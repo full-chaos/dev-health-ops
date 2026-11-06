@@ -78,10 +78,13 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
@@ -117,6 +120,11 @@ type Response struct {
 	// ordered lists.
 	RepoNames      map[string]string `json:"repo_names,omitempty"`
 	DeveloperNames map[string]string `json:"developer_names,omitempty"`
+	// OmittedSignals and NarrowedCounts (CHAOS-13088, Go-only, last, absent when empty): the lists a caller held to a
+	// repository ceiling is not served, with the reason, and the mark that the lists it is served are held to the
+	// ceiling. A caller with no ceiling gets neither key.
+	OmittedSignals []linkscope.OmittedSignal `json:"omitted_signals,omitempty"`
+	NarrowedCounts []linkscope.NarrowedCount `json:"narrowed_counts,omitempty"`
 }
 
 // emailValueRe ports filters.py's _EMAIL_VALUE_RE verbatim -- Go's RE2
@@ -343,6 +351,16 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string) (Respo
 		RepoNames:      repoNames,
 		DeveloperNames: developerNames,
 	}, nil
+}
+
+// BuildCeilingResponse is the answer of a request with a repository ceiling (CHAOS-13088). An unrestricted ceiling is
+// BuildResponse, statement for statement; a restricted one serves the options of the allowed repositories only
+// (restrictedResponse). now ends the status history of an open item.
+func BuildCeilingResponse(ctx context.Context, client QueryClient, orgID string, ceiling teamscope.Ceiling, now time.Time) (Response, error) {
+	if ceiling.Restricted() {
+		return restrictedResponse(ctx, client, orgID, ceiling, now)
+	}
+	return BuildResponse(ctx, client, orgID)
 }
 
 // namedTeams runs teamNamesQuery. It returns nil when no team has a name.

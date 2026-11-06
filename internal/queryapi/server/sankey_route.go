@@ -43,6 +43,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 const (
@@ -323,6 +324,13 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 			return
 		}
 
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "sankey", org, err)
+			return
+		}
+		params.Ceiling = ceiling
+
 		resp, err := sankey.BuildResponse(r.Context(), client, org, params)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -450,6 +458,13 @@ func newSankeyPostHandler(client sankey.QueryClient) http.HandlerFunc {
 			writeTimeWindowOverflow(w, r, "sankey", org)
 			return
 		}
+
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "sankey", org, err)
+			return
+		}
+		params.Ceiling = ceiling
 
 		resp, err := sankey.BuildResponse(r.Context(), client, org, params)
 		if err != nil {

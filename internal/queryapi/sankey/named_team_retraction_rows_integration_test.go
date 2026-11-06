@@ -11,6 +11,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/retractionseed"
 )
 
@@ -107,14 +108,14 @@ func TestStateFlowIsWithheldWhenAColumnOfTheRuleIsMissing(t *testing.T) {
 	defer func() { _ = client.Close() }()
 
 	start, end := store.Days[0], store.Days[len(store.Days)-1].AddDate(0, 0, 1)
-	_, links, err := buildStateFlow(ctx, client, start, end, "org", nil, nil, retractionseed.ControlOrg)
+	_, links, err := buildStateFlow(ctx, client, start, end, "org", nil, nil, retractionseed.ControlOrg, time.Now().UTC(), teamscope.NoCeiling())
 	if err != nil || len(links) == 0 {
 		t.Fatalf("the state flow on the full schema = %d links, %v; want links", len(links), err)
 	}
 	if err := store.Conn.Exec(ctx, "ALTER TABLE work_item_state_durations_daily DROP COLUMN avg_wip"); err != nil {
 		t.Fatalf("drop the column: %v", err)
 	}
-	nodes, links, err := buildStateFlow(ctx, client, start, end, "org", nil, nil, retractionseed.ControlOrg)
+	nodes, links, err := buildStateFlow(ctx, client, start, end, "org", nil, nil, retractionseed.ControlOrg, time.Now().UTC(), teamscope.NoCeiling())
 	if err != nil || nodes != nil || links != nil {
 		t.Fatalf("the state flow with a column of the rule missing = %d nodes, %d links, %v; want no flow and no error",
 			len(nodes), len(links), err)

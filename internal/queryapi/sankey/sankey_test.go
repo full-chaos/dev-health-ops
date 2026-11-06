@@ -8,6 +8,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 func day(y int, m time.Month, d int) time.Time {
@@ -78,7 +80,7 @@ func TestBuildInvestmentFlow(t *testing.T) {
 		return nil, nil
 	})
 
-	nodes, links, err := buildInvestmentFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, nil, "org-1", teamScopeAsOf)
+	nodes, links, err := buildInvestmentFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, nil, "org-1", teamScopeAsOf, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("buildInvestmentFlow: %v", err)
 	}
@@ -143,7 +145,7 @@ func TestBuildExpenseFlow(t *testing.T) {
 		}
 	})
 
-	nodes, links, err := buildExpenseFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, "org-1")
+	nodes, links, err := buildExpenseFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, "org-1", teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("buildExpenseFlow: %v", err)
 	}
@@ -172,7 +174,7 @@ func TestBuildExpenseFlowNoRows(t *testing.T) {
 		t.Fatalf("unexpected query (abandoned fetch must not run when counts are empty):\n%s", query)
 		return nil, nil
 	})
-	nodes, links, err := buildExpenseFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, "org-1")
+	nodes, links, err := buildExpenseFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, "org-1", teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("buildExpenseFlow: %v", err)
 	}
@@ -200,7 +202,7 @@ func TestBuildStateFlow(t *testing.T) {
 		return nil, nil
 	})
 
-	nodes, links, err := buildStateFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, "org-1")
+	nodes, links, err := buildStateFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, "org-1", teamScopeAsOf, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("buildStateFlow: %v", err)
 	}
@@ -259,7 +261,7 @@ func TestBuildHotspotFlow(t *testing.T) {
 		return nil, nil
 	})
 
-	nodes, links, err := buildHotspotFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, "org-1", teamScopeAsOf)
+	nodes, links, err := buildHotspotFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, "org-1", teamScopeAsOf, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("buildHotspotFlow: %v", err)
 	}

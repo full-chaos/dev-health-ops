@@ -10,6 +10,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
@@ -20,7 +21,7 @@ func combineScope(sqlA string, bindingsA []dhclickhouse.Binding, sqlB string, bi
 
 // buildInvestmentFlow ports _build_investment_flow (services/sankey.py:
 // 236-297).
-func buildInvestmentFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos, workCategory []string, orgID string, asOf time.Time) ([]Node, []Link, error) {
+func buildInvestmentFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos, workCategory []string, orgID string, asOf time.Time, ceiling teamscope.Ceiling) ([]Node, []Link, error) {
 	if !tablesPresent(ctx, client, []string{"work_unit_investments"}) {
 		return nil, nil, nil
 	}
@@ -30,7 +31,7 @@ func buildInvestmentFlow(ctx context.Context, client QueryClient, startDay, endD
 		return nil, nil, nil
 	}
 
-	repoFilterSQL, repoBindings, err := repoScopeFilter(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID, "repo_id", asOf)
+	repoFilterSQL, repoBindings, err := repoScopeFilter(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID, "repo_id", asOf, ceiling)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -73,7 +74,7 @@ func buildInvestmentFlow(ctx context.Context, client QueryClient, startDay, endD
 }
 
 // buildExpenseFlow ports _build_expense_flow (services/sankey.py:300-384).
-func buildExpenseFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos []string, orgID string) ([]Node, []Link, error) {
+func buildExpenseFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos []string, orgID string, ceiling teamscope.Ceiling) ([]Node, []Link, error) {
 	if !tablesPresent(ctx, client, []string{"work_item_metrics_daily", "work_item_cycle_times"}) {
 		return nil, nil, nil
 	}
@@ -91,7 +92,17 @@ func buildExpenseFlow(ctx context.Context, client QueryClient, startDay, endDay 
 	workFilterSQL, workBindings := workScopeFilter(scopeLevel, scopeIDs, whatRepos, "work_scope_id")
 	scopeFilterSQL, scopeBindings := combineScope(teamFilterSQL, teamBindings, workFilterSQL, workBindings)
 
-	rows, err := fetchExpenseCounts(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, orgID)
+	var rows []expenseCountsRow
+	var err error
+	var linkIDs []string
+	if ceiling.Restricted() {
+		if linkIDs, err = linkRepoIDs(ctx, client, ceiling, scopeLevel, scopeIDs, whatRepos, orgID); err != nil {
+			return nil, nil, err
+		}
+		rows, err = linkedExpenseCounts(ctx, client, orgID, linkIDs, startDay, endDay, newRowFilter(scopeLevel, scopeIDs, whatRepos))
+	} else {
+		rows, err = fetchExpenseCounts(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, orgID)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -101,6 +112,10 @@ func buildExpenseFlow(ctx context.Context, client QueryClient, startDay, endDay 
 	newBugs := rows[0].NewBugs
 	bugCompleted := rows[0].BugCompletedEstimate
 
+	if ceiling.Restricted() {
+		itemSQL, itemBindings := linkscope.ItemConditionIDs(linkIDs, "work_item_id")
+		scopeFilterSQL, scopeBindings = combineScope(scopeFilterSQL, scopeBindings, itemSQL, itemBindings)
+	}
 	canceledItems, err := fetchExpenseAbandoned(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, orgID)
 	if err != nil {
 		return nil, nil, err
@@ -151,7 +166,7 @@ func stateLabel(status string) string {
 }
 
 // buildStateFlow ports _build_state_flow (services/sankey.py:387-473).
-func buildStateFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos []string, orgID string) ([]Node, []Link, error) {
+func buildStateFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos []string, orgID string, asOf time.Time, ceiling teamscope.Ceiling) ([]Node, []Link, error) {
 	if !tablesPresent(ctx, client, []string{"work_item_state_durations_daily"}) {
 		return nil, nil, nil
 	}
@@ -168,7 +183,17 @@ func buildStateFlow(ctx context.Context, client QueryClient, startDay, endDay ti
 	workFilterSQL, workBindings := workScopeFilter(scopeLevel, scopeIDs, whatRepos, "work_scope_id")
 	scopeFilterSQL, scopeBindings := combineScope(teamFilterSQL, teamBindings, workFilterSQL, workBindings)
 
-	rows, err := fetchStateStatusCounts(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, orgID)
+	var rows []stateStatusCountRow
+	var err error
+	if ceiling.Restricted() {
+		var linkIDs []string
+		if linkIDs, err = linkRepoIDs(ctx, client, ceiling, scopeLevel, scopeIDs, whatRepos, orgID); err != nil {
+			return nil, nil, err
+		}
+		rows, err = linkedStateStatusCounts(ctx, client, orgID, linkIDs, startDay, endDay, asOf, newRowFilter(scopeLevel, scopeIDs, whatRepos))
+	} else {
+		rows, err = fetchStateStatusCounts(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, orgID)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -218,7 +243,7 @@ func buildStateFlow(ctx context.Context, client QueryClient, startDay, endDay ti
 }
 
 // buildHotspotFlow ports _build_hotspot_flow (services/sankey.py:476-534).
-func buildHotspotFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos []string, orgID string, asOf time.Time) ([]Node, []Link, error) {
+func buildHotspotFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos []string, orgID string, asOf time.Time, ceiling teamscope.Ceiling) ([]Node, []Link, error) {
 	if !tablesPresent(ctx, client, []string{"file_metrics_daily", "repos"}) {
 		return nil, nil, nil
 	}
@@ -229,7 +254,7 @@ func buildHotspotFlow(ctx context.Context, client QueryClient, startDay, endDay 
 		return nil, nil, nil
 	}
 
-	scopeFilterSQL, scopeBindings, err := repoScopeFilter(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID, "metrics.repo_id", asOf)
+	scopeFilterSQL, scopeBindings, err := repoScopeFilter(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID, "metrics.repo_id", asOf, ceiling)
 	if err != nil {
 		return nil, nil, err
 	}

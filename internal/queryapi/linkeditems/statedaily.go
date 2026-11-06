@@ -201,3 +201,63 @@ func stateItemOf(item workitemmetrics.StoredItem) workitemmetrics.StateItem {
 		CreatedAt: item.CreatedAt, CompletedAt: item.CompletedAt,
 	}
 }
+
+// Statuses are the statuses the work_item_state family records for the items linked to a loader's repositories over
+// their whole history: the statuses of each item's segments of positive length (workitemmetrics.SegmentStatuses), with
+// the blocked overlay, the item once (its newest stored row), an item with no transition left out as the family
+// leaves it out. It is the distinct status of work_item_state_durations_daily for those items where the daily job ran
+// every day of their lives (CHAOS-13088). The loader's window bounds the items read: [WindowStart, WindowEnd) must hold
+// their lives. Sorted, no repeat, no empty status.
+func Statuses(ctx context.Context, loader Loader, computedAt time.Time) ([]string, error) {
+	if len(loader.RepoIDs) == 0 {
+		return []string{}, nil
+	}
+	versions, _, err := loader.Read(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(versions) == 0 {
+		return []string{}, nil
+	}
+	transitions, err := loader.readTransitions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(transitions) == 0 {
+		return []string{}, nil
+	}
+	blocked, err := workitemblockers.LoadBlockedIntervalsNaming(ctx, namedQuerier{loader.Client}, loader.OrgID, blockingNames(versions), stateBlockedLimit)
+	if err != nil {
+		return nil, fmt.Errorf("linkeditems: blocked spans: %w", err)
+	}
+	return statusesOf(versions, transitions, computedAt.UTC(), blocked), nil
+}
+
+func statusesOf(versions []Version, transitions []workitemmetrics.StateTransition, computedAt time.Time, blocked map[string][]workitemmetrics.BlockedInterval) []string {
+	keys := make([]workitemmetrics.ItemVersion, len(versions))
+	for i, v := range versions {
+		keys[i] = v.version()
+	}
+	kept, _ := workitemmetrics.OncePerProviderAndID(keys)
+	byItem := map[string][]workitemmetrics.StateTransition{}
+	for _, transition := range transitions {
+		byItem[transition.WorkItemID] = append(byItem[transition.WorkItemID], transition)
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, index := range kept {
+		item := versions[index].Item
+		segments := workitemmetrics.SegmentStatuses(item.CreatedAt, item.CompletedAt, item.Status, byItem[item.WorkItemID], computedAt)
+		if len(segments) > 0 && len(blocked[item.WorkItemID]) > 0 {
+			segments = workitemmetrics.OverlayBlocked(segments, blocked[item.WorkItemID])
+		}
+		for _, segment := range segments {
+			if segment.Status != "" && segment.End.After(segment.Start) && !seen[segment.Status] {
+				seen[segment.Status] = true
+				out = append(out, segment.Status)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}

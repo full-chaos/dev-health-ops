@@ -23,8 +23,8 @@ import (
 var (
 	narrowableClasses = []string{"heatmap", "investment", "investment_sunburst", "investment_explain", "drilldown_prs",
 		"work_units", "work_unit_explain", "people_drilldown_prs", "drilldown_issues", "people_drilldown_issues", "flame", "home", "opportunities",
-		"quadrant", "people", "people_summary", "people_metric"}
-	mixedClasses = []string{"sankey", "filteroptions", "explain", "flame_aggregated"}
+		"quadrant", "people", "people_summary", "people_metric", "sankey", "filteroptions"}
+	mixedClasses = []string{"explain", "flame_aggregated"}
 )
 
 func restRows(t *testing.T) map[string]string {
@@ -179,8 +179,8 @@ func TestAllowlistOnANarrowableRouteIsCarried(t *testing.T) {
 			}
 		})
 	}
-	if seen != 23 {
-		t.Fatalf("%d narrowable rows, want 23", seen)
+	if seen != 26 {
+		t.Fatalf("%d narrowable rows, want 26", seen)
 	}
 }
 
@@ -196,7 +196,7 @@ func TestNarrowedClassesAreExactlyTheNarrowable(t *testing.T) {
 			narrowed = append(narrowed, class)
 		}
 	}
-	if len(narrowable) != 17 || !slices.Equal(narrowable, narrowed) {
+	if len(narrowable) != 19 || !slices.Equal(narrowable, narrowed) {
 		t.Fatalf("narrowed %v, want the narrowable classes %v", narrowed, narrowable)
 	}
 }

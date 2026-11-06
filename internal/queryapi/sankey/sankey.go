@@ -44,6 +44,9 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // QueryClient is the narrow ClickHouse read capability this package
@@ -122,6 +125,9 @@ type Params struct {
 	WorkCategory []string
 	StartDay     time.Time
 	EndDay       time.Time
+	// Ceiling is the repositories the request may read (CHAOS-13088). The zero value reads every repository: today's
+	// statements and body, byte for byte.
+	Ceiling teamscope.Ceiling
 }
 
 // normalizeMode ports the `if mode == "hotpot": mode = "hotspot"` typo fix
@@ -162,6 +168,9 @@ type Response struct {
 	FlowMode            *string                    `json:"flow_mode"`
 	DrillCategory       *string                    `json:"drill_category"`
 	TopNRepos           *int                       `json:"top_n_repos"`
+	// NarrowedCounts (CHAOS-13088, Go-only, last, absent when empty): the flow of a caller held to a repository ceiling
+	// counts the work items linked to the allowed repositories only; an item with no such link is not in it.
+	NarrowedCounts []linkscope.NarrowedCount `json:"narrowed_counts,omitempty"`
 }
 
 // Node is the wire shape of SankeyNode (schemas.py:549-552). Value is
@@ -209,13 +218,13 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 
 	switch mode {
 	case "investment":
-		nodes, links, err = buildInvestmentFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, params.WorkCategory, orgID, asOf)
+		nodes, links, err = buildInvestmentFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, params.WorkCategory, orgID, asOf, params.Ceiling)
 	case "expense":
-		nodes, links, err = buildExpenseFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
+		nodes, links, err = buildExpenseFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID, params.Ceiling)
 	case "state":
-		nodes, links, err = buildStateFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
+		nodes, links, err = buildStateFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID, asOf, params.Ceiling)
 	case "hotspot":
-		nodes, links, err = buildHotspotFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID, asOf)
+		nodes, links, err = buildHotspotFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID, asOf, params.Ceiling)
 	}
 	if err != nil {
 		return nil, err
@@ -227,14 +236,18 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		links = []Link{}
 	}
 
-	return &Response{
+	resp := &Response{
 		Mode:        mode,
 		Nodes:       nodes,
 		Links:       links,
 		Unit:        strPtr(def.Unit),
 		Label:       strPtr(def.Label),
 		Description: strPtr(def.Description),
-	}, nil
+	}
+	if params.Ceiling.Restricted() && (mode == "expense" || mode == "state") {
+		resp.NarrowedCounts = []linkscope.NarrowedCount{{Kind: mode, Scope: linkscope.ScopeRepositoryCeiling}}
+	}
+	return resp, nil
 }
 
 type unknownModeError struct{ mode string }

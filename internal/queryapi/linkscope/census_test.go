@@ -79,6 +79,24 @@ var workItemReads = map[string]censusFile{
 	"internal/queryapi/quadrant/quadrant.go": {false, map[string]string{
 		"teamScopedWorkItemTeamAttributionSourceFmt": "joined on the ids of workItemTeamQuadrantQuery, which carries the link condition of the selection",
 		"workItemTeamQuadrantQuery":                  "wct carries the link condition the selection splices into its WHERE (selected.attributedTeams)",
+	}},	// CHAOS-13088: the work-item reads of sankey and filter options. Under a ceiling the two daily aggregates with no
+	// item (work_item_metrics_daily, work_item_state_durations_daily) and the per-person aggregate are not read: their
+	// rows are recomputed from the linked items (linkeditems), or the list is read from the linked items' cycle times.
+	"internal/queryapi/sankey/builders.go": {true, map[string]string{}},
+	"internal/queryapi/sankey/queries.go": {false, map[string]string{
+		"fetchExpenseCounts":     "read only for an unrestricted ceiling; buildExpenseFlow reads linkedExpenseCounts (the recompute) for a restricted one",
+		"fetchExpenseAbandoned":  "under a ceiling buildExpenseFlow splices linkscope.ItemConditionIDs into its scope filter",
+		"fetchStateStatusCounts": "read only for an unrestricted ceiling; buildStateFlow reads linkedStateStatusCounts (the recompute) for a restricted one",
+	}},
+	"internal/queryapi/filteroptions/filteroptions.go": {false, map[string]string{
+		"teamsQuery":     "read only for an unrestricted ceiling; BuildCeilingResponse hands a restricted one to restrictedResponse",
+		"flowStageQuery": "read only for an unrestricted ceiling; a restricted one reads linkeditems.Statuses of the linked items",
+	}},
+	"internal/queryapi/filteroptions/ceiling.go": {true, map[string]string{
+		"ceilingTeamsQuery": "the work_item_cycle_times branch carries linkscope.ItemCondition",
+	}},
+	"internal/queryapi/linkeditems/statedaily.go": {false, map[string]string{
+		"transitionsStatement": "work_item_id IN Subquery: the transitions of the linked items only",
 	}},
 }
 

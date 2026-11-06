@@ -87,7 +87,10 @@ func scopeClauseTeam(teamIDs []string, teamColumn string) (filterSQL string, bin
 // repositories a team scope OWNS (teamscope.RepoCondition, resolved inside
 // the statement rather than as a result of its own). Empty when the request
 // names neither.
-func repoScopeFilter(ctx context.Context, client QueryClient, scopeLevel string, scopeIDs, whatRepos []string, orgID, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
+//
+// ceiling is the repositories the request may read at all (CHAOS-13088): it ANDs with both, never replaces either
+// (teamscope.NarrowRepoScope); NoCeiling() is today's fragment byte for byte.
+func repoScopeFilter(ctx context.Context, client QueryClient, scopeLevel string, scopeIDs, whatRepos []string, orgID, repoColumn string, asOf time.Time, ceiling teamscope.Ceiling) (string, []dhclickhouse.Binding, error) {
 	repoIDs, err := resolveRepoFilterIDs(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID)
 	if err != nil {
 		return "", nil, err
@@ -100,7 +103,7 @@ func repoScopeFilter(ctx context.Context, client QueryClient, scopeLevel string,
 		teamCondition, teamBindings = teamscope.RepoCondition(orgID, repoColumn, scopeIDs, asOf)
 	}
 
-	filter, bindings := teamscope.NarrowRepoScope(len(teamscope.NamedRepoRefs(scopeLevel, scopeIDs, whatRepos)) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings, teamscope.NoCeiling(), repoColumn)
+	filter, bindings := teamscope.NarrowRepoScope(len(teamscope.NamedRepoRefs(scopeLevel, scopeIDs, whatRepos)) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings, ceiling, repoColumn)
 	return filter, bindings, nil
 }
 

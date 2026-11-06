@@ -36,8 +36,9 @@ func impersonationHolders(t *testing.T, minter *accessMinter) map[string]struct 
 		tokens map[string]string
 	}{
 		"superuser holder": {func() *accessStore { return legacyStore(legacySession(), nil) }, legacyTokens(t, minter)},
+		// Its user access token: go-api's scope lets it impersonate (a legacy token without the superuser claim does
+		// not; TestQueryServesANonSuperuserHolderAsItself).
 		"non-superuser holder": {nonSuperuserHolderStore, map[string]string{
-			"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
 			"EdDSA": minter.mint(ecUser, nil, nil),
 		}},
 	}

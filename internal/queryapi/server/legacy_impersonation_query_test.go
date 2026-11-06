@@ -191,8 +191,9 @@ func TestProofWriteDoorRefusesTheLegacyImpersonationCaller(t *testing.T) {
 	for signing, token := range legacyTokens(t, minter) {
 		t.Run(signing, func(t *testing.T) {
 			unset, seenUnset := door(t, "")
-			if got := post(unset, token); got.Code != http.StatusOK || len(*seenUnset) != 1 || (*seenUnset)[0].OrgID != irTargetOrg.String() {
-				t.Fatalf("switch unset: %d %s claims=%+v, want the mutation served in the target org (main's behavior)", got.Code, got.Body.String(), *seenUnset)
+			// An applied session is reads only (D6714), so the switch unset refuses the mutation too (main served it in the target org).
+			if got := post(unset, token); got.Code != http.StatusForbidden || strings.TrimSpace(got.Body.String()) != legacyRefusalBody || len(*seenUnset) != 0 {
+				t.Fatalf("switch unset: %d %s claims=%+v, want 403 %s and no resolver", got.Code, got.Body.String(), *seenUnset, legacyRefusalBody)
 			}
 			// "yes" refuses startup; a handler built with it anyway fails closed.
 			for _, value := range []string{"true", "yes"} {

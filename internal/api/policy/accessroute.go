@@ -123,5 +123,14 @@ func (s *Scope) mayImpersonate(r *http.Request) bool {
 	if !ok || decision.err != nil {
 		return true
 	}
-	return decision.user != nil && (decision.user.accessToken || decision.user.superuserClaim || (decision.user.IsSuperuser && s.ReadsPlatformRoles()))
+	return decision.user != nil && decision.user.MayImpersonate(s.ReadsPlatformRoles())
+}
+
+// MayImpersonate is the caller half of mayImpersonate: a user access token,
+// or a legacy token whose verified is_superuser claim is truthy, or, while the
+// platform roles switch is owned (readsPlatformRoles), a legacy token whose
+// live read says superuser. A surface that reads the session itself (query-api's
+// /query) applies a session only to a caller this admits, as the scope does.
+func (u *User) MayImpersonate(readsPlatformRoles bool) bool {
+	return u.accessToken || u.superuserClaim || (u.IsSuperuser && readsPlatformRoles)
 }

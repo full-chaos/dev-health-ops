@@ -152,14 +152,15 @@ func nonSuperuserHolderStore() *accessStore {
 	return store
 }
 
-// TestQueryServesANonSuperuserHolderAsItself: on each /query mount and on the write door, the non-superuser holder
-// beside a live row is served as itself in its own org, with no impersonation, the switch unset or on.
+// TestQueryServesANonSuperuserHolderAsItself: with a legacy HS256 token (no superuser claim, platform roles not
+// owned) the non-superuser holder beside a live row is one go-api's scope does not let impersonate
+// (policy.User.MayImpersonate); on each /query mount and on the write door it is served as itself in its own org,
+// with no impersonation, the switch unset or on -- as /graphql serves it.
 func TestQueryServesANonSuperuserHolderAsItself(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
 	tokens := map[string]string{
 		"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
-		"EdDSA": minter.mint(ecUser, nil, nil),
 	}
 	asItself := func(t *testing.T, code int, body string, seen []authctx.Claims) {
 		t.Helper()
@@ -176,6 +177,11 @@ func TestQueryServesANonSuperuserHolderAsItself(t *testing.T) {
 					asItself(t, got.Status, got.Body, *s.seen)
 				})
 			}
+			t.Run(switchName+" "+signing+" POST /graphql", func(t *testing.T) {
+				s := legacyStack(t, minter, nonSuperuserHolderStore(), on)
+				got := legacyGraphQLDocument(s, http.MethodPost, token, iaDocument)
+				asItself(t, got.Status, got.Body, *s.seen)
+			})
 			t.Run(switchName+" "+signing+" write door", func(t *testing.T) {
 				door, seen := revokedWriteDoor(t, minter, nonSuperuserHolderStore(), on)
 				got := postProofWrite(door, token)

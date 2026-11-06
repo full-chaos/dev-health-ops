@@ -7024,6 +7024,16 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			}
 		}
 
+		if claims.ImpersonationActive && !documentOnlyReads(query) {
+			// D6714: an applied impersonation session is reads only, on every
+			// path of this pipeline and whatever the switch; the kind is the
+			// AST of the text the resolver runs, and a kind that cannot be
+			// stated is not a read.
+			log.Printf("query-api: refused a non-query document in an impersonation session: operation=%s", operation)
+			policy.WriteImpersonationRefused(w)
+			return
+		}
+
 		if requireKind != "" {
 			kind, kindErr := digest.DocumentKind(query)
 			if kind != requireKind {

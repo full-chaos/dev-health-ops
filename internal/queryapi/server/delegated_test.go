@@ -33,8 +33,8 @@ func TestEdgeCarrier_DelegatedTokenIsDelegated(t *testing.T) {
 	store := ecMemberStore()
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	plain := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
-	delegated := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5, impersonatingUserID: ecActor.String()})
+	plain := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	delegated := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5, impersonatingUserID: ecActor.String()})
 	for _, token := range []string{plain, delegated} {
 		if rec := ecPost(handler, token); rec.Code != http.StatusOK {
 			t.Fatalf("got %d, want 200, body=%s", rec.Code, rec.Body.String())
@@ -72,11 +72,11 @@ func TestProofWriteRefusesADelegatedCaller(t *testing.T) {
 		handler(rec, req)
 		return rec
 	}
-	plain := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
+	plain := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	if rec := post(plain); rec.Code != http.StatusOK || ran != 1 {
 		t.Fatalf("plain caller: %d %s, ran %d; want 200 and the resolver run", rec.Code, rec.Body.String(), ran)
 	}
-	delegated := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5, impersonatingUserID: ecActor.String()})
+	delegated := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5, impersonatingUserID: ecActor.String()})
 	if rec := post(delegated); rec.Code != http.StatusForbidden || ran != 1 {
 		t.Fatalf("delegated caller: %d %s, ran %d; want 403 and no resolver", rec.Code, rec.Body.String(), ran)
 	}
@@ -88,7 +88,7 @@ func TestProofWriteRefusesADelegatedCaller(t *testing.T) {
 // membership in the token's own org even for a superuser, roleInOrg).
 func TestDelegatedSuperuserOnANonMemberOrg_ReadServedWriteRefused(t *testing.T) {
 	quietStdLog(t)
-	delegated := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: true, tokenVersion: 5, impersonatingUserID: ecActor.String()})
+	delegated := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5, impersonatingUserID: ecActor.String()})
 	store := newAccessStore()
 	store.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
 	store.members = nil

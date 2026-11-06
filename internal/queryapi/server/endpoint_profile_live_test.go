@@ -154,7 +154,7 @@ func withSession(s *accessStore) {
 
 func edgeBearer(t *testing.T, orgID string) string {
 	t.Helper()
-	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: orgID, role: "admin", tokenVersion: 5})
+	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: orgID, tokenVersion: 5})
 }
 
 type liveObs struct {

@@ -99,7 +99,7 @@ func irUser() string                { return "user " + ecUser.String() + "=1" }
 func irSession() string             { return "session " + ecUser.String() + "=1" }
 func irMember(org uuid.UUID) string { return "member " + ecUser.String() + " " + org.String() + "=1" }
 func irToken(t *testing.T, super bool) string {
-	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: super, tokenVersion: 5})
+	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 }
 
 func TestGraphQLEdgeReadsEachIdentityFactOncePerRequest(t *testing.T) {

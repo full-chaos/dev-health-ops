@@ -123,7 +123,7 @@ func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup)
 			"operator": operator.Handler(),
 		},
 		envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}),
-		edge:     ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
+		edge:     ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5}),
 		reader:   reader,
 		priv:     priv,
 		seen:     seen,

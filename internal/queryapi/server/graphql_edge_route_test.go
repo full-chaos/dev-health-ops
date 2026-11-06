@@ -96,11 +96,11 @@ func edgeHarnessWith(t *testing.T, store *fakeEdgeStore, sw routeswitch.Switch) 
 	}
 	byDigest := map[string]string{digestHex(iaDocument): "probe", digestHex(edgeWriteDocument): "probeWrite"}
 	auth := ecEdgeAuth(t, store)
-	chain := graphQLEdgeChain(newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, auth, store, "", nil),
-		graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes})
+	chain := onPattern("/graphql", graphQLEdgeChain(newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, auth, store, "", nil),
+		graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes}))
 	handler := chain.ServeHTTP
-	member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
-	nonmember := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: "99999999-9999-9999-9999-999999999999", role: "admin", tokenVersion: 5})
+	member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	nonmember := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: "99999999-9999-9999-9999-999999999999", tokenVersion: 5})
 	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"})
 	return handler, ran, member, nonmember, envelope
 }
@@ -511,7 +511,7 @@ func TestGraphQLEdgeRefusesARequestNoChainPrepared(t *testing.T) {
 			nilStore = store
 		}
 		handler, seen := iaDispatchWithEdge(t, nil, auth, nilStore)
-		member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
+		member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 		recorder := edgePostAs(t, newGraphQLEdgeHandler(handler), member)
 		if recorder.Code != http.StatusInternalServerError || len(*seen) != 0 || !strings.Contains(logged.String(), "reason=edge_not_bound") {
 			t.Errorf("%s: %d ran=%d logged %q, want the 500, nothing run, and the reason", name, recorder.Code, len(*seen), logged.String())
@@ -728,7 +728,7 @@ func TestGraphQLEdgeAnswersAStoreItCannotReadAsTheUnhandled500(t *testing.T) {
 // impersonation session is not one of its reads: the middleware in front
 // reads it (TestGraphQLEdgeReadsTheImpersonationSessionOnce).
 func TestGraphQLEdgeAuthenticatorReportsAStoreItCannotReadAsUnavailable(t *testing.T) {
-	member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
+	member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	for name, tc := range map[string]struct {
 		store *fakeEdgeStore
 		// want is the pipeline's outcome; -1 when the scope's Principal step
@@ -792,7 +792,7 @@ func edgeClaimsHarness(t *testing.T, store policy.Store) (http.Handler, *[]authc
 	}))
 	auth := ecEdgeAuth(t, store)
 	pipeline := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil)
-	return internalidentity.Public(graphQLEdgeChain(pipeline, graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes})), seen
+	return internalidentity.Public(onPattern("/graphql", graphQLEdgeChain(pipeline, graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes}))), seen
 }
 
 func edgePostAs(t *testing.T, handler http.Handler, token string) *httptest.ResponseRecorder {
@@ -818,8 +818,8 @@ func TestGraphQLEdgeReadsTheImpersonationSessionOnce(t *testing.T) {
 	session := &policy.Impersonation{AdminUserID: ecUser, TargetUserID: ecTarget, TargetOrgID: targetOrg, TargetRole: "viewer"}
 	admin := authctx.Claims{OrgID: ecOrg.String(), Role: "owner", IsSuperuser: true}
 	target := authctx.Claims{OrgID: targetOrg.String(), Role: "viewer", IsSuperuser: true, ImpersonationActive: true}
-	claimsSuper := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
-	claimsPlain := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5})
+	claimsSuper := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	claimsPlain := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	for name, tc := range map[string]struct {
 		answers       []*policy.Impersonation
 		token         string
@@ -875,7 +875,7 @@ func TestGraphQLEdgeRefusesARequestNoMiddlewareDecided(t *testing.T) {
 	previous := log.Writer()
 	log.SetOutput(&logged)
 	t.Cleanup(func() { log.SetOutput(previous) })
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	for name, tc := range map[string]struct {
 		handler http.Handler
 		reason  string
@@ -902,7 +902,7 @@ func TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead(t *testing.T) {
 		errSession: errors.New("down"),
 	}
 	handler, seen := edgeClaimsHarness(t, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	recorder := edgePostAs(t, handler, token)
 	if recorder.Code != http.StatusInternalServerError || recorder.Body.String() != `{"detail":"Internal Server Error"}` || len(*seen) != 0 {
 		t.Fatalf("%d %q ran=%v, want the unhandled 500 and nothing run", recorder.Code, recorder.Body.String(), *seen)
@@ -966,7 +966,7 @@ func TestGraphQLEdgeOrglessTokenNeedsALiveSuperuserRow(t *testing.T) {
 			sessions: map[uuid.UUID]*policy.Impersonation{ecUser: tc.session},
 		}
 		handler, seen := edgeClaimsHarness(t, store)
-		token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), role: "member", tokenVersion: 5})
+		token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5})
 		recorder := edgePostAs(t, handler, token)
 		if recorder.Code != tc.code || len(*seen) != tc.ran {
 			t.Errorf("%s: %d ran=%d body=%q, want %d/%d", name, recorder.Code, len(*seen), recorder.Body.String(), tc.code, tc.ran)

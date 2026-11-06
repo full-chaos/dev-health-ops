@@ -49,7 +49,7 @@ func paCarriers(store *fakeEdgeStore) []paCarrier {
 			path, handler := "/query", http.Handler(dispatch)
 			if graphql {
 				path = "/graphql"
-				handler = graphQLEdgeChain(dispatch, graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes})
+				handler = onPattern("/graphql", graphQLEdgeChain(dispatch, graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes}))
 			}
 			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"query":"`+iaDocument+`"}`))
 			request.Header.Set("Content-Type", "application/json")
@@ -94,7 +94,7 @@ func TestEdgeClaimsCarryTheLiveActionSet(t *testing.T) {
 		store := paStore(c.superuser, c.platform)
 		for _, carrier := range paCarriers(store) {
 			t.Run(carrier.name+"/"+c.name, func(t *testing.T) {
-				token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
+				token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 				recorder, seen := carrier.serve(t, token, nil)
 				if recorder.Code != http.StatusOK || len(seen) != 1 {
 					t.Fatalf("status %d, %d runs, body %q", recorder.Code, len(seen), recorder.Body.String())
@@ -156,7 +156,7 @@ func TestEdgeOrglessAdmissionNeedsASetOrTheFlag(t *testing.T) {
 		store := paStore(c.superuser, c.platform)
 		for _, carrier := range paCarriers(store) {
 			t.Run(carrier.name+"/"+c.name, func(t *testing.T) {
-				token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: "", role: "member", tokenVersion: 5})
+				token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: "", tokenVersion: 5})
 				recorder, seen := carrier.serve(t, token, nil)
 				if c.admitted {
 					if recorder.Code != http.StatusOK || len(seen) != 1 || seen[0].OrgID != "" {

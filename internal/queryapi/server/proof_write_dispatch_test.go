@@ -230,7 +230,7 @@ func TestNewQueryHandlerWiresTheEdgeAuthenticatorIntoEveryRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member"})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String()})
 
 	for route, handler := range map[string]http.HandlerFunc{"serve": serve, "proof": proof, "proof-write": proofWrite} {
 		var logged bytes.Buffer

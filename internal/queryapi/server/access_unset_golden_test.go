@@ -65,10 +65,10 @@ func unsetCases(m *accessMinter) []unsetCase {
 	edge := func(c ecEdgeClaims) func(*testing.T, string) string {
 		return func(t *testing.T, _ string) string { return ecMintEdgeToken(t, c) }
 	}
-	member := ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}
+	member := ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5}
 	stale := member
 	stale.tokenVersion = 4
-	orgless := ecEdgeClaims{sub: ecUser.String(), role: "admin", tokenVersion: 5}
+	orgless := ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5}
 	fixed := func(token string) func(*testing.T, string) string {
 		return func(*testing.T, string) string { return token }
 	}

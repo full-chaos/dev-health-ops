@@ -2575,6 +2575,7 @@ services:
       AUTH_SIGNING_KEY_ID: auth-signing-bigboy
       AUTH_TOKEN_ISSUER_URL: https://auth.bigboy.internal:8443
       AUTH_USERS_OWNED: 'false'
+      AUTH_VALKEY_URI: redis://valkey:6379/1
       AUTH_WORKLOAD_BOOTSTRAP: 'true'
       OTEL_ENABLED: 'false'
     healthcheck:

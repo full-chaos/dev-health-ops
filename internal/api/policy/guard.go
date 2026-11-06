@@ -191,7 +191,7 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
 			}
-			if r.Pattern != stopImpersonationPattern && ImpersonationFrom(r.Context()) != nil {
+			if r.Pattern != stopImpersonationPattern && sessionRowFrom(r.Context()) != nil {
 				g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
 					slog.String("path", r.Pattern), slog.String("action", gt.action))
 				g.observeShadow(r, caller, bearer, false)

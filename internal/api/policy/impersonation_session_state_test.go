@@ -91,7 +91,7 @@ func TestARowReadFailureWithoutAdminImpersonateFailsClosed(t *testing.T) {
 	store.errSession = errors.New("store down")
 	for _, call := range []struct{ method, path string }{{http.MethodGet, "/read"}, {http.MethodPost, "/write"}} {
 		got := serve(handler, call.method, call.path, map[string]string{"Authorization": "Bearer " + token})
-		if got.status != http.StatusServiceUnavailable || got.body != `{"detail":"Database temporarily unavailable"}` {
+		if got.status != http.StatusServiceUnavailable || got.body != `{"detail":{"message":"Database temporarily unavailable"}}` {
 			t.Fatalf("%s %s: %d %q, want the 503 before the route", call.method, call.path, got.status, got.body)
 		}
 	}

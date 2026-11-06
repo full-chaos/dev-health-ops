@@ -217,7 +217,7 @@ func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (s
 // refuses it) whatever the caller's actions; only a holder of admin.impersonate
 // acts as the target: the target's org, the impersonation context, and the
 // X-Impersonating / X-Impersonated-User-Id headers. A session lookup failure
-// refuses the request with the generic 500 (fail closed, logged).
+// refuses the request with 503, the dependency failure (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every path below that calls next has decided; the refusals return
@@ -247,7 +247,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			s.logger.ErrorContext(r.Context(), "api impersonation: session lookup failed; refusing the request",
 				slog.String("path", r.Pattern), slog.String("admin_user_id", user.UserID),
 				slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)), slog.Any("error", err))
-			WriteInternal(w)
+			WriteAuthFailure(w, "", ErrUnavailable)
 			return
 		}
 		if session == nil {

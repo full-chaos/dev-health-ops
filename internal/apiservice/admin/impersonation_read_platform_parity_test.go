@@ -283,7 +283,7 @@ func TestAnAdminReadWithNoImpersonationStillAsksThePDP(t *testing.T) {
 
 // A live-row platform admin's writes keep today's answers: the enforced admin-or create is refused before any PDP
 // call; the delete (its row names no action, so it is not enforced) keeps its handler's platform question, answered
-// as on 7a6f892a9 (this fake gives admin.users no allow: no verdict, 503, one call).
+// as origin/main f496ee5d answers it with the same cells and fake (no allow for admin.users: no verdict, 503, one call).
 func TestAnImpersonationWriteOnAdminRoutesKeepsItsAnswer(t *testing.T) {
 	enforced, pdp := iprRig(t, true, true)
 	pdp.take()

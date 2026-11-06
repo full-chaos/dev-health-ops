@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
@@ -136,6 +138,48 @@ func TestProofWriteDoorFailsClosedForAPlainMemberWhoseRowReadFails(t *testing.T)
 				if got := postProofWrite(ok, token); got.Code != http.StatusOK || len(*seenOK) != 1 {
 					t.Fatalf("read succeeds: got %d %q, ran %d; want 200 and one run", got.Code, got.Body.String(), len(*seenOK))
 				}
+			})
+		}
+	}
+}
+
+// nonSuperuserHolderStore is a live non-superuser whose platform set holds admin.impersonate, beside a live go-api
+// row. /query serves it as itself (main's answer): a session is applied only to a live superuser that holds the action.
+func nonSuperuserHolderStore() *accessStore {
+	store := legacyStore(legacySession(), nil)
+	platform := rule.PlatformOf(rule.ActionAdminImpersonate)
+	store.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: false, Platform: &platform, TokenVersion: 5}
+	return store
+}
+
+// TestQueryServesANonSuperuserHolderAsItself: on each /query mount and on the write door, the non-superuser holder
+// beside a live row is served as itself in its own org, with no impersonation, the switch unset or on.
+func TestQueryServesANonSuperuserHolderAsItself(t *testing.T) {
+	quietStdLog(t)
+	minter := newAccessMinter(t)
+	tokens := map[string]string{
+		"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
+		"EdDSA": minter.mint(ecUser, nil, nil),
+	}
+	asItself := func(t *testing.T, code int, body string, seen []authctx.Claims) {
+		t.Helper()
+		if code != http.StatusOK || len(seen) != 1 || seen[0].ImpersonationActive || seen[0].OrgID != ecOrg.String() {
+			t.Fatalf("got %d %s claims=%+v, want 200 served as itself (its own org %s, no impersonation)", code, body, seen, ecOrg)
+		}
+	}
+	for switchName, on := range revokedSwitches {
+		for signing, token := range tokens {
+			for _, route := range legacyQueryRoutes {
+				t.Run(switchName+" "+signing+" "+route.listener+" "+route.path, func(t *testing.T) {
+					s := legacyStack(t, minter, nonSuperuserHolderStore(), on)
+					got, _ := legacyQuery(s, route.listener, route.path, token)
+					asItself(t, got.Status, got.Body, *s.seen)
+				})
+			}
+			t.Run(switchName+" "+signing+" write door", func(t *testing.T) {
+				door, seen := revokedWriteDoor(t, minter, nonSuperuserHolderStore(), on)
+				got := postProofWrite(door, token)
+				asItself(t, got.Code, got.Body.String(), *seen)
 			})
 		}
 	}

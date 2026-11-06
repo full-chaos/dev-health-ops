@@ -201,7 +201,6 @@ nav:
           - Auth legacy compatibility and rollback: operate/runbooks/auth-legacy-compat-and-rollback.md
           - External Push lifecycle events: operate/runbooks/external-push-lifecycle.md
           - Legacy ingest retirement: operate/runbooks/legacy-ingest-retirement.md
-      - Prod cutover 2026-09-11:
   - Integrate and extend:
       - integrate/index.md
       - Customer Push:

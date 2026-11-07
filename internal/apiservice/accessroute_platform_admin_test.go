@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -82,7 +81,8 @@ func platformAdminRig(t *testing.T, superuser, routed bool) (http.Handler, *edds
 // Product rule 1 (D6773): on org-scoped admin rows a platform admin whose
 // token names an org it holds no membership row in gets, with a user access
 // token, the HS256 path's answer byte for byte. A caller without the platform
-// action keeps the routed refusal.
+// action gets the HS256 path's answer too (CHAOS-13227): the X-Org-Id refusal
+// for an org that exists, and the claimed org for a claim that is not a UUID.
 func TestProductRule1PlatformAdminWithoutMembershipAnswersAsLegacy(t *testing.T) {
 	rows := []string{"/api/v1/admin/audit-logs", "/api/v1/admin/credentials", "/api/v1/admin/backfill-jobs"}
 	for _, superuser := range []bool{true, false} {
@@ -93,6 +93,9 @@ func TestProductRule1PlatformAdminWithoutMembershipAnswersAsLegacy(t *testing.T)
 		hs256 := "Bearer " + probeHS256(t, probeKey, jwt.MapClaims{"sub": probeUser.String(), "org_id": probeTargetOrg.String(),
 			"role": "member", "email": "user@example.test", "username": "user", "full_name": "Probe User", "tv": 3})
 		eddsa := "Bearer " + minter.mint(probeUser, map[string]any{"org_id": probeTargetOrg.String()})
+		hs256NotUUID := "Bearer " + probeHS256(t, probeKey, jwt.MapClaims{"sub": probeUser.String(), "org_id": "not-a-uuid",
+			"role": "member", "email": "user@example.test", "username": "user", "full_name": "Probe User", "tv": 3})
+		eddsaNotUUID := "Bearer " + minter.mint(probeUser, map[string]any{"org_id": "not-a-uuid"})
 		for _, path := range rows {
 			serve := func(handler http.Handler, bearer string) (int, string) {
 				request := httptest.NewRequest(http.MethodGet, path, nil)
@@ -109,8 +112,13 @@ func TestProductRule1PlatformAdminWithoutMembershipAnswersAsLegacy(t *testing.T)
 				}
 				continue
 			}
-			if gotStatus != http.StatusUnauthorized || strings.TrimSpace(gotBody) != genericRefusal {
-				t.Fatalf("%s non-member without the platform action: %d %s, want the routed 401", path, gotStatus, gotBody)
+			if wantStatus != http.StatusForbidden || wantBody != `{"detail": "X-Org-Id not permitted for this user"}` || gotStatus != wantStatus || gotBody != wantBody {
+				t.Fatalf("%s non-member without the platform action: user access token %d %s, HS256 %d %s", path, gotStatus, gotBody, wantStatus, wantBody)
+			}
+			wantStatus, wantBody = serve(legacy, hs256NotUUID)
+			gotStatus, gotBody = serve(routed, eddsaNotUUID)
+			if gotStatus != wantStatus || gotBody != wantBody {
+				t.Fatalf("%s org claim not a UUID: user access token %d %s, HS256 %d %s", path, gotStatus, gotBody, wantStatus, wantBody)
 			}
 		}
 	}

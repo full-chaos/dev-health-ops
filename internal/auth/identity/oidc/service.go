@@ -692,10 +692,6 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 	if s.cfg.MembershipJIT == nil {
 		return Login{}, notMember(row)
 	}
-	// An asserted email is the org's IdP's word: only a domain the row lists can make an account.
-	if len(row.AllowedDomains) == 0 {
-		return Login{}, s.provisioningOff(ctx, row)
-	}
 	role, ok := s.signInRole(ctx, row)
 	if !ok {
 		return Login{}, notMember(row)

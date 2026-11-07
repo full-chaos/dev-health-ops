@@ -123,7 +123,7 @@ func (h Handlers) ACS(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, err)
 		return
 	}
-	posted, ok := readSAMLResponse(w, r)
+	in, ok := decodeACS(w, r)
 	if !ok {
 		return
 	}
@@ -140,7 +140,7 @@ func (h Handlers) ACS(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, bindingCookie(name, "", cookiePath, -1))
 		return c.Value
 	}
-	signIn, err := h.Service.ConsumeFor(r.Context(), p, posted, cookie)
+	signIn, err := h.Service.ConsumeFor(r.Context(), p, in.SAMLResponse, in.RelayState, cookie)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -154,19 +154,11 @@ type acsInput struct {
 	RelayState   string
 }
 
-// readSAMLResponse decodes the ACS body into one acsInput: the HTTP-POST
-// binding the metadata advertises (application/x-www-form-urlencoded with
-// SAMLResponse and RelayState) or the go-api JSON body (no content type,
-// application/json or application/*+json; "SAMLResponse" or "saml_response").
+// decodeACS decodes the ACS body into one acsInput: the HTTP-POST binding the
+// metadata advertises (application/x-www-form-urlencoded with SAMLResponse and
+// RelayState) or the go-api JSON body (no content type, application/json or
+// application/*+json; "SAMLResponse" or "saml_response").
 // Any other content type, a missing or repeated SAMLResponse, is refused.
-func readSAMLResponse(w http.ResponseWriter, r *http.Request) (string, bool) {
-	in, ok := decodeACS(w, r)
-	if !ok {
-		return "", false
-	}
-	return in.SAMLResponse, true
-}
-
 func decodeACS(w http.ResponseWriter, r *http.Request) (acsInput, bool) {
 	contentType := r.Header.Get("Content-Type")
 	mediaType := ""

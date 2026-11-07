@@ -107,3 +107,14 @@ func ACSPath(p Provider, base string) string {
 }
 
 func bindingHash(nonce string) [32]byte { return sha256.Sum256([]byte(nonce)) }
+
+// flowBinding is the stored binding of a request. Without IdP-initiated
+// sign-in it also binds the RelayState the SP issued, so the ACS refuses a
+// missing or changed echo, as go-api refuses one of its sealed token. The
+// nonce is base64url, so the 0x00 separator is unambiguous.
+func flowBinding(p Provider, nonce, relayState string) [32]byte {
+	if p.AllowIdPInitiated {
+		return bindingHash(nonce)
+	}
+	return sha256.Sum256([]byte(nonce + "\x00" + relayState))
+}

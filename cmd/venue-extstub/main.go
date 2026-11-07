@@ -3,7 +3,12 @@
 // It logs one JSON line per request or message (t, service, method, host, path: no header, body, query or address)
 // for the venue judge (internal/shadowvenue, -stub-log), answers from a frozen table, and never dials out.
 //
-//	venue-extstub -ca-cert <pem> -ca-key <pkcs8 pem, 0600> -log <new jsonl file> [-https :8443] [-smtp :2525]
+//	venue-extstub -ca-cert <pem> -ca-key <pkcs8 pem, 0600> -log <new jsonl file> -status <new file> [-mode run|seed]
+//	              [-https :8443] [-smtp :2525]
+//
+// -mode seed answers only GET api.pagerduty.com/services?limit=1 (the org E PagerDuty credential's validation, before
+// the judged runs) and needs a log whose name holds ".seed."; run mode refuses such a log name, so the two logs never
+// mix. -status names the mode, the answer-table digest and the start time for the venue's egress records.
 //
 // Exit: 2 usage or start failure; otherwise it serves until SIGINT or SIGTERM.
 package main
@@ -20,6 +25,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,13 +50,22 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	logPath := fs.String("log", "", "hit log to create (must not exist), mode 0600")
 	httpsAddr := fs.String("https", ":8443", "HTTPS listen address")
 	smtpAddr := fs.String("smtp", ":2525", "SMTP listen address")
-	_ = fs.String("mode", modeRun, "skeleton")
-	_ = fs.String("status", "", "skeleton")
+	mode := fs.String("mode", modeRun, "run (the frozen answers of the judged runs) or seed (the org E credential probe only)")
+	statusPath := fs.String("status", "", "status file to create (must not exist): mode, config digest, start time")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if *caCert == "" || *caKey == "" || *logPath == "" {
-		fmt.Fprintln(stderr, "venue-extstub: -ca-cert, -ca-key and -log are required")
+	if *caCert == "" || *caKey == "" || *logPath == "" || *statusPath == "" {
+		fmt.Fprintln(stderr, "venue-extstub: -ca-cert, -ca-key, -log and -status are required")
+		return exitUsage
+	}
+	seedLog := strings.Contains(filepath.Base(*logPath), ".seed.")
+	switch {
+	case *mode != modeRun && *mode != modeSeed:
+		fmt.Fprintf(stderr, "venue-extstub: -mode %q: want run or seed\n", *mode)
+		return exitUsage
+	case (*mode == modeSeed) != seedLog:
+		fmt.Fprintln(stderr, "venue-extstub: a seed-mode log name holds \".seed.\" and a run-mode one does not, so the logs never mix")
 		return exitUsage
 	}
 	certPEM, err := os.ReadFile(*caCert)
@@ -74,19 +90,34 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "venue-extstub: -https: %v\n", err)
 		return exitUsage
 	}
-	smtpLn, err := net.Listen("tcp", *smtpAddr)
-	if err != nil {
+	// Seed mode answers the one PagerDuty probe and nothing else: it opens no SMTP listener.
+	smtpLn := net.Listener(nil)
+	if *mode == modeRun {
+		if smtpLn, err = net.Listen("tcp", *smtpAddr); err != nil {
+			_ = httpsLn.Close()
+			fmt.Fprintf(stderr, "venue-extstub: -smtp: %v\n", err)
+			return exitUsage
+		}
+	}
+	if err := writeStatus(*statusPath, *mode, time.Now()); err != nil {
 		_ = httpsLn.Close()
-		fmt.Fprintf(stderr, "venue-extstub: -smtp: %v\n", err)
+		if smtpLn != nil {
+			_ = smtpLn.Close()
+		}
+		fmt.Fprintf(stderr, "venue-extstub: -status %s: %v\n", *statusPath, errors.Unwrap(err))
 		return exitUsage
 	}
-	srv := &http.Server{Handler: handler(log, modeRun), ReadHeaderTimeout: 10 * time.Second,
+	srv := &http.Server{Handler: handler(log, *mode), ReadHeaderTimeout: 10 * time.Second,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12}}
 	go func() { _ = srv.ServeTLS(httpsLn, "", "") }()
-	go func() { _ = serveSMTP(smtpLn, log) }()
-	fmt.Fprintf(stderr, "venue-extstub: serving https %s smtp %s, log %s\n", httpsLn.Addr(), smtpLn.Addr(), *logPath)
+	if smtpLn != nil {
+		go func() { _ = serveSMTP(smtpLn, log) }()
+	}
+	fmt.Fprintf(stderr, "venue-extstub: mode %s config %s, serving https %s, log %s\n", *mode, configDigest(*mode), httpsLn.Addr(), *logPath)
 	<-ctx.Done()
-	_ = smtpLn.Close()
+	if smtpLn != nil {
+		_ = smtpLn.Close()
+	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdown)

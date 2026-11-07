@@ -236,9 +236,10 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 					for _, tc := range []struct {
 						query  string
 						status int
+						calls  int
 					}{
-						{"org_id=" + ownOrg + "&org_id=" + strangerOrg, http.StatusForbidden},
-						{"org_id=" + strangerOrg + "&org_id=" + ownOrg, http.StatusOK},
+						{"org_id=" + ownOrg + "&org_id=" + strangerOrg, http.StatusOK, 0},
+						{"org_id=" + strangerOrg + "&org_id=" + ownOrg, http.StatusOK, 1},
 					} {
 						auth := routed(t, personaStore(personaAdmin), &fakeValidator{result: userClaims(nil)})
 						guard := NewGuard(auth, quiet())
@@ -247,39 +248,40 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 						mux := http.NewServeMux()
 						mux.Handle(row.pattern, guard.Wrap(row.level, echo))
 						method, route, _ := strings.Cut(row.pattern, " ")
-						if got := enforceRequest(mux, method, profilePath(route)+"?"+tc.query); got.status != tc.status {
-							t.Errorf("%s: %d %q, want %d", tc.query, got.status, got.body, tc.status)
+						if got := enforceRequest(mux, method, profilePath(route)+"?"+tc.query); got.status != tc.status || len(pdp.calls()) != tc.calls {
+							t.Errorf("%s: %d %q, PDP saw %+v, want %d with %d call(s)", tc.query, got.status, got.body, pdp.calls(), tc.status, tc.calls)
 						}
 					}
 				})
 			}
-			t.Run("another org is refused by the seam with no PDP call", func(t *testing.T) {
+			t.Run("another org keeps the legacy answer with no PDP call", func(t *testing.T) {
 				for _, other := range []string{strangerOrg, memberOrg} {
 					for form, served := range servedOrgForms(other) {
+						legacy := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin}, served)
 						rec := recordEnforce(t)
 						pdp := newTestPDP(t, allowAll)
 						got := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin, enforcer: servedOrgEnforcer(t, pdp, namespace)}, served)
-						if got.status != http.StatusForbidden || got.body != servedOrgDenyBody(row.level) {
-							t.Errorf("%s %s: %d %q, want 403 %s", other, form, got.status, got.body, servedOrgDenyBody(row.level))
+						if got.status != legacy.status || got.body != legacy.body {
+							t.Errorf("%s %s: %d %q, want the legacy %d %q", other, form, got.status, got.body, legacy.status, legacy.body)
 						}
 						if n := len(pdp.calls()); n != 0 {
 							t.Errorf("%s %s: %d PDP calls, want 0", other, form, n)
 						}
-						if !slices.Equal(rec.snapshot(), []string{namespace + "/org_mismatch"}) || len(rec.unjudgedSnapshot()) != 0 {
-							t.Errorf("%s %s: outcomes %v unjudged %v, want [%s/org_mismatch] and none", other, form, rec.snapshot(), rec.unjudgedSnapshot(), namespace)
+						if len(rec.snapshot()) != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/served_org"}) {
+							t.Errorf("%s %s: outcomes %v unjudged %v, want none and [%s/served_org]", other, form, rec.snapshot(), rec.unjudgedSnapshot(), row.pattern)
 						}
 					}
 				}
 			})
-			t.Run("an admin of A and B with token A is refused on B (intended 200 to 403)", func(t *testing.T) {
+			t.Run("an admin of A and B with token A keeps the legacy answer on B", func(t *testing.T) {
 				legacy := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin, adminOf: []string{memberOrg}}, memberOrg)
 				if legacy.status != http.StatusOK {
 					t.Errorf("legacy guard: %d %q, want 200", legacy.status, legacy.body)
 				}
 				pdp := newTestPDP(t, allowAll)
 				got := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin, adminOf: []string{memberOrg}, enforcer: servedOrgEnforcer(t, pdp, namespace)}, memberOrg)
-				if got.status != http.StatusForbidden || len(pdp.calls()) != 0 {
-					t.Errorf("enforced: %d %q, %d PDP calls, want 403 and none", got.status, got.body, len(pdp.calls()))
+				if got.status != legacy.status || got.body != legacy.body || len(pdp.calls()) != 0 {
+					t.Errorf("enforced: %d %q, %d PDP calls, want the legacy %d and none", got.status, got.body, len(pdp.calls()), legacy.status)
 				}
 			})
 			t.Run("a slug keeps the legacy answer with no PDP call", func(t *testing.T) {
@@ -303,10 +305,12 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 					t.Errorf("X-Org-Id B, served A: %d %q, PDP saw %+v, want 200 and one question on A", got.status, got.body, calls)
 				}
 				for _, xOrg := range []string{memberOrg, strings.ToUpper(memberOrg), " " + memberOrg + " "} {
+					legacy := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin, xOrgID: xOrg}, memberOrg)
 					pdp = newTestPDP(t, allowAll)
 					got = servedOrgServe(t, row, servedOrgSetup{who: personaAdmin, enforcer: servedOrgEnforcer(t, pdp, namespace), xOrgID: xOrg}, memberOrg)
-					if got.status != http.StatusForbidden || len(pdp.calls()) != 0 {
-						t.Errorf("X-Org-Id %q, served B: %d %q, %d PDP calls, want 403 and none", xOrg, got.status, got.body, len(pdp.calls()))
+					if got.status != legacy.status || got.body != legacy.body || len(pdp.calls()) != 0 {
+						t.Errorf("X-Org-Id %q, served B: %d %q, %d PDP calls, want the legacy %d %q and none", xOrg, got.status, got.body,
+							len(pdp.calls()), legacy.status, legacy.body)
 					}
 				}
 			})
@@ -322,11 +326,12 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 				}
 				pdp = newTestPDP(t, allowAll)
 				got = servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, enforcer: servedOrgEnforcer(t, pdp, namespace)}, strangerOrg)
-				if got.status != http.StatusForbidden || got.body != servedOrgDenyBody(row.level) || len(pdp.calls()) != 0 {
-					t.Errorf("enforced, superuser, another org: %d %q, %d PDP calls, want 403 and none", got.status, got.body, len(pdp.calls()))
+				if got.status != legacy.status || got.body != legacy.body || len(pdp.calls()) != 0 {
+					t.Errorf("enforced, superuser, another org: %d %q, %d PDP calls, want the legacy %d and none", got.status, got.body,
+						len(pdp.calls()), legacy.status)
 				}
 			})
-			t.Run("the rule runs before the unjudged check: a legacy HS256 token", func(t *testing.T) {
+			t.Run("a legacy HS256 token: another org is unjudged served_org", func(t *testing.T) {
 				rec := recordEnforce(t)
 				pdp := newTestPDP(t, allowAll)
 				legacy := servedOrgServeHS256(t, row, nil, ownOrg)
@@ -335,26 +340,29 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 					t.Errorf("HS256, same org: %d %q unjudged %v, want the legacy %d %q and [%s/hs256]", got.status, got.body, rec.unjudgedSnapshot(),
 						legacy.status, legacy.body, row.pattern)
 				}
+				legacy = servedOrgServeHS256(t, row, nil, strangerOrg)
 				rec = recordEnforce(t)
 				got = servedOrgServeHS256(t, row, servedOrgEnforcer(t, pdp, namespace), strangerOrg)
-				if got.status != http.StatusForbidden || got.body != servedOrgDenyBody(row.level) {
-					t.Errorf("HS256, another org: %d %q, want 403 %s", got.status, got.body, servedOrgDenyBody(row.level))
+				if got.status != legacy.status || got.body != legacy.body {
+					t.Errorf("HS256, another org: %d %q, want the legacy %d %q", got.status, got.body, legacy.status, legacy.body)
 				}
-				if !slices.Equal(rec.snapshot(), []string{namespace + "/org_mismatch"}) || len(rec.unjudgedSnapshot()) != 0 {
-					t.Errorf("HS256, another org: outcomes %v unjudged %v, want [%s/org_mismatch] and none", rec.snapshot(), rec.unjudgedSnapshot(), namespace)
+				if len(rec.snapshot()) != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/served_org"}) {
+					t.Errorf("HS256, another org: outcomes %v unjudged %v, want none and [%s/served_org]", rec.snapshot(), rec.unjudgedSnapshot(), row.pattern)
 				}
 				if n := len(pdp.calls()); n != 0 {
 					t.Errorf("HS256: %d PDP calls, want 0", n)
 				}
 			})
-			t.Run("a token with no organization is refused on any named org", func(t *testing.T) {
+			t.Run("a token with no organization keeps the legacy answer on any named org", func(t *testing.T) {
 				noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
+				legacy := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg}, ownOrg)
 				rec := recordEnforce(t)
 				pdp := newTestPDP(t, allowAll)
 				got := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: servedOrgEnforcer(t, pdp, namespace)}, ownOrg)
-				if got.status != http.StatusForbidden || len(pdp.calls()) != 0 || !slices.Equal(rec.snapshot(), []string{namespace + "/org_mismatch"}) {
-					t.Errorf("no token org, named A: %d %q, %d PDP calls, outcomes %v, want 403, none and [%s/org_mismatch]", got.status, got.body,
-						len(pdp.calls()), rec.snapshot(), namespace)
+				if got.status != legacy.status || got.body != legacy.body || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 ||
+					!slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/served_org"}) {
+					t.Errorf("no token org, named A: %d %q, %d PDP calls, outcomes %v unjudged %v, want the legacy %d %q, none, none and [%s/served_org]",
+						got.status, got.body, len(pdp.calls()), rec.snapshot(), rec.unjudgedSnapshot(), legacy.status, legacy.body, row.pattern)
 				}
 			})
 		})
@@ -416,20 +424,19 @@ func headersEqual(a, b http.Header) bool {
 	return true
 }
 
-// Shadow on, enforcement off: the answer is the legacy one; a served org that is not A is recorded as a mismatch
-// of class intentional without a PDP call; a slug is skipped; A is asked and matched.
-func TestServedOrgShadowRecordsTheMismatchAndNeverChangesTheAnswer(t *testing.T) {
+// Shadow on, enforcement off: the answer is the legacy one; a served org that is not A is skipped without a PDP call,
+// as enforcement keeps its legacy answer; a slug is skipped; A is asked and matched.
+func TestServedOrgShadowJudgesOnlyTheTokenOrgAndNeverChangesTheAnswer(t *testing.T) {
 	for _, row := range servedOrgCensus {
 		t.Run(row.pattern, func(t *testing.T) {
-			namespace := servedOrgNamespace(t, row.pattern)
 			cases := []struct {
 				name, served, result, mismatch string
 				calls                          int
 			}{
 				{"same org", ownOrg, "match", "", 1},
 				{"same org upper", strings.ToUpper(ownOrg), "match", "", 1},
-				{"another org", strangerOrg, "mismatch", namespace + "/admin/intentional", 0},
-				{"another org braces", "{" + memberOrg + "}", "mismatch", namespace + "/admin/intentional", 0},
+				{"another org", strangerOrg, "skipped", "", 0},
+				{"another org braces", "{" + memberOrg + "}", "skipped", "", 0},
 				{"slug", "acme", "skipped", "", 0},
 			}
 			for _, tc := range cases {

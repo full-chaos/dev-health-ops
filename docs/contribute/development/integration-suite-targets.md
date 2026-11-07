@@ -18,15 +18,13 @@ Every Go integration suite in dev-health-ops needs a real datastore. There are
 three places it can come from, and picking the wrong one produces a green run
 that proves nothing.
 
-Tracked by CHAOS-4428. The companion runbook,
-[Lane isolation on a kiac cluster](lane-isolation-kiac.md), covers how a lane
-cluster is built; this page covers only **where a given suite should run**.
+This page covers only **where a given suite should run**.
 
 ## The three targets
 
 | Target | What it is | What it costs |
 | --- | --- | --- |
-| **Host Testcontainers** | `StartPostgres`/`StartClickHouse`/`StartValkey` start a container per caller through Docker. The default. | Docker CPU on the developer's Mac — the allocation CHAOS-4428 exists to reduce. |
+| **Host Testcontainers** | `StartPostgres`/`StartClickHouse`/`StartValkey` start a container per caller through Docker. The default. | Docker CPU on the developer's Mac — the allocation this routing exists to reduce. |
 | **kiac in-cluster** | The same helpers, pointed at a cluster's existing datastores by env DSN. Every caller **that goes through the harness** gets its own scratch database; a resource created out-of-band is outside that ownership model — see below. | Near zero extra CPU: the datastores are already running. |
 | **GitHub Actions CI** | The suite is not run locally at all; the `go-storage-integration-*` jobs are the signal. | No local cost, but see the version table — CI does not run what production runs. |
 
@@ -38,16 +36,16 @@ across the three targets, and that is what decides the routing:
 | Where | ClickHouse | PostgreSQL | How this was established |
 | --- | --- | --- | --- |
 | Host Testcontainers (this repo) | **26.6.1.1193** | 18-alpine | The image is digest-pinned with no version in the source; resolved from the registry config blob label `com.clickhouse.build.version` (built 2026-06-26). Independently corroborated in-repo: `internal/providersync/linear_stale_project_ownership_cleanup.go:75-82` records the same resolution, reached by running against the digest directly. |
-| GitHub Actions CI services | **26.7** | 18-alpine | `.github/workflows/test.yml:171,353`; `.github/workflows/live-e2e.yml:88,200`. Moved 25.1 -> 26.7 by CHAOS-4851 when the service images were mirrored to ghcr; kept a tag, not a digest, so minor upgrades apply. |
+| GitHub Actions CI services | **26.7** | 18-alpine | `.github/workflows/test.yml:171,353`; `.github/workflows/live-e2e.yml:88,200`. Moved 25.1 -> 26.7 when the service images were mirrored to ghcr; kept a tag, not a digest, so minor upgrades apply. |
 | kiac in-cluster (`acr-local`) | **26.7.3.19** | **18.6** | Live readback, `SELECT version()` / `SHOW server_version`, 2026-08-31. |
-| acr's own Testcontainers | 26.7 | 18-alpine | Pinned deliberately by CHAOS-4549; floor `26.7` in `acr/internal/chfixture`. Relaxed from the exact patch `26.7.5.10` to the bare minor by CHAOS-5180 (patch drift allowed). |
-| Production | 26.7.x (floating) | — | CHAOS-4519: prod's exact patch drifts, so the floor is `major.minor`. |
+| acr's own Testcontainers | 26.7 | 18-alpine | Pinned deliberately; floor `26.7` in `acr/internal/chfixture`. Relaxed from the exact patch `26.7.5.10` to the bare minor (patch drift allowed). |
+| Production | 26.7.x (floating) | — | Prod's exact patch drifts, so the floor is `major.minor`. |
 
 Three consequences follow, and they are the whole decision procedure:
 
 1. **CI's service containers now match production's line.** They ran 25.1
-   against a production line of 26.7 until CHAOS-4851 moved them to 26.7 as a
-   side effect of mirroring them to ghcr. CHAOS-4549 is the precedent for why
+   against a production line of 26.7 until they moved to 26.7 as a
+   side effect of mirroring them to ghcr. The acr pin is the precedent for why
    that gap mattered rather than being cosmetic: a multi-arm
    `JOIN ... ON (... OR ...)` is accepted on 26.7 and rejected on 24.8 with
    `Code: 403 Unsupported JOIN ON conditions`, under every analyzer setting.
@@ -64,7 +62,7 @@ Three consequences follow, and they are the whole decision procedure:
    ClickHouse line.** So moving ClickHouse-touching suites there is a
    correctness upgrade, not only a Docker saving.
 
-> **Open:** the ops ClickHouse pin is an opaque digest set under CHAOS-3033 and
+> **Open:** the ops ClickHouse pin is an opaque digest set long ago and
 > never revisited, and it disagrees with acr's ruled 26.7 floor. Reconciling
 > the two is tracked separately — it changes what every ops ClickHouse suite
 > runs against and needs its own red-first change, so it is deliberately not
@@ -92,16 +90,16 @@ flowchart TD
     P -- yes --> Q[Ask these of EACH store<br/>independently]
 
     Q --> O{Is anything created<br/>behind the harness?}
-    O -- yes --> O1[Nothing namespaces or drops it,<br/>so lanes collide]
+    O -- yes --> O1[Nothing namespaces or drops it,<br/>so parallel runs collide]
 
     Q --> R{Does it create cluster-scoped objects?<br/>CREATE ROLE, tablespace,<br/>event trigger}
-    R -- yes --> R1[A scratch database does not isolate<br/>these, and two lanes collide on a<br/>fixed name even if one drops it first]
+    R -- yes --> R1[A scratch database does not isolate<br/>these, and two parallel runs collide on a<br/>fixed name even if one drops it first]
 
     Q --> V{Does it use Valkey?}
     V -- yes --> V1[Valkey has no CREATE DATABASE<br/>to isolate parallel callers]
 
     Q --> C{Does it touch ClickHouse?}
-    C -- yes --> C1[CI services run 26.7,<br/>production's line, since CHAOS-4851]
+    C -- yes --> C1[CI services run 26.7,<br/>production's line]
 
     O1 --> T[Read that store's cell<br/>in the table below]
     R1 --> T
@@ -137,15 +135,13 @@ Alongside it, one separate question: **is CI sufficient proof?** — whether the
 `go-storage-integration-*` jobs can stand in for a local run at all. That is
 where the version table bites.
 
-**The bar is two lanes running concurrently** (chris, 2026-08-31), which is
-CHAOS-4428's own scope item 5. That is what makes a fixed name disqualifying:
+**The bar is two parallel runs running concurrently.** That is what makes a fixed name disqualifying:
 a suite creating `CREATE ROLE reindex_domain_runtime` is re-runnable on its own
-and still unsafe beside a second lane doing the same.
+and still unsafe beside a second run doing the same.
 
 PostgreSQL-only packages get **yes**: CI's PostgreSQL is the same 18 line as
 kiac (18.6) and production, so nothing about the engine differs. ClickHouse-
-touching packages are no longer blocked on the CI engine version: since
-CHAOS-4851 the CI services run 26.7, production's line. The host
+touching packages are no longer blocked on the CI engine version: the CI services run 26.7, production's line. The host
 Testcontainers gap in point 2 above still stands, so "I ran it locally"
 remains the weaker claim.
 
@@ -156,31 +152,31 @@ semantics that a version change can move.
 
 | Package | Weight | PG | CH | Valkey | CI proof? | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `internal/providersync` | 1166s | kiac | kiac | — | **no** | Sensitive. `FINAL`/`argMax`/`ReplacingMergeTree` in 53 of 55 CH-touching files, plus a dedup-window `SETTINGS` test. Largest single cost in the repo. Role name parameterised by CHAOS-4661 for both re-run- and concurrency-safety; self-cleans via `containers.DropRole` (see "Executed evidence" below). |
+| `internal/providersync` | 1166s | kiac | kiac | — | **no** | Sensitive. `FINAL`/`argMax`/`ReplacingMergeTree` in 53 of 55 CH-touching files, plus a dedup-window `SETTINGS` test. Largest single cost in the repo. Role name parameterised for both re-run- and concurrency-safety; self-cleans via `containers.DropRole` (see "Executed evidence" below). |
 | `internal/scheduler/fixed` | 143s | kiac | — | — | yes | Self-seeding PostgreSQL. |
 | `internal/streamhandlers` | 113s | — | kiac | — | **no** | Sensitive. `argMax` tie-break over `(occurred_at, event_id)`; migration 077 states outright that a tie lets ClickHouse "return either key". Weight is *almost entirely container startup* (six tests, fresh container each) — the biggest per-package saving. |
-| `internal/storage/postgres` | 91s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (7 creation sites across this package -- 6 that literally `CREATE ROLE`, plus `provision_script_integration_test.go`'s `TestProvisionScriptGrantsNoTablePrivileges`, whose roles come from an external `psql --file=provision_river_roles.sql` invocation -- each self-cleaning via `containers.DropRole`; plus 3 same-package pure consumers of `domain_grant_reconciliation_integration_test.go`'s shared `startGrantHarness` fixture a `CREATE ROLE` grep could not see -- `coordinator_statement_privileges`, `posture_diagnostics`, `fixed_engine_statement_privileges`, and `provision_script`'s other test, `TestProvisionScriptNeverWipesMigrateGrants`). Otherwise pure PostgreSQL. |
+| `internal/storage/postgres` | 91s | kiac | — | — | yes | Role names parameterised (7 creation sites across this package -- 6 that literally `CREATE ROLE`, plus `provision_script_integration_test.go`'s `TestProvisionScriptGrantsNoTablePrivileges`, whose roles come from an external `psql --file=provision_river_roles.sql` invocation -- each self-cleaning via `containers.DropRole`; plus 3 same-package pure consumers of `domain_grant_reconciliation_integration_test.go`'s shared `startGrantHarness` fixture a `CREATE ROLE` grep could not see -- `coordinator_statement_privileges`, `posture_diagnostics`, `fixed_engine_statement_privileges`, and `provision_script`'s other test, `TestProvisionScriptNeverWipesMigrateGrants`). Otherwise pure PostgreSQL. |
 | `internal/jobs/report` | 33s | kiac | kiac | — | **no** | Mixed: most files use only `LIMIT 1 BY`/`uniqExact`, but `team_metrics_daily_ratio` uses `countIf(...) OVER (PARTITION BY ...)`. |
 | `internal/scheduler/sync` | 32s | kiac | — | — | yes | Pure PostgreSQL. |
-| `internal/workerservice` | 24s | kiac | kiac | **host** | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. Role names parameterised by CHAOS-4661; still host-bound overall for Valkey -- moving PostgreSQL alone does not move the package until Valkey is also resolved (CHAOS-4666). |
-| `internal/syncreconciler` | 16s | kiac | — | — | yes | Role names parameterised by CHAOS-4661: `unreclaimable_sweep_role_split_integration_test.go` plus 3 same-package consumers of `kernel_integration_test.go`'s shared role fixture (`active_active_integration_test.go`, `terminal_delivery_repair_integration_test.go` × 3 call sites) that a `CREATE ROLE` grep could not see. |
+| `internal/workerservice` | 24s | kiac | kiac | **host** | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. Role names parameterised; still host-bound overall for Valkey -- moving PostgreSQL alone does not move the package until Valkey is also resolved. |
+| `internal/syncreconciler` | 16s | kiac | — | — | yes | Role names parameterised: `unreclaimable_sweep_role_split_integration_test.go` plus 3 same-package consumers of `kernel_integration_test.go`'s shared role fixture (`active_active_integration_test.go`, `terminal_delivery_repair_integration_test.go` × 3 call sites) that a `CREATE ROLE` grep could not see. |
 | `internal/externalrecompute` | 15s | kiac | — | **host** | yes | Uses Valkey. |
-| `internal/workersctl` | 13s | kiac | — | — | yes | Role names parameterised by CHAOS-4661. |
-| `internal/joboperator` | 13s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (2 test functions sharing 1 setup helper). |
+| `internal/workersctl` | 13s | kiac | — | — | yes | Role names parameterised. |
+| `internal/joboperator` | 13s | kiac | — | — | yes | Role names parameterised (2 test functions sharing 1 setup helper). |
 | `internal/synccoverage` | 13s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/testsupport/containers` | 13s | **host** | **host** | **host** | yes | Engine-neutral (boot/open/close only) — but it is the harness's own self-test, so it must keep exercising the container path. |
-| `internal/joboutbox` | 12s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (`relay_integration_test.go`, `strand_repair_integration_test.go`). |
+| `internal/joboutbox` | 12s | kiac | — | — | yes | Role names parameterised (`relay_integration_test.go`, `strand_repair_integration_test.go`). |
 | `internal/jobs/system` | 12s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/providerfoundation` | 12s | kiac | kiac | **host** | **no** | Sensitive: asserts insert-block dedup under `SETTINGS non_replicated_deduplication_window=100`. |
 | `internal/reconcilerservice` | 10s | kiac | — | — | yes | Pure PostgreSQL. |
-| `internal/queryapi/hotspots` | 26s | — | kiac | — | **no** | Sensitive. CHAOS-4684: `argMax(<col>, (day, computed_at))` tie-break regression guard — a fake `QueryClient` cannot exercise how ClickHouse itself resolves an argMax tie, so this package's first `-tags=integration` file drives the real engine. Two tests: the tie-break proof (confirmed RED on the parent `argMax(<col>, computed_at)`, no `day` in the ordering tuple, GREEN after the fix) and a second regression guard (codex review round 1, EXECUTED) pinning that six INDEPENDENT `argMax(<col>, (day, computed_at))` calls still mix days when the winning day's `blame_concentration` is `NULL` — ClickHouse's argMax skips a NULL-valued Nullable argument when choosing that column's own winning row, so the fix aggregates one `argMax(tuple(...), (day, computed_at))` and extracts all six fields with `tupleElement` so the row selection is atomic. Both tests confirmed RED/GREEN on BOTH ClickHouse 26.7.5.10 (kiac/prod line) and the digest-pinned 26.6.1.1193 host-Testcontainers image this repo's CI Go integration-shard job actually runs against today (`.github/workflows/go.yml`'s job sets no remote-DSN env var, so every package in this table executes via host Testcontainers in CI regardless of this column — the "Open" caveat above applies here too). |
+| `internal/queryapi/hotspots` | 26s | — | kiac | — | **no** | Sensitive. `argMax(<col>, (day, computed_at))` tie-break regression guard — a fake `QueryClient` cannot exercise how ClickHouse itself resolves an argMax tie, so this package's first `-tags=integration` file drives the real engine. Two tests: the tie-break proof (confirmed RED on the parent `argMax(<col>, computed_at)`, no `day` in the ordering tuple, GREEN after the fix) and a second regression guard (codex review round 1, EXECUTED) pinning that six INDEPENDENT `argMax(<col>, (day, computed_at))` calls still mix days when the winning day's `blame_concentration` is `NULL` — ClickHouse's argMax skips a NULL-valued Nullable argument when choosing that column's own winning row, so the fix aggregates one `argMax(tuple(...), (day, computed_at))` and extracts all six fields with `tupleElement` so the row selection is atomic. Both tests confirmed RED/GREEN on BOTH ClickHouse 26.7.5.10 (kiac/prod line) and the digest-pinned 26.6.1.1193 host-Testcontainers image this repo's CI Go integration-shard job actually runs against today (`.github/workflows/go.yml`'s job sets no remote-DSN env var, so every package in this table executes via host Testcontainers in CI regardless of this column — the "Open" caveat above applies here too). |
 | `internal/jobs/pagerduty` | 9s | kiac | — | — | yes | Pure PostgreSQL. |
-| `internal/storage/river` | 9s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 across `migrate_integration_test.go` and `telemetry_integration_test.go` -- both independently call `containers.RoleName` and create their own roles (not a shared-fixture consumer pair, despite the similar name); each self-cleans via `containers.DropRole`. **Dual-path backup/restore**: its round-trip test dispatches on `instance.Container` -- non-nil (host Testcontainers, including CI) runs `pg_dump`/`createdb`/`pg_restore` via `instance.Container.Exec`, reusing the `postgres:18-alpine` image's own bundled PostgreSQL 18 client tools with zero host dependency (this is the original, pre-CHAOS-4661 mechanism, restored); nil (the kiac remote path, no container to exec into) runs the same three binaries as host processes instead. **Host-tools requirement is remote-path only**: `assertPostgresClientToolsAvailable` (PATH + PostgreSQL 18+ major-version check, failing with an install instruction rather than an opaque exec error) gates only the host-process branch -- CI, which runs the container path, carries no such dependency and is unaffected by what PostgreSQL client tools its runner happens to have. |
+| `internal/storage/river` | 9s | kiac | — | — | yes | Role names parameterised across `migrate_integration_test.go` and `telemetry_integration_test.go` -- both independently call `containers.RoleName` and create their own roles (not a shared-fixture consumer pair, despite the similar name); each self-cleans via `containers.DropRole`. **Dual-path backup/restore**: its round-trip test dispatches on `instance.Container` -- non-nil (host Testcontainers, including CI) runs `pg_dump`/`createdb`/`pg_restore` via `instance.Container.Exec`, reusing the `postgres:18-alpine` image's own bundled PostgreSQL 18 client tools with zero host dependency (this is the original, earlier mechanism, restored); nil (the kiac remote path, no container to exec into) runs the same three binaries as host processes instead. **Host-tools requirement is remote-path only**: `assertPostgresClientToolsAvailable` (PATH + PostgreSQL 18+ major-version check, failing with an install instruction rather than an opaque exec error) gates only the host-process branch -- CI, which runs the container path, carries no such dependency and is unaffected by what PostgreSQL client tools its runner happens to have. |
 | `internal/jobs/workgraph` | 7s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobroute` | 6s | kiac | — | — | yes | **Demonstrated** — see below. |
-| `internal/jobs/metrics/daily` | 6s | kiac | kiac | — | **no** | Role name parameterised by CHAOS-4661 -- this is the package the original collision was found on (`finalize_redrive_test_domain`, SQLSTATE 42710). Also sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
+| `internal/jobs/metrics/daily` | 6s | kiac | kiac | — | **no** | Role name parameterised -- this is the package the original collision was found on (`finalize_redrive_test_domain`, SQLSTATE 42710). Also sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
 | `internal/jobs/metrics/remaining` | 6s | kiac | kiac | — | **no** | Mixed: the capacity schema guard reads `system.tables` as strings (neutral), but `dora_ordering_contract` tests `FINAL` vs `LIMIT 1 BY` divergence directly. |
-| `internal/syncdispatchruntime` | 6s | kiac | kiac | **host** | **no** | Sensitive: `argMax(id, updated_at)` dedup readback. Role names parameterised by CHAOS-4661 across 3 files (7 test functions sharing 1 setup helper, plus 2 standalone files); still host-bound overall for Valkey, same as `internal/workerservice`. Also fixed a cross-*package* literal collision: this package and `internal/storage/postgres`'s grant-reconciliation suite hard-coded the identical role name `grant_domain_runtime`, which ordinary `go test ./...` parallelism could already collide on, independent of any lane/cluster concept. |
+| `internal/syncdispatchruntime` | 6s | kiac | kiac | **host** | **no** | Sensitive: `argMax(id, updated_at)` dedup readback. Role names parameterised across 3 files (7 test functions sharing 1 setup helper, plus 2 standalone files); still host-bound overall for Valkey, same as `internal/workerservice`. Also fixed a cross-*package* literal collision: this package and `internal/storage/postgres`'s grant-reconciliation suite hard-coded the identical role name `grant_domain_runtime`, which ordinary `go test ./...` parallelism could already collide on, independent of any lane/cluster concept. |
 | `internal/queryapi/routeswitch` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobrescue` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobruntime` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
@@ -189,7 +185,7 @@ semantics that a version change can move.
 | `internal/streamrunner` | 2s | — | — | **host** | yes | Valkey only. |
 
 **Eight packages carry engine-sensitive ClickHouse SQL and cannot be proven by
-CI at all** — roughly 1366s (down from 1416s/nine packages pre-CHAOS-5336:
+CI at all** — roughly 1366s (down from 1416s/nine packages before the Python producers were retired:
 `internal/testsupport/computeparity`'s ~50s row is gone with the package
 itself, retired along with dora/capacity's Python producers; re-measure rather
 than trust this percentage exactly), about three quarters of the total
@@ -205,7 +201,7 @@ and `internal/workerservice/multi_family_boot_integration_test.go` (may transiti
 ordering guard but asserts nothing about it). Both sit inside packages already
 routed to kiac, so the uncertainty changes no routing decision today.
 
-### The second blocker: PostgreSQL roles are cluster-scoped — RESOLVED by CHAOS-4661
+### The second blocker: PostgreSQL roles are cluster-scoped — RESOLVED
 
 A scratch **database** isolates tables. It does **not** isolate roles, tablespaces
 or event triggers — those live in the cluster, which is shared.
@@ -220,7 +216,7 @@ ERROR: role "finalize_redrive_test_domain" already exists (SQLSTATE 42710)
 ```
 
 Found by running `internal/jobs/metrics/daily` twice against kiac, and
-independently reproduced by CHAOS-4661 on a fresh detached worktree at the
+independently reproduced on a fresh detached worktree at the
 untouched parent commit before any fix: run 1 passed, run 2 failed with the
 same SQLSTATE. It was a re-runnability failure, not a correctness one, and it
 was invisible on the first run — which is exactly what made it worth writing
@@ -228,7 +224,7 @@ down.
 
 Two packages (`internal/providersync`, `internal/storage/river`) already
 `DROP ROLE`d before creating, so they were safe to **re-run**. They were still
-not safe to run **concurrently**: two lanes would race on the same fixed role
+not safe to run **concurrently**: two parallel runs would race on the same fixed role
 name, and the one that dropped it would do so out from under the other.
 
 **Under the concurrent bar that is the deciding test, so a fixed role name
@@ -236,7 +232,7 @@ blocked its package's PostgreSQL — including where the package dropped the
 role first.** This was the single largest constraint on this page:
 `internal/providersync` alone is 1166s, and it was in this set.
 
-**CHAOS-4661 fixed this in the tests, not the harness** — the harness cannot
+**The fix is in the tests, not the harness** — the harness cannot
 rename a role a test hard-codes, and having it drop unknown roles on a shared
 server would be far more dangerous than the problem it solves. Every role name
 in the 19 files (plus same-package and cross-file consumers a literal
@@ -245,7 +241,7 @@ in the 19 files (plus same-package and cross-file consumers a literal
 collision between two packages) is now suffixed with
 `containers.RoleSuffix(instance)`: the scratch database's own crypto-random
 suffix (`internal/testsupport/containers/rolename.go`), so two successive runs
-and two concurrent lanes on the same kiac cluster never collide. The same
+and two concurrent runs on the same kiac cluster never collide. The same
 literal-hardcoding defect existed one level down for the DATABASE name — about
 a dozen files `GRANT`/`REVOKE`d against a hard-coded `worker_test`, which only
 exists on the host container path and does not exist on kiac at all — fixed
@@ -256,7 +252,7 @@ PostgreSQL now routes to kiac in the table above.
 
 31 packages, **1852s (30.9 min)** of declared integration weight.
 
-**Before CHAOS-4661:**
+**Before the role-name change:**
 
 | Class | Weight | Share |
 | --- | --- | --- |
@@ -271,9 +267,9 @@ Exactly, 402/1852 = **21.71%**, rounded to 21.7% above.
 **That number was small because of one package.** `internal/providersync` alone
 is 1166s — 63% of all integration weight — and it created a fixed role name. It
 dropped it first, so it was fine run on its own, and it was unsafe beside a
-concurrent lane. Under the concurrent bar it counted as blocked.
+concurrent run. Under the concurrent bar it counted as blocked.
 
-**After CHAOS-4661 (current state, this page):**
+**After the role-name change (current state, this page):**
 
 | Class | Weight | Share |
 | --- | --- | --- |
@@ -292,30 +288,30 @@ still_blocked_by_valkey_too (30) = 1728`.
 That distinction is not pedantry — it is the correction that produced this
 number. Adding the blocked buckets together over-counts, because
 `internal/workerservice` and `internal/syncdispatchruntime` were blocked by
-roles **and** Valkey, so CHAOS-4661 moved their PostgreSQL and left them
-host-bound anyway (CHAOS-4666 tracks the Valkey side). The same 30s pair had
+roles **and** Valkey, so the role-name change moved their PostgreSQL and left them
+host-bound anyway (the Valkey side is open work). The same 30s pair had
 already caused two earlier arithmetic errors on this page while it was still a
 projection.
 
-**CHAOS-4661 was the priority unlock**: it moved 72 percentage points on its
-own (21.7% → 93.3%), far more than anything else on this page. CHAOS-4677 would
-add another 2.7 (93.3% → 96.0%) by namespacing the compute-parity databases.
+**The role-name change was the priority unlock**: it moved 72 percentage points on its
+own (21.7% → 93.3%), far more than anything else on this page. Namespacing the compute-parity databases would
+add another 2.7 (93.3% → 96.0%) by itself.
 The residual **124s (6.7%)** is Valkey (61s: the 31s Valkey-only packages plus
 the 30s pair now blocked by Valkey alone), the out-of-band databases (50s), and
 the harness's own self-test (13s), and it does not shrink further without
-CHAOS-4677 and CHAOS-4666.
+those two changes.
 
 An earlier version of this page published 85.2%, and before that 87.9%, then
 21.7% with a 93.3%/96.0% projection. The first two were computed with a single
 target per package, which hid role-creating packages behind another reason,
 and measured re-runnability rather than concurrency. 21.7% was the last
-pre-CHAOS-4661 measurement. 93.3% is no longer a projection against a
+pre-role-name-change measurement. 93.3% is no longer a projection against a
 hypothetical future fix: it is the routing this page's table now asserts,
 because the code shipping in the same change makes it true for all ten
 role-blocked packages by the same mechanism (`containers.RoleName`). The
 figures above are derived from the table by script rather than by hand, and
 every bucket can be recomputed from it. **Executed twice-in-succession proof
-for every individual package is tracked in "Executed evidence: CHAOS-4661"
+for every individual package is tracked in "Executed evidence: role names"
 below — do not treat the percentage as a substitute for that table, and check
 it for any row still pending rather than assuming green.**
 
@@ -354,11 +350,11 @@ example that passed the closing check above yet was still unsafe on a shared
 cluster: it created **fixed-name** databases (`parity_left`, `parity_right`,
 `parity_capacity_*`) through a separate fixture tool
 (`scripts/worker/compute_parity_fixtures.py`, removed with the Python api) and provisioned them with
-`--reset`. Two lanes then collided on the same names and one dropped the
+`--reset`. Two runs then collided on the same names and one dropped the
 other's live database. The tool's ownership marker did not help: it was the
-same table name in every lane, so it distinguished a fixture database from a
-real one but not one lane's from another's. Both the package and the fixture
-tool are now retired (CHAOS-5336, dora/capacity's Python producers deleted
+same table name in every run, so it distinguished a fixture database from a
+real one but not one run's from another's. Both the package and the fixture
+tool are now retired (dora/capacity's Python producers deleted
 outright) — kept here as the worked example of the question below, which
 still applies to any future out-of-band creator.
 
@@ -372,7 +368,7 @@ repository — re-sweep before trusting that this stays true.
 ### Orphans
 
 A run that fails hard can also leave its scratch database behind, which is what
-the per-lane prefix and the create/drop log exist for. A failed `DROP`
+the per-run prefix and the create/drop log exist for. A failed `DROP`
 additionally logs `ORPHANED`, because callers routinely discard
 `Instance.Close`'s error and would otherwise never see it.
 
@@ -396,9 +392,9 @@ against anything holding prior state:
 - Suites asserting exact row counts starting from zero.
 
 The scratch-database-per-caller design satisfies these — a scratch database is
-empty by construction — but pointing such a suite at a *seeded* lane database
-does not. CHAOS-4457 recorded this concretely: two `tests/test_dispatch_outbox.py` (removed with the Python api)
-tests failed with `IndexError` against a seeded lane whose `worker_job_outbox`
+empty by construction — but pointing such a suite at a *seeded* database
+does not. This was recorded concretely: two `tests/test_dispatch_outbox.py` (removed with the Python api)
+tests failed with `IndexError` against a seeded database whose `worker_job_outbox`
 already held 32 pending rows, because they claim with `limit=1` and expect
 their own seeded row back. Against a scratch database both pass unchanged (see
 the executed evidence below). **The distinction that matters is scratch vs.
@@ -414,8 +410,8 @@ export DEV_HEALTH_TEST_POSTGRES_DSN="postgres://${ACR_TEST_TRIAL_PG_USER}:${ACR_
 export DEV_HEALTH_TEST_CLICKHOUSE_DSN="clickhouse://${ACR_TEST_TRIAL_CH_USER}:${ACR_TEST_TRIAL_CH_PASSWORD}@${ACR_TEST_TRIAL_CH_HOST}:${ACR_TEST_TRIAL_CH_PORT}/${ACR_TEST_TRIAL_CH_DB}"
 export DEV_HEALTH_TEST_CLICKHOUSE_HTTP_DSN="clickhouse://${ACR_TEST_TRIAL_CH_USER}:${ACR_TEST_TRIAL_CH_PASSWORD}@${ACR_TEST_TRIAL_CH_HOST}:${ACR_TEST_TRIAL_CH_HTTP_PORT}/${ACR_TEST_TRIAL_CH_DB}"
 
-# Namespaces this lane's scratch databases so an orphan from a killed run can
-# be swept without matching a concurrent lane's live ones.
+# Namespaces this run's scratch databases so an orphan from a killed run can
+# be swept without matching a concurrent run's live ones.
 export DEV_HEALTH_TEST_SCRATCH_PREFIX=lane_<ticket>
 
 # ClickHouse suites that apply the real migration chain shell out to python3
@@ -518,8 +514,8 @@ Each Go suite was run **twice** deliberately. A single green run against a
 shared server proves less than it looks: the role collision described above
 passes on the first run and only fails on the second.
 
-The Python pair is the CHAOS-4457 sub-item (b) result: both are recorded there
-as failing against a seeded lane database, and both pass against a scratch one
+The Python pair result: both are recorded there
+as failing against a seeded database, and both pass against a scratch one
 with no change to the tests. The DSN used the `postgresql+asyncpg://` dialect,
 which is sub-item (a)'s correction.
 
@@ -529,7 +525,7 @@ baselines, and a `LIKE 'lane_4428%'` sweep returns 0. The shared trial
 ClickHouse `default` database and the real-data `dh_0830` database were never
 written to.
 
-## Executed evidence: CHAOS-4661 (2026-08-31)
+## Executed evidence: role names (2026-08-31)
 
 Against `acr-local`'s in-cluster data plane — PostgreSQL 18.6 — with the Docker
 daemon left untouched.
@@ -621,9 +617,9 @@ prefix these test files use — `grant_*`, `operator_*`, `kernel_*`, `sweep_*`,
 `workerctl_*`, etc.) was found on the shared cluster on 2026-08-31, accumulated
 from runs across this ticket's own verification history before the cleanup fix
 above existed. It was deliberately **not** bulk-swept as part of this change —
-enumerating and dropping roles by pattern on a server other lanes are actively
+enumerating and dropping roles by pattern on a server other runs are actively
 using is exactly the harness-level danger "why not a harness change" (above)
-warns against; a blind sweep could drop a role a concurrent lane's live test
+warns against; a blind sweep could drop a role a concurrent run's live test
 still owns. Every role created by code in THIS PR from here forward
 self-cleans (proof above); the historical backlog is a separate, explicitly
 flagged cleanup decision for whoever owns a quiet window on the shared

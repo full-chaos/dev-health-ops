@@ -252,8 +252,8 @@ func TestQueueMapGuardsFailOnAStaleLineInTheBlock(t *testing.T) {
 // described as deleted, never as in flight, and both replacement planes must be named.
 func workerRuntimePageDefects(doc string) []string {
 	var out []string
-	if !strings.Contains(doc, "CHAOS-4054") {
-		out = append(out, "go-worker-runtime.md must reference the CHAOS-4054 two-plane decision record")
+	if !strings.Contains(doc, "exactly two planes") {
+		out = append(out, "go-worker-runtime.md must state the two-plane decision (exactly two planes)")
 	}
 	if !strings.Contains(doc, "are **deleted**") && !strings.Contains(doc, "surface is deleted") {
 		out = append(out, "go-worker-runtime.md must state that the WORKER_*_ENABLED surface is deleted")
@@ -275,7 +275,7 @@ func TestGoWorkerRuntimeDoesNotEnshrineWorkerEnabledSwitches(t *testing.T) {
 		t.Fatalf("the real go-worker-runtime page has defects: %q", got)
 	}
 	for _, c := range []struct{ name, old, repl, want string }{
-		{"the decision record reference is removed", "CHAOS-4054", "the decision record", "must reference the CHAOS-4054"},
+		{"the two-plane statement is removed", "exactly two planes", "several planes", "must state the two-plane decision"},
 		{"the deleted statement is changed", "are **deleted**", "are **dying**", "must state that the WORKER_*_ENABLED surface is deleted"},
 		{"the in-flight wording returns", "IntegrationDataset.is_enabled", "IntegrationDataset.is_enabled (being retired)", "route-switch surface as in-flight (being retired)"},
 		{"the intent plane is no longer named", "IntegrationDataset.is_enabled", "the dataset flag", "must name both replacement planes"},

@@ -82,18 +82,18 @@ func merge(a, b map[string]string) map[string]string {
 	return out
 }
 
-// The accept keys are go-api's AcceptSecrets order: the signing key, the
-// previous key, the JWT key; repeats once. The signing key is the only one
-// that signs.
+// The accept keys are go-api's AcceptSecrets order: the signing key, then the
+// previous key; repeats once. The signing key is the only one that signs, and
+// the access key is never an accept key.
 func TestInviteAcceptSecretsOrder(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		previous string
 		want     []string
 	}{
-		{"three distinct keys", testInvitePrevious, []string{testInviteSecret, testInvitePrevious, testAccessSecret}},
-		{"previous equal to the signing key", testInviteSecret, []string{testInviteSecret, testAccessSecret}},
-		{"previous equal to the JWT key", testAccessSecret, []string{testInviteSecret, testAccessSecret}},
+		{"two distinct keys", testInvitePrevious, []string{testInviteSecret, testInvitePrevious}},
+		{"previous equal to the signing key", testInviteSecret, []string{testInviteSecret}},
+		{"previous equal to the access key", testAccessSecret, []string{testInviteSecret, testAccessSecret}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg, err := Load(Spec{LookupEnv: lookupFrom(provisioningEnv(map[string]string{EnvMembershipRoutes: "true",
@@ -135,5 +135,17 @@ func TestSafeAttrsNamesTheRoutesSwitchAndNoInviteKey(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("start line has no membership_routes_enabled=true")
+	}
+}
+
+func TestInviteAcceptSecretsNeverHoldTheAccessSecret(t *testing.T) {
+	env := provisioningEnv(map[string]string{EnvMembershipRoutes: "true",
+		EnvInviteTokenSecret: testInviteSecret, EnvInviteTokenSecretPrevious: testInvitePrevious})
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.InviteAcceptSecrets(); slices.Contains(got, testAccessSecret) || len(got) != 2 {
+		t.Fatalf("accept list holds %d keys, access secret among them: %v", len(got), slices.Contains(got, testAccessSecret))
 	}
 }

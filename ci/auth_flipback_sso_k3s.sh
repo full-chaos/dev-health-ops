@@ -136,6 +136,11 @@ EOF1
   livenessProbe: {timeoutSeconds: 10}
   extraEnv:
     - {name: VALKEY_URI, value: "redis://${FULL}-valkey:6379/1"}
+EOF2
+  cat >>"$1" <<EOF2B
+    - {name: SSO_STATE_SECRET, valueFrom: {secretKeyRef: {name: sso-state, key: SSO_STATE_SECRET}}}
+EOF2B
+  cat >>"$1" <<EOF2C
 authService:
   phase: 3
   loginStage: goApi
@@ -143,7 +148,7 @@ authService:
   image: {repository: "${IMG_SVC}", pullPolicy: IfNotPresent}
   database: {secretName: auth-db}
   signingKey: {secretName: auth-key, keyId: fb}
-EOF2
+EOF2C
   cat >>"$1" <<EOF3
   sessionKeys: {successor: {secretName: auth-session}, loginLockout: {secretName: auth-lockout}}
   valkey: {secretName: auth-ratelimit}
@@ -463,6 +468,7 @@ put_secret auth-migrate-db AUTH_MIGRATION_DATABASE_URI "$(dsn devhealth devhealt
 openssl genpkey -algorithm ed25519 2>/dev/null | K create secret generic auth-key --from-file=signing-key.pem=/dev/stdin >/dev/null
 put_secret auth-ratelimit AUTH_VALKEY_URI "redis://${FULL}-valkey:6379/1"
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' | K create secret generic auth-session --from-file=AUTH_SESSION_SUCCESSOR_KEY=/dev/stdin >/dev/null
+openssl rand -hex 24 | tr -d '\n' | K create secret generic sso-state --from-file=SSO_STATE_SECRET=/dev/stdin >/dev/null
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' | K create secret generic auth-lockout --from-file=AUTH_LOGIN_LOCKOUT_KEY=/dev/stdin >/dev/null
 K create secret generic auth-social >/dev/null
 {

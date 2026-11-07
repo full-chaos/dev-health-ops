@@ -33,6 +33,14 @@ x-jwt-secret-key:
     # startup (edgetoken), and both planes read this one value.
     JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
 
+# The two state keys go-api signs login and install state with. Each is its own
+# key, never JWT_SECRET_KEY (config refuses equal keys), and unset means 503
+# config_missing on those routes. Local-only placeholders, 32+ characters.
+x-state-secret-keys:
+  keys: &state-secret-keys
+    SSO_STATE_SECRET: ${SSO_STATE_SECRET:-local-dev-sso-state-secret-0123456789abcdef}
+    GITHUB_APP_STATE_SECRET: ${GITHUB_APP_STATE_SECRET:-local-dev-github-app-state-secret-0123456789}
+
 # The one address of the router on the `planes` network (see `networks:`
 # below). The router has this address, and go-api names this address, and
 # only this address, in TRUSTED_PROXIES: go-api then reads X-Forwarded-For and
@@ -214,20 +222,27 @@ volumes:
   # keeps it; `down -v` deletes it and the next `up` generates a new pair.
   envelope_keys:
     driver: local
-  # The Auth Control Plane's platform token signing key (profile `auth`),
-  # written once by auth-keys-init. Separate from envelope_keys on purpose.
+  # The Auth Control Plane's platform token signing key, written once by
+  # auth-keys-init. Separate from envelope_keys on purpose.
   auth_signing_keys:
     driver: local
   # The workload bootstrap credential file (profile `auth`), written once by
   # auth-workload-bootstrap and mounted read-only into go-api only.
   workload_bootstrap:
     driver: local
+  # CHAOS-13107: the TLS pair of the local token issuer (auth-issuer), written
+  # once by auth-issuer-tls-init. key/ (0700, uid 101) holds issuer.key (0600)
+  # and only auth-issuer mounts it; ca/ (0755) holds issuer.pem (0644), the
+  # certificate go-api and query-api trust through SSL_CERT_DIR. `down -v`
+  # deletes it and the next `up` makes a new pair.
+  auth_issuer_tls:
+    driver: local
 
 networks:
-  # CHAOS-4886: the Auth Control Plane's network (profile `auth`). auth-service and
-  # auth-migrate join THIS network only, never `default`, so the only stack service
-  # they can reach is postgres (which joins it as well). It is declared always but
-  # carries traffic only while the profile runs.
+  # CHAOS-4886: the Auth Control Plane's network. auth-service and auth-migrate
+  # join THIS network only, never `default`. Its other members are postgres,
+  # go-api (it calls auth-service's session issue route, CHAOS-13107) and
+  # auth-issuer (it forwards the issuer's two public documents to auth-service).
   auth_plane:
     driver: bridge
   # The hop from the router to the two planes. Its members are the router,
@@ -270,7 +285,7 @@ services:
     restart: always
     networks:
       - default
-      # CHAOS-4886: the only service the auth profile may reach (see auth_plane).
+      # CHAOS-4886: the one store the auth services may reach (see auth_plane).
       - auth_plane
     environment:
       # Class sweep over the whole file, not only the knob found: go-river-provision/
@@ -526,6 +541,11 @@ services:
     image: valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328
     container_name: valkey
     restart: unless-stopped
+    # CHAOS-13107: auth-service keeps the rate-limit counters of its session
+    # routes here (AUTH_VALKEY_URI) and reaches the store over auth_plane.
+    networks:
+      - default
+      - auth_plane
     ports:
       - "6379:6379"
     healthcheck:
@@ -601,6 +621,11 @@ services:
       # protocol (9000), not HTTP (8123).
       CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # CHAOS-13196: `docker compose run --rm -T migrate auth users-create --email E --password-stdin` makes a user auth-service
+      # can log in, with the auth runtime login (it is no part of `migrate upgrade`, which ignores all three).
+      AUTH_DATABASE_URI: host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
     depends_on:
       postgres:
         condition: service_healthy
@@ -755,6 +780,10 @@ services:
       # deploy/go-workers/compose-go-workers.yml overlay forwarded this.
       RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
       RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      # CHAOS-13107: go-api's AUTH_PROXY_SESSIONS. The api manifest follows it
+      # (auth-service writes refresh_tokens, go-api only revokes), and go-api's
+      # /readyz refuses a login that does not hold exactly that manifest.
+      AUTH_PROXY_SESSIONS: "true"
       # The two plane logins that go-river-provision creates get their table
       # privileges HERE: `dho migrate river` applies the api manifest to
       # API_DATABASE_ROLE (unset: devhealth_api) and applies the query-api
@@ -1149,7 +1178,10 @@ services:
       # credential, SSO and PagerDuty routes cannot read a stored secret).
       <<:
         - *jwt-secret-key
+        - *state-secret-keys
         - *settings-encryption-key
+      # Signs and accepts invite, verification and reset links; unset, those routes answer 503 config_missing. Local-only placeholder.
+      LINK_TOKEN_SECRET: ${LINK_TOKEN_SECRET:-local-dev-link-token-secret-0123456789abcdef}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
@@ -1169,8 +1201,11 @@ services:
       # reads (rate-limit keys, audit rows): its fixed address on the planes
       # network, never a subnet. Every other peer is its own client.
       TRUSTED_PROXIES: *router-address
-      # Off unless the environment says so (the acp corpus leg only; helm go-api-deployment.yaml sets it from authService.usersOwned).
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      # CHAOS-13107: auth-service owns users, as production's phase 4 (helm
+      # go-api-deployment.yaml sets it from authService.usersOwned): every
+      # service below that reads it has the same default. go-api refuses it
+      # without sessions, local login and credentials forwarded (above).
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       # Observability: OpenTelemetry (traces and metrics to SigNoz). Off by
       # default.
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
@@ -1190,7 +1225,37 @@ services:
       # auth-service's AUTH_TOKEN_ISSUER_URL: a token carries the issuer it was
       # signed under. A path, never the credential.
       AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/api.bootstrap
-      AUTH_WORKLOAD_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-}
+      AUTH_WORKLOAD_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
+      # CHAOS-13107: go-api forwards production's set of auth aggregates to
+      # auth-service: sessions, local login, credentials (sign-up, verify,
+      # password reset) and social sign-in; OIDC and SAML stay on go-api. go-api
+      # never mints a session pair itself: switch-org, accept-invite,
+      # change-password and SSO sign-in take their pair from auth-service's
+      # session issue route, and the access token is the EdDSA token
+      # auth-service signs. go-river-migrate reads the sessions flag (the api
+      # role's refresh_tokens grants follow it). Sessions without local login
+      # picks the earliest-join org at login and records the gateway IP
+      # (internal/cigates/workflows refuses it).
+      AUTH_PROXY_URL: http://auth-service:8095
+      AUTH_PROXY_SESSIONS: "true"
+      AUTH_PROXY_LOCAL_LOGIN: "true"
+      AUTH_PROXY_CREDENTIALS: "true"
+      AUTH_PROXY_SOCIAL: "true"
+      # The session issue credential is session_compat (AUTH_SESSION_ISSUE_CREDENTIAL
+      # unset): this auth-session-issuer service credential, whose SHA-256 the
+      # auth-session-issue-seed one-shot writes to internal_service_credentials.
+      # A local default like the other keys of this file; both services read
+      # the same variable. Not the workload credential: auth-service accepts a
+      # workload token on the route only for a principal id the registry makes
+      # at random, which no compose default can name.
+      AUTH_SESSION_ISSUE_TOKEN: ${AUTH_SESSION_ISSUE_TOKEN:-svc_authsess_local-dev-session-issue-token-0123456789abc}
+      # The issuer go-api verifies the EdDSA access token against: the same
+      # value auth-service signs under. go-api fetches its discovery document
+      # and JWKS over https from auth-issuer and trusts the local CA through
+      # SSL_CERT_DIR (the ca/ directory of auth_issuer_tls). Not SSL_CERT_FILE:
+      # that would replace the image's CA file for every outbound call.
+      AUTH_ACCESS_TOKEN_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
+      SSL_CERT_DIR: /run/auth-issuer-ca
     volumes:
       # Only the private/ subpath: go-api never sees anything else, and
       # nothing but go-api mounts this one.
@@ -1204,9 +1269,18 @@ services:
         source: workload_bootstrap
         target: /run/workload
         read_only: true
+      # Only the ca/ subpath: the issuer certificate, never its key.
+      - type: volume
+        source: auth_issuer_tls
+        target: /run/auth-issuer-ca
+        read_only: true
+        volume:
+          subpath: ca
     networks:
       - default
       - planes
+      # auth-service's API listener (AUTH_PROXY_URL) is on auth_plane only.
+      - auth_plane
     # The same exec-form probe as go-reconciler and query-api: /readyz on
     # --http-addr=:8080 (the listeners, the Postgres login's privilege
     # manifest, the ClickHouse login's privilege manifest and Valkey). The
@@ -1233,6 +1307,19 @@ services:
       clickhouse:
         condition: service_healthy
       valkey:
+        condition: service_started
+      # CHAOS-13107: sessions are auth-service's. Its health covers the auth
+      # schema, the grants and the fence; the seed writes the row of go-api's
+      # session issue credential; the TLS step makes the ca/ subpath mounted
+      # above. Never auth-workload-bootstrap: a later `up` runs it again and
+      # bootstrap-create refuses a workload with a live credential.
+      auth-service:
+        condition: service_healthy
+      auth-session-issue-seed:
+        condition: service_completed_successfully
+      auth-issuer-tls-init:
+        condition: service_completed_successfully
+      auth-issuer:
         condition: service_started
     ports:
       - "8010:8010"
@@ -1277,17 +1364,16 @@ services:
       - envelope_keys:/var/lib/dev-health/envelope-keys
 
   # ---------------------------------------------------------------------------
-  # Auth Control Plane (CHAOS-4886, Wave 1 of CHAOS-3274). DORMANT.
+  # Auth Control Plane (CHAOS-4886, Wave 1 of CHAOS-3274).
   #
-  # Behind the `auth` profile: a plain `docker compose up` starts none of this,
-  # and nothing else in the stack calls it. Start it with
-  #   docker compose --profile auth up --build --wait auth-service
-  # and remove it again with
-  #   docker compose --profile auth rm --stop --force auth-service auth-migrate auth-provision auth-keys-init
-  # (add `docker volume rm dev-health-ops_auth_signing_keys` to drop the key).
-  # Removing it changes no other service's behaviour.
+  # CHAOS-13107: part of the default stack, as in production. A plain
+  # `docker compose up` starts auth-service and its one-shots, because go-api
+  # waits for them: auth-service owns the sessions (go-api AUTH_PROXY_SESSIONS)
+  # and mints the EdDSA access token (AUTH_ACCESS_TOKEN_CLASS=eddsa) under the
+  # https issuer https://auth.dev-health.internal:8443 (auth-issuer below).
+  # docs/operate/install/local-evaluation.md says how a host tool trusts the local CA.
   #
-  # The four services run in this order: auth-keys-init writes the signing key,
+  # The core runs in this order: auth-keys-init writes the signing key,
   # auth-provision creates the runtime login, auth-migrate (the ONLY thing that
   # issues DDL against the auth schema, ACP-ADR-04) applies the schema as the
   # database owner and grants the runtime login its table privileges, and
@@ -1309,7 +1395,6 @@ services:
       args:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
-    profiles: [auth]
     # Writes a file into its volume and needs no network at all: not on `default`, not on
     # `auth_plane`.
     network_mode: none
@@ -1348,7 +1433,6 @@ services:
   # container), never as `-v` arguments: process arguments are visible to `docker top`.
   auth-provision:
     image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-    profiles: [auth]
     networks: [auth_plane]
     restart: "no"
     read_only: true
@@ -1378,6 +1462,11 @@ services:
           WHERE :'writer' <> '' AND NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'writer') \gexec
         SELECT format('GRANT %I TO %I', :'writer', :'mrole')
           WHERE :'writer' <> '' AND NOT pg_has_role(:'mrole', :'writer', 'MEMBER') \gexec
+        \getenv ridwriter AUTH_REPO_IDENTITY_WRITER_ROLE
+        SELECT format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'ridwriter')
+          WHERE :'ridwriter' <> '' AND NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'ridwriter') \gexec
+        SELECT format('GRANT %I TO %I', :'ridwriter', :'mrole')
+          WHERE :'ridwriter' <> '' AND NOT pg_has_role(:'mrole', :'ridwriter', 'MEMBER') \gexec
         SQL
     environment:
       PGHOST: postgres
@@ -1394,6 +1483,9 @@ services:
       # function, created here (with the migration login a member of it, the one
       # thing ALTER FUNCTION OWNER needs) only when named. Empty creates nothing.
       AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
+      # CHAOS-13057: the NOLOGIN role that owns the repository identity append
+      # function, created the same way only when named. Empty creates nothing.
+      AUTH_REPO_IDENTITY_WRITER_ROLE: ${AUTH_REPO_IDENTITY_WRITER_ROLE:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -1416,7 +1508,6 @@ services:
       - ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
       - -grants-only
       - -apply
-    profiles: [auth]
     networks: [auth_plane]
     restart: "no"
     read_only: true
@@ -1449,7 +1540,6 @@ services:
       args:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
-    profiles: [auth]
     networks: [auth_plane]
     restart: "no"
     read_only: true
@@ -1460,17 +1550,25 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
       AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
       AUTH_PUSH_LIFECYCLE_CALLER_ROLES: ${AUTH_PUSH_LIFECYCLE_CALLER_ROLES:-}
+      AUTH_REPO_IDENTITY_WRITER_ROLE: ${AUTH_REPO_IDENTITY_WRITER_ROLE:-}
+      AUTH_REPO_IDENTITY_CALLER_ROLES: ${AUTH_REPO_IDENTITY_CALLER_ROLES:-}
       AUTH_SCHEMA_OWNER_ROLE: ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
+      # CHAOS-13107: the plane logins that read auth-service's sessions
+      # (go-api and query-api run with AUTH_PROXY_SESSIONS on). go-river-provision
+      # creates them; go-river-migrate re-applies their manifests first.
+      AUTH_SESSION_READER_ROLES: ${API_DATABASE_ROLE:-devhealth_api},${QUERY_API_DATABASE_ROLE:-devhealth_query_api}
     depends_on:
       auth-provision:
         condition: service_completed_successfully
       auth-owner-grants:
         condition: service_completed_successfully
       migrate:
+        condition: service_completed_successfully
+      go-river-migrate:
         condition: service_completed_successfully
 
   # One-shot: `auth-migrate grants` applies the runtime role's grants on the
@@ -1482,7 +1580,6 @@ services:
   auth-grants:
     image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
     command: ["grants"]
-    profiles: [auth]
     networks: [auth_plane]
     restart: "no"
     read_only: true
@@ -1493,15 +1590,59 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
       AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
       AUTH_PUSH_LIFECYCLE_CALLER_ROLES: ${AUTH_PUSH_LIFECYCLE_CALLER_ROLES:-}
+      AUTH_REPO_IDENTITY_WRITER_ROLE: ${AUTH_REPO_IDENTITY_WRITER_ROLE:-}
+      AUTH_REPO_IDENTITY_CALLER_ROLES: ${AUTH_REPO_IDENTITY_CALLER_ROLES:-}
       AUTH_SCHEMA_OWNER_ROLE: ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
+      # CHAOS-13107: the plane logins that read auth-service's sessions
+      # (go-api and query-api run with AUTH_PROXY_SESSIONS on). go-river-provision
+      # creates them; go-river-migrate re-applies their manifests first.
+      AUTH_SESSION_READER_ROLES: ${API_DATABASE_ROLE:-devhealth_api},${QUERY_API_DATABASE_ROLE:-devhealth_query_api}
     depends_on:
       migrate:
         condition: service_completed_successfully
       auth-migrate:
+        condition: service_completed_successfully
+
+  # CHAOS-13107: one-shot `dho auth users-backfill`: copies public.users into the
+  # auth schema before auth-service serves. auth-service owns users
+  # (AUTH_USERS_OWNED) and its users_owned readiness check refuses while a
+  # public user has no auth user; a fresh install has one, the migrations'
+  # baseline service placeholder. Production copies the users before its flip;
+  # here every `up` copies them, with AUTH_USERS_OWNED=false for this run only
+  # (the verb refuses while the flag is on). -insert-only: it creates the auth
+  # users that are missing and never changes an existing one, so a password or
+  # name changed through auth-service is never set back to a stale public.users
+  # value. It connects as auth-service's runtime login, after the schema and
+  # its grants.
+  auth-users-backfill:
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: dho
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    command: ["auth", "users-backfill", "-insert-only"]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_DATABASE_URI: host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: "false"
+    depends_on:
+      auth-migrate:
+        condition: service_completed_successfully
+      auth-grants:
         condition: service_completed_successfully
 
   # One-shot: `auth-migrate restore-fence init -if-absent` writes the fence row of the live
@@ -1511,7 +1652,6 @@ services:
   auth-fence-init:
     image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
     command: ["restore-fence", "init", "-if-absent"]
-    profiles: [auth]
     networks: [auth_plane]
     restart: "no"
     read_only: true
@@ -1522,7 +1662,7 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
     depends_on:
       auth-grants:
@@ -1565,7 +1705,7 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
     depends_on:
       auth-grants:
@@ -1585,7 +1725,7 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
     volumes:
       - workload_bootstrap:/run/workload
@@ -1595,10 +1735,11 @@ services:
       auth-workload-seed:
         condition: service_completed_successfully
 
-  # The Auth Control Plane HTTP service. DORMANT: its API listener mounts no
-  # route, no production token is issued, and nothing calls it. The operator
-  # listener (/healthz, /readyz, /metrics) is the one probed, and is published
-  # on loopback only; the API port is not published. The signing key is a file
+  # The Auth Control Plane HTTP service. go-api calls its session issue route
+  # on auth_plane (CHAOS-13107); auth-issuer forwards its discovery document
+  # and JWKS. The operator listener (/healthz, /readyz, /metrics) is the one
+  # probed, and is published on loopback only; the API port is not published.
+  # The signing key is a file
   # (AUTH_SIGNING_KEY_FILE), mounted read-only from the private/ subpath of the
   # auth_signing_keys volume; a direct-value AUTH_SIGNING_KEY is rejected at
   # load (ACP-ADR-02 §4). The healthcheck is exec form (the image has no shell
@@ -1612,7 +1753,6 @@ services:
       args:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
-    profiles: [auth]
     networks: [auth_plane]
     restart: unless-stopped
     read_only: true
@@ -1627,7 +1767,7 @@ services:
       AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s
       AUTH_DATABASE_URI: host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
       AUTH_SIGNING_KEY_ID: ${AUTH_SIGNING_KEY_ID:-auth-signing-local}
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
@@ -1635,8 +1775,39 @@ services:
       # default; on, it needs the issuer (a signed claim, https, nothing dials
       # it) and the go-api principal. A blank value is unset.
       AUTH_WORKLOAD_BOOTSTRAP: ${AUTH_WORKLOAD_BOOTSTRAP:-false}
-      AUTH_TOKEN_ISSUER_URL: ${AUTH_TOKEN_ISSUER_URL:-}
+      AUTH_TOKEN_ISSUER_URL: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
       AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}
+      # CHAOS-13107: auth-service owns the sessions and mints the EdDSA access
+      # token, as in production: signed with AUTH_SIGNING_KEY_FILE, iss
+      # AUTH_TOKEN_ISSUER_URL (served by auth-issuer), aud dev-health-api (the
+      # audience go-api and query-api verify). The session routes need the two
+      # session keys together: go-api's JWT key (one value, the HS256 key of
+      # the compatibility token) and the session successor key (32 bytes,
+      # unpadded base64url). Both are local defaults, like every key of this
+      # file; production reads them from its secret store.
+      AUTH_ACCESS_TOKEN_CLASS: eddsa
+      AUTH_JWT_AUDIENCE: dev-health-api
+      AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
+      AUTH_SESSION_SUCCESSOR_KEY: ${AUTH_SESSION_SUCCESSOR_KEY:-local-dev-session-successor-key-0123456789w}
+      # The session routes are rate limited, so they need the shared store.
+      # Local valkey has no ACL users, so the URI carries none (the production
+      # login is an ACL user limited to the auth_svc_ key prefix).
+      AUTH_VALKEY_URI: ${AUTH_VALKEY_URI:-redis://valkey:6379/1}
+      # go-api forwards local login (AUTH_PROXY_LOCAL_LOGIN): auth-service
+      # mounts its login route only with the login lockout key (32 bytes,
+      # unpadded base64url). A local default, like the session keys above.
+      AUTH_LOGIN_LOCKOUT_KEY: ${AUTH_LOGIN_LOCKOUT_KEY:-local-dev-login-lockout-key-0123456789abcdw}
+      # auth-service owns users (AUTH_USERS_OWNED), so it sends the verify and
+      # reset mails of the credentials routes go-api forwards, and refuses to
+      # start without a usable mail setting. Locally the default is the console
+      # provider, as go-api's: AUTH_MAIL_ALLOW_CONSOLE allows it (and an http
+      # APP_BASE_URL); no mail is delivered. Set EMAIL_PROVIDER and its keys in
+      # .env for real mail.
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
+      AUTH_MAIL_ALLOW_CONSOLE: "true"
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
     volumes:
       - type: volume
         source: auth_signing_keys
@@ -1658,6 +1829,162 @@ services:
       auth-grants:
         condition: service_completed_successfully
       auth-fence-init:
+        condition: service_completed_successfully
+      # CHAOS-13107: the users are copied before auth-service serves.
+      auth-users-backfill:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+
+  # CHAOS-13107: the row of go-api's session issue credential (session_compat). auth-service accepts the
+  # svc_authsess_ token go-api presents only when public.internal_service_credentials holds its SHA-256 for the
+  # auth-session-issuer service with the sessions:issue scope; this writes that row once, for the same compose value
+  # go-api reads (AUTH_SESSION_ISSUE_TOKEN), and a later `up` changes nothing. It connects as the database superuser
+  # (the table owner) after the ops migrate made the table. The token reaches psql through `\getenv`, never argv, and
+  # nothing is printed.
+  auth-session-issue-seed:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "70:70"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        psql -q -v ON_ERROR_STOP=1 -v VERBOSITY=terse <<'SQL'
+        \getenv token AUTH_SESSION_ISSUE_TOKEN
+        INSERT INTO public.internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
+          SELECT gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'token', 'UTF8')), 'hex'),
+                 left(:'token', 16), '["sessions:issue"]'::json, clock_timestamp()
+          WHERE NOT EXISTS (SELECT 1 FROM public.internal_service_credentials
+                            WHERE token_hash = encode(sha256(convert_to(:'token', 'UTF8')), 'hex'));
+        SQL
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      PGDATABASE: ${POSTGRES_DB:-postgres}
+      AUTH_SESSION_ISSUE_TOKEN: ${AUTH_SESSION_ISSUE_TOKEN:-svc_authsess_local-dev-session-issue-token-0123456789abc}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # CHAOS-13107: the TLS pair of the local token issuer, made once into the volume auth_issuer_tls: an ECDSA P-256
+  # self-signed certificate (CA flag set, valid 365 days) for auth.dev-health.internal, by the Go toolchain's own
+  # crypto/tls/generate_cert.go in the Go build image this repository already pins (docker/go-worker.Dockerfile
+  # GO_BUILD_IMAGE): no network, no new image. key/ (0700) and key/issuer.key (0600) go to uid 101, the uid of
+  # auth-issuer; ca/ (0755) and ca/issuer.pem (0644) stay readable for go-api and query-api. The certificate is
+  # written last, so its presence means a previous run finished and a later `up` changes nothing; a key/ without it
+  # is a partial pair and the step fails (remove the volume). Past its 365 days, remove the volume for a new pair.
+  auth-issuer-tls-init:
+    image: mirror.gcr.io/library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd
+    network_mode: none
+    restart: "no"
+    read_only: true
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: [no-new-privileges:true]
+    # go run builds and runs the generator below /tmp.
+    tmpfs: ["/tmp:exec"]
+    environment:
+      AUTH_ISSUER_HOST: auth.dev-health.internal
+      GOTOOLCHAIN: local
+      GOPROXY: "off"
+      GOFLAGS: ""
+      CGO_ENABLED: "0"
+      GOCACHE: /tmp/gocache
+      HOME: /tmp
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        k=/run/auth-issuer-tls/key
+        c=/run/auth-issuer-tls/ca
+        [ -s "$$c/issuer.pem" ] && exit 0
+        if [ -e "$$k" ]; then
+          echo "auth-issuer-tls-init: the volume auth_issuer_tls holds a partial TLS pair; remove the volume for a new pair" >&2
+          exit 3
+        fi
+        cd /tmp
+        go run "$$(go env GOROOT)/src/crypto/tls/generate_cert.go" -host "$$AUTH_ISSUER_HOST" -ecdsa-curve P256 -ca -duration 8760h
+        mkdir -p -m 0755 "$$c"
+        mkdir -m 0700 "$$k"
+        cp key.pem "$$k/issuer.key"
+        chmod 0600 "$$k/issuer.key"
+        chown 101:101 "$$k/issuer.key"
+        chown 101:101 "$$k"
+        cp cert.pem "$$c/issuer.pem.new"
+        chmod 0644 "$$c/issuer.pem.new"
+        mv "$$c/issuer.pem.new" "$$c/issuer.pem"
+    volumes:
+      - auth_issuer_tls:/run/auth-issuer-tls
+
+  # CHAOS-13107: the https origin of the token issuer, as production's issuer host: it forwards exactly auth-service's
+  # two public documents (the discovery document and the JWKS) and answers 404 for everything else. go-api's and
+  # query-api's JWKS client dials https only, so the issuer cannot be auth-service's plain listener. Alias
+  # auth.dev-health.internal on the default network (not a .localhost name: Go resolves those to the loopback
+  # address). Published on loopback port 8443 only, the port of the issuer URL, for a host tool such as the web dev
+  # server that verifies the token: docs/operate/install/local-evaluation.md. The image is the router's.
+  auth-issuer:
+    image: "ghcr.io/nginx/nginx-unprivileged:1.30-alpine@sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e"
+    restart: unless-stopped
+    read_only: true
+    user: "101:101"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    entrypoint: ["sh", "-c", 'printf "%s\n" "$$AUTH_ISSUER_NGINX_CONF" > /tmp/auth-issuer.conf && exec nginx -e /dev/stderr -c /tmp/auth-issuer.conf -g "daemon off;"']
+    environment:
+      AUTH_ISSUER_NGINX_CONF: |
+        worker_processes 1;
+        pid /tmp/nginx.pid;
+        events { worker_connections 128; }
+        http {
+          access_log off;
+          client_body_temp_path /tmp/client_body;
+          proxy_temp_path /tmp/proxy;
+          fastcgi_temp_path /tmp/fastcgi;
+          uwsgi_temp_path /tmp/uwsgi;
+          scgi_temp_path /tmp/scgi;
+          resolver 127.0.0.11 valid=1s ipv6=off;
+          server {
+            listen 8443 ssl;
+            ssl_protocols TLSv1.2 TLSv1.3;
+            ssl_certificate /run/tls/ca/issuer.pem;
+            ssl_certificate_key /run/tls/key/issuer.key;
+            set $$auth_upstream http://auth-service:8095;
+            location = /.well-known/openid-configuration { proxy_pass $$auth_upstream; proxy_http_version 1.1; }
+            location = /.well-known/jwks.json { proxy_pass $$auth_upstream; proxy_http_version 1.1; }
+            location / { return 404; }
+          }
+        }
+    networks:
+      auth_plane: {}
+      default:
+        aliases: [auth.dev-health.internal]
+    volumes:
+      - type: volume
+        source: auth_issuer_tls
+        target: /run/tls/key
+        read_only: true
+        volume:
+          subpath: key
+      - type: volume
+        source: auth_issuer_tls
+        target: /run/tls/ca
+        read_only: true
+        volume:
+          subpath: ca
+    ports:
+      - "127.0.0.1:8443:8443"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      auth-issuer-tls-init:
         condition: service_completed_successfully
 
   # The Go query plane (`dho query-api`): /graphql and the /api/v1 read
@@ -1742,6 +2069,14 @@ services:
       # Observability: OpenTelemetry, as on go-api. Off by default.
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://signoz-otel-collector:4317}
+      # CHAOS-13107: the EdDSA access token auth-service signs, verified as on
+      # go-api: the same issuer, its JWKS over https from auth-issuer, the local
+      # CA through SSL_CERT_DIR. AUTH_PROXY_SESSIONS as go-api reads it: the
+      # registry login holds the auth session read (auth-migrate's
+      # AUTH_SESSION_READER_ROLES).
+      AUTH_ACCESS_TOKEN_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
+      AUTH_PROXY_SESSIONS: "true"
+      SSL_CERT_DIR: /run/auth-issuer-ca
     networks:
       - default
       - planes
@@ -1753,6 +2088,13 @@ services:
         read_only: true
         volume:
           subpath: public
+      # Only the ca/ subpath of the issuer TLS pair: the certificate.
+      - type: volume
+        source: auth_issuer_tls
+        target: /run/auth-issuer-ca
+        read_only: true
+        volume:
+          subpath: ca
     # Same exec-form probe as go-api (see there): /readyz on --http-addr=:8080.
     # query-api's /readyz checks ClickHouse, the registry Postgres pool, that
     # the JWKS file is readable and valid, and that the registry login holds
@@ -1774,6 +2116,14 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      # CHAOS-13107: auth-service healthy means the session read grant is in
+      # place; the TLS step makes the ca/ subpath mounted above.
+      auth-service:
+        condition: service_healthy
+      auth-issuer-tls-init:
+        condition: service_completed_successfully
+      auth-issuer:
+        condition: service_started
 
   # The router of the stack (CHAOS-8361): nginx on host port 8000, the one port
   # a client or the web app calls. It sends each request to the plane that

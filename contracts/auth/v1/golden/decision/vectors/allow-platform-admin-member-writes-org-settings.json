@@ -1,0 +1,43 @@
+{
+  "expect": {
+    "allowed": true,
+    "cache_class": "",
+    "expires_in_seconds": null,
+    "obligations": {
+      "tenant_scope": "org-a"
+    },
+    "policy_revision": 14,
+    "reason": "allowed_by_platform_admin",
+    "wire_reason_code": "allowed_by_role"
+  },
+  "id": "allow-platform-admin-member-writes-org-settings",
+  "layer": "pdp",
+  "request": {
+    "action": "settings.write",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "member",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "platform_admin",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "platform_admin holds admin.orgs and settings.write is flagged platform_admin allowed: the allow has the owner's shape, the member role lacks the action. The internal reason reaches the wire as allowed_by_role."
+}

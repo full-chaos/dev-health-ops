@@ -6,6 +6,7 @@ owner: engineering
 source_of_truth:
   - internal/api/policy/guard.go
   - internal/api/policy/enforce.go
+  - internal/api/policy/platform_decision.go
   - internal/authzenforce/authzenforce.go
   - internal/api/policy/scope.go
   - internal/api/policy/principalonce.go
@@ -56,7 +57,6 @@ go-api:
 
 | Class | Rows |
 | --- | --- |
-| `ops_access_token_hs256` | 196 |
 | `user_access_token` | 196 |
 | `external_push_ingest_token` | 5 |
 | `internal_svc_acr_token` | 4 |
@@ -76,7 +76,6 @@ query-api:
 
 | Class | Rows |
 | --- | --- |
-| `ops_access_token_hs256` | 35 |
 | `user_access_token` | 35 |
 | `effective_principal_envelope` | 34 |
 
@@ -86,7 +85,6 @@ auth-service:
 | --- | --- |
 | `internal_svc_authsess_token` | 13 |
 | `workload_token` | 11 |
-| `ops_access_token_hs256` | 6 |
 | `user_access_token` | 6 |
 | `refresh_credential` | 3 |
 | `sso_oidc_exchange` | 2 |
@@ -101,7 +99,7 @@ go-api and query-api take a bearer access token. Four access-token shapes exist.
 
 | Shape | Class | Header | Used by |
 | --- | --- | --- | --- |
-| Legacy edge token | `ops_access_token_hs256` | `alg` HS256 | go-api, query-api, auth-service session routes |
+| Legacy edge token | `ops_access_token_hs256` | `alg` HS256 | none: the class is `retired`, every row refuses it (`alg_not_allowed`) |
 | User access token | `user_access_token` | `alg` EdDSA, `typ` `at+jwt`, audience `dev-health-api` | go-api (196 rows), query-api only when `AUTH_ACCESS_TOKEN_ISSUER` is set, auth-service lists the class on 6 session, identity and change-password rows, but the validator text of those rows describes an HS256 token only |
 | Workload token | `workload_token` | `typ` `workload+jwt` | go-api (4 rows), auth-service internal routes |
 | Effective principal envelope | `effective_principal_envelope` | `alg` EdDSA | query-api |
@@ -153,12 +151,15 @@ A caller with no organization and no superuser flag gets `403 Organization conte
 A switch per action namespace and service lets the policy decision point decide a route instead of the route level (`internal/authzenforce`, `internal/api/policy/enforce.go`). It is off for every namespace by default and is read once at start.
 
 - go-api reads `GO_API_AUTHZ_ENFORCE`, a comma list of catalog namespaces (the chart renders it from `authService.enforce.goApi`). An item that is not a namespace, a repeat, an empty item and `*` are ignored and stay off; the start is never refused for them (one ERROR line, and the `dev_health_authz_enforcement_ignored_items` gauge).
-- query-api has a cell per namespace in the package, but no wiring: it has no route-level chokepoint and no row that names an action.
+- query-api reads `QUERY_API_AUTHZ_ENFORCE` the same way, for its REST routes (`/api/v1/*`) only. A listed namespace needs the PDP client of `QUERY_API_PDP_MODE`; without it the namespace's routes answer `503`. An allow is served only as the scope its obligations name; see [configuration](configuration.md#pdp-gate-query-api).
 - For a route whose profile row names an action in an enforced namespace, the decision replaces the route level. Allow passes; deny answers `403` with the body the route level gives (`Admin access required`, `Superuser access required`, `Access denied` at the Authenticated level); no verdict (the decision point is down, answers late, answers a malformed body, or an allow carries an obligation go-api does not carry out) answers `503` with `Retry-After`. There is no fallback to the legacy check on a failure.
 - An allow serves only when go-api carries out every obligation it carries: a `tenant_scope` that is the request's organization (never on a platform route, whose request names no organization), and a `repository_allowlist` or the `repository_scope` `organization` only on a route listed with no repository dimension (`goAPIRoutesWithoutRepositoryDimension` in `enforce.go`; a route not listed has one). `redaction`, `minimum_assurance` and `step_up` are never carried out. One obligation not carried out makes the allow no verdict: `503` with `Retry-After`, counted `error_deny`.
 - A caller with a live go-api impersonation row (the admin's own bearer while an `impersonation_sessions` row is in force) is refused with `403` `Not allowed in an impersonation session` before any decision point call, counted `impersonation_refused`. The decision point would judge that bearer as the admin in the admin's organization, not as the delegation. The stop route (`POST /api/v1/admin/impersonate/stop`) is the exception: the admin acts on their own session, and the decision point decides it. Switch a namespace on only with `AUTH_PROXY_IMPERSONATION` on, so impersonation uses a delegated session; otherwise legacy impersonation is refused on that namespace.
+- With the `admin` namespace on, a route open to an organization admin or to a holder of a platform action (the `/api/v1/admin/users` routes, mounted `WrapAdminOr`) asks one batch: the route's platform action, and `members.manage` in the token's organization when the token names one. Either allow passes. A missing or failed answer, or an allow with an obligation go-api does not carry out, answers `503` with `Retry-After`. The rows take part once their profile rows name `admin.users`.
+- With the `admin` namespace on, a platform action of an admin-or or platform wrap, and of a handler that acts across organizations, is asked of the decision point for a caller it can judge (`HoldsPlatform`, `internal/api/policy/platform_decision.go`): the user list and create, the user and organization scope checks, the impersonation status and the telemetry report. Each action is asked at most once per request, and a platform route's own answer is reused. No verdict answers `503` with `Retry-After`. A legacy HS256 caller, whom the decision point cannot judge, keeps main's answer from go-api's own set. A live go-api impersonation row keeps main's answer on rows the decision point does not decide.
+- With the `admin` namespace on, go-api holds no local check stricter than the legacy path for a platform admin (product rule 1): the guard's `User.IsAdmin`, its organization-less reach and its membership read are as with the namespace off, and a platform admin with no membership row gets the same answer.
 - A delegated session's own bearer (a token with an `act` claim) is decided by the decision point like any other caller. Its allow carries `minimum_assurance`, which go-api does not carry out, so on an enforced row it is no verdict (`503`).
-- The decision point judges the caller's token organization; `X-Org-Id` never changes it. On a row whose handler serves an organization that a path segment or an `org_id` query parameter names (`internal/api/policy/servedorg.go`: the rows whose profile resolver is `organization_from_path`, that is the `{org_id}` members, invites and entitlements rows, and the billing invoice and subscription rows of `goAPIQueryOrgRows`), that organization must be the token organization, compared as parsed UUIDs (upper case, braces, `urn:uuid:` and no dashes are the same id). Another organization, or a token with none, is refused with `403` and the route level's body before any decision point call, counted `org_mismatch`. The check runs before the unjudged check, so a legacy HS256 token and a superuser are refused too. A value that parses as no UUID keeps the legacy answer (the handler refuses it) and is counted unjudged `no_org`. The shadow records the same request as a mismatch of class `intentional` with no decision point call, and never changes the answer.
+- The decision point judges the caller's token organization; `X-Org-Id` never changes it. On a row whose handler serves an organization that a path segment or an `org_id` query parameter names (`internal/api/policy/servedorg.go`: the rows whose profile resolver is `organization_from_path`, that is the `{org_id}` members, invites and entitlements rows, and the rows whose resolver is `organization_from_query_or_session`, that is the billing invoice and subscription rows), that organization must be the token organization, compared as parsed UUIDs (upper case, braces, `urn:uuid:` and no dashes are the same id). Another organization, or a token with none, is refused with `403` and the route level's body before any decision point call, counted `org_mismatch`. The check runs before the unjudged check, so a legacy HS256 token and a superuser are refused too. A value that parses as no UUID keeps the legacy answer (the handler refuses it) and is counted unjudged `no_org`. The shadow records the same request as a mismatch of class `intentional` with no decision point call, and never changes the answer.
 - A caller the decision point cannot judge keeps the legacy answer: a legacy HS256 token, an organization route with no organization. The request is counted in `dev_health_authz_enforcement_unjudged_total` by route and reason (`hs256`, `no_org`).
 - A route with no action in its row is never enforced. Authentication and the token organization's membership read still run first.
 - Rollback is removing the namespace from the list and rolling go-api. The switch holds no policy data, and the legacy path reads the same live membership, user and session rows, so a revoked caller stays refused.
@@ -191,7 +192,7 @@ A platform role holds platform actions only. An organization role never comes fr
 
 ## query-api
 
-query-api authenticates every protected REST route with `authenticateRESTRequest` (`internal/queryapi/server/rest_error_response.go`). It has no per-route action check. Its 37 protected rows all have `action: unknown`, with a declared gap tracked in CHAOS-11042.
+query-api authenticates every protected REST route with `authenticateRESTRequest` (`internal/queryapi/server/rest_error_response.go`). It has no per-route action check. Its 37 protected rows all have `action: unknown`, with a declared gap.
 
 | Condition | Answer |
 | --- | --- |
@@ -211,16 +212,16 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | Method and route | Class | Accepted credential classes | Tenant requirement |
 | --- | --- | --- | --- |
 | `POST /v1/token/refresh` | protected | `refresh_credential` | `none` |
-| `GET /v1/sessions/current` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `POST /v1/sessions/revoke` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `POST /v1/sessions/revoke-all` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `POST /v1/identities/social` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `DELETE /v1/identities/social/{id}` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
+| `GET /v1/sessions/current` | protected | `user_access_token` | `none` |
+| `POST /v1/sessions/revoke` | protected | `user_access_token` | `none` |
+| `POST /v1/sessions/revoke-all` | protected | `user_access_token` | `none` |
+| `POST /v1/identities/social` | protected | `user_access_token` | `none` |
+| `DELETE /v1/identities/social/{id}` | protected | `user_access_token` | `none` |
 | `POST /api/v1/auth/login` | public | none | `unset` |
 | `POST /api/v1/auth/refresh` | protected | `refresh_credential` | `none` |
 | `POST /api/v1/auth/logout` | protected | `refresh_credential` | `none` |
-| `POST /api/v1/auth/validate` | protected | `ops_access_token_hs256`, `user_access_token` (body field `token`) | `none` |
-| `POST /api/v1/auth/switch-org` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
+| `POST /api/v1/auth/validate` | protected | `user_access_token` (body field `token`) | `none` |
+| `POST /api/v1/auth/switch-org` | protected | `user_access_token` | `none` |
 | `POST /api/v1/auth/social-login` | protected | `social_oauth_exchange` | `none` |
 | `POST /internal/v1/sessions` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
 | `POST /internal/v1/sessions/state` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
@@ -263,7 +264,7 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | `POST /api/v1/auth/resend-verification` | public | none | `none` |
 | `POST /api/v1/auth/forgot-password` | public | none | `none` |
 | `POST /api/v1/auth/reset-password` | public | none | `none` |
-| `POST /api/v1/auth/change-password` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
+| `POST /api/v1/auth/change-password` | protected | `user_access_token` | `none` |
 | `GET /healthz` | public | none | `unset` |
 | `GET /readyz` | public | none | `unset` |
 | `GET /metrics` | public | none | `unset` |
@@ -287,13 +288,13 @@ Source: `contracts/auth/v1/endpoint-profiles.auth-service.json`. The OpenAPI doc
 
 ## Planned, not built
 
-| Item | Ticket |
+| Item | Status |
 | --- | --- |
-| Policy decision point routes `POST /v1/authorize` and `POST /v1/authorize:batch`. No Go route serves them. | CHAOS-10841 |
-| Actor chain, delegation limits and obligations in the decision point. | CHAOS-10839 |
-| Delegated (impersonation) session with an actor chain. | CHAOS-10987 |
-| Explicit platform actions for the superuser-inherited sites (`admin.billing`, `admin.flags`, `admin.audit`, `admin.impersonate`, `admin.telemetry`, `admin.stats`). Not in the catalog on `main`. | CHAOS-11847 |
-| Server actions and route handlers in web use single decisions. | CHAOS-10883 |
-| Check of the query-api rows and the GraphQL map against live behaviour. | CHAOS-11042 |
+| Policy decision point routes `POST /v1/authorize` and `POST /v1/authorize:batch`. No Go route serves them. | Planned |
+| Actor chain, delegation limits and obligations in the decision point. | Planned |
+| Delegated (impersonation) session with an actor chain. | Planned |
+| Explicit platform actions for the superuser-inherited sites (`admin.billing`, `admin.flags`, `admin.audit`, `admin.impersonate`, `admin.telemetry`, `admin.stats`). Not in the catalog on `main`. | Planned |
+| Server actions and route handlers in web use single decisions. | Planned |
+| Check of the query-api rows and the GraphQL map against live behaviour. | Planned |
 
 The catalog described here is version 4. Changes from the tickets above will change the version. Check `contracts/auth/v1/vocabulary/actions.v1.json` for the current one.

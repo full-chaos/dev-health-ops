@@ -68,6 +68,7 @@ internal/auth/policycatalog
 internal/auth/publicaudit
 internal/auth/pushevent
 internal/auth/ratelimitvalkey
+internal/auth/repoidentityevent
 internal/auth/repokey
 internal/auth/requestid
 internal/auth/sessionevent

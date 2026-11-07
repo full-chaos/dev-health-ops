@@ -34,6 +34,7 @@ type shadowRecorder struct {
 	mu       sync.Mutex
 	mismatch []string
 	results  []string
+	reasons  []string
 }
 
 func recordShadow(t *testing.T) *shadowRecorder {
@@ -45,13 +46,20 @@ func recordShadow(t *testing.T) *shadowRecorder {
 		defer rec.mu.Unlock()
 		rec.mismatch = append(rec.mismatch, namespace+"/"+caller+"/"+class)
 	}
-	shadowResultAdd = func(_ context.Context, result string) {
+	shadowResultAdd = func(_ context.Context, result, reason string) {
 		rec.mu.Lock()
 		defer rec.mu.Unlock()
 		rec.results = append(rec.results, result)
+		rec.reasons = append(rec.reasons, result+"/"+reason)
 	}
 	t.Cleanup(func() { shadowMismatchAdd, shadowResultAdd = prevMismatch, prevResult })
 	return rec
+}
+
+func (r *shadowRecorder) resultReasons() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.reasons)
 }
 
 func (r *shadowRecorder) snapshot() (mismatch, results []string) {
@@ -483,7 +491,7 @@ func TestShadowResultSetIsClosed(t *testing.T) {
 		t.Errorf("shadow results %v, want %v", shadowResults, want)
 	}
 	reader := sdkmetric.NewManualReader()
-	newShadowResultAdder(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("shadow-test"))(context.Background(), resultMatch)
+	newShadowResultAdder(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("shadow-test"))(context.Background(), resultMatch, ShadowReasonNone)
 	description, _ := collectSum(t, reader, shadowResultMetric, "result")
 	if suffix := "by result: " + strings.Join(want, ", "); !strings.HasSuffix(description, suffix) {
 		t.Errorf("results description %q, want it to end %q", description, suffix)
@@ -570,7 +578,7 @@ func TestShadowCounterLabelSetsAreClosed(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("shadow-test")
 	newShadowMismatchAdder(meter)(context.Background(), "teams", "admin", "unresolved")
-	newShadowResultAdder(meter)(context.Background(), "match")
+	newShadowResultAdder(meter)(context.Background(), "match", "none")
 	var collected metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &collected); err != nil {
 		t.Fatal(err)
@@ -595,8 +603,8 @@ func TestShadowCounterLabelSetsAreClosed(t *testing.T) {
 	if got := keysByMetric[shadowMismatchMetric]; !slices.Equal(got, []string{"caller", "class", "namespace"}) {
 		t.Fatalf("mismatch counter keys %v, want [caller class namespace]", got)
 	}
-	if got := keysByMetric[shadowResultMetric]; !slices.Equal(got, []string{"result"}) {
-		t.Fatalf("results counter keys %v, want [result]", got)
+	if got := keysByMetric[shadowResultMetric]; !slices.Equal(got, []string{"reason", "result"}) {
+		t.Fatalf("results counter keys %v, want [reason result]", got)
 	}
 	rec := recordShadow(t)
 	pdp := newTestPDP(t, denyWith("grant_absent"))
@@ -627,6 +635,51 @@ func TestShadowCounterLabelSetsAreClosed(t *testing.T) {
 	for _, r := range results {
 		if !slices.Contains(shadowResults, r) {
 			t.Errorf("result %q is outside the closed set", r)
+		}
+	}
+}
+
+// The skipped counter carries one reason label from one closed list: go-api never sets one, so every go-api skip and
+// every non-skip result is "none"; a caller-supplied reason outside the list is "none", never a new value.
+func TestShadowResultReasonIsFromTheClosedList(t *testing.T) {
+	if got := ShadowReasons(); !slices.Equal(got, []string{"none", "hs256", "envelope", "no_user_bearer", "cap", "unmapped", "op_refused"}) {
+		t.Fatalf("closed reasons %v, want [none hs256 envelope no_user_bearer cap unmapped op_refused]", got)
+	}
+	rec := recordShadow(t)
+	pdp := newTestPDP(t, allowAll)
+	sh, _ := newShadowFor(t, pdp.client(t), nil)
+	observe := func(reason string) {
+		sh.Observe(context.Background(), ShadowObservation{Pattern: "GET /api/v1/admin/teams", Bearer: "", OrgID: memberOrg, Caller: ShadowCallerMember, SkipReason: reason})
+	}
+	for _, reason := range []string{"", ShadowReasonNone, ShadowReasonHS256, ShadowReasonEnvelope, "oidc", "HS256", "org-" + memberOrg} {
+		observe(reason)
+	}
+	sh.wg.Wait()
+	want := []string{"skipped/none", "skipped/none", "skipped/hs256", "skipped/envelope", "skipped/none", "skipped/none", "skipped/none"}
+	if got := rec.resultReasons(); !slices.Equal(got, want) {
+		t.Fatalf("result/reason %v, want %v", got, want)
+	}
+}
+
+func TestShadowEveryGoAPIResultHasReasonNone(t *testing.T) {
+	rec := recordShadow(t)
+	pdp := newTestPDP(t, denyWith("grant_absent"))
+	sh, _ := newShadowFor(t, pdp.client(t), nil)
+	for _, p := range []persona{personaAdmin, personaMember, personaSuperuser} {
+		for _, route := range [][2]string{{"GET", "/api/v1/admin/teams"}, {"POST", "/api/v1/admin/teams"}, {"GET", "/api/v1/billing/invoices"}} {
+			shadowRequest(shadowHandler(t, personaStore(p), userClaims(nil), sh, nil), route[0], route[1])
+		}
+	}
+	shadowRequest(shadowHandler(t, personaStore(personaSuperuser), userClaims(func(c *AccessTokenClaims) { c.OrgID = nil }), sh, nil), "GET", "/api/v1/billing/invoices")
+	sh.wg.Wait()
+	got := rec.resultReasons()
+	if len(got) == 0 {
+		t.Fatal("no result was counted")
+	}
+	for _, rr := range got {
+		result, reason, _ := strings.Cut(rr, "/")
+		if reason != "none" || !slices.Contains(shadowResults, result) {
+			t.Errorf("go-api recorded %q, want a closed result with reason none", rr)
 		}
 	}
 }

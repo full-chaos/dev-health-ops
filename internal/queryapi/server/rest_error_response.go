@@ -274,6 +274,7 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 				// as a pass, and the cause is logged before the response.
 				var orgRequired *principal.OrgRequiredError
 				if errors.As(err, &orgRequired) {
+					observeRESTShadow(r, token, "", orgRequired.Caller, orgRequired.Delegated, false)
 					policy.WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 					return authctx.Claims{}, false
 				}
@@ -288,7 +289,8 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 				return authctx.Claims{}, false
 			}
 			pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassHS256, routeProfile(r))
-			return authctx.Claims{OrgID: claims.OrgID}, true
+			observeRESTShadow(r, token, claims.OrgID, claims.Caller, claims.Delegated, true)
+			return legacyClaims(claims.OrgID), true
 		}
 	}
 
@@ -299,7 +301,8 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 		return authctx.Claims{}, false
 	}
 	pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassEnvelope, routeProfile(r))
-	return authctx.Claims{OrgID: claims.OrgID}, true
+	observeRESTShadow(r, token, claims.OrgID, policy.ShadowCallerMember, claims.ImpersonationActive || (claims.ImpersonatedBy != nil && *claims.ImpersonatedBy != ""), true)
+	return legacyClaims(claims.OrgID), true
 }
 
 // echoRequestID puts the caller's X-Request-Id on the response so an operator

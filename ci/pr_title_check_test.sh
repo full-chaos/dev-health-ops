@@ -50,6 +50,36 @@ run bad-type fail chaos 'feature(ci): CHAOS-1 roll web'
 run no-description fail chaos 'fix(ci): CHAOS-1'
 run no-area fail chaos 'fix: CHAOS-1 roll web'
 
+# CHAOS-13180: the title's ticket must not own a live temporary or decision row of the exception ledger
+ledger_dir=$(mktemp -d)
+printf '# id\tkind\tpath\tneedle\towner\towner_state\treason\nrow-a\ttemporary\tp\tn\tCHAOS-77\topen\tr\nrow-d\tdecision\tp\tn\tCHAOS-78\topen\tr\nrow-p\tpermanent\tp\tn\tCHAOS-79\t-\tr\n# row-c\ttemporary\tp\tn\tCHAOS-80\topen\tr\n' >"$ledger_dir/ledger.tsv"
+# lg <name> <want> <title> [ledger]
+lg() {
+  local name=$1 want=$2 title=$3 path=${4:-$ledger_dir/ledger.tsv} rc=0
+  EVENT=pull_request AUTHOR=chaos TITLE="$title" EXCEPTION_LEDGER="$path" bash "$script" >/dev/null 2>&1 || rc=$?
+  if { [ "$want" = pass ] && [ "$rc" = 0 ]; } || { [ "$want" = fail ] && [ "$rc" != 0 ]; }; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name (want $want, rc=$rc)"; fails=$((fails + 1))
+  fi
+}
+lg ledger-temporary-owner fail 'chore(ci): CHAOS-77 add the check'
+lg ledger-decision-owner fail 'chore(ci): CHAOS-78 add the check'
+lg ledger-permanent-owner pass 'chore(ci): CHAOS-79 add the check'
+lg ledger-commented-row pass 'chore(ci): CHAOS-80 add the check'
+lg ledger-prefix-is-not-the-id pass 'chore(ci): CHAOS-7 add the check'
+lg ledger-other-id pass 'chore(ci): CHAOS-1 add the check'
+lg ledger-missing fail 'chore(ci): CHAOS-1 add the check' "$ledger_dir/absent.tsv"
+missing_err=$(EVENT=pull_request AUTHOR=chaos TITLE='chore(ci): CHAOS-1 add the check' EXCEPTION_LEDGER="$ledger_dir/absent.tsv" bash "$script" 2>&1 >/dev/null || true)
+if [[ "$missing_err" == *'cannot read the exception ledger'* ]]; then
+  echo "ok   ledger-missing-names-the-ledger"
+else
+  echo "FAIL ledger-missing-names-the-ledger"; fails=$((fails + 1))
+fi
+lg ledger-empty-title fail ''
+lg ledger-real-file pass 'chore(ci): CHAOS-1 add the check' "$repo_root/ci/auth_exception_ledger.tsv"
+rm -rf "$ledger_dir"
+
 # merge_group: the PR is read by REST (stub gh); the gh-readonly-queue ref names the PR number
 fakebin=$(mktemp -d)
 trap 'rm -rf "$fakebin"' EXIT

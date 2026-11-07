@@ -169,6 +169,9 @@ func (h handlers) callerRow(w http.ResponseWriter, r *http.Request, tx pgx.Tx) (
 // joinByInvite validates token, accepts it for user and audits the join. It
 // writes the refusal itself and returns false on any failure.
 func (h handlers) joinByInvite(w http.ResponseWriter, r *http.Request, tx pgx.Tx, user *userRow, token, description string, now time.Time) (*membershipRow, string, bool) {
+	if h.Mail.RefuseUnconfigured(w) {
+		return nil, "", false
+	}
 	ctx := r.Context()
 	invite, err := h.validateInvite(ctx, tx, token, now)
 	if err != nil {

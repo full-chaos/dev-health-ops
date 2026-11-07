@@ -94,6 +94,9 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 	if h.refuseWhileUsersOwned(w) {
 		return
 	}
+	if h.Mail.RefuseUnconfigured(w) {
+		return
+	}
 	input, _ := r.Context().Value(registerInputKey{}).(registerInput)
 	ctx := r.Context()
 	email := pythonparity.Strip(pythonparity.Lower(input.email))

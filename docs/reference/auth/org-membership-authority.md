@@ -23,25 +23,25 @@ This page is the one overview of who owns organization, membership and platform-
 checks, rolls back and restores it. It states what the code does now. It links the pages that hold the detail.
 {: .fc-page-lede }
 
-## The authority model (D6651)
+## The authority model
 
 | Data | Authority | The `auth` schema holds |
 | --- | --- | --- |
 | Users | `public.users` | Credentials, password and lockout state, and a copy of each shared column ([deployment, phase 4](../../contribute/architecture/auth-control-plane-deployment.md)). |
 | Organizations | `public.organizations` | A copy. The authorization decision still reads its status from `auth.organizations` (`internal/auth/decisionstate/decisionstate.go:383`), so a stale copy changes a decision. |
 | Memberships | `public.memberships` | A copy. The decision reads both tables (`internal/auth/membership/effective_on.go:31-53`): a public row with a role decides, and the auth row decides only when there is no such public row (`internal/auth/membership/membership.go:73-85`). |
-| Platform roles | `auth.platform_role_assignments`, once `AUTH_PLATFORM_ROLES_OWNED` is on | The authority itself (the one exception, D6659). |
+| Platform roles | `auth.platform_role_assignments`, once `AUTH_PLATFORM_ROLES_OWNED` is on | The authority itself (the one exception). |
 
-- Orgs owned (phase 5, CHAOS-10998, ticket 4.13) is **cancelled** (D6651). The chart refuses phase 5 and refuses
+- Orgs owned (phase 5) is **cancelled**. The chart refuses phase 5 and refuses
   `AUTH_ORGS_OWNED` in any `extraEnv` list ([deployment](../../contribute/architecture/auth-control-plane-deployment.md),
-  [configuration](configuration.md)). CHAOS-12718 removes the name. It is still parsed in `internal/auth/authconfig/config.go:127` and
+  [configuration](configuration.md)). The name is still parsed in `internal/auth/authconfig/config.go:127` and
   read by `orgs-backfill` (`internal/auth/usersbackfill/command.go:272`) at the time of writing.
 - auth-service writes through the public tables. One membership write changes `public.memberships` and
   `auth.memberships` in one transaction (`internal/auth/membership/store.go:501-525`). The organization create and onboard routes
   write both schemas in one commit ([provisioning routes](configuration.md#provisioning-routes)).
 - go-api sends its organization and member writes to auth-service only when `AUTH_PROXY_ORG_PROVISIONING=true`. With the switch off,
-  go-api writes the public tables only and `auth.memberships` drifts (CHAOS-11779,
-  [users-owned runbook](../../operate/runbooks/auth-users-owned-flip-and-rollback.md)). Those writes make no auth-service call and no
+  go-api writes the public tables only and `auth.memberships` drifts
+  ([users-owned runbook](../../operate/runbooks/auth-users-owned-flip-and-rollback.md)). Those writes make no auth-service call and no
   outbox event (see [The provisioning event](#the-provisioning-event)).
 - Platform roles: with `authService.platformRolesOwned: true`, platform authority comes from `auth.platform_role_assignments`, not from
   `public.users.is_superuser` ([runbook](../../operate/runbooks/auth-platform-roles-flip-and-rollback.md)).
@@ -138,4 +138,4 @@ The names below are gaps, not rules:
   after a delay.
 - No setting exists to change the 7 days: `PublishedRetention` is set in `DefaultLoopConfig` only.
 - The code comments of `internal/auth/restorefence/specs.go` still call the public membership table a "legacy mirror". The authority is
-  the public table (D6651).
+  the public table.

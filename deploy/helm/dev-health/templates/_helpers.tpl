@@ -1184,7 +1184,7 @@ address, so its own NetworkPolicy, admitting the listed peer workloads only, is 
 {{- if or (not (or (kindIs "float64" $port) (kindIs "int64" $port) (kindIs "int" $port))) (ne (floor $port) (float64 $port)) (lt (int $port) 1) (gt (int $port) 65535) }}{{- fail "authService.internal.port must be a whole number from 1 to 65535" }}{{- end -}}
 {{- if has (int $port) (list (int .Values.authService.port) (int .Values.authService.operatorPort)) }}{{- fail "authService.internal.port must differ from authService.port and authService.operatorPort" }}{{- end -}}
 {{- if not (kindIs "slice" $in.peers) }}{{- fail "authService.internal.peers must be a list of workload names (web, query-api, go-api)" }}{{- end -}}
-{{- if not $in.peers }}{{- fail "authService.internal.peers must name at least one workload (web, query-api, go-api): the internal port admits only the listed peers" }}{{- end -}}
+{{- if not (or $in.peers .Values.authService.networkPolicy.workloadClients) }}{{- fail "authService.internal.peers or authService.networkPolicy.workloadClients must be non-empty while authService.internal.enabled: the internal port admits only the listed peers and clients, so with neither it would admit nobody (and an empty from would admit every source)" }}{{- end -}}
 {{- $seen := dict -}}
 {{- range $in.peers }}
 {{- if not (and (kindIs "string" .) (has . (list "web" "query-api" "go-api"))) }}{{- fail (printf "authService.internal.peers: %v is not one of web, query-api, go-api" .) }}{{- end -}}
@@ -1193,6 +1193,33 @@ address, so its own NetworkPolicy, admitting the listed peer workloads only, is 
 {{- end -}}
 true
 {{- end -}}
+{{- end -}}
+
+{{/*
+CHAOS-13130: checks authService.networkPolicy.workloadClients, the workloads outside this release (acr-api) admitted on
+the internal port alone. Renders nothing; fails the render on a value the internal policy must not carry. Each entry
+is a podSelector (required, non-empty) and an optional non-empty namespaceSelector, and nothing else: an entry has no
+port, so it can only join the internal port's one rule and never reach the API port, which stays go-api's while
+go-api forwards the auth routes. null is the empty list. Call with (dict "context" . "internalOn" "true"|"").
+*/}}
+{{- define "dev-health.authWorkloadClients" -}}
+{{- $key := "authService.networkPolicy.workloadClients" -}}
+{{- $clients := .context.Values.authService.networkPolicy.workloadClients -}}
+{{- if not (or (kindIs "invalid" $clients) (kindIs "slice" $clients)) }}{{- fail (printf "%s must be a list of {podSelector, namespaceSelector} entries" $key) }}{{- end -}}
+{{- if and $clients (ne .internalOn "true") }}{{- fail (printf "%s needs authService.internal.enabled: the clients are admitted on the internal port alone, by its own NetworkPolicy" $key) }}{{- end -}}
+{{- range $i, $client := $clients }}
+{{- if not (kindIs "map" $client) }}{{- fail (printf "%s[%d] must be an object with a podSelector and an optional namespaceSelector" $key $i) }}{{- end -}}
+{{- range $name := keys $client | sortAlpha }}
+{{- if not (has $name (list "namespaceSelector" "podSelector")) }}{{- fail (printf "%s[%d] takes only podSelector and namespaceSelector, not %q: the entries open the internal port (authService.internal.port) alone, so a port, an ipBlock or any other key is refused" $key $i $name) }}{{- end -}}
+{{- end }}
+{{- if not (hasKey $client "podSelector") }}{{- fail (printf "%s[%d] needs a podSelector: without one the entry admits every pod" $key $i) }}{{- end -}}
+{{- range $name := list "podSelector" "namespaceSelector" }}
+{{- if hasKey $client $name }}
+{{- $selector := index $client $name }}
+{{- if not (and (kindIs "map" $selector) (or (and $selector.matchLabels (gt (len $selector.matchLabels) 0)) (and $selector.matchExpressions (gt (len $selector.matchExpressions) 0)))) }}{{- fail (printf "%s[%d].%s needs a non-empty matchLabels or matchExpressions: an empty selector admits every pod or namespace" $key $i $name) }}{{- end -}}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end -}}
 
 {{/*
@@ -1258,6 +1285,29 @@ differ from the runtime login, and no caller repeats. Renders nothing.
 {{- end }}
 
 {{/*
+The repository identity writer settings (CHAOS-13057) of both auth-migrate Jobs, checked before either renders. The append
+function's owner is a NOLOGIN role of its own (writerRole), and exactly one login may execute it: the worker domain login of
+the provider sync (callerRoles, one entry). Both or neither; the writer differs from the runtime login, from the External
+Push writer and from the caller. Renders nothing.
+*/}}
+{{- define "dev-health.authRepoIdentity" -}}
+{{- $m := .Values.authService.migrate -}}
+{{- $writer := trim (toString (default "" $m.repoIdentity.writerRole)) -}}
+{{- $callers := default (list) $m.repoIdentity.callerRoles -}}
+{{- if and (not $writer) $callers }}{{- fail "authService.migrate.repoIdentity.callerRoles is set while writerRole is empty: the grant pass runs only with a writer role, so no caller would get EXECUTE; set repoIdentity.writerRole too" }}{{- end -}}
+{{- if $writer }}
+{{- if ne (len $callers) 1 }}{{- fail (printf "authService.migrate.repoIdentity.callerRoles must list exactly one login (the worker domain login), got %d" (len $callers)) }}{{- end -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $writer) }}{{- fail (printf "authService.migrate.repoIdentity.writerRole %q is not a valid role name (lower-case letters, digits and underscore, starting with a letter, at most 63 characters)" $writer) }}{{- end -}}
+{{- if or (eq $writer (trim (toString $m.runtimeRole))) (eq $writer (trim (toString (default "" $m.pushLifecycle.writerRole)))) }}{{- fail "authService.migrate.repoIdentity.writerRole must differ from authService.migrate.runtimeRole and from authService.migrate.pushLifecycle.writerRole" }}{{- end -}}
+{{- $raw := toString (first $callers) -}}
+{{- $c := trim $raw -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $raw) }}{{- fail (printf "authService.migrate.repoIdentity.callerRoles entry %q is not a valid role name (lower-case letters, digits and underscore, starting with a letter, at most 63 characters)" $raw) }}{{- end -}}
+{{- if or (eq $c $writer) (eq $c (trim (toString $m.runtimeRole))) (eq $c (trim (toString (default "" $m.pushLifecycle.writerRole)))) }}{{- fail (printf "authService.migrate.repoIdentity.callerRoles entry %q must differ from both writer roles and the runtime role" $c) }}{{- end -}}
+{{- range (default (list) $m.pushLifecycle.callerRoles) }}{{- if eq (trim (toString .)) $writer }}{{- fail "authService.migrate.repoIdentity.writerRole must differ from every authService.migrate.pushLifecycle caller" }}{{- end -}}{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 The auth schema owner pin (authService.migrate.ownerRole -> AUTH_SCHEMA_OWNER_ROLE) for both auth-migrate Jobs, or "".
 Empty renders nothing at every phase. Set, the role must differ from the runtime login, every session reader and every
 push lifecycle role, or the render fails (auth-migrate refuses the first two at run time as well).
@@ -1266,7 +1316,7 @@ push lifecycle role, or the render fails (auth-migrate refuses the first two at 
 {{- $m := .Values.authService.migrate -}}
 {{- $owner := trim (toString (default "" $m.ownerRole)) -}}
 {{- if $owner -}}
-{{- $others := concat (list $m.runtimeRole $m.pushLifecycle.writerRole) (default (list) $m.sessionReaderRoles) (default (list) $m.pushLifecycle.callerRoles) (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi))) -}}
+{{- $others := concat (list $m.runtimeRole $m.pushLifecycle.writerRole) (default (list) $m.sessionReaderRoles) (default (list) $m.projectionReaderRoles) (default (list) $m.pushLifecycle.callerRoles) (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi))) -}}
 {{- if has $owner $others }}{{- fail "authService.migrate.ownerRole must differ from authService.migrate.runtimeRole, every session reader role and every push lifecycle role" }}{{- end -}}
 {{- $owner -}}
 {{- end -}}

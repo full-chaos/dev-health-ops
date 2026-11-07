@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // TestPresentButEmptyScalarQueryParamIs422 (CHAOS-6604): FastAPI validates a
@@ -37,7 +38,7 @@ func TestPresentButEmptyScalarQueryParamIs422(t *testing.T) {
 		if c.person != "" {
 			request.SetPathValue("person_id", c.person)
 		}
-		request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1"}))
+		request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 		recorder := httptest.NewRecorder()
 		c.handler(recorder, request)
 		if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), c.want) || strings.Contains(recorder.Body.String(), `"input"`) {
@@ -46,7 +47,7 @@ func TestPresentButEmptyScalarQueryParamIs422(t *testing.T) {
 	}
 	// A key that is not in the query at all is still absent.
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/prs?scope_type=repo&scope_id=r", nil)
-	request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1"}))
+	request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	recorder := httptest.NewRecorder()
 	prs(recorder, request)
 	if recorder.Code != http.StatusOK {

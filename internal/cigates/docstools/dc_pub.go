@@ -349,6 +349,16 @@ func dcPubRun(root string, stdout io.Writer) ([]string, error) {
 		}
 		actual[rel] = true
 	}
+	// mkdocs does not build the paths in exclude_docs, so they need no navigation entry and their links are not served.
+	if v := dcPubOr(dcPubGetStr(config, "exclude_docs"), nil); v != nil {
+		list, err := pyStr(v)
+		if err != nil {
+			return nil, err
+		}
+		for _, line := range strings.Split(list, "\n") {
+			delete(actual, strings.TrimSpace(line))
+		}
+	}
 	navSet := map[string]bool{}
 	for _, p := range navPaths {
 		navSet[p] = true

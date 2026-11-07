@@ -248,6 +248,8 @@ internal/testsupport/containers
 internal/testsupport/crossorg
 internal/testsupport/edtokens
 internal/testsupport/egressallow
+internal/testsupport/idpstub
+internal/testsupport/issuerstub
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed

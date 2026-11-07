@@ -86,7 +86,7 @@ func checkEgress(reads []EgressRead, want []string) []string {
 		if !imageDigest.MatchString(r.Fields["stub_config"]) {
 			voids = append(voids, fmt.Sprintf("egress record %s: stub_config %q is not a sha256 digest", r.Name, r.Fields["stub_config"]))
 		}
-		if ip := net.ParseIP(r.Fields["goapi_ip"]); ip == nil || !ip.IsPrivate() {
+		if !net.ParseIP(r.Fields["goapi_ip"]).IsPrivate() {
 			voids = append(voids, fmt.Sprintf("egress record %s: goapi_ip %q is not a private IP", r.Name, r.Fields["goapi_ip"]))
 		}
 		if i > 0 && reads[0].Err == nil {

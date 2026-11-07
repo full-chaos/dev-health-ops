@@ -248,8 +248,7 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		))
 	}
 
-	sessionStatements, err := readerStatements(ctx, conn, options, schemaID,
-		options.SessionReaderRoles, SessionReaderReads(options.PlatformRolesOwned), "session reader")
+	sessionStatements, err := sessionReaderStatements(ctx, conn, options, schemaID)
 	if err != nil {
 		return err
 	}

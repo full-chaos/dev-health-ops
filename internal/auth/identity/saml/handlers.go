@@ -83,15 +83,17 @@ func (h Handlers) Initiate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The twin has no sealed branch: it forwards relay_state into the redirect
-	// URL for every provider, so every provider refuses a lone surrogate.
-	if pyjson.MemberHasLoneSurrogateEscape(data, "relay_state", true) {
-		writeStringUnicode(w, "relay_state")
-		return
-	}
+	// Only a provider that allows IdP-initiated sign-in forwards relay_state
+	// into the redirect URL; the others never read it, as go-api.
 	relayState := ""
-	if body.RelayState != nil {
-		relayState = *body.RelayState
+	if p.AllowIdPInitiated {
+		if pyjson.MemberHasLoneSurrogateEscape(data, "relay_state", true) {
+			writeStringUnicode(w, "relay_state")
+			return
+		}
+		if body.RelayState != nil {
+			relayState = *body.RelayState
+		}
 	}
 	init, err := h.Service.InitiateFor(r.Context(), p, relayState)
 	if err != nil {

@@ -144,8 +144,16 @@ func (s *Service) Initiate(ctx context.Context, providerID uuid.UUID, relayState
 }
 
 // InitiateFor stores a new request for a resolved provider and builds the
-// AuthnRequest redirect.
+// AuthnRequest redirect. A provider without IdP-initiated sign-in gets a new
+// random RelayState in place of relayState, as go-api seals its own there.
 func (s *Service) InitiateFor(ctx context.Context, p Provider, relayState string) (Initiation, error) {
+	if !p.AllowIdPInitiated {
+		issued, err := newNonce()
+		if err != nil {
+			return Initiation{}, err
+		}
+		relayState = issued
+	}
 	base := s.BaseURL()
 	requestID, err := newRequestID()
 	if err != nil {

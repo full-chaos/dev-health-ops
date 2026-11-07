@@ -299,6 +299,20 @@ func TestJudgeOutboundEgressEachPlantedDefectIsVoid(t *testing.T) {
 		}
 		return []EgressRead{egressReads("before")[0], ParseEgress("between.txt", []byte(strings.Join(lines, "\n")))}
 	}
+	both := func(key, value string) []EgressRead {
+		var out []EgressRead
+		for _, when := range []string{"before", "between"} {
+			text := egressText(when)
+			lines := strings.Split(text, "\n")
+			for i, l := range lines {
+				if strings.HasPrefix(l, key+"=") {
+					lines[i] = key + "=" + value
+				}
+			}
+			out = append(out, ParseEgress(when+".txt", []byte(strings.Join(lines, "\n"))))
+		}
+		return out
+	}
 	cases := map[string][]EgressRead{
 		"no record":            nil,
 		"one record":           egressReads("before"),
@@ -313,10 +327,10 @@ func TestJudgeOutboundEgressEachPlantedDefectIsVoid(t *testing.T) {
 		"public dns resolves":  bad("public_dns", "ok"),
 		"stub unreachable":     bad("stub_tcp", "refused"),
 		"a host not pinned":    bad("hosts_pinned", "api.stripe.com"),
-		"not a digest":         bad("image", "latest"),
+		"not a digest":         both("image", "latest"),
 		"image differs":        bad("image", "sha256:"+strings.Repeat("2", 64)),
 		"network differs":      bad("networks", "venue-other"),
-		"two networks":         bad("networks", "venue-int,bridge"),
+		"two networks":         both("networks", "venue-int,bridge"),
 		"networks empty": {ParseEgress("before.txt", []byte(strings.Replace(egressText("before"), "networks=venue-int", "networks=", 1))),
 			ParseEgress("between.txt", []byte(strings.Replace(egressText("between"), "networks=venue-int", "networks=", 1)))},
 	}

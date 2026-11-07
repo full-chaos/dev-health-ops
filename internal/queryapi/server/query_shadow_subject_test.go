@@ -62,3 +62,31 @@ func TestQueryHandsTheOperationItsBearer(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-13126: ops_access_token_hs256 is retired. An HS256 edge token on /query, served by the routed authenticator
+// as production builds it, is the generic 401 and runs no operation; the REST edge is the same class's 401 in
+// TestRule1RoutedEdgeTokenIsTheRetiredClass and TestSeamRESTRoutedHS256EdgeTokenIsTheRetiredClass.
+func TestQueryRoutedHS256EdgeTokenIsTheRetiredClass(t *testing.T) {
+	store := newAccessStore()
+	m := newAccessMinter(t)
+	auth := ecEdgeAuth(t, newQueryAPIUserStoreFrom(store))
+	if err := routeAuthenticator(auth, testAccess(m.keys, nil, accessTestNow).opts); err != nil {
+		t.Fatal(err)
+	}
+	verifier, _ := iaVerifier(t)
+	ran := 0
+	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true})
+	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		ran++
+		w.WriteHeader(http.StatusOK)
+	}))
+	routes := http.NewServeMux()
+	routes.Handle("/query", newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, newQueryAPIUserStoreFrom(store), "", nil))
+	hs256 := ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	if code := iaPost(t, routes.ServeHTTP, irBearer(hs256)); code != http.StatusUnauthorized || ran != 0 {
+		t.Fatalf("HS256 edge token on /query: %d, operation ran %d times; want 401 and none", code, ran)
+	}
+	if code := iaPost(t, routes.ServeHTTP, irBearer(m.mint(ecUser, nil, nil))); code != http.StatusOK || ran != 1 {
+		t.Fatalf("user access token on /query: %d, operation ran %d times; want 200 once (the cell's control)", code, ran)
+	}
+}

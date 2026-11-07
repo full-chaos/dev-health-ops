@@ -123,7 +123,7 @@ func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []
 			keyOf[s.Row] = s.Key()
 		}
 	}
-	if len(external) > 0 || len(ob.Egress) > 0 {
+	if len(external) > 0 {
 		out.voids = append(out.voids, checkEgress(ob.Egress, egressWant)...)
 	}
 	if !ob.Logged {

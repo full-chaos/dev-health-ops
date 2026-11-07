@@ -24,8 +24,8 @@ type EgressRead struct {
 	Err    error
 }
 
-// ParseEgress reads one egress record: key=value lines, every key of egressKeys exactly once, no other key, no empty
-// value.
+// ParseEgress reads one egress record: key=value lines of egressKeys, each at most once, no other key, no empty value.
+// A key that is missing fails checkEgress.
 func ParseEgress(name string, raw []byte) EgressRead {
 	read := EgressRead{Name: name, Fields: map[string]string{}}
 	for n, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
@@ -42,12 +42,6 @@ func ParseEgress(name string, raw []byte) EgressRead {
 			return read
 		}
 		read.Fields[key] = value
-	}
-	for _, key := range egressKeys {
-		if read.Fields[key] == "" {
-			read.Err = fmt.Errorf("key %s missing", key)
-			return read
-		}
 	}
 	return read
 }

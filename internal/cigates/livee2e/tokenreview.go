@@ -72,8 +72,13 @@ type reviewUser struct {
 }
 
 // TokenReviewHandler serves POST /apis/authentication.k8s.io/v1/tokenreviews. A wrong reviewer bearer is 401; a subject
-// other than cfg.Subject, or an audience list without cfg.Audience, is an unauthenticated review (201).
+// other than cfg.Subject, cfg.Subject at or after its exp, or an audience list without cfg.Audience, is an
+// unauthenticated review (201).
 func TokenReviewHandler(cfg TokenReviewConfig) http.Handler {
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != tokenReviewPath {
 			http.NotFound(w, r)
@@ -103,7 +108,7 @@ func TokenReviewHandler(cfg TokenReviewConfig) http.Handler {
 		for _, a := range req.Spec.Audiences {
 			asked = asked || a == cfg.Audience
 		}
-		if asked && subtle.ConstantTimeCompare([]byte(req.Spec.Token), []byte(cfg.Subject)) == 1 {
+		if asked && subtle.ConstantTimeCompare([]byte(req.Spec.Token), []byte(cfg.Subject)) == 1 && beforeExp(cfg.Subject, now()) {
 			answer.Status = reviewStatus{
 				Authenticated: true, Audiences: []string{cfg.Audience},
 				User: &reviewUser{Username: "system:serviceaccount:" + cfg.Namespace + ":" + cfg.ServiceAccount, UID: cfg.UID},
@@ -113,6 +118,25 @@ func TokenReviewHandler(cfg TokenReviewConfig) http.Handler {
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(answer)
 	})
+}
+
+// beforeExp reports whether token carries an integer exp claim later than now. A token without one is not live.
+func beforeExp(token string, now time.Time) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	var claims struct {
+		Exp *int64 `json:"exp"`
+	}
+	if json.Unmarshal(raw, &claims) != nil || claims.Exp == nil {
+		return false
+	}
+	return now.Unix() < *claims.Exp
 }
 
 // WriteNewFile creates path (mode 0600, must not exist) with content and a final newline.

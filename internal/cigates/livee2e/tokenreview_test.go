@@ -70,17 +70,28 @@ func TestSubjectJWSIsThreeSegmentsWithFutureExp(t *testing.T) {
 }
 
 func TestTokenReviewFakeAuthenticatesOnlyTheWrittenSubject(t *testing.T) {
-	h := TokenReviewHandler(testConfig("a.b.c"))
+	issued := time.Unix(1_800_000_000, 0).UTC()
+	subject, err := NewSubjectJWS(issued, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(subject)
+	cfg.Now = func() time.Time { return issued.Add(time.Minute) }
+	h := TokenReviewHandler(cfg)
+	noExp := TokenReviewHandler(testConfig("a.b.c"))
+	if rec := post(t, noExp, testReviewer, "a.b.c", []string{testAudience}); strings.Contains(rec.Body.String(), `"authenticated":true`) {
+		t.Fatal("FAIL: a written subject without an exp claim was authenticated")
+	}
 	for name, tc := range map[string]struct {
 		bearer, token string
 		audiences     []string
 		status        int
 		authenticated bool
 	}{
-		"the written subject":  {testReviewer, "a.b.c", []string{testAudience}, http.StatusCreated, true},
+		"the written subject":  {testReviewer, subject, []string{testAudience}, http.StatusCreated, true},
 		"another subject":      {testReviewer, "x.y.z", []string{testAudience}, http.StatusCreated, false},
-		"audience not asked":   {testReviewer, "a.b.c", []string{"other"}, http.StatusCreated, false},
-		"wrong reviewer token": {"nope", "a.b.c", []string{testAudience}, http.StatusUnauthorized, false},
+		"audience not asked":   {testReviewer, subject, []string{"other"}, http.StatusCreated, false},
+		"wrong reviewer token": {"nope", subject, []string{testAudience}, http.StatusUnauthorized, false},
 	} {
 		rec := post(t, h, tc.bearer, tc.token, tc.audiences)
 		if rec.Code != tc.status {

@@ -443,10 +443,10 @@ func TestPlatformAdminAndCrossOrgAnswersEqualLegacy(t *testing.T) {
 		name string
 		h    http.Handler
 	}{{"enforce-on", rig.enforced}, {"enforce-off", rig.legacy}} {
-		status, body, _ := rig.do(side.h, http.MethodPost, revoke, "", hsSU0b.token)
+		status, body, _ := rig.do(side.h, http.MethodPost, revoke, "", edSU0b.token)
 		calls := rig.revoker.take()
 		if status != http.StatusForbidden || body != `{"detail":"Organization access denied"}` || len(calls) != 0 {
-			t.Errorf("F1 %s %s: %d %s, revoke calls %v, want the legacy 403 Organization access denied and none", side.name, hsSU0b.label,
+			t.Errorf("F1 %s %s: %d %s, revoke calls %v, want the legacy 403 Organization access denied and none", side.name, edSU0b.label,
 				status, body, calls)
 		}
 	}

@@ -68,7 +68,7 @@ func wlAuth(t *testing.T, signer wlSigner, audience string) *WorkloadAuth {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &WorkloadAuth{Verifier: verifier, Subject: wlSubject, Now: func() time.Time { return wlNow }}
+	return &WorkloadAuth{Verifier: verifier, Source: StaticSubject(wlSubject), Now: func() time.Time { return wlNow }}
 }
 
 type wlRoute struct{ key, path string }
@@ -282,8 +282,8 @@ func TestWorkloadPathOffWhenUnconfigured(t *testing.T) {
 	token := signer.sign(wlHeader(), wlClaims())
 	configs := map[string]*WorkloadAuth{
 		"nil":         nil,
-		"no subject":  {Verifier: wlAuth(t, signer, "dev-health-api").Verifier},
-		"no verifier": {Subject: wlSubject},
+		"no source":   {Verifier: wlAuth(t, signer, "dev-health-api").Verifier},
+		"no verifier": {Source: StaticSubject(wlSubject)},
 	}
 	for name, workload := range configs {
 		for _, route := range wlRoutesUnderTest {
@@ -395,7 +395,7 @@ func TestUnsupportedClassesWriteOnlyTheParityAuditRow(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			h := newWLHarness(t, &WorkloadAuth{Verifier: verifier, Subject: wlSubject, Now: func() time.Time { return wlNow }})
+			h := newWLHarness(t, &WorkloadAuth{Verifier: verifier, Source: StaticSubject(wlSubject), Now: func() time.Time { return wlNow }})
 			rec := do(h.handler, entitlementPath+someOrg, "Bearer "+token)
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want 401", rec.Code)
@@ -525,7 +525,7 @@ func TestUnsupportedClassesOnLLMConfigTouchNoStoreOrKey(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			h := newWLHarness(t, &WorkloadAuth{Verifier: verifier, Subject: wlSubject, Now: func() time.Time { return wlNow }})
+			h := newWLHarness(t, &WorkloadAuth{Verifier: verifier, Source: StaticSubject(wlSubject), Now: func() time.Time { return wlNow }})
 			before := wlCounts(t, "devhealth_acr_workload_refused_total")
 			rec := do(h.handler, wlRoutesUnderTest[2].path, "Bearer "+token)
 			if rec.Code != http.StatusUnauthorized {

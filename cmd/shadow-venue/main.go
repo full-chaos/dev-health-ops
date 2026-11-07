@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"slices"
@@ -51,6 +52,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return planOrDrive(ctx, args[0], args[1:], stdout, stderr)
 	case "judge":
 		return judge(args[1:], stdout, stderr)
+	case "judge-enforced":
+		return judgeEnforced(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "shadow-venue: unknown step %q\n", args[0])
 	return exitUsage
@@ -68,6 +71,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 	base := fs.String("base", "", "venue go-api origin, loopback only (drive)")
 	out := fs.String("out", "", "slots file to create, 0600 (drive)")
 	gap := fs.Duration("gap", 2500*time.Millisecond, "wait after each answer (drive)")
+	loginOnly := fs.Bool("login-only", false, "sign each principal of the plan in and stop: no row request is sent, no slots file is written (drive)")
 	destructive := fs.Bool("destructive", false, "send the destructive rows (last, throwaway org only); without it they are gaps")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -92,9 +96,12 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	if *out == "" {
+	if *out == "" && !*loginOnly {
 		fmt.Fprintln(stderr, "drive: -out is required")
 		return exitUsage
+	}
+	if *loginOnly {
+		return loginPrincipals(ctx, origin, plan, venue, stdout, stderr)
 	}
 	file, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -126,6 +133,26 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 	}
 	fmt.Fprintf(stdout, "drive: done %s, slots in %s\n", time.Now().UTC().Format(time.RFC3339), *out)
 	return finish(file, exitOK, stderr)
+}
+
+// loginPrincipals signs every principal of the plan in once and sends nothing else: it shows what the drive's own
+// sign-ins change.
+func loginPrincipals(ctx context.Context, origin *url.URL, plan shadowvenue.Plan, venue shadowvenue.Venue, stdout, stderr io.Writer) int {
+	driver := &shadowvenue.Driver{Base: origin, Client: newClient()}
+	done := map[string]bool{}
+	for _, s := range plan.Slots {
+		if s.Gap() || done[s.Principal] {
+			continue
+		}
+		done[s.Principal] = true
+		p, _ := venue.Principal(s.Principal)
+		if _, err := driver.Login(ctx, p, venue.Orgs[p.Org]); err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitFail
+		}
+	}
+	fmt.Fprintf(stdout, "login-only: %d sign-ins, no row request\n", len(done))
+	return exitOK
 }
 
 // newClient sends on the no-proxy outbound transport and never follows a redirect: a bearer reaches only the venue
@@ -178,10 +205,17 @@ func judge(args []string, stdout, stderr io.Writer) int {
 	slotsPath := fs.String("slots", "", "slots file drive wrote")
 	logPath := fs.String("log", "", "go-api JSON log of the run (docker logs --since <drive start>)")
 	rulingsPath := fs.String("rulings", "", "mismatch tuples with a passing pm verdict")
+	verdictsOut := fs.String("verdicts-out", "", "per-slot verdicts file to create, 0600 (the yardstick of a later enforced run)")
+	noOrgBefore := fs.String("noorg-before", "", "go-api /metrics scrape taken before the drive (with -noorg-after: the enforcement no_org counter evidence)")
+	noOrgAfter := fs.String("noorg-after", "", "go-api /metrics scrape taken after the drive")
 	out := fs.String("out", "", "per-row table to create, 0600")
 	k := fs.Int("k", 3, "requests per cell")
 	grace := fs.Duration("grace", 2200*time.Millisecond, "time after an answer in which its result line may land")
 	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if (*noOrgBefore == "") != (*noOrgAfter == "") {
+		fmt.Fprintln(stderr, "judge: -noorg-before and -noorg-after go together")
 		return exitUsage
 	}
 	rawSlots, err := os.ReadFile(*slotsPath)
@@ -221,7 +255,26 @@ func judge(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "judge: -out is required")
 		return exitUsage
 	}
-	report := shadowvenue.Judge(slots, ev, rulings, shadowvenue.JudgeOptions{K: *k, Grace: *grace})
+	var noOrg shadowvenue.NoOrgEvidence
+	if *noOrgBefore != "" {
+		before, err := os.ReadFile(*noOrgBefore)
+		if err != nil {
+			fmt.Fprintf(stderr, "-noorg-before: %v\n", err)
+			return exitUsage
+		}
+		after, err := os.ReadFile(*noOrgAfter)
+		if err != nil {
+			fmt.Fprintf(stderr, "-noorg-after: %v\n", err)
+			return exitUsage
+		}
+		delta, err := shadowvenue.ParseUnjudgedDelta(before, after)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+		noOrg = delta
+	}
+	report := shadowvenue.Judge(slots, ev, rulings, shadowvenue.JudgeOptions{K: *k, Grace: *grace, NoOrg: noOrg})
 	file, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		fmt.Fprintf(stderr, "judge: -out %s: %v\n", *out, errors.Unwrap(err))
@@ -230,6 +283,21 @@ func judge(args []string, stdout, stderr io.Writer) int {
 	if err := report.WriteTable(file); err != nil {
 		fmt.Fprintln(stderr, err)
 		return finish(file, exitUsage, stderr)
+	}
+	if *verdictsOut != "" {
+		vf, err := os.OpenFile(*verdictsOut, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			fmt.Fprintf(stderr, "judge: -verdicts-out %s: %v\n", *verdictsOut, errors.Unwrap(err))
+			return finish(file, exitUsage, stderr)
+		}
+		werr := report.WriteVerdicts(vf)
+		if cerr := vf.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			fmt.Fprintln(stderr, werr)
+			return finish(file, exitFail, stderr)
+		}
 	}
 	for _, reason := range report.Reasons {
 		fmt.Fprintln(stdout, reason)
@@ -263,4 +331,98 @@ func finish(file *os.File, code int, stderr io.Writer) int {
 		}
 	}
 	return code
+}
+
+// judgeEnforced judges a run with enforcement on against the verdicts file of the paired run with it off.
+func judgeEnforced(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("judge-enforced", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	slotsPath := fs.String("slots", "", "slots file the enforced drive wrote")
+	yardPath := fs.String("yardstick", "", "verdicts file of the paired run with enforcement off")
+	yardDigest := fs.String("yardstick-digest", "", "file with the data digest taken before the yardstick run")
+	yardDigestAfter := fs.String("yardstick-digest-after", "", "file with the data digest taken after the yardstick run")
+	digestBefore := fs.String("digest-before", "", "file with the data digest taken before this run")
+	digestAfter := fs.String("digest-after", "", "file with the data digest taken after this run")
+	metricsBefore := fs.String("metrics-before", "", "go-api /metrics scrape before the drive")
+	metricsAfter := fs.String("metrics-after", "", "go-api /metrics scrape after the drive")
+	profiles := fs.String("profiles", "", "endpoint-profiles.go-api.json of the venue image; empty = the embedded one")
+	out := fs.String("out", "", "per-row table to create, 0600")
+	k := fs.Int("k", 3, "requests per cell")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	read := func(name, path string) ([]byte, bool) {
+		if path == "" {
+			fmt.Fprintf(stderr, "judge-enforced: -%s is required\n", name)
+			return nil, false
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(stderr, "-%s: %v\n", name, err)
+			return nil, false
+		}
+		return raw, true
+	}
+	files := map[string][]byte{}
+	for name, path := range map[string]string{"slots": *slotsPath, "yardstick": *yardPath, "yardstick-digest": *yardDigest, "yardstick-digest-after": *yardDigestAfter, "digest-before": *digestBefore,
+		"digest-after": *digestAfter, "metrics-before": *metricsBefore, "metrics-after": *metricsAfter} {
+		raw, ok := read(name, path)
+		if !ok {
+			return exitUsage
+		}
+		files[name] = raw
+	}
+	slots, err := shadowvenue.ParseSlots(files["slots"])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	yard, err := shadowvenue.ParseYardstick(files["yardstick"])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	profileBytes := authv1.GoAPIEndpointProfiles
+	if *profiles != "" {
+		if profileBytes, err = os.ReadFile(*profiles); err != nil {
+			fmt.Fprintf(stderr, "-profiles: %v\n", err)
+			return exitUsage
+		}
+	}
+	namespaces, err := shadowvenue.RowNamespaces(profileBytes)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	if *out == "" {
+		fmt.Fprintln(stderr, "judge-enforced: -out is required")
+		return exitUsage
+	}
+	report := shadowvenue.JudgeEnforced(shadowvenue.EnforcedInput{Slots: slots, Yard: yard, K: *k, Namespaces: namespaces,
+		YardDigest: strings.TrimSpace(string(files["yardstick-digest"])), YardDigestAfter: strings.TrimSpace(string(files["yardstick-digest-after"])), DigestBefore: strings.TrimSpace(string(files["digest-before"])),
+		DigestAfter: strings.TrimSpace(string(files["digest-after"])), MetricsBefore: files["metrics-before"], MetricsAfter: files["metrics-after"]})
+	file, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		fmt.Fprintf(stderr, "judge-enforced: -out %s: %v\n", *out, errors.Unwrap(err))
+		return exitUsage
+	}
+	if err := report.WriteTable(file); err != nil {
+		fmt.Fprintln(stderr, err)
+		return finish(file, exitUsage, stderr)
+	}
+	for _, reason := range report.Reasons {
+		fmt.Fprintln(stdout, reason)
+	}
+	counts := report.VerdictCounts()
+	verdicts := make([]string, 0, len(counts))
+	for verdict := range counts {
+		verdicts = append(verdicts, verdict)
+	}
+	slices.Sort(verdicts)
+	for i, verdict := range verdicts {
+		verdicts[i] = fmt.Sprintf("%s %d", verdict, counts[verdict])
+	}
+	fmt.Fprintf(stdout, "judge-enforced: slots %s\n", strings.Join(verdicts, ", "))
+	fmt.Fprintf(stdout, "judge-enforced: void %v, exit %d, table %s\n", report.Void, report.Exit(), *out)
+	return finish(file, report.Exit(), stderr)
 }

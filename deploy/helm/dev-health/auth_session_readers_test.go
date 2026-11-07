@@ -241,3 +241,32 @@ func TestAuthJobsGrantProjectionReadsToTheListedRoles(t *testing.T) {
 		}
 	}
 }
+
+// auth-migrate and auth-grants pass the workload reader roles only when some are listed, so the default render and
+// every existing release render the same Jobs as before.
+func TestAuthJobsGrantTheWorkloadRegistryReadOnlyToTheListedRoles(t *testing.T) {
+	jobs := []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"}
+	docs, out, err := renderAuth(t, authBase...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	for _, job := range jobs {
+		if value, set := containerEnvValue(t, authDoc(docs, "Job", job), "AUTH_WORKLOAD_READER_ROLES"); set {
+			t.Errorf("%s: the default render sets AUTH_WORKLOAD_READER_ROLES=%q; want it unset", job, value)
+		}
+	}
+	docs, out, err = renderAuth(t, append(append([]string{}, authBase...),
+		"--set-json", `authService.migrate.sessionReaderRoles=["devhealth_api","devhealth_query"]`,
+		"--set-json", `authService.migrate.workloadReaderRoles=["devhealth_api"]`)...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	for _, job := range jobs {
+		if value, _ := containerEnvValue(t, authDoc(docs, "Job", job), "AUTH_WORKLOAD_READER_ROLES"); value != "devhealth_api" {
+			t.Errorf("%s: AUTH_WORKLOAD_READER_ROLES = %q, want devhealth_api", job, value)
+		}
+		if value, _ := containerEnvValue(t, authDoc(docs, "Job", job), "AUTH_SESSION_READER_ROLES"); value != "devhealth_api,devhealth_query" {
+			t.Errorf("%s: AUTH_SESSION_READER_ROLES = %q changed", job, value)
+		}
+	}
+}

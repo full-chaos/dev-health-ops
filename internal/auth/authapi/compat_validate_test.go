@@ -642,7 +642,8 @@ func TestValidateCompatEdDSAAnswerIsGoAPIsRoutedAnswerByteForByte(t *testing.T) 
 		{name: "stale pin", arrange: func(f *validateFixture) {
 			f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: f.principal, LegacyTokenVersion: &stale}
 		}},
-		{name: "org the user left", arrange: func(f *validateFixture) { delete(f.users.roles, [2]uuid.UUID{f.principal, f.org}) }},
+		{name: "org the user left", arrange: func(f *validateFixture) { delete(f.users.roles, [2]uuid.UUID{f.principal, f.org}) },
+			want: func(f *validateFixture) string { return f.validAnswer("ada@example.com", f.org.String(), "member") }},
 		{name: "aud auth-service", token: func(f *validateFixture) string { return f.eddsaToken(contracts.SessionRouteAudience) }},
 		{name: "HS256 token beside it (retired class, refused)", token: func(f *validateFixture) string { return f.hs256Token(nil) }},
 	} {
@@ -718,7 +719,8 @@ func TestValidateCompatC5TokenClassesAreGoAPIsAndNoWider(t *testing.T) {
 		user.IsActive = true
 		f.users.users[f.principal] = user
 		delete(f.users.roles, [2]uuid.UUID{f.principal, f.org})
-		expectAnswer(t, "user token for an org the user left", f.post(f.server, tokenBody(f.eddsaToken(contracts.PlatformAPIAudience)), nil), http.StatusOK, nullAnswer)
+		expectAnswer(t, "user token for an org the user left", f.post(f.server, tokenBody(f.eddsaToken(contracts.PlatformAPIAudience)), nil),
+			http.StatusOK, f.validAnswer("ada@example.com", f.org.String(), "member"))
 		f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: other, LegacyTokenVersion: f.record.LegacyTokenVersion}
 		expectAnswer(t, "user token of another principal's session", f.post(f.server, tokenBody(f.eddsaToken(contracts.PlatformAPIAudience)), nil), http.StatusOK, nullAnswer)
 	})

@@ -116,3 +116,49 @@ func TestFinishFailsAStepWhoseOutputFileDidNotClose(t *testing.T) {
 		t.Fatalf("an earlier failure was replaced by %d", code)
 	}
 }
+
+func TestJudgeTakesTheTwoNoOrgScrapesTogetherOrNotAtAll(t *testing.T) {
+	dir := t.TempDir()
+	one := filepath.Join(dir, "before.prom")
+	if err := os.WriteFile(one, []byte("# HELP dev_health_authz_enforcement_unjudged_total x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	args := []string{"judge", "-slots", filepath.Join(dir, "nope"), "-log", filepath.Join(dir, "nope"), "-out", filepath.Join(dir, "t.tsv"), "-noorg-before", one}
+	if code := run(context.Background(), args, &out, &errOut); code != exitUsage {
+		t.Fatalf("one scrape only: code %d", code)
+	}
+	if !strings.Contains(errOut.String(), "go together") {
+		t.Fatalf("stderr %q", errOut.String())
+	}
+}
+
+func TestJudgeEnforcedNeedsEveryInput(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"judge-enforced", "-out", filepath.Join(t.TempDir(), "t.tsv")}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "is required") {
+		t.Fatalf("no inputs: code %d, stderr %q", code, errOut.String())
+	}
+}
+
+// -login-only signs each principal in once and sends no row request and writes no slots file.
+func TestDriveLoginOnlySendsOnlySignIns(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		_, _ = w.Write([]byte(`{"access_token":"tok"}`))
+	}))
+	defer srv.Close()
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"drive", "-login-only", "-base", srv.URL, "-principals", principalsFile(t)}, &out, &errOut)
+	if code != exitOK || !strings.Contains(out.String(), "4 sign-ins, no row request") {
+		t.Fatalf("code %d out %q err %q", code, out.String(), errOut.String())
+	}
+	if len(paths) != 4 {
+		t.Fatalf("%d requests: %v", len(paths), paths)
+	}
+	for _, p := range paths {
+		if !strings.HasPrefix(p, "POST /api/v1/auth/") {
+			t.Errorf("a request that is no sign-in: %s", p)
+		}
+	}
+}

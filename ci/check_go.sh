@@ -1971,7 +1971,6 @@ venue_oracle_changed_selects() {
 venue_oracle_skips() {
   local json_log="$1" ledger="$2" name skip_test ticket py go top row skips refused=0
   shift 2
-  [ -r "${ledger}" ] || { printf 'ERROR: venue oracle known-divergence ledger %s is missing or unreadable\n' "${ledger}" >&2; return 1; }
   for name in "$@"; do
     # Each line is read on its own (fromjson?): a line go test wrote that is not an event never hides a skip event.
     skips="$(jq -Rrs --arg name "${name}" '
@@ -1994,6 +1993,11 @@ venue_oracle_skips() {
       fi
       if [ -z "${py}" ] || [ -z "${go}" ]; then
         printf 'ERROR: venue oracle %s reported a KNOWN-DIVERGENCE %s skip without python=<answer> go=<answer>: no proof that both planes ran\n' "${skip_test}" "${ticket}" >&2
+        refused=1
+        continue
+      fi
+      if [ ! -r "${ledger}" ]; then
+        printf 'ERROR: venue oracle %s reported a KNOWN-DIVERGENCE %s skip, but the ledger %s is missing or unreadable\n' "${skip_test}" "${ticket}" "${ledger}" >&2
         refused=1
         continue
       fi

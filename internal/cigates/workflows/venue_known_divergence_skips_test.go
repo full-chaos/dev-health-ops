@@ -73,7 +73,7 @@ func runVenueSkips(t *testing.T, log, ledger string, names ...string) (string, s
 	return stdout.String(), stderr.String(), err
 }
 
-func TestVenueOracleSkipsAcceptOnlyALedgerKnownDivergence(t *testing.T) {
+func TestKnownDivergenceSkipsAcceptOnlyALedgerRow(t *testing.T) {
 	for _, tc := range []struct {
 		name, message, refusal string
 	}{
@@ -113,7 +113,7 @@ func TestVenueOracleSkipsAcceptOnlyALedgerKnownDivergence(t *testing.T) {
 
 // The skip message venueoracle.KnownDivergenceSkip writes is the form the verb accepts: a real go test -json run of
 // the venueoracle Diff cell passes with a ledger row for it, and is refused without one.
-func TestVenueOracleSkipsReadTheKnownDivergenceSkipOfVenueoracle(t *testing.T) {
+func TestKnownDivergenceSkipsReadTheVenueoracleSkipForm(t *testing.T) {
 	cmd := exec.Command("go", "test", "-count=1", "-json", "-run", "^TestDiffSkipsADivergentKnownDivergence$", "./internal/testsupport/venueoracle")
 	cmd.Dir = repoRoot(t)
 	out, err := cmd.Output()
@@ -132,7 +132,7 @@ func TestVenueOracleSkipsReadTheKnownDivergenceSkipOfVenueoracle(t *testing.T) {
 
 // The venue-oracles verb judges every discovered test's skips with venue_oracle_skips over the repository ledger and
 // prints the summary line; no other skip check is left in it.
-func TestVenueOraclesVerbJudgesSkipsByTheLedger(t *testing.T) {
+func TestTheVenueVerbJudgesSkipsByTheLedger(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "check_go.sh"))
 	if err != nil {
 		t.Fatal(err)

@@ -301,3 +301,18 @@ func TestGrantsJobRendersOnlyWorkloadReadersItsSessionReadersName(t *testing.T) 
 		t.Errorf("auth-grants AUTH_WORKLOAD_READER_ROLES = %q, want only devhealth_api (the one its session readers name)", value)
 	}
 }
+
+// auth-migrate trims every role name it reads from its env (a padded value is the role), so the grants Job compares trimmed names
+// too: a padded sessionReaderRoles or workloadReaderRoles entry must not drop a workload reader.
+func TestGrantsJobTrimsRoleNamesLikeAuthMigrate(t *testing.T) {
+	sets := append(append([]string{}, authBase...),
+		"--set-json", `authService.migrate.sessionReaderRoles=[" devhealth_api ","devhealth_query"]`,
+		"--set-json", `authService.migrate.workloadReaderRoles=["devhealth_api "]`)
+	docs, out, err := renderAuth(t, sets...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	if value, _ := containerEnvValue(t, authDoc(docs, "Job", "a-dev-health-auth-grants"), "AUTH_WORKLOAD_READER_ROLES"); value != "devhealth_api" {
+		t.Errorf("auth-grants AUTH_WORKLOAD_READER_ROLES = %q, want devhealth_api: a padded role name dropped the workload reader", value)
+	}
+}

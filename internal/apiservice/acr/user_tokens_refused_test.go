@@ -186,7 +186,7 @@ func controlWorkload(t *testing.T) controlCase {
 	})
 	input := enc.EncodeToString(header) + "." + enc.EncodeToString(claims)
 	return controlCase{
-		auth:  &acr.WorkloadAuth{Verifier: verifier, Subject: subject, Now: func() time.Time { return now }},
+		auth:  &acr.WorkloadAuth{Verifier: verifier, Source: acr.StaticSubject(subject), Now: func() time.Time { return now }},
 		token: input + "." + enc.EncodeToString(ed25519.Sign(priv, []byte(input))),
 	}
 }

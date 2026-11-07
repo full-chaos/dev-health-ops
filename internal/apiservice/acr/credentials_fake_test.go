@@ -36,7 +36,7 @@ func newPackageWorkload(signer wlSigner) *WorkloadAuth {
 	if err != nil {
 		panic(err)
 	}
-	return &WorkloadAuth{Verifier: verifier, Subject: wlSubject, Now: func() time.Time { return wlNow }}
+	return &WorkloadAuth{Verifier: verifier, Source: StaticSubject(wlSubject), Now: func() time.Time { return wlNow }}
 }
 
 type auditRow struct{ credentialID, orgID, outcome string }

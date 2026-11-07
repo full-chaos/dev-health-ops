@@ -133,14 +133,28 @@ func isPlatformReaderColumn(table, column string) bool {
 	return false
 }
 
+// isWorkloadReaderColumn reports whether table.column is a column of
+// WorkloadReaderReads.
+func isWorkloadReaderColumn(table, column string) bool {
+	for _, grant := range WorkloadReaderReads() {
+		if grant.Table == table && slices.Contains(grant.Columns, column) {
+			return true
+		}
+	}
+	return false
+}
+
 // readerNarrowing is what a session reader lost of the platform role read
-// (column SELECTs of PlatformRoleReaderColumns) between before and after,
-// named by the reader. Any other grant a reader loses is one the reader grant
-// never declared (a re-apply removes it without an acknowledgement).
+// (column SELECTs of PlatformRoleReaderColumns) or of the workload registry
+// read (WorkloadReaderReads, AUTH_WORKLOAD_READER_ROLES turned off) between
+// before and after, named by the reader: each is a read a running service
+// depends on, so removing it needs the acknowledgement, with the platform
+// roles switch on or off. Any other grant a reader loses is one the reader
+// grant never declared (a re-apply removes it without an acknowledgement).
 func readerNarrowing(reader string, before, after []GrantRecord) []GrantRecord {
 	var lost []GrantRecord
 	for _, g := range narrowedGrants(before, after) {
-		if g.Kind != "column" || g.Privilege != "SELECT" || !isPlatformReaderColumn(g.Object, g.Column) {
+		if g.Kind != "column" || g.Privilege != "SELECT" || !(isPlatformReaderColumn(g.Object, g.Column) || isWorkloadReaderColumn(g.Object, g.Column)) {
 			continue
 		}
 		g.Role = reader

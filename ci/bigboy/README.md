@@ -154,10 +154,9 @@ Bring-up, in this order (every command names its services; `-p dev-health ... --
 5. Once: `--profile auth run --rm acr-workload-bootstrap` (runs `acr-workload-volume` first). It prints the credential id and its
    `expires_at`; re-create before that time (a second `run` refuses while a credential is live: revoke it first with
    `auth-migrate workloads bootstrap-revoke -credential <id> -reason owner_request -apply`, or rotate with `bootstrap-rotate`). It is never a `depends_on`.
-6. The subject: read the principal of the workload acr-api,
-   `docker exec dev-health-postgres-1 psql -U devhealth -d devhealth -Atc "SELECT 'prn_' || rtrim(translate(encode(uuid_send(principal_id), 'base64'), '+/', '-_'), '=') FROM auth.workloads WHERE name = 'acr-api'"`,
-   and write it to `ops/.env` as `AUTH_ACR_WORKLOAD_SUBJECT=prn_...` (an id, not a secret). Unset, go-api refuses every workload token as
-   not configured.
+6. The subject: nothing to write. go-api reads the principal of the workload acr-api from the workload registry (the row `auth.workloads`
+   `name = 'acr-api'`); the venue grants its role that read (`AUTH_WORKLOAD_READER_ROLES=devhealth_api` on auth-migrate and auth-grants).
+   No live acr-api row, or an unreadable registry, and go-api refuses every workload token on the internal acr routes.
 7. Once: `--profile auth run --rm go-api-workload-bootstrap` (runs `go-api-workload-volume` first), then read the principal of the workload `api` as in step 6
    (`WHERE name = 'api'`) and write it to `ops/.env` as `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_...`. Recreate auth-service (`--profile auth up -d --no-deps --no-build auth-service`).
 8. Recreate go-api (`up -d --no-deps --no-build go-api`; it needs the api bootstrap file from step 7 to start), query-api and web, then acr-api (`--profile acr up -d --no-deps --no-build acr-api`).

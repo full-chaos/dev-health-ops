@@ -405,6 +405,7 @@ if [ "${LEG}" = "acp" ]; then
   # CHAOS-11387: this leg runs with auth-service owning users (CI and local only; prod and the other leg stay off).
   # users-backfill refuses once the flag is true and auth-service is not ready while public.users and auth.users
   # have gaps, so the copy runs first, with the flag still off; then grants and auth-service, then go-api.
+  # The compose migrate service defaults AUTH_USERS_OWNED to true (dho auth users-create), so the copy sets it off itself.
   # AUTH_CORPUS_USERS_UNOWNED=1 skips it: the non-vacuity run, which must still pass the golden through the not-owned quirks.
   # The corpus test seeds its users first (it signals ${SEEDED_FILE}), so this runs once they exist, as a real switch has users
   # first; the test is then handed the forwarded set (${FLIPPED_FILE}) and goes on. Step 1e needs auth-service and go-api up, not the test.
@@ -413,7 +414,7 @@ if [ "${LEG}" = "acp" ]; then
     (
       export "AUTH_DATABASE_URI=host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable"
       timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
-        run --rm --no-deps -e AUTH_DATABASE_URI migrate auth users-backfill
+        run --rm --no-deps -e AUTH_DATABASE_URI -e AUTH_USERS_OWNED=false migrate auth users-backfill
     ) || die "users-backfill failed"
     # The flag is set for these two commands only (not exported): the go-api recreates that follow take it from the state.
     AUTH_USERS_OWNED=true timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \

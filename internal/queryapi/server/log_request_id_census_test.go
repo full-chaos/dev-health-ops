@@ -1,19 +1,25 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
+	"go/constant"
+	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 )
 
 // requestIDExemptions are the raw request id reads that reach no log call. Each one is a response value, a
@@ -34,45 +40,44 @@ var requestIDExemptions = map[string]string{
 	"graphql_error_presenter.go#safeGraphQLErrorPresenter": "local goes to the client as an extension; each log call wraps it",
 }
 
-// importedConsts holds the header-name constants this package takes from other packages, keyed as spelled at the use.
-var importedConsts = map[string]string{
-	"httpapi.RequestIDHeader": httpapi.RequestIDHeader,
-}
+// isRequestIDName compares a header name by its canonical form: X-Request-Id and X-Request-ID are one name.
+func isRequestIDName(v string) bool { return http.CanonicalHeaderKey(v) == "X-Request-Id" }
 
-func isRequestIDName(v string) bool { return strings.EqualFold(v, "X-Request-Id") }
+var (
+	censusImporterOnce sync.Once
+	censusSourceImp    types.Importer
+)
+
+// censusImporter type-checks the standard library and the httpapi package from source and gives every other
+// import an empty package, so a constant that names another package's header name resolves by its value while
+// the rest of the module need not compile here.
+type censusImporter struct{}
+
+func (censusImporter) Import(path string) (*types.Package, error) {
+	censusImporterOnce.Do(func() { censusSourceImp = importer.ForCompiler(token.NewFileSet(), "source", nil) })
+	first, _, _ := strings.Cut(path, "/")
+	if !strings.Contains(first, ".") || strings.HasSuffix(path, "/internal/auth/httpapi") {
+		return censusSourceImp.Import(path)
+	}
+	pkg := types.NewPackage(path, filepath.Base(path))
+	pkg.MarkComplete()
+	return pkg, nil
+}
 
 type censusCtx struct {
-	consts map[string]string
-	t      *testing.T
-	fset   *token.FileSet
-	bad    []string
+	info *types.Info
+	t    *testing.T
+	fset *token.FileSet
+	bad  []string
 }
 
+// resolve returns the string constant value of e as the type checker computed it.
 func (c *censusCtx) resolve(e ast.Expr) (string, bool) {
-	switch e := e.(type) {
-	case *ast.BasicLit:
-		if e.Kind == token.STRING {
-			v, err := strconv.Unquote(e.Value)
-			return v, err == nil
-		}
-	case *ast.ParenExpr:
-		return c.resolve(e.X)
-	case *ast.Ident:
-		v, ok := c.consts[e.Name]
-		return v, ok
-	case *ast.SelectorExpr:
-		if x, ok := e.X.(*ast.Ident); ok {
-			v, ok := c.consts[x.Name+"."+e.Sel.Name]
-			return v, ok
-		}
-	case *ast.BinaryExpr:
-		if e.Op == token.ADD {
-			l, ok1 := c.resolve(e.X)
-			r, ok2 := c.resolve(e.Y)
-			return l + r, ok1 && ok2
-		}
+	tv, ok := c.info.Types[e]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+		return "", false
 	}
-	return "", false
+	return constant.StringVal(tv.Value), true
 }
 
 // nameIsRequestID resolves a header name by its constant value. A name that looks like a request id constant but
@@ -82,7 +87,7 @@ func (c *censusCtx) nameIsRequestID(e ast.Expr) bool {
 		return isRequestIDName(v)
 	}
 	if strings.Contains(strings.ToLower(types.ExprString(e)), "requestid") {
-		c.bad = append(c.bad, fmt.Sprintf("%s: header name %s does not resolve; add it to importedConsts", c.fset.Position(e.Pos()), types.ExprString(e)))
+		c.bad = append(c.bad, fmt.Sprintf("%s: header name %s is not a constant the type checker resolves", c.fset.Position(e.Pos()), types.ExprString(e)))
 	}
 	return false
 }
@@ -176,43 +181,29 @@ func (c *censusCtx) tainted(e ast.Expr, vars map[string]bool) bool {
 // requestIDReads parses the files and returns the raw request id reads that sit inside a log call's arguments
 // (log) and those that do not (other), as "file:line" and "file#func" entries. A read wrapped in logSafeRequestID
 // is neither. A local assigned from a raw read (also through an index, a slice or strings.*), and a parameter named
-// requestID, count as raw where a log call uses them. consts is the header-name constants of the package files'
-// own const decls plus importedConsts, resolved by value.
+// requestID, count as raw where a log call uses them. A header name is a constant by its value, as go/types computes it.
 func requestIDReads(t *testing.T, files map[string]string) (logUses, other []string) {
 	t.Helper()
 	fset := token.NewFileSet()
 	parsed := map[string]*ast.File{}
-	c := &censusCtx{consts: map[string]string{}, t: t, fset: fset}
-	for k, v := range importedConsts {
-		c.consts[k] = v
+	var names []string
+	for name := range files {
+		names = append(names, name)
 	}
-	for name, src := range files {
-		f, err := parser.ParseFile(fset, name, src, 0)
+	sort.Strings(names)
+	var list []*ast.File
+	for _, name := range names {
+		f, err := parser.ParseFile(fset, name, files[name], 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
 		parsed[name] = f
+		list = append(list, f)
 	}
-	for pass := 0; pass < 3; pass++ {
-		for _, f := range parsed {
-			for _, d := range f.Decls {
-				gd, ok := d.(*ast.GenDecl)
-				if !ok || gd.Tok != token.CONST {
-					continue
-				}
-				for _, sp := range gd.Specs {
-					vs := sp.(*ast.ValueSpec)
-					for i, id := range vs.Names {
-						if i < len(vs.Values) {
-							if v, ok := c.resolve(vs.Values[i]); ok {
-								c.consts[id.Name] = v
-							}
-						}
-					}
-				}
-			}
-		}
-	}
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
+	conf := types.Config{Importer: censusImporter{}, Error: func(error) {}, FakeImportC: true}
+	conf.Check("p", fset, list, info)
+	c := &censusCtx{info: info, t: t, fset: fset}
 	for name, f := range parsed {
 		for _, decl := range f.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
@@ -313,9 +304,25 @@ func (c *censusCtx) record(logUses, other *[]string, file, fn string, pos token.
 
 func TestRequestIDCensusRecognizesRawLogUses(t *testing.T) {
 	const pre = `package p
-import ("log"; "log/slog")
+import (
+	"context"
+	"log"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+)
 const hdr = "X-Request-Id"
 const hdr2 = "x-request-" + "id"
+const hdr3 = "X-Request-ID"
+type R struct{ Header http.Header }
+var w http.ResponseWriter
+func envelopeRequestID(r R) string { return "" }
+func graphQLRequestID(c context.Context) string { return "" }
+func logSafeRequestID(s string) string { return s }
+var _ = strings.ToLower
+var _ = slog.Info
 `
 	for name, tc := range map[string]struct {
 		body, other string
@@ -326,14 +333,15 @@ const hdr2 = "x-request-" + "id"
 		"literal index direct":      {`func a(r R) { log.Print(r.Header["X-Request-Id"]) }`, "", 1},
 		"const index direct":        {`func a(r R) { log.Print(r.Header[hdr]) }`, "", 1},
 		"const Get direct":          {`func a(r R) { log.Print(r.Header.Get(hdr2)) }`, "", 1},
+		"canonical-case const Get":  {`func a(r R) { log.Print(r.Header.Get(hdr3)) }`, "", 1},
 		"const index local":         {`func a(r R) { id := r.Header[hdr]; log.Print(id) }`, "p.go#a", 1},
 		"const Get local":           {`func a(r R) { id := r.Header.Get(hdr); log.Print(id) }`, "p.go#a", 1},
 		"const index outside":       {`func a(r R) { _ = r.Header[hdr] }`, "p.go#a", 0},
 		"const Get outside":         {`func a(r R) { _ = r.Header.Get(hdr) }`, "p.go#a", 0},
-		"imported const Get direct": {`func a(h H) { log.Print(h.Get(httpapi.RequestIDHeader)) }`, "", 1},
-		"imported const Get local":  {`func a(h H) { id := h.Get(httpapi.RequestIDHeader); log.Print(id) }`, "p.go#a", 1},
-		"imported const outside":    {`func a(h H) string { return h.Get(httpapi.RequestIDHeader) }`, "p.go#a", 0},
-		"context id local":          {`func a(ctx C) { id := httpapi.RequestIDFrom(ctx); log.Print(id) }`, "p.go#a", 1},
+		"imported const Get direct": {`func a(h http.Header) { log.Print(h.Get(httpapi.RequestIDHeader)) }`, "", 1},
+		"imported const Get local":  {`func a(h http.Header) { id := h.Get(httpapi.RequestIDHeader); log.Print(id) }`, "p.go#a", 1},
+		"imported const outside":    {`func a(h http.Header) string { return h.Get(httpapi.RequestIDHeader) }`, "p.go#a", 0},
+		"context id local":          {`func a(ctx context.Context) { id := httpapi.RequestIDFrom(ctx); log.Print(id) }`, "p.go#a", 1},
 		"values then index":         {`func a(r R) { v := r.Header.Values(hdr); log.Print(v[0]) }`, "p.go#a", 1},
 		"strings passthrough":       {`func a(r R) { id := strings.ReplaceAll(envelopeRequestID(r), "x", "y"); log.Print(id) }`, "p.go#a", 1},
 		"param named requestID":     {`func a(requestID string) { log.Print(requestID) }`, "", 1},
@@ -397,6 +405,23 @@ func TestLogSafeRequestIDStripsCRAndLF(t *testing.T) {
 	for in, want := range map[string]string{"": "", "req-123_ok.~": "req-123_ok.~", "a\nb": "ab", "a\rb": "ab", "a\r\nb\n\rc": "abc"} {
 		if got := logSafeRequestID(in); got != want {
 			t.Errorf("logSafeRequestID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPDPRefusalLogsOneLineForARequestIDWithLineBreaks(t *testing.T) {
+	var out bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&out, nil)))
+	defer slog.SetDefault(prev)
+	for _, id := range []string{"abc\r\nlevel=ERROR msg=forged", "abc\ndef", "abc\rdef"} {
+		out.Reset()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/x", nil)
+		r.Header["X-Request-Id"] = []string{id}
+		writePDPDenied(httptest.NewRecorder(), r, "rest", &pdp.DenyError{Reason: "role_lacks_action"})
+		line := strings.TrimSuffix(out.String(), "\n")
+		if !strings.Contains(line, "the PDP refused the request") || strings.ContainsAny(line, "\r\n") || strings.Contains(line, "forged") {
+			t.Errorf("id %q: log output %q is not one line of the site without the id", id, out.String())
 		}
 	}
 }

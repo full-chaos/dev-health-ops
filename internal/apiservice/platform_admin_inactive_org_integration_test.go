@@ -10,7 +10,7 @@ import (
 )
 
 // CHAOS-13209 D3 (x), acp 2026-11-06: the legacy go-api answer, one real row per platform_admin-flagged action, for a
-// superuser with no membership row (HS256, org claim B) when B is active and when B is suspended, and, as the
+// superuser with no membership row (EdDSA, org claim B) when B is active and when B is suspended, and, as the
 // control, for an admin member of B. A measurement: each answer is a CELL line; the test fails only on no answer. A
 // guard refusal is 401 or 403 with the guard's body; any other answer means the request was admitted.
 func TestLegacyGoAPIFlaggedActionsInAnInactiveOrganization(t *testing.T) {
@@ -18,8 +18,8 @@ func TestLegacyGoAPIFlaggedActionsInAnInactiveOrganization(t *testing.T) {
 	defer cancel()
 	rig := newParityRig(t, ctx)
 	B := parOrgB.String()
-	su0 := rig.hs256(t, parSU0, parPtr(parOrgB), "")
-	admin := rig.hs256(t, parT, parPtr(parOrgB), "admin")
+	su0 := rig.eddsa(parSU0, parPtr(parOrgB), nil)
+	admin := rig.eddsa(parT, parPtr(parOrgB), nil)
 	cells := []struct{ action, method, path, body string }{
 		{"billing.manage", http.MethodPost, "/api/v1/billing/subscriptions/cancel?org_id=" + B, "{}"},
 		{"integrations.read", http.MethodGet, "/api/v1/admin/integrations", ""},

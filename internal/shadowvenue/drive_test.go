@@ -332,3 +332,32 @@ func TestDriverChecksItsOriginAtEveryRequest(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// The pre-send guard keys on the route's pinned class, not only on the slot's own flag: a DELETE of an org that the
+// slot does not mark destructive is still held to the frozen ids, and a slot on a route with no class refuses the drive,
+// both before any request.
+func TestDriveGuardsADestructiveRouteTheSlotDoesNotMark(t *testing.T) {
+	api := newFakeAPI(t)
+	_, frozen, _, _ := testPoolVenue(t)
+	tokens := map[string]string{"superuser": "s"}
+	for name, slot := range map[string]Slot{
+		"unmarked org delete": {Seq: 1, Row: "13", Caller: "superuser", Principal: "superuser", Expect: "match", K: 1, Method: "DELETE",
+			Route: "/api/v1/admin/orgs/{org_id}", Path: "/api/v1/admin/orgs/" + testOrgA, Body: none},
+		"a route with no class": {Seq: 1, Row: "58", Caller: "superuser", Principal: "superuser", Expect: "match", K: 1, Method: "GET",
+			Route: "/api/v1/admin/nothing", Path: "/api/v1/admin/nothing", Body: none},
+	} {
+		d := &Driver{Base: api.srv.URL, Client: api.srv.Client(), Gap: MinGap, Frozen: frozen, Sleep: func(context.Context, time.Duration) error { return nil }}
+		if err := d.Drive(context.Background(), Plan{Slots: []Slot{slot}}, tokens, io.Discard); err == nil || !strings.Contains(err.Error(), "before any request") {
+			t.Errorf("%s: %v", name, err)
+		}
+		if len(api.seen) != 0 {
+			t.Fatalf("%s: %d requests sent", name, len(api.seen))
+		}
+	}
+	ok := Slot{Seq: 1, Row: "13", Caller: "superuser", Principal: "superuser", Expect: "match", K: 1, Method: "DELETE",
+		Route: "/api/v1/admin/orgs/{org_id}", Path: "/api/v1/admin/orgs/" + poolID(1, "org"), Body: none}
+	d := &Driver{Base: api.srv.URL, Client: api.srv.Client(), Gap: MinGap, Frozen: frozen, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if err := d.Drive(context.Background(), Plan{Slots: []Slot{ok}}, tokens, io.Discard); err != nil || len(api.seen) != 1 {
+		t.Fatalf("an unmarked delete of a pool org: %v, %d requests", err, len(api.seen))
+	}
+}

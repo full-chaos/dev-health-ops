@@ -48,7 +48,7 @@ func TestRunExitCodes(t *testing.T) {
 	if code := run(context.Background(), []string{"plan", "-principals", principals, "-destructive"}, &out, &errOut); code != exitOK {
 		t.Fatalf("plan: %d %s", code, errOut.String())
 	}
-	if !strings.HasPrefix(out.String(), "1\tC1\tadmin\tadmin-A\tk=1\tGET /api/v1/admin/orgs/22222222-2222-4222-8222-222222222222/members") {
+	if !strings.HasPrefix(out.String(), "1\tC1\tsuperuser\tsuperuser\tk=1\tGET /api/v1/admin/orgs/22222222-2222-4222-8222-222222222222/members") {
 		t.Fatalf("plan does not start with control C1: %.200s", out.String())
 	}
 	last := strings.Split(strings.TrimSpace(out.String()), "\n")

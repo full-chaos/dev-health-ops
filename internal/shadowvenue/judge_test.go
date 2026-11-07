@@ -19,6 +19,7 @@ func slotAt(seq int, row, caller string, k int) Slot {
 func controlAt(seq int, id string, k int) Slot {
 	slot := slotAt(seq, id, "member", k)
 	slot.Expect = "mismatch"
+	slot.Status = 403
 	return slot
 }
 
@@ -406,5 +407,37 @@ func TestJudgeServedOtherMismatchTakesTheWarnInItsWindow(t *testing.T) {
 		if got := report.Slots[6].Verdict; got != want {
 			t.Errorf("%s: %s, want %s", name, got, want)
 		}
+	}
+}
+
+// C1 (a superuser the legacy guard serves names an organization that is not the token's) in the three states a run can
+// show: the planted mismatch (HTTP 200, the line says legacy allow), the old C1 (HTTP 403, the guard refused, yet the
+// line says legacy allow: the line and the answer disagree) and a plain match.
+func TestControlC1IsGreenOnlyWhenTheLegacyGuardServedIt(t *testing.T) {
+	slot := controlAt(1, "C1", 1)
+	slot.Caller, slot.Principal = "superuser", "superuser"
+	served := func(status int, legacy string) Report {
+		slot.Status = status
+		lines := []string{
+			result(slot, 500*time.Millisecond, "mismatch", ""),
+			logLine(slot.Start.Add(500*time.Millisecond), MsgServedOther, "route", slot.Method+" "+slot.Route, "caller", slot.Caller,
+				"class", "intentional", "legacy", legacy, "shadow", "deny", "reason", "served_org_not_judged_org"),
+		}
+		ev, err := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Judge([]Slot{slot}, ev, nil, JudgeOptions{K: 1, Grace: 2200 * time.Millisecond})
+	}
+	if v := served(200, "allow").Slots[0].Verdict; !controlMismatch(v) {
+		t.Fatalf("green: the guard served it and the line says allow: %s", v)
+	}
+	if v := served(403, "allow").Slots[0].Verdict; controlMismatch(v) || v != VerdictLegacyDisagrees {
+		t.Fatalf("red: the guard refused it but the line says allow: %s", v)
+	}
+	slot.Status = 403
+	ev, _ := ParseLog(strings.NewReader(result(slot, 500*time.Millisecond, "match", "") + "\n"))
+	if v := Judge([]Slot{slot}, ev, nil, JudgeOptions{K: 1, Grace: 2200 * time.Millisecond}).Slots[0].Verdict; controlMismatch(v) {
+		t.Fatalf("red: a match: %s", v)
 	}
 }

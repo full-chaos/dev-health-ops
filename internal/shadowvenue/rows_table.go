@@ -7,8 +7,8 @@ var DefaultRows = []byte(`# The venue driver's row table: one go-api shadow row 
 # placeholders in path and body: {org} {org:<label>} {user:<principal>} {uuid:<kind>} {name:<kind>} {missing}.
 # ext names the outside service a legacy-allowed request can reach; the driver sends it only with -allow-external <ext>.
 row	method	route	org	destructive	ext	principal	expect	path	body
-C1	GET	/api/v1/admin/orgs/{org_id}/members	A	no	-	admin-A	mismatch	/api/v1/admin/orgs/{org:B}/members	-
-C2	GET	/api/v1/admin/teams	A	no	-	member-A	mismatch	/api/v1/admin/teams	-
+C1	GET	/api/v1/admin/orgs/{org_id}/members	A	no	-	superuser	mismatch	/api/v1/admin/orgs/{org:B}/members	-
+C2	GET	/api/v1/admin/orgs/{org_id}/members	A	no	-	member-A	mismatch	/api/v1/admin/orgs/{org}/members	-
 1	POST	/api/v1/admin/orgs/{org_id}/invites	A	no	mail	-	match	/api/v1/admin/orgs/{org}/invites	{"email":"p13140-invitee@venue-proof.fullchaos.dev","role":"member"}
 2	GET	/api/v1/admin/orgs/{org_id}/members	A	no	-	-	match	/api/v1/admin/orgs/{org}/members	-
 3	POST	/api/v1/admin/orgs/{org_id}/members	A	no	-	-	match	/api/v1/admin/orgs/{org}/members	{"user_id":"{missing}","role":"member"}
@@ -73,4 +73,35 @@ C2	GET	/api/v1/admin/teams	A	no	-	member-A	mismatch	/api/v1/admin/teams	-
 62	PATCH	/api/v1/admin/teams/{team_id}	A	no	-	-	match	/api/v1/admin/teams/{uuid:team}	{}
 63	GET	/api/v1/billing/entitlements/{org_id}	A	no	-	-	match	/api/v1/billing/entitlements/{org}	-
 64	GET	/api/v1/licensing/entitlements/{org_id}	A	no	-	-	match	/api/v1/licensing/entitlements/{org}	-
+65	DELETE	/api/v1/admin/sync-configs/{config_id}	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}	-
+66	GET	/api/v1/admin/backfill-jobs	A	no	-	-	match	/api/v1/admin/backfill-jobs	-
+67	GET	/api/v1/admin/backfill-jobs/{job_id}	A	no	-	-	match	/api/v1/admin/backfill-jobs/{missing}	-
+68	GET	/api/v1/admin/sync-configs	A	no	-	-	match	/api/v1/admin/sync-configs	-
+69	GET	/api/v1/admin/sync-configs/auto-import-capabilities	A	no	-	-	match	/api/v1/admin/sync-configs/auto-import-capabilities	-
+70	GET	/api/v1/admin/sync-configs/{config_id}	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}	-
+71	GET	/api/v1/admin/sync-configs/{config_id}/coverage	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}/coverage	-
+72	GET	/api/v1/admin/sync-configs/{config_id}/jobs	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}/jobs	-
+73	GET	/api/v1/admin/sync-configs/{config_id}/repositories	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}/repositories	-
+74	GET	/api/v1/admin/sync-runs/{run_id}	A	no	-	-	match	/api/v1/admin/sync-runs/{missing}	-
+75	GET	/api/v1/admin/sync-runs/{run_id}/units	A	no	-	-	match	/api/v1/admin/sync-runs/{missing}/units	-
+76	GET	/api/v1/admin/sync-targets	A	no	-	-	match	/api/v1/admin/sync-targets	-
+77	GET	/api/v1/admin/teams/{team_id}/discover-members	A	no	-	-	match	/api/v1/admin/teams/{missing}/discover-members	-
+78	GET	/api/v1/admin/teams/{team_id}/infer-members	A	no	-	-	match	/api/v1/admin/teams/{missing}/infer-members	-
+79	PATCH	/api/v1/admin/sync-configs/{config_id}	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}	{}
+80	POST	/api/v1/admin/impersonate/handoff/consume	C	no	-	-	match	/api/v1/admin/impersonate/handoff/consume	{}
+81	POST	/api/v1/admin/integrations/github/install-url	A	no	github	-	match	/api/v1/admin/integrations/github/install-url	{}
+82	POST	/api/v1/admin/integrations/pagerduty/preflight	A	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/preflight	{}
+83	POST	/api/v1/admin/integrations/{integration_id}/backfill	A	no	-	-	match	/api/v1/admin/integrations/{missing}/backfill	{}
+84	POST	/api/v1/admin/integrations/{integration_id}/discover	A	no	-	-	match	/api/v1/admin/integrations/{missing}/discover	{}
+85	POST	/api/v1/admin/integrations/{integration_id}/sync	A	no	-	-	match	/api/v1/admin/integrations/{missing}/sync	{}
+86	POST	/api/v1/admin/sync-configs	A	no	-	-	match	/api/v1/admin/sync-configs	{}
+87	POST	/api/v1/admin/sync-configs/batch	A	no	-	-	match	/api/v1/admin/sync-configs/batch	{}
+88	POST	/api/v1/admin/sync-configs/{config_id}/backfill	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}/backfill	{}
+89	POST	/api/v1/admin/sync-configs/{config_id}/trigger	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}/trigger	{}
+90	POST	/api/v1/admin/teams/{team_id}	A	no	-	-	match	/api/v1/admin/teams/{missing}	{}
+91	POST	/api/v1/admin/teams/{team_id}/approve-changes	A	no	-	-	match	/api/v1/admin/teams/{missing}/approve-changes	{}
+92	POST	/api/v1/admin/teams/{team_id}/confirm-inferred-members	A	no	-	-	match	/api/v1/admin/teams/{missing}/confirm-inferred-members	{}
+93	POST	/api/v1/admin/teams/{team_id}/confirm-members	A	no	-	-	match	/api/v1/admin/teams/{missing}/confirm-members	{}
+94	POST	/api/v1/admin/teams/{team_id}/dismiss-changes	A	no	-	-	match	/api/v1/admin/teams/{missing}/dismiss-changes	{}
+95	PUT	/api/v1/admin/sync-configs/{config_id}/repositories	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}/repositories	{}
 `)

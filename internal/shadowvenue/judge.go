@@ -36,6 +36,7 @@ const (
 	VerdictDuplicate            = "DUPLICATE"
 	VerdictGap                  = "GAP"
 	VerdictKShort               = "K_SHORT"
+	VerdictLegacyDisagrees      = "CONTROL_LEGACY_DISAGREES"
 )
 
 var resultVerdicts = map[string]string{
@@ -237,6 +238,7 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 			sv.Verdict = VerdictGap
 		} else {
 			judgeSlot(&sv, results, ev, rulings, o.Grace)
+			controlLegacyHolds(&sv)
 		}
 		if sv.Expect != expectMismatch && !sv.Pass() {
 			fail("FAIL: slot %d row %s %s %s: %s%s", slot.Seq, slot.Row, slot.Caller, slot.Key(), sv.Verdict, hint(sv))
@@ -274,6 +276,18 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 	}
 	report.Pass = !report.Void && !slices.ContainsFunc(report.Reasons, func(s string) bool { return strings.HasPrefix(s, "FAIL") })
 	return report
+}
+
+// controlLegacyHolds ties a control's mismatch to the legacy guard's real answer: the WARN line names the legacy
+// verdict the shadow was told, and the HTTP status is what the guard answered (403 = deny). A control whose line and
+// status disagree proves nothing about the readout, so it no longer counts as a mismatch.
+func controlLegacyHolds(sv *SlotVerdict) {
+	if sv.Expect != expectMismatch || !controlMismatch(sv.Verdict) {
+		return
+	}
+	if denied := sv.Status == 403; denied != (sv.Tuple.Legacy == "deny") {
+		sv.Verdict = VerdictLegacyDisagrees
+	}
 }
 
 func sentSlots(slots []Slot) []Slot {

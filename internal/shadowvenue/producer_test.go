@@ -99,6 +99,9 @@ func TestJudgeReadsTheRealShadowLines(t *testing.T) {
 		if strings.HasPrefix(cell.row, "C") {
 			slot.Expect = "mismatch"
 		}
+		if !cell.legacy {
+			slot.Status = 403
+		}
 		shadow.Observe(context.Background(), policy.ShadowObservation{Pattern: "GET " + cell.route, Bearer: "bearer-not-logged", OrgID: testOrgA,
 			Caller: cell.caller, UserAccessToken: true, LegacyAllowed: cell.legacy})
 		deadline := time.Now().Add(3 * time.Second)
@@ -128,5 +131,64 @@ func TestJudgeReadsTheRealShadowLines(t *testing.T) {
 	}
 	if report.Slots[1].DecisionID == "" || report.Slots[1].DecisionID == report.Slots[2].DecisionID {
 		t.Fatalf("decision ids %q %q", report.Slots[1].DecisionID, report.Slots[2].DecisionID)
+	}
+}
+
+// denyPDP answers deny to every call.
+func denyPDP(t *testing.T) *pep.Client {
+	t.Helper()
+	var n atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"schema_version": "authorization_decision.v1", "decision_id": fmt.Sprintf("dec_%026d", n.Add(1)), "allowed": false,
+			"reason_code": "no_permission", "principal_id": "prn_TESTPRINCIPAL", "organization_id": nil, "policy_revision": 1,
+			"expires_at": time.Now().Add(time.Hour).UTC().Format("2006-01-02T15:04:05Z"),
+		})
+	}))
+	t.Cleanup(srv.Close)
+	client, err := pep.New(pep.Config{BaseURL: srv.URL, AllowPlainHTTP: true, HTTPClient: srv.Client(), ClientService: accessrouting.Service, Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+// C2 (a member the legacy guard refuses on GET members, which the decision point allows) on the real producer: green
+// with a decision point that allows, red with one that denies (a match, so the run is void).
+func TestControlC2IsRedWithoutItsPlantedMismatchAndGreenWith(t *testing.T) {
+	rows, err := policy.ParseShadowRows(authv1.GoAPIEndpointProfiles, accessrouting.Service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const route = "/api/v1/admin/orgs/{org_id}/members"
+	for name, c := range map[string]struct {
+		decider *pep.Client
+		wantOK  bool
+	}{"green: the decision point allows": {allowPDP(t), true}, "red: the decision point denies": {denyPDP(t), false}} {
+		t.Run(name, func(t *testing.T) {
+			logs := &lockedBuffer{}
+			shadow, err := policy.NewShadow(policy.ShadowConfig{Decider: c.decider, Rows: rows, HighRisk: true,
+				Logger: slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			slot := Slot{Seq: 1, Row: "C2", Caller: "member", Principal: "member-A", Expect: "mismatch", K: 1, Method: "GET", Route: route,
+				Path: "/api/v1/admin/orgs/" + testOrgA + "/members", Start: time.Now().UTC(), Status: 403}
+			shadow.Observe(context.Background(), policy.ShadowObservation{Pattern: "GET " + route, Bearer: "bearer-not-logged", OrgID: testOrgA, Caller: "member", UserAccessToken: true, LegacyAllowed: false})
+			deadline := time.Now().Add(3 * time.Second)
+			for !strings.Contains(logs.String(), MsgResult) && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			slot.End = time.Now().UTC()
+			ev, err := ParseLog(strings.NewReader(logs.String()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := Judge([]Slot{slot}, ev, nil, JudgeOptions{K: 1, Grace: 200 * time.Millisecond}).Slots[0].Verdict
+			if controlMismatch(got) != c.wantOK {
+				t.Fatalf("verdict %s, control mismatch want %v\n%s", got, c.wantOK, logs.String())
+			}
+		})
 	}
 }

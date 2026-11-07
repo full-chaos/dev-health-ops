@@ -20,6 +20,7 @@ cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
 cmd/venue-extstub	cert.go
 cmd/venue-extstub	main.go
+cmd/venue-extstub	seed_test.go
 cmd/venue-extstub	stub.go
 cmd/venue-extstub	stub_test.go
 deploy/helm/dev-health	auth_phase_test.go

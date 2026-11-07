@@ -334,6 +334,9 @@ type ShadowObservation struct {
 	// Impersonating is true while a live go-api impersonation row is in force for the caller's own bearer. The PDP
 	// would judge that bearer as the admin, not the delegation, so such a call is never asked (stop route aside).
 	Impersonating bool
+	// Read: the request method writes nothing (readMethod). An impersonation read the legacy check admitted keeps
+	// that answer under enforcement, so the shadow counts it skipped, not refused.
+	Read bool
 	// SkipReason names why the credential class never asks the PDP: one of ShadowReasons, else "none".
 	SkipReason string
 	// LegacyAllowed is the legacy check's answer.
@@ -369,7 +372,11 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	}
 	caller := shadowCallerOf(o.Caller)
 	if o.Impersonating && !liveRowExempt(o.Pattern) {
-		s.record(ctx, o.Pattern, row, caller, resultImpersonationRefused, ShadowReasonNone, "")
+		result := resultImpersonationRefused
+		if o.Read && o.LegacyAllowed {
+			result = resultSkipped
+		}
+		s.record(ctx, o.Pattern, row, caller, result, ShadowReasonNone, "")
 		return
 	}
 	// A served organization that is no UUID, or that is not the token's, keeps the legacy answer under enforcement too:

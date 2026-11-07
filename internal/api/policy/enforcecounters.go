@@ -46,10 +46,13 @@ const (
 	enforceUnjudgedNoOrg = "no_org"
 	// enforceUnjudgedServedOrg: the request serves another organization than the token's, or the token has none.
 	enforceUnjudgedServedOrg = "served_org"
+	// enforceUnjudgedImpersonation: a read by a caller with a live go-api impersonation row. The legacy answer stands
+	// by design (product rule 1), so this reason does not block a flip.
+	enforceUnjudgedImpersonation = "impersonation"
 )
 
 // enforceUnjudgedReasons is the closed reason set of the unjudged counter.
-var enforceUnjudgedReasons = []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg, enforceUnjudgedServedOrg}
+var enforceUnjudgedReasons = []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg, enforceUnjudgedServedOrg, enforceUnjudgedImpersonation}
 
 type enforceUnjudgedAdder func(ctx context.Context, route, reason string)
 

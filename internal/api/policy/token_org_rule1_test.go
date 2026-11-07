@@ -76,7 +76,9 @@ func rule1Answers(t *testing.T, c rule1Case, role string, level Authz, header st
 // the legacy HS256 path gives for the same caller and claim, on every guard
 // level, with and without an X-Org-Id that names the claim. The HS256 token
 // claims role member, the role a user access token (no role claim) carries.
-// The legacy answer is executed here and also held to its literal.
+// The legacy answer is executed here and also held to its literal. The fake
+// validator stands in for the verifier: the access-token.v1 verifier refuses
+// a B-notUUID claim before this step (CHAOS-13261).
 func TestRule1RoutedTokenOrgAnswerIsTheLegacyAnswer_CHAOS13227(t *testing.T) {
 	denied := `{"detail": "X-Org-Id not permitted for this user"}`
 	for _, c := range rule1Cases {

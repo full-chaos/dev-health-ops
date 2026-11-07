@@ -7,7 +7,8 @@ import (
 
 // rule1QueryCases are the org claims a caller holds no membership row for: A,
 // the caller left ecOrg; B-unknown, a UUID with no organizations row;
-// B-notUUID, a claim that is not a UUID.
+// B-notUUID, a claim that is not a UUID (the access-token.v1 verifier refuses
+// it for the user access token before any org read).
 var rule1QueryCases = []struct{ name, org string }{
 	{"A removed member", ecOrg.String()},
 	{"B-unknown org", "88888888-8888-4888-8888-888888888888"},

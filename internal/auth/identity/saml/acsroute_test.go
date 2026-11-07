@@ -37,11 +37,11 @@ func TestSAMLConsumeRefusesARowWhoseACSPathNamesAnotherRow(t *testing.T) {
 	p := Provider{ID: uuid.New(), OrgID: uuid.New(), Protocol: "saml", Status: "active",
 		Config: Config{SPACSURL: "https://sp.example.com/api/v1/auth/saml/" + uuid.NewString() + "/acs"}}
 	s := &Service{Providers: oneProvider{p}, Entitlements: allowAll{}, BaseURL: func() string { return "https://sp.example.com/api/v1/auth" }}
-	_, err := s.Consume(context.Background(), p.ID, "PHg+", nil)
+	_, err := s.Consume(context.Background(), p.ID, "PHg+", "", nil)
 	if reason, ok := IsRefused(err); !ok || reason != ReasonAudience {
 		t.Fatalf("err = %v, want a refusal with reason audience", err)
 	}
-	_, err = s.Consume(context.Background(), uuid.New(), "PHg+", nil)
+	_, err = s.Consume(context.Background(), uuid.New(), "PHg+", "", nil)
 	if reason, ok := IsRefused(err); !ok || reason != ReasonAudience {
 		t.Fatalf("a row other than the route's: err = %v, want a refusal with reason audience", err)
 	}

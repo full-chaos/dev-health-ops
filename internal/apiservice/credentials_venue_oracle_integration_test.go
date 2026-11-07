@@ -247,7 +247,7 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 	var seed venueFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), OrglessSuperusers: credentialOrglessSuperusers,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			seed = venueSeed(t, ctx, admin)
@@ -347,3 +347,7 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 	t.Log("\n" + receipt + "integration_credentials rows (decrypted): " + venueoracle.Mark(same) + "\n")
 	golden.Finish(t)
 }
+
+// credentialOrglessSuperusers names no seed: the "superuser" seed (org claim orgB, no membership row there) keeps its
+// recorded org claim, and its user access token gets the recorded (HS256) answer (product rule 1, D6773).
+var credentialOrglessSuperusers []string

@@ -51,13 +51,16 @@ type rbRule struct {
 			} `json:"queries"`
 		} `json:"compositeQuery"`
 		SelectedQueryName string `json:"selectedQueryName"`
+		AlertOnAbsent     bool   `json:"alertOnAbsent"`
+		AbsentFor         int    `json:"absentFor"`
 		Thresholds        struct {
 			Kind string `json:"kind"`
 			Spec []struct {
-				Name      string  `json:"name"`
-				Target    float64 `json:"target"`
-				Op        string  `json:"op"`
-				MatchType string  `json:"matchType"`
+				Name      string   `json:"name"`
+				Target    float64  `json:"target"`
+				Op        string   `json:"op"`
+				MatchType string   `json:"matchType"`
+				Channels  []string `json:"channels"`
 			} `json:"spec"`
 		} `json:"thresholds"`
 	} `json:"condition"`
@@ -70,6 +73,11 @@ type rbRule struct {
 	} `json:"evaluation"`
 	NotificationSettings struct {
 		UsePolicy bool `json:"usePolicy"`
+		Renotify  *struct {
+			Enabled     bool     `json:"enabled"`
+			Interval    string   `json:"interval"`
+			AlertStates []string `json:"alertStates"`
+		} `json:"renotify"`
 	} `json:"notificationSettings"`
 	Labels      map[string]string `json:"labels"`
 	Annotations map[string]string `json:"annotations"`
@@ -88,7 +96,16 @@ type rbWant struct {
 	groupBy     string
 	summary     string
 	description string
+	// routed: the live form. The rule names the channel, renotifies and does
+	// not use the notification policy. The zero value is the policy form.
+	routed bool
+	// match and space override the aggregation derived from the rule text;
+	// absentFor > 0 pins alertOnAbsent true with that many minutes.
+	match, space string
+	absentFor    int
 }
+
+const rbChannel = "accounts-email"
 
 var rbWants = []rbWant{
 	{
@@ -134,13 +151,13 @@ var (
 	rbExprHead      = regexp.MustCompile(`^(\w+)(?: by \(([\w, ]+)\))? ?\(`)
 	rbExprThreshold = regexp.MustCompile(`(>|==) (\d+)$`)
 	rbExprMatcher   = regexp.MustCompile(`(\w+)(=~|=)"([^"]*)"`)
-	rbExprMetric    = regexp.MustCompile(`dev_health_\w+`)
+	rbExprMetric    = regexp.MustCompile(`dev_?health_\w+`)
 	rbBlockHead     = regexp.MustCompile("(?s)```json\n(.*?)\n```")
 )
 
 // rbMatcherKeys maps a label of the rule text to its builder filter key (the
 // scrape's service label is the resource attribute service.name).
-var rbMatcherKeys = map[string]string{"limit": "limit", "check": "check", "service": "service.name"}
+var rbMatcherKeys = map[string]string{"limit": "limit", "check": "check", "service": "service.name", "class": "class", "outcome": "outcome"}
 
 // rbRequiredKeys are the keys whose zero value is legal JSON, so a decode into
 // the struct cannot tell a missing key from a written zero.
@@ -210,18 +227,24 @@ func rbDuration(g *guard, name, field, got, want string) {
 }
 
 func runbookBuilderRulesMatchRules(g *guard) {
-	text := g.read(valkeyRunbook)
+	runbookBuilderRulesMatch(g, valkeyRunbook, rbWants)
+}
+
+// runbookBuilderRulesMatch pins every import block of one runbook page against
+// alerts/rules.yml and the builder table of that page.
+func runbookBuilderRulesMatch(g *guard, runbook string, wants []rbWant) {
+	text := g.read(runbook)
 	imports := map[string]rbRule{}
 	for _, m := range rbBlockHead.FindAllStringSubmatch(text, -1) {
 		var r rbRule
 		dec := json.NewDecoder(bytes.NewReader([]byte(m[1])))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&r); err != nil {
-			g.failf("an import JSON block in %s does not parse (no unknown field is allowed): %v", valkeyRunbook, err)
+			g.failf("an import JSON block in %s does not parse (no unknown field is allowed): %v", runbook, err)
 			continue
 		}
 		if err := dec.Decode(&struct{}{}); err != io.EOF {
-			g.failf("the import JSON block of %s in %s has text after its JSON value", r.Alert, valkeyRunbook)
+			g.failf("the import JSON block of %s in %s has text after its JSON value", r.Alert, runbook)
 			continue
 		}
 		for _, missing := range rbMissingKeys(m[1]) {
@@ -232,8 +255,8 @@ func runbookBuilderRulesMatchRules(g *guard) {
 		}
 		imports[r.Alert] = r
 	}
-	g.expect(len(imports) == len(rbWants), "the runbook imports %d rules, want %d", len(imports), len(rbWants))
-	for _, want := range rbWants {
+	g.expect(len(imports) == len(wants), "the runbook imports %d rules, want %d", len(imports), len(wants))
+	for _, want := range wants {
 		name, imp := want.alert, imports[want.alert]
 		if imp.Alert == "" {
 			g.failf("the runbook has no import JSON for %s", name)
@@ -254,7 +277,15 @@ func runbookBuilderRulesMatchRules(g *guard) {
 		rbPin(g, name, "unit", cq.Unit, want.unit)
 		rbPin(g, name, "selectedQueryName", imp.Condition.SelectedQueryName, "A")
 		rbPin(g, name, "evaluation kind", imp.Evaluation.Kind, "rolling")
-		rbPin(g, name, "usePolicy", imp.NotificationSettings.UsePolicy, true)
+		rbPin(g, name, "usePolicy", imp.NotificationSettings.UsePolicy, !want.routed)
+		rn := imp.NotificationSettings.Renotify
+		if want.routed {
+			g.expect(rn != nil && rn.Enabled && rn.Interval == "4h" && strings.Join(rn.AlertStates, ",") == "firing,nodata", "%s import renotify is %+v, want enabled, 4h, firing and nodata", name, rn)
+		} else {
+			g.expect(rn == nil, "%s import has a renotify block but routes by policy", name)
+		}
+		rbPin(g, name, "alertOnAbsent", imp.Condition.AlertOnAbsent, want.absentFor > 0)
+		rbPin(g, name, "absentFor", imp.Condition.AbsentFor, want.absentFor)
 		rbDuration(g, name, "frequency", imp.Evaluation.Spec.Frequency, interval)
 		rbPin(g, name, "summary annotation", imp.Annotations["summary"], want.summary)
 		rbPin(g, name, "description annotation", imp.Annotations["description"], want.description)
@@ -272,6 +303,8 @@ func runbookBuilderRulesMatchRules(g *guard) {
 			timeAgg = "increase"
 		case strings.Contains(expr, "rate("):
 			timeAgg = "rate"
+		case outer == "min_over_time":
+			timeAgg, outer = "min", "min"
 		}
 		metric := ""
 		if m := exprMetricName.FindStringSubmatch(expr); m != nil {
@@ -292,7 +325,11 @@ func runbookBuilderRulesMatchRules(g *guard) {
 			rbPin(g, name, "disabled", q.Spec.Disabled, false)
 			rbPin(g, name, "metricName", a.MetricName, metric)
 			rbPin(g, name, "timeAggregation", a.TimeAggregation, timeAgg)
-			rbPin(g, name, "spaceAggregation", a.SpaceAggregation, outer)
+			space := outer
+			if want.space != "" {
+				space = want.space
+			}
+			rbPin(g, name, "spaceAggregation", a.SpaceAggregation, space)
 			gotFilter := ""
 			if q.Spec.Filter != nil {
 				gotFilter = q.Spec.Filter.Expression
@@ -349,7 +386,15 @@ func runbookBuilderRulesMatchRules(g *guard) {
 				rbPin(g, name, "target", specs[0].Target, n)
 				rbPin(g, name, "op", specs[0].Op, op)
 			}
+			if want.match != "" {
+				match = want.match
+			}
 			rbPin(g, name, "matchType", specs[0].MatchType, match)
+			if want.routed {
+				g.expect(len(specs[0].Channels) == 1 && specs[0].Channels[0] == rbChannel, "%s import channels are %v, want [%s]", name, specs[0].Channels, rbChannel)
+			} else {
+				g.expect(len(specs[0].Channels) == 0, "%s import channels are %v, want none", name, specs[0].Channels)
+			}
 			rbPin(g, name, "threshold name", specs[0].Name, str(mp(rule["labels"])["severity"]))
 		}
 		labels := mp(rule["labels"])

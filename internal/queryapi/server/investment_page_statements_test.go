@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // pageStatements is a ClickHouse client that answers the statements of the
@@ -45,8 +46,8 @@ func (client *pageStatements) Query(_ context.Context, statement string, _ []dhc
 		// key, mean, total, known
 		kind, row = statementQualityByGroup, []any{"feature_delivery", 0.8, uint64(12), uint64(9)}
 	case strings.Contains(statement, "quality_known_count"):
-		// total, known, mean, stddev, high, moderate, low, very low, unknown
-		kind, row = statementQualityStats, []any{uint64(40), uint64(30), 0.7, 0.1, uint64(10), uint64(12), uint64(6), uint64(2), uint64(10), uint64(0)}
+		// total, known, mean, stddev, high, moderate, low, very low, unknown, uncategorized, sized
+		kind, row = statementQualityStats, []any{uint64(40), uint64(30), 0.7, 0.1, uint64(10), uint64(12), uint64(6), uint64(2), uint64(10), uint64(0), uint64(0)}
 	case strings.Contains(statement, "AS dimension_value"):
 		// key, value
 		kind, row = statementBreakdown, []any{"feature_delivery", 25.0}
@@ -102,7 +103,7 @@ func investmentPage(t *testing.T, client *pageStatements, document string, batch
 	body, _ := json.Marshal(map[string]any{"query": document, "variables": map[string]any{"orgId": "org-1", "batch": batch}})
 	request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(string(body)))
 	request.Header.Set("Content-Type", "application/json")
-	request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1"}))
+	request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
 	var out struct {
@@ -304,7 +305,7 @@ func TestAWrongAnalyticsBatchIsAnErrorWhateverIsSelected(t *testing.T) {
 				body, _ := json.Marshal(map[string]any{"query": document, "variables": map[string]any{"orgId": "org-1", "batch": batch}})
 				request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(string(body)))
 				request.Header.Set("Content-Type", "application/json")
-				request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1"}))
+				request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 				recorder := httptest.NewRecorder()
 				server.ServeHTTP(recorder, request)
 				var out struct {

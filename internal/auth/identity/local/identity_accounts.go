@@ -97,6 +97,19 @@ func (a IdentityAccounts) ProvisionLocal(ctx context.Context, req ProvisionLocal
 	return a.Store.ProvisionLocal(ctx, identity.LocalProvisionRequest{Email: req.Email, FullName: req.FullName, PasswordHash: &hash, Actor: a.actor(ctx), Organization: org})
 }
 
+// ProvisionLocalDecoy provisions a throwaway address in a rehearsal (audit.WithRehearsal): the same statements, the
+// outbox events and the audit rows of a real sign-up, rolled back. A refusal the real sign-up also swallows is not an error.
+// The address is internal, on a special-use domain: the store keeps it as given (identity.WithDecoyAddress), without
+// the register validator; every statement after that check is the real sign-up's.
+func (a IdentityAccounts) ProvisionLocalDecoy(ctx context.Context, req ProvisionLocalRequest) error {
+	req.Email = "rehearsal-" + uuid.NewString() + "@example.invalid"
+	_, err := a.ProvisionLocal(identity.WithDecoyAddress(audit.WithRehearsal(ctx)), req)
+	if errors.Is(err, identity.ErrEmailTaken) || errors.Is(err, identity.ErrOrganizationSlugCollision) {
+		return nil
+	}
+	return err
+}
+
 func (a IdentityAccounts) PeekVerificationLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error) {
 	return a.Links.PeekVerificationLink(ctx, tokenHash)
 }

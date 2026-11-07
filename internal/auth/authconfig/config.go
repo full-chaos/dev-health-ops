@@ -133,12 +133,18 @@ const (
 	EnvRevisionFeed = "AUTH_REVISION_FEED"
 	// EnvPushProjection is the External Push projection switch (on or off, default off).
 	EnvPushProjection = "AUTH_PUSH_PROJECTION"
+	// EnvRepoIdentityProjection is the repository identity projection switch (on or off, default off).
+	EnvRepoIdentityProjection = "AUTH_REPO_IDENTITY_PROJECTION"
 	// EnvSocialLinkRoutes ("true" or "false", default false) mounts the
 	// bearer-only social link and unlink routes; it needs the session secrets.
 	EnvSocialLinkRoutes = "AUTH_SOCIAL_LINK_ROUTES"
 	// EnvTrustedProxies lists the proxies whose X-Forwarded-For names the
 	// client (internal/auth/clientaddr).
 	EnvTrustedProxies = clientaddr.Env
+	// EnvClientAddrMode selects the client-address rule (cidr, both or signed; default cidr).
+	EnvClientAddrMode = clientaddr.EnvMode
+	// EnvClientAddrVerifyKey is the client-address proof key list (one or two "kid:key" entries).
+	EnvClientAddrVerifyKey = clientaddr.EnvVerifyKey
 )
 
 // EnvValkeyURI is the Valkey login that holds the rate-limit counters of the
@@ -267,6 +273,11 @@ type Config struct {
 	// TrustedProxies are the peers whose X-Forwarded-For names the client.
 	TrustedProxies clientaddr.Trust
 
+	// ClientAddrMode is how the client address is named (clientaddr.Policy).
+	ClientAddrMode clientaddr.Mode
+	// ClientAddrKeys are the client-address proof keys; none in mode cidr is allowed.
+	ClientAddrKeys []clientaddr.ProofKey
+
 	// Social is each social provider's OAuth client, keyed by provider. A
 	// provider without both values answers go-api's 503.
 	Social map[string]SocialClient
@@ -280,6 +291,10 @@ type Config struct {
 	// PushProjection is AUTH_PUSH_PROJECTION=on: this replica runs the External Push projection reader (it reads the
 	// external_push_credential rows of the auth outbox and projects them). Mounts no route.
 	PushProjection bool
+	// RepoIdentityProjection is AUTH_REPO_IDENTITY_PROJECTION=on: this replica runs the repository identity projection
+	// reader (it reads the repository_identity rows of the auth outbox and upserts repository_identities). Mounts no
+	// route.
+	RepoIdentityProjection bool
 
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED, parsed by
 	// rule.OwnedFromLookup: the sign-in state reads is_superuser from
@@ -335,7 +350,7 @@ type SessionTokens struct {
 	// LegacyAudience is the audience of go-api's HS256 token under the eddsa class.
 	LegacyAudience string
 	SuccessorKey   secrets.Value
-	// RateLimitKey is EnvRateLimitKey; unset, the rate limiter keys from AccessSecret.
+	// RateLimitKey is EnvRateLimitKey; unset, the rate limiter keys from AccessSecret (then set).
 	RateLimitKey secrets.Value
 	// LoginEnabled is set with LockoutKey: the login route is mounted.
 	LoginEnabled bool
@@ -397,6 +412,8 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("social_link_routes_enabled", c.Session.SocialLinkRoutes),
 		slog.Bool("membership_routes_enabled", c.Provisioning.Routes),
 		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
+		slog.String("client_addr_mode", string(c.ClientAddrMode)),
+		slog.Int("client_addr_key_count", len(c.ClientAddrKeys)),
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
 		slog.String("access_class", c.Session.AccessClass),
@@ -600,6 +617,9 @@ func Load(spec Spec) (Config, error) {
 	if cfg.TrustedProxies, err = clientaddr.ParseTrust(valueOf(lookup, EnvTrustedProxies)); err != nil {
 		return Config{}, err
 	}
+	if cfg.ClientAddrMode, cfg.ClientAddrKeys, err = clientAddrSetting(lookup); err != nil {
+		return Config{}, err
+	}
 	if cfg.Social, err = socialClients(lookup); err != nil {
 		return Config{}, err
 	}
@@ -609,7 +629,7 @@ func Load(spec Spec) (Config, error) {
 	if cfg.PlatformRolesOwned, err = rule.OwnedFromLookup(lookup); err != nil {
 		return Config{}, err
 	}
-	if cfg.Provisioning, err = provisioning(lookup, cfg.Session.Enabled); err != nil {
+	if cfg.Provisioning, err = provisioning(lookup, cfg.Session); err != nil {
 		return Config{}, err
 	}
 	if cfg.SSO, err = ssoSettings(lookup); err != nil {
@@ -630,7 +650,10 @@ func Load(spec Spec) (Config, error) {
 	if cfg.RevisionFeed, err = revisionFeed(lookup); err != nil {
 		return Config{}, err
 	}
-	if cfg.PushProjection, err = pushProjection(lookup); err != nil {
+	if cfg.PushProjection, err = onOff(lookup, EnvPushProjection); err != nil {
+		return Config{}, err
+	}
+	if cfg.RepoIdentityProjection, err = onOff(lookup, EnvRepoIdentityProjection); err != nil {
 		return Config{}, err
 	}
 	if cfg.ValkeyURI, err = valkeySetting(lookup, cfg.LimitedRoutesMounted()); err != nil {
@@ -654,16 +677,16 @@ func revisionFeed(lookup secrets.LookupEnv) (bool, error) {
 	return false, fmt.Errorf("%s must be on or off", EnvRevisionFeed)
 }
 
-// pushProjection reads AUTH_PUSH_PROJECTION: unset or empty is off; only on and off (any case) are values. The refusal
-// does not quote the value.
-func pushProjection(lookup secrets.LookupEnv) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, EnvPushProjection))) {
+// onOff reads a projection switch (AUTH_PUSH_PROJECTION, AUTH_REPO_IDENTITY_PROJECTION): unset or empty is off; only
+// on and off (any case) are values. The refusal does not quote the value.
+func onOff(lookup secrets.LookupEnv, name string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, name))) {
 	case "", "off":
 		return false, nil
 	case "on":
 		return true, nil
 	}
-	return false, fmt.Errorf("%s must be on or off", EnvPushProjection)
+	return false, fmt.Errorf("%s must be on or off", name)
 }
 
 // LimitedRoutesMounted reports whether a route that counts in the shared
@@ -739,9 +762,12 @@ func accessTokenLifetime(lookup secrets.LookupEnv) (time.Duration, error) {
 	return lifetime, nil
 }
 
-// sessionTokens resolves the session routes' settings. The two secrets come
-// together or not at all: a deployment with one of them meant to serve the
-// session routes, and silently serving none would hide that.
+// sessionTokens resolves the session routes' settings. Under hs256_compat the
+// two secrets come together or not at all: a deployment with one of them meant
+// to serve the session routes, and silently serving none would hide that.
+// Under eddsa the successor key alone turns the session routes on; the access
+// secret only verifies go-api's HS256 token and needs the successor key, and
+// without it the rate limiter needs its own key.
 func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	class, err := accessTokenClass(lookup)
 	if err != nil {
@@ -783,12 +809,16 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	if err != nil {
 		return SessionTokens{}, err
 	}
-	if hasAccess != hasSuccessor {
+	switch {
+	case class == AccessClassEdDSA && hasAccess && !hasSuccessor:
+		return SessionTokens{}, fmt.Errorf("%s needs %s (the session routes need it)", EnvAccessTokenSecret, EnvSessionSuccessorKey)
+	case class != AccessClassEdDSA && hasAccess != hasSuccessor:
 		return SessionTokens{}, fmt.Errorf(
 			"%s and %s are set together or not at all (the session routes need both)",
 			EnvAccessTokenSecret, EnvSessionSuccessorKey,
 		)
 	}
+	needs := sessionSecretNames(class)
 	_, hasLockout, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
 	if err != nil {
 		return SessionTokens{}, err
@@ -801,22 +831,22 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	if err != nil {
 		return SessionTokens{}, err
 	}
-	if !hasAccess {
+	if !hasSuccessor {
 		if linkRoutes {
-			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
-				EnvSocialLinkRoutes, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s)", EnvSocialLinkRoutes, needs)
 		}
 		if hasLockout {
-			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
-				EnvLoginLockoutKey, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s)", EnvLoginLockoutKey, needs)
 		}
 		if hasRateKey {
-			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
-				EnvRateLimitKey, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s)", EnvRateLimitKey, needs)
 		}
 		return out, nil
 	}
-	if hasRateKey && rateKey.Reveal() == access.Reveal() {
+	if !hasAccess && !hasRateKey {
+		return SessionTokens{}, fmt.Errorf("%s is required while %s is unset (the rate limiter has no other key)", EnvRateLimitKey, EnvAccessTokenSecret)
+	}
+	if hasAccess && hasRateKey && rateKey.Reveal() == access.Reveal() {
 		return SessionTokens{}, fmt.Errorf("%s must differ from %s: one key per purpose", EnvRateLimitKey, EnvAccessTokenSecret)
 	}
 	if hasRateKey && len([]rune(rateKey.Reveal())) < minAccessTokenSecretLength {
@@ -824,7 +854,7 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 			"%s must be at least %d characters", EnvRateLimitKey, minAccessTokenSecretLength,
 		)
 	}
-	if len([]rune(access.Reveal())) < minAccessTokenSecretLength {
+	if hasAccess && len([]rune(access.Reveal())) < minAccessTokenSecretLength {
 		return SessionTokens{}, fmt.Errorf(
 			"%s must be at least %d characters", EnvAccessTokenSecret, minAccessTokenSecretLength,
 		)
@@ -851,6 +881,14 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	}
 	out.LoginEnabled, out.LockoutKey = true, lockout
 	return out, nil
+}
+
+// sessionSecretNames names the secrets that turn the session routes on under class.
+func sessionSecretNames(class string) string {
+	if class == AccessClassEdDSA {
+		return EnvSessionSuccessorKey
+	}
+	return EnvAccessTokenSecret + " and " + EnvSessionSuccessorKey
 }
 
 // strictBool reads an unset or blank name as false and accepts only "true"
@@ -1023,6 +1061,27 @@ func layered(overrides map[string]string, environment secrets.LookupEnv) secrets
 		}
 		return environment(key)
 	}
+}
+
+// clientAddrSetting reads the client-address mode and its proof keys. Modes both and signed need a key: without one
+// no proof could ever be valid, and mode signed would name every proxied caller by go-api's pod address.
+func clientAddrSetting(lookup secrets.LookupEnv) (clientaddr.Mode, []clientaddr.ProofKey, error) {
+	mode, err := clientaddr.ParseMode(valueOf(lookup, EnvClientAddrMode))
+	if err != nil {
+		return "", nil, err
+	}
+	raw, _, err := secrets.ResolveSecret(EnvClientAddrVerifyKey, lookup)
+	if err != nil {
+		return "", nil, err
+	}
+	keys, err := clientaddr.ParseProofKeys(EnvClientAddrVerifyKey, raw.Reveal(), clientaddr.MaxVerifyKeys)
+	if err != nil {
+		return "", nil, err
+	}
+	if mode != clientaddr.ModeCIDR && len(keys) == 0 {
+		return "", nil, fmt.Errorf("%s=%s needs %s", EnvClientAddrMode, mode, EnvClientAddrVerifyKey)
+	}
+	return mode, keys, nil
 }
 
 func valueOf(lookup secrets.LookupEnv, key string) string {

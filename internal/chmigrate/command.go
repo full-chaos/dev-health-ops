@@ -87,11 +87,8 @@ func run(ctx context.Context, verb string, env cli.Env) int {
 	if verb == "status" {
 		check = flags.Bool("check", false, "exit 1 unless the database is at the head, with nothing pending (read-only; the JSON status is still printed)")
 	}
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
@@ -210,11 +207,8 @@ func runRepair(ctx context.Context, env cli.Env) int {
 	flags.Usage = func() { fmt.Fprint(env.Stderr, repairUsage) }
 	apply := flags.Bool("apply", false, "delete the stale duplicate rows shown by the dry run")
 	org := flags.String("org", "", "only groups whose newest repository row belongs to this org_id")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

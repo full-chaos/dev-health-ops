@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
@@ -176,6 +177,15 @@ type Client struct {
 	token         string
 	workload      *workloadtoken.Client
 	http          *http.Client
+	// proof signs the client address sent in X-Forwarded-For (internal/auth/clientaddr); nil sends none.
+	proof *clientaddr.ProofKey
+}
+
+// SetClientAddrProof makes every issue carry a proof of its X-Forwarded-For value, signed with key (nil: none).
+func (c *Client) SetClientAddrProof(key *clientaddr.ProofKey) {
+	if c != nil {
+		c.proof = key
+	}
 }
 
 // New builds a Client for base (AUTH_PROXY_URL's origin) and token. It
@@ -301,6 +311,7 @@ func (c *Client) Issue(ctx context.Context, r *http.Request, req Request) (Pair,
 	out.Header.Set("User-Agent", r.UserAgent())
 	if addr, err := netip.ParseAddr(clientip.FromRequest(r)); err == nil {
 		out.Header.Set("X-Forwarded-For", addr.String())
+		clientaddr.SetProof(out, c.proof, time.Now(), addr)
 	}
 	response, err := c.http.Do(out)
 	if err != nil {

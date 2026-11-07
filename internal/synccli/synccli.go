@@ -186,11 +186,8 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	members := flags.Bool("members", false, "sync team memberships")
 	projects := flags.Bool("projects", false, "sync the projects each team works on")
 	allowEmpty := flags.Bool("allow-empty", false, "accept an empty result (exit 0 instead of refusing; nothing is written or closed for it)")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

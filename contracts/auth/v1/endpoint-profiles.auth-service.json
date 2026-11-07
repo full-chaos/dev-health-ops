@@ -1,6 +1,7 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "generated_at": "2026-10-29T00:00:00Z",
+  "rewritten_anchors": [],
   "rows": [
     {
       "accepted_credential_classes": [
@@ -30,7 +31,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 578,
+            "line": 587,
             "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +46,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 447,
+          "line": 456,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -63,15 +64,10 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256",
         "user_access_token"
       ],
       "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
+        "legacy_hs256": false
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -87,7 +83,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+        "description": "authenticate: bearer EdDSA user_access_token (JWT header alg EdDSA), checked by the profile-routed validator with audience auth-service (scope auth:session); sid is required, the session must be live and belong to sub, the users row active, and the session's token_version pin equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An HS256 access token is refused (alg_not_allowed)."
       },
       "public_rationale": null,
       "route": "/v1/sessions/current",
@@ -99,23 +95,18 @@
       "surface_kind": "rest",
       "tenant_requirement": "none",
       "token_shape": {
-        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
-        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
-        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
+        "algorithm": "EdDSA (user_access_token)",
+        "audience": "auth-service",
+        "issuer": "AUTH_TOKEN_ISSUER_URL",
+        "token_type": "the access-token.v1 JWS with sid"
       }
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256",
         "user_access_token"
       ],
       "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
+        "legacy_hs256": false
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -131,7 +122,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+        "description": "authenticate: bearer EdDSA user_access_token (JWT header alg EdDSA), checked by the profile-routed validator with audience auth-service (scope auth:session); sid is required, the session must be live and belong to sub, the users row active, and the session's token_version pin equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An HS256 access token is refused (alg_not_allowed)."
       },
       "public_rationale": null,
       "route": "/v1/sessions/revoke",
@@ -143,23 +134,18 @@
       "surface_kind": "rest",
       "tenant_requirement": "none",
       "token_shape": {
-        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
-        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
-        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
+        "algorithm": "EdDSA (user_access_token)",
+        "audience": "auth-service",
+        "issuer": "AUTH_TOKEN_ISSUER_URL",
+        "token_type": "the access-token.v1 JWS with sid"
       }
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256",
         "user_access_token"
       ],
       "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
+        "legacy_hs256": false
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -175,7 +161,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+        "description": "authenticate: bearer EdDSA user_access_token (JWT header alg EdDSA), checked by the profile-routed validator with audience auth-service (scope auth:session); sid is required, the session must be live and belong to sub, the users row active, and the session's token_version pin equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An HS256 access token is refused (alg_not_allowed)."
       },
       "public_rationale": null,
       "route": "/v1/sessions/revoke-all",
@@ -187,23 +173,18 @@
       "surface_kind": "rest",
       "tenant_requirement": "none",
       "token_shape": {
-        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
-        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
-        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
+        "algorithm": "EdDSA (user_access_token)",
+        "audience": "auth-service",
+        "issuer": "AUTH_TOKEN_ISSUER_URL",
+        "token_type": "the access-token.v1 JWS with sid"
       }
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256",
         "user_access_token"
       ],
       "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
+        "legacy_hs256": false
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -219,7 +200,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. The provider access token in the body is then verified with the provider (social.Service.Link) and the link is bound to the bearer's principal; a stale sign-in is refused. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+        "description": "authenticate: bearer EdDSA user_access_token (JWT header alg EdDSA), checked by the profile-routed validator with audience auth-service (scope auth:session); sid is required, the session must be live and belong to sub, the users row active, and the session's token_version pin equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. The provider access token in the body is then verified with the provider (social.Service.Link) and the link is bound to the bearer's principal; a stale sign-in is refused. An HS256 access token is refused (alg_not_allowed)."
       },
       "public_rationale": null,
       "route": "/v1/identities/social",
@@ -231,23 +212,18 @@
       "surface_kind": "rest",
       "tenant_requirement": "none",
       "token_shape": {
-        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
-        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
-        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
+        "algorithm": "EdDSA (user_access_token)",
+        "audience": "auth-service",
+        "issuer": "AUTH_TOKEN_ISSUER_URL",
+        "token_type": "the access-token.v1 JWS with sid"
       }
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256",
         "user_access_token"
       ],
       "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
+        "legacy_hs256": false
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -263,7 +239,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. social.Service.Unlink then removes an identity of the bearer's own principal only, and never the last sign-in method. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+        "description": "authenticate: bearer EdDSA user_access_token (JWT header alg EdDSA), checked by the profile-routed validator with audience auth-service (scope auth:session); sid is required, the session must be live and belong to sub, the users row active, and the session's token_version pin equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. social.Service.Unlink then removes an identity of the bearer's own principal only, and never the last sign-in method. An HS256 access token is refused (alg_not_allowed)."
       },
       "public_rationale": null,
       "route": "/v1/identities/social/{id}",
@@ -275,10 +251,10 @@
       "surface_kind": "rest",
       "tenant_requirement": "none",
       "token_shape": {
-        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
-        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
-        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
+        "algorithm": "EdDSA (user_access_token)",
+        "audience": "auth-service",
+        "issuer": "AUTH_TOKEN_ISSUER_URL",
+        "token_type": "the access-token.v1 JWS with sid"
       }
     },
     {
@@ -305,7 +281,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -329,14 +305,17 @@
     },
     {
       "accepted_credential_classes": [
+        "ops_refresh_token",
         "refresh_credential"
       ],
+      "class_disambiguator": {
+        "kind": "body_field",
+        "name": "refresh_token"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the credential, its session and the users row are read live; rotation is single use under the session row lock.",
       "disclosure_behavior": "Every refusal of a presented credential is a 401 whose go-api shaped body is {\"detail\":{\"message\":...}} with no reason code and no credential; the reason code goes to the audit row and the log only. A store or key failure is a 5xx.",
-      "gaps": [
-        "ops_refresh_token (a go-api refresh JWT in the same JSON body field refresh_token) is also accepted and exchanged once for a new session by session.Store.ExchangeLegacy, but this row lists refresh_credential only: both classes are body-carried, so no head selector (scheme, prefix, header or JWT header) can tell them apart and the selector gate would refuse a two-class row. The gap ends with the legacy refresh window (CHAOS-10408); the body-carried selector kind that would let the row list both is CHAOS-10583."
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/refresh [dev-health-auth-service @api]",
       "issued_credential": [
@@ -357,7 +336,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 578,
+            "line": 587,
             "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
@@ -372,7 +351,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 447,
+          "line": 456,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -400,7 +379,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 138,
+          "line": 144,
           "note": "func (s *Store) RevokeByCredential",
           "path": "internal/auth/session/signin.go"
         },
@@ -417,15 +396,10 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256",
         "user_access_token"
       ],
       "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
+        "legacy_hs256": false
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the users row (and, for a token with an org_id, the membership row) is read live through PGUsers; a token with a sid reads its session row live (policy.PGStore.SessionState, then the session store's effective revoke and expiry).",
@@ -436,11 +410,11 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 123,
+          "line": 129,
           "note": "func newValidateAuth",
           "path": "internal/auth/authapi/compat_validate.go"
         },
-        "description": "newValidateAuth: go-api's own decision, policy.Authenticator.Authenticate, over the body token. An HS256 token is verified by the go-api verifier the Issuer holds, then CheckClaims and userFromClaims (legacy_hs256 true). With AUTH_TOKEN_ISSUER_URL and a key set, an EdDSA user_access_token (JWT header alg EdDSA) of audience dev-health-api is checked by the profile-routed validator over this route's one row, then go-api's accessTokenUser; the acr-api and acr-mcp audiences, the workload token and a query-api audience token are refused. A token naming a session also needs that session live in auth-service's own state (stricter than go-api: an expired session or one revoked by a password stamp is valid false)."
+        "description": "newValidateAuth: go-api's own decision, policy.Authenticator.Authenticate, over the body token. An HS256 token is refused (alg_not_allowed). With AUTH_TOKEN_ISSUER_URL and a key set, an EdDSA user_access_token (JWT header alg EdDSA) of audience dev-health-api is checked by the profile-routed validator over this route's one row, then go-api's accessTokenUser; the acr-api and acr-mcp audiences, the workload token and a query-api audience token are refused. A token naming a session also needs that session live in auth-service's own state (stricter than go-api: an expired session or one revoked by a password stamp is valid false)."
       },
       "public_rationale": null,
       "route": "/api/v1/auth/validate",
@@ -452,23 +426,18 @@
       "surface_kind": "rest",
       "tenant_requirement": "none",
       "token_shape": {
-        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
-        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: dev-health-api",
-        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access; or the access-token.v1 JWS"
+        "algorithm": "EdDSA (user_access_token)",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_TOKEN_ISSUER_URL",
+        "token_type": "the access-token.v1 JWS"
       }
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256",
         "user_access_token"
       ],
       "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
+        "legacy_hs256": false
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row, the users row, the organization row and the membership row are read live, and the guard reads the user, the organization and the membership again inside the transaction that supersedes the caller's session.",
@@ -509,7 +478,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 69,
+            "line": 73,
             "note": "func (s *Store) insertSession",
             "path": "internal/auth/session/signin.go"
           },
@@ -528,7 +497,7 @@
           "note": "func (h handlers) authenticateWith",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticateWith: bearer HS256 access token with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. A delegated session is refused 403. The route then judges the requested organization by fresh reads inside the supersede transaction: the user active, the organization active and the caller's membership of it. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+        "description": "authenticateWith: bearer EdDSA user_access_token (JWT header alg EdDSA), checked by the profile-routed validator with audience auth-service (scope auth:session); sid is required, the session must be live and belong to sub, the users row active, and the session's token_version pin equal to users.token_version. A delegated session is refused 403. The route then judges the requested organization by fresh reads inside the supersede transaction: the user active, the organization active and the caller's membership of it. An HS256 access token is refused (alg_not_allowed)."
       },
       "public_rationale": null,
       "route": "/api/v1/auth/switch-org",
@@ -540,10 +509,10 @@
       "surface_kind": "rest",
       "tenant_requirement": "none",
       "token_shape": {
-        "algorithm": "HS256 (hs256_compat class) or EdDSA (eddsa class)",
-        "audience": "AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); under the eddsa class dev-health-api or auth-service",
-        "issuer": "AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); under the eddsa class AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; under the eddsa class the access-token.v1 JWS"
+        "algorithm": "EdDSA (user_access_token)",
+        "audience": "dev-health-api or auth-service",
+        "issuer": "AUTH_TOKEN_ISSUER_URL",
+        "token_type": "the access-token.v1 JWS with sid"
       }
     },
     {
@@ -574,7 +543,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -637,7 +606,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -677,8 +646,8 @@
         "name": "workload+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the session is read live on every call (session.Store.Current: the effective expiry, absolute cap or idle expiry, and the effective revoke, a password change included, in one statement).",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; a body that is not exactly one canonical session_id is 400 malformed; a session auth-service does not hold is 404 session_not_found, named to any holder of the service credential or of the go-api workload token; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the session's principal_id, organization_id (or null), revoked, expired and legacy_token_version (or null). The route writes nothing: no audit row and no last_seen_at stamp, so a read never extends a session's idle expiry.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the session is read live on every call (session.Store.Current: the effective expiry, absolute cap or idle expiry, and the effective revoke, a password change included, and the class of the session's live OAuth grant, in one statement).",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; a body that is not exactly one canonical session_id is 400 malformed; a session auth-service does not hold is 404 session_not_found, named to any holder of the service credential or of the go-api workload token; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the session's principal_id, organization_id (or null), revoked, expired and legacy_token_version (or null), plus actor_principal_id on a delegated session and client_class (browser or mcp) on a session with a live OAuth grant, absent when the grant is revoked or there is none. The route writes nothing: no audit row and no last_seen_at stamp, so a read never extends a session's idle expiry.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/sessions/state [dev-health-auth-service @api]",
@@ -1716,6 +1685,278 @@
     },
     {
       "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the principal named by principal_id is read live from the public tables on every call.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a body that is not exactly one principal-request.v1 object is 400 malformed; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the principal-read.v1 body. The route writes nothing and no audit row.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/principals/get [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding principals:read (a write scope never satisfies it; internal/auth/authapi/provisioning_read.go readCaller). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the principal named by principal_id."
+      },
+      "route": "/internal/v1/principals/get",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_read.go",
+        "line": 26
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the principals of the organization named by organization_id is read live from the public tables on every call.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a body that is not exactly one principal-request.v1 object is 400 malformed; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the principal-list.v1 body. The route writes nothing and no audit row.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/principals/list [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding principals:read (a write scope never satisfies it; internal/auth/authapi/provisioning_read.go readCaller). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the principals of the organization named by organization_id."
+      },
+      "route": "/internal/v1/principals/list",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_read.go",
+        "line": 27
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the organization named by organization_id is read live from the public tables on every call.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a body that is not exactly one organization-request.v1 object is 400 malformed; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the organization-read.v1 body. The route writes nothing and no audit row.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/organizations/get [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding organizations:read (a write scope never satisfies it; internal/auth/authapi/provisioning_read.go readCaller). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the organization named by organization_id."
+      },
+      "route": "/internal/v1/organizations/get",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_read.go",
+        "line": 28
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the organizations of the principal named by principal_id is read live from the public tables on every call.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a body that is not exactly one organization-request.v1 object is 400 malformed; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the organization-list.v1 body. The route writes nothing and no audit row.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/organizations/list [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding organizations:read (a write scope never satisfies it; internal/auth/authapi/provisioning_read.go readCaller). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the organizations of the principal named by principal_id."
+      },
+      "route": "/internal/v1/organizations/list",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_read.go",
+        "line": 29
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the membership of one principal in one organization is read live from the public tables on every call.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a body that is not exactly one membership-request.v1 object is 400 malformed; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the membership-read.v1 body. The route writes nothing and no audit row.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/memberships/get [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:read (a write scope never satisfies it; internal/auth/authapi/provisioning_read.go readCaller). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the membership of one principal in one organization."
+      },
+      "route": "/internal/v1/memberships/get",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_read.go",
+        "line": 30
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the memberships of the organization named by organization_id is read live from the public tables on every call.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a body that is not exactly one membership-request.v1 object is 400 malformed; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the membership-list.v1 body. The route writes nothing and no audit row.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/memberships/list [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:read (a write scope never satisfies it; internal/auth/authapi/provisioning_read.go readCaller). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the memberships of the organization named by organization_id."
+      },
+      "route": "/internal/v1/memberships/list",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_read.go",
+        "line": 31
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the resource grant named by grant_id in the organization named by organization_id is read live from the public tables on every call.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a body that is not exactly one grant-request.v1 object is 400 malformed; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the grant-read.v1 body. The route writes nothing and no audit row.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/grants/get [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding grants:read (a write scope never satisfies it; internal/auth/authapi/provisioning_read.go readCaller). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the resource grant named by grant_id in the organization named by organization_id."
+      },
+      "route": "/internal/v1/grants/get",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_read.go",
+        "line": 32
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the resource grants of the organization named by organization_id is read live from the public tables on every call.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a body that is not exactly one grant-request.v1 object is 400 malformed; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the grant-list.v1 body. The route writes nothing and no audit row.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/grants/list [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding grants:read (a write scope never satisfies it; internal/auth/authapi/provisioning_read.go readCaller). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the resource grants of the organization named by organization_id."
+      },
+      "route": "/internal/v1/grants/list",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_read.go",
+        "line": 33
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
         "kubernetes_sa_token_exchange",
         "workload_bootstrap_credential"
       ],
@@ -1752,7 +1993,7 @@
           "note": "subject, err := h.Validator.Validate(reviewCtx, subjectToken)",
           "path": "internal/auth/workloadexchange/exchange.go"
         },
-        "description": "handler.review: the Kubernetes TokenReview API authenticates the subject_token for the audience dev-health-workload-exchange; it is authenticated only by TokenReview: after a successful review its exp claim is read unverified, only to cap the issued token's lifetime, and it is never stored; the workload registry then resolves the reviewed ServiceAccount and narrows the audience and actions. With subject_token_type urn:dev-health:params:oauth:token-type:workload-bootstrap the request is the Compose bootstrap subject instead and never reaches TokenReview: handler.serveBootstrap (exchange_bootstrap.go:88) refuses a value outside the fcwlb_ shape before any store read, and workload.Store.ResolveBootstrap resolves the SHA-256 digest of the value (class, platform owner, workload kind, revocation, expiry, workload and principal state, and an audience both the workload and the credential hold)."
+        "description": "handler.review: the Kubernetes TokenReview API authenticates the subject_token for the audience dev-health-workload-exchange; it is authenticated only by TokenReview: after a successful review its exp claim is read unverified, only to cap the issued token's lifetime, and it is never stored; the workload registry then resolves the reviewed ServiceAccount and narrows the audience and actions. With subject_token_type urn:dev-health:params:oauth:token-type:workload-bootstrap the request is the Compose bootstrap subject instead and never reaches TokenReview: handler.serveBootstrap (internal/auth/workloadexchange/exchange_bootstrap.go:88) refuses a value outside the fcwlb_ shape before any store read, and workload.Store.ResolveBootstrap resolves the SHA-256 digest of the value (class, platform owner, workload kind, revocation, expiry, workload and principal state, and an audience both the workload and the credential hold)."
       },
       "route": "/internal/v1/token/exchange",
       "service": "dev-health-auth-service",
@@ -1921,15 +2162,10 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256",
         "user_access_token"
       ],
       "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
+        "legacy_hs256": false
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -1989,7 +2225,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. The flow then requires the current password. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+        "description": "authenticate: bearer EdDSA user_access_token (JWT header alg EdDSA), checked by the profile-routed validator with audience auth-service (scope auth:session); sid is required, the session must be live and belong to sub, the users row active, and the session's token_version pin equal to users.token_version. The flow then requires the current password. An HS256 access token is refused (alg_not_allowed)."
       },
       "public_rationale": null,
       "route": "/api/v1/auth/change-password",
@@ -2001,10 +2237,10 @@
       "surface_kind": "rest",
       "tenant_requirement": "none",
       "token_shape": {
-        "algorithm": "HS256 (hs256_compat class) or EdDSA (eddsa class)",
-        "audience": "AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); under the eddsa class dev-health-api or auth-service",
-        "issuer": "AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); under the eddsa class AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; under the eddsa class the access-token.v1 JWS"
+        "algorithm": "EdDSA (user_access_token)",
+        "audience": "dev-health-api or auth-service",
+        "issuer": "AUTH_TOKEN_ISSUER_URL",
+        "token_type": "the access-token.v1 JWS with sid"
       }
     },
     {
@@ -2146,7 +2382,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -2228,7 +2464,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -2310,7 +2546,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -2395,8 +2631,147 @@
         "line": 87
       },
       "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "disclosure_behavior": "Before the redirect is proven (an unknown client, a metadata client, an inexact redirect, an unset web origin) every refusal is the same 400 error.v1 malformed, with no Location and no row; after it, an error goes to the client's exact redirect as error, state and iss. Nothing a client sent is logged, and the state never is.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /oauth/authorize [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "GET",
+      "public_rationale": "The OAuth 2.1 authorization request (RFC 6749 section 4.1.1, D0 section 3): pre-session by design, a client sends the browser here and the route accepts no credential. It checks the client registry (contracts/auth/v1/oauth-clients.v1.json), the exact redirect, PKCE S256 and the RFC 8707 resource, writes one request row and answers a 302 to web's consent page with the request id only. Budget auth_svc_oauth_authorize_client, 60 per minute per registry client; an empty body only. Unreachable from outside while go-api's AUTH_PROXY_OAUTH is off.",
+      "route": "/oauth/authorize",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/oauth.go",
+        "line": 154
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": false
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request, and a decision reads the request row under its lock.",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "A bearer refusal is the 401 error.v1 of the session routes. A body that is not one form of action and request_id (and csrf_token for approve and deny) is 400 malformed; a request bound to another session, a wrong or spent anti-CSRF token, an expired request and a decided request are the same 400 malformed, so a caller learns nothing of a request it does not hold. An org-less web session and a principal on the actor side of an impersonation are refused at approve. No code, token or state is logged or audited.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /oauth/authorize [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 203,
+            "note": "csrf, err := newSecret(csrfPrefix)",
+            "path": "internal/auth/oauthgrant/store.go"
+          },
+          "audience": null,
+          "class_id": "oauth_consent_csrf_token",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 600,
+          "note": "action describe: the anti-CSRF token of the request, minted when the request is bound to the bearer's web session (write-once) and returned once in csrf_token; it lives as long as the request."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 505,
+            "note": "code, err = newSecret(codePrefix)",
+            "path": "internal/auth/oauthgrant/store.go"
+          },
+          "audience": null,
+          "class_id": "oauth_authorization_code",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 60,
+          "note": "action approve: the single-use authorization code, minted inside the consent's audit.Commit and returned once as the code parameter of redirect_to, the client's exact redirect."
+        }
+      ],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 109,
+          "note": "func (h handlers) authenticateWith",
+          "path": "internal/auth/authapi/routes.go"
+        },
+        "description": "authenticateWith, the session routes' check, through the profile-routed validator: only an EdDSA user_access_token with audience auth-service (scope auth:session) passes; sid is required, the session must be live and belong to sub, the users row active, and the session's token_version pin must equal users.token_version. The HS256 access token is refused (legacy_hs256 false: prod runs the eddsa class, and web holds the auth-service-audience session access token). A delegated session's bearer is refused. The decision then needs the request bound to that same session and principal and, for approve and deny, its anti-CSRF token."
+      },
+      "public_rationale": null,
+      "route": "/oauth/authorize",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/oauth.go",
+        "line": 155
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "auth-service",
+        "issuer": "AUTH_TOKEN_ISSUER_URL",
+        "token_type": "the access-token.v1 JWS (typ at+jwt), with sid"
+      }
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /.well-known/oauth-authorization-server/oauth [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "GET",
+      "public_rationale": "The RFC 8414 authorization server metadata of the issuer AUTH_TOKEN_ISSUER_URL (path /oauth), fetched anonymously by OAuth clients; it is built from the pinned issuer, not the Host header, and returns no tenant data.",
+      "route": "/.well-known/oauth-authorization-server/oauth",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/oauth.go",
+        "line": 156
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /oauth/.well-known/openid-configuration [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "GET",
+      "public_rationale": "The issuer-path discovery document (issuer, jwks_uri, signing algorithms), the same document as /.well-known/openid-configuration, fetched anonymously by relying parties; returns no tenant data.",
+      "route": "/oauth/.well-known/openid-configuration",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/oauth.go",
+        "line": 157
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /oauth/.well-known/jwks.json [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "GET",
+      "public_rationale": "The issuer-path published token verification keys (public keys only), the same set as /.well-known/jwks.json, fetched anonymously by relying parties; returns no tenant data.",
+      "route": "/oauth/.well-known/jwks.json",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/oauth.go",
+        "line": 158
+      },
+      "surface_kind": "rest"
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "7691593453acfb5163690e289c52b41054fd260f"
+  "source_commit": "d42086d13e8c45b7896723a5c3948bd408eeb7a0"
 }

@@ -3,7 +3,6 @@ package fixturescli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -108,11 +107,8 @@ func runProductTelemetry(ctx context.Context, env cli.Env) int {
 	days := flags.Int("days", 30, "days of data per organization")
 	sessions := flags.Int("sessions-per-day", 50, "sessions per day per organization")
 	seedText := flags.String("seed", "", "deterministic seed")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

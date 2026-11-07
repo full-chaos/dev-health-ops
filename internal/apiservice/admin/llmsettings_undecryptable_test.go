@@ -193,7 +193,7 @@ VALUES ($1, 'llmrotation-admin@example.com', true, true, false, 0, now(), now())
 	})
 
 	t.Run("a write that keeps the unreadable key is refused with the same 409 and changes nothing", func(t *testing.T) {
-		got := call(after, "replace", "PUT", route, `{"provider":"openai","model":"other-model","base_url":"https://example.invalid/v1"}`)
+		got := call(after, "replace", "PUT", route, `{"provider":"anthropic","model":"other-model"}`)
 		assertUndecryptable(t, got, []string{"api_key", "purpose:explain:api_key"}, []string{"explain"})
 		if storedValue(orgReplace, "api_key") != oldCipher || storedValue(orgReplace, "model") != "big-model" {
 			t.Fatalf("a refused write changed the stored config")

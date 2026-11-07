@@ -18,6 +18,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
@@ -48,10 +50,13 @@ type Operator struct {
 	PlatformRolesOwned bool
 	// AuthSchema is AUTH_DATABASE_SCHEMA (empty: "auth").
 	AuthSchema string
-	// OrgProvisioning is AUTH_PROXY_ORG_PROVISIONING: the HTTP member and
-	// delete routes go to auth-service, so the verbs that would write those
-	// rows in go-api only refuse with ErrOrgProvisioningOn.
+	// OrgProvisioning is AUTH_PROXY_ORG_PROVISIONING: an organization create
+	// would write go-api's rows only, so it refuses with ErrOrgProvisioningOn.
 	OrgProvisioning bool
+	// Provisioner is the client of auth-service's provisioning routes. Every
+	// membership change and real organization delete goes through it, whatever
+	// the switch says; nil refuses them with ErrNoProvisioner.
+	Provisioner authprovision.Provisioner
 	// readGrants replaces the org deletion's ClickHouse grant read in a test.
 	readGrants func(context.Context, driver.Conn) ([]string, error)
 }
@@ -69,10 +74,10 @@ type OperatorError struct{ Message string }
 
 func (err *OperatorError) Error() string { return err.Message }
 
-// ErrOrgProvisioningOn refuses an organization create, a membership change or a
-// real organization delete while AUTH_PROXY_ORG_PROVISIONING is on: done here, it would write
-// go-api's rows only and leave auth-service's apart.
-var ErrOrgProvisioningOn = &OperatorError{Message: "AUTH_PROXY_ORG_PROVISIONING is on: organization creates, membership changes and organization deletes go through the admin API, which sends them to the authentication service; this command would change go-api's rows only."}
+// ErrOrgProvisioningOn refuses an organization create while
+// AUTH_PROXY_ORG_PROVISIONING is on: done here, it would write go-api's rows
+// only and leave auth-service's apart.
+var ErrOrgProvisioningOn = &OperatorError{Message: "AUTH_PROXY_ORG_PROVISIONING is on: organization creates go through the admin API, which sends them to the authentication service; this command would change go-api's rows only."}
 
 func refuse(format string, args ...any) error {
 	return &OperatorError{Message: fmt.Sprintf(format, args...)}
@@ -234,6 +239,9 @@ type UpdateUserInput struct {
 	Password                           *string
 	Active, Verified, Superuser        *bool
 	MembershipOrg, Role, RemoveFromOrg *string
+	// Actor is the user (id or email) that acts for a membership change: an
+	// active owner or admin of the organization, or a superuser.
+	Actor *string
 }
 
 func (in UpdateUserInput) hasProfileChange() bool {
@@ -426,8 +434,14 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 	if err := refuseSuperuserWhileOwned(o.PlatformRolesOwned, in.Superuser != nil); err != nil {
 		return nil, err
 	}
-	if o.OrgProvisioning && (in.MembershipOrg != nil || in.RemoveFromOrg != nil) {
-		return nil, ErrOrgProvisioningOn
+	membershipWrite := in.MembershipOrg != nil || in.RemoveFromOrg != nil
+	if in.MembershipOrg != nil && in.RemoveFromOrg != nil {
+		return nil, ErrOneMembershipStep
+	}
+	if membershipWrite {
+		if err := o.requireProvisioning(deref(in.Actor)); err != nil {
+			return nil, err
+		}
 	}
 	hasProfileChange := in.hasProfileChange()
 	if !hasProfileChange && in.Password == nil && in.MembershipOrg == nil && in.RemoveFromOrg == nil {
@@ -436,19 +450,42 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 	if in.Role != nil && in.MembershipOrg == nil {
 		return nil, refuse("--role requires --org.")
 	}
+	// The membership step goes first, through the route (no database write of
+	// this call has happened yet); the profile and password writes follow. A
+	// refused route leaves them unrun. The actor is read here, before any
+	// profile update: --actor may be the old email of the user being renamed.
+	var memberChanges []string
+	var shown *UpdateUserResult
+	if membershipWrite {
+		var plan membershipPlan
+		var userID uuid.UUID
+		err := o.inTransaction(ctx, func(store pgStore) error {
+			user, err := findUser(ctx, store, in.ID, in.Email, in.Username)
+			if err != nil {
+				return err
+			}
+			userID, shown = user.ID, &UpdateUserResult{Email: user.Email, ID: user.ID}
+			if plan.actor, err = resolveActorOn(ctx, store, strings.TrimSpace(deref(in.Actor))); err != nil {
+				return err
+			}
+			return planMembershipChanges(ctx, store, user.ID, in, &plan)
+		})
+		if err != nil {
+			return nil, err
+		}
+		if memberChanges, err = o.applyMembershipPlan(ctx, plan, userID); err != nil {
+			return nil, err
+		}
+		if !hasProfileChange && in.Password == nil {
+			shown.Changes = memberChanges
+			return shown, nil
+		}
+	}
 	var result *UpdateUserResult
 	err := o.inTransaction(ctx, func(store pgStore) error {
 		user, err := findUser(ctx, store, in.ID, in.Email, in.Username)
 		if err != nil {
 			return err
-		}
-		if in.MembershipOrg != nil {
-			// A membership-only update writes no users row, and its INSERT's foreign
-			// key check comes after the unique index: unlocked, a writer that holds
-			// this row gives uq_membership_user_org or a deadlock.
-			if _, err := store.Pool.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, user.ID); err != nil {
-				return err
-			}
 		}
 		changes := []string{}
 		shownEmail := user.Email
@@ -517,74 +554,13 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 			}
 			changes = append(changes, "password updated (existing sessions revoked)")
 		}
-		if in.MembershipOrg != nil {
-			org, err := resolveOrg(ctx, store, *in.MembershipOrg)
-			if err != nil {
-				return err
-			}
-			if org == nil {
-				return refuse("Organization '%s' not found.", *in.MembershipOrg)
-			}
-			existing, err := store.membershipByOrgUser(ctx, org.ID, user.ID)
-			if err != nil {
-				return err
-			}
-			if existing != nil {
-				role := existing.Role
-				if in.Role != nil && *in.Role != "" {
-					role = *in.Role
-				}
-				if _, err := store.updateMembershipRole(ctx, org.ID, user.ID, role); err != nil {
-					if errors.Is(err, errInvalidRole) {
-						return refuse("Invalid role: %s", role)
-					}
-					if errors.Is(err, errLastOwnerDemote) {
-						return refuse("Cannot remove the last owner of an organization")
-					}
-					return err
-				}
-				changes = append(changes, fmt.Sprintf("org '%s' role -> %s", org.Slug, role))
-			} else {
-				role := "member"
-				if in.Role != nil && *in.Role != "" {
-					role = *in.Role
-				}
-				if _, err := store.insertMembership(ctx, org.ID, user.ID, role, nil); err != nil {
-					if errors.Is(err, errMembershipExists) {
-						return refuse("User is already a member of this organization")
-					}
-					return err
-				}
-				changes = append(changes, fmt.Sprintf("added to org '%s' as %s", org.Slug, role))
-			}
-		}
-		if in.RemoveFromOrg != nil {
-			org, err := resolveOrg(ctx, store, *in.RemoveFromOrg)
-			if err != nil {
-				return err
-			}
-			if org == nil {
-				return refuse("Organization '%s' not found.", *in.RemoveFromOrg)
-			}
-			removed, err := store.removeMembership(ctx, org.ID, user.ID)
-			if err != nil {
-				if errors.Is(err, errLastOwner) {
-					return refuse("Cannot remove the last owner of an organization")
-				}
-				return err
-			}
-			if removed {
-				changes = append(changes, fmt.Sprintf("removed from org '%s'", org.Slug))
-			} else {
-				changes = append(changes, fmt.Sprintf("not a member of org '%s' (no change)", org.Slug))
-			}
-		}
 		result = &UpdateUserResult{Email: shownEmail, ID: user.ID, Changes: changes}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	result.Changes = append(result.Changes, memberChanges...)
 	return result, nil
 }
 
@@ -704,21 +680,14 @@ type DeleteOrgConfig struct {
 	Decryptor     providerfoundation.FernetDecryptor
 	PagerDuty     providerfoundation.PagerDutyRevokeConfig
 	HTTPDoer      providerfoundation.HTTPDoer
+	// Actor is the user (id or email) that acts for a real delete: an active
+	// superuser, as auth-service's deprovision route requires.
+	Actor string
 }
 
-// DeleteOrg is OrganizationDeletionService.delete as `admin orgs delete` runs
-// it, and the same code as the DELETE /orgs/{id} route: the org's Postgres rows
-// and ClickHouse rows are counted and (not a dry run) deleted. A malformed id is
-// a refusal; any other failure is returned as it is.
-func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, config DeleteOrgConfig) (map[string]any, error) {
-	orgUUID, err := pyUUID(orgID)
-	if err != nil {
-		return nil, refuse("Invalid organization id")
-	}
-	if o.OrgProvisioning && !dryRun {
-		return nil, ErrOrgProvisioningOn
-	}
-	httpDoer := revokeDoer(config.HTTPDoer)
+// orgDeleteHandlers is the handler set one delete runs. A real delete asks
+// auth-service first, through the provisioner; a dry run asks nothing.
+func (o Operator) orgDeleteHandlers(config DeleteOrgConfig, httpDoer providerfoundation.HTTPDoer, dryRun bool) *handlers {
 	var db pgDB = o.Pool
 	if o.db != nil {
 		db = o.db
@@ -732,11 +701,40 @@ func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, conf
 		httpDoer:      httpDoer,
 		readGrants:    o.readGrants,
 	}
+	if !dryRun {
+		h.orgProvision = actorProvisioner{Provisioner: o.Provisioner, actor: config.Actor, resolve: o.resolveActor}
+	}
+	return h
+}
+
+// DeleteOrg is OrganizationDeletionService.delete as `admin orgs delete` runs
+// it, and the same code as the DELETE /orgs/{id} route: the org's Postgres rows
+// and ClickHouse rows are counted and (not a dry run) deleted. A malformed id is
+// a refusal; any other failure is returned as it is.
+func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, config DeleteOrgConfig) (map[string]any, error) {
+	orgUUID, err := pyUUID(orgID)
+	if err != nil {
+		return nil, refuse("Invalid organization id")
+	}
+	if !dryRun {
+		if err := o.requireProvisioning(config.Actor); err != nil {
+			return nil, err
+		}
+		// The actor is read when the deprovision call is made, after the
+		// ClickHouse checks: a refused delete touches no Postgres row.
+		ctx = policy.WithUser(ctx, &policy.User{})
+	}
+	httpDoer := revokeDoer(config.HTTPDoer)
+	h := o.orgDeleteHandlers(config, httpDoer, dryRun)
 	result, err := h.deleteOrganizationData(ctx, orgUUID, dryRun)
 	if err != nil {
 		var refused *orgDeletionRefusedError
 		if errors.As(err, &refused) {
 			return nil, refuse("%s", orgDeletionRefusedDetail)
+		}
+		var authErr *orgDeletionAuthError
+		if errors.As(err, &authErr) {
+			return nil, provisionError(authErr.err, "")
 		}
 		var incomplete *orgDeletionIncompleteError
 		if errors.As(err, &incomplete) {

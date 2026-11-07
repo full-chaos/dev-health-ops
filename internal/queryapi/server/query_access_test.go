@@ -134,9 +134,10 @@ func TestQueryAPIQueryAndGraphQLIssuerAloneServesOnlyTheUserToken(t *testing.T) 
 	}
 }
 
-// Q8 on /query and /graphql: an edge token whose users read fails keeps its
-// answer with the issuer set. /query answers its bare 401; /graphql answers as
-// its scope middleware decides a caller it could not read.
+// Q8 on /query and /graphql: an edge token whose users read fails. Issuer unset,
+// /query answers its bare 401 and /graphql answers as its scope middleware
+// decides a caller it could not read. Issuer set, the edge token is the retired
+// HS256 class: refused 401 before any users read.
 func TestQueryAPIQueryAndGraphQLStoreFailureAnswersHoldWithTheIssuerSet(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
@@ -148,11 +149,11 @@ func TestQueryAPIQueryAndGraphQLStoreFailureAnswersHoldWithTheIssuerSet(t *testi
 		"users store error that is not unavailable": {
 			func(s *accessStore) { s.errUserState = errors.New("syntax error") },
 			want{http.StatusUnauthorized, http.StatusInternalServerError},
-			want{http.StatusUnauthorized, http.StatusInternalServerError}},
+			want{http.StatusUnauthorized, http.StatusUnauthorized}},
 		"users store unavailable": {
 			func(s *accessStore) { s.errUserState = policy.ErrUnavailable },
-			want{http.StatusUnauthorized, http.StatusInternalServerError},
-			want{http.StatusUnauthorized, http.StatusInternalServerError}},
+			want{http.StatusUnauthorized, http.StatusServiceUnavailable},
+			want{http.StatusUnauthorized, http.StatusUnauthorized}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, routed := range []bool{false, true} {

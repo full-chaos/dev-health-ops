@@ -13,7 +13,7 @@ An External Push token (`fcpush_…`, credential class `external_push_ingest_tok
 
 ## Who decides
 
-- go-api owns the token. It creates, rotates, revokes and validates it, through the `/api/v1/admin/customer-push` routes. Rotation is an immediate cutover: the old token stops working when the replacement is issued.
+- go-api owns the token. It creates, rotates, revokes and validates it, through the `/api/v1/admin/customer-push` routes. Rotation takes effect at once: the old token stops working when the replacement is issued.
 - auth-service holds a projection of the token. It reads lifecycle events from the auth outbox and writes an `external_source` principal (one per organization and source), a `credential_registry` row and the projected state. It does not validate a push token and has no write path to the domain store.
 - The projection is a record, not a gate. A late or lost event does not make go-api accept or refuse a token.
 
@@ -48,5 +48,5 @@ The expired event comes from a sweeper job (`sync.external_push_expiry_sweep`). 
 
 ## Not yet in this page
 
-- The projection reconcile and the drift alert: after CHAOS-10897.
-- A refusal of a half-set writer or caller role in `auth-migrate`: after CHAOS-12828.
+- The projection reconcile and the drift alert: not built yet.
+- A refusal of a half-set writer or caller role in `auth-migrate`: not built yet.

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -18,6 +19,15 @@ type querier interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+// querierOf is pool as a querier: nil, not a typed nil, without a pool. The subscription writes read through it, so a
+// test can serve them with a fake.
+func querierOf(pool *pgxpool.Pool) querier {
+	if pool == nil {
+		return nil
+	}
+	return pool
 }
 
 // planRow is one billing_plans row. Metadata is the stored JSON document,

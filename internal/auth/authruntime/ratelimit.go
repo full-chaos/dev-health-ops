@@ -74,6 +74,16 @@ func (l *lazyStore) Peek(ctx context.Context, hit httpapi.Hit) (int64, error) {
 	return store.Peek(ctx, hit)
 }
 
+func (l *lazyStore) Refund(ctx context.Context, hit httpapi.Hit) error {
+	store, _, err := l.open(ctx)
+	if err != nil {
+		return err
+	}
+	return store.Refund(ctx, hit)
+}
+
+var _ httpapi.Refunder = (*lazyStore)(nil)
+
 func (l *lazyStore) Backend() string { return "redis" }
 
 func (l *lazyStore) ping(ctx context.Context) error {
@@ -97,7 +107,7 @@ func (l *lazyStore) Shutdown(context.Context) error {
 }
 
 // limitStore returns the limits (the shared counter store and the digest key,
-// derived from AUTH_RATE_LIMIT_KEY, else the session signing secret AUTH_JWT_SECRET_KEY) when a limited
+// derived from AUTH_RATE_LIMIT_KEY, else AUTH_JWT_SECRET_KEY; config refuses neither) when a limited
 // route mounts, and nil (no key derived, nothing built, nothing dialled) when
 // none does: a value in AUTH_VALKEY_URI beside no limited route is inert. The
 // login is this service's own (an ACL user limited to the auth_svc_ key

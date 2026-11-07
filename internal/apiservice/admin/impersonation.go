@@ -26,9 +26,9 @@ const impersonationPrefix = "/api/v1/admin"
 func (h *handlers) impersonationRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodPost, Pattern: impersonationPrefix + "/impersonate",
-			Handler: h.bodyFirstPlatform(policy.ActionAdminImpersonate, http.HandlerFunc(h.startImpersonation))},
+			Handler: h.bodyFirstPlatform(policy.ActionAdminImpersonate, h.impersonateStart())},
 		{Method: http.MethodPost, Pattern: impersonationPrefix + "/impersonate/stop",
-			Handler: h.guard.WrapPlatform(policy.ActionAdminImpersonate, http.HandlerFunc(h.stopImpersonation))},
+			Handler: h.guard.WrapPlatform(policy.ActionAdminImpersonate, h.impersonateStop())},
 		{Method: http.MethodGet, Pattern: impersonationPrefix + "/impersonate/status",
 			Handler: h.guard.Wrap(policy.Authenticated, http.HandlerFunc(h.impersonationStatus))},
 	}
@@ -318,7 +318,12 @@ func (h *handlers) impersonationStatus(w http.ResponseWriter, r *http.Request) {
 		response.Set("expires_at", nil)
 		return response
 	}
-	if !user.Holds(policy.ActionAdminImpersonate) {
+	held, err := policy.HoldsPlatform(r.Context(), user, policy.ActionAdminImpersonate)
+	if err != nil {
+		policy.WritePlatformDecisionRefusal(w, err)
+		return
+	}
+	if !held {
 		policy.WriteModel(w, http.StatusOK, notImpersonating(), nil)
 		return
 	}
@@ -371,19 +376,13 @@ func (h *handlers) impersonationStatus(w http.ResponseWriter, r *http.Request) {
 // shaped writes in orgs.go/users.go, never to these two.
 func impersonationAuditMetadata(ctx context.Context, user *policy.User) []byte {
 	metadata := pyjson.NewObject()
-	if user != nil && user.ImpersonatedBy != nil && *user.ImpersonatedBy != "" {
-		metadata.Set("impersonated_by", *user.ImpersonatedBy)
-	}
-	if active := policy.ImpersonationFrom(ctx); active != nil {
+	setImpersonatedBy(metadata, user)
+	if row, ok := policy.SessionRowChain(ctx); ok {
 		if _, ok := metadata.Get("impersonated_by"); !ok {
-			metadata.Set("impersonated_by", active.AdminUserID.String())
+			metadata.Set("impersonated_by", row.Actor)
 		}
-		if _, ok := metadata.Get("impersonation_target"); !ok {
-			metadata.Set("impersonation_target", active.TargetUserID.String())
-		}
-		if _, ok := metadata.Get("impersonation_org"); !ok {
-			metadata.Set("impersonation_org", active.TargetOrgID.String())
-		}
+		metadata.Set("impersonation_target", row.Subject)
+		metadata.Set("impersonation_org", row.OrgID)
 	}
 	if metadata.Len() == 0 {
 		return nil
@@ -393,6 +392,14 @@ func impersonationAuditMetadata(ctx context.Context, user *policy.User) []byte {
 		return nil
 	}
 	return encoded
+}
+
+// setImpersonatedBy names the real actor of the caller's delegation in an
+// audit row's metadata, when the caller's bearer names one.
+func setImpersonatedBy(metadata *pyjson.Object, user *policy.User) {
+	if chain, ok := user.ActorChain(); ok {
+		metadata.Set("impersonated_by", chain.Actor)
+	}
 }
 
 // requestAuditEntry fills entry's RequestMetadata the way

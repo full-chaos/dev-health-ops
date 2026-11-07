@@ -90,6 +90,7 @@ func compatOnEdDSA(mutate func(*compatFixture)) func(*testing.T, AccessSigner) *
 }
 
 func TestCompatRefreshRefusesBeforeExchangeWhenSignerUnavailable(t *testing.T) {
+	t.Parallel()
 	opaque := func(f *compatFixture) *httptest.ResponseRecorder {
 		return f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
 	}
@@ -120,6 +121,7 @@ func TestCompatRefreshRefusesBeforeExchangeWhenSignerUnavailable(t *testing.T) {
 }
 
 func TestCompatLoginRefusesBeforeTheCredentialCheckWhenSignerUnavailable(t *testing.T) {
+	t.Parallel()
 	good := func(f *compatFixture) *httptest.ResponseRecorder {
 		return f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, ""), nil)
 	}
@@ -151,17 +153,14 @@ func TestCompatLoginRefusesBeforeTheCredentialCheckWhenSignerUnavailable(t *test
 	}
 }
 
-// The limiter is charged before the signer check, so a caller over its
-// budget gets the 429 during an outage too.
-func TestALimitedLoginAnswers429BeforeTheSignerIsChecked(t *testing.T) {
+// The limiter is charged before the signer check, and a login the signer check
+// refuses gives the charge back (CHAOS-12737): ten refused tries leave the
+// budget whole, so the eleventh is the 503 again, never a 429.
+func TestAPreflightFailedLoginDoesNotSpendTheBudget(t *testing.T) {
 	signer := unreadableKeySigner(t)
 	f := onEdDSA(t, newCompatFixture(t), signer)
-	for i := 0; i < loginAccountLimit.Count; i++ {
+	for i := 0; i <= loginAccountLimit.Count; i++ {
 		expectGoAPIUnavailable(t, f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, ""), nil))
-	}
-	response := f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, ""), nil)
-	if response.Code != http.StatusTooManyRequests {
-		t.Fatalf("status %d after the budget, want 429: %s", response.Code, response.Body)
 	}
 	if n := compatWrites(f); n != 0 || f.attempts.failures != 0 {
 		t.Fatalf("%d writes during the outage", n)
@@ -169,6 +168,7 @@ func TestALimitedLoginAnswers429BeforeTheSignerIsChecked(t *testing.T) {
 }
 
 func TestSocialLoginRefusesBeforeTheExchangeWhenSignerUnavailable(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		program func(*compatFixture, *fakeSocial)
 		healthy int
@@ -327,6 +327,7 @@ func (s *lateSigner) Check(context.Context) error { return nil }
 // A mint that fails because the signer cannot sign answers go-api's 503; any
 // other mint failure (here the kid record) keeps go-api's generic 500.
 func TestAMintFailureAnswers503OnlyWhenTheSignerCannotSign(t *testing.T) {
+	t.Parallel()
 	const internal = `{"detail":"Internal Server Error"}`
 	late := func(t *testing.T) (*Issuer, *lateSigner) {
 		signer := &lateSigner{}

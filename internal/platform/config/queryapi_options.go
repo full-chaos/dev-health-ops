@@ -1,5 +1,7 @@
 package config
 
+import "github.com/full-chaos/dev-health-ops/internal/authzenforce"
+
 // QueryAPIServiceName is the service identity of `dho query-api`, the read-only
 // Go query plane. Its options are scoped to it, so no other binary advertises or
 // parses them. The environment names are the ones the chart and the compose files
@@ -100,6 +102,37 @@ var queryAPIOptions = func() []Option {
 			Flag: "access-token-issuer", Env: "AUTH_ACCESS_TOKEN_ISSUER", Kind: KindString,
 			Services: q, Group: GroupRoutes,
 			Usage: "https issuer of EdDSA user access tokens (go-api's value): set, the REST, /query and /graphql routes validate the edge and user access tokens by their endpoint-profile row against its JWKS; unset, they do not",
+		},
+		{
+			Flag: "pdp-mode", Env: "QUERY_API_PDP_MODE", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "the REST routes' PDP gate: off (unset, default: no call), shadow (ask auth-service's PDP, count and compare, never deny) or enforce (a PDP deny is 403, no verdict is 503); a bad value, or shadow/enforce with a missing input, never fails the start: one ERROR names the variable and every PDP-gated request answers 503",
+		},
+		{
+			// The name is authzenforce's: one reader of the variable (internal/authzenforce census_test.go).
+			Flag: "authz-enforce", Env: authzenforce.QueryAPI.Env(), Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "comma list of catalog action namespaces (analytics, metrics, git, work_items, ...) whose REST routes the PDP decides (the 5.17 cells; unset: none). A listed namespace needs QUERY_API_PDP_MODE shadow or enforce for the client, else its routes answer 503; with no namespace listed the PDP never refuses. An item that is not a namespace is ignored and stays off (one ERROR), never a start failure",
+		},
+		{
+			Flag: "auth-proxy-url", Env: "AUTH_PROXY_URL", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "auth-service's base URL (go-api's setting), an http(s) origin: the PDP gate's workload exchange and authorize calls go there; read only while QUERY_API_PDP_MODE is on",
+		},
+		{
+			Flag: "auth-workload-subject-file", Env: "AUTH_WORKLOAD_SUBJECT_FILE", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "projected ServiceAccount token file, the PDP gate's workload exchange subject on Kubernetes (exactly one of this and the bootstrap file); read only while QUERY_API_PDP_MODE is on",
+		},
+		{
+			Flag: "auth-workload-bootstrap-file", Env: "AUTH_WORKLOAD_BOOTSTRAP_FILE", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "workload bootstrap credential file, the PDP gate's workload exchange subject on Compose; read only while QUERY_API_PDP_MODE is on",
+		},
+		{
+			Flag: "auth-workload-issuer", Env: "AUTH_WORKLOAD_ISSUER", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "https issuer (auth-service's token issuer URL) every workload token of the PDP gate must carry; read only while QUERY_API_PDP_MODE is on",
 		},
 		{
 			Flag: "drilldown-issues-enabled", Env: "GO_API_DRILLDOWN_ISSUES_ENABLED", Kind: KindBool,

@@ -1,7 +1,7 @@
 # Quality and release gates for the Auth Control Plane tree (CHAOS-4887, Wave 1
 # of CHAOS-3274): go test and -race scoped to the auth packages, the
 # production-middleware stack test (G-69), one fuzz run per parser (grouped by package) and
-# a strict govulncheck (any reachable finding fails; no ignore list). The gate logic lives in `ci/check_go.sh auth`;
+# a strict govulncheck (any reachable finding fails, except an exact id+module+version row of ci/auth-vuln-exceptions.tsv that has no fixed version). The gate logic lives in `ci/check_go.sh auth`;
 # this file only schedules it.
 #
 # RELEVANCE IS DECIDED INSIDE, not in the trigger (the go-quality.yml design,
@@ -98,20 +98,29 @@ jobs:
           grep -E '^relevant=(true|false)$' relevance.txt >> "${GITHUB_OUTPUT}"
 
       # CHAOS-11596: a separate verdict for the external auth corpus (auth-corpus-queue). Its path set is
-      # ci/auth_corpus_paths.txt, not the auth import closure above. The corpus runs on merge queue entries only: a pull
-      # request does not run it, and venue-oracles.yml runs it on a push to main. Fail closed: any fetch, merge-base or
-      # rule error = corpus=true.
+      # ci/auth_corpus_paths.txt, not the auth import closure above. CHAOS-12993: the corpus runs on a merge queue entry
+      # and on a pull request (the merge queue is off, so the pull request is the last gate before main); venue-oracles.yml
+      # runs it on a push to main. A pull request is judged by the same script and table as a queue entry (the script finds
+      # the merge base itself). Fail closed: any fetch, merge-base or rule error = corpus=true.
       - name: Does the change touch the external auth corpus path set?
         id: corpus
         env:
           EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MG_BASE_REF: ${{ github.event.merge_group.base_ref }}
           MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
+          if [ "${EVENT}" = "pull_request" ]; then
+            bash ci/auth_corpus_queue_relevance.sh "${BASE_SHA}" "${HEAD_SHA}" > corpus.txt || echo "corpus=true" > corpus.txt
+            cat corpus.txt
+            grep -xE 'corpus=(true|false)' corpus.txt >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           if [ "${EVENT}" != "merge_group" ]; then
             echo "corpus=false" >> "${GITHUB_OUTPUT}"
-            echo "the external auth corpus runs on merge queue entries only (${EVENT} is not one)"
+            echo "the external auth corpus runs on pull requests and merge queue entries (${EVENT} is neither; main runs it in venue-oracles.yml)"
             exit 0
           fi
           if [[ "${MG_BASE_REF}" == refs/heads/* ]] \
@@ -172,6 +181,8 @@ jobs:
   # CHAOS-12213: the race legs have their own job and their own 30 minute cap. In auth-test they shared one cap with the other
   # legs, and `job_go_test_timeout` gives each race-integration package the time left under that cap, so a slow job left a late
   # package too little time. The cap is not raised: each job stays under it.
+  # CHAOS-12938: auth-race takes the same cap env. Its go test -timeout comes from the race weights of the auth packages
+  # (auth_race_timeout_min in ci/check_go.sh), bounded by this cap, not from the 10 min go default.
   # CHAOS-12420: the same again. The two legs grew to the whole 30 minutes on a slow runner, and the last package got a
   # 2 s timeout, so each leg has a job of its own. auth-gate fans in both.
   auth-race:
@@ -179,6 +190,8 @@ jobs:
     if: needs.auth-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CHECK_GO_JOB_CAP_MIN: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -267,12 +280,12 @@ jobs:
           fi
 
   # CHAOS-11596: the external auth corpus (ci/auth_corpus_external.sh, the same four legs venue-oracles.yml runs on main)
-  # on a merge queue entry that touches ci/auth_corpus_paths.txt. Only the queue runs it (0 jobs on a pull request), and
-  # a red leg ejects the entry before main. No retry: a red leg stays red. Its result fans into `auth-gate`.
+  # on a merge queue entry or (CHAOS-12993, merge queue off) a pull request that touches ci/auth_corpus_paths.txt. A red leg
+  # ejects the entry or reds the pull request before main. No retry: a red leg stays red. Its result fans into `auth-gate`.
   auth-corpus-queue:
     name: auth-corpus-queue (${{ matrix.leg }})
     needs: [auth-changes]
-    if: github.event_name == 'merge_group' && needs.auth-changes.outputs.corpus == 'true'
+    if: (github.event_name == 'merge_group' || github.event_name == 'pull_request') && needs.auth-changes.outputs.corpus == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

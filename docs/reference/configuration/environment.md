@@ -57,7 +57,7 @@ The API and sync workers need the same app client values. The redirect URI is th
 
 ## Worker and schedule settings
 
-!!! note "Go workers are configured by flags first (CHAOS-4020)"
+!!! note "Go workers are configured by flags first"
 
     The Go worker processes (`dho worker`, `dho reconciler`,
     `dho scheduler`, `dho stream-runner`) resolve every setting
@@ -128,13 +128,6 @@ A setting that enables a route is not sufficient evidence that the corresponding
 ## External services and telemetry
 
 Include model providers, email, billing, Sentry-compatible error delivery, OpenTelemetry endpoints, Prometheus settings, service names, sampling, and external integration configuration.
-
-Ask Dev platform allowances use `ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX` and
-`ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD` on the API. They are non-secret,
-restart-loaded operator maxima; organization administrators can only configure
-values at or below them. Defaults are 1,000 accepted platform runs and
-100,000,000 microUSD per UTC calendar month. Runtime hard bounds are 100–5,000
-runs and 10,000,000–500,000,000 microUSD.
 
 ## Reference rules
 

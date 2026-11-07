@@ -204,7 +204,7 @@ func TestVenueOracleCustomerPushReads(t *testing.T) {
 	t.Setenv("EXTERNAL_INGEST_MAX_RECORDS", " 2_500 ")
 	var seed customerPushFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), OrglessSuperusers: customerPushOrglessSuperusers,
 		PythonEnv: []string{"EXTERNAL_INGEST_MAX_RECORDS= 2_500 "},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = customerPushSeed(t, ctx, admin)
@@ -220,12 +220,16 @@ func TestVenueOracleCustomerPushReads(t *testing.T) {
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := customerPushRequests(seed, venue.Tokens)
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads.go-pin.json", SHA256: customerPushReadsPinSHA256, Ruling: customerPushReadsRuling})
-	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{Golden: golden, Retire: retiredCustomerPushReadsRequest, Pin: pin})
+	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads-orgclaim.go-pin.json", SHA256: customerPushReadsOrgClaimPinSHA256, Ruling: orgClaimRuling})
+	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{Golden: golden, Retire: retiredCustomerPushReadsRequest, Pin: pin,
+		Retirements: []venueoracle.Retirement{
+			{Match: func(request venueoracle.Request) bool { return request.Name == "bad org claim" }, Pin: claimPin},
+		}})
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
-	pin.Finish(t)
+	venueoracle.FinishPins(t, pin, claimPin)
 	golden.Finish(t)
 }
 
@@ -240,3 +244,11 @@ const customerPushReadsPinSHA256 = "7c2dac5fc24f5a1383933238554b1f0e407ba46583e2
 func retiredCustomerPushReadsRequest(request venueoracle.Request) bool {
 	return request.Name == "batches huge offset" || request.Name == "batch offset huge"
 }
+
+// customerPushOrglessSuperusers names no seed: the "superuser" seed (org claim orgCommunity, no membership row there)
+// keeps its recorded org claim, and its user access token gets the recorded (HS256) answer (product rule 1, D6773).
+var customerPushOrglessSuperusers []string
+
+const (
+	customerPushReadsOrgClaimPinSHA256 = "e2c439fad270d63bc213c161481f124e5ccc03e57d4d50e12cd77adb88b86e70"
+)

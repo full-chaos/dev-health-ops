@@ -98,13 +98,13 @@ const maxInFlightRequests = 64
 // exchange when it is on.
 func sessionRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	accessSigner authapi.AccessSigner, limits *authapi.Limits,
+	accessSigner authapi.AccessSigner, limits *authapi.Limits, jwks *authapi.JWKSDocument,
 ) ([]httpapi.Route, error) {
 	if !cfg.Session.Enabled {
 		return authapi.SessionsNotEnabledRoutes(), nil
 	}
 	sessions, err := session.New(session.Config{
-		Pool: pool, Schema: schema, Logger: logger, UsersOwned: cfg.UsersOwned, PlatformRolesOwned: cfg.PlatformRolesOwned,
+		Pool: pool, Schema: schema, Logger: logger, RefreshTTL: sessionRefreshTTL(), UsersOwned: cfg.UsersOwned, PlatformRolesOwned: cfg.PlatformRolesOwned,
 		SuccessorKey: contracts.NewSecretString(cfg.Session.SuccessorKey.Reveal()),
 	})
 	if err != nil {
@@ -128,7 +128,7 @@ func sessionRoutes(
 		return nil, err
 	}
 	routes = append(routes, compat...)
-	oauth, err := oauthRoutes(cfg, logger, pool, schema, sessions, issuer, limits, accessSigner)
+	oauth, err := oauthRoutes(cfg, logger, pool, schema, sessions, issuer, limits, jwks)
 	if err != nil {
 		return nil, err
 	}
@@ -442,6 +442,10 @@ func configureWithRoutes(
 		KeyID:      cfg.SigningKeyID,
 		States:     keyStates,
 	})
+	// Both JWKS routes serve this document. Its refresher, started with the
+	// lifecycle, is their one reader of the key set: no JWKS request waits on
+	// the key store, and a latched compromise drops it at the next request.
+	jwks := authapi.NewJWKSDocument(authapi.JWKSDocumentConfig{Keys: signer, Logger: logger})
 
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
 	// Both checks are REQUIRED, so readiness fails closed on either. The
@@ -543,7 +547,7 @@ func configureWithRoutes(
 		}
 		closeStoreOnly()
 	}
-	routes, err := sessionRoutes(cfg, logger, store.Pool(), schemaID, signer, limits)
+	routes, err := sessionRoutes(cfg, logger, store.Pool(), schemaID, signer, limits, jwks)
 	if err != nil {
 		closeStore()
 		return nil, err
@@ -608,7 +612,7 @@ func configureWithRoutes(
 	}
 	routes = append(routes, acrRoutes...)
 	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
-		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
+		JWKS: jwks, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
 	})...)
 	logAPIRoutes(ctx, logger, cfg, routes, len(extra))
 	routes = append(routes, extra...)
@@ -652,12 +656,18 @@ func configureWithRoutes(
 		closeStore()
 		return nil, err
 	}
+	repoIdentityComponents, err := repoIdentityProjection(cfg, logger, store.Pool(), schemaID, registry, projectOrg)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
 
-	components := []lifecycle.Component{store, keyStatesComponent{states: keyStates}}
+	components := []lifecycle.Component{store, keyStatesComponent{states: keyStates}, jwks}
 	components = append(components, limitComponents...)
 	components = append(components, credComponents...)
 	components = append(components, feed.components...)
 	components = append(components, projectionComponents...)
+	components = append(components, repoIdentityComponents...)
 	components = append(components, outboxLoop, announcedListener{listener: operatorHTTP, logger: logger})
 	components = append(components, listeners...)
 	return append(components, health.Gate{Registry: registry}), nil
@@ -709,6 +719,15 @@ func (a announcedListener) Start(ctx context.Context) error {
 func (a announcedListener) Shutdown(ctx context.Context) error { return a.listener.Shutdown(ctx) }
 
 func (a announcedListener) Errors() <-chan error { return a.listener.Errors() }
+
+func (a announcedListener) Drained() <-chan struct{} {
+	if source, ok := a.listener.(lifecycle.ShutdownDrainSource); ok {
+		return source.Drained()
+	}
+	drained := make(chan struct{})
+	close(drained)
+	return drained
+}
 
 // reasonOf renders a bounded reason code for a dependency-construction
 // failure. It never falls back to err.Error(): those errors can carry a DSN.
@@ -833,6 +852,7 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 			routes[i].RateLimitBurst = cfg.PDPRoute.Burst
 		}
 	}
+	policy := clientAddrPolicy(cfg, logger)
 	return httpapi.ServerOptions{
 		PublicMaxInFlight: cfg.Public.MaxInFlight,
 		Address:           cfg.APIAddress,
@@ -848,7 +868,7 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		// carry X-Auth-Request-ID as route answers do. The client address
 		// (every audit row and session) and the user agent (every session)
 		// are bound by internal/auth/clientaddr.
-		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(cfg.TrustedProxies), publicaudit.Middleware},
+		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.PolicyMiddleware(policy), publicaudit.Middleware},
 		// The transport id is always minted here, never a client's
 		// X-Request-ID: it reaches every log line and envelope.
 		AcceptRequestID: func(string) bool { return false },
@@ -857,7 +877,23 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		ExplicitHead: true,
 		// Each access line also carries this service's wire id and the
 		// caller's id, which join it to go-api's proxy line.
-		AccessAttrs: accessLogIDs(cfg.TrustedProxies),
+		AccessAttrs: accessLogIDs(policy),
+	}
+}
+
+// clientAddrPolicy is the client-address rule of the API listener (CHAOS-11645): the mode, the trusted-proxy list and
+// the proof keys. A failed proof check logs its outcome and route class only.
+func clientAddrPolicy(cfg authconfig.Config, logger *slog.Logger) clientaddr.Policy {
+	mode := cfg.ClientAddrMode
+	if mode == "" {
+		mode = clientaddr.ModeCIDR
+	}
+	return clientaddr.Policy{
+		Mode: mode, Trust: cfg.TrustedProxies, Verifier: clientaddr.NewVerifier(cfg.ClientAddrKeys),
+		Log: func(ctx context.Context, outcome, route string) {
+			logger.WarnContext(ctx, "client address proof refused", slog.String("outcome", outcome), slog.String("route", route),
+				slog.String("mode", string(mode)))
+		},
 	}
 }
 

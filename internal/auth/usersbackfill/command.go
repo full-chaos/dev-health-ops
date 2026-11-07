@@ -2,7 +2,6 @@ package usersbackfill
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -38,13 +37,13 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "auth",
 		Kind:    cli.Group,
-		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, platform-role-grant, platform-role-revoke, platform-role-list",
+		Summary: "auth control plane operator verbs: users-backfill, users-create, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, repo-identities-sync, platform-role-grant, platform-role-revoke, platform-role-list",
 		Children: append([]cli.Command{{
 			Name:    "users-backfill",
 			Kind:    cli.Verb,
 			Summary: "copy public.users into the auth schema (idempotent; counts only)",
 			Run:     run,
-		}, {
+		}, usersCreateCommand(), {
 			Name:    "users-reconcile",
 			Kind:    cli.Verb,
 			Summary: "compare public.users with the auth schema in one read-only snapshot (counts only; exit 1 on any gated diff; -platform-roles-gate also gates no_active_platform_admin, run it before the platform roles flip)",
@@ -69,6 +68,11 @@ func Command() cli.Command {
 			Kind:    cli.Verb,
 			Summary: "delete go-api's legacy public link-token rows once users are owned (idempotent; counts only; refused unless AUTH_USERS_OWNED is true)",
 			Run:     runLegacyLinkPurge,
+		}, {
+			Name:    "repo-identities-sync",
+			Kind:    cli.Verb,
+			Summary: "copy the provider repository ids from ClickHouse repos into auth.repository_identities and give live repository grants their id (idempotent; counts and grant ids only; run after auth-migrate)",
+			Run:     runRepoIdentities,
 		}}, platformRoleVerbs()...),
 	}
 }
@@ -78,11 +82,9 @@ func run(ctx context.Context, env cli.Env) int {
 	flags.SetOutput(env.Stderr)
 	dryRun := flags.Bool("dry-run", false, "read and report; write nothing")
 	batch := flags.Int("batch", 500, "users read per page")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	insertOnly := flags.Bool("insert-only", false, "create the auth users that are missing and never change an existing one (compose's auth-users-backfill, where auth-service owns users)")
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 || *batch < 1 || *batch > 10000 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -batch must be 1..10000")
@@ -100,6 +102,7 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintf(env.Stderr, "users-backfill: %s must be true or false\n", platformrole.OwnedEnv)
 		return cli.ExitFailure
 	}
+	opts.InsertOnly = *insertOnly
 	pool, schema, code := connectFn(ctx, env, "users-backfill")
 	if code != cli.ExitOK {
 		return code
@@ -136,11 +139,8 @@ func run(ctx context.Context, env cli.Env) int {
 func runOAuthSSOCount(ctx context.Context, env cli.Env) int {
 	flags := flag.NewFlagSet("dho auth oauth-sso-count", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
@@ -208,11 +208,8 @@ func runReconcile(ctx context.Context, env cli.Env) int {
 	flags.SetOutput(env.Stderr)
 	batch := flags.Int("batch", 500, "rows read per page")
 	platformGate := flags.Bool("platform-roles-gate", false, "gate no_active_platform_admin (exit 1 when no principal holds platform_admin)")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 || *batch < 1 || *batch > 10000 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -batch must be 1..10000")
@@ -255,11 +252,8 @@ func runOrgs(ctx context.Context, env cli.Env) int {
 	flags.SetOutput(env.Stderr)
 	dryRun := flags.Bool("dry-run", false, "read and report; write nothing")
 	batch := flags.Int("batch", 500, "rows read per page")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 || *batch < 1 || *batch > 10000 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -batch must be 1..10000")
@@ -326,11 +320,8 @@ func runLegacyLinkPurge(ctx context.Context, env cli.Env) int {
 	// The auth-backfill Job passes -batch to every verb; the purge has no pages.
 	batch := flags.Int("batch", 500, "accepted for the backfill Job; unused")
 	runID := flags.String("run-id", "", "names this run in its audit row (lowercase letters, digits, . _ -; at most 63)")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	runIDSet := false
 	flags.Visit(func(f *flag.Flag) { runIDSet = runIDSet || f.Name == "run-id" })
@@ -371,11 +362,8 @@ func runOrgsReconcile(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "  -exact:       the cutover gate: exit 1 on EVERY class, role differences, public-only memberships and duplicate sources included.")
 	}
 	exact := flags.Bool("exact", false, "gate every diff class (the cutover gate); the default gates organization diffs, auth-only memberships and inactive-in-public")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

@@ -233,6 +233,9 @@ func Verify(raw []byte, sp SP, now time.Time) (Verified, error) {
 	if err != nil {
 		return Verified{}, err
 	}
+	if err := checkNameIDElement(assertionEl); err != nil {
+		return Verified{}, err
+	}
 	if err := checkAudiences(assertionEl, sp.EntityID); err != nil {
 		return Verified{}, err
 	}
@@ -337,6 +340,31 @@ func checkClaims(response crewsaml.Response, responseSigned bool, a crewsaml.Ass
 		NotOnOrAfter: c.NotOnOrAfter.UTC(),
 		Attributes:   attributes,
 	}, nil
+}
+
+// checkNameIDElement requires the assertion's one Subject to hold exactly one
+// NameID child, in the SAML assertion namespace. crewjam/saml's Subject.NameID
+// tag has no namespace, so xml.Unmarshal would take a NameID of any namespace
+// as the subject (GO-2026-6909).
+func checkNameIDElement(assertion *etree.Element) error {
+	subjects := childrenNS(assertion, nsAssertion, "Subject")
+	if len(subjects) != 1 {
+		return refused(ReasonNameID, "%d Subject elements", len(subjects))
+	}
+	n := 0
+	for _, child := range subjects[0].ChildElements() {
+		if child.Tag != "NameID" {
+			continue
+		}
+		n++
+		if child.NamespaceURI() != nsAssertion {
+			return refused(ReasonNameID, "NameID outside the assertion namespace")
+		}
+	}
+	if n != 1 {
+		return refused(ReasonNameID, "%d NameID elements", n)
+	}
+	return nil
 }
 
 // checkAudiences requires at least one AudienceRestriction, and every one of

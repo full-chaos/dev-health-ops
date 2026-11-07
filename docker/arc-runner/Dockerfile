@@ -110,6 +110,7 @@ RUN apt-get install -y --no-install-recommends \
         libc6-dev \
         xz-utils \
         docker-compose-plugin \
+        gettext-base \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -134,5 +135,29 @@ RUN set -eu; \
     install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck; \
     rm -rf "/tmp/${tarball}" "/tmp/shellcheck-v${SHELLCHECK_VERSION}"; \
     shellcheck --version
+
+# helm (CHAOS-12962, 2026-11-04): the race legs run the internal/cigates/scripts
+# tests (TestPDPLoadK3s*, TestAuthOwnerMoveK3s*) that need `helm`; GitHub-hosted
+# runners shipped it, this image never did (`FAIL: helm is required`). Pinned to
+# the version ci/check_auth_k8s.sh and the other k8s checks use, with the sha256
+# of each release tarball (get.helm.sh/<tarball>.sha256sum, re-hashed on a fresh
+# download). Bump the version and both digests deliberately, together.
+ARG HELM_VERSION=v3.21.4
+ARG HELM_SHA256_ARM64=b54c04b4e0b2540bbdc08c17a121dab70e9a2ed0de5705528fec68a5fd3b85a7
+ARG HELM_SHA256_AMD64=61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14
+RUN set -eu; \
+    case "$(uname -m)" in \
+        aarch64|arm64) arch=arm64; sha="${HELM_SHA256_ARM64}" ;; \
+        x86_64) arch=amd64; sha="${HELM_SHA256_AMD64}" ;; \
+        *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    tarball="helm-${HELM_VERSION}-linux-${arch}.tar.gz"; \
+    curl -fsSL -o "/tmp/${tarball}" "https://get.helm.sh/${tarball}"; \
+    echo "${sha}  /tmp/${tarball}" | sha256sum -c -; \
+    mkdir /tmp/helm-extract; \
+    tar -xzf "/tmp/${tarball}" -C /tmp/helm-extract; \
+    install -m 0755 "/tmp/helm-extract/linux-${arch}/helm" /usr/local/bin/helm; \
+    rm -rf "/tmp/${tarball}" /tmp/helm-extract; \
+    helm version --short
 
 USER runner

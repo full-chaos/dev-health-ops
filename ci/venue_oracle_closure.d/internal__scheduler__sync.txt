@@ -5,13 +5,18 @@ internal/api/policy
 internal/api/pybody
 internal/api/pyjson
 internal/api/pytime
+internal/apiservice/accessrouting
+internal/auth/accessverify
 internal/auth/acraudience
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
 internal/auth/platformrole/rule
 internal/auth/policycatalog
+internal/auth/repoidentityevent
+internal/auth/repokey
 internal/auth/sessionid
+internal/authzenforce
 internal/chmigrate
 internal/cli
 internal/egressguard
@@ -61,6 +66,7 @@ internal/storage/clickhouse
 internal/storage/clickhouse/engineclause
 internal/storage/postgres
 internal/storage/postgres/aclguard
+internal/storage/postgres/authschema
 internal/storage/postgres/ownermove
 internal/storage/river
 internal/storage/roleacl
@@ -78,6 +84,7 @@ internal/teamcreated
 internal/teamid
 internal/teamprovider
 internal/testsupport/containers
+internal/testsupport/edtokens
 internal/testsupport/fakehttp
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
@@ -93,3 +100,4 @@ internal/workitemcontract
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
+~internal/storage/postgres/authschema/migrations

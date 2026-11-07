@@ -83,15 +83,17 @@ func (h Handlers) Initiate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The twin has no sealed branch: it forwards relay_state into the redirect
-	// URL for every provider, so every provider refuses a lone surrogate.
-	if pyjson.MemberHasLoneSurrogateEscape(data, "relay_state", true) {
-		writeStringUnicode(w, "relay_state")
-		return
-	}
+	// Only a provider that allows IdP-initiated sign-in forwards relay_state
+	// into the redirect URL; the others never read it, as go-api.
 	relayState := ""
-	if body.RelayState != nil {
-		relayState = *body.RelayState
+	if p.AllowIdPInitiated {
+		if pyjson.MemberHasLoneSurrogateEscape(data, "relay_state", true) {
+			writeStringUnicode(w, "relay_state")
+			return
+		}
+		if body.RelayState != nil {
+			relayState = *body.RelayState
+		}
 	}
 	init, err := h.Service.InitiateFor(r.Context(), p, relayState)
 	if err != nil {
@@ -121,7 +123,7 @@ func (h Handlers) ACS(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, err)
 		return
 	}
-	posted, ok := readSAMLResponse(w, r)
+	in, ok := decodeACS(w, r)
 	if !ok {
 		return
 	}
@@ -138,7 +140,7 @@ func (h Handlers) ACS(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, bindingCookie(name, "", cookiePath, -1))
 		return c.Value
 	}
-	signIn, err := h.Service.ConsumeFor(r.Context(), p, posted, cookie)
+	signIn, err := h.Service.ConsumeFor(r.Context(), p, in.SAMLResponse, in.RelayState, cookie)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -152,19 +154,11 @@ type acsInput struct {
 	RelayState   string
 }
 
-// readSAMLResponse decodes the ACS body into one acsInput: the HTTP-POST
-// binding the metadata advertises (application/x-www-form-urlencoded with
-// SAMLResponse and RelayState) or the go-api JSON body (no content type,
-// application/json or application/*+json; "SAMLResponse" or "saml_response").
+// decodeACS decodes the ACS body into one acsInput: the HTTP-POST binding the
+// metadata advertises (application/x-www-form-urlencoded with SAMLResponse and
+// RelayState) or the go-api JSON body (no content type, application/json or
+// application/*+json; "SAMLResponse" or "saml_response").
 // Any other content type, a missing or repeated SAMLResponse, is refused.
-func readSAMLResponse(w http.ResponseWriter, r *http.Request) (string, bool) {
-	in, ok := decodeACS(w, r)
-	if !ok {
-		return "", false
-	}
-	return in.SAMLResponse, true
-}
-
 func decodeACS(w http.ResponseWriter, r *http.Request) (acsInput, bool) {
 	contentType := r.Header.Get("Content-Type")
 	mediaType := ""
@@ -241,9 +235,9 @@ func (h Handlers) providerID(w http.ResponseWriter, r *http.Request) (uuid.UUID,
 	return id, true
 }
 
-// AccountExistsMessage is the 409 for an e-mail another account holds; it names
-// no sign-in method.
-const AccountExistsMessage = "An account with this email already exists. Please sign in with your existing sign-in method."
+// ConflictMessage is the one 409 answer for an assertion that finds an account already holding the e-mail or the
+// NameID; it says nothing about which. The reason stays in the log and the audit row.
+const ConflictMessage = "This sign-in could not be completed. Contact your administrator if this continues."
 
 // writeError maps a domain error to the go-api status and detail. Every
 // verification failure has the same detail.
@@ -262,7 +256,7 @@ func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) 
 	case errors.Is(err, ErrProviderInactive):
 		writeDetail(w, http.StatusBadRequest, "SSO provider is not active")
 	case errors.As(err, &conflict):
-		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{"message": AccountExistsMessage}})
+		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{"message": ConflictMessage}})
 	case errors.Is(err, ErrSignupNotAvailable):
 		writeDetail(w, http.StatusForbidden, "Sign-up through SSO is not available")
 	case errors.Is(err, ErrAutoProvisionDisabled), errors.Is(err, ErrInvalidEmailAddress):
@@ -282,7 +276,7 @@ func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		writeJSON(w, http.StatusForbidden, map[string]any{"detail": map[string]string{
 			"message": identity.MembershipRequiredMessage, "reason": "membership_required"}})
 	case errors.Is(err, ErrIdentityAmbiguous):
-		writeDetail(w, http.StatusConflict, "More than one account carries this sign-in. Contact your organization administrator.")
+		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{"message": ConflictMessage}})
 	case errors.Is(err, ErrSessionUnavailable):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": map[string]string{"message": UnavailableText}})
 	case errors.Is(err, ErrUnsolicited), errors.Is(err, ErrFlowNotFound), errors.Is(err, ErrFlowConsumed), errors.Is(err, ErrAssertionReplayed):

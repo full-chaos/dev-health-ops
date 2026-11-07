@@ -120,6 +120,8 @@ type authorizeGoldenPDPVector struct {
 	Expect struct {
 		Reason         string          `json:"reason"`
 		WireReasonCode json.RawMessage `json:"wire_reason_code"`
+		// Obligations is checked by the decision core runner and the router replay; this test only reads past it.
+		Obligations json.RawMessage `json:"obligations"`
 	} `json:"expect"`
 }
 
@@ -182,7 +184,8 @@ func TestGoldenDecisionPDPRowsAssertTheirWireReason(t *testing.T) {
 		t.Fatal("the manifest holds no pdp row")
 	}
 	for _, reason := range authorization.AllReasons() {
-		if !covered[reason] {
+		// Catalog version 14 holds no filtered organization action (product rule 2): no golden row reaches this deny.
+		if !covered[reason] && reason != authorization.ReasonRepositoryAllowlistTooLarge {
 			t.Errorf("reason %s has no pdp golden row asserting its wire reason", reason)
 		}
 	}

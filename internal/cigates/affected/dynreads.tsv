@@ -3,6 +3,7 @@ ci/tools/gotestfuncs	main.go
 cmd/auth-migrate	bootstrap.go
 cmd/auth-migrate	restorefence.go
 cmd/cigate	docs_prepare_refusals_test.go
+cmd/cigate	main.go
 cmd/cigate	main_test.go
 cmd/dev-health-migration-matrix	contract_test.go
 cmd/dev-health-migration-matrix	main.go
@@ -14,9 +15,11 @@ cmd/gqlgen-guard	main.go
 cmd/gqlgen-guard	main_test.go
 cmd/loadtest	main.go
 cmd/registrydump	main.go
+cmd/shadow-venue	main.go
 cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
 deploy/helm/dev-health	auth_phase_test.go
+deploy/helm/dev-health	auth_sso_settings_test.go
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go
 internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
@@ -34,7 +37,6 @@ internal/apiservice	accessroute_unset_test.go
 internal/apiservice	endpoint_profile_rows_test.go
 internal/apiservice	endpoint_profile_scan_test.go
 internal/apiservice	githubapp_config.go
-internal/apiservice	provisioning_credential.go
 internal/apiservice/admin	routeguard_test.go
 internal/apiservice/authflowvenue	auth_flow_venue_oracle_integration_test.go
 internal/apiservice/authflowvenue	linkformat_test.go
@@ -52,6 +54,7 @@ internal/auth/acrmint	census_test.go
 internal/auth/authapi	acr_events_test.go
 internal/auth/authapi	authorize_auth_test.go
 internal/auth/authapi	authorize_golden_test.go
+internal/auth/authapi	authorize_loadprofile_test.go
 internal/auth/authapi	authorize_request_test.go
 internal/auth/authapi	authorize_test.go
 internal/auth/authapi	hung_read_test.go
@@ -69,6 +72,7 @@ internal/auth/contracts	authorization_goldens_test.go
 internal/auth/contracts	authorization_schema_test.go
 internal/auth/contracts	contracts.go
 internal/auth/contracts	credential_anchor_lines_test.go
+internal/auth/contracts	credential_class_retired_test.go
 internal/auth/contracts	credential_class_workload_validators_test.go
 internal/auth/contracts	credential_columns_test.go
 internal/auth/contracts	credential_goldens_test.go
@@ -87,7 +91,9 @@ internal/auth/contracts	jwks_document_differential_test.go
 internal/auth/contracts	jwks_document_goldens_test.go
 internal/auth/contracts	llm_api_keys_anchor_test.go
 internal/auth/contracts	openapi_test.go
+internal/auth/contracts	platform_admin_actions_test.go
 internal/auth/contracts	principal_contract_goldens_test.go
+internal/auth/contracts	principal_wire_form_surface_test.go
 internal/auth/contracts	producer_columns_test.go
 internal/auth/contracts	provisioning_event_goldens_test.go
 internal/auth/contracts	provisioning_resources_test.go
@@ -112,6 +118,7 @@ internal/auth/contracts/tokencorpus	service_account_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity	placeholder_copies_test.go
+internal/auth/identity	sp_callsite_ast_test.go
 internal/auth/identity/local	corpus_helpers_integration_test.go
 internal/auth/identity/oidc	oauth_denial_stages_test.go
 internal/auth/keyrotation	rotation_integration_test.go
@@ -128,14 +135,18 @@ internal/auth/pushprojection	import_guard_test.go
 internal/auth/pushreconcile	import_guard_test.go
 internal/auth/ratelimitvalkey	acl_feed_test.go
 internal/auth/ratelimitvalkey	acl_test.go
+internal/auth/repoidentityprojection	reader_test.go
 internal/auth/restorefence	consumers_reader_test.go
 internal/auth/restorefence	consumers_test.go
 internal/auth/session	credential_test.go
+internal/auth/session	liveness_census_test.go
 internal/auth/workloadexchange	tokenreview.go
+internal/auth/workloadinput	workloadinput.go
 internal/auth/writerinventory	membership_census_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	usersowned_census_shapes_test.go
 internal/auth/writerinventory	usersowned_census_test.go
+internal/authzenforce	census_test.go
 internal/bigboycompose	billing_edge_override_test.go
 internal/bigboycompose	dsn_class_test.go
 internal/bigboycompose	restart_policy_test.go
@@ -178,10 +189,12 @@ internal/cigates/bigboyrender	projectscope.go
 internal/cigates/bigboyrender	projectscope_test.go
 internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
+internal/cigates/chartgates	alerts_auth_slo_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	overlay_test.go
 internal/cigates/chartgates	worker_secret_env_scan_test.go
 internal/cigates/chconstructor	chconstructor_test.go
+internal/cigates/checkgo	auth_race_budget_test.go
 internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go
 internal/cigates/checkgo	discovery_tree_test.go
@@ -211,6 +224,7 @@ internal/cigates/docstools	dc_helpers_test.go
 internal/cigates/docstools	dc_links.go
 internal/cigates/docstools	dc_paths_test.go
 internal/cigates/docstools	dc_pub.go
+internal/cigates/docstools	dc_pub_exclude_test.go
 internal/cigates/docstools	dc_pub_helpers_test.go
 internal/cigates/docstools	dc_pub_py.go
 internal/cigates/docstools	dc_pub_test.go
@@ -236,6 +250,7 @@ internal/cigates/docstools	validate_inventory_review.go
 internal/cigates/docstools	validate_inventory_review_cases_test.go
 internal/cigates/docstools	validatedsite.go
 internal/cigates/emitscan	scan.go
+internal/cigates/exceptionledger	ledger.go
 internal/cigates/frozengoldens	exemption_test.go
 internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/frozengoldens	reads.go
@@ -269,6 +284,7 @@ internal/cigates/routing	planes_test.go
 internal/cigates/routing	tools_test.go
 internal/cigates/scripts	auth_corpus_queue_relevance_test.go
 internal/cigates/scripts	auth_queue_relevance_test.go
+internal/cigates/scripts	census_ops_script_test.go
 internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
 internal/cigates/scripts	e2e_fixture_lib_test.go
@@ -306,6 +322,7 @@ internal/cigates/workflows	auth_corpus_external_behaviour_test.go
 internal/cigates/workflows	auth_corpus_external_retry_test.go
 internal/cigates/workflows	auth_corpus_external_test.go
 internal/cigates/workflows	auth_corpus_queue_test.go
+internal/cigates/workflows	auth_proxy_local_login_compose_test.go
 internal/cigates/workflows	chart_started_filter_test.go
 internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go
@@ -325,6 +342,7 @@ internal/cigates/workflows	workflows_go_queue_cancel_children_test.go
 internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
+internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
 internal/deploymentcontract	manifest.go
 internal/egressguard	egressguard_test.go
@@ -428,6 +446,7 @@ internal/jobs/report	report_test.go
 internal/jobs/report	runtime_integration_test.go
 internal/jobs/workgraph/operationaledges	incidents_golden_integration_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go
+internal/llmorgsettings	keyreaders_census_test.go
 internal/llmorgsettings	relation_test.go
 internal/loadharness	pdp_profiles_test.go
 internal/loadharness	profiles_test.go
@@ -503,6 +522,8 @@ internal/queryapi/drilldown	golden_test.go
 internal/queryapi/explain	golden_test.go
 internal/queryapi/flame	golden_test.go
 internal/queryapi/graph	field_action_map_test.go
+internal/queryapi/graph	field_precheck_parity_test.go
+internal/queryapi/graph	root_class_census_test.go
 internal/queryapi/graph/model	sdl_nullability_gate_test.go
 internal/queryapi/heatmap	identity.go
 internal/queryapi/home	golden_test.go
@@ -514,6 +535,8 @@ internal/queryapi/investmentexplain	repofilter_golden_test.go
 internal/queryapi/opportunities	response_test.go
 internal/queryapi/people	golden_test.go
 internal/queryapi/people	identity.go
+internal/queryapi/pepgate	census_test.go
+internal/queryapi/pepgate	legacy_site_census_test.go
 internal/queryapi/principal	verifier.go
 internal/queryapi/quadrant	golden_test.go
 internal/queryapi/quadrant	identity.go
@@ -537,6 +560,7 @@ internal/queryapi/server	endpoint_profile_same_line_test.go
 internal/queryapi/server	explain_422_test.go
 internal/queryapi/server	graphql_edge_go_only_operations_test.go
 internal/queryapi/server	graphql_edge_venue_oracle_integration_test.go
+internal/queryapi/server	graphql_shadow_test.go
 internal/queryapi/server	home_coverage_oracle_capture_integration_test.go
 internal/queryapi/server	home_coverage_oracle_policy_guard_integration_test.go
 internal/queryapi/server	internal_auth_test.go
@@ -567,8 +591,10 @@ internal/queryapi/server	rate_coverage_documents_integration_test.go
 internal/queryapi/server	registered_document_field_gate_test.go
 internal/queryapi/server	registered_forecast_documents_test.go
 internal/queryapi/server	reports_write_proof_venue_oracle_integration_test.go
+internal/queryapi/server	rest_allowlist_census_test.go
 internal/queryapi/server	rest_error_response_test.go
 internal/queryapi/server	rest_routes_test.go
+internal/queryapi/server	rest_scope_census_test.go
 internal/queryapi/server	result_row_bound_census_test.go
 internal/queryapi/server	schema_gate_test.go
 internal/queryapi/server	unrestricted_read_options_test.go
@@ -585,7 +611,9 @@ internal/reconcilerservice	pool_composition_test.go
 internal/reconcilerservice	readiness_timeout_test.go
 internal/rivermigrate	deploy_wiring_test.go
 internal/scheduler/sync	venue_golden_address_test.go
+internal/shadowvenue	drive.go
 internal/storage/clickhouse/liverow	census_test.go
+internal/storage/postgres	api_authorization_platform_roles_test.go
 internal/storage/postgres	openers_test.go
 internal/storage/postgres	posture_cache_cadence_test.go
 internal/storage/postgres	posture_identity_sites_test.go

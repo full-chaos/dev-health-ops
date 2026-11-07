@@ -19,25 +19,13 @@ import (
 )
 
 const (
-	testOrg    = "6f1c2a52-6d0e-4a5e-9d57-3f4b8d1a7c11"
-	testKey    = "sk-live-VERY-SECRET-key-material"
-	testToken  = "svc_acr_valid-token-value-0123456789"
-	testCredID = "cred-1"
+	testOrg = "6f1c2a52-6d0e-4a5e-9d57-3f4b8d1a7c11"
+	testKey = "sk-live-VERY-SECRET-key-material"
+	// svcACRToken is a svc_acr_ service credential; the route refuses it.
+	svcACRToken = "svc_acr_valid-token-value-0123456789"
 )
 
-type fakeVerifier struct {
-	err      error
-	gotToken string
-	gotScope string
-}
-
-func (f *fakeVerifier) Verify(_ context.Context, token, scope string) (string, error) {
-	f.gotToken, f.gotScope = token, scope
-	if token != testToken && f.err == nil {
-		return "", ErrCredentialInvalid
-	}
-	return testCredID, f.err
-}
+var testToken = entToken
 
 type fakeSource struct {
 	cfg   llmorgsettings.OrgConfig
@@ -58,11 +46,11 @@ func configured() *fakeSource {
 	}}
 }
 
-func call(t *testing.T, v CredentialVerifier, s LLMConfigSource, logs io.Writer, org, auth string) (*http.Response, string) {
+func call(t *testing.T, s LLMConfigSource, logs io.Writer, org, auth string) (*http.Response, string) {
 	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mux := http.NewServeMux()
-	for _, route := range Routes(Deps{Logger: logger, LLMConfig: s, Credentials: v}) {
+	for _, route := range Routes(Deps{Logger: logger, LLMConfig: s, Workload: testWorkload}) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+org+"/llm-config", nil)
@@ -77,8 +65,8 @@ func call(t *testing.T, v CredentialVerifier, s LLMConfigSource, logs io.Writer,
 }
 
 func TestLLMConfigServesTheStoredConfigWithTheKey(t *testing.T) {
-	verifier, source := &fakeVerifier{}, configured()
-	response, body := call(t, verifier, source, io.Discard, testOrg, "Bearer "+testToken)
+	source := configured()
+	response, body := call(t, source, io.Discard, testOrg, "Bearer "+testToken)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d body=%s", response.StatusCode, body)
 	}
@@ -92,9 +80,6 @@ func TestLLMConfigServesTheStoredConfigWithTheKey(t *testing.T) {
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("body = %v, want %v", got, want)
-	}
-	if verifier.gotScope != LLMConfigScope || verifier.gotToken != testToken {
-		t.Fatalf("verifier got token=%q scope=%q", verifier.gotToken, verifier.gotScope)
 	}
 	if source.got != testOrg {
 		t.Fatalf("source asked for %q", source.got)
@@ -120,7 +105,7 @@ func TestLLMConfigServesThePromptCacheOptInOnlyWhenOptedIn(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			source := configured()
 			source.cfg.PromptCache = tc.optedIn
-			response, body := call(t, &fakeVerifier{}, source, io.Discard, testOrg, "Bearer "+testToken)
+			response, body := call(t, source, io.Discard, testOrg, "Bearer "+testToken)
 			if response.StatusCode != http.StatusOK {
 				t.Fatalf("status = %d body=%s", response.StatusCode, body)
 			}
@@ -141,29 +126,24 @@ func TestLLMConfigServesThePromptCacheOptInOnlyWhenOptedIn(t *testing.T) {
 
 func TestLLMConfigRefusals(t *testing.T) {
 	cases := []struct {
-		name     string
-		verifier CredentialVerifier
-		source   LLMConfigSource
-		org      string
-		auth     string
-		want     int
+		name   string
+		source LLMConfigSource
+		org    string
+		auth   string
+		want   int
 	}{
-		{"missing header", &fakeVerifier{}, configured(), testOrg, "", 401},
-		{"not a bearer header", &fakeVerifier{}, configured(), testOrg, "Basic abc", 401},
-		{"wrong token", &fakeVerifier{}, configured(), testOrg, "Bearer svc_acr_wrong", 401},
-		{"revoked or expired", &fakeVerifier{err: ErrCredentialInvalid}, configured(), testOrg, "Bearer " + testToken, 401},
-		{"wrong scope", &fakeVerifier{err: ErrCredentialScope}, configured(), testOrg, "Bearer " + testToken, 403},
-		{"credential lookup down", &fakeVerifier{err: errors.New("db down")}, configured(), testOrg, "Bearer " + testToken, 503},
-		{"malformed org", &fakeVerifier{}, configured(), "not-a-uuid", "Bearer " + testToken, 404},
-		{"no config or gate closed", &fakeVerifier{}, &fakeSource{}, testOrg, "Bearer " + testToken, 404},
-		{"store down", &fakeVerifier{}, &fakeSource{err: errors.New("db down")}, testOrg, "Bearer " + testToken, 503},
-		{"stored config unreadable", &fakeVerifier{}, &fakeSource{err: fmt.Errorf("%w: setting %q", llmorgsettings.ErrStoredSettingUnreadable, "api_key")}, testOrg, "Bearer " + testToken, 409},
-		{"no verifier wired", nil, configured(), testOrg, "Bearer " + testToken, 503},
-		{"no source wired", &fakeVerifier{}, nil, testOrg, "Bearer " + testToken, 503},
+		{"missing header", configured(), testOrg, "", 401},
+		{"not a bearer header", configured(), testOrg, "Basic abc", 401},
+		{"svc_acr_ credential", configured(), testOrg, "Bearer " + svcACRToken, 401},
+		{"malformed org", configured(), "not-a-uuid", "Bearer " + testToken, 404},
+		{"no config or gate closed", &fakeSource{}, testOrg, "Bearer " + testToken, 404},
+		{"store down", &fakeSource{err: errors.New("db down")}, testOrg, "Bearer " + testToken, 503},
+		{"stored config unreadable", &fakeSource{err: fmt.Errorf("%w: setting %q", llmorgsettings.ErrStoredSettingUnreadable, "api_key")}, testOrg, "Bearer " + testToken, 409},
+		{"no source wired", nil, testOrg, "Bearer " + testToken, 503},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			response, body := call(t, tc.verifier, tc.source, io.Discard, tc.org, tc.auth)
+			response, body := call(t, tc.source, io.Discard, tc.org, tc.auth)
 			if response.StatusCode != tc.want {
 				t.Fatalf("status = %d, want %d (body %s)", response.StatusCode, tc.want, body)
 			}
@@ -181,14 +161,13 @@ func TestLLMConfigNeverReachesAnyLog(t *testing.T) {
 	var logs bytes.Buffer
 	leaky := errors.New("dial postgres://user:" + testKey + "@db: refused")
 	for _, source := range []*fakeSource{configured(), {}, {err: leaky}} {
-		call(t, &fakeVerifier{}, source, &logs, testOrg, "Bearer "+testToken)
+		call(t, source, &logs, testOrg, "Bearer "+testToken)
 	}
-	call(t, &fakeVerifier{err: leaky}, configured(), &logs, testOrg, "Bearer "+testToken)
-	call(t, &fakeVerifier{}, configured(), &logs, testOrg, "Bearer svc_acr_wrong-token")
+	call(t, configured(), &logs, testOrg, "Bearer "+svcACRToken)
 	if logs.Len() == 0 {
 		t.Fatal("no log output captured: the test measured nothing")
 	}
-	for _, secret := range []string{testKey, testToken, "svc_acr_wrong-token"} {
+	for _, secret := range []string{testKey, testToken, svcACRToken} {
 		if strings.Contains(logs.String(), secret) {
 			t.Fatalf("log output carries a secret: %s", logs.String())
 		}
@@ -233,30 +212,27 @@ func TestLLMConfigCountsEachOutcome(t *testing.T) {
 	bearer := "Bearer " + testToken
 	unreadable := fmt.Errorf("%w: setting %q", llmorgsettings.ErrStoredSettingUnreadable, "api_key")
 	cases := []struct {
-		name     string
-		outcome  string
-		verifier CredentialVerifier
-		source   LLMConfigSource
-		org      string
-		auth     string
+		name    string
+		outcome string
+		source  LLMConfigSource
+		org     string
+		auth    string
 	}{
-		{"served", "served", &fakeVerifier{}, configured(), testOrg, bearer},
-		{"unauthorized_missing", "unauthorized_missing", &fakeVerifier{}, configured(), testOrg, ""},
-		{"unauthorized_invalid", "unauthorized_invalid", &fakeVerifier{err: ErrCredentialInvalid}, configured(), testOrg, bearer},
-		{"forbidden", "forbidden", &fakeVerifier{err: ErrCredentialScope}, configured(), testOrg, bearer},
-		{"credential_unavailable", "credential_unavailable", &fakeVerifier{err: errors.New("db down")}, configured(), testOrg, bearer},
-		{"bad_org", "bad_org", &fakeVerifier{}, configured(), "not-a-uuid", bearer},
-		{"unreadable", "unreadable", &fakeVerifier{}, &fakeSource{err: unreadable}, testOrg, bearer},
-		{"store_unavailable", "store_unavailable", &fakeVerifier{}, &fakeSource{err: errors.New("db down")}, testOrg, bearer},
-		{"not_found", "not_found", &fakeVerifier{}, &fakeSource{}, testOrg, bearer},
-		{"byo_base_url_carries_key", "byo_base_url_carries_key", &fakeVerifier{}, sourceWithBaseURL("https://p.example.invalid/" + testKey), testOrg, bearer},
-		{"unconfigured", "unconfigured", nil, configured(), testOrg, bearer},
+		{"served", "served", configured(), testOrg, bearer},
+		{"unauthorized_missing", "unauthorized_missing", configured(), testOrg, ""},
+		{"unauthorized_invalid", "unauthorized_invalid", configured(), testOrg, "Bearer " + svcACRToken},
+		{"bad_org", "bad_org", configured(), "not-a-uuid", bearer},
+		{"unreadable", "unreadable", &fakeSource{err: unreadable}, testOrg, bearer},
+		{"store_unavailable", "store_unavailable", &fakeSource{err: errors.New("db down")}, testOrg, bearer},
+		{"not_found", "not_found", &fakeSource{}, testOrg, bearer},
+		{"byo_base_url_carries_key", "byo_base_url_carries_key", sourceWithBaseURL("https://p.example.invalid/" + testKey), testOrg, bearer},
+		{"unconfigured", "unconfigured", nil, testOrg, bearer},
 	}
 	acrMetricReader()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			before := outcomes(t)
-			call(t, tc.verifier, tc.source, io.Discard, tc.org, tc.auth)
+			call(t, tc.source, io.Discard, tc.org, tc.auth)
 			after := outcomes(t)
 			for label, count := range after {
 				want := int64(0)
@@ -280,7 +256,7 @@ func TestWorkerCategorizeRouteIsGone(t *testing.T) {
 	mux := http.NewServeMux()
 	for _, route := range Routes(Deps{
 		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		LLMConfig: configured(), Credentials: &fakeVerifier{},
+		LLMConfig: configured(), Workload: testWorkload,
 	}) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
@@ -297,11 +273,11 @@ func TestWorkerCategorizeRouteIsGone(t *testing.T) {
 // route; a bad org id's 404 does not.
 func TestNoConfigNotFoundIsMarked(t *testing.T) {
 	source := &fakeSource{found: false}
-	response, _ := call(t, &fakeVerifier{}, source, io.Discard, testOrg, "Bearer "+testToken)
+	response, _ := call(t, source, io.Discard, testOrg, "Bearer "+testToken)
 	if response.StatusCode != http.StatusNotFound || response.Header.Get(NoConfigHeader) != NoConfigValue {
 		t.Fatalf("no config: status %d header %q", response.StatusCode, response.Header.Get(NoConfigHeader))
 	}
-	response, _ = call(t, &fakeVerifier{}, source, io.Discard, "not-a-uuid", "Bearer "+testToken)
+	response, _ = call(t, source, io.Discard, "not-a-uuid", "Bearer "+testToken)
 	if response.StatusCode != http.StatusNotFound || response.Header.Get(NoConfigHeader) != "" {
 		t.Fatalf("bad org: status %d header %q", response.StatusCode, response.Header.Get(NoConfigHeader))
 	}
@@ -319,7 +295,7 @@ func TestLLMConfigNamesTheClosedGateInTheLog(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
-			response, body := call(t, &fakeVerifier{}, tc.source, &logs, testOrg, "Bearer "+testToken)
+			response, body := call(t, tc.source, &logs, testOrg, "Bearer "+testToken)
 			if response.StatusCode != 404 || response.Header.Get(NoConfigHeader) != NoConfigValue {
 				t.Fatalf("status %d marker %q, want the marked 404", response.StatusCode, response.Header.Get(NoConfigHeader))
 			}

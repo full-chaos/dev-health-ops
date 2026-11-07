@@ -214,13 +214,20 @@ func (h handlers) resolveProviderIdentity(ctx context.Context, authProvider stri
 }
 
 // resolveSSOIdentity selects an OAuth account by its (auth_provider,
-// auth_provider_id) key. OAuth providers are the public identity providers
-// (github, gitlab, google): their subject is global per type, so the key carries no
-// SSO provider. Without a key hit, an existing account with the same email is a
+// auth_provider_id) key within the instance the provider row names. OAuth providers are the public identity
+// providers (github, gitlab, google): their subject is global per type, so the key carries no SSO provider, except a
+// self-hosted GitLab instance, whose numeric ids are its own: issuer is then the instance host of the provider
+// config (identity.OAuthIssuer) and only an account bound to a GitLab row of that instance matches; a key at a
+// social issuer never matches such an account. Without a key hit, an existing account with the same email is a
 // conflict; it is never adopted or rewritten.
-func (h handlers) resolveSSOIdentity(ctx context.Context, authProvider, externalID, email string) (uuid.UUID, bool, error) {
-	return h.resolveIdentityKey(ctx, `SELECT id FROM users WHERE auth_provider = $1::text AND auth_provider_id = $2::text LIMIT 2`,
-		[]any{authProvider, externalID}, email)
+func (h handlers) resolveSSOIdentity(ctx context.Context, authProvider, externalID, issuer, email string) (uuid.UUID, bool, error) {
+	scope, needsIssuer := identity.OAuthAccountScopeSQL("u", issuer, "$3")
+	args := []any{authProvider, externalID}
+	if needsIssuer {
+		args = append(args, issuer)
+	}
+	return h.resolveIdentityKey(ctx, `SELECT u.id FROM users u WHERE u.auth_provider = $1::text AND u.auth_provider_id = $2::text AND `+scope+` LIMIT 2`,
+		args, email)
 }
 
 func (h handlers) resolveIdentityKey(ctx context.Context, keyQuery string, keyArgs []any, email string) (uuid.UUID, bool, error) {
@@ -268,8 +275,7 @@ func invalidProviderIDDetail() *pyjson.Object {
 
 func identityConflictDetail() *pyjson.Object {
 	detail := pyjson.NewObject()
-	detail.Set("message", "This account is bound to another sign-in identity")
-	detail.Set("reason", "identity_conflict")
+	detail.Set("message", "This sign-in could not be completed. Contact your administrator if this continues.")
 	return detail
 }
 

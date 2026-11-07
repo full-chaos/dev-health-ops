@@ -150,7 +150,7 @@ func TestRiverWorkerProcessExitsImmediatelyOnGenuineStartError(t *testing.T) {
 // forever -- and must log how many attempts it took.
 func TestRiverWorkerProcessExitsAfterBudgetExhaustedOnPersistentStartTimeout(t *testing.T) {
 	t.Parallel()
-	const budget = 20 * time.Millisecond
+	const budget = 5 * time.Second
 
 	process := newTestRiverWorkerProcess(t)
 	var logs bytes.Buffer
@@ -169,8 +169,8 @@ func TestRiverWorkerProcessExitsAfterBudgetExhaustedOnPersistentStartTimeout(t *
 	if err := process.Start(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Start() error = %v, want context.DeadlineExceeded once the budget is spent", err)
 	}
-	// The first backoff (2 s) is clamped to the remaining budget, so the fake
-	// clock lands exactly on the budget after one wait: two attempts, always.
+	// Waits are 2 s, then the 3 s that remain: the fake clock lands exactly on
+	// the budget after the second wait, and no attempt starts there: two attempts.
 	finalAttempts := attempts.Load()
 	if finalAttempts != 2 {
 		t.Fatalf("startClient ran %d times, want exactly 2 (one retry, then the budget is spent)", finalAttempts)

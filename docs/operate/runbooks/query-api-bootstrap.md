@@ -13,7 +13,7 @@ Query-api provides the schema digest, the MCP class decision table, and the proo
 
 ## Prerequisites
 
-- **Prod k3s cluster running** (CHAOS-5590).
+- **Prod k3s cluster running**.
 - **Go API binary and class decisions** — the `dho` operator binary (`goapi routing` and `goapi prove`/`goapi rest-prove`) available.
 - **Image registry credentials** — `ghcr-pull` Secret with `write:packages` scope.
 - **PostgreSQL query role** — `devhealth` user via pgbouncer-transaction (not direct `:5432` in this design, though current prod still uses direct due to chart limitations — see section **"Registry DSN"** below).
@@ -102,7 +102,7 @@ Digest pairing is verified automatically when a class root is enabled (end of st
 Manifest applies with:
 - Image: `ghcr.io/full-chaos/dev-health-go-dho:<sha-COMMIT>@sha256:<manifest-list-sha>`, with `args: [query-api]`
 - `imagePullSecrets: ghcr-pull`
-- Environment from `dev-health-query-api-envelope` Secret by `secretKeyRef` (never flags/argv — Trap #121, R167).
+- Environment from `dev-health-query-api-envelope` Secret by `secretKeyRef` (never flags/argv).
 - Registry PostgreSQL DSN: **currently direct `:5432` form** (see section below).
 - `GO_API_QUERY_API_URL`: the Service DNS name (e.g., `http://dev-health-query-api:8000`).
 
@@ -117,17 +117,17 @@ kubectl patch deployment dev-health-ops -p '{"spec":{"template":{"spec":{"contai
 ]}}]}}'
 ```
 
-Or use `--patch-file` to avoid credential exposure (Trap #121).
+Or use `--patch-file` to avoid credential exposure.
 
 ## Step 6: MCP class decisions (document operations need no routing rows)
 
-**A catalog operation needs no routing row, and no routing row can hold it dark.** query-api's `/query` and `/graphql` serve every registered operation and read no routing row to decide (CHAOS-8702). The table that held them, `go_api_routing_state`, is dropped by migration 0147 (CHAOS-8706), so there is nothing to seed and nothing to hold an operation dark: a fresh stack serves the whole catalog, and this step is not part of a first start. To hold a catalog operation dark, change the code and deploy.
+**A catalog operation needs no routing row, and no routing row can hold it dark.** query-api's `/query` and `/graphql` serve every registered operation and read no routing row to decide. The table that held them, `go_api_routing_state`, is dropped by migration 0147, so there is nothing to seed and nothing to hold an operation dark: a fresh stack serves the whole catalog, and this step is not part of a first start. To hold a catalog operation dark, change the code and deploy.
 
-**MCP class roots are decided by one row per root, in `go_api_class_decision` (CHAOS-8735), not by a routing row.** The row is keyed by the operation alone (`mcp:<root>`), so a schema change moves nothing: the class switch, `status`, `enable`, `disable` and `seed` all read and write that one row, and no step has to carry it to a new schema digest. `enable` is the operator's recorded decision: the per-root class receipt and the `repoint` verb are retired (D6024), and MCP/GraphQL parity is held by the CI step `TestMCPClassParityVenueOracle` (CHAOS-9802). Migration 0146 creates the table and copies into it, for each class root, exactly the `go_api_routing_state` row the running (old) query-api serves: the row at that build's schema digest under the class document digest. A root with no row at that digest gets no decision and stays dark, as the old build answers; a newer row at another digest is never copied. The upgrade reads the old build's digest from `DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`: read `schema_digest` from the running query-api's `GET /registry` before the upgrade starts and set it on the migrate step. When class rows exist and the value is unset, malformed (`sha256:` and 64 lowercase hex) or holds no class row, the migration fails and changes nothing. A database with no class rows needs no value. Migration 0147 (CHAOS-8706) then drops `go_api_routing_state`, so a rollback to an image older than 0146 is no longer possible once 0147 has run (a downgrade of 0147 recreates the table empty).
+**MCP class roots are decided by one row per root, in `go_api_class_decision`, not by a routing row.** The row is keyed by the operation alone (`mcp:<root>`), so a schema change moves nothing: the class switch, `status`, `enable`, `disable` and `seed` all read and write that one row, and no step has to carry it to a new schema digest. `enable` is the operator's recorded decision: the per-root class receipt and the `repoint` verb are retired , and MCP/GraphQL parity is held by the CI step `TestMCPClassParityVenueOracle`. Migration 0146 creates the table and copies into it, for each class root, exactly the `go_api_routing_state` row the running (old) query-api serves: the row at that build's schema digest under the class document digest. A root with no row at that digest gets no decision and stays dark, as the old build answers; a newer row at another digest is never copied. The upgrade reads the old build's digest from `DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`: read `schema_digest` from the running query-api's `GET /registry` before the upgrade starts and set it on the migrate step. When class rows exist and the value is unset, malformed (`sha256:` and 64 lowercase hex) or holds no class row, the migration fails and changes nothing. A database with no class rows needs no value. Migration 0147 then drops `go_api_routing_state`, so a rollback to an image older than 0146 is no longer possible once 0147 has run (a downgrade of 0147 recreates the table empty).
 
 **Roll sheet: make no routing writes during the roll.** Do not run `enable`, `disable` or `seed` between the migration and the new query-api serving: an old tools image writes the old table.
 
-`seed`, `enable` and `disable` take the roots by name (`-operations mcp:<root>`, or `all-mcp`): `seed` writes a shadow decision, `enable` a canary decision, `disable` any other mode. They refuse a catalog operation (CHAOS-8705): it has no routing state to write. Nothing is typed but the root names; the schema digest and the build come from the running query-api's `/registry` and `/buildinfo`. Run from the tools image of the same cut, with the Postgres DSN and the envelope key in the environment (never argv):
+`seed`, `enable` and `disable` take the roots by name (`-operations mcp:<root>`, or `all-mcp`): `seed` writes a shadow decision, `enable` a canary decision, `disable` any other mode. They refuse a catalog operation: it has no routing state to write. Nothing is typed but the root names; the schema digest and the build come from the running query-api's `/registry` and `/buildinfo`. Run from the tools image of the same cut, with the Postgres DSN and the envelope key in the environment (never argv):
 
 ```bash
 dho goapi routing seed -operations mcp:hotspots \
@@ -163,7 +163,7 @@ set `users.is_active = false` to revoke it everywhere.
 
 > **Not runnable now:** the two proofs below, `dho goapi prove -edge-url` and `dho goapi rest-prove -python-api-url`, compare against a Python api, and the Python api was removed. There is no Python edge to point them at, so these steps cannot run. The tools are unchanged.
 
-Real proof run after the metrics drain completes (Trap #174 repair landed). Tools image carries the `dho` operator binary (spec S1, CHAOS-6280) built from the same `dev-health-api` digest.
+Real proof run after the metrics drain completes. Tools image carries the `dho` operator binary built from the same `dev-health-api` digest.
 
 ```bash
 # From tools Pod. GO_API_ENVELOPE_PRIVATE_KEY reaches this Pod's own
@@ -199,11 +199,11 @@ dho goapi rest-prove \
   -artifact-dir=/tmp/proof/artifacts -report=/tmp/proof/rest-report.json
 ```
 
-`dho goapi rest-prove`'s `-candidate-bearer-exec`/`-baseline-bearer-exec` still name an ALLOWLISTED HELPER NAME (`mint-envelope`, `mint-edge-token`), never a path -- since spec S1 (CHAOS-6280) these mint the credential IN PROCESS, calling `internal/mintcli`'s own packages directly rather than exec'ing a subprocess, so no secret ever crosses a process boundary at all.
+`dho goapi rest-prove`'s `-candidate-bearer-exec`/`-baseline-bearer-exec` still name an ALLOWLISTED HELPER NAME (`mint-envelope`, `mint-edge-token`), never a path -- these mint the credential IN PROCESS, calling `internal/mintcli`'s own packages directly rather than exec'ing a subprocess, so no secret ever crosses a process boundary at all.
 
 **Prover build.** `dho goapi prove` and `dho goapi rest-prove` carry every declaration, shape and corpus entry they apply compiled in, so both print `prover_build=<own commit> ... candidate_build=<commit /buildinfo names> prover_build_skew=<bool>` first and refuse to measure when the two commits differ or the prover carries no commit. A released image is built with `-buildvcs=false` and takes its commit from `-ldflags`, so it reports `prover_build_modified=false`; the modified arm names a locally built, VCS-stamped prover, and the commit comparison is what guards a released one. Run the tools image tagged with the candidate's own commit (`sha-<first 7>`). `-allow-prover-build-skew` measures anyway; the report then records `prover_build_skew_allowed: true` beside both commits.
 
-Proof runs against the 12 canary operations (shadow set is empty by design, not deferred). Compare baseline and candidate legs; `-proof-url` left empty (Trap #163: `/query/proof` cannot mount on prod). Result: `{12 total, 11 match, 1 mismatch}` or better.
+Proof runs against the 12 canary operations (shadow set is empty by design, not deferred). Compare baseline and candidate legs; `-proof-url` left empty (`/query/proof` cannot mount on prod). Result: `{12 total, 11 match, 1 mismatch}` or better.
 
 **Retirement note.** `dho goapi prove` no longer accepts a hand-minted static
 edge bearer; the edge credential is always minted in process now (above).
@@ -260,7 +260,7 @@ GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
   -operations mcp:<root1>,mcp:<root2> \
   -mode canary \
   -recorded-by <operator> \
-  -review-evidence "First-time enable on prod k3s, JOB 7 step 6"
+  -review-evidence "First-time enable on prod k3s"
 ```
 
 Add `-dry-run` first to see what would be written.
@@ -271,9 +271,9 @@ Only if investment explanation text is needed:
 
 1. Set `GO_API_INVESTMENT_EXPLAIN_ENABLED=true`.
 2. **Simultaneously** set `SETTINGS_ENCRYPTION_KEY` and `SETTINGS_ENCRYPTION_SALT` on the query-api Deployment (both from the same Secret, by secretKeyRef, same change).
-3. Roll query-api alone and verify both keys are in place (byte-length check, Trap #168).
+3. Roll query-api alone and verify both keys are in place (byte-length check).
 4. Run a real proof on `investmentFull` and `investmentBreakdown` operations.
-5. Chris refreshes the Investment page to verify explanation text.
+5. Refresh the Investment page to verify explanation text.
 
 Without both keys in the same change, encrypted org settings silently fall back to the platform provider (not an error, a fallback).
 
@@ -307,24 +307,22 @@ Either way, Kubernetes resolves `env`/`extraEnv` ahead of `envFrom`: an
 
 Query-api connects directly to `:5432` (`POSTGRES_URI=postgres://devhealth:…@prod:5432/…`). This works but ties the pool to the main Postgres host.
 
-**Design of record** (per CHAOS-3087): use `devhealth` role through pgbouncer-transaction. The chart reserves one role+passwordKey per pooler, and pgbouncer generates a single-line `userlist.txt` with `auth_type=scram-sha-256` requiring plaintext password for onward auth.
+**Design of record:** use `devhealth` role through pgbouncer-transaction. The chart reserves one role+passwordKey per pooler, and pgbouncer generates a single-line `userlist.txt` with `auth_type=scram-sha-256` requiring plaintext password for onward auth.
 
-### Future (CHAOS-5604)
+### Future
 
-Userlist exposure and pooler convergence move to CHAOS-5604 scope. For now, direct `:5432` form is the working prod shape.
+Userlist exposure and pooler convergence are future work. For now, direct `:5432` form is the working prod shape.
 
 **Never** use a GRANT or bypass the pooler on an explicit routing change — consult the architecture record.
 
 ## Known limitations
 
-- **`/query/proof` cannot mount on prod** (Trap #163). `GO_API_PROOF_ROUTE_ENABLED` gates on a non-production `DEV_HEALTH_ENV`; prod never sets it. Real proof runs use `-proof-url=""` (empty).
-- **Tools Pod image** (`dev-health-go-api-tools`) lacks the `go-worker` image's sync-dispatch contracts. Use only the tools image, not go-worker, for one-off `go-api-prove` and corrective `go-api-routing` runs. Its baked-in `mint-envelope` helper mints the envelope locally and needs `GO_API_ENVELOPE_PRIVATE_KEY` mounted into the Pod's environment via `secretKeyRef` (same Secret/key the api Deployment reads) — see [Tools pod (operator image)](../../contribute/architecture/go-api-wave-0-proof-infrastructure.md#tools-pod-operator-image) for the `kubectl run` form and what is (and is not) on the image. Its `mint-edge-token` helper mints the edge access token the same way and needs `JWT_SECRET_KEY` (from the `dev-health-hs256` Secret, not `dev-health-ops`) and `POSTGRES_URI` by `secretKeyRef`, plus a `viewer` membership in the org for the proof service principal (the row itself comes from alembic `0133`; the membership SQL is under Step 7).
-- **Shadow set never lands on prod**. The 3 operations that `disable -mode python` skipped are disabled by design (CHAOS-5606 note: enabling would surface unproven operations to traffic before baseline is established).
+- **`/query/proof` cannot mount on prod**. `GO_API_PROOF_ROUTE_ENABLED` gates on a non-production `DEV_HEALTH_ENV`; prod never sets it. Real proof runs use `-proof-url=""` (empty).
+- **Tools Pod image** (`dev-health-go-api-tools`) lacks the `go-worker` image's sync-dispatch contracts. Use only the tools image, not go-worker, for one-off `go-api-prove` and corrective `go-api-routing` runs. Its baked-in `mint-envelope` helper mints the envelope locally and needs `GO_API_ENVELOPE_PRIVATE_KEY` mounted into the Pod's environment via `secretKeyRef` (same Secret/key the api Deployment reads) — see [Go API tools image](go-api-tools-image.md) for the `kubectl run` form and what is (and is not) on the image. Its `mint-edge-token` helper mints the edge access token the same way and needs `JWT_SECRET_KEY` (from the `dev-health-hs256` Secret, not `dev-health-ops`) and `POSTGRES_URI` by `secretKeyRef`, plus a `viewer` membership in the org for the proof service principal (the row itself comes from alembic `0133`; the membership SQL is under Step 7).
+- **Shadow set never lands on prod**. The 3 operations that `disable -mode python` skipped are disabled by design (enabling would surface unproven operations to traffic before baseline is established).
 
 ## See also
 
-- [Operator commands § Workerctl on Kubernetes](operator-commands.md#workerctl-on-kubernetes-trap-169-amended) — running corrective verbs from a one-off Pod.
-- [Go API Wave 0 § Tools pod (operator image)](../../contribute/architecture/go-api-wave-0-proof-infrastructure.md#tools-pod-operator-image) — what the tools image carries and the `kubectl run` form for it.
+- [Operator commands § Workerctl on Kubernetes](operator-commands.md#dho-workers-on-kubernetes-the-one-off-operator-pod) — running corrective verbs from a one-off Pod.
+- [Go API tools image](go-api-tools-image.md) — what the tools image carries and the `kubectl run` form for it.
 - [Prod k3s operate](prod-k3s-deploy-and-operate.md) — restore procedures, secrets, rollouts.
-- CHAOS-5606 — Query-api bootstrap epic (JOB 7).
-- CHAOS-5604 — Chart and pooler convergence (pooler exposures, CPU limits, future DSN form).

@@ -63,11 +63,11 @@ func internalServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []
 		}
 	}
 	options := apiServerOptions(cfg, logger, served)
-	var noProxy clientaddr.Trust
+	noProxy := clientaddr.Policy{Mode: clientaddr.ModeCIDR}
 	options.Address = cfg.InternalAddress
 	options.Name = internalHTTPName
 	options.Listener = "internal"
-	options.Middleware = []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(noProxy)}
+	options.Middleware = []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.PolicyMiddleware(noProxy)}
 	options.AccessAttrs = accessLogIDs(noProxy)
 	return options
 }

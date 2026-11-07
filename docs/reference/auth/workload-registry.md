@@ -25,14 +25,18 @@ The table below is written by hand. A docs test compares it with the JSON, row b
 
 ## Workloads
 
-| Workload | Audiences | Allowed actions |
-| --- | --- | --- |
-| `api` | `auth-service` | none |
-| `auth-service` | none | none |
-| `acr-api` | `auth-service`, `dev-health-api` | none |
-| `web` | `auth-service` | none |
-| `query-api` | none | none |
+| Workload | Owner | Audiences | Allowed actions |
+| --- | --- | --- | --- |
+| `api` | `platform-operations` | `auth-service` | none |
+| `auth-service` | `platform-operations` | none | none |
+| `acr-api` | `platform-operations` | `auth-service`, `dev-health-api` | none |
+| `web` | `platform-operations` | `auth-service` | none |
+| `query-api` | `platform-operations` | `auth-service` | none |
 
+- The owner is the team that runs the workload and its runbooks. It is a field of the registry contract: `workload-registry.json`
+  holds it, the registry loader that `auth-migrate workloads seed` reads through refuses a row that lacks it or names it with a bad shape,
+  and a docs test compares this column with the JSON. The database does not store it, so `seed` does not write it and no audit event carries it.
+  The component that runs each row is in the [workload audit](workload-audit.md).
 - A row with no audience is a registry identity only. The exchange never resolves it: it refuses a request for any audience, and the log line
   and the counter carry the reason `no_audience`.
 - No row has an allowed action today. A token for such a row carries no action.
@@ -62,7 +66,7 @@ every service.
   ([Credential classes](credential-classes.md)). It names one workload principal and one audience.
 - A row can narrow what a token carries. It never widens it: the exchange issues an audience in the row and at most the actions in the row.
 - A binding ties a row to a cluster identity (Kubernetes) or to a bootstrap file (Compose). The row alone proves nothing.
-- A workload is auth-native data (D6651). It is neither a user nor an organization member, and it has no public record.
+- A workload is auth-native data. It is neither a user nor an organization member, and it has no public record.
 - A workload token does not replace database roles, TLS or network policy.
 
 ## Seed the registry
@@ -106,5 +110,7 @@ auth-migrate workloads bind -workload NAME -environment ENV -trust-domain DOMAIN
   troubleshooting table by reason.
 - [Workload bootstrap credential runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md):
   the Compose subject.
+- [Web assertion key rotation runbook](../../operate/runbooks/auth-workload-assertion-key-rotation.md):
+  the `web` signing key, with `workload-assertion-key-set` and `workload-assertion-key-list`.
 - [Auth service configuration](configuration.md#workload-token-exchange): the `AUTH_WORKLOAD_EXCHANGE*` settings.
 - [Credential classes](credential-classes.md): the `workload_token` and `workload_bootstrap_credential` classes.

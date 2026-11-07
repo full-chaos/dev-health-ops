@@ -52,7 +52,7 @@ func newSwitchOrgLive(t *testing.T, ctx context.Context, owned bool, wrap func(S
 		AppendAudit: func(context.Context, audit.AuditEvent) error { return nil },
 		Limits:      mustLimits(t, httpapi.NewMemoryCounters(nil)),
 		SwitchOrg:   &SwitchOrgConfig{Sessions: p.store, Reads: reads},
-	}, switchRows("ops_access_token_hs256"))
+	}, switchRows("user_access_token"))
 	if err != nil {
 		t.Fatal(err)
 	}

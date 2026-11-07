@@ -32,7 +32,7 @@ func TestPackageDoesNotImportAuthorization(t *testing.T) {
 
 func TestAuthorizationDoesNotImportPackage(t *testing.T) {
 	if _, err := os.Stat(filepath.Join("..", "authorization")); err != nil {
-		t.Skip("internal/auth/authorization is not on this base yet")
+		t.Fatalf("internal/auth/authorization is gone (%v): the import guard would check nothing; point it at the package's new path", err)
 	}
 	for _, dep := range deps(t, authorizationPkg) {
 		if dep == entitlementPkg {

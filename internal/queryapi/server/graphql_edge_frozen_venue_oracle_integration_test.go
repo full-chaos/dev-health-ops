@@ -74,7 +74,7 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 	schemaDigest := digest.Schema(schemav1.SDL)
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: root, JWTKey: edgeOracleJWTKey,
+		Golden: golden, Root: root, JWTKey: edgeOracleJWTKey, LegacyHS256Tokens: true,
 		Seed: edgeSeed(users, docs, schemaDigest),
 	})
 	operatingReviewFixtureHasNoRows(t, ctx, venue.AdminClickHouseURI(t, venue.GoClickHouseDB))
@@ -124,7 +124,8 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 		return timePattern.ReplaceAllString(uuidPattern.ReplaceAllString(body, "<uuid>"), "<time>")
 	})
 
-	// Postgres unreachable on both planes: the caller cannot be read, and both answer the unhandled 500.
+	// Postgres unreachable on both planes: the caller cannot be read. Python answers the unhandled 500; query-api
+	// answers the guard's 503 (declared, D6666).
 	deadSettings := map[string]string{}
 	for key, value := range settings {
 		deadSettings[key] = value
@@ -140,9 +141,12 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = deadPublic.Shutdown(context.Background()) })
-	deadRequests := []venueoracle.Request{edgePost("Postgres unreachable", member, queryBody, nil)}
-	deadPython := golden.Python(t, venue, deadRequests)
-	t.Log("\n" + venueoracle.Diff(t, "http://"+deadPublic.Address(), deadRequests, deadPython, venueoracle.DiffOptions{Golden: golden}))
+	deadCases := []edgeCase{{request: edgePost("Postgres unreachable", member, queryBody, nil),
+		declared: "caller store unavailable: Python answers the unhandled 500; query-api answers the guard's 503 (D6666)",
+		pyWant:   edgeAnswer{status: 500, body: `"Internal Server Error"`},
+		goWant:   edgeAnswer{status: 503, body: `"Database temporarily unavailable"`}}}
+	deadPython := golden.Python(t, venue, edgeRequests(deadCases))
+	edgeCompare(t, "http://"+deadPublic.Address(), deadCases, deadPython, nil, golden)
 
 	leaveRoot() // the golden's file path is relative to the package directory
 	golden.Finish(t)

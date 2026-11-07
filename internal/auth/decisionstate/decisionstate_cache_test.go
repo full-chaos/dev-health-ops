@@ -16,22 +16,21 @@ import (
 // The aggregate ids are the writers' wire ids: provisioning.WireID(type, uuid.String()) (identity/store.go principalEvent
 // and userEvent, org/org.go, membership/membership.go eventFor, grantend/grantend.go EventFor).
 func TestTheDependenciesAreTheWritersWireIDs(t *testing.T) {
-	principal, org, mbr, g1, g2 := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	principal, org, g1, g2 := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	got := principalDependencies(principal)
 	want := []decisioncache.Dependency{{AggregateType: "principal", AggregateID: "prn_" + principal.String()},
 		{AggregateType: "user", AggregateID: "prn_" + principal.String()}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("principal dependencies %+v, want %+v", got, want)
 	}
-	got = organizationDependencies(org, &mbr, []uuid.UUID{g1, g2})
+	got = organizationDependencies(org, []uuid.UUID{g1, g2})
 	want = []decisioncache.Dependency{{AggregateType: "organization", AggregateID: "org_" + org.String()},
-		{AggregateType: "membership", AggregateID: "mbr_" + mbr.String()},
 		{AggregateType: "resource_grant", AggregateID: "grt_" + g1.String()}, {AggregateType: "resource_grant", AggregateID: "grt_" + g2.String()}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("organization dependencies %+v, want %+v", got, want)
 	}
-	if got := organizationDependencies(org, nil, nil); len(got) != 1 {
-		t.Fatalf("no membership row and no grant: %+v, want the organization only", got)
+	if got := organizationDependencies(org, nil); len(got) != 1 {
+		t.Fatalf("no grant: %+v, want the organization only", got)
 	}
 }
 
@@ -80,20 +79,21 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 		"table:sessions":                  "gate: Session, every call before the cache",
 		"table:credential_registry":       "gate: ServiceAccountKey, every call before the cache",
 		"table:service_accounts":          "bypass: read for a service-account principal only, whose decisions never use the cache",
-		"table:principals":                "dep principal (prn_)",
-		"table:organizations":             "dep organization (org_)",
-		"table:memberships":               "dep membership (mbr_) + tag membership",
+		"table:principals":                "bypass: kind and disabled_at of a principal with no public.users row (service account, auth-native, no public twin)",
 		"table:resource_grants":           "dep resource_grant (grt_) + tag resource_grant",
+		"table:repository_identities":     "read only for a pair that holds an id-bearing grant; its rows are in the StateVersion digest, so a change misses the cache",
 		"table:aggregate_revisions":       "the dependency revisions, same transaction",
-		"state:principals":                "StateVersion: the principal row's version",
-		"state:organizations":             "StateVersion: the organization row's version",
-		"state:memberships":               "StateVersion: the pair's membership row version",
+		"state:public.users":              "StateVersion: the principal's public.users row version",
+		"state:public.organizations":      "StateVersion: the organization's public.organizations row version",
+		"state:public.memberships":        "StateVersion: the pair's public.memberships row version",
 		"state:resource_grants":           "StateVersion: every grant row of the pair",
+		"state:repository_identities":     "StateVersion: the organization's identity rows while the pair holds an id-bearing grant",
 		"state:platform_role_assignments": "StateVersion: the principal's assignments while auth owns the platform roles",
-		"public:users":                    "Unfed: is_active, is_superuser when the platform roles are not owned",
-		"public:memberships":              "Unfed: the public role",
+		"public:users":                    "Unfed: is_active, is_superuser when the platform roles are not owned; StateVersion",
+		"public:organizations":            "organization status; StateVersion",
+		"public:memberships":              "Unfed: the public role; StateVersion",
 		"call:StateOn":                    "public.users (is_active, superuser or the owned rule): dep user, Unfed, tag platform_role_assignment",
-		"call:EffectiveOn":                "public.memberships (Unfed) and auth.memberships (dep + tag)",
+		"call:EffectiveOn":                "public.memberships (the effective membership of the pair)",
 	}
 	raw, err := os.ReadFile("decisionstate.go")
 	if err != nil {
@@ -107,7 +107,7 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 		{"table:", regexp.MustCompile(`table\("([a-z_]+)"\)`)},
 		{"public:", regexp.MustCompile(`public\.([a-z_]+)`)},
 		{"call:", regexp.MustCompile(`\.(StateOn|EffectiveOn)\(`)},
-		{"state:", regexp.MustCompile(`SELECT '([a-z_]+)', id::text, xmin::text`)},
+		{"state:", regexp.MustCompile(`SELECT '([a-z_.]+)', `)},
 	} {
 		for _, m := range re.re.FindAllStringSubmatch(string(raw), -1) {
 			key := re.prefix + m[1]
@@ -132,10 +132,11 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 func TestTheStateQueryReadsEveryRowOfThePair(t *testing.T) {
 	const schema = `"auth"`
 	parts := map[string]string{
-		"principal":   `SELECT 'principals', id::text, xmin::text FROM "auth".principals WHERE id = $1`,
-		"org":         `SELECT 'organizations', id::text, xmin::text FROM "auth".organizations WHERE id = $2`,
-		"membership":  `SELECT 'memberships', id::text, xmin::text FROM "auth".memberships WHERE organization_id = $2 AND principal_id = $1`,
+		"principal":   `SELECT 'public.users', id::text, COALESCE(is_active, false)::text || '/' || COALESCE(is_superuser, false)::text FROM public.users WHERE id = $1`,
+		"org":         `SELECT 'public.organizations', id::text, COALESCE(is_active, false)::text FROM public.organizations WHERE id = $2`,
+		"membership":  `SELECT 'public.memberships', user_id::text || '/' || org_id::text, COALESCE('r:' || role, 'null') FROM public.memberships WHERE org_id = $2 AND user_id = $1`,
 		"grants":      `SELECT 'resource_grants', id::text, xmin::text FROM "auth".resource_grants WHERE principal_id = $1 AND organization_id = $2`,
+		"identities":  `SELECT 'repository_identities', provider || ':' || provider_repo_id, xmin::text FROM "auth".repository_identities WHERE organization_id = $2 AND EXISTS (SELECT 1 FROM "auth".resource_grants WHERE principal_id = $1 AND organization_id = $2 AND resource_repo_id IS NOT NULL)`,
 		"assignments": `SELECT 'platform_role_assignments', id::text, xmin::text FROM "auth".platform_role_assignments WHERE principal_id = $1`,
 	}
 	for _, tc := range []struct {
@@ -144,14 +145,26 @@ func TestTheStateQueryReadsEveryRowOfThePair(t *testing.T) {
 	}{
 		{false, false, []string{"principal"}},
 		{false, true, []string{"principal", "assignments"}},
-		{true, false, []string{"principal", "org", "membership", "grants"}},
-		{true, true, []string{"principal", "org", "membership", "grants", "assignments"}},
+		{true, false, []string{"principal", "org", "membership", "grants", "identities"}},
+		{true, true, []string{"principal", "org", "membership", "grants", "identities", "assignments"}},
 	} {
 		q := stateQuery(schema, tc.org, tc.owned)
 		for name, part := range parts {
 			has := strings.Contains(q, part)
 			if want := slices.Contains(tc.want, name); has != want {
 				t.Errorf("org %v owned %v: the %s rows read = %v, want %v\n%s", tc.org, tc.owned, name, has, want, q)
+			}
+		}
+		for _, publicTable := range []string{"public.users", "public.organizations", "public.memberships"} {
+			for _, line := range strings.Split(q, "\nUNION ALL ") {
+				if strings.Contains(line, "FROM "+publicTable+" ") && strings.Contains(line, "xmin") {
+					t.Errorf("org %v owned %v: %s is read through xmin, a system column the column-only grants do not cover:\n%s", tc.org, tc.owned, publicTable, line)
+				}
+			}
+		}
+		for _, copy := range []string{`"auth".principals`, `"auth".organizations`, `"auth".memberships`} {
+			if strings.Contains(q, copy) {
+				t.Errorf("org %v owned %v: the state query reads the auth copy %s\n%s", tc.org, tc.owned, copy, q)
 			}
 		}
 	}
@@ -176,5 +189,24 @@ func TestTheStateDigestFollowsEveryRow(t *testing.T) {
 	}
 	if stateDigest(nil) == base || stateDigest(nil) != stateDigest([]stateRow{}) {
 		t.Error("no rows is its own stable digest")
+	}
+}
+
+// A principal's kind decides before its public.users row does: a service account (or any other non-user kind) whose
+// id also has a users row is not a user. The kind is read first, in principal and in Actor.
+func TestTheKindIsReadBeforeThePublicUsersRow(t *testing.T) {
+	raw, err := os.ReadFile("decisionstate.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fn := range []string{"principal", "Actor"} {
+		body, ok := funcBody(string(raw), fn)
+		if !ok {
+			t.Fatalf("no func %s", fn)
+		}
+		kind, user := strings.Index(body, "principalRow("), strings.Index(body, "StateOn(")
+		if kind < 0 || user < 0 || kind > user {
+			t.Errorf("%s: principalRow at %d, StateOn at %d; want the kind read first", fn, kind, user)
+		}
 	}
 }

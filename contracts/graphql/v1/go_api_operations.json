@@ -280,11 +280,21 @@
   },
   {
     "operation": "investmentBreakdownRepository",
-    "digest": "d896c57f2425e5eb54262cbb01fdd7d0bf6c17249b8c0d4c140d4d33b492a3e6"
+    "digest": "edfb61859b399c52a1b1c155c496c5452226da916e63ec0c88992d24738ad1fb"
+  },
+  {
+    "operation": "investmentBreakdownRepository",
+    "digest": "d896c57f2425e5eb54262cbb01fdd7d0bf6c17249b8c0d4c140d4d33b492a3e6",
+    "legacy": true
   },
   {
     "operation": "investmentBreakdownTeam",
-    "digest": "41128827a7bb7324a6fe3b4f771830ab39b236b237ab182406c30c5151aaf722"
+    "digest": "be9f839cc9628f6a3d9599975673177224a17600942ddb5817101e0a68e7afe2"
+  },
+  {
+    "operation": "investmentBreakdownTeam",
+    "digest": "41128827a7bb7324a6fe3b4f771830ab39b236b237ab182406c30c5151aaf722",
+    "legacy": true
   },
   {
     "operation": "investmentEvidenceQuality",
@@ -388,6 +398,15 @@
   {
     "operation": "sourceHealth",
     "digest": "f9196883f03de7e9689294590f40c0216374a8301ed8712830ec4b9836034fc0"
+  },
+  {
+    "operation": "teamWorkItemBreakdown",
+    "digest": "3d30092f9b8c3d6c820d6a18c8632e835e87d3b4129149982cbfbca448004a31"
+  },
+  {
+    "operation": "teamWorkItemBreakdown",
+    "digest": "875c9197af4bf566516a679569a59ed30a2763117d6d5c61ba9a362c94be2fd8",
+    "legacy": true
   },
   {
     "operation": "testOpsCoverage",

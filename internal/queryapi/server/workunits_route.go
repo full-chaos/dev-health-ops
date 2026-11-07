@@ -391,6 +391,10 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "work_units", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "work_units", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		// scope_type/scope_id: matching drilldown_prs_route.go's own GET
@@ -462,7 +466,7 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -481,7 +485,7 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 		// route's own GET handler in Python, reused rather than re-built.
 		startTS, endTS, windowErr := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "work_units", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "work_units", org)
 			return
 		}
 
@@ -493,19 +497,19 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 		// _filters_from_query never populates what.repos for the GET route
 		// (no query param for it), matching drilldown_prs' own GET handler.
 		reposNamed := len(teamscope.NamedRepoRefs(scopeType, scopeIDs, nil)) > 0
-		repoIDs, err := reader.ResolveRepoFilterIDs(r.Context(), scopeType, scopeIDs, nil, claims.OrgID)
+		repoIDs, err := reader.ResolveRepoFilterIDs(r.Context(), scopeType, scopeIDs, nil, org)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "work_units", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "work_units", org, err)
 			return
 		}
 		var teamCondition string
 		var teamBindings []dhclickhouse.Binding
 		if scopeType == "team" && len(scopeIDs) > 0 {
-			teamCondition, teamBindings = teamscope.RepoCondition(claims.OrgID, repoScopeColumn, scopeIDs, time.Now().UTC())
+			teamCondition, teamBindings = teamscope.RepoCondition(org, repoScopeColumn, scopeIDs, time.Now().UTC())
 		}
 
 		investments, err := reader.BuildWorkUnitInvestments(r.Context(), investmentexplain.BuildWorkUnitInvestmentsOptions{
-			OrgID:              claims.OrgID,
+			OrgID:              org,
 			StartTS:            startTS,
 			EndTS:              endTS,
 			RepoIDs:            repoIDs,
@@ -523,7 +527,7 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (api/main.py:683-685).
-			writeRESTDataUnavailable(w, r, "work_units", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "work_units", org, err)
 			return
 		}
 
@@ -531,7 +535,7 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 		// 680-681), steering callers toward POST with an explicit filters
 		// body.
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
-		writeWorkUnitsResponse(w, r, claims.OrgID, investments)
+		writeWorkUnitsResponse(w, r, org, investments)
 	}
 }
 
@@ -620,22 +624,26 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 			writeRESTUnauthorized(w, r, "work_units", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "work_units", claims)
+		if !ok {
+			return
+		}
 
 		bodyBytes, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
 			// A body-read I/O failure has no Python counterpart to match --
 			// same reasoning as drilldown_prs_route.go's own POST handler.
-			writeRESTError(w, r, "work_units", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "work_units", org, http.StatusBadRequest, "bad request")
 			return
 		}
 
 		filters, rawLimit, includeTextual, validationErrors, bodyErr := decodeWorkUnitsRequestBody(bodyBytes)
 		if bodyErr != nil {
-			writePydanticValidationError(w, r, claims.OrgID, *bodyErr)
+			writePydanticValidationError(w, r, org, *bodyErr)
 			return
 		}
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -649,23 +657,23 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 
 		startTS, endTS, windowErr := timeWindow(filters)
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "work_units", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "work_units", org)
 			return
 		}
 
 		// scopeRepoFilter (investment_explain_route.go) already ports
 		// resolve_repo_filter_ids's full team-scope branch over a raw
 		// filters map -- reused here rather than a second copy.
-		repoIDs, reposNamed, teamCondition, teamBindings, err := scopeRepoFilter(r.Context(), reader, filters, claims.OrgID, time.Now().UTC())
+		repoIDs, reposNamed, teamCondition, teamBindings, err := scopeRepoFilter(r.Context(), reader, filters, org, time.Now().UTC())
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "work_units", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "work_units", org, err)
 			return
 		}
 
 		themeFilters, subcategoryFilters := investmentexplain.SplitCategoryFilters(workCategoryFromFilters(filters))
 
 		investments, err := reader.BuildWorkUnitInvestments(r.Context(), investmentexplain.BuildWorkUnitInvestmentsOptions{
-			OrgID:              claims.OrgID,
+			OrgID:              org,
 			StartTS:            startTS,
 			EndTS:              endTS,
 			RepoIDs:            repoIDs,
@@ -680,10 +688,10 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (api/main.py:638-640).
-			writeRESTDataUnavailable(w, r, "work_units", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "work_units", org, err)
 			return
 		}
 
-		writeWorkUnitsResponse(w, r, claims.OrgID, investments)
+		writeWorkUnitsResponse(w, r, org, investments)
 	}
 }

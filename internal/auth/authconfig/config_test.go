@@ -320,6 +320,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvUsersOwned:                  "true",
 		EnvRevisionFeed:                "on",
 		EnvPushProjection:              "on",
+		EnvRepoIdentityProjection:      "on",
 		rule.OwnedEnv:                  "true",
 		EnvLogLevel:                    "debug",
 		EnvShutdownTimeout:             "42s",
@@ -355,6 +356,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAuthorizeCallerSubjects:     "prn_AAAAAAAAAAAAAAAAAAAAAA,prn_BBBBBBBBBBBBBBBBBBBBBB",
 		EnvAcrEventsWorkloadSubject:    "prn_BBBBBBBBBBBBBBBBBBBBBB",
 		EnvTrustedProxies:              "10.0.0.5,192.168.0.0/16",
+		EnvClientAddrMode:              "signed",
 		"SOCIAL_GITHUB_CLIENT_ID":      "gh-client",
 		"SOCIAL_GITLAB_CLIENT_ID":      "gl-client",
 		"SOCIAL_GOOGLE_CLIENT_ID":      "google-client",
@@ -363,6 +365,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvUsersOwned:                  func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
 		EnvRevisionFeed:                func(c Config) string { return strconv.FormatBool(c.RevisionFeed) },
 		EnvPushProjection:              func(c Config) string { return strconv.FormatBool(c.PushProjection) },
+		EnvRepoIdentityProjection:      func(c Config) string { return strconv.FormatBool(c.RepoIdentityProjection) },
 		rule.OwnedEnv:                  func(c Config) string { return strconv.FormatBool(c.PlatformRolesOwned) },
 		EnvLogLevel:                    func(c Config) string { return c.LogLevel.String() },
 		EnvShutdownTimeout:             func(c Config) string { return c.ShutdownTimeout.String() },
@@ -398,6 +401,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAuthorizeCallerSubjects:     func(c Config) string { return strings.Join(c.AuthorizeCallerSubjects, ",") },
 		EnvAcrEventsWorkloadSubject:    func(c Config) string { return c.AcrEventsWorkloadSubject },
 		EnvTrustedProxies:              func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
+		EnvClientAddrMode:              func(c Config) string { return string(c.ClientAddrMode) },
 		"SOCIAL_GITHUB_CLIENT_ID":      func(c Config) string { return c.Social["github"].ID },
 		"SOCIAL_GITLAB_CLIENT_ID":      func(c Config) string { return c.Social["gitlab"].ID },
 		"SOCIAL_GOOGLE_CLIENT_ID":      func(c Config) string { return c.Social["google"].ID },
@@ -439,6 +443,9 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			}
 			if option.Env == EnvRevisionFeed {
 				env[EnvValkeyURI] = testValkeyURI
+			}
+			if option.Env == EnvClientAddrMode {
+				env[EnvClientAddrVerifyKey] = "k1:" + strings.Repeat("A", 43)
 			}
 			if option.Env == EnvSessionIssueWorkloadSubject || option.Env == EnvAuthorizeCallerSubjects || option.Env == EnvAcrEventsWorkloadSubject {
 				env[EnvTokenIssuerURL] = "https://auth.example.com"

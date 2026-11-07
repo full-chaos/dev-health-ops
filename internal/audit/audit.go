@@ -197,9 +197,14 @@ const OffStreamRestoreFence = "restore_fence"
 // projected state and republishes nothing.
 const OffStreamCredentialProjection = "credential_projection"
 
+// OffStreamRepositoryIdentity marks the copy of the provider repository ids into auth.repository_identities and
+// the backfill of resource_grants.resource_repo_id (CHAOS-12720): the source of the ids is ClickHouse repos, so the
+// copy is not an auth fact and has no provisioning event.
+const OffStreamRepositoryIdentity = "repository_identity"
+
 var offStreamReasons = map[string]bool{
 	OffStreamSessionLifecycle: true, OffStreamLinkCredentialLifecycle: true, OffStreamSigningKeyLifecycle: true,
-	OffStreamWorkloadRegistry: true, OffStreamRestoreFence: true, OffStreamCredentialProjection: true,
+	OffStreamWorkloadRegistry: true, OffStreamRestoreFence: true, OffStreamCredentialProjection: true, OffStreamRepositoryIdentity: true,
 }
 
 // TxOps is what a mutation may do inside the transaction.
@@ -565,6 +570,9 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 		if err := insertAuditEvent(ctx, tx, schema, event); err != nil {
 			return err
 		}
+	}
+	if Rehearsing(ctx) {
+		return nil
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing", ErrMutationFailed)

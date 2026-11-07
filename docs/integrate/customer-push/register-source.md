@@ -20,6 +20,6 @@ Registration and token management require an authenticated organization administ
 5. Record the exact registered instance string. Accept-time token/source matching is case-sensitive.
 6. Validate a sample payload before the first write.
 
-Rotation is an immediate cutover: the old token stops working when the replacement is issued. Update the secret consumer and verify it before broad submission.
+Rotation takes effect at once: the old token stops working when the replacement is issued. Update the secret consumer and verify it before broad submission.
 
 Administrators: rotate, revoke and read the credential kind label in [Manage External Push credentials](../../operate/security/external-push-credentials.md).

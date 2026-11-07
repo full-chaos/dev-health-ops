@@ -4,9 +4,10 @@ summary: How Ask Dev interprets a question and resolves every named subject befo
 content_type: architecture
 owner: engineering
 source_of_truth:
-  - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
+  - Amendment TRD v2 -- Ask Dev (Linear, project Ask Dev)
 applicability: current
-lifecycle: active
+lifecycle: deprecated
+deprecated_by: /admin/ask-dev/
 ---
 
 # Ask Dev subject preflight
@@ -17,9 +18,12 @@ subject that the catalog cannot confirm stops the run: no status, change,
 metric, or evidence tool executes without an exact, committed subject.
 {: .fc-page-lede }
 
-> **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This page is a record of the Python surface that was removed.
+!!! warning "Deprecated: records a removed surface"
+    **Status:** Deprecated. This page records the design of the Python Ask Dev surface (`/api/v1/dev`), which the Go api does not serve. Ask Dev now runs in the Ask Dev service and is called by the browser, and it is not turned on in production today.
+    **Affected versions:** the removed Python surface only. **Review date:** none; the page stays as a record of the design.
+    **Replacement:** [Turn on Ask Dev](../../admin/ask-dev/index.md) and [Ask a question and read the answer](../../use/ask-dev/index.md).
 
-This page describes the runtime behavior CHAOS-3292 introduced. The wire
+This page describes the runtime behavior of the subject preflight. The wire
 contracts it produces are described in
 [Ask Dev v2 contracts](ask-dev-contracts-v2.md).
 
@@ -119,7 +123,7 @@ any user-visible string.
 When a name is ambiguous, the authorized candidates are recorded on the
 ledger, but the retained v1 answer surface has no field that can carry them —
 so a v1 client is told the name was ambiguous without being shown the choices.
-Closing that is CHAOS-3325.
+A typed candidates block on the v2 answer frame closes that gap.
 
 Resolutions are recorded on an **append-only ledger**. A later success cannot
 erase an earlier unresolved mention: entries carry contiguous ordinals, the
@@ -154,7 +158,7 @@ advertised exactly as before.
 | The catalog is briefly unavailable | "Temporarily unavailable", retryable |
 | Several distinct subjects are named (a bounded cohort) | "Not supported yet" |
 
-A named **team** is now a first-class direct subject (CHAOS-3301), exactly
+A named **team** is now a first-class direct subject, exactly
 like a project, repository, issue, pull request, or work unit: it commits and
 the run proceeds to answer about it. The remaining "Not supported yet" case is
 a **bounded cohort** — several distinct named subjects at once (e.g. "compare
@@ -164,7 +168,7 @@ which mentions could not be resolved is disclosed, and nothing is silently
 narrowed or widened to organization scope. What is missing is only the
 *rendering* — a v1 `DevAnswer` names one direct subject, and there is no
 faithful way to project a several-subject answer onto that shape yet. That
-lands with the v2 answer-frame work (CHAOS-3297/3298); until then the
+lands with the v2 answer-frame work; until then the
 diagnostic recorded on the run is `committed_cohort_v1_only` — "we committed
 it and cannot render it here" — not a refusal.
 

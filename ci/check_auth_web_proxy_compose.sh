@@ -21,6 +21,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 # shellcheck source=ci/lib/registry_retry.sh
 source "${SCRIPT_DIR}/lib/registry_retry.sh"
+# shellcheck source=ci/lib/auth_workload_session_issue.sh
+source "${SCRIPT_DIR}/lib/auth_workload_session_issue.sh"
 # The suffix comes from /dev/urandom: the preflight below is check-then-use, and compose adopts a
 # resource that already carries the project name, so the name must not be guessable.
 PROJECT="${AUTH_WEB_PROXY_PROOF_PROJECT:-authwebproof$$-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')}"
@@ -67,9 +69,11 @@ compose() {
 
 SINK_PID=""
 SINK_DIR=""
+FORWARD_PID=""
 cleanup() {
   local status=$?
   [ -z "${SINK_PID}" ] || kill "${SINK_PID}" >/dev/null 2>&1 || true
+  [ -z "${FORWARD_PID}" ] || kill "${FORWARD_PID}" >/dev/null 2>&1 || true
   [ -z "${SINK_DIR}" ] || rm -rf "${SINK_DIR}"
   if [ "${status}" -ne 0 ]; then
     printf '\n--- auth services at failure ---\n' >&2
@@ -99,11 +103,6 @@ AUTH_SESSION_SUCCESSOR_KEY="${AUTH_SESSION_SUCCESSOR_KEY:-$(head -c 32 /dev/uran
 export AUTH_SESSION_SUCCESSOR_KEY
 AUTH_LOGIN_LOCKOUT_KEY="${AUTH_LOGIN_LOCKOUT_KEY:-$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')}"
 export AUTH_LOGIN_LOCKOUT_KEY
-# go-api reads this auth-session-issuer credential when it asks auth-service for a session (sessions flag on); its
-# row is stored once the stack is up. Built at run time, never printed.
-AUTH_SESSION_ISSUE_TOKEN="svc_authsess_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
-[[ "${AUTH_SESSION_ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "could not build a session issue credential"
-export AUTH_SESSION_ISSUE_TOKEN
 WEB_DIR="${AUTH_PROOF_WEB_DIR:?AUTH_PROOF_WEB_DIR must name a dev-health-web checkout}"
 [ -f "${WEB_DIR}/vitest.auth-proxy.config.ts" ] || die "${WEB_DIR} has no vitest.auth-proxy.config.ts (the web side of CHAOS-10230)"
 
@@ -123,17 +122,20 @@ printf 'SMTP sink pid %s on port %s\n' "${SINK_PID}" "${AUTH_PROOF_SMTP_PORT}"
 
 BUILD_FLAG=--build
 [ "${AUTH_PROOF_PREBUILT:-}" != 1 ] || BUILD_FLAG=--no-build
-printf 'step 1: up %s --wait go-api auth-service\n' "${BUILD_FLAG}"
+# go-api asks auth-service for a session (sessions flag on) with its workload token: the bootstrap credential is written
+# and the api workload principal read before go-api and auth-service start.
+printf 'step 1: the go-api workload credential (auth-workload-bootstrap)\n'
+# CHAOS-13242: the access-token issuer is compose.yml's own (auth-issuer serves its discovery document and key set), so the
+# Web code in step 3 can read them; the workload token carries the same issuer.
+ISSUER_HOST=auth.dev-health.internal
+ISSUER_URL="https://${ISSUER_HOST}:8443"
+export AUTH_TOKEN_ISSUER_URL="${ISSUER_URL}"
+RUN_BUILD=(--build)
+[ "${AUTH_PROOF_PREBUILT:-}" != 1 ] || RUN_BUILD=()
+auth_workload_session_issue compose "${RUN_BUILD[@]}" || die "the go-api workload credential is not ready"
+printf 'step 1b: up %s --wait go-api auth-service\n' "${BUILD_FLAG}"
 registry_retry_run auth-web-proxy-up -- compose --profile auth up "${BUILD_FLAG}" --detach --wait --wait-timeout 900 go-api auth-service
 assert_project_prefixed
-compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
-  < <(printf '\\set token %s\n' "'${AUTH_SESSION_ISSUE_TOKEN}'"; cat <<'SQL'
-INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-VALUES (gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'token', 'UTF8')), 'hex'), left(:'token', 16),
-        '["sessions:issue"]', now());
-SQL
-  ) \
-  || die "could not store the session issue credential"
 API_PORT="$(compose port go-api 8000 | sed 's/.*://')"
 [[ "${API_PORT}" =~ ^[0-9]+$ ]] || die "could not read the ephemeral go-api port (${API_PORT})"
 BASE="http://127.0.0.1:${API_PORT}"
@@ -184,9 +186,29 @@ before="$(psql_one "SELECT count(*) FROM public.refresh_tokens WHERE user_id = '
 printf 'public.refresh_tokens rows for the user before the Web run: %s\n' "${before}"
 
 printf 'step 3: the real Web auth code: login, refresh, logout\n'
+# CHAOS-13242: auth-service issues EdDSA access tokens (compose.yml, CHAOS-13107), so the Web code runs with class
+# eddsa and reads the issuer's discovery document and key set itself, as the web dev server does
+# (docs/operate/install/local-evaluation.md): the issuer name resolves to loopback, port 8443 reaches the proof's
+# auth-issuer, and the local CA is trusted.
+ISSUER_PORT="$(compose port auth-issuer 8443 | sed 's/.*://')"
+[[ "${ISSUER_PORT}" =~ ^[0-9]+$ ]] || die "could not read the ephemeral auth-issuer port (${ISSUER_PORT})"
+compose cp auth-issuer:/run/tls/ca/issuer.pem "${SINK_DIR}/issuer-ca.pem" || die "could not copy the issuer CA"
+if ! getent hosts "${ISSUER_HOST}" | grep -q '^127\.0\.0\.1[[:space:]]'; then
+  [ "${CI:-}" = true ] || die "${ISSUER_HOST} must resolve to 127.0.0.1 (the CI run adds it to /etc/hosts)"
+  printf '127.0.0.1 %s\n' "${ISSUER_HOST}" | sudo tee -a /etc/hosts >/dev/null
+fi
+node "${SCRIPT_DIR}/auth_webproof_issuer_forward.mjs" 8443 "${ISSUER_PORT}" "${SINK_DIR}/forward.ready" &
+FORWARD_PID=$!
+for _ in $(seq 1 50); do [ -s "${SINK_DIR}/forward.ready" ] && break; sleep 0.1; done
+[ -s "${SINK_DIR}/forward.ready" ] || die "the issuer forward did not start on 127.0.0.1:8443"
+status="$(curl --silent --show-error --max-time 10 --cacert "${SINK_DIR}/issuer-ca.pem" --output /dev/null \
+  --write-out '%{http_code}' "${ISSUER_URL}/.well-known/openid-configuration")"
+printf 'GET %s/.well-known/openid-configuration -> %s\n' "${ISSUER_URL}" "${status}"
+[ "${status}" = "200" ] || die "the issuer discovery answered ${status}"
 (
   cd "${WEB_DIR}"
   AUTH_PROOF_BACKEND_URL="${BASE}" AUTH_PROOF_EMAIL="${EMAIL}" AUTH_PROOF_PASSWORD="${PASSWORD}" \
+    AUTH_ACCESS_TOKEN_CLASS=eddsa AUTH_ACCESS_TOKEN_ISSUER="${ISSUER_URL}" NODE_EXTRA_CA_CERTS="${SINK_DIR}/issuer-ca.pem" \
     pnpm exec vitest run --config vitest.auth-proxy.config.ts
 )
 
@@ -217,8 +239,10 @@ printf 'auth.refresh_credentials rows: %s, still live: %s\n' "${creds}" "${live}
 [ "${revoked}" = "${sessions}" ] || die "the logout left ${sessions} session(s) of which ${revoked} are revoked"
 [ "${after}" = "${before}" ] || die "go-api wrote public.refresh_tokens (${before} -> ${after}): its own handlers served a call"
 
-printf 'step 5: flags OFF in the default stack\n'
-if grep -E '^\s*AUTH_PROXY_(SESSIONS|LOCAL_LOGIN|CREDENTIALS|SOCIAL|OIDC|SAML)\s*[:=]\s*"?(true|1|on)' "${ROOT}/compose.yml"; then
-  die "compose.yml turns an auth proxy flag on"
+printf 'step 5: OIDC and SAML proxy flags OFF in the default stack\n'
+# Since CHAOS-13107 compose.yml forwards production's set (sessions, local login, credentials, social); OIDC and SAML stay
+# off there, the same rule as internal/cigates/webproxyproof TestAuthProxyFlagsAreOffOutsideTheProofOverrides.
+if grep -E '^\s*AUTH_PROXY_(OIDC|SAML)\s*[:=]\s*"?(true|1|on)' "${ROOT}/compose.yml"; then
+  die "compose.yml turns the OIDC or SAML auth proxy flag on"
 fi
 printf 'OK\n'

@@ -64,7 +64,7 @@ PagerDuty REST and webhook events, Customer Push, and future verified providers 
 
 Webhook authority comes from the persisted binding. Durable deduplication uses bounded source/event identity and raw-body identity. Out-of-order events use the canonical ordering builder and current-row reader.
 
-After the canonical incident contract cutover is admitted, production rollback cannot reintroduce a legacy writer or reader that does not understand the current ordering schema.
+After the canonical incident contract is admitted, production rollback cannot reintroduce a legacy writer or reader that does not understand the current ordering schema.
 
 ## ClickHouse writes
 
@@ -93,16 +93,16 @@ Migration `107_work_item_interactions_comment_id.sql` is one `ALTER` and the vie
 
 `work_item_metrics_daily` stores `bug_completed_ratio` and `story_points_completed` as non-null numbers, so a stored `0` cannot say whether the work was measured and came to zero or the provider does not track the measure. `work_item_measure_capability` (migration `111_work_item_measure_capability.sql`) holds that answer apart, for each organization, provider and measure, so a reader can answer "not applicable" instead of `0`.
 
-- **Writer.** The daily metrics job, finalize family `work_item_measure_capability` (`internal/jobs/metrics/daily/work_item_measure_capability.go`): once for each daily run, after every partition, because the answer is the organization's and not a partition's. The rule is one function, `workitemmetrics.DeriveMeasureCapability`, beside the daily triplet's `ComputeDailyTriplet`. The sync writes no row: since CHAOS-8811 the daily job is the one writer of the derived work-item tables, and a sync unit holds only the items of its own window, which cannot show that a provider does *not* track a measure.
+- **Writer.** The daily metrics job, finalize family `work_item_measure_capability` (`internal/jobs/metrics/daily/work_item_measure_capability.go`): once for each daily run, after every partition, because the answer is the organization's and not a partition's. The rule is one function, `workitemmetrics.DeriveMeasureCapability`, beside the daily triplet's `ComputeDailyTriplet`. The sync writes no row: the daily job is the one writer of the derived work-item tables, and a sync unit holds only the items of its own window, which cannot show that a provider does *not* track a measure.
 - **Observation, not configuration.** The family reads every work item of the organization, from every repository, in a 90-day window that ends on the run's target day: an item created before the window ends that is not done, or was completed in the window, each item counted once. `story_points_completed` is tracked (`tracked = 1`) when one of the provider's items there has story points (Jira's configured story-points field, GitLab's weight, Linear's estimate, a number field of a GitHub Projects v2 board); `bug_completed_ratio` is tracked when one of them has the type `bug`. Otherwise `tracked = 0`. `evidence_count` is the number of items that carry the measure and `item_count` the number of the provider's items in the window.
 - **Missing is unknown.** A provider with no item in the window gets no row. A reader reads a missing row as unknown, never as `0` and never as "not tracked".
 - **Reader contract.** The sorting key is `(org_id, provider, measure, window_end)`: a run for an old day adds the answer of its own window and never replaces a newer one. The reader contract is **exact day**: the answer for day D is the row with `window_end = D`, deduplicated with `argMax` on `computed_at` (merges are eventual). No row with `window_end = D` means unknown for D; a reader never falls back to an earlier window's row, because that would present "no items in D's window" as an old answer.
 
-The acr reader that turns this into "not applicable" is CHAOS-7505.
+The acr reader turns this into "not applicable".
 
 ### Change-failure counts: `repo_change_failure_daily`
 
-Change failure rate is the share of deployments that failed: named by an incident link, or failed by their own status (CHAOS-9621). It needs evidence: a repository that deploys, has no incident tied to it and no deployment with a final status is **unknown**, not `0%`. `repo_change_failure_daily` (migrations `112_change_failure_rate_incident_basis.sql` and `125_change_failure_deployment_status.sql`) stores the inputs for each repository and day, and one rule, `internal/jobs/metrics/changefailure`, turns summed inputs into a rate.
+Change failure rate is the share of deployments that failed: named by an incident link, or failed by their own status. It needs evidence: a repository that deploys, has no incident tied to it and no deployment with a final status is **unknown**, not `0%`. `repo_change_failure_daily` (migrations `112_change_failure_rate_incident_basis.sql` and `125_change_failure_deployment_status.sql`) stores the inputs for each repository and day, and one rule, `internal/jobs/metrics/changefailure`, turns summed inputs into a rate.
 
 - **Columns.** `deployments_count`; `failed_deployments_native` and `failed_deployments_heuristic` (deployments with at least one deployment-incident link, by the best tier of their links); `incidents_direct` and `incidents_via_deployment` (incidents that started on the day, by how they tie to the repository); `failed_deployments_status` (deployments whose own status is failed that no link names, so a failed deployment counts once: failed in total is native + heuristic + status) and `deployments_status_known` (deployments with a final status, succeeded or failed: the status evidence). `deployments_count` excludes cancelled deployments. The meaning of a status is `internal/jobs/metrics/deploymentstatus`, shared with deployment failure rate and the deploy metrics. The evidence basis (`incident`, `status`, `both`) is derived from the sums by `changefailure.Evaluate`, not stored.
 - **Writer.** The daily metrics job, family `repo_user_commit` (`internal/jobs/metrics/daily/change_failure_native_clickhouse.go`). It loads the day's deployments and the incidents that started on the day with the loaders of the `work_graph_edges` family, and derives the links with that family's own extraction function. It does not read `work_graph_deployment_incident_edges` for the same day, because `work_graph_edges` runs after `repo_user_commit`. Today the extraction is heuristic only: an incident links to every deployment of its repository on its day.
@@ -113,8 +113,8 @@ Change failure rate is the share of deployments that failed: named by an inciden
 - **Reader contract.** Keep the newest `computed_at` per `(org_id, repo_id, day)`, sum the counts over the view's window and repositories (a team is its owned repositories), then apply the rule. A reader that serves the rate reads the sums and the number of stored rows (`changefailure.ViewSumsSQL`) and calls `changefailure.Evaluate`, which returns the value, its state and the weakest contributing link tier together: no stored row is no state, no deployments is not applicable, no incident and no deployment with a final status is unknown, else failed / D with incident evidence and failed-by-status / K without it (`changefailure.ApplyRule`). The three unknown answers (not collected, no deployments in window, deployments without outcome) are `Outcome.UnknownReason`. `/explain` (`rate_state`, `link_tier`, `evidence_basis`), Home and the operating review (`rateState`) serve the state, so the three empty answers stay apart at the surface. A reader that only ranks or draws (contributors, drivers, the Home series, flow opportunities, report charts) uses `changefailure.WindowRateSQL`, which is `NULL` for every state that is not measured, and leaves such a group or bucket out. Never average daily rates.
 - **Retraction.** The table keeps the newest row per key and cannot drop one. A run therefore writes, for its partition and day, a row for every repository with something to count and a row of zeros for every repository that already has a stored row for the day and has nothing to count now (a deleted incident, a service mapping that moved, a deployment that is gone). Zeros read as not applicable, the same as no row. A repository that never had a row and has nothing to count gets none.
 - **`repo_metrics_daily`, expand step.** Migration 112 only adds. `change_failure_rate_incident` (`Nullable(Float64)`) holds the incident-based one-day value. `revert_rate` (`Nullable(Float64)`) is reverted / merged pull requests; it is `NULL` on every row until a revert detector exists (nothing measures it yet). A reader of either deduplicates with `(argMax(tuple(col), computed_at)).1` or `LIMIT 1 BY`; a bare `argMax` skips a `NULL` and returns an older value.
-- **DEPRECATED: `repo_metrics_daily.change_failure_rate`** (CHAOS-9017 drops it). It stays `Float64`, not nullable, with its old meaning: the legacy revert ratio, denominator forced to 1. The writer keeps writing it, so a pod of the release before this change, and a rollback to it, read the same type and the same values as before. No reader of this release takes change failure rate from it. No reader of this release takes revert rate from it either: the reverted count behind it was always 0.
-- **Deployment failure rate.** The DORA writer names the deployment-status ratio (failed runs / deployments) `deployment_failure_rate` in `dora_metrics_daily`; a job scope that still names `change_failure_rate` selects it. **DEPRECATED: the stored rows with `metric_name = 'change_failure_rate'`** (CHAOS-9017 renames or deletes them). Migration 112 does not touch them, and no reader of this release selects a DORA row by that name.
+- **DEPRECATED: `repo_metrics_daily.change_failure_rate`** (a later release drops it). It stays `Float64`, not nullable, with its old meaning: the legacy revert ratio, denominator forced to 1. The writer keeps writing it, so a pod of the release before this change, and a rollback to it, read the same type and the same values as before. No reader of this release takes change failure rate from it. No reader of this release takes revert rate from it either: the reverted count behind it was always 0.
+- **Deployment failure rate.** The DORA writer names the deployment-status ratio (failed runs / deployments) `deployment_failure_rate` in `dora_metrics_daily`; a job scope that still names `change_failure_rate` selects it. **DEPRECATED: the stored rows with `metric_name = 'change_failure_rate'`** (a later release renames or deletes them). Migration 112 does not touch them, and no reader of this release selects a DORA row by that name.
 - **Report charts.** A chart of `change_failure_rate` is `changefailure.WindowRateSQL` over the newest counts of each bucket (`internal/jobs/report`, `chartRules`): the same number the other surfaces give for that window, never the deprecated column and never an average of stored one-day values. The exported metric registry still names `repo_metrics_daily` for the metric; the chart result names the table it reads.
 - **No ops reader of `change_failure_rate_incident`.** The one-day column is written for readers outside this repository (acr); every reader here uses the counts table.
 
@@ -135,15 +135,14 @@ table is a `ReplacingMergeTree` keyed on the work item, so a reassignment
 overwrote `project_id` and the previous value was unrecoverable after
 compaction: presence was queryable, history never existed. A pull request had
 it worse -- `git_pull_requests` carries no project columns at all, so a PR's
-board membership was nowhere in the graph even as a current value. CHAOS-4194
-and CHAOS-4193 replace both with one representation -- an append-only event
+board membership was nowhere in the graph even as a current value. One
+representation replaces both -- an append-only event
 stream that presence projects from and validity intervals derive from -- rather
 than parallel stores per subject.
 
 Read this diagram for where a value can be LOST rather than only where it
 flows. Five edges below are refusals, and each one exists because the silent
-version of it was the actual defect. The reachability of the whole path is
-CHAOS-4222.
+version of it was the actual defect. The reachability of the whole path is tracked as a known gap.
 
 ```mermaid
 flowchart TD
@@ -225,17 +224,16 @@ Load-bearing properties, and why each is where it is:
   sink-supplied timestamp differs on every re-sync of the same event: the keys
   differ, `FINAL` keeps both, and the table accumulates one row per sync of a
   single reassignment. The sink cannot invent a value stable across re-syncs;
-  only the producer can, so an event without one is refused. This deviates from
-  CHAOS-4194's provisional "else `last_synced`" default, which was written
-  before the interaction with the sorting key was noticed, and Context Fabric
-  ratified the deviation on 2026-08-24. The github board producer satisfies it
+  only the producer can, so an event without one is refused. This deliberately does not
+  default to "else `last_synced`", because that default interacts badly with
+  the sorting key. The github board producer satisfies it
   with the board item's own `createdAt` -- the time the subject was added to the
   board -- which is both the real membership event time and stable across
   re-syncs.
 - **The presence fallback is a view arm, not a backfill.** Synthesising
   transition rows for pre-CDC work items would put events into the history
   table that no provider emitted, with a fabricated `event_id` and an
-  `occurred_at` that is really just "whenever we happened to sync". CHAOS-4193
+  `occurred_at` that is really just "whenever we happened to sync". The sink
   derives validity intervals from that stream, so those rows would become
   invented `ValidFrom` boundaries presented as observed fact. The `source`
   column keeps the two provenances separable.
@@ -250,7 +248,7 @@ Load-bearing properties, and why each is where it is:
   request on `(repo_id, number)`, mirroring the fabric identity registry's own
   natural keys. A PR still never becomes a `work_items` row -- only its
   membership is recorded. Its `changes` history inside a board remains
-  discarded; that is CHAOS-4221.
+  discarded.
 - **The subject declaration must be POSITIVE.** `subjectKind` is required with a
   closed enum because the sink branches its entire identity derivation on it. An
   earlier build refused PRs by rejecting the value `"pr"`, and a PR payload need
@@ -313,14 +311,14 @@ Load-bearing properties, and why each is where it is:
   teams that gitlab writes project memberships — a provider whose "project"
   concept IS `repo_id` and which is refused for the kind by construction.
   github, jira, and linear each advertise two more than the shared
-  work-item family (CHAOS-4194 for github; CHAOS-4193 for jira and linear,
-  producing directly from Jira's own project-move changelog and Linear's own
+  work-item family (the github board producer; jira and linear
+  produce directly from Jira's own project-move changelog and Linear's own
   issue history — not through the `External batch` path above); the Linear
   expired-lease retry policy still advertises two fewer, because no
   retry-safety proof exists for it yet.
-- **Linear and Jira write a creation-time ADD (CHAOS-7361).** The history
+- **Linear and Jira write a creation-time ADD.** The history
   must be complete from the item's creation: the acr touch reader skips a
-  first touch that is a REMOVE or a move P→Q as an orphan (CHAOS-7349). The
+  first touch that is a REMOVE or a move P→Q as an orphan. The
   producer therefore writes one `("", P)` row at the provider's creation time
   when the project history does not already begin with the add. P is the
   FIRST project of the history (a first move P→Q means P, not the current
@@ -344,7 +342,7 @@ Load-bearing properties, and why each is where it is:
   stay the same, `observed_at` becomes the creation time and `last_synced`
   the new ingest time.
 - **`projects` rows are ensured by the producer.** GitHub Projects V2 wrote no
-  `projects` row anywhere before CHAOS-4194 -- the fetcher stamped the id onto
+  `projects` row anywhere before the board producer -- the fetcher stamped the id onto
   work items and the entity it named was never created -- so every github
   membership would have been filtered out by the vocabulary constraint.
   `ensureProjectsRow` writes the base 051 columns and converges on re-sync,
@@ -427,7 +425,7 @@ Two rules hold for every read of the tree:
    `work_graph_issue_pr`. Each row carries a `provenance` tier, ranked
    **native > explicit_text > heuristic**. All three tiers count as links.
    A consumer names the tier it read and never presents a lower tier as
-   native. The two lower tiers are a **fallback only** (chris, 2026-10-15):
+   native. The two lower tiers are a **fallback only**:
    a pull request that has a native issue link gets no `explicit_text` or
    `heuristic` link, and an issue that has a native pull request link gets
    none either. The text and heuristic writers skip both sides, and every
@@ -442,7 +440,7 @@ Two rules hold for every read of the tree:
    It repairs nothing: it adds the rows it finds to the unlabeled counter
    `workgraph_issue_pr_fallback_beside_native_rows_total` on every
    build (plus one counter per side, `..._beside_native_pull_request_rows_total`, `..._beside_native_issue_rows_total`,
-   `..._pull_request_issue_side_rows_total`, and `workgraph_issue_pr_fallback_invariant_checks_total`, one per check that ran; no alert rule reads them yet), and when the count is above 0 it logs a WARN `issue-pr fallback
+   `..._pull_request_issue_side_rows_total`, and `workgraph_issue_pr_fallback_invariant_checks_total`, one per check that ran; the rule `IssuePRFallbackInvariantBreached` in `alerts/rules.yml` (see [dashboards and alerts](../../operate/observe/dashboards-and-alerts.md)) alerts on any increase of the first counter in 24 hours), and when the count is above 0 it logs a WARN `issue-pr fallback
    invariant breached` with the counts and reports FAILED (step evidence
    `status: failed`, build evidence `failed_steps`); the later steps still run. A pull or merge request
    work item (`ghpr:<owner>/<repo>#<n>`, `gitlab:<path>!<n>`) is never the
@@ -455,7 +453,7 @@ Two rules hold for every read of the tree:
    `owner/repo#n`; GitLab `#n` and `group/project#n`; a GitLab `!n` is a merge
    request and never matches). A `KEY-n` that matches issue rows of more than
    one provider in the org is ambiguous and gives no link (a key string is not
-   a link across providers; CHAOS-9457). An issue-key prefix by itself, an unresolved external key, an
+   a link across providers). An issue-key prefix by itself, an unresolved external key, an
    issue's own repository column, or a team's repositories is never the
    relation.
 2. A team is reached through ownership only (`team_repo_ownership`,
@@ -519,7 +517,7 @@ projects only to keep ownership rows open and writes no project row for them.
 ### Project target date
 
 `projects.target_date` is the day a project is committed to, and seven columns say
-where it came from, the same for every provider (lead ruling D6009; the product
+where it came from, the same for every provider (the product
 owner may override). Linear's own project date is stated as it is. Jira and
 GitLab have none, so the target is the earliest OPEN dated version (Jira: not
 released, not archived) or milestone (GitLab: state `active`), a past date
@@ -557,8 +555,8 @@ ancestor group. The request reads `GET /api/v4/version` once per run and sends
 deprecated `include_parent_milestones` in 16.7), or `include_parent_milestones`
 to older instances. It never sends both, because GitLab declares the two names
 mutually exclusive and refuses a request that carries both with HTTP 400
-(CHAOS-12145). A version read that fails or cannot be parsed falls back to
-`include_ancestors` and logs the error with the org and unit ids (CHAOS-12150). A group milestone that is
+. A version read that fails or cannot be parsed falls back to
+`include_ancestors` and logs the error with the org and unit ids. A group milestone that is
 the earliest open dated one supplies the target with source
 `gitlab.group_milestone.due_date` and a `target_ref` that names the group. It has
 a `sprints` row under the same key (the work-items unit lists the same ancestor milestones and writes a group milestone once, keyed by its group), so `target_ref` joins the sprint row.
@@ -584,7 +582,7 @@ Every migration needs:
 
 - forward schema and data behavior;
 - mixed-version compatibility where a rolling deployment requires it;
-- an explicit writer/read barrier for incompatible cutovers;
+- an explicit writer/read barrier for incompatible schema changes;
 - bounded backfill or copy behavior;
 - resumable checkpoints and idempotency evidence;
 - role/grant updates;

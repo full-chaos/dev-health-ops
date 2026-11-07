@@ -46,6 +46,7 @@ var binaryLogging = map[string]string{
 	"faultproxy":                             "installs",
 	"loadtest":                               "installs",
 	"registrydump":                           "silent",
+	"shadow-venue":                           "installs",
 	"strip-agent-attribution":                "silent",
 }
 

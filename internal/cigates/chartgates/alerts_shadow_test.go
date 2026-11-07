@@ -3,6 +3,7 @@ package chartgates_test
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -23,16 +24,18 @@ const (
 	shadowCountersRel  = "internal/api/policy/shadowcounters.go"
 	shadowRel          = "internal/api/policy/shadow.go"
 	shadowLabelsRel    = "internal/platform/otlpmetrics/labels.tsv"
+	shadowServiceRel   = "internal/platform/config/config.go"
 )
 
 var (
-	shadowAllowedKeys = map[string]bool{"namespace": true, "caller": true, "class": true, "result": true, "service.name": true, "deployment.environment": true}
-	shadowBannedKeys  = append([]string{"organization", "user", "route", "action", "decision_id", "reason_code", "reason", "instance_id"}, prohibitedLabels...)
+	shadowAllowedKeys = map[string]bool{"namespace": true, "caller": true, "class": true, "result": true, "reason": true, "service.name": true, "deployment.environment": true}
+	shadowBannedKeys  = append([]string{"organization", "user", "route", "action", "decision_id", "reason_code", "instance_id"}, prohibitedLabels...)
 	shadowFilterKey   = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*)\s*(?:!=|=~|=|\bNOT IN\b|\bIN\b|\bNOT LIKE\b|\bLIKE\b|\bEXISTS\b)`)
 	shadowQuoted      = regexp.MustCompile(`'[^']*'|"[^"]*"`)
 	shadowPromMatcher = regexp.MustCompile(`\{([^}]*)\}`)
 	shadowPromBy      = regexp.MustCompile(`\b(?:by|without)\s*\(([^)]*)\)`)
 	shadowPromKey     = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*(?:=~|!=|=)`)
+	shadowServiceName = regexp.MustCompile(`(?m)^const APIServiceName = "([^"]+)"$`)
 )
 
 func shadowAlertsAreTheGroup(g *guard) {
@@ -103,7 +106,7 @@ func shadowMetricNamesAreEmitted(g *guard) {
 
 func shadowCheckKeys(g *guard, where string, keys []string) {
 	for _, k := range keys {
-		g.expect(shadowAllowedKeys[k], "%s uses the label %q, outside the allowlist {namespace, caller, class, result, service.name, deployment.environment}", where, k)
+		g.expect(shadowAllowedKeys[k], "%s uses the label %q, outside the allowlist {namespace, caller, class, result, reason, service.name, deployment.environment}", where, k)
 		for _, b := range shadowBannedKeys {
 			g.expect(k != b, "%s uses the prohibited label %q", where, k)
 		}
@@ -127,7 +130,7 @@ func shadowLabelsStayInAllowlist(g *guard) {
 		}
 	}
 	g.expect(rows[shadowMismatch] == "caller,class,namespace", "%s row for %s is %q, want caller,class,namespace", shadowLabelsRel, shadowMismatch, rows[shadowMismatch])
-	g.expect(rows[shadowResults] == "result", "%s row for %s is %q, want result", shadowLabelsRel, shadowResults, rows[shadowResults])
+	g.expect(rows[shadowResults] == "reason,result", "%s row for %s is %q, want reason,result", shadowLabelsRel, shadowResults, rows[shadowResults])
 
 	expr := str(alertNamed(g, shadowAlert)["expr"])
 	var keys []string
@@ -258,6 +261,142 @@ func shadowDashboardPanels(g *guard) {
 	g.expect(len(seen) == len(panels), "layout places %d panels of %d", len(seen), len(panels))
 }
 
+// Allowed panel plugin fields per SigNoz v6 panel kind; source: schema-notes-10849d-v1.md (live prod dashboards and the SigNoz Number panel doc).
+// "*" marks a free-form map, a path absent from a kind is not allowed.
+var shadowPanelFields = map[string]map[string][]string{
+	"signoz/NumberPanel": {
+		"": {"formatting", "thresholds", "visualization"}, "formatting": {"decimalPrecision", "unit"},
+		"thresholds[]": {"color", "unit", "value"}, "visualization": {"timePreference"},
+	},
+	"signoz/TablePanel": {
+		"": {"formatting", "thresholds", "visualization"}, "formatting": {"columnUnits", "decimalPrecision"},
+		"formatting.columnUnits": {"*"}, "visualization": {"timePreference"},
+	},
+	"signoz/BarChartPanel": {
+		"": {"axes", "formatting", "legend", "thresholds", "visualization"}, "axes": {"isLogScale", "softMax", "softMin"},
+		"formatting": {"decimalPrecision", "unit"}, "legend": {"customColors", "mode", "position"},
+		"thresholds[]": {"color", "label", "unit", "value"}, "visualization": {"fillSpans", "stackedBarChart", "timePreference"},
+	},
+	"signoz/TimeSeriesPanel": {
+		"": {"axes", "chartAppearance", "formatting", "legend", "thresholds", "visualization"}, "axes": {"isLogScale", "softMax", "softMin"},
+		"chartAppearance":          {"fillMode", "lineInterpolation", "lineStyle", "showPoints", "spanGaps"},
+		"chartAppearance.spanGaps": {"fillLessThan", "fillOnlyBelow"}, "formatting": {"decimalPrecision", "unit"},
+		"legend": {"customColors", "mode", "position"}, "thresholds[]": {"color", "label", "unit", "value"},
+		"visualization": {"fillSpans", "timePreference"},
+	},
+}
+
+func shadowCheckPanelFields(g *guard, where, path string, v any, allowed map[string][]string) {
+	keys, ok := allowed[path]
+	if !ok {
+		g.failf("%s: object at %q is not in the allowed set for its panel kind", where, path)
+		return
+	}
+	m := mp(v)
+	for k, child := range m {
+		if len(keys) == 1 && keys[0] == "*" {
+			continue
+		}
+		if !slices.Contains(keys, k) {
+			g.failf("%s: key %q at %q is not in the SigNoz v6 field set %v", where, k, path, keys)
+			continue
+		}
+		sub := k
+		if path != "" {
+			sub = path + "." + k
+		}
+		switch c := child.(type) {
+		case map[string]any:
+			shadowCheckPanelFields(g, where, sub, c, allowed)
+		case []any:
+			for _, it := range c {
+				if _, isObj := it.(map[string]any); isObj {
+					shadowCheckPanelFields(g, where, sub+"[]", it, allowed)
+				}
+			}
+		}
+	}
+}
+
+func shadowPanelFieldsAreV6(g *guard) {
+	root := shadowDashboard(g)
+	if root == nil {
+		return
+	}
+	for id, p := range mp(mp(root["spec"])["panels"]) {
+		plugin := mp(mp(mp(p)["spec"])["plugin"])
+		kind := str(plugin["kind"])
+		allowed, ok := shadowPanelFields[kind]
+		if !ok {
+			g.failf("panel %s has kind %q, which is not in the allowed panel kinds", id, kind)
+			continue
+		}
+		shadowCheckPanelFields(g, "panel "+id, "", plugin["spec"], allowed)
+	}
+}
+
+// Scalar panels issue a scalar request, so each metric aggregation needs reduceTo; chart panels do not. Source: schema-notes-10849d-v2.md.
+var (
+	shadowScalarKinds = []string{"signoz/NumberPanel", "signoz/TablePanel", "signoz/PiePanel"}
+	shadowReduceTo    = []string{"sum", "count", "avg", "min", "max", "last", "median"}
+)
+
+func shadowScalarPanelsReduce(g *guard) {
+	root := shadowDashboard(g)
+	if root == nil {
+		return
+	}
+	for id, p := range mp(mp(root["spec"])["panels"]) {
+		spec := mp(mp(p)["spec"])
+		scalar := slices.Contains(shadowScalarKinds, str(mp(spec["plugin"])["kind"]))
+		for _, q := range list(spec["queries"]) {
+			for _, a := range list(mp(mp(mp(mp(q)["spec"])["plugin"])["spec"])["aggregations"]) {
+				if str(mp(a)["metricName"]) == "" {
+					continue
+				}
+				r, has := mp(a)["reduceTo"]
+				if scalar {
+					g.expect(has && slices.Contains(shadowReduceTo, str(r)), "panel %s is scalar: metric %s has reduceTo %v, want one of %v", id, str(mp(a)["metricName"]), r, shadowReduceTo)
+				} else {
+					g.expect(!has, "panel %s is a chart panel: metric %s must not set reduceTo", id, str(mp(a)["metricName"]))
+				}
+			}
+		}
+	}
+}
+
+// go-api reports the service.name of its shell spec (internal/apiservice/service.go Spec), config.APIServiceName; a panel
+// filtered on any other name reads no series.
+func shadowDashboardFiltersNameTheAPIService(g *guard) {
+	m := shadowServiceName.FindStringSubmatch(g.read(shadowServiceRel))
+	if m == nil {
+		g.failf("%s has no `const APIServiceName = \"...\"`, the service.name go-api reports", shadowServiceRel)
+		return
+	}
+	want := "service.name = '" + m[1] + "'"
+	for id, p := range shadowPanels(g) {
+		for _, q := range p.queries {
+			expr := str(mp(q["filter"])["expression"])
+			g.expect(strings.Count(expr, "service.name") == 1 && strings.Contains(expr, want),
+				"dashboard panel %s filter is %q, want exactly one service clause %s (config.APIServiceName in %s)", id, expr, want, shadowServiceRel)
+		}
+	}
+}
+
+func TestShadowDashboardServiceGuardPlantedDefects(t *testing.T) {
+	files := []string{shadowDashboardRel, shadowServiceRel}
+	clause := "service.name = 'dev-health-api'"
+	want := "want exactly one service clause"
+	runPlanted(t, []planted{
+		{"one-panel-names-go-api", files, mut(shadowDashboardRel, clause, "service.name = 'go-api'"), shadowDashboardFiltersNameTheAPIService, want},
+		{"one-panel-drops-the-service-clause", files, mut(shadowDashboardRel, " AND "+clause, ""), shadowDashboardFiltersNameTheAPIService, want},
+		{"one-panel-adds-a-second-service", files, mut(shadowDashboardRel, clause, clause+" OR service.name = 'auth-service'"), shadowDashboardFiltersNameTheAPIService, want},
+		{"one-panel-negates-the-service", files, mut(shadowDashboardRel, clause, "service.name != 'dev-health-api'"), shadowDashboardFiltersNameTheAPIService, want},
+		{"api-service-name-changes", files, mut(shadowServiceRel, `const APIServiceName = "dev-health-api"`, `const APIServiceName = "dev-health-go-api"`), shadowDashboardFiltersNameTheAPIService, want},
+		{"api-service-name-const-gone", files, mut(shadowServiceRel, `const APIServiceName = "dev-health-api"`, `const APIServiceNameOld = "dev-health-api"`), shadowDashboardFiltersNameTheAPIService, "has no `const APIServiceName"},
+	})
+}
+
 func TestShadowAlertGuardsRealTree(t *testing.T) {
 	runReal(t,
 		check{"shadow-alerts-are-the-group", shadowAlertsAreTheGroup},
@@ -267,5 +406,8 @@ func TestShadowAlertGuardsRealTree(t *testing.T) {
 		check{"shadow-labels-stay-in-allowlist", shadowLabelsStayInAllowlist},
 		check{"shadow-class-value-is-in-the-closed-set", shadowClassValueIsInTheClosedSet},
 		check{"shadow-dashboard-panels", shadowDashboardPanels},
+		check{"shadow-panel-fields-are-v6", shadowPanelFieldsAreV6},
+		check{"shadow-scalar-panels-reduce", shadowScalarPanelsReduce},
+		check{"shadow-dashboard-filters-name-the-api-service", shadowDashboardFiltersNameTheAPIService},
 	)
 }

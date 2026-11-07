@@ -762,11 +762,12 @@ public.memberships stay the authority), refuses AUTH_ORGS_OWNED in every extraEn
 */}}
 {{- define "dev-health.authPhase" -}}
 {{- $v := .Values -}}
-{{- /* goApi.authProxy keeps one key, orgProvisioning (CHAOS-11858, CHAOS-10988): the go-api switch AUTH_PROXY_ORG_PROVISIONING. Every other key is a routing flag authService.phase owns. */ -}}
+{{- /* goApi.authProxy keeps two keys: orgProvisioning (CHAOS-11858, CHAOS-10988), the go-api switch AUTH_PROXY_ORG_PROVISIONING, and impersonation (CHAOS-12914), the go-api switch AUTH_PROXY_IMPERSONATION. Every other key is a routing flag authService.phase owns. */ -}}
 {{- if hasKey $v.goApi "authProxy" }}
 {{- if or (not (kindIs "map" $v.goApi.authProxy)) (eq (len $v.goApi.authProxy) 0) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}
-{{- range $key, $_ := $v.goApi.authProxy }}{{- if ne $key "orgProvisioning" }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}{{- end }}
+{{- range $key, $_ := $v.goApi.authProxy }}{{- if not (has $key (list "orgProvisioning" "impersonation")) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}{{- end }}
 {{- if and (hasKey $v.goApi.authProxy "orgProvisioning") (not (kindIs "bool" $v.goApi.authProxy.orgProvisioning)) }}{{- fail "goApi.authProxy.orgProvisioning must be true or false" }}{{- end }}
+{{- if and (hasKey $v.goApi.authProxy "impersonation") (not (kindIs "bool" $v.goApi.authProxy.impersonation)) }}{{- fail "goApi.authProxy.impersonation must be true or false" }}{{- end }}
 {{- end -}}
 {{- if hasKey $v.authService "enabled" }}{{- fail "authService.enabled is replaced by authService.phase: enabled=true is phase 1 and enabled=false is phase 0; remove authService.enabled and set authService.phase" }}{{- end -}}
 {{- if hasKey $v.authService "usersOwned" }}{{- fail "authService.usersOwned is replaced by authService.phase: users owned is phase 4; remove authService.usersOwned" }}{{- end -}}
@@ -775,6 +776,9 @@ public.memberships stay the authority), refuses AUTH_ORGS_OWNED in every extraEn
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 4, got %s %v" (kindOf $p) $p) }}{{- end -}}
 {{- if and (eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true) (lt (int $p) 4) }}{{- fail "goApi.authProxy.orgProvisioning needs authService.phase 4: the switch sends member, invite and organization delete changes to auth-service, whose provisioning routes refuse until it owns users (phase 4)" }}{{- end -}}
+{{- /* CHAOS-12914: go-api only logs the switch without sessions (one ERROR line, devhealth_api_auth_proxy_impersonation_config_invalid=1, every start 503; D6465 no fail-start), so the render refuses it. */ -}}
+{{- if and (eq (default false (default dict $v.goApi.authProxy).impersonation) true) (not $v.goApi.enabled) }}{{- fail "goApi.authProxy.impersonation needs goApi.enabled: the switch is an env entry of the go-api Deployment, and without go-api it would be accepted and absent" }}{{- end -}}
+{{- if and (eq (default false (default dict $v.goApi.authProxy).impersonation) true) (lt (int $p) 2) }}{{- fail "goApi.authProxy.impersonation needs authService.phase 2 or higher: go-api starts the admin impersonation session at auth-service only while auth-service owns sessions (AUTH_PROXY_SESSIONS); without it every impersonation start answers 503" }}{{- end -}}
 {{- if eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true }}
 {{- $routes := false }}{{- range ($v.authService.extraEnv | default list) }}{{- if eq (toString .name) "AUTH_MEMBERSHIP_ROUTES" }}{{- $routes = eq (toString .value) "true" }}{{- end }}{{- end }}
 {{- if not $routes }}{{- fail "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true (the exact name; the last entry with that name must be \"true\"): go-api calls auth-service's provisioning routes, which auth-service mounts only with that setting" }}{{- end }}
@@ -810,7 +814,7 @@ Every env name the chart renders for the go-api container, as a JSON list. goApi
 any case, for the same reason as dev-health.authServiceEnvNames. auth_phase_test.go walks the rendered names. The DSN name is appended, not listed, so the worker DSN list keeps the only listed spelling (a chartgates planted defect edits it).
 */}}
 {{- define "dev-health.goApiEnvNames" -}}
-{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
+{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "GO_API_AUTHZ_ENFORCE" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
 {{- $names = (append $names "API_DATABASE_URI") }}{{- toJson $names -}}
 {{- end -}}
 
@@ -903,8 +907,8 @@ the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and 
 {{- end -}}
 
 {{/*
-"true" when authService.platformRolesOwned is on, else "". The one read of the switch: auth-service, go-api, query-api and the
-auth Jobs render AUTH_PLATFORM_ROLES_OWNED from it. true is refused unless users are owned (authOn usersOwned): platform authority
+"true" when authService.platformRolesOwned is on, else "". The one read of the switch: auth-service, go-api, query-api, the
+auth Jobs and the River step (river-migrate hook, migrate Job) render AUTH_PLATFORM_ROLES_OWNED from it. true is refused unless users are owned (authOn usersOwned): platform authority
 moves from public.users.is_superuser to auth.platform_role_assignments only after users do.
 */}}
 {{- define "dev-health.platformRolesOwned" -}}
@@ -913,6 +917,18 @@ moves from public.users.is_superuser to auth.platform_role_assignments only afte
 {{- if $v -}}
 {{- if ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}{{- fail "authService.platformRolesOwned needs users owned: authService.phase 4 with authService.usersOwnedStage=owned (docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md)" }}{{- end -}}
 true
+{{- end -}}
+{{- end -}}
+
+{{/*
+The go-api enforcement list as one comma list, "" when empty (authService.enforce.goApi). A non-empty list needs
+AUTH_PROXY_URL on go-api, so it is refused unless go-api reaches auth-service. Rendered as GO_API_AUTHZ_ENFORCE.
+*/}}
+{{- define "dev-health.authzEnforceGoApi" -}}
+{{- $list := default (list) (default dict .Values.authService.enforce).goApi -}}
+{{- if $list -}}
+{{- if ne (include "dev-health.authProxyOn" .) "true" }}{{- fail "authService.enforce.goApi needs go-api to reach auth-service: set authService.phase to 2 or higher" }}{{- end -}}
+{{- join "," $list -}}
 {{- end -}}
 {{- end -}}
 
@@ -931,25 +947,38 @@ true
 {{- end -}}
 
 {{/*
-"true" when authService.ssoJit is on, else "". The one read of the switch. true is refused (CHAOS-12678).
+"true" when authService.ssoJit is on, else "". The one read of the switch. true is refused unless users are owned
+(authOn usersOwned): go-api refuses its own sign-in join and account create while AUTH_USERS_OWNED is on (internal/api/sso/provision.go),
+and go-api has that switch from stage goApi, before auth-service owns users, so auth-service is then the only writer.
 */}}
 {{- define "dev-health.ssoJit" -}}
 {{- $v := .Values.authService.ssoJit -}}
 {{- if not (kindIs "bool" $v) }}{{- fail "authService.ssoJit must be true or false" }}{{- end -}}
 {{- if $v -}}
-{{- fail "authService.ssoJit=true is refused at every phase until CHAOS-12678 re-homes SSO JIT at users owned (phase 4): go-api's own sign-in join still writes, and two writers would race; phase 5 (orgs owned) is cancelled (D6651)" -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}{{- fail "authService.ssoJit=true needs users owned: authService.phase 4 with authService.usersOwnedStage=owned (below it go-api's own sign-in join still writes, and two writers would race)" }}{{- end -}}
+true
 {{- end -}}
 {{- end -}}
 
 {{/*
-OIDC and SAML through auth-service (authService.sso.oidc / .saml): "true" or "". true is refused: the chart does not
-render auth-service's SSO settings, so go-api would forward to routes auth-service does not mount.
-Call with (dict "flag" "oidc"|"saml" "context" $).
+OIDC and SAML through auth-service (authService.sso.oidc / .saml): "true" or "". Call with (dict "flag" "oidc"|"saml" "context" $).
+true needs go-api to reach auth-service (phase >= 2), authService.sso.secretName and a Secret key name for every setting
+auth-service's loader reads for the protocol (internal/auth/authconfig/sso.go): APP_BASE_URL, SETTINGS_ENCRYPTION_KEY and
+SETTINGS_ENCRYPTION_SALT, and AUTH_SSO_STATE_KEY for oidc only. A missing one fails the render and names the key; the settings
+reach the pod by secretKeyRef (templates/auth-service.yaml), never a value.
 */}}
 {{- define "dev-health.authSSOOn" -}}
 {{- $key := printf "authService.sso.%s" .flag -}}
 {{- $sso := default dict .context.Values.authService.sso -}}
-{{- if eq (include "dev-health.authBool" (dict "value" (index $sso .flag) "key" $key)) "true" }}{{- fail (printf "%s=true is refused: the chart does not render auth-service's SSO settings (state key, base URL, encryption key) yet, so its %s routes would not mount" $key (upper .flag)) }}{{- end -}}
+{{- if eq (include "dev-health.authBool" (dict "value" (index $sso .flag) "key" $key)) "true" -}}
+{{- if ne (include "dev-health.authProxyOn" .context) "true" }}{{- fail (printf "%s=true needs go-api to reach auth-service: authService.phase >= 2 and goApi.enabled" $key) }}{{- end -}}
+{{- if not (trim (toString $sso.secretName)) }}{{- fail (printf "%s=true needs authService.sso.secretName: the Secret holding the SSO settings of auth-service (it must carry go-api's SETTINGS_ENCRYPTION_KEY)" $key) }}{{- end -}}
+{{- $keys := default dict $sso.keys -}}
+{{- range $name := ternary (list "stateKey" "appBaseURL" "encryptionKey" "encryptionSalt") (list "appBaseURL" "encryptionKey" "encryptionSalt") (eq $.flag "oidc") }}
+{{- if not (include "dev-health.validSecretKey" (index $keys $name)) }}{{- fail (printf "%s=true needs authService.sso.keys.%s (%s): the key name in authService.sso.secretName is empty or not a valid Secret key" $key $name (get (dict "stateKey" "AUTH_SSO_STATE_KEY" "appBaseURL" "APP_BASE_URL" "encryptionKey" "SETTINGS_ENCRYPTION_KEY" "encryptionSalt" "SETTINGS_ENCRYPTION_SALT") $name)) }}{{- end -}}
+{{- end -}}
+true
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -1155,7 +1184,7 @@ address, so its own NetworkPolicy, admitting the listed peer workloads only, is 
 {{- if or (not (or (kindIs "float64" $port) (kindIs "int64" $port) (kindIs "int" $port))) (ne (floor $port) (float64 $port)) (lt (int $port) 1) (gt (int $port) 65535) }}{{- fail "authService.internal.port must be a whole number from 1 to 65535" }}{{- end -}}
 {{- if has (int $port) (list (int .Values.authService.port) (int .Values.authService.operatorPort)) }}{{- fail "authService.internal.port must differ from authService.port and authService.operatorPort" }}{{- end -}}
 {{- if not (kindIs "slice" $in.peers) }}{{- fail "authService.internal.peers must be a list of workload names (web, query-api, go-api)" }}{{- end -}}
-{{- if not $in.peers }}{{- fail "authService.internal.peers must name at least one workload (web, query-api, go-api): the internal port admits only the listed peers" }}{{- end -}}
+{{- if not (or $in.peers .Values.authService.networkPolicy.workloadClients) }}{{- fail "authService.internal.peers or authService.networkPolicy.workloadClients must be non-empty while authService.internal.enabled: the internal port admits only the listed peers and clients, so with neither it would admit nobody (and an empty from would admit every source)" }}{{- end -}}
 {{- $seen := dict -}}
 {{- range $in.peers }}
 {{- if not (and (kindIs "string" .) (has . (list "web" "query-api" "go-api"))) }}{{- fail (printf "authService.internal.peers: %v is not one of web, query-api, go-api" .) }}{{- end -}}
@@ -1164,6 +1193,33 @@ address, so its own NetworkPolicy, admitting the listed peer workloads only, is 
 {{- end -}}
 true
 {{- end -}}
+{{- end -}}
+
+{{/*
+CHAOS-13130: checks authService.networkPolicy.workloadClients, the workloads outside this release (acr-api) admitted on
+the internal port alone. Renders nothing; fails the render on a value the internal policy must not carry. Each entry
+is a podSelector (required, non-empty) and an optional non-empty namespaceSelector, and nothing else: an entry has no
+port, so it can only join the internal port's one rule and never reach the API port, which stays go-api's while
+go-api forwards the auth routes. null is the empty list. Call with (dict "context" . "internalOn" "true"|"").
+*/}}
+{{- define "dev-health.authWorkloadClients" -}}
+{{- $key := "authService.networkPolicy.workloadClients" -}}
+{{- $clients := .context.Values.authService.networkPolicy.workloadClients -}}
+{{- if not (or (kindIs "invalid" $clients) (kindIs "slice" $clients)) }}{{- fail (printf "%s must be a list of {podSelector, namespaceSelector} entries" $key) }}{{- end -}}
+{{- if and $clients (ne .internalOn "true") }}{{- fail (printf "%s needs authService.internal.enabled: the clients are admitted on the internal port alone, by its own NetworkPolicy" $key) }}{{- end -}}
+{{- range $i, $client := $clients }}
+{{- if not (kindIs "map" $client) }}{{- fail (printf "%s[%d] must be an object with a podSelector and an optional namespaceSelector" $key $i) }}{{- end -}}
+{{- range $name := keys $client | sortAlpha }}
+{{- if not (has $name (list "namespaceSelector" "podSelector")) }}{{- fail (printf "%s[%d] takes only podSelector and namespaceSelector, not %q: the entries open the internal port (authService.internal.port) alone, so a port, an ipBlock or any other key is refused" $key $i $name) }}{{- end -}}
+{{- end }}
+{{- if not (hasKey $client "podSelector") }}{{- fail (printf "%s[%d] needs a podSelector: without one the entry admits every pod" $key $i) }}{{- end -}}
+{{- range $name := list "podSelector" "namespaceSelector" }}
+{{- if hasKey $client $name }}
+{{- $selector := index $client $name }}
+{{- if not (and (kindIs "map" $selector) (or (and $selector.matchLabels (gt (len $selector.matchLabels) 0)) (and $selector.matchExpressions (gt (len $selector.matchExpressions) 0)))) }}{{- fail (printf "%s[%d].%s needs a non-empty matchLabels or matchExpressions: an empty selector admits every pod or namespace" $key $i $name) }}{{- end -}}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end -}}
 
 {{/*
@@ -1229,6 +1285,29 @@ differ from the runtime login, and no caller repeats. Renders nothing.
 {{- end }}
 
 {{/*
+The repository identity writer settings (CHAOS-13057) of both auth-migrate Jobs, checked before either renders. The append
+function's owner is a NOLOGIN role of its own (writerRole), and exactly one login may execute it: the worker domain login of
+the provider sync (callerRoles, one entry). Both or neither; the writer differs from the runtime login, from the External
+Push writer and from the caller. Renders nothing.
+*/}}
+{{- define "dev-health.authRepoIdentity" -}}
+{{- $m := .Values.authService.migrate -}}
+{{- $writer := trim (toString (default "" $m.repoIdentity.writerRole)) -}}
+{{- $callers := default (list) $m.repoIdentity.callerRoles -}}
+{{- if and (not $writer) $callers }}{{- fail "authService.migrate.repoIdentity.callerRoles is set while writerRole is empty: the grant pass runs only with a writer role, so no caller would get EXECUTE; set repoIdentity.writerRole too" }}{{- end -}}
+{{- if $writer }}
+{{- if ne (len $callers) 1 }}{{- fail (printf "authService.migrate.repoIdentity.callerRoles must list exactly one login (the worker domain login), got %d" (len $callers)) }}{{- end -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $writer) }}{{- fail (printf "authService.migrate.repoIdentity.writerRole %q is not a valid role name (lower-case letters, digits and underscore, starting with a letter, at most 63 characters)" $writer) }}{{- end -}}
+{{- if or (eq $writer (trim (toString $m.runtimeRole))) (eq $writer (trim (toString (default "" $m.pushLifecycle.writerRole)))) }}{{- fail "authService.migrate.repoIdentity.writerRole must differ from authService.migrate.runtimeRole and from authService.migrate.pushLifecycle.writerRole" }}{{- end -}}
+{{- $raw := toString (first $callers) -}}
+{{- $c := trim $raw -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $raw) }}{{- fail (printf "authService.migrate.repoIdentity.callerRoles entry %q is not a valid role name (lower-case letters, digits and underscore, starting with a letter, at most 63 characters)" $raw) }}{{- end -}}
+{{- if or (eq $c $writer) (eq $c (trim (toString $m.runtimeRole))) (eq $c (trim (toString (default "" $m.pushLifecycle.writerRole)))) }}{{- fail (printf "authService.migrate.repoIdentity.callerRoles entry %q must differ from both writer roles and the runtime role" $c) }}{{- end -}}
+{{- range (default (list) $m.pushLifecycle.callerRoles) }}{{- if eq (trim (toString .)) $writer }}{{- fail "authService.migrate.repoIdentity.writerRole must differ from every authService.migrate.pushLifecycle caller" }}{{- end -}}{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 The auth schema owner pin (authService.migrate.ownerRole -> AUTH_SCHEMA_OWNER_ROLE) for both auth-migrate Jobs, or "".
 Empty renders nothing at every phase. Set, the role must differ from the runtime login, every session reader and every
 push lifecycle role, or the render fails (auth-migrate refuses the first two at run time as well).
@@ -1237,7 +1316,7 @@ push lifecycle role, or the render fails (auth-migrate refuses the first two at 
 {{- $m := .Values.authService.migrate -}}
 {{- $owner := trim (toString (default "" $m.ownerRole)) -}}
 {{- if $owner -}}
-{{- $others := concat (list $m.runtimeRole $m.pushLifecycle.writerRole) (default (list) $m.sessionReaderRoles) (default (list) $m.pushLifecycle.callerRoles) (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi))) -}}
+{{- $others := concat (list $m.runtimeRole $m.pushLifecycle.writerRole) (default (list) $m.sessionReaderRoles) (default (list) $m.projectionReaderRoles) (default (list) $m.pushLifecycle.callerRoles) (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi))) -}}
 {{- if has $owner $others }}{{- fail "authService.migrate.ownerRole must differ from authService.migrate.runtimeRole, every session reader role and every push lifecycle role" }}{{- end -}}
 {{- $owner -}}
 {{- end -}}

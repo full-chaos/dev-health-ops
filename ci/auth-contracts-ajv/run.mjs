@@ -140,6 +140,7 @@ const PINNED_INVENTORY = {
 const APPROVED_REVOKED = [
   "compromised",
   "domain_revoked",
+  "org_deprovisioned",
   "owner_request",
 ];
 const APPROVED_AUDIT = [
@@ -157,6 +158,7 @@ const APPROVED_AUDIT = [
   "internal_error",
   "compromised",
   "domain_revoked",
+  "org_deprovisioned",
   "owner_request",
   "role_granted",
   "role_revoked",
@@ -212,7 +214,9 @@ const APPROVED_AUDIT = [
 const APPROVED_DECISION = [
   "allowed_by_repository_grant",
   "grant_absent",
+  "repository_allowlist_too_large",
   "repository_not_granted",
+  "repository_unresolved",
   "platform_role_absent",
   "allowed_by_membership_default",
   "allowed_by_role",
@@ -221,7 +225,6 @@ const APPROVED_DECISION = [
   "grant_revoked",
   "impersonation_denied",
   "invalid_request",
-  "membership_inactive",
   "no_membership",
   "org_mismatch",
   "organization_inactive",

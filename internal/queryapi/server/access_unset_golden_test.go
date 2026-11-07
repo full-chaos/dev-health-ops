@@ -21,7 +21,7 @@ const issuerUnsetGolden = `{"graphql POST edge inactive":{"body":"{\"detail\":\"
 "graphql POST edge orgless superuser":{"body":"","status":200},
 "graphql POST edge stale token_version":{"body":"{\"detail\":\"Authentication required\"}","status":401},
 "graphql POST edge users store error":{"body":"{\"detail\":\"Internal Server Error\"}","status":500},
-"graphql POST edge users store unavailable":{"body":"{\"detail\":\"Internal Server Error\"}","status":500},
+"graphql POST edge users store unavailable":{"body":"{\"detail\":{\"message\":\"Database temporarily unavailable\"}}","status":503},
 "graphql POST envelope":{"body":"{\"detail\":\"Authentication required\"}","status":401},
 "graphql POST garbage":{"body":"{\"detail\":\"Authentication required\"}","status":401},
 "graphql POST no bearer":{"body":"{\"detail\":\"Authentication required\"}","status":401},

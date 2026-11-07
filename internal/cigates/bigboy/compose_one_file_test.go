@@ -86,6 +86,8 @@ func composeDigestsInPinsOnly(g *guard) {
 	pins := composePinsMap(g.read(composePins))
 	delete(pins, "DHO_API_CH_USERS_XML")
 	delete(pins, "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED")
+	delete(pins, "ACR_DB_INIT_SCRIPT")
+	delete(pins, "BIGBOY_ACR_COMMIT")
 	var acr, own []string
 	for _, name := range composeSorted(pins) {
 		if strings.Contains(name, "_ACR_") {
@@ -96,7 +98,7 @@ func composeDigestsInPinsOnly(g *guard) {
 	}
 	wantACR := []string{"BIGBOY_ACR_API_IMAGE", "BIGBOY_ACR_FALKORDB_IMAGE", "BIGBOY_ACR_MCP_IMAGE", "BIGBOY_ACR_NGINX_IMAGE", "BIGBOY_ACR_POSTGRES_IMAGE"}
 	g.expect(equal(acr, wantACR), "images.env acr pins are %v, want %v", acr, wantACR)
-	wantOwn := []string{"BIGBOY_API_TOOLS_IMAGE", "BIGBOY_DHO_IMAGE", "BIGBOY_WEB_IMAGE"}
+	wantOwn := []string{"BIGBOY_API_TOOLS_IMAGE", "BIGBOY_AUTH_MIGRATE_IMAGE", "BIGBOY_AUTH_SERVICE_IMAGE", "BIGBOY_DHO_IMAGE", "BIGBOY_WEB_IMAGE"}
 	g.expect(equal(own, wantOwn), "images.env pins are %v, want %v", own, wantOwn)
 	for _, name := range append(acr, own...) {
 		g.expect(required[name], "compose.bigboy.yml does not require (${%s:?) the pin %s", name, name)
@@ -115,12 +117,12 @@ func composeOneOffNeedsNoOwnVariables(g *guard) {
 	for _, p := range [][]string{nil, {"smoke"}, {"venue"}, {"venue-hook"}, {"venue-river"}, composeAllOneOffs} {
 		composeMust(g, composeIn{profiles: p})
 	}
-	want := []string{"BIGBOY_ACR_API_IMAGE", "BIGBOY_ACR_FALKORDB_IMAGE", "BIGBOY_ACR_MCP_IMAGE", "BIGBOY_ACR_NGINX_IMAGE", "BIGBOY_ACR_POSTGRES_IMAGE",
-		"BIGBOY_API_TOOLS_IMAGE", "BIGBOY_DHO_IMAGE", "BIGBOY_WEB_IMAGE", "DHO_API_CH_USERS_XML"}
+	want := []string{"ACR_DB_INIT_SCRIPT", "BIGBOY_ACR_API_IMAGE", "BIGBOY_ACR_FALKORDB_IMAGE", "BIGBOY_ACR_MCP_IMAGE", "BIGBOY_ACR_NGINX_IMAGE", "BIGBOY_ACR_POSTGRES_IMAGE",
+		"BIGBOY_API_TOOLS_IMAGE", "BIGBOY_AUTH_MIGRATE_IMAGE", "BIGBOY_AUTH_SERVICE_IMAGE", "BIGBOY_DHO_IMAGE", "BIGBOY_WEB_IMAGE", "DHO_API_CH_USERS_XML"}
 	sort.Strings(want)
 	got := composeRequired(g)
 	if len(composeBugsinkEnv()) == 0 { // the in-repo tree keeps its bugsink defaults: it requires none of the bugsink variables
-		g.expect(equal(got, want), "compose.bigboy.yml requires %v, want only the pins and DHO_API_CH_USERS_XML %v", got, want)
+		g.expect(equal(got, want), "compose.bigboy.yml requires %v, want only the pins, ACR_DB_INIT_SCRIPT and DHO_API_CH_USERS_XML %v", got, want)
 		return
 	}
 	for _, f := range composeBugsinkFileFindings(g, got, want) {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
@@ -40,20 +41,29 @@ func TestOAuthSSOCountVerbWithoutADatabaseFailsWithoutRunning(t *testing.T) {
 	}
 }
 
-func TestOAuthSSOKeysOddSocialBaseURLFormsAreSelfHostedUnbindable(t *testing.T) {
+func TestOAuthSSOKeysBaseURLFormsKeyByLowercaseHost(t *testing.T) {
 	row := uuid.New()
-	for base, wantKey := range map[string]bool{
-		"https://gitlab.com":      true,
-		"https://gitlab.com/":     true,
-		"https://GitLab.com/":     false,
-		"https://gitlab.com//":    false,
-		"https://gitlab.com:443":  false,
-		"https://gitlab.com/path": false,
-		"http://gitlab.com":       false,
+	for base, wantIssuer := range map[string]string{
+		"https://gitlab.com":               "https://gitlab.com",
+		"https://gitlab.com/":              "https://gitlab.com",
+		"https://GitLab.com/":              "https://gitlab.com",
+		"https://gitlab.com//":             "https://gitlab.com",
+		"https://gitlab.com/path":          "https://gitlab.com",
+		"https://gitlab.com:443":           "https://gitlab.com:443",
+		"http://gitlab.com":                "http://gitlab.com",
+		"https://Git.Corp.Example:8443/gl": "https://git.corp.example:8443",
+		"git.corp.example":                 "",
+		"ftp://git.corp.example":           "",
 	} {
-		key, selfHosted := OAuthSSOKey(cand(uuid.New(), row, "gitlab", "5", base))
-		if (key != nil) != wantKey || selfHosted == wantKey {
-			t.Fatalf("base_url %q: key=%v selfHosted=%v, want key=%v", base, key, selfHosted, wantKey)
+		key := OAuthSSOKey(cand(uuid.New(), row, "gitlab", "5", base))
+		if wantIssuer == "" {
+			if key != nil {
+				t.Fatalf("base_url %q: key %+v, want none", base, key)
+			}
+			continue
+		}
+		if key == nil || key.Issuer != wantIssuer || key.Provider != identity.Provider(row.String()) {
+			t.Fatalf("base_url %q: key %+v, want issuer %q", base, key, wantIssuer)
 		}
 	}
 }

@@ -153,6 +153,9 @@ var errReadFailed = errors.New("provisionDB: the read failed")
 // provTarget into every uuid.UUID: a row whose columns the test does not read.
 type zeroFill struct{}
 
+// idFill is zeroFill with the given id in every uuid.UUID target.
+type idFill struct{ id uuid.UUID }
+
 func scanValues(values, dest []any) error {
 	if len(values) == 1 && values[0] == (failRead{}) {
 		return errReadFailed
@@ -166,6 +169,18 @@ func scanValues(values, dest []any) error {
 			}
 		}
 		return nil
+	}
+	if len(values) == 1 {
+		if fill, ok := values[0].(idFill); ok {
+			for _, target := range dest {
+				v := reflect.ValueOf(target).Elem()
+				v.Set(reflect.Zero(v.Type()))
+				if id, ok := target.(*uuid.UUID); ok {
+					*id = fill.id
+				}
+			}
+			return nil
+		}
 	}
 	if len(values) != len(dest) {
 		return errProvNoDB
@@ -203,12 +218,21 @@ func (r *provisionRows) Close()                 {}
 // in the database log (so the order against the SQL is one list) and answers
 // err, or a success naming the requested rows.
 type fakeProvisioner struct {
-	db    *provisionDB
-	err   error
-	calls []string
-	args  [][]any
+	db  *provisionDB
+	err error
+	// failOn, when set, limits err to that verb (add, role, remove ...).
+	failOn string
+	calls  []string
+	args   [][]any
 	// role, when set, is the role a success answers (an accept's invite role).
 	role string
+}
+
+func (f *fakeProvisioner) errFor(verb string) error {
+	if f.failOn != "" && f.failOn != verb {
+		return nil
+	}
+	return f.err
 }
 
 func (f *fakeProvisioner) record(verb string, args ...any) {
@@ -219,17 +243,17 @@ func (f *fakeProvisioner) record(verb string, args ...any) {
 
 func (f *fakeProvisioner) AddMember(_ context.Context, org, principal, actor uuid.UUID, role string, invitedBy *uuid.UUID) (authprovision.Membership, error) {
 	f.record("add", org, principal, actor, role, invitedBy)
-	return authprovision.Membership{ID: provMember, OrgID: org, PrincipalID: principal, Role: role, Status: "active"}, f.err
+	return authprovision.Membership{ID: provMember, OrgID: org, PrincipalID: principal, Role: role, Status: "active"}, f.errFor("add")
 }
 
 func (f *fakeProvisioner) ChangeRole(_ context.Context, org, principal, actor uuid.UUID, role string) (authprovision.Membership, error) {
 	f.record("role", org, principal, actor, role)
-	return authprovision.Membership{ID: provMember, OrgID: org, PrincipalID: principal, Role: role, Status: "active"}, f.err
+	return authprovision.Membership{ID: provMember, OrgID: org, PrincipalID: principal, Role: role, Status: "active"}, f.errFor("role")
 }
 
 func (f *fakeProvisioner) RemoveMember(_ context.Context, org, principal, actor uuid.UUID) error {
 	f.record("remove", org, principal, actor)
-	return f.err
+	return f.errFor("remove")
 }
 
 func (f *fakeProvisioner) TransferOwnership(_ context.Context, org, from, to, actor uuid.UUID) error {
@@ -310,7 +334,7 @@ var provisionRoutes = []provisionRoute{
 
 func newProvisionHandlers(db *provisionDB, auth authprovision.Provisioner) *handlers {
 	h := &handlers{store: pgStore{Pool: db, Now: func() time.Time { return provStamp }}, logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		audit: audit.PGWriter{Now: func() time.Time { return provStamp }}}
+		audit: audit.PGWriter{Now: func() time.Time { return provStamp }}, invites: InviteConfig{LinkSecret: "provision-test-link-secret"}}
 	if auth != nil {
 		h.orgProvision = auth
 	}
@@ -504,7 +528,6 @@ func TestProvisionRefusalsMapToTodaysAnswers(t *testing.T) {
 		{errors.New("other"), 503, provUnavailable},
 		{refusedWith(409, "users_not_owned"), 503, provUnavailable},
 		{refusedWith(409, "state_changed"), 503, provUnavailable},
-		{refusedWith(409, "organization_suspended"), 503, provUnavailable},
 		{refusedWith(400, "malformed"), 503, provUnavailable},
 		{refusedWith(401, ""), 503, provUnavailable},
 	}
@@ -549,6 +572,104 @@ func TestProvisionRefusalsMapToTodaysAnswers(t *testing.T) {
 				t.Fatalf("%s %v: steps after the refused call: %v", route.name, tc.err, db.log)
 			}
 		}
+	}
+}
+
+// CHAOS-11800 (pm 2026-11-03): a client error is never a 503. One cell per
+// refusal reason of each member route; a dependency failure stays 503.
+func TestProvisionClientRefusalsAre4xx(t *testing.T) {
+	type cell struct {
+		route  string
+		status int
+		reason string
+		code   int
+		text   string
+	}
+	cells := []cell{
+		{"add", 404, "principal_not_found", 404, "User not found"},
+		{"add", 404, "inviter_not_found", 404, "Inviter not found"},
+		{"add", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"add", 403, "deactivated", 403, "Account is deactivated"},
+		{"add", 409, "membership_suspended", 409, "Membership is suspended"},
+		{"role", 404, "principal_not_found", 404, "Membership not found"},
+		{"role", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"role", 403, "deactivated", 403, "Account is deactivated"},
+		{"role", 409, "membership_suspended", 404, "Membership not found"},
+		{"remove", 404, "principal_not_found", 404, "Membership not found"},
+		{"remove", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"remove", 403, "deactivated", 403, "Account is deactivated"},
+		{"transfer", 404, "principal_not_found", 400, "Target user is not a member"},
+		{"transfer", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"transfer", 403, "deactivated", 403, "Account is deactivated"},
+	}
+	for _, c := range cells {
+		t.Run(c.route+"_"+c.reason, func(t *testing.T) {
+			for _, route := range provisionRoutes {
+				if route.name != c.route {
+					continue
+				}
+				db := &provisionDB{rows: provisionRowsFor()}
+				code, body := callRoute(newProvisionHandlers(db, &fakeProvisioner{db: db, err: refusedWith(c.status, c.reason)}), route)
+				if code != c.code || body != provDetail(c.text) {
+					t.Errorf("%s %s: %d %s, want %d %s", c.route, c.reason, code, body, c.code, provDetail(c.text))
+				}
+			}
+		})
+	}
+	t.Run("dependency_failure_stays_503", func(t *testing.T) {
+		for _, err := range []error{authprovision.ErrUnavailable, refusedWith(503, "dependency_unavailable"), refusedWith(500, "principal_not_found"), refusedWith(502, "")} {
+			for _, route := range provisionRoutes {
+				if route.name == "invite" {
+					continue
+				}
+				db := &provisionDB{rows: provisionRowsFor()}
+				code, body := callRoute(newProvisionHandlers(db, &fakeProvisioner{db: db, err: err}), route)
+				if code != 503 || body != provUnavailable {
+					t.Errorf("%s %v: %d %s, want 503", route.name, err, code, body)
+				}
+			}
+		}
+	})
+}
+
+// The wire reason auth-service sends for a deactivated actor is
+// principal_deactivated (internal/auth/authapi/wire.go): the four member routes
+// and the invite route answer 403, organization creation keeps its 503.
+func TestProvisionPrincipalDeactivatedIs403OnMemberAndInviteRoutes(t *testing.T) {
+	for _, route := range provisionRoutes {
+		t.Run(route.name, func(t *testing.T) {
+			db := &provisionDB{rows: provisionRowsFor()}
+			code, body := callRoute(newProvisionHandlers(db, &fakeProvisioner{db: db, err: refusedWith(403, "principal_deactivated")}), route)
+			if code != 403 || body != provDetail("Account is deactivated") {
+				t.Errorf("%s: %d %s, want 403 Account is deactivated", route.name, code, body)
+			}
+		})
+	}
+	t.Run("create_organization_keeps_503", func(t *testing.T) {
+		db := newOrgCreateDB()
+		auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB, err: refusedWith(403, "principal_deactivated")}}
+		if code, body, _ := callCreateOrg(db, auth, orgCreateWithOwner); code != http.StatusServiceUnavailable || body != unavailableBody() {
+			t.Errorf("create org: %d %s, want the 503", code, body)
+		}
+	})
+}
+
+// CHAOS-11800 (pm 2026-11-03): the strict role rule stays. With the proxy on, an
+// empty or non-catalog role is a 400 and auth-service is never called; the
+// legacy row orgs_crud.json "add member empty role" (201, proxy OFF) is an
+// accepted divergence: no role outside the catalog.
+func TestProvisionAddEmptyRoleIsRefusedWithProxyOn(t *testing.T) {
+	for name, role := range map[string]string{"empty": "", "banana": "banana"} {
+		t.Run(name, func(t *testing.T) {
+			route := provisionRoutes[0]
+			route.body = `{"user_id": "` + provTarget.String() + `", "role": "` + role + `"}`
+			db := &provisionDB{rows: provisionRowsFor()}
+			auth := &fakeProvisioner{db: db}
+			code, body := callRoute(newProvisionHandlers(db, auth), route)
+			if code != 400 || body != provDetail("Invalid role: "+role) || len(auth.calls) != 0 {
+				t.Errorf("role %q: %d %s calls %v, want 400 Invalid role and no auth call", role, code, body, auth.calls)
+			}
+		})
 	}
 }
 
@@ -642,7 +763,7 @@ func TestProvisionReadBackFailureAfterSuccessIs503(t *testing.T) {
 		auth := &fakeProvisioner{db: db}
 		h := newProvisionHandlers(db, auth)
 		sent := &mailRecorder{}
-		h.invites = InviteConfig{Mail: sent}
+		h.invites = InviteConfig{Mail: sent, LinkSecret: "provision-test-link-secret"}
 		code, body := callRoute(h, route)
 		if code != http.StatusServiceUnavailable || body != provUnavailable || len(auth.calls) != 1 {
 			t.Fatalf("%s: %d %s calls %v, want 503 %s after one auth call", route.name, code, body, auth.calls, provUnavailable)
@@ -660,6 +781,7 @@ func TestProvisionInviteMailIsSentOnce(t *testing.T) {
 	db := &provisionDB{rows: provisionRowsFor()}
 	h := newProvisionHandlers(db, &fakeProvisioner{db: db})
 	sent := &mailRecorder{}
+	// auth-service signs the token, so go-api needs no link secret on this path.
 	h.invites = InviteConfig{Mail: sent}
 	if code, body := callRoute(h, provisionRoutes[4]); code != http.StatusCreated || len(sent.sent) != 1 {
 		t.Fatalf("%d %s, %d mails; want 201 and one mail", code, body, len(sent.sent))

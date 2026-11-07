@@ -383,11 +383,15 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		result, err = h.Sessions.ExchangeGuarded(ctx, contracts.NewSecretString(token), h.refreshGuard)
 	}
 	guardRefused := errors.Is(err, session.ErrGuardRefused)
+	// The store refuses an auth-service credential whose public user is inactive or gone under the session lock
+	// (D6651) and names the locked session. The user read below decides go-api's answer and row, the session is
+	// revoked whatever that read finds, and nothing is minted.
+	storeRefused := err == nil && storeRefusedUser(result) && legacy == nil
 	if err != nil && !guardRefused {
 		h.fail(w, r, opCompatRefresh, err)
 		return
 	}
-	if !guardRefused && !result.Reason.Success() {
+	if !guardRefused && !storeRefused && !result.Reason.Success() {
 		if result.Reason == session.ReasonPrincipalDeactivated {
 			// go-api's deactivated row (refresh.go:265), in a transaction of its own: for a go-api refresh token the
 			// store revoked its family in its own transaction; for an auth-service credential the store refused
@@ -425,6 +429,15 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonDeactivated, textDisabled)
+		return
+	}
+	if storeRefused {
+		// The store's lock read refused the user and the read above finds it active (a concurrent change): nothing
+		// was rotated, the refused session ends with go-api's generic 401.
+		if !h.revokeRefused(w, r, record, legacy, nil) {
+			return
+		}
+		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textInvalidRefresh)
 		return
 	}
 	switch checkPin(ctx, h.rec.logger, record, user) {
@@ -490,6 +503,12 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	out.Set("user", refreshUserInfo(record.PrincipalID, user, orgText, role))
 	setSessionAccessToken(out, tokens)
 	writeCompatModel(w, out)
+}
+
+// storeRefusedUser reports the store's refusal of a session whose public user
+// is inactive or gone, naming the locked session.
+func storeRefusedUser(result session.Result) bool {
+	return result.Reason == session.ReasonPrincipalDeactivated && result.Session.ID != uuid.Nil
 }
 
 // isJWT reports a token in compact JWS form (three dot-separated parts). An
@@ -584,8 +603,9 @@ func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 // revokeLegacy verifies a go-api refresh JWT and ends its lineage. A token that
-// does not verify revokes nothing, as an unknown opaque credential does; no
-// principal is projected, since the go-api rows exist without it.
+// does not verify revokes nothing, as an unknown opaque credential does, and so
+// does every such token once the Issuer holds no legacy key: an unverified jti
+// never revokes. No principal is projected, since the go-api rows exist without it.
 func (h compatHandlers) revokeLegacy(r *http.Request, token string, actor session.Actor) (bool, error) {
 	ctx := r.Context()
 	legacy, err := h.Issuer.VerifyLegacyRefresh(token)
@@ -593,6 +613,7 @@ func (h compatHandlers) revokeLegacy(r *http.Request, token string, actor sessio
 		h.rec.logger.DebugContext(ctx, "legacy refresh token refused at logout", "reason", edgetoken.ReasonOf(err))
 		return false, nil
 	}
+	legacyLogoutAccepted.Load().Accepted(ctx)
 	return h.Sessions.RevokeLegacy(ctx, legacy, actor)
 }
 

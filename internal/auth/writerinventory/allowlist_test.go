@@ -76,6 +76,12 @@ var Allowlist = []Entry{
 	{File: "internal/audit/audit.go", Func: "insertOutboxRow", Table: "auth.auth_outbox_events", Verb: "INSERT"},
 	{File: "internal/audit/publisher.go", Func: "Publisher.deliverOne", Table: "auth.auth_outbox_events", Verb: "UPDATE"},
 	{File: "internal/audit/reaper.go", Func: "Reap", Table: "auth.auth_outbox_events", Verb: "DELETE"},
+	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "DELETE"},
+	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "INSERT"},
+	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "UPDATE"},
+	// CHAOS-13057 (PLAN-13034 a56ac6f7, acp GO): the grant id fill moved out of PGSink.Apply into one function that the backfill
+	// and the repository identity reader share; each caller runs it inside its own audit.Commit.
+	{File: "internal/auth/repoidentity/repoidentity.go", Func: "FillGrantRepoIDs", Table: "auth.resource_grants", Verb: "UPDATE"},
 	{File: "internal/auth/grant/store.go", Func: "Store.Create", Table: "auth.resource_grants", Verb: "INSERT"},
 	{File: "internal/auth/grant/store.go", Func: "Store.Update", Table: "auth.resource_grants", Verb: "UPDATE"},
 	{File: "internal/auth/grantend/grantend.go", Func: "Plan.Apply", Table: "auth.resource_grants", Verb: "UPDATE"},
@@ -104,6 +110,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Issue", Table: "auth.link_credentials", Verb: "DELETE"},
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Issue", Table: "auth.link_credentials", Verb: "INSERT"},
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Redeem", Table: "auth.link_credentials", Verb: "UPDATE"},
+	// acp 11-07 ruling, CHAOS-13196: `dho auth users-create` provisions a verified local user through ProvisionCLIUser.
+	{File: "internal/auth/identity/cliuser.go", Func: "Store.ProvisionCLIUser", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/identity/cliuser.go", Func: "Store.ProvisionCLIUser", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.SetEmailVerifiedWith", Table: "auth.users", Verb: "UPDATE"},
@@ -135,8 +144,13 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/end_org.go", Func: "Store.EndOrganizationInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Begin", Table: "auth.sso_flow_states", Verb: "INSERT"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Consume", Table: "auth.sso_flow_states", Verb: "UPDATE"},
-	{File: "internal/auth/identity/organization.go", Func: "Store.insertOrganization", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.updateOrganization", Table: "auth.organizations", Verb: "UPDATE"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "EnsureOrganizationIn", Table: "auth.organizations", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "EnsureUserIn", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "EnsureUserIn", Table: "auth.users", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertOrganizationSQL", Table: "auth.organizations", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertPrincipalSQL", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertUserSQL", Table: "auth.users", Verb: "INSERT"},
 	// acp ruling, CHAOS-12032 (D6515): go-api's provider failure record (recordSSOFailure) by the OAuth and SAML sign-ins: last_error, last_error_at and updated_at, never the status, one transaction with the audit row.
 	{File: "internal/auth/identity/ssoaudit/ssoaudit.go", Func: "PGProviderFailure.Failed", Table: "public.sso_providers", Verb: "UPDATE"},
 	// D6534 (ticket 12118): go-api's success record (finishSSOLogin) by the OIDC, OAuth and SAML sign-ins: last_login_at and updated_at, one transaction with the audit row.
@@ -190,8 +204,6 @@ var Allowlist = []Entry{
 	{File: "internal/auth/platformrole/owner.go", Func: "Store.RevokeOwner", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.users", Verb: "UPDATE"},
-	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.principals", Verb: "INSERT"},
-	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.users", Verb: "INSERT"},
 	// The signing-key rotation operator (auth-migrate keys, migration role): key states, and the sessions a compromise revokes.
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.revokeSessions", Table: "auth.refresh_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.revokeSessions", Table: "auth.sessions", Verb: "UPDATE"},
@@ -218,10 +230,22 @@ var Allowlist = []Entry{
 	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.park", Table: "auth.projection_retry", Verb: "UPSERT"},
 	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.readMark", Table: "auth.projection_cursor", Verb: "INSERT"},
 	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.release", Table: "auth.projection_retry", Verb: "DELETE"},
+	// CHAOS-13057 (PLAN-13034 a56ac6f7, acp GO): the repository identity reader moves a repository_identities row to an event's
+	// revision (the UPDATE first, the INSERT only for a repository with no row), and keeps its own cursor and retry rows on
+	// stream repository_identity, each inside audit.Commit.
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.advance", Table: "auth.projection_cursor", Verb: "UPDATE"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.apply", Table: "auth.repository_identities", Verb: "UPDATE"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.apply", Table: "auth.repository_identities", Verb: "UPSERT"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.park", Table: "auth.projection_retry", Verb: "UPSERT"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.readMark", Table: "auth.projection_cursor", Verb: "INSERT"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.release", Table: "auth.projection_retry", Verb: "DELETE"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.IssueKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.revokeKeyOnce", Table: "auth.credential_registry", Verb: "UPDATE"},
+	// CHAOS-12680 (pm answers-12680-1 Q1 (b)): an organization deprovision revokes the organization's service-account keys
+	// in its own audit.Commit.
+	{File: "internal/auth/orgdeprovision/keys.go", Func: "keyPlan.apply", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.service_accounts", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.disableOnce", Table: "auth.principals", Verb: "UPDATE"},
@@ -289,4 +313,6 @@ var Allowlist = []Entry{
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.users", Verb: "INSERT"},
+	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "writeSessions", Table: "auth.principals", Verb: "INSERT"}, // test support: venue seed for the api's real session check
+	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "writeSessions", Table: "auth.sessions", Verb: "INSERT"},   // test support: venue seed for the api's real session check
 }

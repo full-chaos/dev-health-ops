@@ -18,7 +18,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/metric/noop"
 
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -63,7 +65,9 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "b1dc4f7ff6f2456c9fd6df675cec53ea8aa7fb1da7af3c7f66c3f66cf07003e0", Ruling: protectedRoutesPinRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "90fa8ecb637e04601a3a0b7c98cd331077a11f89398a2f95581e47e2e087eb04", Ruling: protectedRoutesPinRuling})
+	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-orgclaim.go-pin.json", SHA256: protectedOrgClaimPinSHA256, Ruling: orgClaimRuling})
+	publicPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-public.go-pin.json", SHA256: protectedPublicPinSHA256, Ruling: publicRowRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
@@ -71,7 +75,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	members := newMembersStub(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), OrglessSuperusers: protectedOrglessSuperusers,
 		PythonEnv: []string{"EXPECTED_WORKER_GROUPS=" + venueWorkerGroups, "TELEMETRY_ENDPOINT=" + endpoint.URL + "/py", "SETTINGS_ENCRYPTION_KEY=" + venueEncryptionKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			// Python's collect_usage_stats counts a Postgres repos table the
@@ -155,6 +159,10 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		},
 		Retire: retiredProtectedRequest,
 		Pin:    pin,
+		Retirements: []venueoracle.Retirement{
+			{Match: func(request venueoracle.Request) bool { return protectedOrgClaimRetired[request.Name] }, Pin: claimPin},
+			{Match: func(request venueoracle.Request) bool { return protectedPublicRetired[request.Name] }, Pin: publicPin},
+		},
 		// A HEAD probe has no body to normalize, but its content-length is the
 		// length of the ruled GET body.
 		SkipContentLength: func(request venueoracle.Request) bool {
@@ -163,6 +171,12 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	}))
 	if len(orglessRefused) != 2 {
 		t.Errorf("org-less refusals declared: %v, want exactly 2", orglessRefused)
+	}
+	// publicRowRuling: the stranger-org telemetry event Go accepts lands on no stream (it is dropped).
+	for _, delta := range goStreamDeltas {
+		if protectedPublicRetired[delta.request] && len(delta.entries) != 0 {
+			t.Errorf("%s: go wrote stream entries %q, want none", delta.request, delta.entries)
+		}
 	}
 	// The provider traffic the member routes caused (method, path, sorted
 	// query): the member routes are retired, so Go's traffic is pinned.
@@ -269,7 +283,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		`SELECT canonical_id, coalesce(display_name, '<null>'), coalesce(email, '<null>'),
 			provider_identities, team_ids, is_active FROM identities FINAL
 		WHERE org_id != '' ORDER BY canonical_id`)
-	pin.Finish(t)
+	venueoracle.FinishPins(t, pin, claimPin, publicPin)
 	golden.Finish(t)
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt.String()), 0o600)
@@ -285,11 +299,25 @@ func startVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, venue *
 }
 
 // startVenueAPIWith is startVenueAPI with adjust applied to the built Deps
-// before the routes are composed.
+// before the routes are composed. The api verifies the venue's tokens as user
+// access tokens by the route's endpoint-profile row, with the venue's issuer key
+// as the only key, and reads each token's session in the auth schema of the Go
+// copy (venueoracle.WriteAuthSessions), as production does.
 func startVenueAPIWith(t *testing.T, ctx context.Context, cfg config.Config, venue *venueoracle.Venue, adjust func(*Deps)) string {
 	t.Helper()
+	venue.WriteAuthSessions(t, ctx)
+	routed := func(deps *Deps) {
+		if venue.TokenIssuer != nil {
+			if err := accessrouting.RouteUserTokens(deps.Auth, venue.TokenIssuer.Verifier(t), noop.NewMeterProvider().Meter("venue"), quietLogger()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if adjust != nil {
+			adjust(deps)
+		}
+	}
 	registry := health.NewRegistry(5 * time.Second)
-	components, err := configureWith(ctx, cfg, registry, quietLogger(), adjust)
+	components, err := configureWith(ctx, cfg, registry, quietLogger(), routed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +496,7 @@ func compareCHRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden
 // the pin shows any change in Go's answers.
 const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8939/CHAOS-8940)"
 
-// productTelemetryRuling retired the Python reference of nine product-telemetry
+// productTelemetryRuling retired the Python reference of ten product-telemetry
 // intake requests: the intake now bounds payload keys and string values, drops
 // only the event that breaks a rule, and bounds the org hash that names the
 // stream key (CHAOS-10945; stricter than Python, D6129). The rule tests in
@@ -490,6 +518,7 @@ var retiredProductTelemetryRequests = map[string]bool{
 	"pt: lone surrogate org hash":       true,
 	"pt: lone surrogate org hash snake": true,
 	"pt: paired surrogate org hash":     true,
+	"pt: wrong types":                   true,
 }
 
 // retiredProtectedRequest reports a request whose Python reference a ruling
@@ -556,3 +585,23 @@ func soloTeamRequests(tokens map[string]string) []venueoracle.Request {
 			Body: venueoracle.B64(`{"team_id":"solo","links":[{"provider_identity":"sol-gh","provider":"github","canonical_id":"sol","action":"create"}]}`)},
 	}
 }
+
+// orgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user holds
+// no live membership in, or is not a UUID.
+const orgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:90-102); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
+
+// publicRowRuling retires the Python answer of a request to a public row (no accepted credential class) that names a
+// stranger org in X-Org-Id.
+const publicRowRuling = "a public row verifies no bearer, so OrgScope (policy/scope.go:128) sees an anonymous caller and does not check X-Org-Id; the row serves no org data and the telemetry POST is the anonymous stream; prod behaves so today"
+
+// protectedOrgClaimRetired are the requests orgClaimRuling retired.
+var protectedOrgClaimRetired = map[string]bool{"ent: bad org claim": true}
+
+// protectedPublicRetired are the requests publicRowRuling retired.
+var protectedPublicRetired = map[string]bool{"probe: GET /health stranger org": true, "probe: GET /ready stranger org": true,
+	"probe: GET /health/workers stranger org": true, "pt: stranger org header": true}
+
+const (
+	protectedOrgClaimPinSHA256 = "ab2b2fb1dea730522b3c39382b3ed52d774a25ba183aa2bda2cc52fd1c682ba3"
+	protectedPublicPinSHA256   = "dd35f8f365cec8af4b488d59adcc511ef3dccaf1240f86f9d7464ec3c6d6f27f"
+)

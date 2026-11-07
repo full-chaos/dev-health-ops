@@ -70,6 +70,7 @@ func (j PGJIT) ProvisionOnSignIn(ctx context.Context, account NewAccount, p Prov
 		Key:   identity.ExternalKey{Issuer: account.Identity.Issuer, Provider: identity.Provider(account.Identity.Provider), Subject: account.Identity.Subject},
 		Email: account.Email, FullName: account.FullName, Actor: identity.SelfSignUp(nil),
 		LegacyProvider: "saml", LegacySubject: account.LegacySubject, LegacyFullName: account.LegacyFullName,
+		SAMLNameID: &identity.SAMLNameIDParts{Format: account.NameIDFormat, SPNameQualifier: account.SPNameQualifier},
 	}, identity.SSOJoin{OrgID: p.OrgID, Role: role}, nil)
 	return id, j.refused(ctx, p, err)
 }

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
@@ -107,7 +108,7 @@ var optionRegistry = []Option{
 	{
 		Flag: "http-addr", Env: EnvAPIAddress, Kind: KindString,
 		Default: defaultAPIAddress, Group: GroupHTTP,
-		Usage: "host:port for the auth API surface (the session routes mount only when both session secrets are set)",
+		Usage: "host:port for the auth API surface (the session routes mount only when the session secrets are set)",
 	},
 	{
 		Flag: "operator-http-addr", Env: EnvOperatorAddress, Kind: KindString,
@@ -180,6 +181,16 @@ var optionRegistry = []Option{
 			"X-Forwarded-For value names the client (the go-api proxy); \"*\" and hostnames are refused; empty trusts none",
 	},
 	{
+		Flag: "client-addr-mode", Env: EnvClientAddrMode, Kind: KindString, Default: string(clientaddr.ModeCIDR), Group: GroupHTTP,
+		Usage: "how the client address is named: cidr (the trusted-proxy list), both (a valid go-api proof, else the list) or " +
+			"signed (a valid go-api proof, else the socket peer; the list is read only for GET and HEAD of the two well-known documents)",
+	},
+	{
+		Env: EnvClientAddrVerifyKey, Kind: KindString, Secret: true, Group: GroupHTTP,
+		Usage: "one or two <kid>:<key> entries (key base64url without padding, at least 32 bytes) that go-api's client-address " +
+			"proofs are checked with; " + EnvClientAddrVerifyKey + "_FILE reads it from a mounted file instead. Needed by modes both and signed",
+	},
+	{
 		Env: EnvDatabaseURI, Kind: KindString, Secret: true, Group: GroupDatabase,
 		Usage: "PostgreSQL DSN for the auth-owned schema; " + EnvDatabaseURI +
 			"_FILE reads it from a mounted file instead (the two are mutually exclusive)",
@@ -225,8 +236,9 @@ var optionRegistry = []Option{
 	{
 		Env: EnvAccessTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "HS256 key of the compatibility access token (go-api's JWT_SECRET_KEY value, at least 32 characters); " +
-			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Set together with " +
-			EnvSessionSuccessorKey + "; with neither, no session route is mounted",
+			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Under hs256_compat set together with " +
+			EnvSessionSuccessorKey + "; with neither, no session route is mounted. Under eddsa optional (it only verifies go-api's HS256 token) and it needs " +
+			EnvSessionSuccessorKey,
 	},
 	{
 		Env: EnvSessionSuccessorKey, Kind: KindString, Secret: true, Group: GroupSession,
@@ -255,7 +267,8 @@ var optionRegistry = []Option{
 	},
 	{
 		Env: EnvSessionIssueWorkloadSubject, Kind: KindString, Group: GroupSession,
-		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. Needs " +
+		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. " +
+			EnvSessionIssueWorkloadSubject + "_FILE reads it from a mounted file instead (the two are mutually exclusive). Needs " +
 			EnvTokenIssuerURL,
 	},
 	{
@@ -272,7 +285,7 @@ var optionRegistry = []Option{
 		Env: EnvRateLimitKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "key the rate-limit counters digest identifiers with, at least 32 characters; " + EnvRateLimitKey +
 			"_FILE reads it from a mounted file instead. Unset, the limiter is keyed from " + EnvAccessTokenSecret +
-			"; needs the session secrets",
+			"; required while that is unset; needs the session secrets",
 	},
 	{
 		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,
@@ -294,6 +307,10 @@ var optionRegistry = []Option{
 	{
 		Flag: "push-projection", Env: EnvPushProjection, Kind: KindString, Default: "off", Group: GroupSession,
 		Usage: "on runs the External Push projection reader on this replica: it projects the external_push_credential rows of the auth outbox into external_source principals and credential_registry rows; off (default) runs none. Mounts no route",
+	},
+	{
+		Flag: "repo-identity-projection", Env: EnvRepoIdentityProjection, Kind: KindString, Default: "off", Group: GroupSession,
+		Usage: "on runs the repository identity projection reader on this replica: it upserts repository_identities from the repository_identity rows of the auth outbox (the provider sync's events); off (default) runs none. Mounts no route",
 	},
 	{
 		Flag: "revision-feed", Env: EnvRevisionFeed, Kind: KindString, Default: "off", Group: GroupSession,

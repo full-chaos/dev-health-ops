@@ -1,0 +1,30 @@
+# BARRIER_ALLOWLIST example for auth-users-owned-barrier.sh: the D6710 allowed set (CHAOS-13103), the 3 known non-writers
+# the admin users scan STOPs on in the prod namespace dev-health (operator clear in the 2026-11-05 U1..U3 window).
+#   1. Jobs ch-m5-grant17, 17b, 17c (ClickHouse grants, created 2026-10-23, succeeded 1, active 0) and their Succeeded pods:
+#      "malformed row" (an argument holds the field separator).
+#   2. Deployment dev-health-acr, init container prepare-entitlement-token: "runs a shell with -c".
+#   3. Deployment dev-health-ops-go-pgbouncer-transaction, container exporter (supervisor loop): "runs a shell with -c".
+# The facts the operator checked: cmd+args of each item mention dho / users / admin 0/0/0; the images below.
+#
+# Format: one entry per line, kind|owner|container|reason|image|sha256. Lines that start with # and empty lines are skipped.
+#   kind       pod or job
+#   owner      Job/<name> or Deployment/<name>: the workload that owns the pod (pod -> ReplicaSet -> Deployment), or the Job
+#   container  the container name, or - for a malformed row (the scan cannot split it)
+#   reason     malformed row (owner Job/..., container -) or shell -c (kind pod, owner Deployment/..., a container name)
+#   image      the full image reference with its digest, exactly as in the pod spec: <repository[:tag]>@sha256:<64 hex>
+#   sha256     the content the reviewer read: for malformed row, the row bytes after its third | (a Job and its pod give the
+#              same bytes); for shell -c, the container's command+args as the scan reads them. 64 lowercase hex, or unset.
+# The sha256 fields below are unset: the D6710 content was not recorded as bytes. unset never matches, so this file STOPs as it
+# is. To fill them, run the barrier read-only with this file: for each item whose other facts match it prints
+# `allowlist-hash-mismatch <key> object=<name> sha256=<actual>`; read that object's command+args read-only, and write the hash
+# here only when the content is the reviewed non-writer. Any later change of the content changes the hash and STOPs.
+# Exact string compare, no pattern; any bad line, a duplicate kind|owner|container|reason or an entry that matches nothing
+# STOPs the barrier. Review the file against the namespace before each use; remove an entry when its object is gone.
+pod|Job/ch-m5-grant17|-|malformed row|clickhouse/clickhouse-server:26.6.8.7@sha256:2c870d77ea76e955fb1c8dad536ad40a1236b6093db0c4966e22d21d4428982b|unset
+pod|Job/ch-m5-grant17b|-|malformed row|clickhouse/clickhouse-server:26.6.8.7@sha256:2c870d77ea76e955fb1c8dad536ad40a1236b6093db0c4966e22d21d4428982b|unset
+pod|Job/ch-m5-grant17c|-|malformed row|clickhouse/clickhouse-server:26.6.8.7@sha256:2c870d77ea76e955fb1c8dad536ad40a1236b6093db0c4966e22d21d4428982b|unset
+job|Job/ch-m5-grant17|-|malformed row|clickhouse/clickhouse-server:26.6.8.7@sha256:2c870d77ea76e955fb1c8dad536ad40a1236b6093db0c4966e22d21d4428982b|unset
+job|Job/ch-m5-grant17b|-|malformed row|clickhouse/clickhouse-server:26.6.8.7@sha256:2c870d77ea76e955fb1c8dad536ad40a1236b6093db0c4966e22d21d4428982b|unset
+job|Job/ch-m5-grant17c|-|malformed row|clickhouse/clickhouse-server:26.6.8.7@sha256:2c870d77ea76e955fb1c8dad536ad40a1236b6093db0c4966e22d21d4428982b|unset
+pod|Deployment/dev-health-acr|prepare-entitlement-token|shell -c|docker.io/library/busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028|unset
+pod|Deployment/dev-health-ops-go-pgbouncer-transaction|exporter|shell -c|quay.io/prometheuscommunity/pgbouncer-exporter:v0.12.1@sha256:30f31b6c2efdad3647f8182cc7c1a3a19e42bae5d17387694989f969371c230d|unset

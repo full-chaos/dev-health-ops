@@ -235,7 +235,6 @@ services:
       required: true
     environment:
     - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443
-    - AUTH_ACR_WORKLOAD_SUBJECT=${AUTH_ACR_WORKLOAD_SUBJECT:-}
     - AUTH_PROXY_SESSIONS=true
     - AUTH_PROXY_URL=http://auth-service:8095
     - AUTH_SESSION_ISSUE_CREDENTIAL=workload
@@ -1945,7 +1944,7 @@ services:
   # workload token (CHAOS-12976, the prod shape): ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload, and acr-api exchanges the Compose
   # bootstrap credential of the workload acr-api (the volume acr_workload_bootstrap, written by acr-workload-bootstrap, profile auth)
   # at auth-service (the auth venue below) for a token of audience dev-health-api. go-api verifies it against the issuer's JWKS and
-  # the pinned subject AUTH_ACR_WORKLOAD_SUBJECT. There is no service token. CHAOS-12997: acr reads an org's BYO LLM config from ops'
+  # the principal of the workload acr-api in the registry (go-api's role reads it: AUTH_WORKLOAD_READER_ROLES on auth-migrate and auth-grants). There is no service token. CHAOS-12997: acr reads an org's BYO LLM config from ops'
   # internal route with that token (scope llm_config:read) whenever it has an entitlement client; the
   # ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE setting was removed from acr and is not passed.
   # The entitlement stand-in is gone (CHAOS-12976): prod has none (deploy values.acr-prod.yaml "No stand-in on prod"), and it checked
@@ -2280,8 +2279,8 @@ services:
   #   docker compose -p dev-health ... -f ops/ci/bigboy/compose.bigboy.yml --profile auth up -d --no-deps --no-build <service>
   # Order: auth-keys-init, auth-provision, auth-owner-grants (after the ops `migrate`), auth-migrate, auth-grants, auth-fence-init,
   # auth-workload-seed, auth-service, auth-issuer; then once `run --rm acr-workload-bootstrap` (never a depends_on: a later `up`
-  # would run bootstrap-create again, and it refuses a workload with a live credential); then the prn_ id of the workload acr-api
-  # goes into AUTH_ACR_WORKLOAD_SUBJECT (ops/.env) and go-api and acr-api are recreated. README "auth venue" has the commands.
+  # would run bootstrap-create again, and it refuses a workload with a live credential); go-api reads the principal of the workload
+  # acr-api from the registry, so nothing else is recreated. README "auth venue" has the commands.
   # Isolation (CHAOS-4886): auth-service and the auth one-shots are on auth_plane, where only postgres joins them. acr-api reaches
   # auth-service on acr_auth_workload (only the two of them; acr-api never joins auth_plane). go-api reaches the issuer origin
   # (auth-issuer, alias auth.bigboy.internal on dev-health), which forwards only the discovery and JWKS documents.
@@ -2403,6 +2402,7 @@ services:
     environment:
       <<: *auth-migration-env
       AUTH_SESSION_READER_ROLES: devhealth_api,devhealth_query_api
+      AUTH_WORKLOAD_READER_ROLES: devhealth_api
     image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'
     networks:
       auth_plane: null
@@ -2423,6 +2423,7 @@ services:
     environment:
       <<: *auth-migration-env
       AUTH_SESSION_READER_ROLES: devhealth_api,devhealth_query_api
+      AUTH_WORKLOAD_READER_ROLES: devhealth_api
     image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'
     networks:
       auth_plane: null
@@ -2508,7 +2509,7 @@ services:
   # The bootstrap credential of the workload api (go-api), the session issue credential of go-api (AUTH_SESSION_ISSUE_CREDENTIAL=workload):
   # written once into the volume go_api_workload_bootstrap (0600, uid 65532: the uid go-api runs as); go-api mounts it read-only,
   # auth-service never mounts it. The prn_ id of the api workload goes into AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT (ops/.env) and
-  # auth-service is recreated (README "auth venue"), as AUTH_ACR_WORKLOAD_SUBJECT is for acr-api. CHAOS-12978, the shape of ops compose.yml.
+  # auth-service is recreated (README "auth venue"). CHAOS-12978, the shape of ops compose.yml.
   go-api-workload-volume:
     cap_add: [CHOWN]
     cap_drop: [ALL]

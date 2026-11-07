@@ -12,7 +12,9 @@ import (
 // Product rule 1 (D6773): a platform admin needs no membership row in the
 // token org, for every token class. The user access token path builds the
 // principal the HS256 path builds for the same caller and org: the org of the
-// token, the non-member role, the live superuser flag and platform set.
+// token, the non-member role, the live superuser flag and platform set. A
+// caller without admin.orgs gets that principal too (CHAOS-13227); the org
+// scope and the guard then refuse it as they refuse the HS256 principal.
 func TestProductRule1RoutedPlatformAdminWithoutMembershipIsTheLegacyPrincipal(t *testing.T) {
 	const otherOrg = "66666666-6666-4666-8666-666666666666"
 	adminOrgs := rule.PlatformOf(rule.ActionAdminOrgs)
@@ -40,9 +42,9 @@ func TestProductRule1RoutedPlatformAdminWithoutMembershipIsTheLegacyPrincipal(t 
 				c["org_id"] = otherOrg
 				delete(c, "role")
 			})))
-			if !tc.admit {
-				if routedUser != nil || !IsRefusal(routedErr) {
-					t.Fatalf("routed user %+v err %v, want a refusal", routedUser, routedErr)
+			if !tc.state.IsActive {
+				if routedUser != nil || !IsRefusal(routedErr) || legacyUser != nil || !IsRefusal(legacyErr) {
+					t.Fatalf("routed user %+v err %v, legacy user %+v err %v, want two refusals", routedUser, routedErr, legacyUser, legacyErr)
 				}
 				return
 			}
@@ -51,8 +53,8 @@ func TestProductRule1RoutedPlatformAdminWithoutMembershipIsTheLegacyPrincipal(t 
 			}
 			// The HS256 path keeps the token org only through useTokenOrg /
 			// CheckTokenOrg; both admit exactly an admin.orgs holder.
-			if err := authenticator(t, store).CheckTokenOrg(ctx, legacyUser); err != nil {
-				t.Fatalf("the legacy path refuses this caller: %v", err)
+			if err := authenticator(t, store).CheckTokenOrg(ctx, legacyUser); (err == nil) != tc.admit {
+				t.Fatalf("the legacy token org check: %v, admit %v", err, tc.admit)
 			}
 			got := [6]any{routedUser.OrgID, routedUser.Role, routedUser.IsAdmin(), routedUser.IsSuperuser, routedUser.Holds(ActionAdminOrgs), routedUser.ID}
 			want := [6]any{legacyUser.OrgID, legacyUser.Role, legacyUser.IsAdmin(), legacyUser.IsSuperuser, legacyUser.Holds(ActionAdminOrgs), legacyUser.ID}

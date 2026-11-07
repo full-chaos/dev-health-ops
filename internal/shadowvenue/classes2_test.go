@@ -164,32 +164,39 @@ func TestTheCleanTablePassesPlanAndBothJudges(t *testing.T) {
 // A table that is clean by itself but whose row id names another route than the slot sent (row 22 on a plain route,
 // the slot on the Stripe route) voids both judges: each slot's class is its route's.
 func TestJudgesVoidASlotWhoseTableRowNamesAnotherRoute(t *testing.T) {
-	slots, ev := stripeSlots(t)
-	table := tableOf(slots, map[string]string{"22": "stripe"})
-	for i := range table {
-		if table[i].ID == "22" {
-			table[i].Method, table[i].Route, table[i].Ext = "GET", "/api/v1/admin/teams", none
+	t.Run("judge", func(t *testing.T) {
+		slots, ev := stripeSlots(t)
+		table := tableOf(slots, map[string]string{"22": "stripe"})
+		for i := range table {
+			if table[i].ID == "22" {
+				table[i].Method, table[i].Route, table[i].Ext = "GET", "/api/v1/admin/teams", none
+			}
 		}
-	}
-	if _, err := CheckRowClasses(table); err != nil {
-		t.Fatalf("the table is not clean by itself: %v", err)
-	}
-	r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Rows: table, Egress: egressReads("before", "between"), Seed: noSeed}})
-	if !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "the row table gives the class") {
-		t.Fatalf("judge void %v: %v", r.Void, r.Reasons)
-	}
-	run := newEnfRun()
-	table = tableOf(run.in.Slots, nil)
-	for i := range table {
-		if table[i].ID == "3" {
-			table[i].Method, table[i].Route = "POST", "/api/v1/billing/plans/pull-stripe"
-			table[i].Ext = "stripe"
+		if _, err := CheckRowClasses(table); err != nil {
+			t.Fatalf("the table is not clean by itself: %v", err)
 		}
-	}
-	run.in.Outbound = Outbound{Rows: table}
-	if rep := run.judge(); !rep.Void || !strings.Contains(strings.Join(rep.Reasons, "\n"), "the row table gives the class") {
-		t.Fatalf("judge-enforced void %v: %v", rep.Void, rep.Reasons)
-	}
+		r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Rows: table, Egress: egressReads("before", "between"), Seed: noSeed}})
+		if !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "the row table gives the class") {
+			t.Errorf("judge void %v: %v", r.Void, r.Reasons)
+		}
+	})
+	t.Run("judge-enforced", func(t *testing.T) {
+		run := newEnfRun()
+		table := tableOf(run.in.Slots, nil)
+		for i := range table {
+			if table[i].ID == "3" {
+				table[i].Method, table[i].Route = "POST", "/api/v1/billing/plans/pull-stripe"
+				table[i].Ext = "stripe"
+			}
+		}
+		if _, err := CheckRowClasses(table); err != nil {
+			t.Fatalf("the table is not clean by itself: %v", err)
+		}
+		run.in.Outbound = Outbound{Rows: table}
+		if rep := run.judge(); !rep.Void || !strings.Contains(strings.Join(rep.Reasons, "\n"), "the row table gives the class") {
+			t.Errorf("judge-enforced void %v: %v", rep.Void, rep.Reasons)
+		}
+	})
 }
 
 // The run's table and its slot records agree with EACH OTHER (row 22 on the Stripe route, its table row ext -) but

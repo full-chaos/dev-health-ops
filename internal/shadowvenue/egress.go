@@ -88,3 +88,10 @@ func checkEgress(reads []EgressRead, want []string) []string {
 	}
 	return voids
 }
+
+// SeedLog: skeleton.
+type SeedLog struct {
+	Given bool
+	Hits  []StubHit
+	Err   error
+}

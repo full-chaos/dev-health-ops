@@ -38,12 +38,19 @@ func stripeRun(t *testing.T) ([]Slot, []string, []string) {
 	return slots, lines, hits
 }
 
-const testImage = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+const (
+	testImage      = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	testStubConfig = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+)
+
+// noSeed is a given, empty seed-mode log.
+var noSeed = SeedLog{Given: true}
 
 // egressText is a passing egress record of the read when.
 func egressText(when string) string {
 	return "when=" + when + "\nnetwork_internal=true\nnetworks=venue-int\ndefault_route=none\npublic_tcp=refused\npublic_dns=fail\nstub_tcp=ok\n" +
-		"hosts_pinned=api.github.com,api.pagerduty.com,api.stripe.com,github.com,identity.pagerduty.com\nimage=" + testImage + "\n"
+		"hosts_pinned=api.github.com,api.pagerduty.com,api.stripe.com,github.com,identity.pagerduty.com\nimage=" + testImage + "\n" +
+		"stub_mode=run\nstub_config=" + testStubConfig + "\nstub_started=2026-11-07T15:00:00Z\n"
 }
 
 func egressReads(when ...string) []EgressRead {
@@ -70,7 +77,7 @@ func judgeOutboundEgress(t *testing.T, slots []Slot, lines, hits []string, logge
 		t.Fatal(err)
 	}
 	ext := map[string]string{"C1": none, "C2": none, "27": "stripe", "58": none}
-	return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: logged, Hits: parsed, Ext: ext, Egress: egress}})
+	return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: logged, Hits: parsed, Ext: ext, Egress: egress, Seed: noSeed}})
 }
 
 func TestJudgeOutboundPassesWhenEveryAllowedSlotReachesTheStub(t *testing.T) {
@@ -239,7 +246,7 @@ func TestEnforcedOutboundParity(t *testing.T) {
 				ext[s.Row] = none
 			}
 		}
-		r.in.Outbound = Outbound{Logged: true, Hits: hits, Ext: ext, Egress: egressReads("before", "between", "after")}
+		r.in.Outbound = Outbound{Logged: true, Hits: hits, Ext: ext, Egress: egressReads("before", "between", "after"), Seed: noSeed}
 		return r
 	}
 	if rep := build().judge(); rep.Void || !rep.Pass {
@@ -365,7 +372,7 @@ func TestNoOutboundRowPassesWithoutAHitAndFailsOnOne(t *testing.T) {
 		ev, _ := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
 		parsed, _ := ParseStubLog([]byte(strings.Join(hitLines, "\n")))
 		ext := map[string]string{"C1": none, "C2": none, "81": "github"}
-		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Hits: parsed, Ext: ext, Egress: egressReads("before", "between")}})
+		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Hits: parsed, Ext: ext, Egress: egressReads("before", "between"), Seed: noSeed}})
 	}
 	clean := run(false)
 	if clean.Void || !clean.Pass {
@@ -423,7 +430,7 @@ func TestEnforcedNoOutboundRowFailsOnAHitInEitherRun(t *testing.T) {
 				ext[s.Row] = none
 			}
 		}
-		r.in.Outbound = Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between", "after")}
+		r.in.Outbound = Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between", "after"), Seed: noSeed}
 		return r
 	}
 	if rep := build().judge(); rep.Void || !rep.Pass {
@@ -465,7 +472,7 @@ func TestNoOutboundRowNeedsACallerPastTheDecision(t *testing.T) {
 		slots, lines := slotsWith(status)
 		ev, _ := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
 		ext := map[string]string{"C1": none, "C2": none, "42": "pagerduty"}
-		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between")}})
+		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between"), Seed: noSeed}})
 	}
 	legacy := func(caller string, _ int) int {
 		if caller == "member" {
@@ -527,7 +534,7 @@ func TestNoOutboundRowNeedsACallerPastTheDecision(t *testing.T) {
 				ext[s.Row] = none
 			}
 		}
-		r.in.Outbound = Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between", "after")}
+		r.in.Outbound = Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between", "after"), Seed: noSeed}
 		return r.judge()
 	}
 	if rep := enforced(legacy, legacy); rep.Void || !rep.Pass {
@@ -537,5 +544,60 @@ func TestNoOutboundRowNeedsACallerPastTheDecision(t *testing.T) {
 	if rep := enforced(refused, refused); rep.Pass || !strings.Contains(strings.Join(rep.Reasons, "\n"), "in the yardstick no caller got past") ||
 		!strings.Contains(strings.Join(rep.Reasons, "\n"), "in the run no caller got past") {
 		t.Errorf("enforced, every caller refused in both runs: pass %v: %v", rep.Pass, rep.Reasons)
+	}
+}
+
+// The stub's status in the egress records and its seed-mode log (acp Q-B1): seed mode in any read, a stub config or
+// start that differs between reads, a config that is no digest, a missing or unreadable seed log, or a seed line in the
+// drive window voids the run; a seed line before the run does not.
+func TestJudgeOutboundStubModeAndSeedLog(t *testing.T) {
+	slots, lines, hits := stripeRun(t)
+	ev, err := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, _ := ParseStubLog([]byte(strings.Join(hits, "\n")))
+	ext := map[string]string{"C1": none, "C2": none, "27": "stripe"}
+	judgeWith := func(egress []EgressRead, seed SeedLog) Report {
+		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Hits: parsed, Ext: ext, Egress: egress, Seed: seed}})
+	}
+	set := func(when, key, value string) EgressRead {
+		lines := strings.Split(egressText(when), "\n")
+		for i, l := range lines {
+			if strings.HasPrefix(l, key+"=") {
+				lines[i] = key + "=" + value
+			}
+		}
+		return ParseEgress(when+".txt", []byte(strings.Join(lines, "\n")))
+	}
+	before := egressReads("before")[0]
+	seedLine := func(at time.Time) SeedLog {
+		h, err := ParseStubLog([]byte(`{"t":"` + at.Format(time.RFC3339Nano) + `","service":"pagerduty","method":"GET","host":"api.pagerduty.com","path":"/services"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return SeedLog{Given: true, Hits: h}
+	}
+	if r := judgeWith(egressReads("before", "between"), seedLine(slots[0].Start.Add(-time.Hour))); r.Void || !r.Pass {
+		t.Fatalf("a seed line an hour before the run: void %v: %v", r.Void, r.Reasons)
+	}
+	cases := map[string]struct {
+		egress []EgressRead
+		seed   SeedLog
+		want   string
+	}{
+		"seed mode in a read":      {[]EgressRead{before, set("between", "stub_mode", "seed")}, noSeed, "stub_mode=seed"},
+		"stub config differs":      {[]EgressRead{before, set("between", "stub_config", "sha256:"+strings.Repeat("4", 64))}, noSeed, "stub_config"},
+		"stub config no digest":    {[]EgressRead{set("before", "stub_config", "frozen"), set("between", "stub_config", "frozen")}, noSeed, "stub_config"},
+		"stub restarted":           {[]EgressRead{before, set("between", "stub_started", "2026-11-07T15:30:00Z")}, noSeed, "stub_started"},
+		"no seed log":              {egressReads("before", "between"), SeedLog{}, "seed-mode log was not given"},
+		"seed log unreadable":      {egressReads("before", "between"), SeedLog{Given: true, Err: errors.New("unreadable")}, "seed-mode log is unreadable"},
+		"a seed line in the drive": {egressReads("before", "between"), seedLine(slots[8].Start.Add(time.Second)), "inside the drive window"},
+	}
+	for name, c := range cases {
+		r := judgeWith(c.egress, c.seed)
+		if !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), c.want) {
+			t.Errorf("%s: void %v, reasons %v", name, r.Void, r.Reasons)
+		}
 	}
 }

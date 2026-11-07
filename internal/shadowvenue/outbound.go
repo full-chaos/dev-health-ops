@@ -110,6 +110,7 @@ type Outbound struct {
 	Hits   []StubHit
 	Ext    map[string]string
 	Egress []EgressRead
+	Seed   SeedLog
 }
 
 // RowExt maps each row id of rows to its ext.

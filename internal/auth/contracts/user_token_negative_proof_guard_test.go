@@ -39,7 +39,6 @@ const (
 	stripeTest     = "TestStripeWebhookRefusesUserTokens"
 	webhookTest    = "TestWebhookRoutesRefuseUserTokens"
 	mcpTest        = "TestMCPRefusesUserTokensAsAuthorization"
-	buildInfoTest  = "TestBuildInfoRefusesUserTokens"
 	issueTest      = "TestIssueSessionRefusesUserTokens"
 	refreshTest    = "TestRefreshRowsRefuseUserTokens"
 	exchangeTest   = "TestTheExchangeRefusesUserTokens"
@@ -70,7 +69,6 @@ var negativeProofs = map[string]negativeProof{
 	"go-api|POST /api/v1/billing/webhooks/stripe [dev-health-ops-billing-edge @billing-edge]":                  {file: proofStripe, test: stripeTest},
 	"go-api|POST /api/v1/webhooks/github [dev-health-ops-api @api]":                                            {file: proofWebhooks, test: webhookTest},
 	"go-api|POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]":                            {file: proofWebhooks, test: webhookTest},
-	"query-api|GET /buildinfo [dev-health-query-api @query,internal]":                                          {file: proofMCP, test: buildInfoTest},
 	"query-api|POST /query [dev-health-query-api @mcp]":                                                        {file: proofMCP, test: mcpTest},
 	"auth-service|POST /internal/v1/sessions [dev-health-auth-service @api]":                                   {file: proofIssue, test: issueTest},
 	"auth-service|POST /internal/v1/token/exchange [dev-health-auth-service @api]":                             {file: proofExchange, test: exchangeTest},
@@ -217,7 +215,7 @@ func TestEveryNegativeProofNamesARealTestThatSendsUserTokens(t *testing.T) {
 	}
 }
 
-// The census: 33 derived rows = 32 proven + 1 exempt. A change to either count is a decision, made here.
+// The census: derived rows = proven + exempt. A change to either count is a decision, made here.
 func TestNegativeProofCensus(t *testing.T) {
 	proven, exempt := 0, 0
 	for _, proof := range negativeProofs {
@@ -231,7 +229,8 @@ func TestNegativeProofCensus(t *testing.T) {
 	// CHAOS-11885 added the organization reactivate row, CHAOS-11887 the invite revoke row and the organization suspend row, CHAOS-12043 the organization state row;
 	// CHAOS-12128 the principal access read row; CHAOS-12189 the session state row; CHAOS-10992 the organization onboard and create rows.
 	// CHAOS-10987 the two delegated session rows; CHAOS-12273 the four service account key rows; CHAOS-12275 the organization rename row; CHAOS-10841 the two authorize rows; CHAOS-12670 the eight read rows.
-	if len(derivedRows(t)) != 59 || proven != 58 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 59, 58, 1", len(derivedRows(t)), proven, exempt)
+	// CHAOS-13265 took query-api GET /buildinfo out: it accepts a platform admin's user access token.
+	if len(derivedRows(t)) != 58 || proven != 57 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 58, 57, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

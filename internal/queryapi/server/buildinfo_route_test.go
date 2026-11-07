@@ -137,7 +137,7 @@ func TestQueryPatternDoesNotSwallowTheProofPath(t *testing.T) {
 }
 
 func TestBuildInfoHandlerRefusesWithoutABearer(t *testing.T) {
-	handler := newBuildInfoHandler(nil)
+	handler := newBuildInfoHandler(nil, nil, nil)
 	recorder := httptest.NewRecorder()
 	handler(recorder, httptest.NewRequest(http.MethodGet, "/buildinfo", nil))
 	if recorder.Code != http.StatusUnauthorized {
@@ -146,7 +146,7 @@ func TestBuildInfoHandlerRefusesWithoutABearer(t *testing.T) {
 }
 
 func TestBuildInfoHandlerRejectsNonGet(t *testing.T) {
-	handler := newBuildInfoHandler(nil)
+	handler := newBuildInfoHandler(nil, nil, nil)
 	recorder := httptest.NewRecorder()
 	handler(recorder, httptest.NewRequest(http.MethodPost, "/buildinfo", nil))
 	if recorder.Code != http.StatusMethodNotAllowed {

@@ -221,7 +221,7 @@ The six dispatcher rows (`/graphql`, `/query` on the query and internal listener
 | `GET /api/v1/work-units` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
 | `POST /api/v1/work-units` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
 | `POST /api/v1/work-units/{work_unit_id}/explain` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /buildinfo` | protected | `org.read` | `effective_principal_envelope` |
+| `GET /buildinfo` | protected | `org.read` | `effective_principal_envelope`, `user_access_token` (a platform admin only) |
 | `GET /graphql` | protected | `analytics.read` | `user_access_token` |
 | `POST /graphql` | protected | `analytics.read` | `user_access_token` |
 | `api_route /healthz` | public | none | none |

@@ -55,4 +55,5 @@ internal/queryapi/datahealth/datahealth.go	RequireOperator	admin.stats	6
 internal/queryapi/graph/operation_org_guard.go	operationOrgDecision	admin.orgs	handler
 internal/queryapi/graph/operation_shadow.go	OperationShadow.observe	admin.orgs	handler
 internal/queryapi/producttelemetry/platform.go	RequirePlatformAdmin	admin.telemetry	handler
+internal/queryapi/server/buildinfo_route.go	authenticateBuildInfo	admin.orgs	handler
 internal/queryapi/server/internal_auth.go	roleInOrg	admin.orgs	5

@@ -184,6 +184,7 @@ func TestUsersCreateRefusalsWriteNothingByRowCount(t *testing.T) {
 	if _, err := Run(ctx, PGSource{Pool: e.runtime}, e.store, Options{}); err != nil {
 		t.Fatal(err)
 	}
+	// At least one, not exactly one: the backfill reads every public superuser, and in CI the database is shared by parallel cells.
 	if got := e.createRows(t, ctx).assignments - assignmentsBefore; got < 1 {
 		t.Fatalf("the admin seed wrote %d platform_admin assignments, want at least 1", got)
 	}

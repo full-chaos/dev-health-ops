@@ -256,6 +256,10 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 		report.Void = true
 		fail("VOID: "+format, args...)
 	}
+	byRow, classErr := CheckRowClasses(o.Outbound.Rows)
+	if classErr != nil {
+		void("%v", classErr)
+	}
 	if len(ev.results) == 0 {
 		void("the log has no result line %q: wrong log, an image without the line, or the shadow is off", MsgResult)
 	}
@@ -277,7 +281,7 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 		report.Slots = append(report.Slots, sv)
 	}
 	relabelNoOrgSkips(report.Slots, o.NoOrg)
-	outbound := checkOutbound(slots, o.Outbound, o.Grace, []string{"before", "between"})
+	outbound := checkOutbound(slots, o.Outbound, byRow, o.Grace, []string{"before", "between"})
 	for i := range report.Slots {
 		report.Slots[i].Outbound = outbound.hits[report.Slots[i].Seq]
 	}

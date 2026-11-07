@@ -137,6 +137,10 @@ func JudgeEnforced(in EnforcedInput) Report {
 		report.Void = true
 		fail("VOID: "+format, args...)
 	}
+	byRow, classErr := CheckRowClasses(in.Outbound.Rows)
+	if classErr != nil {
+		void("%v", classErr)
+	}
 	before, after := readLive(in.MetricsBefore), readLive(in.MetricsAfter)
 	readable := before.ok && after.ok
 	if !readable {
@@ -251,7 +255,7 @@ func JudgeEnforced(in EnforcedInput) Report {
 			}
 		}
 	}
-	outbound := judgeOutboundEnforced(&report, in)
+	outbound := judgeOutboundEnforced(&report, in, byRow)
 	for _, reason := range outbound.voids {
 		void("%s", reason)
 	}
@@ -344,8 +348,8 @@ func ParseYardstick(raw []byte) ([]YardSlot, error) {
 // judgeOutboundEnforced checks the enforced run's stub evidence (checkOutbound), holds the yardstick's own outbound file
 // to the same reach rule, and gives a passing slot whose outside calls differ from its yardstick slot's
 // MISMATCH_OUTBOUND. Without external rows and without a yardstick outbound file there is nothing to compare.
-func judgeOutboundEnforced(report *Report, in EnforcedInput) outboundCheck {
-	check := checkOutbound(in.Slots, in.Outbound, in.Grace, []string{"before", "between", "after"})
+func judgeOutboundEnforced(report *Report, in EnforcedInput, byRow map[string]rowClass) outboundCheck {
+	check := checkOutbound(in.Slots, in.Outbound, byRow, in.Grace, []string{"before", "between", "after"})
 	external := map[string]bool{}
 	for _, s := range sentSlots(in.Slots) {
 		if c, ok := classOf(s.Key()); ok && c.ext != none {

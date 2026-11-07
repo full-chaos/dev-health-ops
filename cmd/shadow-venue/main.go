@@ -276,7 +276,7 @@ func readOutbound(path, rowsPath string, slots []shadowvenue.Slot) (shadowvenue.
 	if err := shadowvenue.CheckRowKeys(slots, rows); err != nil {
 		return shadowvenue.Outbound{}, err
 	}
-	ob := shadowvenue.Outbound{Ext: shadowvenue.RowExt(rows)}
+	ob := shadowvenue.Outbound{Rows: rows}
 	if path == "" {
 		return ob, nil
 	}

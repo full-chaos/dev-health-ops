@@ -155,6 +155,9 @@ type PlanOptions struct {
 // order, in pool org Pool[k-1], so each pool org sees the destructive rows once, from its seeded state. A row with an
 // outside service not allowed is a gap.
 func MakePlan(rows []Row, v Venue, o PlanOptions) (Plan, error) {
+	if _, err := CheckRowClasses(rows); err != nil {
+		return Plan{}, fmt.Errorf("plan: %w", err)
+	}
 	if o.K < 1 {
 		return Plan{}, errors.New("plan: k must be at least 1")
 	}

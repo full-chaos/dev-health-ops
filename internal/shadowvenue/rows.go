@@ -205,15 +205,7 @@ func CheckRows(rows []Row, profiles []byte) error {
 			continue
 		}
 		if row.Control() {
-			if row.Ext != none {
-				problems = append(problems, fmt.Sprintf("control %s: names outside service %s; a control's class has none", row.ID, row.Ext))
-			}
 			continue
-		}
-		// A route the embedded table does not hold has the zero class, which no parsed row has, so it is refused here too.
-		if c, _ := classOf(row.Key()); c.ext != row.Ext || c.destructive != row.Destructive {
-			problems = append(problems, fmt.Sprintf("row %s: %s has the class ext %s, destructive %v; the table names ext %s, destructive %v",
-				row.ID, row.Key(), c.ext, c.destructive, row.Ext, row.Destructive))
 		}
 		if first, dup := have[row.Key()]; dup {
 			problems = append(problems, fmt.Sprintf("%s is in the table twice (rows %s and %s)", row.Key(), first, row.ID))
@@ -231,10 +223,39 @@ func CheckRows(rows []Row, profiles []byte) error {
 			problems = append(problems, fmt.Sprintf("shadow row %s is not in the table", key))
 		}
 	}
+	if _, err := CheckRowClasses(rows); err != nil {
+		problems = append(problems, err.Error())
+	}
 	if len(problems) > 0 {
 		return fmt.Errorf("rows: the table differs from the profile shadow rows:\n  %s", strings.Join(problems, "\n  "))
 	}
 	return nil
+}
+
+// CheckRowClasses is the one class check of a row table, which plan, judge and judge-enforced all call first. Every row,
+// data or control, must carry its route's pinned class (classOf: ext AND destructive), and a control must sit on a plain
+// route (no outside service, not destructive). A route the embedded table does not hold has the zero class, which no
+// parsed row has, so it is refused too. It returns each row id's class.
+func CheckRowClasses(rows []Row) (map[string]rowClass, error) {
+	out := map[string]rowClass{}
+	var problems []string
+	for _, row := range rows {
+		c, _ := classOf(row.Key())
+		got := rowClass{ext: row.Ext, destructive: row.Destructive}
+		switch {
+		case c != got:
+			problems = append(problems, fmt.Sprintf("row %s: %s has the class ext %s, destructive %v; the table names ext %s, destructive %v",
+				row.ID, row.Key(), c.ext, c.destructive, row.Ext, row.Destructive))
+		case row.Control() && (c.ext != none || c.destructive):
+			problems = append(problems, fmt.Sprintf("control %s: %s has the class ext %s, destructive %v; a control stays on a plain route",
+				row.ID, row.Key(), c.ext, c.destructive))
+		}
+		out[row.ID] = c
+	}
+	if len(problems) > 0 {
+		return nil, fmt.Errorf("class: the row table differs from the pinned route classes:\n  %s", strings.Join(problems, "\n  "))
+	}
+	return out, nil
 }
 
 // validJSON reports whether body is one JSON value.

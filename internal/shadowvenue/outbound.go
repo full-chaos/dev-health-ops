@@ -103,26 +103,17 @@ func ParseStubLog(raw []byte) ([]StubHit, error) {
 	return hits, nil
 }
 
-// Outbound is a run's stub evidence. Logged reports whether the stub log was given (an empty log is a log); Ext maps
-// each row id to the ext column of the row table the drive used (nil when no table is given): the judge takes each
-// slot's class from its route (classOf) and voids a run whose table names another; Egress are the run's egress records
-// (ParseEgress), in read order.
+// Outbound is a run's stub evidence. Logged reports whether the stub log was given (an empty log is a log); Rows is the
+// row table the drive used (nil when no table is given): the judges hold it to the pinned classes (CheckRowClasses) before
+// anything else and take each slot's class from its route; Egress are the run's egress records (ParseEgress), in read
+// order.
 type Outbound struct {
 	Logged bool
 	Hits   []StubHit
-	Ext    map[string]string
+	Rows   []Row
 	Egress []EgressRead
 	// Seed is the stub's seed-mode log (acp ADDENDUM-13267-2 Q-B1): no line of it may fall in the drive window.
 	Seed SeedLog
-}
-
-// RowExt maps each row id of rows to its ext.
-func RowExt(rows []Row) map[string]string {
-	out := map[string]string{}
-	for _, row := range rows {
-		out[row.ID] = row.Ext
-	}
-	return out
 }
 
 // CheckRowKeys refuses slots whose row id names another route in rows than the slot's: the ext map would not be the
@@ -155,7 +146,7 @@ type outboundCheck struct {
 // a service the stub does not serve. Fail: a hit of a service other than the slot row's ext, a denied slot (401/403)
 // with a hit, an external row none of whose allowed slots (not 401/403) reached the stub, or a NO_OUTBOUND row with a
 // hit.
-func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []string) outboundCheck {
+func checkOutbound(slots []Slot, ob Outbound, byRow map[string]rowClass, grace time.Duration, egressWant []string) outboundCheck {
 	out := outboundCheck{hits: map[int]int{}}
 	sent := sentSlots(slots)
 	external := map[string]bool{}
@@ -167,8 +158,8 @@ func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []
 		case !ok:
 			out.voids = append(out.voids, fmt.Sprintf("slot %d row %s: route %s has no class in the embedded row table", s.Seq, s.Row, s.Key()))
 			continue
-		case ob.Ext != nil && ob.Ext[s.Row] != c.ext:
-			out.voids = append(out.voids, fmt.Sprintf("slot %d row %s: the row table names ext %q, but the class of %s is ext %q", s.Seq, s.Row, ob.Ext[s.Row], s.Key(), c.ext))
+		case ob.Rows != nil && byRow[s.Row] != c:
+			out.voids = append(out.voids, fmt.Sprintf("slot %d row %s: the row table gives the class %+v, but the class of %s is %+v", s.Seq, s.Row, byRow[s.Row], s.Key(), c))
 		}
 		extOf[s.Row] = c.ext
 		if c.ext != none {

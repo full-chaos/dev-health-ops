@@ -51,6 +51,26 @@ func runIDOf(when string) string {
 	return map[string]string{"before": "13267-4a", "between": "13267-4b", "after": "none"}[when]
 }
 
+// tableOf is the row table of slots: one row per row id, on its slot's route, with the ext ext names (- when it names
+// none) and the destructive flag of the route's pinned class.
+func tableOf(slots []Slot, ext map[string]string) []Row {
+	var rows []Row
+	seen := map[string]bool{}
+	for _, s := range slots {
+		if seen[s.Row] {
+			continue
+		}
+		seen[s.Row] = true
+		e := ext[s.Row]
+		if e == "" {
+			e = none
+		}
+		c, _ := classOf(s.Key())
+		rows = append(rows, Row{ID: s.Row, Method: s.Method, Route: s.Route, Org: "A", Ext: e, Destructive: c.destructive, Principal: none, Expect: s.Expect, Path: s.Path, Body: none})
+	}
+	return rows
+}
+
 // noSeed is a given, empty seed-mode log.
 var noSeed = SeedLog{Given: true}
 
@@ -85,7 +105,7 @@ func judgeOutboundEgress(t *testing.T, slots []Slot, lines, hits []string, logge
 		t.Fatal(err)
 	}
 	ext := map[string]string{"C1": none, "C2": none, "27": "stripe", "58": none}
-	return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: logged, Hits: parsed, Ext: ext, Egress: egress, Seed: noSeed}})
+	return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: logged, Hits: parsed, Rows: tableOf(slots, ext), Egress: egress, Seed: noSeed}})
 }
 
 func TestJudgeOutboundPassesWhenEveryAllowedSlotReachesTheStub(t *testing.T) {
@@ -178,7 +198,7 @@ func TestJudgeOutboundNeedsNoLogWithoutExternalRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Ext: map[string]string{"C1": none, "C2": none}}})
+	r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Rows: tableOf(slots, nil)}})
 	if r.Void || !r.Pass {
 		t.Fatalf("void %v pass %v: %v", r.Void, r.Pass, r.Reasons)
 	}
@@ -254,7 +274,7 @@ func TestEnforcedOutboundParity(t *testing.T) {
 				ext[s.Row] = none
 			}
 		}
-		r.in.Outbound = Outbound{Logged: true, Hits: hits, Ext: ext, Egress: egressReads("before", "between", "after"), Seed: noSeed}
+		r.in.Outbound = Outbound{Logged: true, Hits: hits, Rows: tableOf(r.in.Slots, ext), Egress: egressReads("before", "between", "after"), Seed: noSeed}
 		return r
 	}
 	if rep := build().judge(); rep.Void || !rep.Pass {
@@ -399,7 +419,7 @@ func TestNoOutboundRowPassesWithoutAHitAndFailsOnOne(t *testing.T) {
 		ev, _ := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
 		parsed, _ := ParseStubLog([]byte(strings.Join(hitLines, "\n")))
 		ext := map[string]string{"C1": none, "C2": none, "81": "github"}
-		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Hits: parsed, Ext: ext, Egress: egressReads("before", "between"), Seed: noSeed}})
+		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Hits: parsed, Rows: tableOf(slots, ext), Egress: egressReads("before", "between"), Seed: noSeed}})
 	}
 	clean := run(false)
 	if clean.Void || !clean.Pass {
@@ -457,7 +477,7 @@ func TestEnforcedNoOutboundRowFailsOnAHitInEitherRun(t *testing.T) {
 				ext[s.Row] = none
 			}
 		}
-		r.in.Outbound = Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between", "after"), Seed: noSeed}
+		r.in.Outbound = Outbound{Logged: true, Rows: tableOf(r.in.Slots, ext), Egress: egressReads("before", "between", "after"), Seed: noSeed}
 		return r
 	}
 	if rep := build().judge(); rep.Void || !rep.Pass {
@@ -499,7 +519,7 @@ func TestNoOutboundRowNeedsACallerPastTheDecision(t *testing.T) {
 		slots, lines := slotsWith(status)
 		ev, _ := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
 		ext := map[string]string{"C1": none, "C2": none, "42": "pagerduty"}
-		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between"), Seed: noSeed}})
+		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Rows: tableOf(slots, ext), Egress: egressReads("before", "between"), Seed: noSeed}})
 	}
 	legacy := func(caller string, _ int) int {
 		if caller == "member" {
@@ -561,7 +581,7 @@ func TestNoOutboundRowNeedsACallerPastTheDecision(t *testing.T) {
 				ext[s.Row] = none
 			}
 		}
-		r.in.Outbound = Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between", "after"), Seed: noSeed}
+		r.in.Outbound = Outbound{Logged: true, Rows: tableOf(r.in.Slots, ext), Egress: egressReads("before", "between", "after"), Seed: noSeed}
 		return r.judge()
 	}
 	if rep := enforced(legacy, legacy); rep.Void || !rep.Pass {
@@ -586,7 +606,7 @@ func TestJudgeOutboundStubModeAndSeedLog(t *testing.T) {
 	parsed, _ := ParseStubLog([]byte(strings.Join(hits, "\n")))
 	ext := map[string]string{"C1": none, "C2": none, "27": "stripe"}
 	judgeWith := func(egress []EgressRead, seed SeedLog) Report {
-		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Hits: parsed, Ext: ext, Egress: egress, Seed: seed}})
+		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Hits: parsed, Rows: tableOf(slots, ext), Egress: egress, Seed: seed}})
 	}
 	set := func(when, key, value string) EgressRead {
 		lines := strings.Split(egressText(when), "\n")

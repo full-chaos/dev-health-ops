@@ -1,0 +1,121 @@
+package shadowvenue
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+)
+
+// controlOn is the embedded table with control ctrl moved onto target's route (ext - and destructive no, as a control
+// row is written).
+func controlOn(t *testing.T, ctrl string, target Row) []Row {
+	t.Helper()
+	var out []string
+	for _, line := range strings.Split(string(DefaultRows), "\n") {
+		if f := strings.Split(line, "\t"); len(f) == 10 && f[0] == ctrl {
+			f[1], f[2], f[8] = target.Method, target.Route, target.Route
+			line = strings.Join(f, "\t")
+		}
+		out = append(out, line)
+	}
+	return mustRows(t, strings.Join(out, "\n"))
+}
+
+// classed are the embedded table's external and destructive rows.
+func classed(t *testing.T) []Row {
+	t.Helper()
+	var out []Row
+	for _, row := range mustRows(t, string(DefaultRows)) {
+		if !row.Control() && (row.Ext != none || row.Destructive) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// The reviewer's form: C1 or C2 moved onto an external or destructive route is refused at plan (CheckRows and the
+// library MakePlan) and voids both judges, for all 44 combinations; a control stays on a plain route.
+func TestControlRowsStayOnPlainRoutes(t *testing.T) {
+	targets := classed(t)
+	if len(targets) != 22 {
+		t.Fatalf("%d external or destructive rows, want 22", len(targets))
+	}
+	venue, frozen, _, _ := testPoolVenue(t)
+	combos := 0
+	for _, ctrl := range []string{"C1", "C2"} {
+		for _, target := range targets {
+			combos++
+			table := controlOn(t, ctrl, target)
+			name := ctrl + " on " + target.Key()
+			if err := CheckRows(table, authv1.GoAPIEndpointProfiles); err == nil || !strings.Contains(err.Error(), "control "+ctrl) && !strings.Contains(err.Error(), "row "+ctrl) {
+				t.Errorf("%s: CheckRows %v", name, err)
+			}
+			if _, err := MakePlan(table, venue, PlanOptions{Throwaway: "T", Pool: testPool, Frozen: frozen, K: 3, Destructive: true, AllowExternal: StubServices}); err == nil || !strings.Contains(err.Error(), "class") {
+				t.Errorf("%s: MakePlan %v", name, err)
+			}
+			slots, lines := controlsOK()
+			ev, _ := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+			if r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Rows: table}}); !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "class") {
+				t.Errorf("%s: judge void %v %v", name, r.Void, r.Reasons)
+			}
+			run := newEnfRun()
+			run.in.Outbound = Outbound{Rows: table}
+			if r := run.judge(); !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "class") {
+				t.Errorf("%s: judge-enforced void %v", name, r.Void)
+			}
+		}
+	}
+	if combos != 44 {
+		t.Fatalf("%d combinations, want 44", combos)
+	}
+}
+
+// A destructive-flag mismatch on rows 1, 6, 9, 10 and 13 voids the judge and judge-enforced.
+func TestJudgesVoidADestructiveFlagMismatch(t *testing.T) {
+	for _, id := range []string{"1", "6", "9", "10", "13"} {
+		var out []string
+		for _, line := range strings.Split(string(DefaultRows), "\n") {
+			if f := strings.Split(line, "\t"); len(f) == 10 && f[0] == id {
+				f[4] = "no"
+				line = strings.Join(f, "\t")
+			}
+			out = append(out, line)
+		}
+		table := mustRows(t, strings.Join(out, "\n"))
+		slots, lines := controlsOK()
+		ev, _ := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+		if r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Rows: table}}); !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "row "+id+":") {
+			t.Errorf("row %s destructive=no: judge void %v %v", id, r.Void, r.Reasons)
+		}
+		run := newEnfRun()
+		run.in.Outbound = Outbound{Rows: table}
+		if r := run.judge(); !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "row "+id+":") {
+			t.Errorf("row %s destructive=no: judge-enforced void %v", id, r.Void)
+		}
+	}
+}
+
+// The clean table passes all three: CheckRows and MakePlan take the embedded table, the judge takes it with the
+// control slots, and judge-enforced takes the table of its own slots.
+func TestTheCleanTablePassesPlanAndBothJudges(t *testing.T) {
+	table := mustRows(t, string(DefaultRows))
+	if err := CheckRows(table, authv1.GoAPIEndpointProfiles); err != nil {
+		t.Fatal(err)
+	}
+	venue, frozen, _, _ := testPoolVenue(t)
+	if _, err := MakePlan(table, venue, PlanOptions{Throwaway: "T", Pool: testPool, Frozen: frozen, K: 3, OnlyRows: []string{"58"}}); err != nil {
+		t.Fatalf("MakePlan: %v", err)
+	}
+	slots, lines := controlsOK()
+	ev, _ := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+	if r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Rows: table}}); r.Void || !r.Pass {
+		t.Fatalf("judge: void %v pass %v %v", r.Void, r.Pass, r.Reasons)
+	}
+	run := newEnfRun()
+	run.in.Outbound = Outbound{Rows: tableOf(run.in.Slots, nil)}
+	if r := run.judge(); r.Void || !r.Pass {
+		t.Fatalf("judge-enforced: void %v pass %v %v", r.Void, r.Pass, r.Reasons)
+	}
+}

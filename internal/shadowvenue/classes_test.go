@@ -143,7 +143,7 @@ func TestJudgeVoidsARowTableThatReclassifiesARoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Ext: map[string]string{"C1": none, "C2": none, "22": none}}})
+	r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Rows: tableOf(slots, map[string]string{"22": none})}})
 	if !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "class") {
 		t.Fatalf("void %v pass %v: %v", r.Void, r.Pass, r.Reasons)
 	}
@@ -188,13 +188,13 @@ func TestJudgeVoidsTheTableWithEveryExternalRowMadeInternal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := Judge(slots, ev, nil, JudgeOptions{K: 1, Grace: 2200 * time.Millisecond, Outbound: Outbound{Ext: ext}})
+	r := Judge(slots, ev, nil, JudgeOptions{K: 1, Grace: 2200 * time.Millisecond, Outbound: Outbound{Rows: tableOf(slots, ext)}})
 	joined := strings.Join(r.Reasons, "\n")
 	if !r.Void {
 		t.Fatalf("the reviewer's table passed the judge: %v", r.Reasons)
 	}
 	for _, row := range external {
-		if !strings.Contains(joined, "row "+row.ID+": the row table names ext \"-\"") {
+		if !strings.Contains(joined, "row "+row.ID+": "+row.Key()+" has the class ext "+row.Ext) {
 			t.Errorf("row %s not voided for its class", row.ID)
 		}
 	}

@@ -307,7 +307,9 @@ func TestRunServesTLSWithTheVenueCA(t *testing.T) {
 	if resp.StatusCode != 200 || len(got) != 1 || got[0]["service"] != "stripe" || info.Mode().Perm() != 0o600 {
 		t.Fatalf("status %d, hits %v, mode %v", resp.StatusCode, got, info.Mode().Perm())
 	}
-	if code := run(context.Background(), []string{"-ca-cert", certPath, "-ca-key", keyPath, "-log", logPath, "-https", "127.0.0.1:0", "-smtp", "127.0.0.1:0"}, &stderr); code != exitUsage {
+	again, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	if code := run(again, []string{"-ca-cert", certPath, "-ca-key", keyPath, "-log", logPath, "-https", "127.0.0.1:0", "-smtp", "127.0.0.1:0"}, &stderr); code != exitUsage {
 		t.Fatalf("an existing log file: exit %d", code)
 	}
 }

@@ -48,14 +48,14 @@ var requestIDExemptions = map[string]string{
 
 // requestIDForwardAllowed are the callees a raw request id may be passed to: none of them logs its argument.
 var requestIDForwardAllowed = map[string]string{
-	"WithRequestMeta":         "principal request meta; not a log",
-	"acceptableCorrelationID": "predicate",
-	"writeExplainResponse":    "logs its id argument through logSafeRequestID",
-	"Set":                     "response header",
-	"Add":                     "response header",
-	"len":                     "length only",
-	"WithRequestID":           "request context value",
-	"withRequestID":           "client response extension",
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal.WithRequestMeta": "principal request meta; not a log",
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi.WithRequestID":         "request context value",
+	"local.acceptableCorrelationID": "predicate",
+	"local.writeExplainResponse":    "logs its id argument through logSafeRequestID",
+	"local.withRequestID":           "client response extension",
+	"net/http.Header.Set":           "response header",
+	"net/http.Header.Add":           "response header",
+	"builtin.len":                   "length only",
 }
 
 // isRequestIDName compares a header name by its canonical form: X-Request-Id and X-Request-ID are one name.
@@ -219,7 +219,7 @@ func requestIDReads(t *testing.T, files map[string]string, allowed map[string]st
 		parsed[name] = f
 		list = append(list, f)
 	}
-	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
 	conf := types.Config{Importer: censusImporter{}, Error: func(error) {}, FakeImportC: true}
 	conf.Check("p", fset, list, info)
 	c := &censusCtx{info: info, t: t, fset: fset}
@@ -289,7 +289,7 @@ func requestIDReads(t *testing.T, files map[string]string, allowed map[string]st
 							}
 							return false
 						}
-						if callee := censusCalleeName(n); callee != "" && !inLog && !isStringsCall(n) {
+						if callee := c.calleeKey(n); callee != "" && !inLog && !strings.HasPrefix(callee, "strings.") {
 							if _, ok := allowed[callee]; !ok {
 								for _, a := range n.Args {
 									if c.tainted(a, vars) {
@@ -323,21 +323,40 @@ func requestIDReads(t *testing.T, files map[string]string, allowed map[string]st
 	return logUses, other, forwards
 }
 
-func isStringsCall(call *ast.CallExpr) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	x, ok := sel.X.(*ast.Ident)
-	return ok && x.Name == "strings"
-}
-
-func censusCalleeName(call *ast.CallExpr) string {
+// calleeKey names the callee by what it resolves to, not by its spelling: "builtin.len", "local.name" (this
+// package), "<import path>.Name" for a package function, "<receiver type>.Name" for a method, "?.Name" if it
+// does not resolve. A same-name function in another package or on another type is a different key.
+func (c *censusCtx) calleeKey(call *ast.CallExpr) string {
 	switch fn := call.Fun.(type) {
 	case *ast.Ident:
-		return fn.Name
+		switch o := c.info.Uses[fn].(type) {
+		case *types.Builtin:
+			return "builtin." + o.Name()
+		case *types.Func:
+			if o.Pkg() != nil && o.Pkg().Path() == "p" {
+				return "local." + o.Name()
+			}
+			if o.Pkg() != nil {
+				return o.Pkg().Path() + "." + o.Name()
+			}
+		case *types.TypeName:
+			return "type." + o.Name()
+		}
+		return "?." + fn.Name
 	case *ast.SelectorExpr:
-		return fn.Sel.Name
+		if x, ok := fn.X.(*ast.Ident); ok {
+			if pn, ok := c.info.Uses[x].(*types.PkgName); ok {
+				return pn.Imported().Path() + "." + fn.Sel.Name
+			}
+		}
+		if sel := c.info.Selections[fn]; sel != nil {
+			rt := sel.Recv()
+			if ptr, ok := rt.(*types.Pointer); ok {
+				rt = ptr.Elem()
+			}
+			return types.TypeString(rt, func(p *types.Package) string { return p.Path() }) + "." + fn.Sel.Name
+		}
+		return "?." + fn.Sel.Name
 	}
 	return ""
 }
@@ -364,6 +383,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"example.com/other"
 )
 const hdr = "X-Request-Id"
 const hdr2 = "x-request-" + "id"
@@ -413,7 +433,14 @@ func helper(id string) { log.Print(id) }`, "p.go#a#1", 0, 1},
 		"forward wrapped is safe": {`func a(r R) { helper(logSafeRequestID(envelopeRequestID(r))) }
 func helper(id string) { log.Print(id) }`, "", 0, 0},
 		"forward to an allowed callee": {`func a(r R) { w.Header().Set("X-Request-Id", envelopeRequestID(r)) }`, "p.go#a#1", 0, 0},
-		"second read in a function":    {`func a(r R) { _ = envelopeRequestID(r); _ = envelopeRequestID(r) }`, "p.go#a#1,p.go#a#2", 0, 0},
+		"forward to Set on a non-Header type": {`type L struct{}
+func (L) Set(k, v string) { log.Print(v) }
+func a(r R, l L) { l.Set("request_id", envelopeRequestID(r)) }`, "p.go#a#1", 0, 1},
+		"forward to a same-name func in another package": {`func a(r R) { _ = other.WithRequestID(nil, envelopeRequestID(r)) }`, "p.go#a#1", 0, 1},
+		"forward to a local func named like a listed one": {`func WithRequestID(c context.Context, id string) { log.Print(id) }
+func a(r R) { WithRequestID(nil, envelopeRequestID(r)) }`, "p.go#a#1", 0, 1},
+		"forward to http.Header Set and Add": {`func a(r R) { r.Header.Set("X-Request-Id", envelopeRequestID(r)); r.Header.Add("X", envelopeRequestID(r)) }`, "p.go#a#1,p.go#a#2", 0, 0},
+		"second read in a function":          {`func a(r R) { _ = envelopeRequestID(r); _ = envelopeRequestID(r) }`, "p.go#a#1,p.go#a#2", 0, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			logUses, other, forwards := requestIDReads(t, map[string]string{"p.go": pre + tc.body}, requestIDForwardAllowed)
@@ -490,7 +517,7 @@ func envelopeRequestID(r R) string { return "" }
 func logSafeRequestID(s string) string { return s }
 func helper(id string) { log.Print(id) }
 `
-	allowed := map[string]string{"setHeader": "response header write"}
+	allowed := map[string]string{"local.setHeader": "response header write"}
 	rows := map[string]string{"p.go#restScopeOrg#1": "guarded local"}
 	for name, tc := range map[string]struct {
 		body string

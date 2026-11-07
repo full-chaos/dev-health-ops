@@ -189,3 +189,10 @@ func writeStatus(path, mode string, started time.Time) error {
 	}
 	return werr
 }
+
+// UnservedHosts: skeleton, not in the leaf yet.
+var UnservedHosts = []string{
+	"accounts.google.com", "api.anthropic.com", "api.atlassian.com", "api.eu.pagerduty.com", "api.linear.app", "api.openai.com",
+	"api.resend.com", "api.typesafe.ai", "app.launchdarkly.com", "connect.stripe.com", "files.stripe.com",
+	"generativelanguage.googleapis.com", "gitlab.com", "meter-events.stripe.com", "oauth2.googleapis.com", "www.googleapis.com",
+}

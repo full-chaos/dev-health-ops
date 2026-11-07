@@ -252,6 +252,14 @@ func TestLeafCertCoversTheStubHostsOnly(t *testing.T) {
 			t.Errorf("%s: %v", host, err)
 		}
 	}
+	for _, host := range UnservedHosts {
+		if _, err := parsed.Verify(x509.VerifyOptions{DNSName: host, Roots: pool, CurrentTime: stubT0}); err != nil {
+			t.Errorf("unserved %s: %v", host, err)
+		}
+	}
+	if len(parsed.DNSNames) != len(Hosts)+len(UnservedHosts) {
+		t.Errorf("the leaf names %d hosts, want %d", len(parsed.DNSNames), len(Hosts)+len(UnservedHosts))
+	}
 	if _, err := parsed.Verify(x509.VerifyOptions{DNSName: "api.example.com", Roots: pool, CurrentTime: stubT0}); err == nil {
 		t.Error("the leaf verifies for a host the stub does not serve")
 	}
@@ -312,5 +320,33 @@ func TestRunServesTLSWithTheVenueCA(t *testing.T) {
 	defer stop()
 	if code := run(again, []string{"-ca-cert", certPath, "-ca-key", keyPath, "-log", logPath, "-status", filepath.Join(dir, "status2.txt"), "-https", "127.0.0.1:0", "-smtp", "127.0.0.1:0"}, &stderr); code != exitUsage {
 		t.Fatalf("an existing log file: exit %d", code)
+	}
+}
+
+// Every unserved pinned host reaches the stub, is answered 421 and is logged with service unknown (the venue judge
+// voids a run on it); none of them is a served host.
+func TestUnservedPinnedHostsAreLoggedUnknownAnd421(t *testing.T) {
+	var buf bytes.Buffer
+	h := handler(fixedLog(&buf), modeRun)
+	for _, host := range UnservedHosts {
+		if _, served := Hosts[host]; served {
+			t.Fatalf("%s is both served and unserved", host)
+		}
+		req := httptest.NewRequest(http.MethodPost, "https://"+host+"/v1/x", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMisdirectedRequest {
+			t.Errorf("%s: %d", host, rec.Code)
+		}
+	}
+	got := hits(t, buf.String())
+	if len(got) != len(UnservedHosts) {
+		t.Fatalf("%d hits, want %d", len(got), len(UnservedHosts))
+	}
+	for i, rec := range got {
+		if rec["service"] != unknownService || rec["host"] != UnservedHosts[i] {
+			t.Errorf("hit %d: %v", i, rec)
+		}
 	}
 }

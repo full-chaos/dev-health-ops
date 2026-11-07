@@ -78,9 +78,12 @@ func TestTokenReviewFakeAuthenticatesOnlyTheWrittenSubject(t *testing.T) {
 	cfg := testConfig(subject)
 	cfg.Now = func() time.Time { return issued.Add(time.Minute) }
 	h := TokenReviewHandler(cfg)
-	noExp := TokenReviewHandler(testConfig("a.b.c"))
-	if rec := post(t, noExp, testReviewer, "a.b.c", []string{testAudience}); strings.Contains(rec.Body.String(), `"authenticated":true`) {
-		t.Fatal("FAIL: a written subject without an exp claim was authenticated")
+	// A written subject without a readable exp claim is never authenticated: not a JWS, a payload without exp.
+	enc := base64.RawURLEncoding
+	for _, noExp := range []string{"a.b.c", enc.EncodeToString([]byte(`{"alg":"EdDSA"}`)) + "." + enc.EncodeToString([]byte(`{"iss":"x"}`)) + ".c2ln"} {
+		if rec := post(t, TokenReviewHandler(testConfig(noExp)), testReviewer, noExp, []string{testAudience}); strings.Contains(rec.Body.String(), `"authenticated":true`) {
+			t.Fatalf("FAIL: written subject %q without an exp claim was authenticated", noExp)
+		}
 	}
 	for name, tc := range map[string]struct {
 		bearer, token string

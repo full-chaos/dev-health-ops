@@ -373,10 +373,20 @@ func judgeOutboundEnforced(report *Report, in EnforcedInput) outboundCheck {
 	slices.Sort(rows)
 	for _, row := range rows {
 		if reason, ok := NoOutboundRows[keyOfYard(in.YardOutbound, row)]; ok {
+			var callers []string
+			var statuses []int
 			for _, y := range in.YardOutbound {
-				if y.Row == row && y.Hits > 0 {
+				if y.Row != row {
+					continue
+				}
+				callers, statuses = append(callers, y.Caller), append(statuses, y.Status)
+				if y.Hits > 0 {
 					check.fails = append(check.fails, fmt.Sprintf("FAIL: row %s %s k=%d: %d outside calls in the yardstick, but the row is pinned NO_OUTBOUND (%s)", row, y.Caller, y.K, y.Hits, reason))
 				}
+			}
+			if shown := decisionShown(row, "yardstick", callers, statuses); len(shown) > 0 {
+				check.noReach = append(check.noReach, row)
+				check.fails = append(check.fails, shown...)
 			}
 			continue
 		}

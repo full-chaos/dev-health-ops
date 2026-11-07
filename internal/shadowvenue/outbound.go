@@ -17,12 +17,51 @@ var StubServices = []string{"stripe", "pagerduty", "github", "mail"}
 // VerdictOutboundDiffers: the enforced slot made a different number of outside calls than the yardstick slot.
 const VerdictOutboundDiffers = "MISMATCH_OUTBOUND"
 
-// NoOutboundRows are the external rows that make no outside call on any path (acp, ADDENDUM-13267-1 Q-A2), by row key,
-// with the code-argued reason. They pass on status equality and on 0 stub hits in every slot of both runs; one hit fails
-// the row. The reason goes into the row table.
+// NoOutboundRows are the external rows that make no outside call on any path (acp, ADDENDUM-13267-1 Q-A2 and the word
+// on rows 42/44/45/46/82), by row key, with the code-argued reason. They pass on status equality and on 0 stub hits in
+// every slot of both runs; one hit fails the row. So that such a row is no empty evidence, in each run at least one
+// caller must get past the decision in every slot (an answer other than 401/403) and each caller must get one class of
+// answer in all its slots; else the row is VOID. The reason goes into the row table.
 var NoOutboundRows = map[string]string{
-	"POST /api/v1/admin/integrations/pagerduty/authorize": "builds the PagerDuty authorize URL only (internal/apiservice/admin/pagerduty_authorize.go:67-99)",
-	"POST /api/v1/admin/integrations/github/install-url":  "builds the GitHub App install URL only (internal/api/githubapp/routes.go:110-135)",
+	"POST /api/v1/admin/integrations/pagerduty/authorize":                              "builds the PagerDuty authorize URL only (internal/apiservice/admin/pagerduty_authorize.go:67-99)",
+	"POST /api/v1/admin/integrations/github/install-url":                               "builds the GitHub App install URL only (internal/api/githubapp/routes.go:110-135)",
+	"POST /api/v1/admin/integrations/pagerduty/webhook-bindings":                       "DB only (internal/apiservice/admin/pagerduty_bindings.go:228-299)",
+	"POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate": "DB only (internal/apiservice/admin/pagerduty_bindings.go:396-477)",
+	"POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/revoke":   "DB only (internal/apiservice/admin/pagerduty_bindings.go:479-515)",
+	"POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/rotate":   "DB only (internal/apiservice/admin/pagerduty_bindings.go:301-394)",
+	"POST /api/v1/admin/integrations/pagerduty/preflight":                              "reads the credential and its scopes from the DB only (internal/apiservice/admin/pagerduty.go:274-375)",
+}
+
+// decisionShown holds a NO_OUTBOUND row to evidence that the decision point ran: statuses are the (caller, status) of
+// the row's slots in one run. Each caller must get one class of answer (refused 401/403, or past the decision) in all
+// its slots, and at least one caller must get past the decision; each problem is a failure line.
+func decisionShown(row, run string, callers []string, statuses []int) []string {
+	var fails []string
+	refused, past := map[string]int{}, map[string]int{}
+	var order []string
+	for i, caller := range callers {
+		if refused[caller]+past[caller] == 0 {
+			order = append(order, caller)
+		}
+		if denied(statuses[i]) {
+			refused[caller]++
+		} else {
+			past[caller]++
+		}
+	}
+	through := 0
+	for _, caller := range order {
+		switch {
+		case refused[caller] > 0 && past[caller] > 0:
+			fails = append(fails, fmt.Sprintf("FAIL: row %s %s: %s is refused in %d slots and served in %d: one class of answer per caller", row, run, caller, refused[caller], past[caller]))
+		case past[caller] > 0:
+			through++
+		}
+	}
+	if through == 0 {
+		fails = append(fails, fmt.Sprintf("FAIL: row %s VOID: in the %s no caller got past the decision; a NO_OUTBOUND row is no evidence then", row, run))
+	}
+	return fails
 }
 
 // StubHit is one request the venue stub served. The stub logs no header, body or query.
@@ -175,10 +214,20 @@ func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []
 	for _, row := range rows {
 		if reason, ok := NoOutboundRows[keyOf[row]]; ok {
 			out.pinned = append(out.pinned, row)
+			var callers []string
+			var statuses []int
 			for _, s := range sent {
-				if s.Row == row && out.hits[s.Seq] > 0 {
+				if s.Row != row {
+					continue
+				}
+				callers, statuses = append(callers, s.Caller), append(statuses, s.Status)
+				if out.hits[s.Seq] > 0 {
 					out.fails = append(out.fails, fmt.Sprintf("FAIL: slot %d row %s %s: %d outside calls, but the row is pinned NO_OUTBOUND (%s)", s.Seq, row, s.Caller, out.hits[s.Seq], reason))
 				}
+			}
+			if shown := decisionShown(row, "run", callers, statuses); len(shown) > 0 {
+				out.noReach = append(out.noReach, row)
+				out.fails = append(out.fails, shown...)
 			}
 			continue
 		}

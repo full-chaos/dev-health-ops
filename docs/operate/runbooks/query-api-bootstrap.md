@@ -273,7 +273,7 @@ Only if investment explanation text is needed:
 2. **Simultaneously** set `SETTINGS_ENCRYPTION_KEY` and `SETTINGS_ENCRYPTION_SALT` on the query-api Deployment (both from the same Secret, by secretKeyRef, same change).
 3. Roll query-api alone and verify both keys are in place (byte-length check).
 4. Run a real proof on `investmentFull` and `investmentBreakdown` operations.
-5. Chris refreshes the Investment page to verify explanation text.
+5. Refresh the Investment page to verify explanation text.
 
 Without both keys in the same change, encrypted org settings silently fall back to the platform provider (not an error, a fallback).
 

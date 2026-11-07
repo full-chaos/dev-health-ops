@@ -2,6 +2,8 @@ package authconfig
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -120,5 +122,41 @@ func TestTheSessionIssueWorkloadSubjectIsADeclaredEnvOnlyOption(t *testing.T) {
 	}
 	if !listed {
 		t.Fatalf("EnvOnlySettings %v does not list %s", cfg.EnvOnlySettings, EnvSessionIssueWorkloadSubject)
+	}
+}
+
+func TestTheSessionIssueWorkloadSubjectLoadsFromItsFileCompanion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.subject")
+	if err := os.WriteFile(path, []byte(issueWorkloadSubject), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := baseEnv()
+	env[EnvTokenIssuerURL] = "https://auth.example.com"
+	env[EnvSessionIssueWorkloadSubject+"_FILE"] = path
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SessionIssueWorkloadSubject != issueWorkloadSubject {
+		t.Fatalf("subject %q from the file", cfg.SessionIssueWorkloadSubject)
+	}
+
+	env[EnvSessionIssueWorkloadSubject] = issueWorkloadSubject
+	if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("the value and its file together were not refused: %v", err)
+	}
+	delete(env, EnvSessionIssueWorkloadSubject)
+
+	if err := os.WriteFile(path, []byte("not-a-subject"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Load(Spec{LookupEnv: lookupFrom(env)})
+	if err == nil || !strings.Contains(err.Error(), EnvSessionIssueWorkloadSubject) || strings.Contains(err.Error(), "not-a-subject") {
+		t.Fatalf("a malformed file was not refused by name, or the error names the value: %v", err)
+	}
+
+	env[EnvSessionIssueWorkloadSubject+"_FILE"] = filepath.Join(t.TempDir(), "missing")
+	if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil || !strings.Contains(err.Error(), EnvSessionIssueWorkloadSubject+"_FILE") {
+		t.Fatalf("a missing file was not refused by name: %v", err)
 	}
 }

@@ -44,6 +44,7 @@ type EgressRead struct {
 // value. run_id names the drive the read precedes (the driver's -run-id), or none for the read after the last drive.
 func ParseEgress(name string, raw []byte) EgressRead {
 	read := EgressRead{Name: name, Fields: map[string]string{}}
+	seen := map[string]bool{}
 	for n, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
 		key, value, ok := strings.Cut(line, "=")
 		switch {
@@ -51,16 +52,19 @@ func ParseEgress(name string, raw []byte) EgressRead {
 			read.Err = fmt.Errorf("line %d is not key=value", n+1)
 		case !slices.Contains(egressKeys, key):
 			read.Err = fmt.Errorf("line %d: unknown key %q", n+1, key)
-		case read.Fields[key] != "":
+		case seen[key]:
 			read.Err = fmt.Errorf("line %d: key %s twice", n+1, key)
+		case value == "":
+			read.Err = fmt.Errorf("line %d: key %s has an empty value", n+1, key)
 		}
 		if read.Err != nil {
 			return read
 		}
+		seen[key] = true
 		read.Fields[key] = value
 	}
 	for _, key := range egressKeys {
-		if read.Fields[key] == "" {
+		if !seen[key] {
 			read.Err = fmt.Errorf("key %s missing", key)
 			return read
 		}

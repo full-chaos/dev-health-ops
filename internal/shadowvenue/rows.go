@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
@@ -130,9 +131,42 @@ func (r Row) check(destructive string) error {
 	return nil
 }
 
+// rowClass is a route's class: its outside service (ext) and whether it is destructive.
+type rowClass struct {
+	ext         string
+	destructive bool
+}
+
+// embeddedRows is the embedded row table as the package was built, copied at init so no later change of DefaultRows
+// can move a class.
+var embeddedRows = append([]byte(nil), DefaultRows...)
+
+// classes are the classes of the embedded table's rows by route key: a custom row table may change a row's path or
+// body, never its class (the row table is an input; the classes are code).
+var classes = sync.OnceValue(func() map[string]rowClass {
+	rows, err := ParseRows(embeddedRows)
+	if err != nil {
+		panic("shadowvenue: the embedded row table does not parse: " + err.Error())
+	}
+	out := map[string]rowClass{}
+	for _, row := range rows {
+		if !row.Control() {
+			out[row.Key()] = rowClass{ext: row.Ext, destructive: row.Destructive}
+		}
+	}
+	return out
+})
+
+// classOf is the class of a route key, ok false for a route the embedded table does not hold.
+func classOf(key string) (rowClass, bool) {
+	c, ok := classes()[key]
+	return c, ok
+}
+
 // CheckRows holds the rows to go-api's shadow rows in profiles (an endpoint-profiles.go-api.json), read by the
 // shadow's own parser: every shadow row is in the table exactly once, the table has no other row, and every
-// control is a shadow row.
+// control is a shadow row. Each row keeps its route's class (classOf): its ext and destructive columns are the
+// embedded table's, and a control names no outside service.
 func CheckRows(rows []Row, profiles []byte) error {
 	shadowRows, err := policy.ParseShadowRows(profiles, accessrouting.Service)
 	if err != nil {
@@ -150,7 +184,15 @@ func CheckRows(rows []Row, profiles []byte) error {
 			continue
 		}
 		if row.Control() {
+			if row.Ext != none {
+				problems = append(problems, fmt.Sprintf("control %s: names outside service %s; a control's class has none", row.ID, row.Ext))
+			}
 			continue
+		}
+		// A route the embedded table does not hold has the zero class, which no parsed row has, so it is refused here too.
+		if c, _ := classOf(row.Key()); c.ext != row.Ext || c.destructive != row.Destructive {
+			problems = append(problems, fmt.Sprintf("row %s: %s has the class ext %s, destructive %v; the table names ext %s, destructive %v",
+				row.ID, row.Key(), c.ext, c.destructive, row.Ext, row.Destructive))
 		}
 		if first, dup := have[row.Key()]; dup {
 			problems = append(problems, fmt.Sprintf("%s is in the table twice (rows %s and %s)", row.Key(), first, row.ID))

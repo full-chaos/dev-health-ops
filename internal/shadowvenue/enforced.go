@@ -348,7 +348,7 @@ func judgeOutboundEnforced(report *Report, in EnforcedInput) outboundCheck {
 	check := checkOutbound(in.Slots, in.Outbound, in.Grace, []string{"before", "between", "after"})
 	external := map[string]bool{}
 	for _, s := range sentSlots(in.Slots) {
-		if ext := in.Outbound.Ext[s.Row]; ext != "" && ext != none {
+		if c, ok := classOf(s.Key()); ok && c.ext != none {
 			external[s.Row] = true
 		}
 	}

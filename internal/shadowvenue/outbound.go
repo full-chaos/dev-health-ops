@@ -104,7 +104,9 @@ func ParseStubLog(raw []byte) ([]StubHit, error) {
 }
 
 // Outbound is a run's stub evidence. Logged reports whether the stub log was given (an empty log is a log); Ext maps
-// each row id to its ext column; Egress are the run's egress records (ParseEgress), in read order.
+// each row id to the ext column of the row table the drive used (nil when no table is given): the judge takes each
+// slot's class from its route (classOf) and voids a run whose table names another; Egress are the run's egress records
+// (ParseEgress), in read order.
 type Outbound struct {
 	Logged bool
 	Hits   []StubHit
@@ -158,8 +160,18 @@ func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []
 	sent := sentSlots(slots)
 	external := map[string]bool{}
 	keyOf := map[string]string{}
+	extOf := map[string]string{}
 	for _, s := range sent {
-		if ext := ob.Ext[s.Row]; ext != "" && ext != none {
+		c, ok := classOf(s.Key())
+		switch {
+		case !ok:
+			out.voids = append(out.voids, fmt.Sprintf("slot %d row %s: route %s has no class in the embedded row table", s.Seq, s.Row, s.Key()))
+			continue
+		case ob.Ext != nil && ob.Ext[s.Row] != c.ext:
+			out.voids = append(out.voids, fmt.Sprintf("slot %d row %s: the row table names ext %q, but the class of %s is ext %q", s.Seq, s.Row, ob.Ext[s.Row], s.Key(), c.ext))
+		}
+		extOf[s.Row] = c.ext
+		if c.ext != none {
 			external[s.Row] = true
 			keyOf[s.Row] = s.Key()
 		}
@@ -201,8 +213,8 @@ func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []
 	}
 	for _, s := range sent {
 		for service := range byService[s.Seq] {
-			if service != ob.Ext[s.Row] {
-				out.fails = append(out.fails, fmt.Sprintf("FAIL: slot %d row %s %s: a %s call, but the row's ext is %q", s.Seq, s.Row, s.Caller, service, ob.Ext[s.Row]))
+			if service != extOf[s.Row] {
+				out.fails = append(out.fails, fmt.Sprintf("FAIL: slot %d row %s %s: a %s call, but the row's ext is %q", s.Seq, s.Row, s.Caller, service, extOf[s.Row]))
 			}
 		}
 		if denied(s.Status) && out.hits[s.Seq] > 0 {
@@ -246,7 +258,7 @@ func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []
 		}
 		if reached == 0 {
 			out.noReach = append(out.noReach, row)
-			out.fails = append(out.fails, fmt.Sprintf("FAIL: row %s VOID: %d allowed slots, %d reached the %s stub; the row is no evidence", row, allowed, reached, ob.Ext[row]))
+			out.fails = append(out.fails, fmt.Sprintf("FAIL: row %s VOID: %d allowed slots, %d reached the %s stub; the row is no evidence", row, allowed, reached, extOf[row]))
 		}
 	}
 	return out

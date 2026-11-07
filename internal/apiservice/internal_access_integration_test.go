@@ -20,7 +20,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
-	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -72,7 +71,7 @@ func accessLoginDSN(t *testing.T, ctx context.Context, admin driver.Conn, dsn, n
 // TestInternalRoutesServeThePrincipalAccessReadOnTheAPIPosture drives the
 // mounted read the way go-api builds it (InternalRoutes over the pool and the
 // ClickHouse connection) through the internal listener's server wrapper, with
-// a svc_acr_ credential that holds principal_access:read and a ClickHouse
+// the acr-api workload token and a ClickHouse
 // login granted exactly chclickhouse.APIPosture. The same read on a login
 // granted the posture without its repos row answers 503: the repos grant is
 // what the inventory read needs, and a missing grant never answers a partial
@@ -122,13 +121,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 		}
 		pgseed.OrgOverride(ctx, t, pool, org.String(), featureID, true)
 	}
-	const token = "svc_acr_access-mount-0123456789abcdef"
-	if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials
-		(id, service_name, token_hash, token_prefix, scopes, created_at)
-		VALUES (gen_random_uuid(), 'acr', $1, $2, '["principal_access:read"]'::json, now())`,
-		admin.HashServiceToken(token), token[:16]); err != nil {
-		t.Fatal(err)
-	}
+	workload, bearer := listenerWorkload(t)
 	for _, repo := range []string{"Acme/Web", "acme/api"} {
 		if err := chAdmin.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
 			uuid.New(), repo, org.String(), "github", time.Now().UTC()); err != nil {
@@ -158,13 +151,14 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 
 	readWith := func(t *testing.T, deps Deps, query string) *httptest.ResponseRecorder {
 		t.Helper()
+		deps.ACRWorkload = workload
 		server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(),
 			InternalRoutes(deps, quietLog()))
 		if err != nil {
 			t.Fatal(err)
 		}
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+org.String()+"/principals/"+user.String()+"/access"+query, nil)
-		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Authorization", bearer)
 		recorder := httptest.NewRecorder()
 		server.Handler().ServeHTTP(recorder, request)
 		return recorder
@@ -270,12 +264,12 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, big); err
 			}
 		}
 		server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(),
-			InternalRoutes(Deps{Pool: pool, ClickHouse: granted}, quietLog()))
+			InternalRoutes(Deps{Pool: pool, ClickHouse: granted, ACRWorkload: workload}, quietLog()))
 		if err != nil {
 			t.Fatal(err)
 		}
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+big.String()+"/principals/"+user.String()+"/access", nil)
-		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Authorization", bearer)
 		rec := httptest.NewRecorder()
 		server.Handler().ServeHTTP(rec, request)
 		const want = `{"detail":"Service unavailable","code":"acr_access_repository_scope_over_limit"}`
@@ -360,13 +354,7 @@ VALUES ($1, $2, 'not-a-hash', true, true, false, 0, now(), now())`, user, "acces
 VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err != nil {
 		t.Fatal(err)
 	}
-	const token = "svc_acr_access-projects-0123456789"
-	if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials
-		(id, service_name, token_hash, token_prefix, scopes, created_at)
-		VALUES (gen_random_uuid(), 'acr', $1, $2, '["principal_access:read"]'::json, now())`,
-		admin.HashServiceToken(token), token[:16]); err != nil {
-		t.Fatal(err)
-	}
+	workload, bearer := listenerWorkload(t)
 	for _, project := range [][2]string{{"linear", "P-1"}, {"jira", "10001"}} {
 		if err := chAdmin.Exec(ctx, `INSERT INTO projects (id, org_id, provider, name, updated_at) VALUES (?, ?, ?, ?, ?)`,
 			project[1], org.String(), project[0], "Project "+project[1], time.Now().UTC()); err != nil {
@@ -435,12 +423,13 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 	})
 	read := func(t *testing.T, deps Deps) *httptest.ResponseRecorder {
 		t.Helper()
+		deps.ACRWorkload = workload
 		server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(), InternalRoutes(deps, quietLog()))
 		if err != nil {
 			t.Fatal(err)
 		}
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+org.String()+"/principals/"+user.String()+"/access", nil)
-		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Authorization", bearer)
 		recorder := httptest.NewRecorder()
 		server.Handler().ServeHTTP(recorder, request)
 		return recorder

@@ -77,7 +77,10 @@ auth-service accepts for it, with four one-shot services. Every `up` runs them, 
 
 - The value is written once to `/run/workload/api.bootstrap` (mode 0600) in the named volume `workload_bootstrap`.
   The registry keeps only its digest. The command prints the credential id (`credential=ID`), never the value.
-  With `-if-absent`, a workload that already holds a live credential is skipped: exit 0, nothing written.
+  With `-if-absent`, a workload that already holds a live credential is skipped: exit 0, nothing written. A workload with
+  no live credential (the value expired or was revoked) gets a new one, and an old file at the same path is replaced
+  atomically (a 0600 temporary file in the same directory, renamed over it): a restart after the credential expired
+  leaves go-api with the new file, not the dead one. Without `-if-absent` an existing file is refused.
 - go-api mounts the volume read-only at `/run/workload` and reads the file for its session issue call
   (`AUTH_SESSION_ISSUE_CREDENTIAL=workload`). auth-service never mounts it. To accept the value, auth-service has
   `AUTH_WORKLOAD_BOOTSTRAP=true` and `AUTH_TOKEN_ISSUER_URL` (go-api's `AUTH_WORKLOAD_ISSUER` follows it).

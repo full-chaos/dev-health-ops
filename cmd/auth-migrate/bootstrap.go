@@ -72,6 +72,36 @@ func writeSecretFile(path, value string) (err error) {
 	return nil
 }
 
+// replaceSecretFile writes value to a new 0600 file in path's directory, syncs it and renames it over path, then syncs
+// the directory: a reader sees the old file or the new one, never a partial one, and a failure leaves path as it was.
+// Only bootstrap-create -if-absent uses it, for a workload with no live value, where the file it replaces is dead.
+func replaceSecretFile(path, value string) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".bootstrap-*") // #nosec G304 -- the operator-chosen output path's directory
+	if err != nil {
+		return errors.New("the -out directory is not writable")
+	}
+	name := tmp.Name()
+	if err := fillSecretFile(tmp, value); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return errors.New("the -out file could not be closed")
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return errors.New("the -out file could not be replaced")
+	}
+	if err := syncDir(dir); err != nil {
+		_ = os.Remove(path)
+		return errors.New("the -out directory could not be synced")
+	}
+	return nil
+}
+
 func fillSecretFile(f *os.File, value string) error {
 	if err := f.Chmod(0o600); err != nil {
 		return errors.New("the -out file mode could not be set")
@@ -115,7 +145,11 @@ func runBootstrap(ctx context.Context, store bootstrapStore, parsed workloadsArg
 			fmt.Fprintln(stderr, "workloads error: the system random source failed")
 			return 1
 		}
-		if err := writeSecretFile(parsed.out, value); err != nil {
+		write := writeSecretFile
+		if parsed.ifAbsent {
+			write = replaceSecretFile
+		}
+		if err := write(parsed.out, value); err != nil {
 			fmt.Fprintf(stderr, "workloads error: %s: %v (nothing was registered)\n", parsed.verb, err)
 			return 1
 		}
@@ -163,7 +197,7 @@ func bootstrapDryRun(ctx context.Context, store bootstrapStore, parsed workloads
 		fmt.Fprintf(stdout, "workloads bootstrap-revoke dry run: credential=%s status=%s (no change written)\n", parsed.credentialID, state)
 		return 0
 	}
-	if parsed.out != "" {
+	if parsed.out != "" && !parsed.ifAbsent {
 		if _, err := os.Lstat(parsed.out); err == nil {
 			fmt.Fprintf(stderr, "workloads error: %s dry run: %v\n", parsed.verb, errOutExists)
 			return 1

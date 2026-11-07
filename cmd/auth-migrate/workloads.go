@@ -34,7 +34,7 @@ const workloadsUsage = "usage: auth-migrate workloads seed [-apply] | bind -work
 	" a recreated ServiceAccount of the same name is a new identity. It never enables a disabled binding; binding-enable does that." +
 	"\nA bootstrap value is written once, to a new 0600 -out file, and never to argv, stdout or a log." +
 	"\nPut -out in a directory writable only by the operator: a failed verb's file is removed by path." +
-	"\nbootstrap-create -if-absent (compose and dev only): with -apply it exits 0 and writes nothing when N already holds a live value, so a one-shot can run on every up." +
+	"\nbootstrap-create -if-absent (compose and dev only): with -apply it exits 0 and writes nothing when N already holds a live value, and replaces a stale -out file (the value expired or was revoked) atomically, so a one-shot can run on every up." +
 	"\nsubject writes the wire principal id of workload N (prn_ and 22 base64url characters; not a secret) to PATH, replacing it atomically, for AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT_FILE." +
 	"\nbootstrap-disable revokes every live bootstrap value of N at once; workload tokens issued before it live at most 300 s." +
 	"\nenable clears the workload row's disabled mark (and, with -enable-principal, its workload principal's); ID is the enabled" +
@@ -88,7 +88,7 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 	flags.StringVar(&parsed.binding.ServiceAccountName, "service-account", "", "bind: the Kubernetes service account name")
 	flags.StringVar(&parsed.binding.ServiceAccountUID, "uid", "", "bind: the service account uid, when it is to be pinned")
 	flags.StringVar(&parsed.out, "out", "", "bootstrap-create, bootstrap-rotate: the NEW file (mode 0600) the value is written to once, in a directory writable only by the operator")
-	flags.BoolVar(&parsed.ifAbsent, "if-absent", false, "bootstrap-create: with -apply, exit 0 and write nothing when the workload already holds a live bootstrap value (compose and dev only)")
+	flags.BoolVar(&parsed.ifAbsent, "if-absent", false, "bootstrap-create: with -apply, exit 0 and write nothing when the workload already holds a live bootstrap value; with none, replace an existing -out file atomically (compose and dev only)")
 	flags.Var(&parsed.audiences, "audience", "bootstrap-create: an audience of the value (repeatable; default: the workload's audiences)")
 	flags.DurationVar(&parsed.expiresIn, "expires-in", workload.BootstrapExpiryDefault, "bootstrap-create, bootstrap-rotate: the value's lifetime (at most 2160h)")
 	flags.DurationVar(&parsed.overlap, "overlap", 0, "bootstrap-rotate: how long the old value stays live (0 to 1h)")

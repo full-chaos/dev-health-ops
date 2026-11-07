@@ -195,7 +195,7 @@ A platform role holds platform actions only. An organization role never comes fr
 
 ## query-api
 
-query-api authenticates every protected REST route with `authenticateRESTRequest` (`internal/queryapi/server/rest_error_response.go`). It has no per-route action check. Its 37 protected rows all have `action: unknown`, with a declared gap tracked in CHAOS-11042.
+query-api authenticates every protected REST route with `authenticateRESTRequest` (`internal/queryapi/server/rest_error_response.go`). It has no per-route action check. Its 37 protected rows all have `action: unknown`, with a declared gap.
 
 | Condition | Answer |
 | --- | --- |
@@ -291,13 +291,13 @@ Source: `contracts/auth/v1/endpoint-profiles.auth-service.json`. The OpenAPI doc
 
 ## Planned, not built
 
-| Item | Ticket |
+| Item | Status |
 | --- | --- |
-| Policy decision point routes `POST /v1/authorize` and `POST /v1/authorize:batch`. No Go route serves them. | CHAOS-10841 |
-| Actor chain, delegation limits and obligations in the decision point. | CHAOS-10839 |
-| Delegated (impersonation) session with an actor chain. | CHAOS-10987 |
-| Explicit platform actions for the superuser-inherited sites (`admin.billing`, `admin.flags`, `admin.audit`, `admin.impersonate`, `admin.telemetry`, `admin.stats`). Not in the catalog on `main`. | CHAOS-11847 |
-| Server actions and route handlers in web use single decisions. | CHAOS-10883 |
-| Check of the query-api rows and the GraphQL map against live behaviour. | CHAOS-11042 |
+| Policy decision point routes `POST /v1/authorize` and `POST /v1/authorize:batch`. No Go route serves them. | Planned |
+| Actor chain, delegation limits and obligations in the decision point. | Planned |
+| Delegated (impersonation) session with an actor chain. | Planned |
+| Explicit platform actions for the superuser-inherited sites (`admin.billing`, `admin.flags`, `admin.audit`, `admin.impersonate`, `admin.telemetry`, `admin.stats`). Not in the catalog on `main`. | Planned |
+| Server actions and route handlers in web use single decisions. | Planned |
+| Check of the query-api rows and the GraphQL map against live behaviour. | Planned |
 
 The catalog described here is version 4. Changes from the tickets above will change the version. Check `contracts/auth/v1/vocabulary/actions.v1.json` for the current one.

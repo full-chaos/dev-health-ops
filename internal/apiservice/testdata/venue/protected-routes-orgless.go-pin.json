@@ -1,5 +1,0 @@
-{
-  "me: superuser": "400 {\"detail\":\"No organization context\"}",
-  "me: superuser X-Org-Id any": "400 {\"detail\":\"No organization context\"}",
-  "report: superuser no org": "403 {\"detail\":\"Organization context required\"}"
-}

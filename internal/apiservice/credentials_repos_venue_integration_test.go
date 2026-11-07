@@ -425,11 +425,9 @@ func TestVenueOracleCredentialRepos(t *testing.T) {
 	pythonResponses := golden.Python(t, venue, requests)
 	pythonProvider := strings.Split(golden.InspectRows(t, "python provider requests"), "\n")
 	failuresChecked := 0
-	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/credential-repos-orgless.go-pin.json", SHA256: credentialReposOrglessPinSHA256, Ruling: credentialOrglessRuling})
 	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
-		Golden:      golden,
-		Normalize:   reduceProviderFailure,
-		Retirements: []venueoracle.Retirement{{Match: func(request venueoracle.Request) bool { return request.Name == "repos: other org's admin" }, Pin: orglessPin}},
+		Golden:    golden,
+		Normalize: reduceProviderFailure,
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
 			assertProviderFailureSentence(t, request, goResponse, &failuresChecked)
 		},
@@ -445,9 +443,5 @@ func TestVenueOracleCredentialRepos(t *testing.T) {
 	}
 
 	t.Logf("\n%sprovider requests (%d): %s\n", receipt, len(goProvider), venueoracle.Mark(providerSame))
-	orglessPin.Finish(t)
 	golden.Finish(t)
 }
-
-// credentialReposOrglessPinSHA256 is the digest of testdata/venue/credential-repos-orgless.go-pin.json.
-const credentialReposOrglessPinSHA256 = "1435e239da106d2cde0e1caed84078d5c24bfd55c8f9862e2bae602ef5c99421"

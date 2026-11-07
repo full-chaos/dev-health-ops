@@ -222,6 +222,7 @@ internal/cigates/docstools	dc_helpers_test.go
 internal/cigates/docstools	dc_links.go
 internal/cigates/docstools	dc_paths_test.go
 internal/cigates/docstools	dc_pub.go
+internal/cigates/docstools	dc_pub_exclude_test.go
 internal/cigates/docstools	dc_pub_helpers_test.go
 internal/cigates/docstools	dc_pub_py.go
 internal/cigates/docstools	dc_pub_test.go
@@ -339,6 +340,7 @@ internal/cigates/workflows	workflows_go_queue_cancel_children_test.go
 internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
+internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
 internal/deploymentcontract	manifest.go
 internal/egressguard	egressguard_test.go

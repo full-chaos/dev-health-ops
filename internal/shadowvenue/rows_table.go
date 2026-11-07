@@ -7,8 +7,8 @@ var DefaultRows = []byte(`# The venue driver's row table: one go-api shadow row 
 # placeholders in path and body: {org} {org:<label>} {user:<principal>} {uuid:<kind>} {name:<kind>} {missing}.
 # ext names the outside service a legacy-allowed request can reach; the driver sends it only with -allow-external <ext>.
 row	method	route	org	destructive	ext	principal	expect	path	body
-C1	GET	/api/v1/admin/teams	A	no	-	drift-A	mismatch	/api/v1/admin/teams	-
-C2	GET	/api/v1/admin/integrations	A	no	-	drift-A	mismatch	/api/v1/admin/integrations	-
+C1	GET	/api/v1/admin/teams	A	no	-	drift-S	mismatch	/api/v1/admin/teams	-
+C2	GET	/api/v1/admin/integrations	A	no	-	drift-S	mismatch	/api/v1/admin/integrations	-
 1	POST	/api/v1/admin/orgs/{org_id}/invites	A	no	mail	-	match	/api/v1/admin/orgs/{org}/invites	{"email":"p13140-invitee@venue-proof.fullchaos.dev","role":"member"}
 2	GET	/api/v1/admin/orgs/{org_id}/members	A	no	-	-	match	/api/v1/admin/orgs/{org}/members	-
 3	POST	/api/v1/admin/orgs/{org_id}/members	A	no	-	-	match	/api/v1/admin/orgs/{org}/members	{"user_id":"{missing}","role":"member"}

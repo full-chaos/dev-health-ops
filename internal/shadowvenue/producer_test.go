@@ -164,8 +164,8 @@ func denyPDP(t *testing.T) *pep.Client {
 	return client
 }
 
-// The controls C1 and C2 plant a data drift: drift-A is an owner of org A for the legacy guard (HTTP 200) while the
-// decision point's grant for it is member, so a denying decision point is the planted mismatch. On the real producer a
+// The controls C1 and C2 plant a data drift: drift-S is a platform administrator by the public.users flag, which the legacy guard honours (HTTP 200), a member of org A,
+// with no platform role assignment, so the decision point judges it as a member, so a denying decision point is the planted mismatch. On the real producer a
 // control is green with that denial and red (a match, so the run is void) when the decision point allows.
 func TestDriftControlsAreRedWithoutTheirPlantedMismatchAndGreenWith(t *testing.T) {
 	rows, err := policy.ParseShadowRows(authv1.GoAPIEndpointProfiles, accessrouting.Service)
@@ -184,9 +184,9 @@ func TestDriftControlsAreRedWithoutTheirPlantedMismatchAndGreenWith(t *testing.T
 				if err != nil {
 					t.Fatal(err)
 				}
-				slot := Slot{Seq: 1, Row: "C1", Caller: "admin", Principal: "drift-A", Expect: "mismatch", K: 1, Method: "GET", Route: route,
+				slot := Slot{Seq: 1, Row: "C1", Caller: "superuser", Principal: "drift-S", Expect: "mismatch", K: 1, Method: "GET", Route: route,
 					Path: route, Start: time.Now().UTC(), Status: 200}
-				shadow.Observe(context.Background(), policy.ShadowObservation{Pattern: "GET " + route, Bearer: "bearer-not-logged", OrgID: testOrgA, Caller: "admin", UserAccessToken: true, LegacyAllowed: true})
+				shadow.Observe(context.Background(), policy.ShadowObservation{Pattern: "GET " + route, Bearer: "bearer-not-logged", OrgID: testOrgA, Caller: "superuser", UserAccessToken: true, LegacyAllowed: true})
 				deadline := time.Now().Add(3 * time.Second)
 				for !strings.Contains(logs.String(), MsgResult) && time.Now().Before(deadline) {
 					time.Sleep(10 * time.Millisecond)

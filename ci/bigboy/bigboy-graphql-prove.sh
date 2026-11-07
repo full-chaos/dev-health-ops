@@ -16,10 +16,12 @@
 #      (prover_build_skew would refuse later; this names the cause first);
 #   2. `dho goapi prove` from venue-prove (on the stack's networks: edge = the router)
 #      for the local org -- read-only against the org's data; it writes proof receipts
-#      only. Both credentials are minted IN PROCESS by prove itself: the envelope key is
-#      loaded from the mounted key file into the process env inside the container, the
-#      edge-token key comes from compose substitution (compose.bigboy.yml, venue-prove). No
-#      credential is printed, written to a file, or put on argv;
+#      only. The proof credential is a real auth-service session token of the local admin
+#      account (a platform admin), which the operator stages in a 0600 file named by
+#      BIGBOY_PROVE_ACCESS_TOKEN_FILE; it is mounted read-only into the container and read
+#      there (-proof-access-token-file). Never a prod token. The edge token is minted IN
+#      PROCESS by prove, its key from compose substitution (compose.bigboy.yml, venue-prove).
+#      No credential is printed or put on argv;
 #
 # The local org id is derived at run time from Postgres (the single org of the local
 # admin account, read-only) and never printed. Full prove output (it names the org) stays
@@ -70,9 +72,20 @@ grep -q '^JWT_SECRET_KEY=.' "$R/ops/.env" || { st jwt-secret 1; echo "REFUSED: J
 
 U="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo"
 
-# 2. prove. The key file is loaded into THIS process's env inside the container only.
-"${DC[@]}" --profile venue run --rm --no-deps -T venue-prove \
-  "GO_API_ENVELOPE_PRIVATE_KEY=\"\$(cat /keys/envelope.pem)\" dho goapi prove $U $EDGE_ARGS \
+# The proof credential: the local admin's user access token, in a 0600 file the operator stages (the value is never read
+# by this script). /buildinfo serves a platform admin only, so the account must be one.
+TOKEN_FILE=${BIGBOY_PROVE_ACCESS_TOKEN_FILE:-}
+if [ -z "$TOKEN_FILE" ] || [ ! -f "$TOKEN_FILE" ] || [ -L "$TOKEN_FILE" ]; then
+  st proof-token 1; echo "REFUSED: set BIGBOY_PROVE_ACCESS_TOKEN_FILE to a regular 0600 file holding the local admin's user access token" >&2; exit 1
+fi
+if [ "$(stat -c %a "$TOKEN_FILE")" != 600 ] && [ "$(stat -c %a "$TOKEN_FILE")" != 400 ]; then
+  st proof-token 1; echo "REFUSED: BIGBOY_PROVE_ACCESS_TOKEN_FILE must be mode 0600 or 0400" >&2; exit 1
+fi
+st proof-token 0
+
+# 2. prove. The token file is mounted read-only and read by the prover inside the container only.
+"${DC[@]}" --profile venue run --rm --no-deps -T -v "$TOKEN_FILE:/run/proof/access-token:ro" venue-prove \
+  "dho goapi prove $U $EDGE_ARGS -proof-access-token-file /run/proof/access-token \
    -documents /app/go-api/documents.json -org \"\$PROVE_ORG\" -artifact-dir /proof/bodies -key-id $KEY_ID -candidate-build $NEW \
    -recorded-by bigboy-graphql-prove \
    -review-evidence 'CHAOS-6993: deployed_executed proof of query-api build $NEW on bigboy (compose venue) through $EDGE_NOTE, local org, read-only' \

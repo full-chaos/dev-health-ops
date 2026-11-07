@@ -27,11 +27,13 @@ func headerToken(t *testing.T, typ string) string {
 // The proof credential (/buildinfo and /query/proof) is a platform admin's user access token the operator stages in a
 // 0600 file (-proof-access-token-file), read on each use; nothing mints the effective-principal envelope.
 func TestTheProofCredentialIsTheUserAccessTokenFile(t *testing.T) {
+	t.Setenv(proofAccessTokenFileEnvVar, "")
 	var minted []string
 	withFakeMinter(t, func(_ context.Context, helperName string, _ []string) (string, error) {
 		minted = append(minted, helperName)
 		return headerToken(t, "at+jwt"), nil
 	})
+	t.Setenv(proofAccessTokenFileEnvVar, "")
 	dir := t.TempDir()
 	file := filepath.Join(dir, "proof-token")
 	token := headerToken(t, "at+jwt")

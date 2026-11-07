@@ -46,11 +46,11 @@ kubectl delete pod dev-health-go-api-tools-oneoff
 
 ## Envelope credential
 
-`dho goapi prove` mints its proof-plane credential, the effective-principal envelope, in process. It calls `internal/mintcli/envelope`, the same package `dho mint envelope` calls. It starts no subprocess and takes no flag that names a helper or a path. It mints the envelope locally, in the Pod. It does not call the issuer over the network or exec into a running api Pod.
+`dho goapi prove` reads its proof-plane credential from a file: a platform admin's user access token (typ `at+jwt`) in a 0600 file named by `-proof-access-token-file` or `GO_API_PROVE_PROOF_ACCESS_TOKEN_FILE`. `/buildinfo` serves a platform admin only, and `/query/proof` reads the same token. The file is read on each use, so a token refreshed in place during a run is picked up. The value never reaches argv, output or a receipt, and a file that does not hold a user access token (an envelope, an HS256 token, a usage line) is refused before anything is measured.
 
-It needs the same Ed25519 signing key that the api Pod's environment holds (`GO_API_ENVELOPE_PRIVATE_KEY`). Mount it by `secretKeyRef`, as the `--overrides` above show, from the same Secret name and key that the api Deployment reads. The key is never copied into the image. Never pass it as a flag value, because a flag value lands in argv and `/proc/<pid>/cmdline`. `internal/mintcli/envelope` reads the key by environment variable name only. The claim shape, algorithm (EdDSA/Ed25519), key id, TTL (60 seconds), issuer and audience match the issuer exactly. See the [principal envelope reference](../../reference/auth/principal-envelope.md).
+`dho goapi rest-prove` reads the query-api candidate the same way (`-candidate-access-token-file`). `dho goapi routing seed` and `enable` read `/buildinfo` with the token of the file `GO_API_ROUTING_ACCESS_TOKEN_FILE` names, and record its subject as `user_access_token`.
 
-`dho goapi routing` takes a pre-minted `GO_API_ROUTING_BEARER`. The standalone `dho mint envelope` verb prints the raw credential to stdout for a caller outside `goapi prove`.
+Stage the file from a session of a platform admin account; never stage a production token outside the cluster. The tools no longer mint the effective-principal envelope.
 
 ## Edge access token
 

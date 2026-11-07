@@ -8,9 +8,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
@@ -25,6 +25,9 @@ func withFakeMinter(t *testing.T, mint func(ctx context.Context, helperName stri
 	original := mintCredential
 	t.Cleanup(func() { mintCredential = original })
 	mintCredential = mint
+	if os.Getenv(proofAccessTokenFileEnvVar) == "" {
+		t.Setenv(proofAccessTokenFileEnvVar, proofTokenFile(t, "70d529e0"))
+	}
 }
 
 // withOrgMinter is the common case: a synthetic JWT naming edgeOrg for
@@ -33,6 +36,7 @@ func withFakeMinter(t *testing.T, mint func(ctx context.Context, helperName stri
 // credential its own claimed org without a real minting helper.
 func withOrgMinter(t *testing.T, edgeOrg, proofOrg string) {
 	t.Helper()
+	t.Setenv(proofAccessTokenFileEnvVar, proofTokenFile(t, proofOrg))
 	withFakeMinter(t, func(_ context.Context, helperName string, _ []string) (string, error) {
 		org, sub := proofOrg, "proof"
 		if helperName == "mint-edge-token" {
@@ -65,37 +69,55 @@ func syntheticJWT(t *testing.T, claims map[string]string) string {
 	}, ".")
 }
 
-// A malformed STATIC envelope must fail at construction, with a
-// message that does not echo it. Before, only the minted path was
-// validated, so a static value became a confusing 401 fifteen operations
-// later.
-func TestAMalformedStaticProofBearerFailsAtConstruction(t *testing.T) {
-	const bad = "not-an-envelope-but-still-a-secret"
-	t.Setenv(proofBearerEnvVar, bad)
-
-	_, _, err := credentials(flags{orgID: "o"})
+// A malformed proof token file must fail at construction, with a message that does not echo it: a malformed value
+// would otherwise be a confusing 401 fifteen operations later.
+func TestAMalformedProofTokenFileFailsAtConstruction(t *testing.T) {
+	const bad = "not-a-token-but-still-a-secret"
+	path := filepath.Join(t.TempDir(), "proof-token")
+	if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := credentials(flags{orgID: "o", proofAccessTokenFile: path})
 	if err == nil {
-		t.Fatal("a malformed static proof bearer must be refused before anything is measured")
+		t.Fatal("a malformed proof token file must be refused before anything is measured")
 	}
 	if strings.Contains(err.Error(), bad) {
 		t.Fatalf("the error echoed the credential: %v", err)
 	}
-	if !strings.Contains(err.Error(), proofBearerEnvVar) {
-		t.Fatalf("the error must name the variable so an operator knows what to fix: %v", err)
+	if !strings.Contains(err.Error(), proofAccessTokenFileFlag) {
+		t.Fatalf("the error must name the flag so an operator knows what to fix: %v", err)
 	}
 }
 
-// And a well-formed one is accepted, so the check above is not simply
-// refusing everything.
-func TestAWellFormedStaticProofBearerIsAccepted(t *testing.T) {
-	t.Setenv(proofBearerEnvVar, syntheticJWT(t, map[string]string{"sub": "u-1"}))
-	edge, proof, err := credentials(flags{orgID: "o"})
+// And a well-formed one is accepted, so the check above is not simply refusing everything.
+func TestAWellFormedProofTokenFileIsAccepted(t *testing.T) {
+	edge, proof, err := credentials(flags{orgID: "o", proofAccessTokenFile: proofTokenFile(t, "o")})
 	if err != nil {
-		t.Fatalf("a well-formed static envelope was refused: %v", err)
+		t.Fatalf("a well-formed proof token file was refused: %v", err)
 	}
 	if edge == nil || proof == nil {
 		t.Fatal("both credentials must be constructed")
 	}
+}
+
+// proofTokenFile is a 0600 file holding a user-access-token-shaped value (typ at+jwt) naming org, the shape
+// -proof-access-token-file requires; built at run time, so no token literal is in the tree.
+func proofTokenFile(t *testing.T, org string) string {
+	t.Helper()
+	segment := func(value any) string {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	token := strings.Join([]string{segment(map[string]string{"alg": "EdDSA", "typ": "at+jwt"}), segment(map[string]string{"sub": "proof", "org_id": org}),
+		base64.RawURLEncoding.EncodeToString([]byte("synthetic-signature"))}, ".")
+	path := filepath.Join(t.TempDir(), "proof-token")
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func captureStdout(t *testing.T, fn func()) string {
@@ -175,7 +197,7 @@ func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(printed, "envelope mints = 3") { // 3, so neither 0 nor 1 can pass
+	if !strings.Contains(printed, "proof access token reads = 3") { // 3, so neither 0 nor 1 can pass
 		t.Fatalf("the mint COUNT must reach the report -- a run that minted once will fail at the closing build check, and this line is the only warning:\n%s", printed)
 	}
 	if !strings.Contains(printed, "build binding "+goapiproof.EdgeBuildAbsent+" = 1") {
@@ -292,41 +314,22 @@ func TestTheCLIsOwnGuardsAreReachable(t *testing.T) {
 		}
 	})
 
-	t.Run("the credential freshness window stays well inside the TTL", func(t *testing.T) {
-		// ENVELOPE_DEFAULT_TTL_SECONDS is 60. Stretching this to 250s
-		// once survived: a value at or past the TTL means every request
-		// after the first carries an expired envelope.
-		if proofCredentialFreshness >= 60*time.Second {
-			t.Fatalf("freshness %s is not inside the 60s envelope TTL", proofCredentialFreshness)
-		}
-		if proofCredentialFreshness > 30*time.Second {
-			t.Fatalf("freshness %s leaves too little margin for the request to arrive and be verified", proofCredentialFreshness)
-		}
-	})
 }
 
-// The one place in the shipped binary where the shape validator is
-// JOINED to the minted credential had no killer. ValidateEnvelopeShape is
-// well pinned and MintedCredential(...).WithShapeValidator(...) is
-// exercised, but dropping `.WithShapeValidator(...)` from credentials()
-// survived -- and without it a minter printing a usage line is installed
-// as an Authorization header.
-func TestTheMintedProofCredentialIsShapeValidated(t *testing.T) {
-	withFakeMinter(t, func(_ context.Context, helperName string, _ []string) (string, error) {
-		if helperName == "mint-envelope" {
-			return "usage: mint-envelope [--org ORG]", nil
-		}
-		return syntheticJWT(t, map[string]string{"sub": "edge"}), nil
-	})
-
-	_, proof, err := credentials(flags{orgID: "o"})
+// The proof token file is read on each use and each value is shape-checked: a file rewritten during a run with
+// something that is not a user access token (a usage line, an envelope) never reaches a request.
+func TestTheProofTokenFileIsShapeCheckedOnEachUse(t *testing.T) {
+	path := proofTokenFile(t, "o")
+	_, proof, err := credentials(flags{orgID: "o", proofAccessTokenFile: path})
 	if err != nil {
 		t.Fatalf("credentials: %v", err)
 	}
-
+	if err := os.WriteFile(path, []byte("usage: something [--org ORG]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/buildinfo", nil)
 	if err := proof.Apply(context.Background(), request); err == nil {
-		t.Fatal("a minter printing a usage line was installed as a credential: the shape validator is not wired to the minted credential")
+		t.Fatal("a token file rewritten with a usage line was installed as a credential: the shape check is not applied on each use")
 	}
 	if request.Header.Get("Authorization") != "" {
 		t.Fatal("a malformed credential reached the request")

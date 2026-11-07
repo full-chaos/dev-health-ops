@@ -9,22 +9,21 @@
 | 404 `{"detail":"Not found"}` (no `code`) | `org_id` is not a UUID. Says nothing about deletion. |
 | 503 `{"detail":"Service unavailable"}` | The store cannot be read (database outage, no store configured). |
 
-## Bearer check (CHAOS-9993)
+## Bearer check
 
-`GET .../entitlements/{org_id}` and `GET .../health` check a `svc_acr_` bearer, as `api/internal/acr.py` did (the Python source is in git history: `git show 64efc37bb^:src/dev_health_ops/api/internal/acr.py`). The credential comes from `dho service-credentials create --service acr --scope entitlements:read`. A token that is not a minted credential is refused.
+Every internal acr route (health, entitlement, org llm-config, principal access) accepts one credential: the acr-api workload token (`workload-token.v1`: EdDSA, `typ` `workload+jwt`, `aud` `dev-health-api`, issuer `AUTH_ACCESS_TOKEN_ISSUER`, `sub` equal to `AUTH_ACR_WORKLOAD_SUBJECT`). Every other bearer, a `svc_acr_` service credential included (CHAOS-11242), is refused with the uniform 401 before any credential read; no route reads `internal_service_credentials` any more. The `svc_acr_` check that ported `api/internal/acr.py` (CHAOS-9993) is gone.
 
-Order, on both routes:
+Order, on health and entitlement:
 
 1. 429 `{"detail":"Too many authentication attempts"}`: more than 100 attempts per minute from one client address (`INTERNAL_ACR_AUTH_ATTEMPT_IP_LIMIT`). One bucket per address, shared by both routes and every org id. A rate-limit store error is 500.
-2. 401 `{"detail":"Unauthorized"}`: no `Authorization: Bearer svc_acr_...` header (the scheme is case-sensitive), an unknown token, a revoked or expired token, or a credential of another service. A credential is still valid at its `expires_at` instant.
-3. 403 `{"detail":"Forbidden"}`: a valid credential without `entitlements:read`.
-4. The route's own answers above.
+2. 401 `{"detail":"Unauthorized"}`: no `Authorization: Bearer` header (the scheme is case-sensitive), a bearer that is not a workload token (a `svc_acr_` credential included), or a refused workload token. 403 `{"detail":"Forbidden"}`: a valid workload token of another workload. 503: the workload key source is unavailable.
+3. The route's own answers above.
 
-The entitlement route also writes `last_used_at` (after the validity check, before the scope check) and one `internal_service_credential_audits` row per answer, action `acr_entitlement_lookup`, `requested_org_id` the raw path value, `credential_id` NULL when the token matched no credential. Outcomes: `missing_or_malformed_token`, `unknown_token`, `inactive_token`, `insufficient_scope`, `organization_not_found` (404, both kinds), `entitlement_lookup_failed` (503 or 500), `success`. The health route writes neither. The health route's 503 is a failed credential or store read.
+The entitlement route writes one `internal_service_credential_audits` row per answer, action `acr_entitlement_lookup`, `requested_org_id` the raw path value, `credential_id` always NULL, `principal_id` the workload subject on an accepted token. Outcomes: `missing_or_malformed_token` (every non-workload bearer), `workload_refused`, `workload_forbidden`, `organization_not_found` (404, both kinds), `entitlement_lookup_failed` (503 or 500), `success`. The health route writes none.
 
-Differences from Python: a credential-store, `last_used_at` or audit write that fails is 503 on the entitlement route (Python raised an unhandled 500), and Python rolled back `last_used_at` with the failed lookup while the Go route keeps it. A route with no credential store answers 503; it never serves unauthenticated. Telemetry: `devhealth_acr_internal_requests_total{route,outcome}`; the token is never logged.
+An audit write that fails is 503 on the entitlement route. A route with no audit store answers 503; it never serves unauthenticated. Telemetry: `devhealth_acr_internal_requests_total{route,outcome}`, `devhealth_acr_workload_accepted_total{route}`, `devhealth_acr_workload_refused_total{route,reason}`; the token is never logged.
 
-The API database role needs SELECT and UPDATE on `internal_service_credentials` and INSERT on `internal_service_credential_audits` (`apiPosture`); the River GRANT migration must run before the API rollout, or the entitlement route answers 503.
+The API database role needs INSERT on `internal_service_credential_audits` (`apiPosture`). Its SELECT and UPDATE on `internal_service_credentials` are no longer used by any route; they go with the table's retirement.
 
 Rules for callers:
 
@@ -38,24 +37,22 @@ Code: `UnknownOrganizationCode` in `internal/apiservice/acr/handlers.go`; sentin
 
 `GET /api/v1/internal/acr/orgs/{org_id}/llm-config` is served on the internal listener, beside the entitlement route. It gives acr an org's bring-your-own (BYO) LLM config. The key stays in the ops settings store, and acr never holds `SETTINGS_ENCRYPTION_KEY`.
 
-Unlike the entitlement route, it checks a bearer token. The token is a `svc_acr_` credential from `dho service-credentials create --service acr --scope llm_config:read`. The check reads `internal_service_credentials` and compares the SHA-256 hash in constant time. A credential made before this scope existed holds only `entitlements:read` and gets 403 until it is rotated with the new scope. The internal-listener boundary still applies.
+It checks its own bearer: the acr-api workload token only (see Bearer check above); any other bearer, a `svc_acr_` credential included, is 401 before any read. The internal-listener boundary still applies.
 
 | Answer | Meaning |
 | --- | --- |
 | 200 `acr_llm_config.v1` body | `schema_version`, `org_id`, `provider`, `model`, `base_url`, `api_key` (decrypted), `version`, and `prompt_cache` (the boolean `true`, present only for an org that opted in to the Anthropic prompt cache on an `anthropic` provider; absent means off, so acr's strict decoder sees the field only where an org asked for it). `version` is the hex sha256 over the org's effective BYO source (the investigate override's rows when one is stored, else `provider`, `model`, `api_key`, `base_url`) and its `prompt_cache` row, sorted by key, each as key, `updated_at` and the sha256 of the stored value; any write, delete or value change in those rows moves it, a flip of the opt-in included, and a row outside them (a non-BYO llm row, or the default row while an override is in use) never does. `provider` is served in the writer's canonical form (stripped and lower-cased, `admin/llmsettings.go:393`). `Cache-Control: no-store`. |
-| 401 `{"detail":"Unauthorized"}` | Missing, unknown, revoked or expired bearer token. |
-| 403 `{"detail":"Forbidden"}` | Valid credential without the `llm_config:read` scope. |
+| 401 `{"detail":"Unauthorized"}` | Missing bearer, a bearer that is not a workload token (a `svc_acr_` credential included), or a refused workload token. |
+| 403 `{"detail":"Forbidden"}` | A valid workload token of another workload. |
 | 404 `{"detail":"Not found"}` | The org id is not a UUID, the org has no BYO settings, its provider is empty, `auto`, `mock` or `none`, or the `byo_llm` gate is closed for it. Every no-config 404 carries `X-Org-Llm-Config: none`. Three of them also carry `X-Org-Llm-Config-Reason`: `byo_llm_gate_closed` when BYO settings are stored but the `byo_llm` gate is closed, `byo_no_investigate_config` (on the worker route, `byo_no_categorize_config`) when the org has a saved BYO config of another purpose only, and `byo_base_url_carries_key` when the stored `base_url` carries an api key the org stores (the served key, the default row's key or a purpose override's key; raw, escaped, hex or base64 form, up to four layers of percent-escapes), so the route never serves the url. acr refuses all three with a reason and never uses the platform model in their place; with no reason header the org has no BYO config, and acr uses the platform model only with `acr_service_model` and `platform_model_fallback`. |
-| 503 `{"detail":"Service unavailable"}` | The credential store, the settings store or the `byo_llm` gate lookup failed, or the route has no database. |
+| 503 `{"detail":"Service unavailable"}` | The workload key source, the settings store or the `byo_llm` gate lookup failed, or the route has no database. |
 | 409 `{"detail":"Stored config unreadable"}` | A stored BYO setting could not be decrypted (wrong settings key or a corrupt row) while the gate is open. acr treats it as BYO configured but unusable and fails closed. |
 
-The key is never logged, traced, or put in error text. Each served call writes one log line with the org id, the credential id and the version, and increments `devhealth_acr_llm_config_requests_total{outcome}`.
+The key is never logged, traced, or put in error text. Each served call writes one log line with the org id and the version, and increments `devhealth_acr_llm_config_requests_total{outcome}`.
 
-Code: `internal/apiservice/acr/llmconfig.go`; read and decryption in `llmorgsettings.Store.OrgConfig`. The API database role gains SELECT on `internal_service_credentials` (`apiPosture`).
+Code: `internal/apiservice/acr/llmconfig.go`; read and decryption in `llmorgsettings.Store.OrgConfig`.
 
 `base_url`: no provider requires one (`llmorgsettings/resolve.go` `credentialsComplete` checks only the api key), so an empty `base_url` is valid and the consumer uses the provider's public endpoint. The writer validates a non-empty `base_url` with `ValidateBaseURLChecked` (`llmorgsettings/ssrf.go:61`): no whitespace, no userinfo, `https` only, and a literal or resolved host must be public. This route serves what was stored and adds no validation, except one refusal: a `base_url` that carries an api key is never served (the marked 404 with `byo_base_url_carries_key`; the log line and the metric outcome carry the reason only, never the url or the key).
-
-Rotation: a `svc_acr_` credential minted before `llm_config:read` existed gets 403 here. Rotate with `dho service-credentials rotate <id> --scope entitlements:read --scope llm_config:read`.
 
 ## Principal access read (CHAOS-12084)
 
@@ -63,7 +60,7 @@ Rotation: a `svc_acr_` credential minted before `llm_config:read` existed gets 4
 
 `GET /api/v1/internal/acr/orgs/{org_id}/principals/{user_id}/access[?sid=<session id>]` is served on the internal listener, beside the entitlement route. acr-api calls it on **every** protected call by a user-class credential (browser, OAuth user and native device credentials: the investigation POST, replay, status and evidence, and each call acr-mcp forwards) to re-check, live, what it may do for that user (North Star check 18: authorization is re-checked every turn, never carried as memory). Design: Linear "Ask Dev: browser calls ACR directly with an ACR OAuth credential" §3.1. The acr consumer is a separate acr item (CHAOS-12092).
 
-Bearer: a `svc_acr_` credential with the scope `principal_access:read` (`dho service-credentials create --service acr --scope entitlements:read --scope llm_config:read --scope principal_access:read`), or the acr-api workload token. A credential minted before this scope existed gets 403 until it is rotated with it. Order: 429 (more than 6000 attempts per minute from one client address, its own bucket `internal_acr_access_attempt`, not the entitlement route's 100/minute one), 401, 403, then the answers below. The route writes no audit row and no `last_used_at` (one per acr call would put a write on the read path); every answer is logged with the org id, user id and credential id, and counted in `devhealth_acr_internal_requests_total{route="principal_access",outcome}`.
+Bearer: the acr-api workload token only (see Bearer check above); a `svc_acr_` credential is 401 before any read. Order: 429 (more than 6000 attempts per minute from one client address, its own bucket `internal_acr_access_attempt`, not the entitlement route's 100/minute one), 401, 403, then the answers below. The route writes no audit row and no `last_used_at` (one per acr call would put a write on the read path); every answer is logged with the org id and user id, and counted in `devhealth_acr_internal_requests_total{route="principal_access",outcome}`.
 
 `sid` is optional. With it, the answer carries `session`; without it (a row-only credential class), `session` is absent. Any other query parameter, a second `sid`, a query string that does not decode (`sid=%zz`, a `;` separator), or a `sid` that is not a session id in its wire form (`ses_` + unpadded base64url of 16 bytes) is a 400: an undecodable pair is never read as "no sid".
 

@@ -26,11 +26,6 @@ import (
 // read".
 const PrincipalAccessPattern = "/api/v1/internal/acr/orgs/{org_id}/principals/{user_id}/access"
 
-// PrincipalAccessScope is the scope a svc_acr_ credential must hold for the
-// principal access read. A credential that holds only entitlements:read is
-// refused with 403 until it is rotated with this scope.
-const PrincipalAccessScope = "principal_access:read"
-
 // AccessAttemptLimit is the principal access read's own attempt bucket, per
 // client address. acr-api calls the read once per protected request (no cache),
 // so it cannot share the 100/minute bucket of the entitlement and health routes
@@ -129,10 +124,10 @@ type PrincipalAccessStore interface {
 // (the auth-test history check reads every anchor at source_commit).
 //
 // The route is not audited: acr-api calls it on every protected request, so a
-// row and a last_used_at stamp per call would put a write on the read path;
-// refusals are logged and counted (routeAuth).
+// row per call would put a write on the read path; refusals are logged and
+// counted (routeAuth).
 //
-// deps carries the svc_acr_ credential store and the workload auth; access is
+// deps carries the audit store and the workload auth; access is
 // the store (nil answers 503) and limiter its own attempt bucket
 // (AccessAttemptLimit; nil does not rate limit).
 func principalAccessRoute(deps Deps, access PrincipalAccessStore, limiter *httpapi.KeyedLimiter, logger *slog.Logger) httpapi.Route {
@@ -141,7 +136,7 @@ func principalAccessRoute(deps Deps, access PrincipalAccessStore, limiter *httpa
 		Method: http.MethodGet, Pattern: PrincipalAccessPattern,
 		Handler: principalAccessHandler(access, routeAuth{
 			store: deps.Auth, limiter: limiter, logger: logger, route: routePrincipalAccess,
-			workload: deps.Workload, scope: PrincipalAccessScope, limitPath: principalAccessPath,
+			workload: deps.Workload, limitPath: principalAccessPath,
 		}, logger),
 	}
 }
@@ -150,14 +145,13 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		orgRaw, userRaw := r.PathValue("org_id"), r.PathValue("user_id")
-		cred, ok := auth.authenticate(w, r, orgRaw)
-		if !ok {
+		if _, ok := auth.authenticate(w, r, orgRaw); !ok {
 			return
 		}
 		refuse := func(status int, outcome, code string, attrs ...slog.Attr) {
 			countInternal(ctx, routePrincipalAccess, outcome)
 			logger.LogAttrs(ctx, slog.LevelWarn, "acr principal access: request refused", append([]slog.Attr{
-				slog.String("org_id", orgRaw), slog.String("user_id", userRaw), slog.String("credential_id", cred.ID),
+				slog.String("org_id", orgRaw), slog.String("user_id", userRaw),
 				slog.String("outcome", outcome), slog.Int("status", status), slog.String("code", code),
 			}, attrs...)...)
 			body := pyjson.NewObject()
@@ -220,7 +214,7 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 		case errors.Is(err, ErrOrgUnknown):
 			countInternal(ctx, routePrincipalAccess, outcomeOrgNotFound)
 			logger.WarnContext(ctx, "acr principal access: organization unknown",
-				slog.String("org_id", orgRaw), slog.String("user_id", userRaw), slog.String("credential_id", cred.ID))
+				slog.String("org_id", orgRaw), slog.String("user_id", userRaw))
 			body := pyjson.NewObject()
 			body.Set("detail", "Not found")
 			body.Set("code", UnknownOrganizationCode)
@@ -229,7 +223,7 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 		case isOverLimit:
 			countInternal(ctx, routePrincipalAccess, over.outcome)
 			logger.WarnContext(ctx, "acr principal access: inventory over its limit; answering 503",
-				slog.String("org_id", orgRaw), slog.String("user_id", userRaw), slog.String("credential_id", cred.ID),
+				slog.String("org_id", orgRaw), slog.String("user_id", userRaw),
 				slog.String("inventory", over.inventory), slog.Int("limit", over.limit), slog.String("code", over.code),
 				slog.Duration("elapsed", elapsed))
 			body := pyjson.NewObject()
@@ -240,14 +234,14 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 		default:
 			countInternal(ctx, routePrincipalAccess, outcomeAccessUnavailable)
 			logger.ErrorContext(ctx, "acr principal access: read failed; answering 503",
-				slog.String("org_id", orgRaw), slog.String("user_id", userRaw), slog.String("credential_id", cred.ID),
+				slog.String("org_id", orgRaw), slog.String("user_id", userRaw),
 				slog.Bool("unavailable", errors.Is(err, ErrUnavailable)), slog.String("missing_grant", policy.MissingGrant(err)),
 				slog.Duration("elapsed", elapsed), slog.Any("error", err))
 			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
 			return
 		}
 		attrs := []slog.Attr{
-			slog.String("org_id", orgRaw), slog.String("user_id", userRaw), slog.String("credential_id", cred.ID),
+			slog.String("org_id", orgRaw), slog.String("user_id", userRaw),
 			slog.Bool("member", access.Member), slog.Bool("impersonating", access.Impersonating), slog.Bool("ask_dev", access.AskDev),
 			slog.Bool("agent_context_runtime", access.AgentContextRuntime), slog.String("acr_entitlement_basis", access.ACRBasis),
 			slog.Int("repositories", len(access.Repositories)), slog.Duration("elapsed", elapsed),

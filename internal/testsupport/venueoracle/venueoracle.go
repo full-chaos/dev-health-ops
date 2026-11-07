@@ -102,6 +102,9 @@ type Options struct {
 	// that class (the query-api edge). Unset, they are user access tokens of
 	// TokenIssuer.
 	LegacyHS256Tokens bool
+	// TokenIssuer, when set, mints the seed's tokens (unset: a new edtokens.New issuer): a plane that fetches its
+	// keys from an issuer URL verifies them against that issuer.
+	TokenIssuer *edtokens.Issuer
 	// OrglessSuperusers names superuser seeds whose org claim names an
 	// organization the user holds no membership in: their user access token
 	// carries no org claim, as auth-service login mints one for a user without a
@@ -195,7 +198,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	if !options.GoOnly && options.Golden == nil {
 		t.Fatal("venue: a venue needs its golden (Options.Golden) or Options.GoOnly: no Python plane can be served")
 	}
-	v := &Venue{Root: options.Root, Tokens: map[string]string{}, Roles: map[string]string{}, frozen: true, pythonEnv: planeEnv(options)}
+	v := &Venue{Root: options.Root, Tokens: map[string]string{}, Roles: map[string]string{}, frozen: true, pythonEnv: planeEnv(options), TokenIssuer: options.TokenIssuer}
 	if options.LegacyHS256Tokens {
 		v.legacyTokenKey = options.JWTKey
 	}

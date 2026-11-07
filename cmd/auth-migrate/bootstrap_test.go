@@ -444,3 +444,116 @@ func TestTheUsageStatesTheOutDirectoryRule(t *testing.T) {
 		}
 	}
 }
+
+type fakeLive struct {
+	fakeBootstrap
+	live int
+}
+
+func (f *fakeLive) LiveBootstrap(context.Context, string) ([]workload.BootstrapCredential, error) {
+	out := make([]workload.BootstrapCredential, f.live)
+	for i := range out {
+		out[i] = workload.BootstrapCredential{ID: uuid.New()}
+	}
+	return out, nil
+}
+
+func TestBootstrapCreateIfAbsentSkipsAWorkloadThatHoldsALiveValue(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "value")
+	store := &fakeLive{live: 1}
+	var stdout, stderr bytes.Buffer
+	code := runBootstrap(t.Context(), store, mustParse(t, "bootstrap-create", "-workload", "api", "-out", out, "-if-absent", "-apply"), &stdout, &stderr)
+	if code != 0 || store.writes != 0 || len(store.values) != 0 {
+		t.Fatalf("exit %d, writes %d: a live workload must be skipped, stderr %s", code, store.writes, stderr.String())
+	}
+	if _, err := os.Lstat(out); err == nil {
+		t.Fatal("the skip wrote the out-file")
+	}
+	if !strings.Contains(stdout.String(), "skipped") {
+		t.Fatalf("the skip is not said: %q", stdout.String())
+	}
+
+	store = &fakeLive{live: 0}
+	stdout.Reset()
+	if code := runBootstrap(t.Context(), store, mustParse(t, "bootstrap-create", "-workload", "api", "-out", out, "-if-absent", "-apply"), &stdout, &stderr); code != 0 || store.writes != 1 {
+		t.Fatalf("exit %d, writes %d: a workload with no live value must be created", code, store.writes)
+	}
+	if b, err := os.ReadFile(out); err != nil || string(b) != store.values[0] {
+		t.Fatal("the created value is not in the out-file")
+	}
+}
+
+func TestBootstrapCreateWithoutIfAbsentStillRefusesALiveWorkload(t *testing.T) {
+	store := &fakeLive{live: 1, fakeBootstrap: fakeBootstrap{refusal: workload.ErrBootstrapLive}}
+	var stdout, stderr bytes.Buffer
+	out := filepath.Join(t.TempDir(), "value")
+	if code := runBootstrap(t.Context(), store, mustParse(t, "bootstrap-create", "-workload", "api", "-out", out, "-apply"), &stdout, &stderr); code != 1 {
+		t.Fatalf("exit %d, want the refusal", code)
+	}
+}
+
+func TestIfAbsentIsBootstrapCreateOnly(t *testing.T) {
+	if _, err := parseWorkloadsArgs([]string{"bootstrap-rotate", "-workload", "api", "-out", "v", "-overlap", "0s", "-if-absent"}, io.Discard); err == nil {
+		t.Fatal("bootstrap-rotate took -if-absent")
+	}
+	if _, err := parseWorkloadsArgs([]string{"seed", "-if-absent"}, io.Discard); err == nil {
+		t.Fatal("seed took -if-absent")
+	}
+}
+
+type fakeSubject struct {
+	id  uuid.UUID
+	err error
+}
+
+func (f fakeSubject) Lookup(context.Context, string) (*workload.Info, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &workload.Info{PrincipalID: f.id, Name: "api"}, nil
+}
+
+func TestSubjectWritesTheWirePrincipalIDAndIsRerunnable(t *testing.T) {
+	id := uuid.MustParse("00000000-0000-0000-0000-000000000000")
+	out := filepath.Join(t.TempDir(), "api.subject")
+	var stdout, stderr bytes.Buffer
+	for run := 0; run < 2; run++ {
+		if code := runSubject(t.Context(), fakeSubject{id: id}, mustParse(t, "subject", "-workload", "api", "-out", out, "-apply"), &stdout, &stderr); code != 0 {
+			t.Fatalf("run %d exit %d, stderr %s", run, code, stderr.String())
+		}
+	}
+	b, err := os.ReadFile(out)
+	if err != nil || string(b) != "prn_AAAAAAAAAAAAAAAAAAAAAA" {
+		t.Fatalf("subject file = %q, %v", b, err)
+	}
+	info, _ := os.Stat(out)
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("mode %v: the id is not a secret and auth-service reads it as another uid", info.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(filepath.Dir(out))
+	if len(entries) != 1 {
+		t.Fatalf("%d files left in the directory, want only the subject file", len(entries))
+	}
+}
+
+func TestSubjectDryRunWritesNothingAndAnUnknownWorkloadIsRefused(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "api.subject")
+	var stdout, stderr bytes.Buffer
+	if code := runSubject(t.Context(), fakeSubject{id: uuid.New()}, mustParse(t, "subject", "-workload", "api", "-out", out), &stdout, &stderr); code != 0 {
+		t.Fatalf("dry run exit %d", code)
+	}
+	if _, err := os.Lstat(out); err == nil {
+		t.Fatal("the dry run wrote the file")
+	}
+	if code := runSubject(t.Context(), fakeSubject{err: workload.ErrNotFound}, mustParse(t, "subject", "-workload", "api", "-out", out, "-apply"), &stdout, &stderr); code != 1 {
+		t.Fatalf("unknown workload exit %d, want 1", code)
+	}
+	if _, err := os.Lstat(out); err == nil {
+		t.Fatal("a refused run wrote the file")
+	}
+	for _, args := range [][]string{{"subject", "-out", "v"}, {"subject", "-workload", "api"}, {"subject", "-workload", "api", "-out", "-"}, {"subject", "-workload", "api", "-out", "v", "-expires-in", "1h"}} {
+		if _, err := parseWorkloadsArgs(args, io.Discard); err == nil {
+			t.Errorf("%v accepted", args)
+		}
+	}
+}

@@ -64,32 +64,31 @@ the new credential. Keep the id: you need it to revoke.
 
 ## Compose one-shots
 
-The Compose stack (`compose.yml`, profile `auth`) creates the first credential of the `api` workload with three
-one-shot services. No running service depends on them, because a later `up` would run `bootstrap-create` again
-and it refuses a workload with a live credential.
+The Compose stack (`compose.yml`) creates the first credential of the `api` workload, and writes the principal id
+auth-service accepts for it, with four one-shot services. Every `up` runs them, go-api waits for
+`auth-workload-bootstrap` and auth-service waits for `auth-workload-subject`, and each is safe to run again.
 
 | Service | What it does | Audit event |
 | --- | --- | --- |
-| `auth-workload-volume` | Sets the owner and mode of the volume directory `/run/workload` (user 65532, mode 0700), only when they differ. | no audit row |
+| `auth-workload-volume` | Sets the owner and mode of the volume directories `/run/workload` and `/run/workload-subject` (user 65532, mode 0700), only when they differ. | no audit row |
 | `auth-workload-seed` | Runs `workloads seed -apply`. | `auth.workload.registered`, `auth.workload.audiences_changed`, `auth.workload.allowed_actions_changed` (see [Seed the workload row](#seed-the-workload-row)) |
-| `auth-workload-bootstrap` | Runs `workloads bootstrap-create -workload api -out /run/workload/api.bootstrap -apply`. | `auth.workload.bootstrap_created` (reason `credential_issued`) |
+| `auth-workload-bootstrap` | Runs `workloads bootstrap-create -workload api -out /run/workload/api.bootstrap -if-absent -apply`. | `auth.workload.bootstrap_created` (reason `credential_issued`), none when it skips |
+| `auth-workload-subject` | Runs `workloads subject -workload api -out /run/workload-subject/api.subject -apply`. | no audit row |
 
-```sh
-docker compose --profile auth run --rm auth-workload-bootstrap
-```
-
-- The one command is enough. Compose starts `auth-workload-volume` and `auth-workload-seed` first, in that
-  dependency order (`auth-workload-seed` also waits for `auth-grants`), and each of them is safe to run again.
 - The value is written once to `/run/workload/api.bootstrap` (mode 0600) in the named volume `workload_bootstrap`.
   The registry keeps only its digest. The command prints the credential id (`credential=ID`), never the value.
-- go-api mounts the volume read-only at `/run/workload` and reads the file only when
-  `AUTH_SESSION_ISSUE_CREDENTIAL` or `AUTH_PROVISIONING_CREDENTIAL` selects `workload`. auth-service never mounts
-  it. To accept the value, auth-service needs `AUTH_WORKLOAD_BOOTSTRAP=true` and `AUTH_TOKEN_ISSUER_URL` (go-api's
-  `AUTH_WORKLOAD_ISSUER` follows it).
-- A second `run --rm auth-workload-bootstrap` is refused (`the workload has a live bootstrap value; rotate it`)
-  and removes its own file. If the volume was removed and the database was not, the registry still holds the live
-  credential: find its id with the dry run below, revoke it, then run the one-shot again. `down -v` removes the
-  volume and the database volume together.
+  With `-if-absent`, a workload that already holds a live credential is skipped: exit 0, nothing written.
+- go-api mounts the volume read-only at `/run/workload` and reads the file for its session issue call
+  (`AUTH_SESSION_ISSUE_CREDENTIAL=workload`). auth-service never mounts it. To accept the value, auth-service has
+  `AUTH_WORKLOAD_BOOTSTRAP=true` and `AUTH_TOKEN_ISSUER_URL` (go-api's `AUTH_WORKLOAD_ISSUER` follows it).
+- `workloads subject` writes the wire principal id of the workload (`prn_` and 22 characters, not a secret, mode 0644)
+  to `/run/workload-subject/api.subject`, replacing the file atomically. auth-service mounts that volume read-only and
+  reads it as `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT_FILE`; the value form `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT` is the
+  alternative, and setting both is refused.
+- If the credential volume was removed and the database was not, the registry still holds the live credential and
+  `-if-absent` skips it: go-api has no file. Find the id with the dry run below, revoke it
+  (`bootstrap-disable -workload api -apply`), then `up` again. `down -v` removes the volumes and the database
+  volume together.
 - The compose file does not script a rotation. The verbs below work against the same database with the migration
   login. Put the new file in place of `/run/workload/api.bootstrap` yourself, and deliver it before the overlap
   ends.

@@ -20,7 +20,8 @@ import (
 )
 
 const workloadsUsage = "usage: auth-migrate workloads seed [-apply] | bind -workload N -environment E -trust-domain T -issuer I -namespace NS -service-account SA [-uid U] [-apply]" +
-	" | bootstrap-create -workload N -out PATH [-audience A]... [-expires-in DUR] [-apply]" +
+	" | bootstrap-create -workload N -out PATH [-audience A]... [-expires-in DUR] [-if-absent] [-apply]" +
+	" | subject -workload N -out PATH [-apply]" +
 	" | bootstrap-rotate -workload N -out PATH -overlap DUR [-expires-in DUR] [-apply]" +
 	" | bootstrap-revoke -credential ID -reason compromised|owner_request [-apply]" +
 	" | bootstrap-disable -workload N [-apply]" +
@@ -33,6 +34,8 @@ const workloadsUsage = "usage: auth-migrate workloads seed [-apply] | bind -work
 	" a recreated ServiceAccount of the same name is a new identity. It never enables a disabled binding; binding-enable does that." +
 	"\nA bootstrap value is written once, to a new 0600 -out file, and never to argv, stdout or a log." +
 	"\nPut -out in a directory writable only by the operator: a failed verb's file is removed by path." +
+	"\nbootstrap-create -if-absent (compose and dev only): with -apply it exits 0 and writes nothing when N already holds a live value, so a one-shot can run on every up." +
+	"\nsubject writes the wire principal id of workload N (prn_ and 22 base64url characters; not a secret) to PATH, replacing it atomically, for AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT_FILE." +
 	"\nbootstrap-disable revokes every live bootstrap value of N at once; workload tokens issued before it live at most 300 s." +
 	"\nenable clears the workload row's disabled mark (and, with -enable-principal, its workload principal's); ID is the enabled" +
 	" principal who enables it, named in the audit row. enable mints no credential: run bootstrap-create after it."
@@ -44,6 +47,7 @@ type workloadsArgs struct {
 	binding workload.BindingSpec
 
 	out          string
+	ifAbsent     bool
 	audiences    audienceList
 	expiresIn    time.Duration
 	overlap      time.Duration
@@ -84,6 +88,7 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 	flags.StringVar(&parsed.binding.ServiceAccountName, "service-account", "", "bind: the Kubernetes service account name")
 	flags.StringVar(&parsed.binding.ServiceAccountUID, "uid", "", "bind: the service account uid, when it is to be pinned")
 	flags.StringVar(&parsed.out, "out", "", "bootstrap-create, bootstrap-rotate: the NEW file (mode 0600) the value is written to once, in a directory writable only by the operator")
+	flags.BoolVar(&parsed.ifAbsent, "if-absent", false, "bootstrap-create: with -apply, exit 0 and write nothing when the workload already holds a live bootstrap value (compose and dev only)")
 	flags.Var(&parsed.audiences, "audience", "bootstrap-create: an audience of the value (repeatable; default: the workload's audiences)")
 	flags.DurationVar(&parsed.expiresIn, "expires-in", workload.BootstrapExpiryDefault, "bootstrap-create, bootstrap-rotate: the value's lifetime (at most 2160h)")
 	flags.DurationVar(&parsed.overlap, "overlap", 0, "bootstrap-rotate: how long the old value stays live (0 to 1h)")
@@ -126,7 +131,7 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 			return workloadsArgs{}, err
 		}
 	case "bootstrap-create", "bootstrap-rotate":
-		allowed := []string{"workload", "out", "expires-in", "audience"}
+		allowed := []string{"workload", "out", "expires-in", "audience", "if-absent"}
 		if parsed.verb == "bootstrap-rotate" {
 			allowed = []string{"workload", "out", "expires-in", "overlap"}
 		}
@@ -152,6 +157,16 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 			if parsed.overlap < 0 || parsed.overlap > workload.BootstrapOverlapCeiling {
 				return workloadsArgs{}, errors.New("-overlap must be from 0 to 1h")
 			}
+		}
+	case "subject":
+		if err := only(parsed.verb, "workload", "out"); err != nil {
+			return workloadsArgs{}, err
+		}
+		if workload.ValidateName(parsed.name) != nil {
+			return workloadsArgs{}, errors.New("subject needs a valid -workload")
+		}
+		if parsed.out == "" || parsed.out == "-" {
+			return workloadsArgs{}, errors.New("subject needs -out, a file path (never stdout)")
 		}
 	case "bootstrap-revoke":
 		if err := only(parsed.verb, "credential", "reason"); err != nil {
@@ -309,6 +324,8 @@ func executeWorkloads(parent context.Context, args []string, lookup secrets.Look
 		return runDisable(ctx, store, parsed, stdout, stderr)
 	case "rebind", "binding-disable", "binding-enable":
 		return runBinding(ctx, store, parsed, stdout, stderr)
+	case "subject":
+		return runSubject(ctx, store, parsed, stdout, stderr)
 	default:
 		return runBootstrap(ctx, store, parsed, stdout, stderr)
 	}

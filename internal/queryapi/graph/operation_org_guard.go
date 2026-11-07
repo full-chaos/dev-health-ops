@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // OperationOrgGuard is the Go form of the Python schema extension
@@ -66,6 +67,10 @@ func (OperationOrgGuard) InterceptOperation(ctx context.Context, next graphql.Op
 		// Python, every field of this operation runs against that org.
 		claims, _ := authctx.FromContext(ctx)
 		claims.OrgID = rebindTo
+		if claims.Scope.Kind() == pepgate.KindLegacy {
+			// The legacy path's scope names the org the operation runs in.
+			claims.Scope = pepgate.Legacy(rebindTo)
+		}
 		ctx = authctx.WithClaims(ctx, claims)
 	}
 	return next(ctx)

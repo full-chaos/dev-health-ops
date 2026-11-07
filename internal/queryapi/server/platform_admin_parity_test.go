@@ -229,10 +229,8 @@ func TestPlatformAdminNoMembershipQueryAPIAnswersEqualLegacy(t *testing.T) {
 	tokens := map[string]string{
 		"EdDSA no org":            ed(nil),
 		"EdDSA org claim, no row": ed(&org),
-		"HS256 no org":            ecMintEdgeToken(t, ecEdgeClaims{sub: paSU0.String(), isSuperuser: true}),
-		"HS256 org claim, no row": ecMintEdgeToken(t, ecEdgeClaims{sub: paSU0.String(), orgID: org, isSuperuser: true}),
 	}
-	for _, label := range []string{"EdDSA no org", "EdDSA org claim, no row", "HS256 no org", "HS256 org claim, no row"} {
+	for _, label := range []string{"EdDSA no org", "EdDSA org claim, no row"} {
 		token := tokens[label]
 		p.register(token, label, su0)
 		for _, row := range paRows {

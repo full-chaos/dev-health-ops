@@ -64,7 +64,7 @@ func rule1EdTokensServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, auth 
 // org is suspended; B, the claim names no org; B, the claim is not a UUID. Routed is go-api's routed
 // listener (ruleOneServer) and the venue oracles' authenticator (edtokens, accessrouting.go RouteUserTokens).
 // The HS256 token claims role member, the role a user access token (no role claim) carries. The access-token.v1
-// verifier refuses an org claim that is not a UUID (401) where legacy goes on: CHAOS-13261, never wanted.
+// verifier refuses an org claim that is not a UUID (401) where legacy goes on: CHAOS-13262, never wanted.
 func TestRule1TokenOrgWithoutMembershipWiredHandlers_CHAOS13227(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -167,6 +167,6 @@ func rule1WiredCase(t *testing.T, org string, legacy http.Handler, routed map[st
 		}
 	}
 	if len(notUUIDRefused) > 0 {
-		t.Skipf("CHAOS-13261: the access-token.v1 verifier refuses an org claim that is not a UUID (401) where legacy answers: %v", notUUIDRefused)
+		t.Skipf("CHAOS-13262: the access-token.v1 verifier refuses an org claim that is not a UUID (401) where legacy answers: %v", notUUIDRefused)
 	}
 }

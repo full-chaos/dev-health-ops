@@ -38,7 +38,7 @@ func (f *validateFixture) eddsaTokenFor(org string) string {
 // B-notUUID: the claim is not a UUID. Both planes (auth-service and go-api)
 // answer the same. A user access token whose org_id is not a canonical UUID
 // is refused by the access-token.v1 verifier itself (authverify), before any
-// org read: that stricter answer is CHAOS-13261 and is never held as wanted.
+// org read: that stricter answer is CHAOS-13262 and is never held as wanted.
 func TestRule1ValidateTokenOrgWithoutMembershipIsTheLegacyAnswer_CHAOS13227(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -68,7 +68,7 @@ func TestRule1ValidateTokenOrgWithoutMembershipIsTheLegacyAnswer_CHAOS13227(t *t
 			t.Logf("routed user access token: %d %s", compat.Code, compat.Body)
 			expectSamePlanes(t, "routed "+tc.name, compat, goAPI)
 			if org == "not-a-uuid" && compat.Code == http.StatusOK && compat.Body.String() == nullAnswer {
-				t.Skipf("CHAOS-13261: the access-token.v1 verifier refuses an org claim that is not a UUID (valid:false); legacy answers valid:true")
+				t.Skipf("CHAOS-13262: the access-token.v1 verifier refuses an org claim that is not a UUID (valid:false); legacy answers valid:true")
 			}
 			expectAnswer(t, "routed "+tc.name, compat, http.StatusOK, routed.validAnswer("ada@example.com", org, "member"))
 		})

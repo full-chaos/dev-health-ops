@@ -514,11 +514,11 @@ type Retirement struct {
 }
 
 // NotUUIDOrgClaimGap and RoleClaimGap are the product rule 1 gaps of a user access token whose claims the legacy
-// HS256 path trusted (CHAOS-13227 residual, CHAOS-13261): the access-token.v1 verifier refuses an org claim that is
+// HS256 path trusted (CHAOS-13227 residuals): the access-token.v1 verifier refuses an org claim that is
 // not a canonical lowercase UUID, and a user access token has no role claim, so a caller with no membership row in
 // its org claim has the member role where legacy used the claimed role.
 const (
-	NotUUIDOrgClaimGap = "CHAOS-13261, rule 1: the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)"
+	NotUUIDOrgClaimGap = "CHAOS-13262, rule 1: the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)"
 	RoleClaimGap       = "CHAOS-13261, rule 1: no role claim, so a caller without a membership row in its org claim is a member where legacy used the claimed role"
 )
 

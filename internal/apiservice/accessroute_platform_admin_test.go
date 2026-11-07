@@ -84,7 +84,7 @@ func platformAdminRig(t *testing.T, superuser, routed bool) (http.Handler, *edds
 // action gets the HS256 path's answer too (CHAOS-13227): the X-Org-Id refusal
 // for an org that exists on an org-scoped row, and the claimed org on an
 // org-less row. A claim that is not a UUID is refused by the access-token.v1
-// verifier itself, where legacy goes on in the claimed org: CHAOS-13261.
+// verifier itself, where legacy goes on in the claimed org: CHAOS-13262.
 func TestProductRule1PlatformAdminWithoutMembershipAnswersAsLegacy(t *testing.T) {
 	rows := []string{"/api/v1/admin/audit-logs", "/api/v1/admin/credentials", "/api/v1/admin/backfill-jobs", probeAuthenticated}
 	serve := func(handler http.Handler, path, bearer string) (int, string) {
@@ -140,7 +140,7 @@ func TestProductRule1PlatformAdminWithoutMembershipAnswersAsLegacy(t *testing.T)
 			}
 		}
 		if len(refused) > 0 {
-			t.Skipf("CHAOS-13261: the access-token.v1 verifier refuses an org claim that is not a UUID (401) where legacy answers: %v", refused)
+			t.Skipf("CHAOS-13262: the access-token.v1 verifier refuses an org claim that is not a UUID (401) where legacy answers: %v", refused)
 		}
 	})
 }

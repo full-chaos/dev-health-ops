@@ -84,6 +84,17 @@ func newEnfRun() *enfRun {
 
 func (r *enfRun) judge() Report { return JudgeEnforced(r.in) }
 
+// A go-api that has not yet counted an unjudged request has no series of the counter in the before scrape: the delta is
+// the whole after series, and the run is judged, not voided.
+func TestEnforcedAcceptsABeforeScrapeWithNoUnjudgedSeries(t *testing.T) {
+	r := newEnfRun()
+	r.in.MetricsBefore = live(allEnforced, 1000, "f50883b", "0")
+	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "3"), unjudged(seamKey, "served_org", "3"))
+	if report := r.judge(); report.Void || !report.Pass {
+		t.Fatalf("void %v pass %v: %v", report.Void, report.Pass, report.Reasons)
+	}
+}
+
 func TestEnforcedPassesWhenEveryCellEqualsTheYardstickAndTheEvidenceHolds(t *testing.T) {
 	r := newEnfRun().judge()
 	if r.Void || !r.Pass || r.Exit() != 0 {

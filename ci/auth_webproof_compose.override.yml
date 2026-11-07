@@ -8,6 +8,10 @@
 # social stay on go-api, so users are not owned here unless the caller exports AUTH_USERS_OWNED=true (the workload
 # overlay, which forwards credentials too): every service that reads the flag takes the same value, default false.
 services:
+  # CHAOS-13242: the Web code reads the issuer's discovery document and key set from the runner, so the proof's
+  # auth-issuer publishes an ephemeral loopback port (the script forwards 127.0.0.1:8443 to it).
+  auth-issuer:
+    ports: !override ["127.0.0.1::8443"]
   valkey:
     container_name: !reset null
     ports: !reset []

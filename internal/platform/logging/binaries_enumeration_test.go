@@ -75,11 +75,10 @@ var defaultLoggingCalls = map[string]map[string]bool{
 	},
 }
 
-// TestEveryBinaryLogsThroughTheRedactingHandler proves by enumeration that
-// every binary under cmd/ logs through logging.NewJSON's handler, and that
-// no production package builds its own slog handler to a real writer.
-func TestEveryBinaryLogsThroughTheRedactingHandler(t *testing.T) {
-	t.Parallel()
+// loadCmdPackages lists every package the binaries under cmd/ link (go list
+// -deps) and parses the non-test files of the module's own packages.
+func loadCmdPackages(t *testing.T) (map[string]listedPackage, map[string][]*ast.File, *token.FileSet) {
+	t.Helper()
 	root := moduleRoot(t)
 	command := exec.Command("go", "list", "-deps", "-json=ImportPath,Name,Dir,GoFiles,Deps,Module", "./cmd/...")
 	command.Dir = root
@@ -98,7 +97,6 @@ func TestEveryBinaryLogsThroughTheRedactingHandler(t *testing.T) {
 		}
 		packages[listed.ImportPath] = listed
 	}
-
 	if len(packages) == 0 {
 		t.Fatal("go list returned no packages")
 	}
@@ -116,6 +114,15 @@ func TestEveryBinaryLogsThroughTheRedactingHandler(t *testing.T) {
 			parsed[path] = append(parsed[path], file)
 		}
 	}
+	return packages, parsed, fileSet
+}
+
+// TestEveryBinaryLogsThroughTheRedactingHandler proves by enumeration that
+// every binary under cmd/ logs through logging.NewJSON's handler, and that
+// no production package builds its own slog handler to a real writer.
+func TestEveryBinaryLogsThroughTheRedactingHandler(t *testing.T) {
+	t.Parallel()
+	packages, parsed, fileSet := loadCmdPackages(t)
 
 	var binaries []string
 	for path, listed := range packages {
@@ -320,4 +327,183 @@ func render(node ast.Node) string {
 
 func formatNode(buffer *bytes.Buffer, node ast.Node) error {
 	return printer.Fprint(buffer, token.NewFileSet(), node)
+}
+
+// deployedServices names the packages that run a long-lived service: each
+// calls shell.Execute, which installs the JSON handler for the run. The
+// services are subcommands of dho (api, query-api, reconciler, scheduler,
+// stream-runner, worker); auth-service is its own binary (authruntime).
+var deployedServices = []string{
+	"internal/apiservice",
+	"internal/queryapiservice",
+	"internal/reconcilerservice",
+	"internal/schedulerservice",
+	"internal/streamrunnerservice",
+	"internal/workerservice",
+}
+
+// TestEveryServiceInstallsTheJSONHandler proves by static scan (go list -deps
+// of ./cmd/..., then the AST of every non-test file the binaries link) that
+// each deployed service reaches logging.InstallDefault(logging.NewJSON(...)),
+// and that no linked production package installs another default handler or
+// writes the standard log package raw.
+//
+// Limits: it reads source, it does not run the binaries; a handler type
+// written by hand and passed to slog.New is not seen (only the slog
+// constructors and setters are); an identifier passed to InstallDefault is
+// traced one assignment deep inside the two service entry points only; code
+// a binary does not link is not scanned.
+func TestEveryServiceInstallsTheJSONHandler(t *testing.T) {
+	t.Parallel()
+	packages, parsed, fileSet := loadCmdPackages(t)
+	loggingPath := modulePath + "/internal/platform/logging"
+	shellPath := modulePath + "/internal/platform/shell"
+
+	callers := map[string]bool{}
+	for path, files := range parsed {
+		if path == shellPath {
+			continue
+		}
+		for _, file := range files {
+			calls(file, func(callPath, function string, _ *ast.CallExpr) {
+				if callPath == shellPath && (function == "Execute" || function == "Main") {
+					callers[strings.TrimPrefix(path, modulePath+"/")] = true
+				}
+			})
+		}
+	}
+	for _, service := range deployedServices {
+		if !callers[service] {
+			t.Errorf("service %s does not call shell.Execute (or is not linked by a cmd binary)", service)
+		}
+		delete(callers, service)
+	}
+	for extra := range callers {
+		t.Errorf("%s calls shell.Execute but is not named in deployedServices", extra)
+	}
+
+	requireInstallsJSON(t, parsed[shellPath], "Execute", loggingPath)
+	requireInstallsJSON(t, parsed[modulePath+"/internal/auth/authruntime"], "Execute", loggingPath)
+	if len(packages[modulePath+"/cmd/auth-service"].GoFiles) == 0 {
+		t.Error("cmd/auth-service is not listed")
+	}
+	requireCall(t, "auth-service", parsed[modulePath+"/cmd/auth-service"], modulePath+"/internal/auth/authruntime", "Main")
+	requireCall(t, "dho", parsed[modulePath+"/cmd/dho"], modulePath+"/internal/cli", "Main")
+
+	for path, files := range parsed {
+		if path == loggingPath {
+			continue
+		}
+		for _, file := range files {
+			names := importNames(file)
+			calls(file, func(callPath, function string, call *ast.CallExpr) {
+				where := fileSet.Position(call.Pos())
+				switch {
+				case callPath == "log/slog" && function == "NewTextHandler", callPath == "log/slog" && function == "NewJSONHandler":
+					if !discardsOutput(call) {
+						t.Errorf("%s: %s builds a slog handler on a real writer", where, render(call))
+					}
+				case callPath == "log" && function == "SetOutput":
+					if !discardsOutput(call) {
+						t.Errorf("%s: %s points the standard log package at a raw writer", where, render(call))
+					}
+				case callPath == "log/slog" && function == "SetDefault":
+					t.Errorf("%s: %s installs a default handler outside logging.InstallDefault", where, render(call))
+				case callPath == loggingPath && function == "InstallDefault":
+					if len(call.Args) != 1 || !jsonInstallArgument(call.Args[0], names, loggingPath, true) {
+						t.Errorf("%s: %s does not install logging.NewJSON", where, render(call))
+					}
+				}
+			})
+		}
+	}
+}
+
+// discardsOutput reports whether the call's writer (first argument) is
+// io.Discard or the package's own discard{}: it prints nothing.
+func discardsOutput(call *ast.CallExpr) bool {
+	if len(call.Args) == 0 {
+		return false
+	}
+	switch render(call.Args[0]) {
+	case "io.Discard", "discard{}":
+		return true
+	}
+	return false
+}
+
+// jsonInstallArgument reports whether argument is logging.NewJSON(...), the
+// value-redaction wrapper around the installed default
+// (slog.New(logging.WithValueRedaction(...))), or, when identOK, a variable.
+func jsonInstallArgument(argument ast.Expr, names map[string]string, loggingPath string, identOK bool) bool {
+	switch typed := argument.(type) {
+	case *ast.Ident:
+		return identOK
+	case *ast.CallExpr:
+		selector, ok := typed.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		ident, ok := selector.X.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		switch {
+		case names[ident.Name] == loggingPath && selector.Sel.Name == "NewJSON":
+			return true
+		case names[ident.Name] == "log/slog" && selector.Sel.Name == "New" && len(typed.Args) == 1:
+			inner, ok := typed.Args[0].(*ast.CallExpr)
+			if !ok {
+				return false
+			}
+			innerSelector, ok := inner.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return false
+			}
+			innerIdent, ok := innerSelector.X.(*ast.Ident)
+			return ok && names[innerIdent.Name] == loggingPath && innerSelector.Sel.Name == "WithValueRedaction"
+		}
+	}
+	return false
+}
+
+// requireInstallsJSON checks that the top-level function named function
+// declares logger := logging.NewJSON(...) and later runs
+// defer logging.InstallDefault(logger)() as one of its own top-level
+// statements, so every run of the entry point logs through the JSON handler.
+func requireInstallsJSON(t *testing.T, files []*ast.File, function, loggingPath string) {
+	t.Helper()
+	found := false
+	for _, file := range files {
+		names := importNames(file)
+		for _, declaration := range file.Decls {
+			decl, ok := declaration.(*ast.FuncDecl)
+			if !ok || decl.Name.Name != function || decl.Recv != nil || decl.Body == nil {
+				continue
+			}
+			jsonVariables := map[string]bool{}
+			for _, statement := range decl.Body.List {
+				if assign, ok := statement.(*ast.AssignStmt); ok && len(assign.Lhs) == 1 && len(assign.Rhs) == 1 {
+					if name, ok := assign.Lhs[0].(*ast.Ident); ok && jsonInstallArgument(assign.Rhs[0], names, loggingPath, false) {
+						jsonVariables[name.Name] = true
+					}
+				}
+				deferred, ok := statement.(*ast.DeferStmt)
+				if !ok {
+					continue
+				}
+				outer := deferred.Call
+				inner, ok := outer.Fun.(*ast.CallExpr)
+				if !ok || len(inner.Args) != 1 || !topLevelCall(inner, names, loggingPath, "InstallDefault") {
+					continue
+				}
+				if variable, ok := inner.Args[0].(*ast.Ident); ok && jsonVariables[variable.Name] {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Errorf("func %s does not install a logger built by logging.NewJSON through a top-level defer logging.InstallDefault", function)
+	}
 }

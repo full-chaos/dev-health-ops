@@ -63,6 +63,66 @@ func TestCustomRowTableCannotReclassifyARow(t *testing.T) {
 	if err := CheckRows(reclassified(t, "58", "stripe", ""), authv1.GoAPIEndpointProfiles); err == nil || !strings.Contains(err.Error(), "class") {
 		t.Errorf("a plain row made external accepted: %v", err)
 	}
+	if err := CheckRows(reclassified(t, "C1", "stripe", ""), authv1.GoAPIEndpointProfiles); err == nil || !strings.Contains(err.Error(), "class") {
+		t.Errorf("a control with an outside service accepted: %v", err)
+	}
+}
+
+// stripeSlots are three cells of row 22 (an external route) with matching shadow lines, after the controls.
+func stripeSlots(t *testing.T) ([]Slot, Evidence) {
+	t.Helper()
+	slots, lines := controlsOK()
+	seq := len(slots) + 1
+	for _, caller := range callerOrder {
+		for k := 1; k <= 3; k++ {
+			s := slotAt(seq, "22", caller, k)
+			s.Method, s.Route, s.Path = "POST", "/api/v1/billing/plans/pull-stripe", "/api/v1/billing/plans/pull-stripe"
+			slots = append(slots, s)
+			lines = append(lines, result(s, 500*time.Millisecond, "match", "dec_"+strings.Repeat(string(rune('a'+seq)), 24)))
+			seq++
+		}
+	}
+	ev, err := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slots, ev
+}
+
+// With no row table at all the judge still knows an external route by its class, and a route with no class voids.
+func TestJudgeTakesTheClassFromTheRouteWithNoTableAndVoidsAnUnknownRoute(t *testing.T) {
+	slots, ev := stripeSlots(t)
+	r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond})
+	if !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "without a stub log") {
+		t.Fatalf("external route, no table, no stub log: void %v: %v", r.Void, r.Reasons)
+	}
+	slots[len(slots)-1].Method, slots[len(slots)-1].Route = "GET", "/api/v1/admin/nothing"
+	r = Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Egress: egressReads("before", "between"), Seed: noSeed}})
+	if !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "no class") {
+		t.Fatalf("a route with no class: void %v: %v", r.Void, r.Reasons)
+	}
+}
+
+// The enforced judge, too, takes the class from the route: with no row table an external row still needs the
+// yardstick's outbound file.
+func TestEnforcedTakesTheClassFromTheRoute(t *testing.T) {
+	r := newEnfRun()
+	seq := len(r.in.Slots) + 1
+	for _, caller := range callerOrder {
+		for k := 1; k <= 3; k++ {
+			start := enfT0.Add(time.Duration(seq-1) * 3 * time.Second)
+			r.in.Slots = append(r.in.Slots, Slot{Seq: seq, Row: "22", Caller: caller, Principal: caller, Expect: "match", K: k, Method: "POST",
+				Route: "/api/v1/billing/plans/pull-stripe", Path: "/api/v1/billing/plans/pull-stripe", Start: start, End: start.Add(100 * time.Millisecond), Status: 403})
+			r.in.Yard = append(r.in.Yard, YardSlot{Row: "22", Caller: caller, K: k, Key: "POST /api/v1/billing/plans/pull-stripe", Status: 403, Verdict: VerdictMatch})
+			seq++
+		}
+	}
+	r.in.Namespaces["POST /api/v1/billing/plans/pull-stripe"] = "billing"
+	r.in.Outbound = Outbound{Logged: true, Egress: egressReads("before", "between", "after"), Seed: noSeed}
+	rep := r.judge()
+	if !rep.Void || !strings.Contains(strings.Join(rep.Reasons, "\n"), "yardstick's outbound file") {
+		t.Fatalf("void %v: %v", rep.Void, rep.Reasons)
+	}
 }
 
 // The judge takes each sent slot's class from its route, not from the row table it is given: a table that names an

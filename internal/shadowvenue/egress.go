@@ -39,7 +39,7 @@ func ParseEgress(name string, raw []byte) EgressRead {
 	for n, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
 		key, value, ok := strings.Cut(line, "=")
 		switch {
-		case !ok || value == "":
+		case !ok:
 			read.Err = fmt.Errorf("line %d is not key=value", n+1)
 		case !slices.Contains(egressKeys, key):
 			read.Err = fmt.Errorf("line %d: unknown key %q", n+1, key)

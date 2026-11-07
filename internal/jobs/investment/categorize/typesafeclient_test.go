@@ -867,14 +867,47 @@ func TestPostSystemOneCancelAndDeadlineAreTheContextError(t *testing.T) {
 	if _, _, err := h.client.PostSystemOne(ctx, tsBody); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v", err)
 	}
-	dctx, dcancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
-	defer dcancel()
+	// The deadline passes while the handler holds the request: one call, not retried.
+	dctx := newHandlerDeadlineContext()
 	h2 := newTS(t, func(_ http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
+		dctx.expire()
 		<-r.Context().Done()
 	})
-	if _, _, err := h2.client.PostSystemOne(dctx, tsBody); !errors.Is(err, context.DeadlineExceeded) || h2.calls.Load() != 1 {
-		t.Fatalf("err = %v calls=%d", err, h2.calls.Load())
+	if _, _, err := h2.client.PostSystemOne(dctx, tsBody); !errors.Is(err, context.DeadlineExceeded) || h2.calls.Load() != 1 || len(*h2.delays) != 0 {
+		t.Fatalf("err = %v calls=%d retry delays=%v", err, h2.calls.Load(), *h2.delays)
+	}
+	// The deadline has passed before the request is sent: no call.
+	passed, passedCancel := context.WithDeadline(context.Background(), time.Unix(1, 0))
+	defer passedCancel()
+	h3 := newTS(t, func(http.ResponseWriter, *http.Request) {})
+	if _, _, err := h3.client.PostSystemOne(passed, tsBody); !errors.Is(err, context.DeadlineExceeded) || h3.calls.Load() != 0 || len(*h3.delays) != 0 {
+		t.Fatalf("err = %v calls=%d retry delays=%v", err, h3.calls.Load(), *h3.delays)
+	}
+}
+
+// handlerDeadlineContext reaches its deadline when expire is called, so a test can place the deadline at a point of
+// the exchange: a wall-clock deadline can pass before a loaded machine reaches that point.
+type handlerDeadlineContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newHandlerDeadlineContext() *handlerDeadlineContext {
+	return &handlerDeadlineContext{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *handlerDeadlineContext) expire() { c.once.Do(func() { close(c.done) }) }
+
+func (c *handlerDeadlineContext) Done() <-chan struct{} { return c.done }
+
+func (c *handlerDeadlineContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
 	}
 }
 

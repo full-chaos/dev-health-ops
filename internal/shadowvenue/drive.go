@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,17 +23,30 @@ const MinGap = 2300 * time.Millisecond
 
 const loginPath = "/api/v1/auth/login"
 
-// CheckBase accepts only a plain-http loopback origin with no path, query or credentials: the venue's published
-// go-api port. A production or LAN host is refused here, before any request.
-func CheckBase(raw string) (*url.URL, error) {
+// CheckVenueBase is the one check of every origin the driver sends to: a plain-http origin with no path, query or
+// credentials whose host is loopback, or go-api's own address on the venue's internal network (a container on an
+// internal-only network has no published port). Such a host must be the private IP the egress record read just before
+// this drive names as goapi_ip; that record must be readable, show an internal network with no default route, and name
+// this drive's run id (run_id), so a record of another drive is refused. Any other host is refused before any request.
+func CheckVenueBase(raw string, record EgressRead, runID string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || u.Opaque != "" {
-		return nil, fmt.Errorf("base %q: want http://127.0.0.1:<port> (loopback, no path, query or credentials)", raw)
+		return nil, fmt.Errorf("base %q: want http://127.0.0.1:<port> (loopback) or go-api's venue IP, no path, query or credentials", raw)
 	}
 	host := u.Hostname()
 	ip := net.ParseIP(host)
-	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return nil, fmt.Errorf("base %q: the host is not loopback", raw)
+	switch {
+	case host == "localhost" || (ip != nil && ip.IsLoopback()):
+	case ip == nil || !ip.IsPrivate():
+		return nil, fmt.Errorf("base %q: the host is neither loopback nor a private IP", raw)
+	case record.Err != nil || record.Fields == nil:
+		return nil, fmt.Errorf("base %q: a non-loopback base needs the readable egress record of the read before the drive (-egress)", raw)
+	case record.Fields["network_internal"] != "true" || record.Fields["default_route"] != "none":
+		return nil, fmt.Errorf("base %q: egress record %s does not show an internal network with no default route", raw, record.Name)
+	case !net.ParseIP(record.Fields["goapi_ip"]).Equal(ip):
+		return nil, fmt.Errorf("base %q: the host is not go-api's venue address %q in egress record %s", raw, record.Fields["goapi_ip"], record.Name)
+	case runID == noRun || record.Fields["run_id"] != runID:
+		return nil, fmt.Errorf("base %q: egress record %s names run %q, not this drive's run %q (-run-id)", raw, record.Name, record.Fields["run_id"], runID)
 	}
 	u.Path = ""
 	return u, nil
@@ -58,15 +72,28 @@ func ReadPassword(path string) (string, error) {
 	return value, nil
 }
 
-// Driver sends a plan's slots to the venue go-api, one at a time.
+// Driver sends a plan's slots to the venue go-api, one at a time. Base is the raw origin; every request takes its origin
+// from CheckVenueBase(Base, Egress, RunID) (origin), so no request path has a check of its own.
 type Driver struct {
-	Base   *url.URL
-	Client *http.Client
+	Base string
+	// AllowExternal are the outside services a slot's route may call (-allow-external); a slot on a route of another
+	// service refuses the drive before any request, as MakePlan makes it a gap.
+	AllowExternal []string
+	Egress        EgressRead
+	RunID         string
+	Client        *http.Client
 	// Gap is the wait after each answer; at least MinGap.
-	Gap   time.Duration
-	Sleep func(context.Context, time.Duration) error
-	Now   func() time.Time
+	Gap time.Duration
+	// Frozen is the frozen throwaway ids: before any request, a slot that is destructive by its own flag or by its
+	// route's pinned class, and whose path or body holds another id, refuses the whole drive; so does a slot on a route
+	// with no class.
+	Frozen ThrowawayIDs
+	Sleep  func(context.Context, time.Duration) error
+	Now    func() time.Time
 }
+
+// origin is the checked origin of a request.
+func (d *Driver) origin() (*url.URL, error) { return CheckVenueBase(d.Base, d.Egress, d.RunID) }
 
 func (d *Driver) now() time.Time {
 	if d.Now != nil {
@@ -101,7 +128,11 @@ func (d *Driver) Login(ctx context.Context, p Principal, orgID string) (string, 
 		in["org_id"] = orgID
 	}
 	body, _ := json.Marshal(in)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.Base.String()+loginPath, bytes.NewReader(body))
+	origin, err := d.origin()
+	if err != nil {
+		return "", fmt.Errorf("login %s: %w", p.Name, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, origin.String()+loginPath, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("login %s: build request", p.Name)
 	}
@@ -134,6 +165,23 @@ func (d *Driver) Drive(ctx context.Context, plan Plan, tokens map[string]string,
 		if !slot.Gap() && tokens[slot.Principal] == "" {
 			return fmt.Errorf("drive: principal %s of row %s has no token", slot.Principal, slot.Row)
 		}
+		if slot.Gap() {
+			continue
+		}
+		c, ok := classOf(slot.Key())
+		switch {
+		case !ok:
+			return fmt.Errorf("drive: slot %d row %s refused before any request: route %s has no class in the pinned table", slot.Seq, slot.Row, slot.Key())
+		case (strings.HasPrefix(slot.Row, "C") || slot.Expect == expectMismatch) && (c.ext != none || c.destructive):
+			return fmt.Errorf("drive: slot %d row %s refused before any request: a control on %s, an external or destructive route", slot.Seq, slot.Row, slot.Key())
+		case c.ext != none && !slices.Contains(d.AllowExternal, c.ext):
+			return fmt.Errorf("drive: slot %d row %s refused before any request: route %s calls %s, not allowed (-allow-external %s)", slot.Seq, slot.Row, slot.Key(), c.ext, c.ext)
+		}
+		if slot.Destructive || c.destructive {
+			if err := d.Frozen.Holds(slot.Path, slot.Body); err != nil {
+				return fmt.Errorf("drive: destructive slot %d row %s refused before any request: %w", slot.Seq, slot.Row, err)
+			}
+		}
 	}
 	if _, err := io.WriteString(w, slotsHeader+"\n"); err != nil {
 		return err
@@ -161,7 +209,11 @@ func (d *Driver) send(ctx context.Context, slot *Slot, token string) error {
 	if slot.Body != none {
 		body = strings.NewReader(slot.Body)
 	}
-	req, err := http.NewRequestWithContext(ctx, slot.Method, d.Base.String()+slot.Path, body)
+	origin, err := d.origin()
+	if err != nil {
+		return fmt.Errorf("drive: slot %d: %w", slot.Seq, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, slot.Method, origin.String()+slot.Path, body)
 	if err != nil {
 		return fmt.Errorf("drive: slot %d: build request", slot.Seq)
 	}

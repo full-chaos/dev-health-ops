@@ -46,6 +46,13 @@ type EnforcedInput struct {
 	YardDigest, YardDigestAfter, DigestBefore, DigestAfter string
 	// go-api /metrics scrapes before and after the run, for the unjudged counter.
 	MetricsBefore, MetricsAfter []byte
+	// Grace is the time after a slot's answer in which its outside call may still land.
+	Grace time.Duration
+	// Outbound is this run's stub evidence; YardOutbound the yardstick run's outbound file (WriteOutbound), given when
+	// YardOutboundGiven. Each enforced slot must make as many outside calls as its yardstick slot.
+	Outbound          Outbound
+	YardOutbound      []OutboundSlot
+	YardOutboundGiven bool
 }
 
 // liveEnforcement is what one /metrics scrape of the running go-api says: the namespaces whose enforcement gauge is 1,
@@ -130,6 +137,13 @@ func JudgeEnforced(in EnforcedInput) Report {
 	void := func(format string, args ...any) {
 		report.Void = true
 		fail("VOID: "+format, args...)
+	}
+	if in.Outbound.Rows == nil {
+		void("no row table was given (Outbound.Rows): every run is judged against its table, held to the pinned classes")
+	}
+	byRow, classErr := CheckRowClasses(in.Outbound.Rows)
+	if classErr != nil {
+		void("%v", classErr)
 	}
 	before, after := readLive(in.MetricsBefore), readLive(in.MetricsAfter)
 	readable := before.ok && after.ok
@@ -245,12 +259,18 @@ func JudgeEnforced(in EnforcedInput) Report {
 			}
 		}
 	}
+	outbound := judgeOutboundEnforced(&report, in, byRow)
+	for _, reason := range outbound.voids {
+		void("%s", reason)
+	}
+	report.Reasons = append(report.Reasons, outbound.fails...)
 	for _, sv := range report.Slots {
 		if sv.Expect != expectMismatch && !sv.Pass() {
 			fail("FAIL: slot %d row %s %s %s: %s", sv.Seq, sv.Row, sv.Caller, sv.Key(), sv.Verdict)
 		}
 	}
 	report.Rows = rowVerdicts(report.Slots, in.K)
+	markNoReach(report.Rows, outbound)
 	controls := 0
 	for _, rv := range report.Rows {
 		if strings.HasPrefix(rv.Row, "C") {
@@ -327,4 +347,100 @@ func ParseYardstick(raw []byte) ([]YardSlot, error) {
 		return nil, errors.New("yardstick: no slot")
 	}
 	return out, nil
+}
+
+// judgeOutboundEnforced checks the enforced run's stub evidence (checkOutbound), holds the yardstick's own outbound file
+// to the same reach rule, and gives a passing slot whose outside calls differ from its yardstick slot's
+// MISMATCH_OUTBOUND. Without external rows and without a yardstick outbound file there is nothing to compare.
+func judgeOutboundEnforced(report *Report, in EnforcedInput, byRow map[string]rowClass) outboundCheck {
+	check := checkOutbound(in.Slots, in.Outbound, byRow, in.Grace, []string{"before", "between", "after"})
+	external := map[string]bool{}
+	for _, s := range sentSlots(in.Slots) {
+		if c, ok := classOf(s.Key()); ok && c.ext != none {
+			external[s.Row] = true
+		}
+	}
+	if !in.YardOutboundGiven {
+		if len(external) > 0 {
+			check.voids = append(check.voids, "external rows were sent but the yardstick's outbound file was not given")
+		}
+		return check
+	}
+	type cell struct {
+		row, caller string
+		k           int
+	}
+	yard := map[cell]OutboundSlot{}
+	for _, y := range in.YardOutbound {
+		yard[cell{y.Row, y.Caller, y.K}] = y
+	}
+	var rows []string
+	slotKey := map[string]string{}
+	for _, s := range sentSlots(in.Slots) {
+		slotKey[s.Row] = s.Key()
+	}
+	for row := range external {
+		rows = append(rows, row)
+	}
+	slices.Sort(rows)
+	for _, row := range rows {
+		if yk := keyOfYard(in.YardOutbound, row); yk != "" && yk != slotKey[row] {
+			check.voids = append(check.voids, fmt.Sprintf("the yardstick names route %s for row %s, but the run sent it on %s: the files are of different rows", yk, row, slotKey[row]))
+			continue
+		}
+		if reason, ok := NoOutboundRows[slotKey[row]]; ok {
+			var callers []string
+			var statuses []int
+			for _, y := range in.YardOutbound {
+				if y.Row != row {
+					continue
+				}
+				callers, statuses = append(callers, y.Caller), append(statuses, y.Status)
+				if y.Hits > 0 {
+					check.fails = append(check.fails, fmt.Sprintf("FAIL: row %s %s k=%d: %d outside calls in the yardstick, but the row is pinned NO_OUTBOUND (%s)", row, y.Caller, y.K, y.Hits, reason))
+				}
+			}
+			if shown := decisionShown(row, "yardstick", callers, statuses); len(shown) > 0 {
+				check.noReach = append(check.noReach, row)
+				check.fails = append(check.fails, shown...)
+			}
+			continue
+		}
+		allowed, reached := 0, 0
+		for _, y := range in.YardOutbound {
+			if y.Row != row || denied(y.Status) {
+				continue
+			}
+			allowed++
+			if y.Hits > 0 {
+				reached++
+			}
+		}
+		if reached == 0 {
+			check.noReach = append(check.noReach, row)
+			check.fails = append(check.fails, fmt.Sprintf("FAIL: row %s VOID: in the yardstick %d allowed slots, %d reached the stub; the row is no evidence", row, allowed, reached))
+		}
+	}
+	for i := range report.Slots {
+		sv := &report.Slots[i]
+		if sv.Gap() {
+			continue
+		}
+		sv.Outbound = check.hits[sv.Seq]
+		y, found := yard[cell{sv.Row, sv.Caller, sv.K}]
+		if sv.Pass() && (!found || y.Hits != sv.Outbound) {
+			sv.Verdict = VerdictOutboundDiffers
+		}
+	}
+	return check
+}
+
+// keyOfYard is the route key of row in the yardstick outbound file, "" when the row is not in it.
+func keyOfYard(yard []OutboundSlot, row string) string {
+	for _, y := range yard {
+		if y.Row == row {
+			return y.Key
+		}
+	}
+	return ""
 }

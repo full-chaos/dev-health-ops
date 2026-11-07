@@ -567,6 +567,11 @@ func TestPlatformAdminInAnUnknownOrDeletedOrganizationGoAPIAnswersEqualLegacy(t 
 						if enforced.status == legacy.status && enforced.body == legacy.body {
 							t.Fatalf("control: enforced now equals legacy (%d); remove the CHAOS-13261 row of this subtest from known_divergences.tsv", legacy.status)
 						}
+						if enforced.status != http.StatusForbidden || enforced.body != `{"detail":"Access denied"}` || len(enforced.calls) != 1 ||
+							!strings.Contains(enforced.calls[0], " billing.read ") || !strings.HasSuffix(enforced.calls[0], " -> allowed=false reason=organization_inactive") {
+							t.Fatalf("control: enforced %d %s pdp=%v is not the known CHAOS-13261 answer (403 Access denied, one billing.read PDP call refused organization_inactive)",
+								enforced.status, enforced.body, enforced.calls)
+						}
 						venueoracle.KnownDivergenceSkip(t, "CHAOS-13261", strconv.Itoa(legacy.status), strconv.Itoa(enforced.status),
 							fmt.Sprintf("legacy %s; enforced %s pdp=%v", legacy.body, enforced.body, enforced.calls))
 					}

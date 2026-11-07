@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
@@ -37,9 +38,8 @@ type EnforcedInput struct {
 	Slots []Slot
 	Yard  []YardSlot
 	K     int
-	// EnforceEnv is the readback of the venue go-api environment (an env dump or the one line); Namespaces maps each
-	// row key to its action namespace, so the namespaces the run needs are known.
-	EnforceEnv string
+	// Namespaces maps each row key to its action namespace, so the namespaces the run needs are known. The enforcement
+	// switch is read back from the running go-api: the gauge dev_health_authz_enforcement_enabled in both scrapes.
 	Namespaces map[string]string
 	// The data digests, all four equal: before the yardstick run, after it, before this run, after it. A write that a
 	// run made and did not restore shows as a difference.
@@ -48,24 +48,75 @@ type EnforcedInput struct {
 	MetricsBefore, MetricsAfter []byte
 }
 
-// enforcedNamespaces reads GO_API_AUTHZ_ENFORCE from env; false when the variable is absent or empty.
-func enforcedNamespaces(env string) (map[string]bool, bool) {
-	for _, line := range strings.Split(env, "\n") {
-		if value, ok := strings.CutPrefix(strings.TrimSpace(line), "GO_API_AUTHZ_ENFORCE="); ok {
-			out := map[string]bool{}
-			for _, ns := range strings.Split(value, ",") {
-				if ns = strings.TrimSpace(ns); ns != "" {
-					out[ns] = true
-				}
-			}
-			return out, len(out) > 0
-		}
-	}
-	return nil, false
+// liveEnforcement is what one /metrics scrape of the running go-api says: the namespaces whose enforcement gauge is 1,
+// whether the enforcement config was invalid, the build version and the process uptime. ok is false when the scrape
+// carries no enforcement gauge or no uptime.
+type liveEnforcement struct {
+	enabled       map[string]bool
+	configInvalid bool
+	version       string
+	uptime        float64
+	ok            bool
 }
 
-// JudgeEnforced judges a run with enforcement on against the yardstick. Void (exit 3): the enforcement config unread or
-// missing a namespace the rows need, a data digest that differs, an unreadable counter, fewer than two controls, a
+func readLive(scrape []byte) liveEnforcement {
+	out := liveEnforcement{enabled: map[string]bool{}}
+	sawGauge, sawUptime := false, false
+	for _, line := range strings.Split(string(scrape), "\n") {
+		switch {
+		case strings.HasPrefix(line, "dev_health_authz_enforcement_enabled{"):
+			labels, value, _ := strings.Cut(strings.TrimPrefix(line, "dev_health_authz_enforcement_enabled{"), "} ")
+			if !strings.Contains(labels, `service="go-api"`) {
+				continue
+			}
+			sawGauge = true
+			if ns := labelValue(labels, "namespace"); ns != "" && strings.TrimSpace(value) == "1" {
+				out.enabled[ns] = true
+			}
+		case strings.HasPrefix(line, "dev_health_authz_enforcement_config_invalid{"):
+			if _, value, ok := strings.Cut(line, "} "); ok && strings.Contains(line, `service="go-api"`) && strings.TrimSpace(value) != "0" {
+				out.configInvalid = true
+			}
+		case strings.HasPrefix(line, "dev_health_runtime_info{"):
+			out.version = labelValue(line, "version")
+		case strings.HasPrefix(line, "dev_health_runtime_uptime_seconds "):
+			if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "dev_health_runtime_uptime_seconds ")), 64); err == nil {
+				out.uptime, sawUptime = v, true
+			}
+		}
+	}
+	out.ok = sawGauge && sawUptime
+	return out
+}
+
+// labelValue returns the value of label name in a metric line, "" when absent.
+func labelValue(line, name string) string {
+	_, rest, ok := strings.Cut(line, name+`="`)
+	if !ok {
+		return ""
+	}
+	value, _, _ := strings.Cut(rest, `"`)
+	return value
+}
+
+// driveSpan is the first start and the last end of the slots that were sent.
+func driveSpan(slots []Slot) (first, last time.Time) {
+	for _, s := range slots {
+		if s.Gap() {
+			continue
+		}
+		if first.IsZero() || s.Start.Before(first) {
+			first = s.Start
+		}
+		if s.End.After(last) {
+			last = s.End
+		}
+	}
+	return first, last
+}
+
+// JudgeEnforced judges a run with enforcement on against the yardstick. Void (exit 3): the enforcement switch not read
+// back from the running go-api or missing a namespace the rows need, a go-api restart or build change between the scrapes, a data digest that differs, an unreadable counter, fewer than two controls, a
 // control the enforcement did not deny. Per slot, every caller: the enforced status must equal the yardstick's legacy
 // status; a difference is MISMATCH_STRICTER or MISMATCH_WIDER by direction (403 = deny), else MISMATCH_STATUS. The
 // superuser's skips of the yardstick pass only on the counter: per route, unjudged{reason="no_org"} grew by exactly the
@@ -79,9 +130,25 @@ func JudgeEnforced(in EnforcedInput) Report {
 		report.Void = true
 		fail("VOID: "+format, args...)
 	}
-	enforced, readable := enforcedNamespaces(in.EnforceEnv)
+	before, after := readLive(in.MetricsBefore), readLive(in.MetricsAfter)
+	readable := before.ok && after.ok
 	if !readable {
-		void("the enforce config GO_API_AUTHZ_ENFORCE was not read back from the venue go-api, or is empty")
+		void("the enforcement switch was not read back from the running go-api: a scrape has no dev_health_authz_enforcement_enabled gauge or no uptime")
+	}
+	if readable && (before.configInvalid || after.configInvalid) {
+		void("the go-api reports its enforcement config invalid")
+	}
+	if readable && (before.version == "" || before.version != after.version) {
+		void("the go-api build differs between the scrapes (%q, %q): another process ran", before.version, after.version)
+	}
+	if readable {
+		first, last := driveSpan(in.Slots)
+		switch {
+		case after.uptime < before.uptime:
+			void("the go-api uptime went from %.0fs to %.0fs between the scrapes: the process restarted, its counters are not comparable", before.uptime, after.uptime)
+		case after.uptime-before.uptime < last.Sub(first).Seconds()-5:
+			void("the go-api uptime grew %.0fs over a drive of %.0fs: the process restarted during the run", after.uptime-before.uptime, last.Sub(first).Seconds())
+		}
 	}
 	var need []string
 	for _, s := range in.Slots {
@@ -91,8 +158,8 @@ func JudgeEnforced(in EnforcedInput) Report {
 	}
 	slices.Sort(need)
 	for _, ns := range need {
-		if readable && !enforced[ns] {
-			void("namespace %s is not enforced on the venue go-api, but a row of it runs", ns)
+		if readable && !(before.enabled[ns] && after.enabled[ns]) {
+			void("namespace %s is not enforced on the running go-api in both scrapes, but a row of it runs", ns)
 		}
 	}
 	digests := []string{in.YardDigest, in.YardDigestAfter, in.DigestBefore, in.DigestAfter}

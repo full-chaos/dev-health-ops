@@ -1,9 +1,42 @@
 package shadowvenue
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
+
+var enfT0 = time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+
+var allEnforced = []string{"admin", "billing", "integrations", "license", "members", "settings", "teams"}
+
+// live builds a go-api /metrics scrape: the enforcement gauge for every catalog namespace (1 for those enabled), the
+// config gauge, the build info, the uptime and the given unjudged series.
+func live(enabled []string, uptime int, version, invalid string, series ...string) []byte {
+	var lines []string
+	for _, ns := range []string{"acr", "admin", "billing", "integrations", "license", "members", "settings", "teams"} {
+		v := "0"
+		if slicesContains(enabled, ns) {
+			v = "1"
+		}
+		lines = append(lines, `dev_health_authz_enforcement_enabled{namespace="`+ns+`",service="go-api"} `+v)
+	}
+	lines = append(lines, `dev_health_authz_enforcement_config_invalid{service="go-api"} `+invalid,
+		`dev_health_runtime_info{service="dev-health-api",version="`+version+`"} 1`, "dev_health_runtime_uptime_seconds "+itoa(uptime))
+	return scrape(append(lines, series...)...)
+}
+
+func slicesContains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 const (
 	enfDigest = "d41d8cd98f00b204e9800998ecf8427e1111111111111111111111111111aaaa"
@@ -29,7 +62,8 @@ func newEnfRun() *enfRun {
 				expect = "mismatch"
 			}
 			r.yard = append(r.yard, YardSlot{Row: row, Caller: caller, K: k, Key: key, Status: legacy, Verdict: yardVerdict})
-			r.slots = append(r.slots, Slot{Seq: len(r.slots) + 1, Row: row, Caller: caller, Principal: caller + "-A", Expect: expect, K: k, Method: method, Route: route, Path: route, Status: enforced})
+			start := enfT0.Add(time.Duration(len(r.slots)) * 3 * time.Second)
+			r.slots = append(r.slots, Slot{Start: start, End: start.Add(100 * time.Millisecond), Seq: len(r.slots) + 1, Row: row, Caller: caller, Principal: caller + "-A", Expect: expect, K: k, Method: method, Route: route, Path: route, Status: enforced})
 		}
 	}
 	add("C1", "superuser", teamsKey, 200, 403, VerdictMismatch, true)
@@ -40,11 +74,10 @@ func newEnfRun() *enfRun {
 	add("3", "superuser", noOrgKey, 403, 403, VerdictSkipped, false)
 	r.in = EnforcedInput{
 		Slots: r.slots, Yard: r.yard, K: 3,
-		EnforceEnv: "PATH=/usr/bin\nGO_API_AUTHZ_ENFORCE=admin,billing,integrations,license,members,settings,teams\n",
 		Namespaces: map[string]string{teamsKey: "teams", "GET /api/v1/admin/integrations": "integrations", seamKey: "members", noOrgKey: "billing"},
 		YardDigest: enfDigest, YardDigestAfter: enfDigest, DigestBefore: enfDigest, DigestAfter: enfDigest,
-		MetricsBefore: scrape(unjudged(noOrgKey, "no_org", "5"), unjudged(seamKey, "served_org", "2")),
-		MetricsAfter:  scrape(unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5")),
+		MetricsBefore: live(allEnforced, 1000, "f50883b", "0", unjudged(noOrgKey, "no_org", "5"), unjudged(seamKey, "served_org", "2")),
+		MetricsAfter:  live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5")),
 	}
 	return r
 }
@@ -69,11 +102,31 @@ func TestEnforcedEachPlantedDefectIsRed(t *testing.T) {
 		void  bool
 		want  string
 	}{
-		"enforce config unread": {func(r *enfRun) { r.in.EnforceEnv = "" }, true, "enforce"},
-		"enforce list lacks billing": {func(r *enfRun) {
-			r.in.EnforceEnv = "GO_API_AUTHZ_ENFORCE=admin,integrations,license,members,settings,teams"
+		"no enforcement gauge in the scrapes": {func(r *enfRun) {
+			r.in.MetricsBefore = scrape(unjudged(noOrgKey, "no_org", "5"))
+			r.in.MetricsAfter = scrape(unjudged(noOrgKey, "no_org", "8"))
+		}, true, "read back"},
+		"billing not enforced before": {func(r *enfRun) {
+			r.in.MetricsBefore = live([]string{"admin", "integrations", "license", "members", "settings", "teams"}, 1000, "f50883b", "0", unjudged(noOrgKey, "no_org", "5"))
 		}, true, "billing"},
-		"enforce list empty":              {func(r *enfRun) { r.in.EnforceEnv = "GO_API_AUTHZ_ENFORCE=" }, true, "enforce"},
+		"billing not enforced after": {func(r *enfRun) {
+			r.in.MetricsAfter = live([]string{"admin", "integrations", "license", "members", "settings", "teams"}, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"))
+		}, true, "billing"},
+		"no namespace enforced": {func(r *enfRun) {
+			r.in.MetricsBefore = live(nil, 1000, "f50883b", "0", unjudged(noOrgKey, "no_org", "5"))
+		}, true, "enforced"},
+		"enforcement config invalid": {func(r *enfRun) {
+			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "1", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"))
+		}, true, "invalid"},
+		"build differs": {func(r *enfRun) {
+			r.in.MetricsAfter = live(allEnforced, 1100, "aaaaaaa", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"))
+		}, true, "build"},
+		"uptime went down (restart between the scrapes)": {func(r *enfRun) {
+			r.in.MetricsAfter = live(allEnforced, 40, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"))
+		}, true, "restarted"},
+		"uptime grew less than the drive (restart in the run)": {func(r *enfRun) {
+			r.in.MetricsAfter = live(allEnforced, 1020, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"))
+		}, true, "restarted"},
 		"yardstick digest none":           {func(r *enfRun) { r.in.YardDigest = "" }, true, "missing"},
 		"yardstick digest differs":        {func(r *enfRun) { r.in.YardDigest = strings.Repeat("c", 64) }, true, "differs"},
 		"yardstick after digest differs":  {func(r *enfRun) { r.in.YardDigestAfter = strings.Repeat("d", 64) }, true, "differs"},
@@ -88,21 +141,21 @@ func TestEnforcedEachPlantedDefectIsRed(t *testing.T) {
 		"enforced 503":                    {func(r *enfRun) { r.in.Slots[6].Status = 503 }, false, VerdictStatusDiffers},
 		"no yardstick slot":               {func(r *enfRun) { r.in.Yard = r.in.Yard[:len(r.in.Yard)-1] }, false, VerdictMissing},
 		"no_org delta one short": {func(r *enfRun) {
-			r.in.MetricsAfter = scrape(unjudged(noOrgKey, "no_org", "7"), unjudged(seamKey, "served_org", "5"))
+			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "7"), unjudged(seamKey, "served_org", "5"))
 		}, false, VerdictUnevidencedNoOrg},
 		"no_org delta one over": {func(r *enfRun) {
-			r.in.MetricsAfter = scrape(unjudged(noOrgKey, "no_org", "9"), unjudged(seamKey, "served_org", "5"))
+			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "9"), unjudged(seamKey, "served_org", "5"))
 		}, false, VerdictUnevidencedNoOrg},
 		"other reason on the no_org route": {func(r *enfRun) {
-			r.in.MetricsAfter = scrape(unjudged(noOrgKey, "no_org", "8"), unjudged(noOrgKey, "served_org", "1"), unjudged(seamKey, "served_org", "5"))
+			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(noOrgKey, "served_org", "1"), unjudged(seamKey, "served_org", "5"))
 		}, false, VerdictUnevidencedNoOrg},
 		"other reason on the seam route": {func(r *enfRun) {
-			r.in.MetricsAfter = scrape(unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"), unjudged(seamKey, "no_org", "1"))
+			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"), unjudged(seamKey, "no_org", "1"))
 		}, false, VerdictUnevidencedSeam},
 		"counter went down": {func(r *enfRun) {
-			r.in.MetricsAfter = scrape(unjudged(noOrgKey, "no_org", "4"), unjudged(seamKey, "served_org", "5"))
+			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "4"), unjudged(seamKey, "served_org", "5"))
 		}, true, "counter"},
-		"scrape unreadable": {func(r *enfRun) { r.in.MetricsAfter = []byte("nothing\n") }, true, "scrape"},
+		"scrape unreadable": {func(r *enfRun) { r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0")[:20] }, true, "scrape"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

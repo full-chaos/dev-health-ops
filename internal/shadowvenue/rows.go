@@ -9,6 +9,8 @@
 package shadowvenue
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -141,8 +143,24 @@ type rowClass struct {
 // can move a class.
 var embeddedRows = append([]byte(nil), DefaultRows...)
 
+// ClassTableSHA256 pins the class table, the one canonical source of each route's class (ADDENDUM-13267-1; acp): the
+// sha256 of the sorted lines "METHOD /route<TAB>ext<TAB>destructive" of the embedded table's 95 rows. A change of any
+// row's class changes it, and classes refuses to serve a table that does not hash to it.
+const ClassTableSHA256 = "43b9757556e20e361026f1e8484cb70e06add49bd1f04d2cedde1140c49d88b4"
+
+// classDigest is the sha256 of a class table in the ClassTableSHA256 form.
+func classDigest(table map[string]rowClass) string {
+	lines := make([]string, 0, len(table))
+	for key, c := range table {
+		lines = append(lines, fmt.Sprintf("%s\t%s\t%v", key, c.ext, c.destructive))
+	}
+	slices.Sort(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n") + "\n"))
+	return hex.EncodeToString(sum[:])
+}
+
 // classes are the classes of the embedded table's rows by route key: a custom row table may change a row's path or
-// body, never its class (the row table is an input; the classes are code).
+// body, never its class (the row table is an input; the classes are code, pinned by ClassTableSHA256).
 var classes = sync.OnceValue(func() map[string]rowClass {
 	rows, err := ParseRows(embeddedRows)
 	if err != nil {
@@ -153,6 +171,9 @@ var classes = sync.OnceValue(func() map[string]rowClass {
 		if !row.Control() {
 			out[row.Key()] = rowClass{ext: row.Ext, destructive: row.Destructive}
 		}
+	}
+	if got := classDigest(out); got != ClassTableSHA256 {
+		panic("shadowvenue: the embedded class table hashes to " + got + ", not the pinned ClassTableSHA256")
 	}
 	return out
 })

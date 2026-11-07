@@ -440,6 +440,7 @@ internal/queryapi/server	graphql_shadow_test.go	unexpressed	-	-
 internal/queryapi/server	internal_auth_test.go	unexpressed	-	*.go
 internal/queryapi/server	internal_auth_test.go	unexpressed	-	-
 internal/queryapi/server	investment_scope_pin_wiring_test.go	unexpressed	-	-
+internal/queryapi/server	log_request_id_census_test.go	unexpressed	-	-
 internal/queryapi/server	mcp_proof_route_retired_test.go	unexpressed	-	*.go
 internal/queryapi/server	org_scope_census_test.go	unexpressed	-	-
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	*.go

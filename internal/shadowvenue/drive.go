@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -74,7 +75,9 @@ func ReadPassword(path string) (string, error) {
 // Driver sends a plan's slots to the venue go-api, one at a time. Base is the raw origin; every request takes its origin
 // from CheckVenueBase(Base, Egress, RunID) (origin), so no request path has a check of its own.
 type Driver struct {
-	Base          string
+	Base string
+	// AllowExternal are the outside services a slot's route may call (-allow-external); a slot on a route of another
+	// service refuses the drive before any request, as MakePlan makes it a gap.
 	AllowExternal []string
 	Egress        EgressRead
 	RunID         string
@@ -166,8 +169,13 @@ func (d *Driver) Drive(ctx context.Context, plan Plan, tokens map[string]string,
 			continue
 		}
 		c, ok := classOf(slot.Key())
-		if !ok {
+		switch {
+		case !ok:
 			return fmt.Errorf("drive: slot %d row %s refused before any request: route %s has no class in the pinned table", slot.Seq, slot.Row, slot.Key())
+		case (strings.HasPrefix(slot.Row, "C") || slot.Expect == expectMismatch) && (c.ext != none || c.destructive):
+			return fmt.Errorf("drive: slot %d row %s refused before any request: a control on %s, an external or destructive route", slot.Seq, slot.Row, slot.Key())
+		case c.ext != none && !slices.Contains(d.AllowExternal, c.ext):
+			return fmt.Errorf("drive: slot %d row %s refused before any request: route %s calls %s, not allowed (-allow-external %s)", slot.Seq, slot.Row, slot.Key(), c.ext, c.ext)
 		}
 		if slot.Destructive || c.destructive {
 			if err := d.Frozen.Holds(slot.Path, slot.Body); err != nil {

@@ -200,15 +200,14 @@ func TestJudgeVoidsTheTableWithEveryExternalRowMadeInternal(t *testing.T) {
 	}
 }
 
-// With no row table the judge takes the service of each hit's slot from the route: a hit of the route's own service
-// is no mismatch.
-func TestJudgeWithNoTableComparesHitsToTheRouteService(t *testing.T) {
+// The judge takes the service of each hit's slot from the route: a hit of the route's own service is no mismatch.
+func TestJudgeComparesHitsToTheRouteService(t *testing.T) {
 	slots, ev := stripeSlots(t)
 	var hits []StubHit
 	for _, s := range slots[6:] {
 		hits = append(hits, StubHit{At: s.Start.Add(10 * time.Millisecond), Service: "stripe", Method: "GET", Host: "api.stripe.com", Path: "/v1/products"})
 	}
-	r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Hits: hits, Egress: egressReads("before", "between"), Seed: noSeed}})
+	r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Hits: hits, Rows: tableOf(slots, map[string]string{"22": "stripe"}), Egress: egressReads("before", "between"), Seed: noSeed}})
 	if r.Void || !r.Pass {
 		t.Fatalf("void %v pass %v: %v", r.Void, r.Pass, r.Reasons)
 	}

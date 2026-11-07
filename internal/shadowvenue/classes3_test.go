@@ -68,8 +68,8 @@ func TestDriveValidatesAHandBuiltPlan(t *testing.T) {
 		allow []string
 		want  string
 	}{
-		"a control on an external route":  {control, []string{"stripe"}, "control"},
-		"an external route not allowed":   {stripe, nil, "-allow-external stripe"},
+		"a control on an external route":   {control, []string{"stripe"}, "control"},
+		"an external route not allowed":    {stripe, nil, "-allow-external stripe"},
 		"an external route, other allowed": {stripe, []string{"pagerduty"}, "-allow-external stripe"},
 	} {
 		d := &Driver{Base: api.srv.URL, Client: api.srv.Client(), Gap: MinGap, AllowExternal: c.allow, Sleep: func(context.Context, time.Duration) error { return nil }}

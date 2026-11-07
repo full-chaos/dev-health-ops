@@ -138,6 +138,9 @@ func JudgeEnforced(in EnforcedInput) Report {
 		report.Void = true
 		fail("VOID: "+format, args...)
 	}
+	if in.Outbound.Rows == nil {
+		void("no row table was given (Outbound.Rows): every run is judged against its table, held to the pinned classes")
+	}
 	byRow, classErr := CheckRowClasses(in.Outbound.Rows)
 	if classErr != nil {
 		void("%v", classErr)
@@ -372,12 +375,20 @@ func judgeOutboundEnforced(report *Report, in EnforcedInput, byRow map[string]ro
 		yard[cell{y.Row, y.Caller, y.K}] = y
 	}
 	var rows []string
+	slotKey := map[string]string{}
+	for _, s := range sentSlots(in.Slots) {
+		slotKey[s.Row] = s.Key()
+	}
 	for row := range external {
 		rows = append(rows, row)
 	}
 	slices.Sort(rows)
 	for _, row := range rows {
-		if reason, ok := NoOutboundRows[keyOfYard(in.YardOutbound, row)]; ok {
+		if yk := keyOfYard(in.YardOutbound, row); yk != "" && yk != slotKey[row] {
+			check.voids = append(check.voids, fmt.Sprintf("the yardstick names route %s for row %s, but the run sent it on %s: the files are of different rows", yk, row, slotKey[row]))
+			continue
+		}
+		if reason, ok := NoOutboundRows[slotKey[row]]; ok {
 			var callers []string
 			var statuses []int
 			for _, y := range in.YardOutbound {

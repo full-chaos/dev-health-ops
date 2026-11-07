@@ -256,6 +256,9 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 		report.Void = true
 		fail("VOID: "+format, args...)
 	}
+	if o.Outbound.Rows == nil {
+		void("no row table was given (Outbound.Rows): every run is judged against its table, held to the pinned classes")
+	}
 	byRow, classErr := CheckRowClasses(o.Outbound.Rows)
 	if classErr != nil {
 		void("%v", classErr)

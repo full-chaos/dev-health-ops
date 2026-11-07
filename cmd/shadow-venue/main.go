@@ -130,7 +130,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		fmt.Fprintf(stderr, "drive: -out %s: %v\n", *out, errors.Unwrap(err))
 		return exitUsage
 	}
-	driver := &shadowvenue.Driver{Base: *base, Egress: record, RunID: *runID, Client: newClient(), Gap: *gap, Frozen: frozen}
+	driver := &shadowvenue.Driver{Base: *base, AllowExternal: list(*allow), Egress: record, RunID: *runID, Client: newClient(), Gap: *gap, Frozen: frozen}
 	tokens := map[string]string{}
 	for _, s := range plan.Slots {
 		if s.Gap() || tokens[s.Principal] != "" {

@@ -41,6 +41,7 @@ func stripeRun(t *testing.T) ([]Slot, []string, []string) {
 const (
 	testImage      = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	testStubConfig = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	testGoAPIIP    = "172.30.0.5"
 )
 
 // noSeed is a given, empty seed-mode log.
@@ -50,7 +51,7 @@ var noSeed = SeedLog{Given: true}
 func egressText(when string) string {
 	return "when=" + when + "\nnetwork_internal=true\nnetworks=venue-int\ndefault_route=none\npublic_tcp=refused\npublic_dns=fail\nstub_tcp=ok\n" +
 		"hosts_pinned=api.github.com,api.pagerduty.com,api.stripe.com,github.com,identity.pagerduty.com\nimage=" + testImage + "\n" +
-		"stub_mode=run\nstub_config=" + testStubConfig + "\nstub_started=2026-11-07T15:00:00Z\n"
+		"stub_mode=run\nstub_config=" + testStubConfig + "\nstub_started=2026-11-07T15:00:00Z\ngoapi_ip=" + testGoAPIIP + "\n"
 }
 
 func egressReads(when ...string) []EgressRead {
@@ -338,6 +339,9 @@ func TestJudgeOutboundEgressEachPlantedDefectIsVoid(t *testing.T) {
 		"image differs":        bad("image", "sha256:"+strings.Repeat("2", 64)),
 		"network differs":      bad("networks", "venue-other"),
 		"two networks":         both("networks", "venue-int,bridge"),
+		"goapi ip differs":     bad("goapi_ip", "172.30.0.6"),
+		"goapi ip public":      both("goapi_ip", "8.8.8.8"),
+		"goapi ip no ip":       both("goapi_ip", "go-api"),
 		"networks empty": {ParseEgress("before.txt", []byte(strings.Replace(egressText("before"), "networks=venue-int", "networks=", 1))),
 			ParseEgress("between.txt", []byte(strings.Replace(egressText("between"), "networks=venue-int", "networks=", 1)))},
 	}

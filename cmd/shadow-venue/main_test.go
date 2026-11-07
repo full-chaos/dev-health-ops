@@ -235,3 +235,16 @@ func TestPlanRefusesAStatesFileOthersCanRead(t *testing.T) {
 		t.Fatalf("a 0600 states file: code %d, stderr %q", code, errOut.String())
 	}
 }
+
+// A drive to a non-loopback base without the egress record of the read before it is refused before any request.
+func TestDriveRefusesAVenueIPWithoutItsEgressRecord(t *testing.T) {
+	var out, errOut bytes.Buffer
+	slots := filepath.Join(t.TempDir(), "slots.tsv")
+	code := run(context.Background(), []string{"drive", "-principals", principalsFile(t), "-base", "http://172.30.0.5:8000", "-out", slots}, &out, &errOut)
+	if code != exitUsage || !strings.Contains(errOut.String(), "-egress") {
+		t.Fatalf("code %d, stderr %q", code, errOut.String())
+	}
+	if _, err := os.Stat(slots); !os.IsNotExist(err) {
+		t.Fatal("drive made its slots file before it refused the base")
+	}
+}

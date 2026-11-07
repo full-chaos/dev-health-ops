@@ -239,3 +239,6 @@ func ParseSlots(raw []byte) ([]Slot, error) {
 	}
 	return slots, nil
 }
+
+// CheckVenueBase: skeleton, loopback only.
+func CheckVenueBase(raw string, record EgressRead) (*url.URL, error) { return CheckBase(raw) }

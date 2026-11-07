@@ -263,3 +263,43 @@ func TestDriveRefusesADestructiveSlotOutsideTheFrozenIDsBeforeAnyRequest(t *test
 		t.Fatalf("%d requests, want 2", len(api.seen))
 	}
 }
+
+// A non-loopback base is go-api's own venue address only: the private IP named as goapi_ip by a readable egress record
+// that shows an internal network with no default route.
+func TestCheckVenueBaseAcceptsOnlyTheRecordedGoAPIAddress(t *testing.T) {
+	good := ParseEgress("before.txt", []byte(egressText("before")))
+	if u, err := CheckVenueBase("http://"+testGoAPIIP+":8000", good); err != nil || u.Host != testGoAPIIP+":8000" {
+		t.Fatalf("the recorded address: %v %v", u, err)
+	}
+	if _, err := CheckVenueBase("http://127.0.0.1:8093", EgressRead{}); err != nil {
+		t.Fatalf("loopback with no record: %v", err)
+	}
+	set := func(key, value string) EgressRead {
+		lines := strings.Split(egressText("before"), "\n")
+		for i, l := range lines {
+			if strings.HasPrefix(l, key+"=") {
+				lines[i] = key + "=" + value
+			}
+		}
+		return ParseEgress("before.txt", []byte(strings.Join(lines, "\n")))
+	}
+	cases := map[string]struct {
+		base   string
+		record EgressRead
+	}{
+		"no record":            {"http://" + testGoAPIIP + ":8000", EgressRead{}},
+		"unreadable record":    {"http://" + testGoAPIIP + ":8000", EgressRead{Name: "x", Err: os.ErrNotExist}},
+		"another private ip":   {"http://172.30.0.9:8000", good},
+		"a public ip":          {"http://8.8.8.8:8000", set("goapi_ip", "8.8.8.8")},
+		"a host name":          {"http://go-api:8000", set("goapi_ip", "go-api")},
+		"network not internal": {"http://" + testGoAPIIP + ":8000", set("network_internal", "false")},
+		"a default route":      {"http://" + testGoAPIIP + ":8000", set("default_route", "via 172.30.0.1")},
+		"a path":               {"http://" + testGoAPIIP + ":8000/api", good},
+		"https":                {"https://" + testGoAPIIP + ":8000", good},
+	}
+	for name, c := range cases {
+		if _, err := CheckVenueBase(c.base, c.record); err == nil {
+			t.Errorf("%s: %s accepted", name, c.base)
+		}
+	}
+}

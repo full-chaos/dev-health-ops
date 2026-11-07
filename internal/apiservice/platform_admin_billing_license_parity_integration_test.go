@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -33,6 +34,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // Product rule 1 parity cells for a superuser with no membership row on go-api. Each cell serves one request on the
@@ -377,10 +379,21 @@ func (rig *msrRig) msrServe(h http.Handler, r msrRow, c msrCaller) msrAnswer {
 	return msrAnswer{status: status, body: body, calls: rig.pdp.take()}
 }
 
-// msrParity serves the row to both sides and fails unless the enforced answer equals the legacy answer. A write row
-// goes to the enforced side first (a write it refuses changes nothing the legacy side then reads); a read row goes to
-// the legacy side first. It logs one CELL line per side and returns both answers.
+// msrParity serves the row to both sides and fails unless the enforced answer equals the legacy answer.
 func (rig *msrRig) msrParity(t *testing.T, cell, org string, c msrCaller, r msrRow) (legacy, enforced msrAnswer) {
+	t.Helper()
+	legacy, enforced = rig.msrAnswers(t, cell, org, c, r)
+	if enforced.status != legacy.status || enforced.body != legacy.body {
+		t.Errorf("%s %s %s %s: enforced %d %s, legacy %d %s; product rule 1 wants the legacy answer", c.label, org, r.method,
+			r.path, enforced.status, enforced.body, legacy.status, legacy.body)
+	}
+	return legacy, enforced
+}
+
+// msrAnswers serves the row to both sides. A write row goes to the enforced side first (a write it refuses changes
+// nothing the legacy side then reads); a read row goes to the legacy side first. It logs one CELL line per side and
+// returns both answers.
+func (rig *msrRig) msrAnswers(t *testing.T, cell, org string, c msrCaller, r msrRow) (legacy, enforced msrAnswer) {
 	t.Helper()
 	if r.method == http.MethodGet {
 		legacy = rig.msrServe(rig.legacy, r, c)
@@ -398,10 +411,6 @@ func (rig *msrRig) msrParity(t *testing.T, cell, org string, c msrCaller, r msrR
 		enforced.status, msrVerdict(enforced.status), enforced.body, enforced.calls)
 	if len(legacy.calls) != 0 {
 		t.Errorf("%s %s %s %s: the legacy side asked the PDP: %v", c.label, org, r.method, r.path, legacy.calls)
-	}
-	if enforced.status != legacy.status || enforced.body != legacy.body {
-		t.Errorf("%s %s %s %s: enforced %d %s, legacy %d %s; product rule 1 wants the legacy answer", c.label, org, r.method,
-			r.path, enforced.status, enforced.body, legacy.status, legacy.body)
 	}
 	return legacy, enforced
 }
@@ -503,7 +512,9 @@ func TestPlatformAdminNoOrgClaimBillingReadsEqualLegacy(t *testing.T) {
 // A superuser with no membership row whose token names an organization with no row (U: never existed; R: its row
 // deleted) gets the legacy answer on one row per platform_admin-flagged go-api action and on the 7 billing.read and
 // license.read rows: the decision point admits a holder in an unknown organization. Control: a user without the
-// platform action, same orgs, is refused on both sides.
+// platform action, same orgs, is refused on both sides, except the EdDSA billing.read row: the legacy side keeps a
+// token org without a membership row as a member and admits it, while the decision point refuses the unknown
+// organization (known divergence CHAOS-13261, kept stricter).
 func TestPlatformAdminInAnUnknownOrDeletedOrganizationGoAPIAnswersEqualLegacy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -548,6 +559,17 @@ func TestPlatformAdminInAnUnknownOrDeletedOrganizationGoAPIAnswersEqualLegacy(t 
 			rig.pdp.register(c.token, c.label, plain)
 			for _, r := range []msrRow{rows[5], rows[8]} {
 				t.Run(c.label+" "+r.method+" "+r.path, func(t *testing.T) {
+					if r.action == "billing.read" && strings.Contains(c.label, "/EdDSA/") {
+						legacy, enforced := rig.msrAnswers(t, "M-go", o.label, c, r)
+						if legacy.status != http.StatusOK || !strings.HasPrefix(legacy.body, `{"items":[`) {
+							t.Fatalf("control: legacy %d %s; want the measured legacy answer 200 {\"items\":[...", legacy.status, legacy.body)
+						}
+						if enforced.status == legacy.status && enforced.body == legacy.body {
+							t.Fatalf("control: enforced now equals legacy (%d); remove the CHAOS-13261 row of this subtest from known_divergences.tsv", legacy.status)
+						}
+						venueoracle.KnownDivergenceSkip(t, "CHAOS-13261", strconv.Itoa(legacy.status), strconv.Itoa(enforced.status),
+							fmt.Sprintf("legacy %s; enforced %s pdp=%v", legacy.body, enforced.body, enforced.calls))
+					}
 					legacy, enforced := rig.msrParity(t, "M-go", o.label, c, r)
 					if msrVerdict(legacy.status) != "REFUSE" || msrVerdict(enforced.status) != "REFUSE" {
 						t.Errorf("control: legacy %d, enforced %d; want both refused", legacy.status, enforced.status)

@@ -432,23 +432,18 @@ func TestPlatformAdminGapOrgScopeSelectsAnOrgByTheLocalFlag(t *testing.T) {
 }
 
 // Product rule 1 (D6773): a platform admin whose access token names an org it holds no membership row in gets, on
-// every platform-admin row, the answer of its HS256 token for the same org, and is decided by the decision point.
+// every platform-admin row, the answer its HS256 token gave for the same org, and is decided by the decision point.
+// The HS256 answer is the executed legacy run on main 98c7d4f56 (log 13154-legacy-rec-98c7d4f5.log sha256
+// 8ba2f74cdd64, LEGACY-REC lines): 200 "org= user=<id> imp=-" on every row, 0 decision-point calls.
 func TestPlatformAdminRowsAnswerAnOrgClaimWithNoMembershipAsLegacy(t *testing.T) {
 	for pattern := range platformAdminRoutes {
 		t.Run(pattern, func(t *testing.T) {
-			legacyPDP, routedPDP := newTestPDP(t, allowAll), newTestPDP(t, allowAll)
+			routedPDP := newTestPDP(t, allowAll)
 			store := legacyStore(true, "")
-			validator := &fakeValidator{}
-			legacyAuth := routed(t, store, validator)
-			validator.legacy = legacyAuth.AuthenticateLegacy
-			guard := NewGuard(legacyAuth, quiet())
-			guard.SetEnforcer(productionEnforcer(t, legacyPDP, "admin"))
-			want := serveCell(platformAdminMux(guard), pattern, map[string]string{"Authorization": "Bearer " + sign(t, claims(nil))})
 			got := serveCell(cellHandler(t, store, userClaims(nil), productionEnforcer(t, routedPDP, "admin")), pattern, cellBearer())
-			// The HS256 class never asks the decision point; the user access token, like the org-less one, does.
-			if want.status == http.StatusUnauthorized || got.status != want.status || got.body != want.body || len(routedPDP.calls()) == 0 {
-				t.Fatalf("user access token %d %q (%d PDP calls), HS256 %d %q (%d PDP calls)",
-					got.status, got.body, len(routedPDP.calls()), want.status, want.body, len(legacyPDP.calls()))
+			// The HS256 class never asked the decision point; the user access token, like the org-less one, does.
+			if got.status != http.StatusOK || got.body != legacyPlatformAdminBody || len(routedPDP.calls()) == 0 {
+				t.Fatalf("user access token %d %q (%d PDP calls), HS256 200 %q (0 PDP calls)", got.status, got.body, len(routedPDP.calls()), legacyPlatformAdminBody)
 			}
 		})
 	}

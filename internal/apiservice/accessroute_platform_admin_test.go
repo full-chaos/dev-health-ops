@@ -1,27 +1,24 @@
 package apiservice
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
 	"github.com/full-chaos/dev-health-go/authverify"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
-// platformAdminRig is the api listener as newMatrixRig builds it (real rows,
-// real scope layers, the real route guard on each protected row) with probeUser
-// a superuser or not; routed false is the HS256 path alone.
-func platformAdminRig(t *testing.T, superuser, routed bool) (http.Handler, *eddsaMinter, *lookupCounts) {
+// platformAdminRig is the routed api listener as newMatrixRig builds it (real
+// rows, real scope layers, the real route guard on each protected row) with
+// probeUser a superuser or not.
+func platformAdminRig(t *testing.T, superuser bool) (http.Handler, *eddsaMinter) {
 	t.Helper()
 	counts := &lookupCounts{}
 	minter := newEdDSAMinter(t)
@@ -30,11 +27,7 @@ func platformAdminRig(t *testing.T, superuser, routed bool) (http.Handler, *edds
 	row.state.IsSuperuser = superuser
 	probe.users[probeUser] = row
 	store := matrixStore{probeStore: probe, counts: counts}
-	hs, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(hs, store, quietLogger())
+	auth, err := policy.NewAuthenticator(store, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,20 +35,16 @@ func platformAdminRig(t *testing.T, superuser, routed bool) (http.Handler, *edds
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := legacyVerifier(auth.AuthenticateLegacy)
 	validator, err := accessverify.New(accessverify.Config{
 		Rows: realRows(t), EdDSA: eddsa,
-		Legacy: func(ctx context.Context, token string) (any, error) { return legacy(ctx, token) },
-		Meter:  sdkmetric.NewMeterProvider().Meter("test"), Logger: quietLogger(),
+		Meter: sdkmetric.NewMeterProvider().Meter("test"), Logger: quietLogger(),
 		Now: func() time.Time { return probeNow },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if routed {
-		if err := auth.RouteAccess(matrixValidator{inner: routedAccessVerify{validator}, counts: counts}, goAPIAccessService); err != nil {
-			t.Fatal(err)
-		}
+	if err := auth.RouteAccess(matrixValidator{inner: routedAccessVerify{validator}, counts: counts}, goAPIAccessService); err != nil {
+		t.Fatal(err)
 	}
 	scopeRows, err := goAPIScopeRows()
 	if err != nil {
@@ -76,8 +65,13 @@ func platformAdminRig(t *testing.T, superuser, routed bool) (http.Handler, *edds
 	if err != nil {
 		t.Fatal(err)
 	}
-	return server.Handler(), minter, counts
+	return server.Handler(), minter
 }
+
+// legacyPlatformAdminProbeBody is the HS256 path's answer on each row below for a superuser probe with no membership in
+// probeTargetOrg (role member, the users row's profile, token version 3): the executed legacy run on main 98c7d4f56,
+// log 13154-legacy-rec-98c7d4f5.log sha256 8ba2f74cdd64 (LEGACY-REC superuser=true lines, 200 on each row).
+const legacyPlatformAdminProbeBody = `{"org":"00000000-0000-4000-8000-0000000000b3","user":{"email":"user@example.test","full_name":"Probe User","is_superuser":true,"org_id":"00000000-0000-4000-8000-0000000000b3","role":"member","token_version":3,"user_id":"00000000-0000-4000-8000-0000000000a1","username":"user"}}` + "\n"
 
 // Product rule 1 (D6773): on org-scoped admin rows a platform admin whose
 // token names an org it holds no membership row in gets, with a user access
@@ -86,26 +80,17 @@ func platformAdminRig(t *testing.T, superuser, routed bool) (http.Handler, *edds
 func TestProductRule1PlatformAdminWithoutMembershipAnswersAsLegacy(t *testing.T) {
 	rows := []string{"/api/v1/admin/audit-logs", "/api/v1/admin/credentials", "/api/v1/admin/backfill-jobs"}
 	for _, superuser := range []bool{true, false} {
-		legacy, _, _ := platformAdminRig(t, superuser, false)
-		routed, minter, _ := platformAdminRig(t, superuser, true)
-		// The HS256 token a minter gives a non-member: role member, the
-		// users row's profile, the row's token version.
-		hs256 := "Bearer " + probeHS256(t, probeKey, jwt.MapClaims{"sub": probeUser.String(), "org_id": probeTargetOrg.String(),
-			"role": "member", "email": "user@example.test", "username": "user", "full_name": "Probe User", "tv": 3})
+		routed, minter := platformAdminRig(t, superuser)
 		eddsa := "Bearer " + minter.mint(probeUser, map[string]any{"org_id": probeTargetOrg.String()})
 		for _, path := range rows {
-			serve := func(handler http.Handler, bearer string) (int, string) {
-				request := httptest.NewRequest(http.MethodGet, path, nil)
-				request.Header.Set("Authorization", bearer)
-				recorder := httptest.NewRecorder()
-				handler.ServeHTTP(recorder, request)
-				return recorder.Code, recorder.Body.String()
-			}
-			wantStatus, wantBody := serve(legacy, hs256)
-			gotStatus, gotBody := serve(routed, eddsa)
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			request.Header.Set("Authorization", eddsa)
+			recorder := httptest.NewRecorder()
+			routed.ServeHTTP(recorder, request)
+			gotStatus, gotBody := recorder.Code, recorder.Body.String()
 			if superuser {
-				if wantStatus != http.StatusOK || gotStatus != wantStatus || gotBody != wantBody {
-					t.Fatalf("%s superuser: user access token %d %s, HS256 %d %s", path, gotStatus, gotBody, wantStatus, wantBody)
+				if gotStatus != http.StatusOK || gotBody != legacyPlatformAdminProbeBody {
+					t.Fatalf("%s superuser: user access token %d %s, HS256 200 %s", path, gotStatus, gotBody, legacyPlatformAdminProbeBody)
 				}
 				continue
 			}

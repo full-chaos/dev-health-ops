@@ -321,7 +321,6 @@ func TestEdgeCarrier_SuperuserFlagClearedInDatabaseOverridesAStaleToken(t *testi
 func TestEdgeCarrier_ImpersonatingSuperuserSetsImpersonationActive(t *testing.T) {
 	// D6773 (product rule 1): no membership row in the token org, as on the legacy path; its answer, executed on
 	// origin/main ad73c1cc1, is this test there (200, ImpersonationActive, the target org and role).
-	t.Skip("known defect, D6773, CHAOS-13206: the routed check refuses the token org without a membership row (401)")
 	store := &fakeEdgeStore{
 		states:   map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
 		found:    map[uuid.UUID]bool{ecUser: true},

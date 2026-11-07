@@ -87,7 +87,6 @@ func TestProofWriteRefusesADelegatedCaller(t *testing.T) {
 // origin/main ad73c1cc1 (TestDelegatedSuperuserOnANonMemberOrg_ReadServedWriteRefused): the REST read is served
 // in the claimed org (200); the write door refuses (401) and runs no resolver.
 func TestDelegatedSuperuserOnANonMemberOrg_ReadServedAsOnTheLegacyPath(t *testing.T) {
-	t.Skip("known defect, D6773, CHAOS-13206: the routed check refuses the token org without a membership row (401)")
 	quietStdLog(t)
 	store := newAccessStore()
 	store.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}

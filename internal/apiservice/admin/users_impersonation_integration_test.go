@@ -34,7 +34,6 @@ func TestImpersonatingSuperuserListsOnlyTheTargetOrgUsers(t *testing.T) {
 // D6773 (product rule 1): the same with root's token naming its own admin org, where root holds no membership row,
 // as the legacy (HS256) token did. The legacy answer, executed on origin/main, is this test there.
 func TestImpersonatingSuperuserWithAnOrgClaimWithoutMembershipListsOnlyTheTargetOrgUsers(t *testing.T) {
-	t.Skip("known defect, D6773, CHAOS-13206: the routed check refuses the token org without a membership row (401)")
 	impersonatingSuperuserListsOnlyTheTargetOrgUsers(t, true)
 }
 

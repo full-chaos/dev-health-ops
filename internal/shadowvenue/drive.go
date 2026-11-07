@@ -80,8 +80,9 @@ type Driver struct {
 	Client *http.Client
 	// Gap is the wait after each answer; at least MinGap.
 	Gap time.Duration
-	// Frozen is the frozen throwaway ids: before any request, a destructive slot whose path or body holds another id
-	// refuses the whole drive.
+	// Frozen is the frozen throwaway ids: before any request, a slot that is destructive by its own flag or by its
+	// route's pinned class, and whose path or body holds another id, refuses the whole drive; so does a slot on a route
+	// with no class.
 	Frozen ThrowawayIDs
 	Sleep  func(context.Context, time.Duration) error
 	Now    func() time.Time
@@ -160,7 +161,14 @@ func (d *Driver) Drive(ctx context.Context, plan Plan, tokens map[string]string,
 		if !slot.Gap() && tokens[slot.Principal] == "" {
 			return fmt.Errorf("drive: principal %s of row %s has no token", slot.Principal, slot.Row)
 		}
-		if slot.Destructive {
+		if slot.Gap() {
+			continue
+		}
+		c, ok := classOf(slot.Key())
+		if !ok {
+			return fmt.Errorf("drive: slot %d row %s refused before any request: route %s has no class in the pinned table", slot.Seq, slot.Row, slot.Key())
+		}
+		if slot.Destructive || c.destructive {
 			if err := d.Frozen.Holds(slot.Path, slot.Body); err != nil {
 				return fmt.Errorf("drive: destructive slot %d row %s refused before any request: %w", slot.Seq, slot.Row, err)
 			}

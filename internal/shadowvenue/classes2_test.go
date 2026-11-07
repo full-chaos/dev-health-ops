@@ -191,3 +191,29 @@ func TestJudgesVoidASlotWhoseTableRowNamesAnotherRoute(t *testing.T) {
 		t.Fatalf("judge-enforced void %v: %v", rep.Void, rep.Reasons)
 	}
 }
+
+// The run's table and its slot records agree with EACH OTHER (row 22 on the Stripe route, its table row ext -) but
+// disagree with the pinned table: both judges void. The truth is the pinned class, never the run's own table.
+func TestJudgesVoidATableThatAgreesWithItsSlotsButNotThePinnedClasses(t *testing.T) {
+	slots, ev := stripeSlots(t)
+	table := tableOf(slots, map[string]string{"22": none})
+	if r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Rows: table, Egress: egressReads("before", "between"), Seed: noSeed}}); !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "row 22: POST /api/v1/billing/plans/pull-stripe has the class ext stripe") {
+		t.Fatalf("judge void %v: %v", r.Void, r.Reasons)
+	}
+	run := newEnfRun()
+	seq := len(run.in.Slots) + 1
+	for _, caller := range callerOrder {
+		for k := 1; k <= 3; k++ {
+			start := enfT0.Add(time.Duration(seq-1) * 3 * time.Second)
+			run.in.Slots = append(run.in.Slots, Slot{Seq: seq, Row: "22", Caller: caller, Principal: caller, Expect: "match", K: k, Method: "POST",
+				Route: "/api/v1/billing/plans/pull-stripe", Path: "/api/v1/billing/plans/pull-stripe", Start: start, End: start.Add(100 * time.Millisecond), Status: 403})
+			run.in.Yard = append(run.in.Yard, YardSlot{Row: "22", Caller: caller, K: k, Key: "POST /api/v1/billing/plans/pull-stripe", Status: 403, Verdict: VerdictMatch})
+			seq++
+		}
+	}
+	run.in.Namespaces["POST /api/v1/billing/plans/pull-stripe"] = "billing"
+	run.in.Outbound = Outbound{Rows: tableOf(run.in.Slots, map[string]string{"22": none})}
+	if rep := run.judge(); !rep.Void || !strings.Contains(strings.Join(rep.Reasons, "\n"), "row 22: POST /api/v1/billing/plans/pull-stripe has the class ext stripe") {
+		t.Fatalf("judge-enforced void %v: %v", rep.Void, rep.Reasons)
+	}
+}

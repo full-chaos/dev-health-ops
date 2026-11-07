@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -29,7 +28,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
-// EnvToken is the go-api service credential auth-service checks on the route.
+// EnvToken is the go-api session issuer service credential. The session issue
+// route no longer takes it; auth-service's provisioning routes still read it.
 const EnvToken = "AUTH_SESSION_ISSUE_TOKEN"
 
 // Path is the issue route on auth-service's API listener.
@@ -40,7 +40,7 @@ const Path = "/internal/v1/sessions"
 var tokenPattern = regexp.MustCompile(`^svc_authsess_[A-Za-z0-9_-]{43}$`)
 
 // ValidToken reports whether token has the auth-session-issuer credential
-// shape, for the other go-api clients of auth-service that present it.
+// shape, for the go-api clients of auth-service that still present it.
 func ValidToken(token string) bool { return tokenPattern.MatchString(token) }
 
 // maxAnswerBytes bounds the issue route's answer.
@@ -168,13 +168,11 @@ type Issuer interface {
 const WorkloadAudience = "auth-service"
 
 // Client calls the issue route of one auth-service, and its session state
-// route (State). It presents either the session credential (token, set by New)
-// or the go-api workload token (workload set, see NewWorkload); bearer is the
-// one place that chooses.
+// route (State). It presents the go-api workload token (see NewWorkload): the
+// routes no longer take the session issuer credential.
 type Client struct {
 	endpoint      string
 	stateEndpoint string
-	token         string
 	workload      *workloadtoken.Client
 	http          *http.Client
 	// proof signs the client address sent in X-Forwarded-For (internal/auth/clientaddr); nil sends none.
@@ -188,45 +186,11 @@ func (c *Client) SetClientAddrProof(key *clientaddr.ProofKey) {
 	}
 }
 
-// New builds a Client for base (AUTH_PROXY_URL's origin) and token. It
-// refuses a token that is not an auth-session-issuer credential.
-func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
-	if base == nil {
-		return nil, errors.New("sessionissue: no auth-service URL")
-	}
-	if !tokenPattern.MatchString(token) {
-		return nil, fmt.Errorf("%s must be an auth-session-issuer service credential (svc_authsess_...)", EnvToken)
-	}
-	if timeout <= 0 {
-		timeout = defaultTimeout
-	}
-	endpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: Path}
-	stateEndpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: PathState}
-	// The bearer is a service credential: no proxy from the environment, a
-	// connection pool of its own, and no redirect following, as the auth
-	// proxy dials auth-service.
-	transport := &http.Transport{
-		Proxy:                 nil,
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		MaxIdleConns:          16,
-		MaxIdleConnsPerHost:   16,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: time.Second,
-		ForceAttemptHTTP2:     true,
-	}
-	return &Client{endpoint: endpoint.String(), stateEndpoint: stateEndpoint.String(), token: token, http: &http.Client{
-		Transport:     transport,
-		Timeout:       timeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}}, nil
-}
-
 // NewWorkload builds a Client for base (AUTH_PROXY_URL's origin) that presents
 // the workload token of workload (audience WorkloadAudience). No token is held:
 // Issue and State ask the workload client for one on every call (it is cached,
 // and one exchange serves every call of its lifetime), so a call with no usable token
-// fails as ErrUnavailable with nothing sent. There is no session credential to
+// fails as ErrUnavailable with nothing sent. There is no other credential to
 // fall back to. The token is set here, not by the workload client's own
 // transport, because that transport drops every header but a fixed few and
 // the end user's X-Forwarded-For must reach auth-service. The client uses the
@@ -248,13 +212,10 @@ func NewWorkload(base *url.URL, workload *workloadtoken.Client, timeout time.Dur
 	return &Client{endpoint: endpoint.String(), stateEndpoint: stateEndpoint.String(), workload: workload, http: client}, nil
 }
 
-// bearer is the credential of one call: the session credential, or the workload token asked of the workload client
-// (cached there; one exchange serves every call of its lifetime). A workload token that cannot be had fails the call as
-// ErrUnavailable before anything is sent; there is no fallback to a session credential.
+// bearer is the credential of one call: the workload token asked of the workload client (cached there; one exchange
+// serves every call of its lifetime). A workload token that cannot be had fails the call as ErrUnavailable before
+// anything is sent; there is no fallback to another credential.
 func (c *Client) bearer(ctx context.Context) (string, error) {
-	if c.workload == nil {
-		return c.token, nil
-	}
 	token, err := c.workload.Token(ctx, WorkloadAudience)
 	if err != nil {
 		return "", fmt.Errorf("%w: workload token: %w", ErrUnavailable, err)

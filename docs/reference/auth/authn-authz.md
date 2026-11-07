@@ -82,7 +82,6 @@ auth-service:
 
 | Class | Rows |
 | --- | --- |
-| `internal_svc_authsess_token` | 13 |
 | `workload_token` | 11 |
 | `user_access_token` | 6 |
 | `refresh_credential` | 3 |
@@ -222,10 +221,10 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | `POST /api/v1/auth/validate` | protected | `user_access_token` (body field `token`) | `none` |
 | `POST /api/v1/auth/switch-org` | protected | `user_access_token` | `none` |
 | `POST /api/v1/auth/social-login` | protected | `social_oauth_exchange` | `none` |
-| `POST /internal/v1/sessions` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
-| `POST /internal/v1/sessions/state` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
-| `POST /internal/v1/sessions/delegated` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
-| `POST /internal/v1/sessions/delegated/end` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
+| `POST /internal/v1/sessions` | protected | `workload_token` | `none` |
+| `POST /internal/v1/sessions/state` | protected | `workload_token` | `none` |
+| `POST /internal/v1/sessions/delegated` | protected | `workload_token` | `none` |
+| `POST /internal/v1/sessions/delegated/end` | protected | `workload_token` | `none` |
 | `POST /internal/v1/memberships/add` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
 | `POST /internal/v1/memberships/role` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
 | `POST /internal/v1/memberships/remove` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |

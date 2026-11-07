@@ -22,7 +22,7 @@ func TestIssueHandsOnTheSessionRouteToken(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, answer)
 		}))
-		client, err := New(baseOf(t, server.URL), testToken(t), time.Second)
+		client, err := newTestClient(t, baseOf(t, server.URL), testToken(t), time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}

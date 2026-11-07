@@ -36,10 +36,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
-// CHAOS-13214 measurement cells (acp 2026-11-06). Each cell serves one request on the real go-api Routes over a
-// migrated database twice: legacy (no Enforcer) and enforced (the Enforcer over the real profile rows, every
-// namespace of msrNamespaces on, the production evaluator behind the PDP wire). Each answer is a CELL line; a cell
-// fails only when a side gives no answer. The later fix PR turns them into equality cells.
+// Product rule 1 parity cells for a superuser with no membership row on go-api. Each cell serves one request on the
+// real go-api Routes over a migrated database twice: legacy (no Enforcer) and enforced (the Enforcer over the real
+// profile rows, every namespace of msrNamespaces on, the production evaluator behind the PDP wire). The enforced
+// answer must equal the legacy answer (status and body). Each side's answer is also logged as a CELL line.
 
 var (
 	msrOrgB    = uuid.MustParse("00000000-0000-4000-8000-0000000013b1") // active, invoice + subscription seeded
@@ -47,6 +47,7 @@ var (
 	msrOrgR    = uuid.MustParse("00000000-0000-4000-8000-0000000013d1") // seeded, then its row deleted
 	msrSU0     = uuid.MustParse("00000000-0000-4000-8000-0000000013f0") // superuser, no membership row anywhere
 	msrPlain   = uuid.MustParse("00000000-0000-4000-8000-0000000013f1") // not a superuser, no membership row
+	msrMemberB = uuid.MustParse("00000000-0000-4000-8000-0000000013f2") // not a superuser, member of B
 	msrInvoice = "13b10000-0000-4000-8000-0000000000a1"
 )
 
@@ -228,11 +229,12 @@ func newMsrRig(t *testing.T, ctx context.Context) *msrRig {
 	t.Cleanup(pool.Close)
 	pgseed.Org(ctx, t, pool, msrOrgB.String(), "community")
 	sessions := map[uuid.UUID]policy.SessionRow{}
-	for _, u := range []uuid.UUID{msrSU0, msrPlain} {
+	for _, u := range []uuid.UUID{msrSU0, msrPlain, msrMemberB} {
 		pgseed.User(ctx, t, pool, u.String())
 		sessions[msrSID(u)] = policy.SessionRow{PrincipalID: u, LegacyTokenVersion: i64ptr(0)}
 	}
 	pgseed.SetUserState(ctx, t, pool, msrSU0.String(), true, true, 0)
+	pgseed.Membership(ctx, t, pool, uuid.NewSHA1(msrMemberB, []byte("msr-membership")).String(), msrMemberB.String(), msrOrgB.String(), "member")
 	for _, stmt := range []string{
 		`INSERT INTO billing_plans (id, key, name, tier, is_active, display_order) VALUES ('13e00000-0000-4000-8000-000000000001', 'msr-plan', 'Msr plan', 'team', true, 0)`,
 		`INSERT INTO billing_prices (id, plan_id, interval, amount, currency, is_active) VALUES ('13ef0000-0000-4000-8000-000000000001', '13e00000-0000-4000-8000-000000000001', 'monthly', 100, 'usd', true)`,
@@ -332,6 +334,11 @@ func (rig *msrRig) eddsa(u, org uuid.UUID) string {
 	return rig.minter.mint(u, map[string]any{"sid": sessionid.Wire(msrSID(u)), "org_id": org.String()})
 }
 
+// eddsaNoOrg is a user access token with no org claim.
+func (rig *msrRig) eddsaNoOrg(u uuid.UUID) string {
+	return rig.minter.mint(u, map[string]any{"sid": sessionid.Wire(msrSID(u)), "org_id": nil})
+}
+
 func (rig *msrRig) do(h http.Handler, method, path, body, token string) (int, string) {
 	var reader io.Reader
 	if body != "" {
@@ -368,21 +375,56 @@ type msrRow struct {
 	action, method, path, body string
 }
 
-// msrMeasure serves the row to the enforced listener first (a write it refuses changes nothing the legacy side then
-// reads), then to the legacy one, and logs one CELL line per side.
-func (rig *msrRig) msrMeasure(t *testing.T, cell, org string, c msrCaller, r msrRow) {
+// msrAnswer is one side's answer to one request.
+type msrAnswer struct {
+	status int
+	body   string
+	calls  []string
+}
+
+// msrServe serves the row to one side and returns its answer with the PDP calls it made.
+func (rig *msrRig) msrServe(h http.Handler, r msrRow, c msrCaller) msrAnswer {
+	status, body := rig.do(h, r.method, r.path, r.body, c.token)
+	return msrAnswer{status: status, body: body, calls: rig.pdp.take()}
+}
+
+// msrParity serves the row to both sides and fails unless the enforced answer equals the legacy answer. A write row
+// goes to the enforced side first (a write it refuses changes nothing the legacy side then reads); a read row goes to
+// the legacy side first. It logs one CELL line per side and returns both answers.
+func (rig *msrRig) msrParity(t *testing.T, cell, org string, c msrCaller, r msrRow) (legacy, enforced msrAnswer) {
 	t.Helper()
-	enfStatus, enfBody := rig.do(rig.enforced, r.method, r.path, r.body, c.token)
-	calls := rig.pdp.take()
-	legStatus, legBody := rig.do(rig.legacy, r.method, r.path, r.body, c.token)
-	legacyCalls := rig.pdp.take()
-	if enfStatus == 0 || legStatus == 0 {
-		t.Fatalf("%s %s %s %s %s: no answer (enforced %d, legacy %d)", cell, org, c.label, r.method, r.path, enfStatus, legStatus)
+	if r.method == http.MethodGet {
+		legacy = rig.msrServe(rig.legacy, r, c)
+		enforced = rig.msrServe(rig.enforced, r, c)
+	} else {
+		enforced = rig.msrServe(rig.enforced, r, c)
+		legacy = rig.msrServe(rig.legacy, r, c)
+	}
+	if enforced.status == 0 || legacy.status == 0 {
+		t.Fatalf("%s %s %s %s %s: no answer (enforced %d, legacy %d)", cell, org, c.label, r.method, r.path, enforced.status, legacy.status)
 	}
 	t.Logf("CELL|%s|go-api|%s|%s|%s|%s %s|legacy|%d|%s|%s|pdp_calls=%d", cell, org, c.label, r.action, r.method, r.path,
-		legStatus, msrVerdict(legStatus), legBody, len(legacyCalls))
+		legacy.status, msrVerdict(legacy.status), legacy.body, len(legacy.calls))
 	t.Logf("CELL|%s|go-api|%s|%s|%s|%s %s|enforced|%d|%s|%s|pdp=%v", cell, org, c.label, r.action, r.method, r.path,
-		enfStatus, msrVerdict(enfStatus), enfBody, calls)
+		enforced.status, msrVerdict(enforced.status), enforced.body, enforced.calls)
+	if len(legacy.calls) != 0 {
+		t.Errorf("%s %s %s %s: the legacy side asked the PDP: %v", c.label, org, r.method, r.path, legacy.calls)
+	}
+	if enforced.status != legacy.status || enforced.body != legacy.body {
+		t.Errorf("%s %s %s %s: enforced %d %s, legacy %d %s; product rule 1 wants the legacy answer", c.label, org, r.method,
+			r.path, enforced.status, enforced.body, legacy.status, legacy.body)
+	}
+	return legacy, enforced
+}
+
+// msrWantJudgedAllow fails unless the enforced side asked the PDP exactly once, for the row's action on org, and got
+// an allow: the answer equals legacy because the decision point admits the caller, not because it was not asked.
+func msrWantJudgedAllow(t *testing.T, label string, r msrRow, org uuid.UUID, enforced msrAnswer) {
+	t.Helper()
+	want := " " + r.action + " organization/" + org.String() + " "
+	if len(enforced.calls) != 1 || !strings.Contains(enforced.calls[0], want) || !strings.Contains(enforced.calls[0], "allowed=true") {
+		t.Errorf("%s %s %s: enforced PDP calls %v, want one allow of %s on %s", label, r.method, r.path, enforced.calls, r.action, org)
+	}
 }
 
 // msrBillingLicenseRows are the 5 billing.read and 2 license.read go-api rows, asked as the token's org would be
@@ -414,9 +456,10 @@ func msrOrgIDRows(org uuid.UUID) []msrRow {
 	return out
 }
 
-// C3 measurement: a superuser with no membership row whose token names active org B, on the 7 billing.read and
-// license.read rows. EdDSA user access token is the judged class; HS256 is the cross-check.
-func TestMeasureBillingAndLicenseReadsForAPlatformAdminWithoutMembership(t *testing.T) {
+// C3: a superuser with no membership row whose token names active org B, on the 5 billing.read and 2 license.read
+// rows, without and with org_id=B. The EdDSA user access token is the judged class: the PDP is asked and allows (the
+// platform_admin flag); HS256 is unjudged and is the cross-check. The legacy answer is an answer past the guard.
+func TestPlatformAdminNoMembershipBillingAndLicenseReadsEqualLegacyWired(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	rig := newMsrRig(t, ctx)
@@ -428,15 +471,50 @@ func TestMeasureBillingAndLicenseReadsForAPlatformAdminWithoutMembership(t *test
 	rows := append(msrBillingLicenseRows(msrOrgB), msrOrgIDRows(msrOrgB)...)
 	for _, c := range []msrCaller{ed, hs} {
 		for _, r := range rows {
-			rig.msrMeasure(t, "C3", "org B active", c, r)
+			t.Run(c.label+" "+r.method+" "+r.path, func(t *testing.T) {
+				legacy, enforced := rig.msrParity(t, "C3", "org B active", c, r)
+				if msrVerdict(legacy.status) != "ADMIT" {
+					t.Errorf("legacy %d %s: want an answer past the guard", legacy.status, legacy.body)
+				}
+				if c.label == ed.label {
+					msrWantJudgedAllow(t, c.label, r, msrOrgB, enforced)
+				}
+			})
 		}
 	}
 }
 
-// M-go: a superuser with no membership row whose token names an organization with no row (U: never existed; R:
-// its row deleted). One row per platform_admin-flagged go-api action on main, and the 7 billing.read and
-// license.read rows. Control: a user without the platform action, same orgs.
-func TestMeasureGoAPIPlatformAdminInAnUnknownOrDeletedOrganization(t *testing.T) {
+// The billing.read rows for a superuser with no membership row whose token has no org claim, without org_id and
+// with org_id=B (the 13148 venue rows the shadow skipped). A member of B with a token for B is the control: it keeps
+// its own answer, so the change is not wider.
+func TestPlatformAdminNoOrgClaimBillingReadsEqualLegacy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	rig := newMsrRig(t, ctx)
+	su0 := msrSnap{platformRole: rule.PlatformAdmin, members: map[string]string{}}
+	noOrg := msrCaller{"SU0/EdDSA/no org", rig.eddsaNoOrg(msrSU0)}
+	rig.pdp.register(noOrg.token, noOrg.label, su0)
+	member := msrCaller{"member of B/EdDSA/org=B", rig.eddsa(msrMemberB, msrOrgB)}
+	rig.pdp.register(member.token, member.label, msrSnap{members: map[string]string{msrOrgB.String(): "member"}})
+	billing := msrBillingLicenseRows(msrOrgB)[:5]
+	rows := append(append([]msrRow{}, billing...), msrOrgIDRows(msrOrgB)...)
+	for _, r := range rows {
+		t.Run(noOrg.label+" "+r.method+" "+r.path, func(t *testing.T) {
+			rig.msrParity(t, "no-org", "org B active", noOrg, r)
+		})
+	}
+	for _, r := range billing {
+		t.Run(member.label+" "+r.method+" "+r.path, func(t *testing.T) {
+			rig.msrParity(t, "member", "org B active", member, r)
+		})
+	}
+}
+
+// A superuser with no membership row whose token names an organization with no row (U: never existed; R: its row
+// deleted) gets the legacy answer on one row per platform_admin-flagged go-api action and on the 7 billing.read and
+// license.read rows: the decision point admits a holder in an unknown organization. Control: a user without the
+// platform action, same orgs, is refused on both sides.
+func TestPlatformAdminInAnUnknownOrDeletedOrganizationGoAPIAnswersEqualLegacy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	rig := newMsrRig(t, ctx)
@@ -465,7 +543,12 @@ func TestMeasureGoAPIPlatformAdminInAnUnknownOrDeletedOrganization(t *testing.T)
 		for _, c := range callers {
 			rig.pdp.register(c.token, c.label, su0)
 			for _, r := range rows {
-				rig.msrMeasure(t, "M-go", o.label, c, r)
+				t.Run(c.label+" "+r.method+" "+r.path, func(t *testing.T) {
+					legacy, _ := rig.msrParity(t, "M-go", o.label, c, r)
+					if msrVerdict(legacy.status) != "ADMIT" {
+						t.Errorf("legacy %d %s: want an answer past the guard", legacy.status, legacy.body)
+					}
+				})
 			}
 		}
 		for _, c := range []msrCaller{
@@ -474,7 +557,12 @@ func TestMeasureGoAPIPlatformAdminInAnUnknownOrDeletedOrganization(t *testing.T)
 		} {
 			rig.pdp.register(c.token, c.label, plain)
 			for _, r := range []msrRow{rows[5], rows[8]} {
-				rig.msrMeasure(t, "M-go", o.label, c, r)
+				t.Run(c.label+" "+r.method+" "+r.path, func(t *testing.T) {
+					legacy, enforced := rig.msrParity(t, "M-go", o.label, c, r)
+					if msrVerdict(legacy.status) != "REFUSE" || msrVerdict(enforced.status) != "REFUSE" {
+						t.Errorf("control: legacy %d, enforced %d; want both refused", legacy.status, enforced.status)
+					}
+				})
 			}
 		}
 	}

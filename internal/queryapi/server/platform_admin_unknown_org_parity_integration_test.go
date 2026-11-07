@@ -34,12 +34,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
-// CHAOS-13214 M-q (acp 2026-11-06), a measurement: the query-api REST authentication (authenticateRESTRequest, the
-// edge verifier routed by row with the HS256 leg on, the live users store over a migrated database) behind the plane
-// handler, for a superuser with no membership row whose token names an organization with no row (U: never existed;
-// R: its row deleted). Legacy is the gate off; enforced is the gate in enforce mode with the four read cells on and
-// the production evaluator behind the PDP wire. The handler past authentication echoes the org and scope it may
-// serve. Each answer is a CELL line; the test fails only when a side gives no answer.
+// Product rule 1 parity cells: the query-api REST authentication (authenticateRESTRequest, the edge verifier routed by
+// row with the HS256 leg on, the live users store over a migrated database) behind the plane handler, for a superuser
+// with no membership row whose token names an organization with no row (U: never existed; R: its row deleted).
+// Legacy is the gate off; enforced is the gate in enforce mode with the four read cells on and the production
+// evaluator behind the PDP wire. The handler past authentication echoes the org and the scope org it may serve (the
+// handlers read only Scope.OrgID, not the scope kind). The enforced answer must equal the legacy answer.
 
 var (
 	msqOrgU  = uuid.MustParse("00000000-0000-4000-8000-0000000014c1")
@@ -210,7 +210,7 @@ func msqHandler(t *testing.T, store queryAPIUserStore, m *accessMinter, gate *pd
 			}
 			r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 			org, has := claims.Scope.OrgID()
-			_, _ = fmt.Fprintf(w, `{"org":%q,"scope_kind":%d,"scope_org":%q,"scope_has_org":%v}`, claims.OrgID, claims.Scope.Kind(), org, has)
+			_, _ = fmt.Fprintf(w, `{"org":%q,"scope_org":%q,"scope_has_org":%v}`, claims.OrgID, org, has)
 		})
 	}
 	return planeHandler(mux, gate)
@@ -238,7 +238,7 @@ func msqVerdict(status int) string {
 	return "ADMIT"
 }
 
-func TestMeasureQueryAPIPlatformAdminInAnUnknownOrDeletedOrganization(t *testing.T) {
+func TestPlatformAdminInAnUnknownOrDeletedOrganizationQueryAPIAnswersEqualLegacy(t *testing.T) {
 	quietStdLog(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
@@ -283,6 +283,7 @@ func TestMeasureQueryAPIPlatformAdminInAnUnknownOrDeletedOrganization(t *testing
 			{"control plain/EdDSA/" + o.label, ed(msqPlain, o.id), msqSnap{}},
 			{"control plain/HS256-edge/" + o.label, ecMintEdgeToken(t, ecEdgeClaims{sub: msqPlain.String(), orgID: org, role: "viewer"}), msqSnap{}},
 		} {
+			control := strings.HasPrefix(c.label, "control")
 			p.register(c.token, c.label, c.snap)
 			for _, row := range msqRows {
 				serve := func(h http.Handler) (int, string) {
@@ -301,6 +302,17 @@ func TestMeasureQueryAPIPlatformAdminInAnUnknownOrDeletedOrganization(t *testing
 				}
 				t.Logf("CELL|M-q|query-api|%s|%s|GET %s|legacy|%d|%s|%s|pdp_calls=%d", o.label, c.label, row, legStatus, msqVerdict(legStatus), legBody, len(legacyCalls))
 				t.Logf("CELL|M-q|query-api|%s|%s|GET %s|enforced|%d|%s|%s|pdp=%v", o.label, c.label, row, enfStatus, msqVerdict(enfStatus), enfBody, calls)
+				t.Run(c.label+" GET "+row, func(t *testing.T) {
+					if enfStatus != legStatus || enfBody != legBody {
+						t.Errorf("enforced %d %s, legacy %d %s; product rule 1 wants the legacy answer", enfStatus, enfBody, legStatus, legBody)
+					}
+					switch {
+					case control && msqVerdict(legStatus) != "REFUSE":
+						t.Errorf("control: legacy %d %s, want refused", legStatus, legBody)
+					case !control && msqVerdict(legStatus) != "ADMIT":
+						t.Errorf("legacy %d %s, want an answer past the guard", legStatus, legBody)
+					}
+				})
 			}
 		}
 	}

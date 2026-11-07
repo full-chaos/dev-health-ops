@@ -28,6 +28,13 @@ var platformAdminLegacyQueryAPIActions = map[string]string{
 	"reports.write":   "acp parity TestParityPDPAlone: OperationOrgGuard and requireMutationOrg read no membership row",
 }
 
+// platformAdminLegacyGoAPIActions maps each go-api action whose legacy handlers admit an admin.billing holder (or a
+// users.is_superuser user) with no membership row, on every row that asks it, to its executed legacy cell.
+var platformAdminLegacyGoAPIActions = map[string]string{
+	"billing.read": "apiservice TestPlatformAdminNoMembershipBillingAndLicenseReadsEqualLegacyWired, the 5 billing.read rows",
+	"license.read": "apiservice TestPlatformAdminNoMembershipBillingAndLicenseReadsEqualLegacyWired, the 2 license.read rows",
+}
+
 var adminGuardValidators = []string{"policy.Admin:", "policy.AdminOrg:"}
 
 var platformAdminProfiles = []string{"go-api", "query-api", "auth-service"}
@@ -100,8 +107,11 @@ func TestPlatformAdminFlagIsExactlyTheAdminGuardOrganizationActions(t *testing.T
 				}
 				continue
 			}
-			// Part 2: only an admin-guard row, or a query-api row of a listed action, may ask a flagged action.
-			if _, listed := platformAdminLegacyQueryAPIActions[a]; flagged[a] && (profile != "query-api" || !listed) {
+			// Part 2: only an admin-guard row, a query-api row of a listed query-api action, or a go-api row of a
+			// listed go-api action may ask a flagged action.
+			_, queryAPIListed := platformAdminLegacyQueryAPIActions[a]
+			_, goAPIListed := platformAdminLegacyGoAPIActions[a]
+			if flagged[a] && !(profile == "query-api" && queryAPIListed) && !(profile == "go-api" && goAPIListed) {
 				t.Errorf("%s row %q is not an admin-guard row and asks the flagged action %s", profile, r.ID, a)
 			}
 		}
@@ -121,8 +131,14 @@ func TestPlatformAdminFlagIsExactlyTheAdminGuardOrganizationActions(t *testing.T
 		}
 		want[a] = true
 	}
+	for a := range platformAdminLegacyGoAPIActions {
+		if !organization[a] {
+			t.Errorf("listed go-api action %s is not an organization action", a)
+		}
+		want[a] = true
+	}
 	if got, want := platformAdminSet(flagged), platformAdminSet(want); !slices.Equal(got, want) {
-		t.Errorf("platform_admin allowed on %v; the go-api admin-guard organization actions and the query-api list are %v", got, want)
+		t.Errorf("platform_admin allowed on %v; the go-api admin-guard organization actions and the query-api and go-api lists are %v", got, want)
 	}
 
 	// Part 3: a flagged allow is the owner's shape: no repository scope, no redaction class for any role.

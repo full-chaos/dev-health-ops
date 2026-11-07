@@ -11,11 +11,13 @@ import (
 )
 
 // platformAdminActions is the admin-guard set (the organization actions of the go-api policy.Admin and
-// policy.AdminOrg profile rows) and the query-api actions whose legacy path admits a superuser in any organization.
+// policy.AdminOrg profile rows), the query-api actions whose legacy path admits a superuser in any organization, and
+// the go-api billing and license reads whose legacy handlers admit an admin.billing holder before any membership read.
 // The catalog flag must name exactly these.
 var platformAdminActions = []string{
-	"analytics.read", "billing.manage", "git.read", "integrations.read", "integrations.write", "members.invite",
-	"members.manage", "metrics.read", "reports.write", "settings.write", "teams.write", "work_items.read",
+	"analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read", "integrations.write",
+	"license.read", "members.invite", "members.manage", "metrics.read", "reports.write", "settings.write",
+	"teams.write", "work_items.read",
 }
 
 func flaggedActions(t *testing.T) []string {
@@ -86,7 +88,9 @@ func TestPlatformAdminCellsOverTheFlaggedActions(t *testing.T) {
 		for _, member := range []string{"", "member", "owner"} {
 			wantOwnerShapeAllow(t, a+" platform_admin + "+member+" in a suspended org",
 				e.Evaluate(req, platformAdminSnapshot("platform_admin", member, StatusSuspended)), ReasonAllowedByPlatformAdmin)
-			for _, org := range []Status{StatusUnknown, StatusRemoved} {
+			wantOwnerShapeAllow(t, a+" platform_admin + "+member+" in an unknown org",
+				e.Evaluate(req, platformAdminSnapshot("platform_admin", member, StatusUnknown)), ReasonAllowedByPlatformAdmin)
+			for _, org := range []Status{StatusRemoved, StatusInvited} {
 				if d := e.Evaluate(req, platformAdminSnapshot("platform_admin", member, org)); d.Allowed || d.Reason != ReasonOrganizationInactive {
 					t.Errorf("%s platform_admin + %q in org %v: %+v, want deny organization_inactive", a, member, org, d)
 				}
@@ -154,9 +158,6 @@ func TestPlatformAdminSuspendedOrganizationAllowsAHolderOnly(t *testing.T) {
 			e.Evaluate(req, platformAdminSnapshot("platform_admin", "", StatusSuspended)), ReasonAllowedByPlatformAdmin)
 		wantOwnerShapeAllow(t, a+" own suspended org",
 			e.Evaluate(req, platformAdminSnapshot("platform_admin", "owner", StatusSuspended)), ReasonAllowedByPlatformAdmin)
-		if d := e.Evaluate(req, platformAdminSnapshot("platform_admin", "", StatusUnknown)); d.Allowed || d.Reason != ReasonOrganizationInactive {
-			t.Errorf("%s platform_admin, unknown org: %+v, want deny organization_inactive", a, d)
-		}
 		for _, platform := range []string{"", "platform_owner"} {
 			for _, member := range []string{"viewer", "member", "admin", "owner"} {
 				if d := e.Evaluate(req, platformAdminSnapshot(platform, member, StatusSuspended)); d.Allowed || d.Reason != ReasonOrganizationInactive {
@@ -174,6 +175,44 @@ func TestPlatformAdminSuspendedOrganizationAllowsAHolderOnly(t *testing.T) {
 			if d := e.Evaluate(platformRequest(a), platformAdminSnapshot("platform_admin", "owner", org)); !d.Allowed || d.Reason != ReasonAllowedByRole {
 				t.Errorf("platform action %s with the org %v: %+v, want allow", a, org, d)
 			}
+		}
+	}
+}
+
+// acp word on PLAN-13214-1, 2026-11-06, after the executed legacy measurement (go-api 40/40 and query-api 8/8 admit
+// a superuser whose token names an organization with no row): the platform-admin rule comes before the organization
+// status check for an unknown organization too. A member without admin.orgs keeps organization_inactive, and a
+// removed organization still denies.
+func TestPlatformAdminUnknownOrganizationAllowsAHolderOnly(t *testing.T) {
+	e := NewEvaluator()
+	for _, a := range flaggedActions(t) {
+		req := orgRequest(a)
+		for _, member := range []string{"", "owner"} {
+			wantOwnerShapeAllow(t, a+" platform_admin + "+member+" in an unknown org",
+				e.Evaluate(req, platformAdminSnapshot("platform_admin", member, StatusUnknown)), ReasonAllowedByPlatformAdmin)
+		}
+		if d := e.Evaluate(req, platformAdminSnapshot("platform_admin", "", StatusRemoved)); d.Allowed || d.Reason != ReasonOrganizationInactive {
+			t.Errorf("%s platform_admin, removed org: %+v, want deny organization_inactive", a, d)
+		}
+		for _, platform := range []string{"", "platform_owner"} {
+			for _, member := range []string{"", "viewer", "member", "admin", "owner"} {
+				if d := e.Evaluate(req, platformAdminSnapshot(platform, member, StatusUnknown)); d.Allowed || d.Reason != ReasonOrganizationInactive {
+					t.Errorf("%s %q + %q in an unknown org: %+v, want deny organization_inactive", a, platform, member, d)
+				}
+			}
+		}
+	}
+	actions, _, _ := vocab(t)
+	flagged := map[string]bool{}
+	for _, a := range flaggedActions(t) {
+		flagged[a] = true
+	}
+	for _, a := range actions {
+		if a.Scope != "organization" || a.ResourceKind != "organization" || flagged[a.Action] {
+			continue
+		}
+		if d := e.Evaluate(orgRequest(a.Action), platformAdminSnapshot("platform_admin", "owner", StatusUnknown)); d.Allowed || d.Reason != ReasonOrganizationInactive {
+			t.Errorf("unflagged %s platform_admin + owner in an unknown org: %+v, want deny organization_inactive", a.Action, d)
 		}
 	}
 }

@@ -1965,7 +1965,7 @@ venue_oracle_changed_selects() {
 # venue_oracle_skips JSON_LOG LEDGER NAME... judges every skip a venue oracle test (or one of its subtests) reported in
 # the go test -json log. A skip passes only as a known divergence of product rule 1: its message starts
 # "KNOWN-DIVERGENCE CHAOS-<n>", carries python=<answer> and go=<answer> (both planes ran), and the ledger
-# (internal/testsupport/venueoracle/known_divergences.tsv: ticket, test, row, reason) holds that ticket, test and row.
+# (internal/testsupport/venueoracle/testdata/known_divergences.tsv: ticket, test, row, reason) holds that ticket, test and row.
 # CI does not ask the tracker. Every other skip is an ERROR. It prints one "KNOWN <ticket>" line per passing skip and
 # returns 1 when any skip is refused.
 venue_oracle_skips() {
@@ -2179,7 +2179,7 @@ check_venue_oracles() {
   fi
 
   local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0 tmo known
-  local known_ledger="${ROOT}/internal/testsupport/venueoracle/known_divergences.tsv"
+  local known_ledger="${ROOT}/internal/testsupport/venueoracle/testdata/known_divergences.tsv"
   local -a compared=() go_only=() known_lines=()
   for index in "${!vo_dirs[@]}"; do
     rel="./${vo_dirs[${index}]#"${ROOT}"/}"

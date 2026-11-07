@@ -551,7 +551,7 @@ var knownDivergenceTicket = regexp.MustCompile(`^CHAOS-[0-9]+\b`)
 
 // KnownDivergenceSkip skips t as a known divergence. The message is the form the venue-oracles verb of ci/check_go.sh
 // accepts: "KNOWN-DIVERGENCE CHAOS-<n> python=<answer> go=<answer>", so a skip shows that both planes ran; the verb
-// also needs the ticket, test and row in known_divergences.tsv. ticket starts with its CHAOS id.
+// also needs the ticket, test and row in testdata/known_divergences.tsv. ticket starts with its CHAOS id.
 func KnownDivergenceSkip(t *testing.T, ticket, python, goAnswer, detail string) {
 	t.Helper()
 	id := knownDivergenceTicket.FindString(ticket)

@@ -145,7 +145,7 @@ func TestVenueOraclesVerbJudgesSkipsByTheLedger(t *testing.T) {
 	end := strings.Index(src[start+1:], "\n}\n")
 	body := src[start : start+1+end]
 	for _, want := range []string{
-		`local known_ledger="${ROOT}/internal/testsupport/venueoracle/known_divergences.tsv"`,
+		`local known_ledger="${ROOT}/internal/testsupport/venueoracle/testdata/known_divergences.tsv"`,
 		`if ! known="$(venue_oracle_skips "${json_log}" "${known_ledger}" "${name}")"; then`,
 		`| venue_oracle_known_summary`,
 	} {
@@ -162,7 +162,7 @@ var knownLedgerRow = regexp.MustCompile(`^CHAOS-[0-9]+\tTest[A-Za-z0-9_]+\t[^\t]
 
 // The repository ledger is well formed: ticket, test, row, reason; no row twice.
 func TestKnownDivergenceLedgerRowsAreWellFormed(t *testing.T) {
-	f, err := os.Open(filepath.Join(repoRoot(t), "internal", "testsupport", "venueoracle", "known_divergences.tsv"))
+	f, err := os.Open(filepath.Join(repoRoot(t), "internal", "testsupport", "venueoracle", "testdata", "known_divergences.tsv"))
 	if err != nil {
 		t.Fatal(err)
 	}

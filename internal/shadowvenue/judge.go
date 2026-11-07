@@ -37,6 +37,7 @@ const (
 	VerdictGap                  = "GAP"
 	VerdictKShort               = "K_SHORT"
 	VerdictLegacyDisagrees      = "CONTROL_LEGACY_DISAGREES"
+	VerdictSkippedSeam          = "SKIPPED_SEAM"
 	VerdictStricter             = "MISMATCH_STRICTER"
 	VerdictWider                = "MISMATCH_WIDER"
 )
@@ -183,10 +184,20 @@ type SlotVerdict struct {
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam:
 		return true
 	}
 	return false
+}
+
+// seamSkipRows are the rows on which the superuser, whose token has no organization, is answered by the served-org seam
+// (CHAOS-13209, #5862): the request names an organization, the seam keeps the legacy answer and asks the decision
+// point nothing, so the shadow's result is "skipped" and enforcement equals legacy by construction. The result line
+// carries no reason, so the pass is pinned to these rows and to the superuser; any other skip fails the run.
+var seamSkipRows = []string{
+	"GET /api/v1/admin/orgs/{org_id}/members", "POST /api/v1/admin/orgs/{org_id}/members",
+	"DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}", "PATCH /api/v1/admin/orgs/{org_id}/members/{user_id}",
+	"GET /api/v1/billing/entitlements/{org_id}", "GET /api/v1/licensing/entitlements/{org_id}",
 }
 
 // RowVerdict is one row (or control) and its cells, by caller kind.
@@ -204,6 +215,15 @@ type Report struct {
 	Void    bool
 	Pass    bool
 	Reasons []string
+}
+
+// VerdictCounts counts the slots by verdict; a seam skip is its own count, never a match.
+func (r Report) VerdictCounts() map[string]int {
+	out := map[string]int{}
+	for _, sv := range r.Slots {
+		out[sv.Verdict]++
+	}
+	return out
 }
 
 // Exit is 0 when every row passes, 1 when a row fails, 3 when the run is void.
@@ -377,6 +397,9 @@ func judgeSlot(sv *SlotVerdict, results []resultLine, ev Evidence, rulings []Rul
 		}
 	default:
 		sv.Verdict = resultVerdicts[line.result]
+		if line.result == "skipped" && sv.Caller == "superuser" && slices.Contains(seamSkipRows, sv.Key()) {
+			sv.Verdict = VerdictSkippedSeam
+		}
 	}
 }
 
@@ -482,7 +505,7 @@ func rowVerdicts(slots []SlotVerdict, k int) []RowVerdict {
 func cellPasses(counts map[string]int, row string) bool {
 	for verdict := range counts {
 		switch verdict {
-		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled:
+		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam:
 		default:
 			if !(strings.HasPrefix(row, "C") && controlMismatch(verdict)) {
 				return false

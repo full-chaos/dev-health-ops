@@ -3,6 +3,7 @@ package shadowvenue
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,8 +57,8 @@ var noSeed = SeedLog{Given: true}
 // egressText is a passing egress record of the read when.
 func egressText(when string) string {
 	return "when=" + when + "\nnetwork_internal=true\nnetworks=venue-int\ndefault_route=none\npublic_tcp=refused\npublic_dns=fail\nstub_tcp=ok\n" +
-		"hosts_pinned=api.github.com,api.pagerduty.com,api.stripe.com,github.com,identity.pagerduty.com\nimage=" + testImage + "\n" +
-		"stub_mode=run\nstub_config=" + testStubConfig + "\nstub_started=2026-11-07T15:00:00Z\ngoapi_ip=" + testGoAPIIP + "\nrun_id=" + runIDOf(when) + "\n"
+		"hosts_pinned=" + strings.Join(StubHosts, ",") + "\nimage=" + testImage + "\n" +
+		"stub_mode=run\nstub_config=" + testStubConfig + "\nstub_started=2026-11-07T15:00:00Z\ngoapi_ip=" + testGoAPIIP + "\nrun_id=" + runIDOf(when) + "\ndynamic_hosts=unset\n"
 }
 
 func egressReads(when ...string) []EgressRead {
@@ -362,6 +363,8 @@ func TestJudgeOutboundEgressEachPlantedDefectIsVoid(t *testing.T) {
 		"an empty value in both":         both("stub_started", ""),
 		"run id of the next drive twice": {egressReads("before")[0], set2("between", "run_id", "13267-4a")},
 		"run id none before the end":     {egressReads("before")[0], set2("between", "run_id", "none")},
+		"a dynamic host set":             bad("dynamic_hosts", "GITHUB_URL"),
+		"one pinned host missing":        bad("hosts_pinned", strings.Join(StubHosts[1:], ",")),
 		"networks empty": {ParseEgress("before.txt", []byte(strings.Replace(egressText("before"), "networks=venue-int", "networks=", 1))),
 			ParseEgress("between.txt", []byte(strings.Replace(egressText("between"), "networks=venue-int", "networks=", 1)))},
 	}
@@ -622,6 +625,18 @@ func TestJudgeOutboundStubModeAndSeedLog(t *testing.T) {
 		r := judgeWith(c.egress, c.seed)
 		if !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), c.want) {
 			t.Errorf("%s: void %v, reasons %v", name, r.Void, r.Reasons)
+		}
+	}
+}
+
+// The frozen pinned-host list is sorted, has no duplicate, and holds the five served hosts and the census hosts.
+func TestStubHostsIsTheFrozenCensusList(t *testing.T) {
+	if !slices.IsSorted(StubHosts) || len(slices.Compact(slices.Clone(StubHosts))) != len(StubHosts) || len(StubHosts) != 21 {
+		t.Fatalf("StubHosts %v: want 21 sorted distinct hosts", StubHosts)
+	}
+	for _, host := range []string{"api.stripe.com", "api.pagerduty.com", "identity.pagerduty.com", "github.com", "api.github.com", "gitlab.com", "api.linear.app", "app.launchdarkly.com", "api.atlassian.com", "api.resend.com"} {
+		if !slices.Contains(StubHosts, host) {
+			t.Errorf("%s is not pinned", host)
 		}
 	}
 }

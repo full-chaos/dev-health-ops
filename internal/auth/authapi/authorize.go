@@ -326,6 +326,10 @@ type authorizeItem struct {
 	decision  authorization.Decision
 	now       int64
 	delegated bool
+	// actor and session are the real actor (uuid.Nil when the row names none)
+	// and the delegated session of a delegated item: its audit row's ids.
+	actor   uuid.UUID
+	session uuid.UUID
 	// orgKnown is true when the question's organization is a canonical uuid
 	// the decision transaction found.
 	orgKnown bool
@@ -435,7 +439,7 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		}
 		out[i] = doc
 	}
-	if err := h.auditHighRisk(ctx, items, out); err != nil {
+	if err := h.auditDecisions(ctx, items, out); err != nil {
 		h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
 		return nil, false
 	}
@@ -579,6 +583,9 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			}
 		}
 		items[i].decision, items[i].now, items[i].delegated = d, snap.NowUnixNano(), delegated
+		if delegated {
+			items[i].actor, items[i].session = rs.row.ActorPrincipalID, rs.id
+		}
 		items[i].orgKnown = knownOrganization(q.OrganizationID, snap)
 	}
 	return nil

@@ -169,11 +169,23 @@ const genericRefusal = `{"detail":{"message":"Invalid or expired token"}}`
 
 // issuerSetDrift is the accepted drift with the issuer set (acp D3, D6): the
 // scope middlewares decide with the route's row, and a legacy token whose sub
-// has the wrong type is a refusal.
+// has the wrong type is a refusal. ops_access_token_hs256 is retired: no row
+// opts into HS256, so every HS256 bearer on a guarded row is the generic 401,
+// and on the optional row the caller is anonymous.
 var issuerSetDrift = map[string]struct {
 	status int
 	body   string
 }{
+	"hs256 admin at admin route":               {http.StatusUnauthorized, genericRefusal},
+	"hs256 member at admin route":              {http.StatusUnauthorized, genericRefusal},
+	"hs256 member at superuser route":          {http.StatusUnauthorized, genericRefusal},
+	"hs256 sid live":                           {http.StatusUnauthorized, genericRefusal},
+	"hs256 store down":                         {http.StatusUnauthorized, genericRefusal},
+	"hs256 superuser impersonating":            {http.StatusUnauthorized, genericRefusal},
+	"hs256 valid":                              {http.StatusUnauthorized, genericRefusal},
+	"hs256 x-org-id member":                    {http.StatusUnauthorized, genericRefusal},
+	"hs256 x-org-id not a member":              {http.StatusUnauthorized, genericRefusal},
+	"optional hs256 valid":                     {http.StatusOK, `{"org":""}` + "\n"},
 	"hs256 sub not a string":                   {http.StatusUnauthorized, genericRefusal},
 	"public hs256 valid":                       {http.StatusOK, `{"org":""}` + "\n"},
 	"public hs256 x-org-id not a member":       {http.StatusOK, `{"org":""}` + "\n"},
@@ -181,8 +193,8 @@ var issuerSetDrift = map[string]struct {
 }
 
 // TestIssuerSetLegacyAnswersMatchTheGoldenExceptTheRuledDrift: with the
-// issuer set and the FULL real row table, every HS256 answer of the fixed set
-// is the issuer-unset answer, except the drift acp ruled (D3, D6).
+// issuer set and the FULL real row table, every answer of the fixed set is the
+// issuer-unset answer, except the drift acp ruled (D3, D6) and the retired HS256 class.
 func TestIssuerSetLegacyAnswersMatchTheGoldenExceptTheRuledDrift(t *testing.T) {
 	want, err := os.ReadFile(issuerUnsetGolden)
 	if err != nil {
@@ -211,8 +223,13 @@ func TestIssuerSetLegacyAnswersMatchTheGoldenExceptTheRuledDrift(t *testing.T) {
 		}
 	}
 	counters := f.counters(t)
-	if counters[accessverify.AcceptedMetric+"|class=ops_access_token_hs256,profile=GET "+probeAuthenticated+",service="+goAPIAccessService] == 0 {
-		t.Error("no legacy acceptance counted on the authenticated probe row")
+	if counters[accessverify.RefusedMetric+"|profile=GET "+probeAuthenticated+",reason=alg_not_allowed,service="+goAPIAccessService] == 0 {
+		t.Error("an HS256 token on the authenticated probe row was not refused alg_not_allowed")
+	}
+	for name, n := range counters {
+		if strings.Contains(name, "class=ops_access_token_hs256") && n != 0 {
+			t.Errorf("%s = %d: an HS256 token was accepted on a row", name, n)
+		}
 	}
 	if counters[accessverify.RefusedMetric+"|profile=GET "+probePublic+",reason=alg_not_allowed,service="+goAPIAccessService] == 0 {
 		t.Error("an HS256 token on a row without legacy_hs256 was not refused alg_not_allowed")
@@ -598,8 +615,8 @@ func TestGoAPIAccessRowsAreTheFullInventory(t *testing.T) {
 			user++
 		}
 	}
-	if legacy != 198 || user != 198 {
-		t.Errorf("%d legacy rows, %d user rows", legacy, user)
+	if legacy != 0 || user != 198 {
+		t.Errorf("%d legacy rows, %d user rows: want 0 (ops_access_token_hs256 is retired) and 198", legacy, user)
 	}
 }
 
@@ -693,7 +710,10 @@ func TestIssuerSetCallerLookupOutageIsTheListener503(t *testing.T) {
 		t.Fatalf("issuer unset: %d %s", unset.Status, unset.Body)
 	}
 	f := newRoutedFixture(t, store, userRows(t), probeIssuer, minter.keys, nil, probeNow)
-	for name, token := range map[string]string{"legacy": legacy, "user": user} {
+	if got := probeDo(f.handler, probeRequest{"legacy", http.MethodGet, probeAuthenticated, bearer(legacy)}); got.Status != http.StatusUnauthorized || got.Body != genericRefusal {
+		t.Errorf("legacy: issuer set answers %d %s, want the generic 401 (ops_access_token_hs256 is retired)", got.Status, got.Body)
+	}
+	for name, token := range map[string]string{"user": user} {
 		got := probeDo(f.handler, probeRequest{name, http.MethodGet, probeAuthenticated, bearer(token)})
 		a, _ := json.Marshal(probeAnswer{Status: got.Status, Headers: got.Headers, Body: got.Body})
 		b, _ := json.Marshal(probeAnswer{Status: unset.Status, Headers: unset.Headers, Body: unset.Body})

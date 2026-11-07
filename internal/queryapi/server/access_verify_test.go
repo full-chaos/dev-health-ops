@@ -220,19 +220,19 @@ func TestQueryAPIAccessRowsAreTheQueryAndInternalListenerInventory(t *testing.T)
 		byProfile[row.Profile] = row
 	}
 	want := map[string]struct{ user, legacy bool }{
-		"GET /api/v1/home":                      {true, true},
-		"POST /api/v1/home":                     {true, true},
-		"POST /query":                           {true, true},
-		"POST /query/proof":                     {true, true},
-		"POST /query/proof-write":               {true, true},
-		"POST /query/run-operation":             {true, true},
-		"GET /graphql":                          {true, true},
-		"POST /graphql":                         {true, true},
+		"GET /api/v1/home":                      {true, false},
+		"POST /api/v1/home":                     {true, false},
+		"POST /query":                           {true, false},
+		"POST /query/proof":                     {true, false},
+		"POST /query/proof-write":               {true, false},
+		"POST /query/run-operation":             {true, false},
+		"GET /graphql":                          {true, false},
+		"POST /graphql":                         {true, false},
 		"GET /buildinfo":                        {false, false},
 		"GET /api/v1/meta":                      {false, false},
 		"GET /metrics":                          {false, false},
-		"POST /api/v1/sankey":                   {true, true},
-		"GET /api/v1/people/{person_id}/metric": {true, true},
+		"POST /api/v1/sankey":                   {true, false},
+		"GET /api/v1/people/{person_id}/metric": {true, false},
 	}
 	for profile, flags := range want {
 		row, ok := byProfile[profile]
@@ -253,8 +253,8 @@ func TestQueryAPIAccessRowsAreTheQueryAndInternalListenerInventory(t *testing.T)
 	for _, row := range rows {
 		if row.AcceptsUser {
 			users++
-			if !row.LegacyHS256 {
-				t.Errorf("%s accepts the user token without the HS256 opt-in: no query-api row is EdDSA-only yet", row.Profile)
+			if row.LegacyHS256 {
+				t.Errorf("%s keeps the HS256 opt-in: ops_access_token_hs256 is retired, every query-api row is EdDSA-only", row.Profile)
 			}
 		}
 	}
@@ -339,8 +339,8 @@ func TestQueryAPIRouteProfileIsMethodAndPattern(t *testing.T) {
 		})))
 		mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(p.method, p.path, nil))
 		row, ok := keys[seen]
-		if !ok || row.AcceptsUser != row.LegacyHS256 {
-			t.Errorf("%s %s: profile %q is not a row, or a row that takes the HS256 token but not the user token", p.method, p.path, seen)
+		if !ok || row.LegacyHS256 {
+			t.Errorf("%s %s: profile %q is not a row, or a row that keeps the retired HS256 opt-in", p.method, p.path, seen)
 		}
 	}
 	var seen string

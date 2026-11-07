@@ -2465,6 +2465,25 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     user: 65532:65532
+  # The platform_admin fixture one-off (CHAOS-13282): dho auth users-backfill / users-reconcile with the auth-service runtime login, run by
+  # bigboy-platform-admin-fixture.sh with `run --rm --no-deps`. The default command only lists the assignments (read-only).
+  auth-users-backfill:
+    cap_drop: [ALL]
+    command: [auth, platform-role-list]
+    entrypoint: [/usr/local/bin/dho]
+    environment:
+      AUTH_DATABASE_SCHEMA: auth
+      AUTH_DATABASE_URI: host=postgres port=5432 user=devhealth_auth password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
+      AUTH_USERS_OWNED: 'false'
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/images.env}'
+    networks:
+      auth_plane: null
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: 65532:65532
   # The bootstrap credential of the workload acr-api, written into the volume acr_workload_bootstrap (0600) as uid 1001: the uid
   # acr-api runs as here (it reads the 0600 host secret files of ubuntu). auth-service never mounts the volume; acr-api mounts it
   # read-only. Run it once, with `run --rm`; a re-create after expiry is the README "auth venue" procedure.
@@ -2569,6 +2588,8 @@ services:
       AUTH_DATABASE_URI: host=postgres port=5432 user=devhealth_auth password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
       AUTH_JWT_AUDIENCE: dev-health-api
       AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      # Prod form for platform roles: the PDP reads the role from the assignments, not users.is_superuser (CHAOS-13282). go-api stays not owned (the drift-S controls need legacy to read the flag); users stay not owned (no mail settings here: auth_mail_config_invalid).
+      AUTH_PLATFORM_ROLES_OWNED: 'true'
       AUTH_SERVICE_HTTP_ADDR: :8095
       AUTH_SERVICE_OPERATOR_HTTP_ADDR: :8096
       AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s

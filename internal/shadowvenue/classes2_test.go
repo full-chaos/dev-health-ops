@@ -72,6 +72,47 @@ func TestControlRowsStayOnPlainRoutes(t *testing.T) {
 	}
 }
 
+// A control that also carries an external route's class (its ext column set to the route's service, so the class
+// compare holds) is still refused at plan and voids both judges: a control stays on a plain route.
+func TestAControlCarryingAnExternalClassIsRefused(t *testing.T) {
+	venue, frozen, _, _ := testPoolVenue(t)
+	n := 0
+	for _, target := range classed(t) {
+		if target.Destructive {
+			continue
+		}
+		for _, ctrl := range []string{"C1", "C2"} {
+			n++
+			table := controlOn(t, ctrl, target)
+			for i := range table {
+				if table[i].ID == ctrl {
+					table[i].Ext = target.Ext
+				}
+			}
+			name := ctrl + " as " + target.Key()
+			if err := CheckRows(table, authv1.GoAPIEndpointProfiles); err == nil || !strings.Contains(err.Error(), "control "+ctrl) {
+				t.Errorf("%s: CheckRows %v", name, err)
+			}
+			if _, err := MakePlan(table, venue, PlanOptions{Throwaway: "T", Pool: testPool, Frozen: frozen, K: 3, AllowExternal: StubServices}); err == nil || !strings.Contains(err.Error(), "control "+ctrl) {
+				t.Errorf("%s: MakePlan %v", name, err)
+			}
+			slots, lines := controlsOK()
+			ev, _ := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+			if r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Rows: table}}); !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "control "+ctrl) {
+				t.Errorf("%s: judge void %v", name, r.Void)
+			}
+			run := newEnfRun()
+			run.in.Outbound = Outbound{Rows: table}
+			if r := run.judge(); !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "control "+ctrl) {
+				t.Errorf("%s: judge-enforced void %v", name, r.Void)
+			}
+		}
+	}
+	if n != 34 {
+		t.Fatalf("%d combinations, want 34 (17 external routes x 2 controls)", n)
+	}
+}
+
 // A destructive-flag mismatch on rows 1, 6, 9, 10 and 13 voids the judge and judge-enforced.
 func TestJudgesVoidADestructiveFlagMismatch(t *testing.T) {
 	for _, id := range []string{"1", "6", "9", "10", "13"} {

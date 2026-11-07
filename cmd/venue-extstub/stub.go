@@ -25,6 +25,15 @@ var Hosts = map[string]string{
 	"api.github.com":         "github",
 }
 
+// UnservedHosts are the other code-constant hosts go-api can dial (ADDENDUM-13267-3 section 2 B). The venue pins them
+// to the stub too and the leaf names them, so a dial of one reaches the stub, is answered 421 and is logged with service
+// unknown, which voids the run (acp Q-C1): no outside call is silent.
+var UnservedHosts = []string{
+	"accounts.google.com", "api.anthropic.com", "api.atlassian.com", "api.eu.pagerduty.com", "api.linear.app", "api.openai.com",
+	"api.resend.com", "api.typesafe.ai", "app.launchdarkly.com", "connect.stripe.com", "files.stripe.com",
+	"generativelanguage.googleapis.com", "gitlab.com", "meter-events.stripe.com", "oauth2.googleapis.com", "www.googleapis.com",
+}
+
 // unknownService is the service a request to another host is logged as; the venue judge voids a run on it.
 const unknownService = "unknown"
 
@@ -159,10 +168,11 @@ var configProbes = []struct{ method, path, query string }{
 // configDigest is the sha256 of mode and the answer of every probe on every served host and one unknown host: the
 // status file names it, and the venue judge holds it equal across the egress reads.
 func configDigest(mode string) string {
-	hosts := make([]string, 0, len(Hosts)+1)
+	hosts := make([]string, 0, len(Hosts)+len(UnservedHosts)+1)
 	for host := range Hosts {
 		hosts = append(hosts, host)
 	}
+	hosts = append(hosts, UnservedHosts...)
 	slices.Sort(hosts)
 	hosts = append(hosts, "unknown.invalid")
 	sum := sha256.New()
@@ -188,11 +198,4 @@ func writeStatus(path, mode string, started time.Time) error {
 		werr = cerr
 	}
 	return werr
-}
-
-// UnservedHosts: skeleton, not in the leaf yet.
-var UnservedHosts = []string{
-	"accounts.google.com", "api.anthropic.com", "api.atlassian.com", "api.eu.pagerduty.com", "api.linear.app", "api.openai.com",
-	"api.resend.com", "api.typesafe.ai", "app.launchdarkly.com", "connect.stripe.com", "files.stripe.com",
-	"generativelanguage.googleapis.com", "gitlab.com", "meter-events.stripe.com", "oauth2.googleapis.com", "www.googleapis.com",
 }

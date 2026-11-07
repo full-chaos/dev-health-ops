@@ -29,7 +29,7 @@ func readOwnerOnly(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// leafCert signs, with the venue CA, a one-day leaf for every stub host on a key made in memory. The CA key is a
+// leafCert signs, with the venue CA, a one-day leaf for every served and unserved stub host on a key made in memory. The CA key is a
 // PKCS #8 PEM file of mode 0600; no key is ever written.
 func leafCert(caCertPEM []byte, caKeyPath string, now time.Time) (tls.Certificate, error) {
 	block, _ := pem.Decode(caCertPEM)
@@ -64,10 +64,11 @@ func leafCert(caCertPEM []byte, caKeyPath string, now time.Time) (tls.Certificat
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	names := make([]string, 0, len(Hosts))
+	names := make([]string, 0, len(Hosts)+len(UnservedHosts))
 	for host := range Hosts {
 		names = append(names, host)
 	}
+	names = append(names, UnservedHosts...)
 	slices.Sort(names)
 	tmpl := &x509.Certificate{
 		SerialNumber: serial, Subject: pkix.Name{CommonName: "venue-extstub"}, DNSNames: names,

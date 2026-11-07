@@ -18,6 +18,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // CHAOS-8598: the per-team completionDistribution read document that MCP run_operation serves by digest.
@@ -214,7 +215,7 @@ func TestCapacityCompletionDistributionDocument_ServesTheCapacityForecastShapePe
 	})
 	req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-7"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-7", Scope: pepgate.Legacy("org-7")}))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

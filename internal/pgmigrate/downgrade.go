@@ -410,7 +410,7 @@ func downgrade(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 			fmt.Fprintln(env.Stderr, "Usage of dho migrate postgres downgrade TARGET: TARGET is a revision id "+DownRangeText()+" (revert everything above it) or -N (revert N steps); environment as `migrate postgres current`")
 			return cli.ExitOK
 		case strings.HasPrefix(arg, "-") && arg != "-" && !negativeNumber.MatchString(arg):
-			fmt.Fprintf(env.Stderr, "argument error: unknown flag %s\n", arg)
+			fmt.Fprintln(env.Stderr, "argument error: unknown flag")
 			return cli.ExitUsage
 		default:
 			targets = append(targets, arg)

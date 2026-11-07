@@ -331,6 +331,7 @@ func issuePreKeyRefusals() map[string]func(*workloadIssueFixture) map[string]str
 // request_id and occurred_at differ), and no store is read.
 // The prefix, shape, typ, audience and subject refusals also read no key set.
 func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
+	t.Parallel()
 	var golden string
 	for name, build := range issuePreKeyRefusals() {
 		w := newWorkloadIssueFixture(t)
@@ -404,6 +405,7 @@ func issueVerifierRefusals() map[string]func(*workloadIssueFixture) map[string]s
 // T10: a token that passes the class, audience and subject peek but fails the
 // verifier is refused: no store is read, and the body is the same.
 func TestIssueSessionRefusesATokenTheVerifierRefuses(t *testing.T) {
+	t.Parallel()
 	var golden string
 	for name, build := range issueVerifierRefusals() {
 		w := newWorkloadIssueFixture(t)
@@ -600,6 +602,7 @@ func TestNewSessionIssueWorkloadRefusesBadConfigurationNamingNoValue(t *testing.
 // The log line names why a bearer was refused, so an operator can tell a
 // class refusal from a verifier refusal. The answer never does.
 func TestIssueSessionLogsWhyABearerWasRefused(t *testing.T) {
+	t.Parallel()
 	forty3 := strings.Repeat("A", 43)
 	for name, tc := range map[string]struct {
 		build func(*workloadIssueFixture) map[string]string

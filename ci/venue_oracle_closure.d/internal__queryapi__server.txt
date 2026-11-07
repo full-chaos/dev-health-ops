@@ -2,6 +2,8 @@ contracts/auth/v1
 contracts/auth/v1/vocabulary
 contracts/graphql/v1
 internal/aftercommit
+internal/api/authprovision
+internal/api/clientip
 internal/api/externalurl
 internal/api/licensing
 internal/api/policy
@@ -10,6 +12,8 @@ internal/api/pyheaders
 internal/api/pyjson
 internal/api/pytime
 internal/api/registerorg
+internal/api/sessionissue
+internal/apiservice/accessrouting
 internal/audit
 internal/auth/accessverify
 internal/auth/acraudience
@@ -21,6 +25,7 @@ internal/auth/contracts
 internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
+internal/auth/copyproject
 internal/auth/decisioncache
 internal/auth/delegationend
 internal/auth/delegationinput
@@ -50,6 +55,7 @@ internal/auth/policycatalog
 internal/auth/publicaudit
 internal/auth/publicread
 internal/auth/pushlifecycle
+internal/auth/repoidentityevent
 internal/auth/repokey
 internal/auth/requestid
 internal/auth/restorefence
@@ -61,6 +67,8 @@ internal/auth/sessionid
 internal/auth/sessionrule
 internal/auth/signedtoken
 internal/auth/workload
+internal/auth/workloadinput
+internal/authzenforce
 internal/backfillrun
 internal/cacheinvalidation
 internal/chmigrate
@@ -125,6 +133,7 @@ internal/platform/errortext/hardened
 internal/platform/fernet
 internal/platform/health
 internal/platform/logging
+internal/platform/netaddr
 internal/platform/pgident
 internal/platform/queuecontrol
 internal/platform/secrets
@@ -180,7 +189,10 @@ internal/queryapi/meta
 internal/queryapi/newestrow
 internal/queryapi/operatingreview
 internal/queryapi/opportunities
+internal/queryapi/pdp
+internal/queryapi/pdp/pdptest
 internal/queryapi/people
+internal/queryapi/pepgate
 internal/queryapi/principal
 internal/queryapi/producttelemetry
 internal/queryapi/quadrant
@@ -234,6 +246,7 @@ internal/testsupport/chquery
 internal/testsupport/chschema
 internal/testsupport/containers
 internal/testsupport/crossorg
+internal/testsupport/edtokens
 internal/testsupport/egressallow
 internal/testsupport/moduleroot
 internal/testsupport/pgschema

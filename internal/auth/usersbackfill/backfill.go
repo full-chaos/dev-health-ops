@@ -38,6 +38,10 @@ type Row struct {
 	// SAMLNameIDFormat and SAMLSPNameQualifier are users.saml_nameid_format and users.saml_sp_name_qualifier: NULL until
 	// the account signs in through go-api SAML after the columns exist.
 	SAMLNameIDFormat, SAMLSPNameQualifier *string
+	// SelfHostedGitLab: a gitlab account of a self-hosted GitLab instance, read from the provider config: bound to a
+	// self-hosted oauth_gitlab provider row, or unbound with exactly one active candidate row that is self-hosted.
+	// Its numeric id is the instance's, never a gitlab.com subject, so it carries no gitlab.com social key.
+	SelfHostedGitLab bool
 }
 
 // Skip classes. A skipped user is counted, not written, and fails the run.
@@ -89,6 +93,9 @@ type Report struct {
 	// parts are missing (never signed in) or do not key, e.g. a transient NameID (SubjectUnverifiable); each holds the
 	// users-owned guard until it has an identity.
 	SSOSubjectUnverifiable int
+	// InsertOnly is Options.InsertOnly; Kept counts the existing users it left as they are.
+	InsertOnly bool
+	Kept       int
 }
 
 // SkippedTotal is the number of users that were not written.
@@ -103,6 +110,9 @@ func (r Report) SkippedTotal() int {
 // Lines renders the report as stable key=value lines.
 func (r Report) Lines() []string {
 	mode := "write"
+	if r.InsertOnly {
+		mode = "insert-only"
+	}
 	if r.DryRun {
 		mode = "dry-run"
 	}
@@ -112,6 +122,12 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("inserted=%d", r.Inserted),
 		fmt.Sprintf("updated=%d", r.Updated),
 		fmt.Sprintf("unchanged=%d", r.Unchanged),
+	}
+	if r.InsertOnly {
+		// Only an insert-only run has the line: the default run's report is as before.
+		lines = append(lines, fmt.Sprintf("kept=%d", r.Kept))
+	}
+	lines = append(lines,
 		fmt.Sprintf("identity_linked=%d", r.IdentityLinked),
 		fmt.Sprintf("identity_not_carried=%d", r.IdentityNotCarry),
 		fmt.Sprintf("identity_relink_pending=%d", r.IdentityRelinkPending),
@@ -122,7 +138,7 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("platform_role_revoked=%d", r.RoleRevoked),
 		fmt.Sprintf("platform_role_skipped_owned=%d", r.RoleSkippedOwned),
 		fmt.Sprintf("platform_role_expired_granted=%d", len(r.ExpiredGranted)),
-	}
+	)
 	expired := make([]string, 0, len(r.ExpiredGranted))
 	for _, id := range r.ExpiredGranted {
 		expired = append(expired, id.String())
@@ -150,6 +166,9 @@ type Options struct {
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: the platform role leg
 	// writes nothing and counts each difference.
 	PlatformRolesOwned bool
+	// InsertOnly creates the auth users that are missing and never changes an
+	// existing one (identity.BackfillTarget.InsertOnly; `-insert-only`).
+	InsertOnly bool
 }
 
 // Run copies every user. Per-user failures are counted by class and the run
@@ -159,7 +178,7 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 	if batch <= 0 {
 		batch = 500
 	}
-	rep := Report{DryRun: opts.DryRun, Skipped: map[string]int{}}
+	rep := Report{DryRun: opts.DryRun, InsertOnly: opts.InsertOnly, Skipped: map[string]int{}}
 	var after *uuid.UUID
 	for {
 		rows, err := src.Page(ctx, after, batch)
@@ -189,12 +208,15 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 				}
 			}
 			target.PlatformRolesOwned = opts.PlatformRolesOwned
+			target.InsertOnly = opts.InsertOnly
 			res, err := sink.BackfillUser(ctx, target, opts.DryRun)
 			if err != nil {
 				rep.Skipped[classify(err)]++
 				continue
 			}
 			switch {
+			case res.Kept:
+				rep.Kept++
 			case res.Inserted:
 				rep.Inserted++
 			case res.Updated:
@@ -276,6 +298,8 @@ func mapIdentity(row Row) (key *identity.ExternalKey, class string, notCarried b
 	}
 	switch {
 	case provider == "" || provider == "local":
+	case row.SelfHostedGitLab && identity.Provider(provider) == identity.ProviderGitLab:
+		notCarried = true
 	case identity.Provider(provider).IsSocial():
 		issuer, _ := identity.SocialIssuer(identity.Provider(provider))
 		k := identity.ExternalKey{Issuer: issuer, Provider: identity.Provider(provider), Subject: subject}

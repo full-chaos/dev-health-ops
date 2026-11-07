@@ -74,6 +74,7 @@ func (f *provFixture) revokeBody(actor uuid.UUID, inviteID uuid.UUID) map[string
 // The revoke route is mounted with the other provisioning routes and reaches
 // the invite aggregate's revoke.
 func TestInviteRevokeIsMounted(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	id := uuid.New()
 	response := f.post(PatternInviteRevoke, encode(f.revokeBody(f.owner, id)), nil)
@@ -89,6 +90,7 @@ func TestInviteRevokeIsMounted(t *testing.T) {
 // no longer pending invite gets the same 403 as any other, and the store is
 // not called.
 func TestInviteRevokeRefusesARefusedActorBeforeAnyInviteLookup(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name   string
 		store  error
@@ -116,6 +118,7 @@ func TestInviteRevokeRefusesARefusedActorBeforeAnyInviteLookup(t *testing.T) {
 // The answers: success (also a repeat, which the store reports as nil), and
 // each store refusal by its code.
 func TestInviteRevokeAnswers(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	id := uuid.New()
 	response := f.revoke(&fakeRevoker{}, f.revokeBody(f.owner, id), nil)
@@ -138,6 +141,7 @@ func TestInviteRevokeAnswers(t *testing.T) {
 // What the store is given: the body's ids, the actor, the request id and an
 // Authorize that runs the actor rule again (here it refuses a demoted actor).
 func TestInviteRevokePassesTheRequestAndTheLockedActorRule(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	revoker := &fakeRevoker{}
 	id := uuid.New()
@@ -160,6 +164,7 @@ func TestInviteRevokePassesTheRequestAndTheLockedActorRule(t *testing.T) {
 
 // The body is strict and the bearer is checked first.
 func TestInviteRevokeRefusesABadBearerOrBody(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	revoker := &fakeRevoker{}
 	expectRefusal(t, f.revoke(revoker, f.revokeBody(f.owner, uuid.New()), map[string]string{"Authorization": "Bearer nope"}),

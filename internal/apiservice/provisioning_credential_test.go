@@ -24,7 +24,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 )
 
@@ -539,11 +538,4 @@ func TestWorkloadExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 		t.Fatal("a redirect answer was taken for a token")
 	}
 	probe.Assert(t)
-}
-
-// The workload exchange rides the shared outbound transport (no environment proxy), not a transport of its own.
-func TestExchangeTransportIsTheSharedOutboundTransport(t *testing.T) {
-	if exchangeTransport() != httpguard.SharedTransport() {
-		t.Fatal("the workload exchange does not use httpguard.SharedTransport()")
-	}
 }

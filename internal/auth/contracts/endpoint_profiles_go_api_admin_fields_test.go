@@ -41,7 +41,7 @@ var impersonationRoutes = map[string]string{
 
 // coveredFamilies are the route prefixes whose protected rows carry the fields.
 var coveredFamilies = []string{
-	"/api/v1/admin", "/api/v1/auth", "/api/v1/billing", "/api/v1/licensing", "/api/v1/orgs", "/api/v1/internal",
+	"/api/v1/acr", "/api/v1/admin", "/api/v1/auth", "/api/v1/billing", "/api/v1/licensing", "/api/v1/orgs", "/api/v1/internal",
 	"/api/v1/external-ingest", "/api/v1/telemetry", "/api/v1/webhooks", "/buildinfo",
 }
 
@@ -140,7 +140,8 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 
 	// resource resolver, cache text and impersonation enum are always recorded.
 	resolver, _ := row["resource_resolver"].(string)
-	if !strings.HasPrefix(resolver, "organization_from_session:") && !strings.HasPrefix(resolver, "organization_from_path:") && !strings.HasPrefix(resolver, "none:") && !nonSessionResolver(resolver) {
+	if !strings.HasPrefix(resolver, "organization_from_session:") && !strings.HasPrefix(resolver, "organization_from_path:") &&
+		!strings.HasPrefix(resolver, "organization_from_query_or_session:") && !strings.HasPrefix(resolver, "none:") && !nonSessionResolver(resolver) {
 		bad("resource_resolver does not start with a resolver kind: %q", resolver)
 	}
 	cache, _ := row["current_state_cache_behavior"].(string)

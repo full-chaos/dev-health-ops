@@ -6,7 +6,7 @@ owner: engineering
 source_of_truth:
   - current deployment and service entry points
   - TRD: Ask Dev — constrained agent runtime, graph query layer, and web experience
-  - Amendment TRD v2 — Ask Dev Wave 3.1: Deterministic investigation, health synthesis, and safe outcomes
+  - Amendment TRD v2 — Ask Dev: Deterministic investigation, health synthesis, and safe outcomes
   - PRD v2.1: Dev Health Agent Context Runtime — Go service and MCP sidecar
 applicability: current
 lifecycle: active
@@ -14,7 +14,7 @@ lifecycle: active
 
 # Platform architecture
 
-Dev Health has a Go api, query plane and worker fleet, and a Python data platform. The boundary is deliberate: Go owns the API (`dho api`) and GraphQL (`dho query-api`), and Python owns providers, processors, and the domain behavior they serve. The Go worker fleet owns every production job route and schedule; no Celery process exists in any shipped topology (CHAOS-4026, CHAOS-7059). Go components provide versioned job contracts, River execution, health, operator controls, and migration evidence.
+Dev Health has a Go api, query plane and worker fleet, and a Python data platform. The boundary is deliberate: Go owns the API (`dho api`) and GraphQL (`dho query-api`), and Python owns providers, processors, and the domain behavior they serve. The Go worker fleet owns every production job route and schedule; no Celery process exists in any shipped topology. Go components provide versioned job contracts, River execution, health, operator controls, and migration evidence.
 {: .fc-page-lede }
 
 ## Primary request and data paths
@@ -50,7 +50,7 @@ The checked-in sync-dispatch routes target River and declare no rollback transpo
 
 > **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This section is a record of the Python surface that was removed.
 
-Ask Dev remains part of the existing Python application and API. It is not a browser-side agent, a new generic agent service, or an MCP-driven web chatbot. The authoritative Ask Dev runtime path is:
+Ask Dev was part of the existing Python application and API, and this diagram records that removed runtime path. Ask Dev now runs in the Ask Dev service, which the browser calls directly; see [Turn on Ask Dev](../../admin/ask-dev/index.md). The removed path was:
 
 ```mermaid
 flowchart LR
@@ -77,9 +77,9 @@ flowchart LR
     D --> O[Audit, traces, Prometheus, LLM usage]
 ```
 
-The app-wide Ask Dev window and `/dev` workspace share this same backend, conversation identity, scope, streaming run, answer contract, evidence authorization, and retention policy.
+In that removed design the app-wide Ask Dev window and `/dev` workspace shared one backend, conversation identity, scope, streaming run, answer contract, evidence authorization, and retention policy.
 
-Wave 3.1 makes the investigation lifecycle server-owned. Mandatory retrieval and canonical synthesis happen before optional model narration:
+The investigation lifecycle is server-owned: mandatory retrieval and canonical synthesis happen before optional model narration:
 
 ```mermaid
 flowchart LR
@@ -98,7 +98,7 @@ flowchart LR
     D --> O
 ```
 
-The model may help present the result. It does not own subject resolution, mandatory source selection, canonical facts, metrics, health states, evidence, or the final safe outcome. See [Ask Dev subject preflight](ask-dev-subject-preflight.md) and [Ask Dev v2 contracts](ask-dev-contracts-v2.md) for the runtime and wire invariants.
+The model may help present the result. It does not own subject resolution, mandatory source selection, canonical facts, metrics, health states, evidence, or the final safe outcome. The deprecated [Ask Dev subject preflight](ask-dev-subject-preflight.md) and [Ask Dev v2 contracts](ask-dev-contracts-v2.md) pages record these invariants for the removed Python Ask Dev surface.
 
 ACR is a separate Go service family for agent-facing Context Fabric access:
 
@@ -170,4 +170,4 @@ A process can be live and healthy while its deployment group is disabled. Produc
 
 ## Contributor navigation
 
-Use [Data and storage boundaries](data-and-storage.md) for database, River, outbox, and migration responsibilities. Use [Stable contracts](contracts.md) for public and internal contract changes. Use [Ask Dev subject preflight](ask-dev-subject-preflight.md) and [Ask Dev v2 contracts](ask-dev-contracts-v2.md) for the deterministic investigation boundary. Use [Workers, schedules, and queues](../../operate/configure/workers-and-schedules.md) for deployment ownership and migration gates.
+Use [Data and storage boundaries](data-and-storage.md) for database, River, outbox, and migration responsibilities. Use [Stable contracts](contracts.md) for public and internal contract changes. The deprecated [Ask Dev subject preflight](ask-dev-subject-preflight.md) and [Ask Dev v2 contracts](ask-dev-contracts-v2.md) pages record the deterministic investigation boundary of the removed Python Ask Dev surface. Use [Workers, schedules, and queues](../../operate/configure/workers-and-schedules.md) for deployment ownership and migration gates.

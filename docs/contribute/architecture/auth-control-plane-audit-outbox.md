@@ -1,6 +1,6 @@
 ---
 page_id: con-auth-cp-audit-outbox
-summary: How the Auth Control Plane records security mutations - the single transaction that commits state, outbox event and audit row, the database commit guard, the outbox loop and reaper that run in Wave 1 - plus the metrics, the readiness check and a troubleshooting guide.
+summary: How the Auth Control Plane records security mutations - the single transaction that commits state, outbox event and audit row, the database commit guard, the outbox loop and reaper that run today - plus the metrics, the readiness check and a troubleshooting guide.
 content_type: task-guide
 owner: engineering
 source_of_truth:
@@ -26,7 +26,7 @@ A security mutation in the Auth Control Plane is three writes that must live or
 die together: the state change, an **outbox event** that tells consumers about
 it, and a **security audit row** that records it. They commit in one PostgreSQL
 transaction or not at all (guardrail G-53). This page covers how that is
-enforced, what runs in Wave 1, and how to operate and debug it.
+enforced, what runs today, and how to operate and debug it.
 {: .fc-page-lede }
 
 ## The write path
@@ -51,7 +51,7 @@ rolled-back commit leaves no gap. A mutation that is not a provisioning event
 row only. The wire contract already admits the revocation events that will
 replace the session and signing-key `OffStream` reasons (`session.revoked`,
 `principal.sessions_revoked`, `organization.sessions_revoked`,
-`signing_key.compromised`, CHAOS-11816); the session and signing-key mutations queue them from inside `Apply` with `TxOps.AddEvent` (they keep the `OffStream` reason for the events they declare statically: none), and `Commit` writes the queued events with the declared ones in the same transaction. The session aggregate is one-shot (revision 1, terminal): `Commit` bumps no revision row for it and writes its outbox row with `ON CONFLICT (idempotency_key) DO NOTHING`; the revision feed sink publishes it with a script that writes no high-water field, and the consumer evicts without a mark or a cursor entry, so a session event adds no state to Valkey, to a replica or to the restore floors.
+`signing_key.compromised`); the session and signing-key mutations queue them from inside `Apply` with `TxOps.AddEvent` (they keep the `OffStream` reason for the events they declare statically: none), and `Commit` writes the queued events with the declared ones in the same transaction. The session aggregate is one-shot (revision 1, terminal): `Commit` bumps no revision row for it and writes its outbox row with `ON CONFLICT (idempotency_key) DO NOTHING`; the revision feed sink publishes it with a script that writes no high-water field, and the consumer evicts without a mark or a cursor entry, so a session event adds no state to Valkey, to a replica or to the restore floors.
 
 The guarantee is held by PostgreSQL for code that does not set out to defeat
 it. Migration `0006` puts a trigger on the audit and outbox tables and on the
@@ -80,7 +80,7 @@ an id of a fixed shape or a whole number). Free text has no slot, and a refused
 value is never echoed. The runtime login can only insert and select audit rows;
 it cannot update or delete them.
 
-## What runs in Wave 1
+## What runs today
 
 `authruntime` builds one **outbox loop**. By default (`AUTH_REVISION_FEED` unset
 or `off`) it is built with `audit.NewOutboxLoop(pool, nil, config)`: a loop with
@@ -190,7 +190,7 @@ channel.
   would count an empty input as a usable source and refuse the blind margin). The
   registry is per process; the auth-service registers its input only when the feed
   is on, and the restore-fence CLI will register its own with its own Valkey login
-  (CHAOS-11978, which blocks the production flag flip).
+  (it blocks the production flag flip).
 - **Restore.** Until the restore-fence leaf that reads these floors ships, a
   restore does not use the Valkey hash, and **the flag must stay off in
   production**.
@@ -200,8 +200,8 @@ channel.
 | Signal | Meaning |
 | --- | --- |
 | Readiness check `outbox_loop` (in `/readyz` `failed_checks`) | Required. Closes after **3 consecutive failed steps** and reopens on one success; a single transient failure does not flap readiness. Before the first successful step it is not ready. |
-| `devhealth_auth_outbox_publisher_enabled` (gauge) | `1` when a sink is configured, `0` when publishing is disabled. In Wave 1 it is `0` by design; zero deliveries is not health. |
-| `devhealth_auth_outbox_oldest_pending_age_seconds` (gauge) | Age of the oldest unpublished event, including one waiting out a retry backoff; `0` when none. Exported with or without a sink. In Wave 1 it grows with the backlog. |
+| `devhealth_auth_outbox_publisher_enabled` (gauge) | `1` when a sink is configured, `0` when publishing is disabled. Today it is `0` by design; zero deliveries is not health. |
+| `devhealth_auth_outbox_oldest_pending_age_seconds` (gauge) | Age of the oldest unpublished event, including one waiting out a retry backoff; `0` when none. Exported with or without a sink. With no sink it grows with the backlog. |
 | `devhealth_auth_outbox_delivered_total` (counter) | Events delivered and marked published (only with a sink). |
 | `devhealth_auth_outbox_delivery_failures_total` (counter, by reason) | Failed delivery attempts, by the closed reason set above. |
 
@@ -214,7 +214,7 @@ unreachable (then `postgres` fails too) or the runtime login lost a privilege on
 [database, roles and migrations](auth-control-plane-database.md) and re-run
 `auth-migrate`, which re-grants exactly the manifest.
 
-**Pending age keeps growing in Wave 1.** Expected: there is no sink. It is a
+**Pending age keeps growing with no sink.** Expected: there is no sink. It is a
 problem only if `publisher_enabled` is `1`. With a sink, find the stuck row (replace `auth` with the
 configured `AUTH_DATABASE_SCHEMA` if it is not the default):
 

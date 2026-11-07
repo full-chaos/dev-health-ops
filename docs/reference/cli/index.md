@@ -167,7 +167,7 @@ dho sync prs --provider github \
   --repo repo
 ```
 
-### `sync work-items` (deleted, CHAOS-5351)
+### `sync work-items` (deleted)
 
 This command no longer exists. Work items are synced automatically by the
 native Go provider-sync route (`internal/workerservice/provider_sync.go`'s
@@ -281,7 +281,7 @@ Accepts the same provider/auth/batch options as [`sync git`](#sync-git). Provide
 
 ### `sync teams`
 
-Sync team catalogs. ClickHouse is the system of record for teams (CHAOS-2600 CS5): `dho sync teams` writes ClickHouse only, tags every team row with `org_id`, and does not write PostgreSQL or call any Postgres-to-ClickHouse bridge. `--provider` is one of `jira`, `github`, `gitlab` or `linear`, and `--org <org-id>` is required. `CLICKHOUSE_URI` (or `--analytics-db`) is required. By default the verb exits 1 when discovery or persistence results in zero teams; use `--allow-empty` only when an empty sync is expected.
+Sync team catalogs. ClickHouse is the system of record for teams: `dho sync teams` writes ClickHouse only, tags every team row with `org_id`, and does not write PostgreSQL or call any Postgres-to-ClickHouse bridge. `--provider` is one of `jira`, `github`, `gitlab` or `linear`, and `--org <org-id>` is required. `CLICKHOUSE_URI` (or `--analytics-db`) is required. By default the verb exits 1 when discovery or persistence results in zero teams; use `--allow-empty` only when an empty sync is expected.
 
 ```bash
 # Atlassian Teams of a Jira organization
@@ -302,11 +302,11 @@ dho sync teams --provider linear --org "$ORG_ID" \
   --auth "$LINEAR_API_KEY"
 ```
 
-A Jira **project** is not a team. The automatic team import that runs after a Jira sync (`internal/providersync/jira_team_catalog.go`) writes the Jira `projects` rows and retires the project-as-team rows that earlier versions wrote (see [`providersync retire-jira-project-as-team`](#providersync-retire-jira-project-as-team-chaos-8888)). `--provider jira` here syncs the Atlassian Teams: they are the Jira teams.
+A Jira **project** is not a team. The automatic team import that runs after a Jira sync (`internal/providersync/jira_team_catalog.go`) writes the Jira `projects` rows and retires the project-as-team rows that earlier versions wrote (see [`providersync retire-jira-project-as-team`](#providersync-retire-jira-project-as-team)). `--provider jira` here syncs the Atlassian Teams: they are the Jira teams.
 
 - **`--provider jira`** syncs the organization's **Atlassian Teams** (structure, members, connected projects; `--structure`, `--members`, `--projects`; with none of the three, all are synced; `--allow-empty`). A team's projects are the Jira projects ("spaces") the team is connected to in Atlassian, one ownership row per link; a team with no member is synced too. A team row has `id` `jira:<team uuid>` and `native_team_key` the team's ARI. This verb writes what it reads and closes nothing: it has no integration census, so it cannot prove that it is the only Jira integration of the organization, and a row it does not hold may be a row of another site (the scope proof, architecture document section 0.4b; the GitHub and GitLab forms of this verb behave the same). Members and project links that a team no longer has are closed by the worker's sync, which has the census. An empty result is refused unless `--allow-empty`. When a team's link read fails, the run still writes the teams, the members and the links it read, and logs a warning (`atlassian team project links incomplete`). A Jira project link that gets no row (no readable project id, or no key) closes no link of its team in that run; the team's other links are written, and the run logs a warning (`atlassian team project links not written`). A gateway answer with a missing list or a missing `pageInfo` is a failed read, not an empty one. Its Atlassian credential (email, api token, tenant URL) is resolved from the org's **stored jira integration** in PostgreSQL (`POSTGRES_URI` or `--db`), the same integration row and credential that work-items sync and the worker's post-sync team auto-import use, decrypted with `SETTINGS_ENCRYPTION_KEY`. The integration's `atlassian_organization_id` config key is an **override only**: when absent, it is derived live from the AGG (Atlassian GraphQL gateway) `tenantContexts(cloudIds: [...])` query using the same stored credential (`internal/atlassianteams.ResolveOrganizationID`). A set value must be UUID- or ARI-shaped (`ari:cloud:platform::org/<uuid>`), validated on save by the admin credentials API (`PATCH /api/v1/admin/credentials/jira/{name}`). `atlassian_cloud_id` is likewise optional and otherwise derived live from the tenant's own site (its `_edge/tenant_info` endpoint). `ATLASSIAN_ORGANIZATION_ID`, `ATLASSIAN_CLOUD_ID`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` and `ATLASSIAN_JIRA_BASE_URL` (`_FILE` accepted; `JIRA_EMAIL`, `JIRA_API_TOKEN` and `JIRA_BASE_URL` as fallbacks) each override the corresponding stored or resolved value. When `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` and `ATLASSIAN_JIRA_BASE_URL` are ALL set, the verb runs fully from the environment with no database at all (an offline or test path only). The same collection also runs automatically as an additional step of the jira team-catalog auto-import, whenever team import is selected (`auto_import_teams`, `auto_import_projects`, `auto_import_members`), so a normal scheduled jira sync produces Atlassian Teams rows on its own. A resolution failure (no organization context, or no permission) degrades non-strict: it logs and keeps the result of the team catalog step (projects and legacy links). See `architecture/team-attribution.md` §0.2a.
 - **`--provider github`** `--owner <github-org> [--auth <token>]` (the token else `GITHUB_TOKEN`; a GitHub Enterprise base URL from `GITHUB_URL` or `GITHUB_BASE_URL`) runs the provider's **team catalog**: the producer the worker's post-sync team autoimport runs. It writes the ClickHouse team dimensions the team-attribution contract prescribes (`teams` rows of `provider_access`, `team_memberships`, `team_repo_ownership`; see `architecture/team-attribution.md` §0). A missing owner, a missing token, or an empty result without `--allow-empty` exits 1; a provider or write failure exits 1 with nothing written. A `403` on one team's repositories fails the run with exit 1 and writes nothing. A team with a non-zero `sync_policy` in `team_sync_policies` is left untouched and reported as `teams_skipped_policy`, not as an empty catalog. A team row has `id` `gh:<slug>`, a trimmed `name`, the provider's `description`, `members` as provider-scoped identity facets (`github:<login>` plus the member's public email, lower-cased), a stable `team_uuid` (uuid5 of the team id), `provider` `github`, `native_team_key` (the slug), `repo_patterns` (the team's repositories as `owner/name`), and `manual_members` (an admin override survives). The catalog writes its tables in order and not in one transaction: a write that fails part way leaves the earlier tables written, and the next run finishes them.
-- **`--provider gitlab`** `--owner <group-path> [--auth <token>]` (the token else `GITLAB_TOKEN`; the instance URL from `GITLAB_URL`, default `https://gitlab.com`) runs the same team catalog seam for GitLab. The group and its direct subgroups become `teams` rows (`provider_access`, `id` `gl:<full_path>`, `native_team_key` the group's `full_path`, `project_keys` the group's own `path_with_namespace` values). The group's own projects populate `team_project_ownership`, members populate `team_memberships` (identity facets `gitlab:<username>` plus the member's email), and the group's full project tree, including subgroups, populates the native `projects` catalog (CHAOS-3380).
+- **`--provider gitlab`** `--owner <group-path> [--auth <token>]` (the token else `GITLAB_TOKEN`; the instance URL from `GITLAB_URL`, default `https://gitlab.com`) runs the same team catalog seam for GitLab. The group and its direct subgroups become `teams` rows (`provider_access`, `id` `gl:<full_path>`, `native_team_key` the group's `full_path`, `project_keys` the group's own `path_with_namespace` values). The group's own projects populate `team_project_ownership`, members populate `team_memberships` (identity facets `gitlab:<username>` plus the member's email), and the group's full project tree, including subgroups, populates the native `projects` catalog.
 - **`--provider linear`** `[--auth <token>]` (the token else `LINEAR_API_KEY`; `LINEAR_URL` points the verb at a fake API for testing only) needs no `--owner`: an API key scopes the whole Linear workspace, so every team is in scope. Teams become `teams` rows (`provider_access`, `id` `linear:<key>`, `native_team_key` the team's key). Members populate `team_memberships` and the shared `members` dimension (identity facets `linear:<email-or-id>`, lower-cased), and an inactive member is excluded. Linear's own projects populate the native `projects` catalog and `team_project_ownership` when `--projects` is selected. An org-archived Linear team is included, as the workspace returns it. No description is invented when the provider has none.
 - **Concurrency (`github`, `gitlab`, `linear`).** The catalog takes the same per-(organization, provider) turn the worker's team catalog takes (a durable lease in PostgreSQL, kind `team_catalog.<provider>`, one holder per organization), so a CLI run and a worker run, or two CLI runs, of one organization and provider take turns instead of stamping the same new membership twice. The turn is taken in the domain database: `--db`, else `POSTGRES_URI`. The run logs `waiting for the team catalog turn` and waits until the holder releases it or the lease expires; `Ctrl-C` ends the wait and nothing is written. A lease the run loses while it lives ends the run before it writes (exit 1). A DSN that cannot be used, or a lease that cannot be taken, exits 1 with `turn_unavailable`; the run never goes on without a turn it was asked to take. With no DSN, or an `--org` that is not a UUID, the run logs `team catalog turn not taken` (reason `no_postgres_dsn` or `org_not_uuid`) and runs without it: a concurrent worker or CLI run of that organization and provider is then not excluded.
 
@@ -314,13 +314,13 @@ A Jira **project** is not a team. The automatic team import that runs after a Ji
 
 ## Teams Commands
 
-> **Removed in CHAOS-2600 CS5:** the `dev-hops teams reconcile` command is **deleted**. It reconciled org-scoped ClickHouse teams back into PostgreSQL `team_mappings` and re-bridged via `bridge_teams_to_clickhouse` — both the Postgres team control plane and the bridge are gone. ClickHouse is now the system of record for teams, written directly by `sync teams` and the admin team surface, so no reconcile step is needed.
+> **Removed:** the `dev-hops teams reconcile` command is **deleted**. It reconciled org-scoped ClickHouse teams back into PostgreSQL `team_mappings` and re-bridged via `bridge_teams_to_clickhouse` — both the Postgres team control plane and the bridge are gone. ClickHouse is now the system of record for teams, written directly by `sync teams` and the admin team surface, so no reconcile step is needed.
 
 ---
 
 ## Metrics Commands
 
-> ⚠️ **Warning (CHAOS-2475):** Metrics commands run inline and require database connections and configurations that the CLI doesn't enforce at startup. Running them inline can cause silent failures or incomplete computations.
+> ⚠️ **Warning:** Metrics commands run inline and require database connections and configurations that the CLI doesn't enforce at startup. Running them inline can cause silent failures or incomplete computations.
 >
 > **Interim Workaround:** Prefer the scheduled Go run over an inline invocation; it validates the same inputs before admitting the job. See [Run workers and jobs](../../operate/run/workers-and-jobs.md).
 
@@ -340,7 +340,7 @@ dho workers metrics daily-start --org <org-uuid> --day 2025-01-26 --to 2025-02-0
 dho workers metrics daily-start --org <org-uuid> --day 2025-02-01 --repo-id <uuid> --reason <code> --correlation-id <id>
 ```
 
-See [`metrics daily-start`](#metrics-daily-start-chaos-5055) for the full
+See [`metrics daily-start`](#metrics-daily-start) for the full
 contract.
 
 ### `metrics dora` / `complexity` / `capacity` / `release-impact` (deleted)
@@ -351,11 +351,11 @@ day-scoped families):
 
 ```bash
 dho workers metrics remaining trigger-backstop --family dora --org <org-uuid> \
-  --day 2026-08-01 --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today" \
+  --day 2026-08-01 --review-evidence "routine trigger, no automatic run yet today" \
   --reason <code> --correlation-id <id>
 
 dho workers metrics remaining trigger-backstop --family capacity --org <org-uuid> \
-  --team <team-uuid> --review-evidence "CHAOS-1234 -- routine trigger" \
+  --team <team-uuid> --review-evidence "routine trigger" \
   --reason <code> --correlation-id <id>
 ```
 
@@ -481,22 +481,41 @@ It reads `CLICKHOUSE_URI` and, without `--org`, the first `--orgs` rows of `orga
 
 ## Admin Commands
 
-User and organization management commands. The `admin users`, `admin orgs` and `admin billing` verbs (and `billing reconcile`) use the first PostgreSQL database that is set: `MIGRATION_DATABASE_URI`, then `API_DATABASE_URI`, then `POSTGRES_URI`. On Kubernetes, run them in the go-api pod (`kubectl exec -i deploy/<release>-go-api -- dho admin users create ...`): it has `API_DATABASE_URI`, the role the admin API writes users and organizations with. A worker pod has only `POSTGRES_URI`, the domain role, which cannot write users. The other `admin` verbs use `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
+User and organization management commands. The `admin users`, `admin orgs` and `admin billing` verbs (and `billing reconcile`) use the first PostgreSQL database that is set: `MIGRATION_DATABASE_URI`, then `API_DATABASE_URI`, then `POSTGRES_URI`. On Kubernetes, run them in the go-api pod (`kubectl exec -i deploy/<release>-go-api -- dho admin users create ...`): it has `API_DATABASE_URI`, the role the admin API writes users and organizations with. A worker pod has only `POSTGRES_URI`, the domain role, which cannot write users. The other `admin` verbs use `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`. While auth-service owns users (`AUTH_USERS_OWNED=true`), `admin users create` refuses: use `dho auth users-create`.
 
 > **Important:** Users must belong to an organization to log in. Always create an organization after creating a user.
 
 ### Create the first admin
 
-A stack on empty volumes has no user. Create the first user and its organization with the two admin verbs below. On the Compose stack, run them in the `migrate` service: its image is `dho`, so the arguments after the service name are the `dho` arguments, and it has the database login these verbs use. Read the password from standard input (the first line of a file here), never from an argument:
+A stack on empty volumes has no user. While auth-service owns users (`AUTH_USERS_OWNED=true`, the Compose default), create the first user with `dho auth users-create`, then its organization with `dho admin orgs create`. On the Compose stack, run them in the `migrate` service: its image is `dho`, so the arguments after the service name are the `dho` arguments, and it has the logins these verbs use. Read the password from standard input (the first line of a file here), never from an argument:
 
 ```bash
-docker compose run --rm --no-deps -T migrate admin users create \
-  --email admin@example.com --full-name "Admin User" --superuser --password-stdin < password.txt
+docker compose run --rm --no-deps -T migrate auth users-create \
+  --email admin@example.com --full-name "Admin User" --password-stdin < password.txt
 docker compose run --rm --no-deps -T migrate admin orgs create \
   --name "My Organization" --owner-email admin@example.com
 ```
 
-Outside Compose, run the same verbs with `dho` and the database environment set (`dho admin users create ...`, then `dho admin orgs create ...`). Remove the password file afterwards.
+`dho auth users-create` writes the principal, the verified local login and the `public.users` row in one commit, and prints `user_created principal=<id>`. It gives no organization, no membership and no platform role, and it refuses without `AUTH_USERS_OWNED=true`. It refuses `--superuser` before it writes anything, and names the next step: with no active platform administrator, `auth-migrate platform-role-bootstrap -principal <id> -confirm` after a plain create; with one, `dho auth platform-role-grant`. While `AUTH_PLATFORM_ROLES_OWNED` is not true, `public.users.is_superuser` is the authority and the auth runtime role cannot write it, so the refusal names the owner (migration) login step of the [platform roles runbook](../../operate/runbooks/auth-platform-roles-flip-and-rollback.md).
+
+With `AUTH_USERS_OWNED=false`, `dho admin users create` makes the user instead (`--superuser` works there while `AUTH_PLATFORM_ROLES_OWNED` is not true). While auth-service owns users, `dho admin users create` refuses and names `dho auth users-create`. On Kubernetes, `dho auth users-create` needs the auth runtime login (`AUTH_DATABASE_URI`), which the go-api pod does not have. Running it there is a later step (pm), not a recipe here. Remove the password file afterwards.
+
+### `auth users-create`
+
+Create a verified local user while auth-service owns users. It connects with the auth runtime login (`AUTH_DATABASE_URI` or `AUTH_DATABASE_URI_FILE`, and `AUTH_DATABASE_SCHEMA`).
+
+```bash
+dho auth users-create --email admin@example.com --full-name "Admin User" --password-stdin < password.txt
+```
+
+| Option | Description |
+|--------|-------------|
+| `--email` | Login email (required) |
+| `--full-name` | Display name |
+| `--password-stdin` | Read the password from the first line of standard input (required; there is no password argument and no password variable) |
+| `--superuser` | Always refused, before any write, with the next step named (see above) |
+
+Exit 3 (refused) with nothing written: users are not owned, the password fails the shared policy, the email exists, or `--superuser` was given.
 
 ### `admin users create`
 
@@ -747,7 +766,7 @@ dho backfill run \
 
 **Which datasets run.** For a configuration that covers a whole integration, the backfill names the datasets that are enabled for that integration (its dataset rows), not the configuration's `sync_targets` list. A dataset that is off, or that has no row, is not backfilled and is not switched on, unless `--dataset-keys` names a key with no row (see below). When the integration has no enabled dataset and no `--dataset-keys` is given, the verb refuses the run (exit code 3) and writes nothing; enable a dataset in the connection's synchronization settings first. A configuration pinned to a single source still names the datasets its own `sync_targets` select, and so does a PagerDuty configuration (the platform manages the PagerDuty datasets as one set, so its list must be exactly `operational`).
 
-**Scoping a run.** A run plans units = selected sources x planned datasets x 7-day chunks of the window; a GitHub source plans about ten units per chunk with every dataset on, because the pull-request, test and work-item families fold into one unit each. For example, 33 sources over thirty days (five chunks) plan about 1650 units, while the same sources limited to `--dataset-keys prs,commits` plan about 2 units per source per chunk, and a three-month window (thirteen chunks) fits. A plan has no unit cap by default; an operator can opt in with `SYNC_RUN_MAX_UNITS` (a positive number), and a plan over that value is quarantined with `invalid_plan`. The org's `max_sync_units` tier limit is not read. `--source-ids` and `--dataset-keys` limit the run to part of the configuration. Each takes a comma list and may be repeated; an empty item is an argument error. Every source id must be an enabled source of the configuration's integration that the configuration selects (an enabled source the configuration does not select is refused: its scheduled runs never plan it). Every dataset key must be one the run could already name (see above): a key the provider does not have is unknown, a key the integration has no row for runs once and writes no row (the schedule does not change), and a key whose row is off is refused, because a backfill never switches a dataset on (PagerDuty is the exception: its plan re-enables the operational rows first, so an off operational row still runs). A refused value is named in the error, the verb exits with code 3 and nothing is written. The values are written to the same `source_ids` and `dataset_keys` columns of the trigger that the admin Backfill wizard writes, in the enabled-source order and the provider's dataset order. Without the flags the run covers the sources a scheduled run of the configuration plans, the ones selected for it in Sync admin (CHAOS-10064: for one window a backfill covers the hourly run's scope; before, it covered every enabled source of the integration, selected or not), and every enabled dataset. A configuration pinned to a single source accepts only that source, and only while the source is enabled; its dataset keys must be keys its own `sync_targets` select, and a key whose row is off is refused (a key outside its `sync_targets` is refused even when it has no row; a pinned configuration with no `sync_targets` follows the integration's rows, as above).
+**Scoping a run.** A run plans units = selected sources x planned datasets x 7-day chunks of the window; a GitHub source plans about ten units per chunk with every dataset on, because the pull-request, test and work-item families fold into one unit each. For example, 33 sources over thirty days (five chunks) plan about 1650 units, while the same sources limited to `--dataset-keys prs,commits` plan about 2 units per source per chunk, and a three-month window (thirteen chunks) fits. A plan has no unit cap by default; an operator can opt in with `SYNC_RUN_MAX_UNITS` (a positive number), and a plan over that value is quarantined with `invalid_plan`. The org's `max_sync_units` tier limit is not read. `--source-ids` and `--dataset-keys` limit the run to part of the configuration. Each takes a comma list and may be repeated; an empty item is an argument error. Every source id must be an enabled source of the configuration's integration that the configuration selects (an enabled source the configuration does not select is refused: its scheduled runs never plan it). Every dataset key must be one the run could already name (see above): a key the provider does not have is unknown, a key the integration has no row for runs once and writes no row (the schedule does not change), and a key whose row is off is refused, because a backfill never switches a dataset on (PagerDuty is the exception: its plan re-enables the operational rows first, so an off operational row still runs). A refused value is named in the error, the verb exits with code 3 and nothing is written. The values are written to the same `source_ids` and `dataset_keys` columns of the trigger that the admin Backfill wizard writes, in the enabled-source order and the provider's dataset order. Without the flags the run covers the sources a scheduled run of the configuration plans, the ones selected for it in Sync admin (for one window a backfill covers the hourly run's scope; before, it covered every enabled source of the integration, selected or not), and every enabled dataset. A configuration pinned to a single source accepts only that source, and only while the source is enabled; its dataset keys must be keys its own `sync_targets` select, and a key whose row is off is refused (a key outside its `sync_targets` is refused even when it has no row; a pinned configuration with no `sync_targets` follows the integration's rows, as above).
 
 ```bash
 dho backfill run \
@@ -806,11 +825,11 @@ The api has no auto-reload, and it does not serve an OpenAPI or `/docs` page.
 
 ## Workers
 
-**Celery is retired (CHAOS-4026, 2026-08-21): zero Python celery services run
+**Celery is retired: zero Python celery services run
 in prod since the 2026-08-19 stop.** `workers start-worker`/`workers
 start-scheduler` (which booted a real `celery worker`/`celery beat` process)
 were deleted along with it, and `workers inspect` (a Celery control-plane
-reader) went with the Celery app (CHAOS-7059). Go owns every periodic
+reader) went with the Celery app. Go owns every periodic
 maintenance cadence; see [Run workers and jobs](../../operate/run/workers-and-jobs.md)
 for the Go worker/scheduler/reconciler/stream-runner processes.
 
@@ -867,14 +886,14 @@ base (`compose.yml`), and the three stream services take them back to empty.
     ignores the requested action, and inspects no domain state, so no amount of
     configuration makes either verb work. The refusal is deliberate: the frozen
     contracts name domain links that have no authoritative semantic table yet.
-    Treat them as unavailable until CHAOS-4030 lands. There is currently no
+    Treat them as unavailable. There is currently no
     generic supported path to re-drive a stranded job by hand — `metrics
     daily-redrive` below is a narrow, daily-metrics-specific exception, not a
     counterexample to this warning.
 
 ### `dho workers metrics`
 
-#### `metrics daily-start` (CHAOS-5055)
+#### `metrics daily-start`
 
 Dispatch a daily-metrics run for one (organization, day-range[, repository
 set]) through the same `StartRunTx` coordinator transaction the post-sync
@@ -924,8 +943,8 @@ unchanged.
   earlier one in the ReplacingMergeTree daily tables, so readers that take the newest row
   count the day once. Raw reads of the plain MergeTree tables (`work_item_completion_daily`,
   `issue_type_metrics_daily`; the daily job no longer writes `investment_metrics_daily` or
-  `investment_classifications_daily`, CHAOS-9264; both tables and the view
-  `v_investment_flow_edges` were dropped by migration 120, CHAOS-9302) count every
+  `investment_classifications_daily`; both tables and the view
+  `v_investment_flow_edges` were dropped by migration 120) count every
   generation of a day; any second run of a day does that, with or without a tag. A rerun deletes no row: a row stored under a key
   that the new run no longer produces stays, and only the writer of that table can zero it.
 - Output: a call with a tag prints `rerun_tag` and, per day, `started` (`false` when the
@@ -943,7 +962,7 @@ kubectl exec -i <worker-pod> -- dho workers metrics daily-start \
   --rerun-tag chaos-NNNN-1 --reason <code> --correlation-id <id> < org-id-source
 ```
 
-**Organization from stdin (CHAOS-8892):** `--org-stdin` replaces `--org`. The
+**Organization from stdin:** `--org-stdin` replaces `--org`. The
 verb reads ONE line from stdin, drops one trailing newline, and uses it as the
 organization id, so the id is on no command line. This is the route on a
 distroless worker pod, where the only way to hand over a value is the stdin of
@@ -978,7 +997,7 @@ dho workers metrics daily-start \
   --reason <code> --correlation-id <id>
 ```
 
-Repair a daily-metrics run stranded by CHAOS-4358: every `daily_partition`
+Repair a daily-metrics run stranded by a failed partition dispatch: every `daily_partition`
 River job for it already failed and was discarded, and nothing else ever
 re-enqueues work for that run on its own (a fresh `metrics.daily_dispatch`
 run still hits the SAME permanent per-partition outbox dedupe key its
@@ -1030,7 +1049,7 @@ and re-terminalizes the partition `failed_permanent`, undoing the reset):
    (the final River attempt died after claiming it but before releasing
    it; `ClaimPartition` already treats this as reclaimable) — under a
    redrive-scoped dedupe key distinct from the partition's original
-   dispatch (CHAOS-4358). A live (unexpired) lease is never touched.
+   dispatch. A live (unexpired) lease is never touched.
 
 If step 1 reports `skipped_claim_active > 0` (an execution's original claim
 still read as active at repair time), step 2 does **not** run at all: the
@@ -1061,7 +1080,7 @@ WHERE dedupe_key LIKE 'metrics.daily_partition:redrive:%'
 ORDER BY created_at DESC;
 ```
 
-#### `metrics daily-finalize` (CHAOS-4389)
+#### `metrics daily-finalize`
 
 Repair a daily-metrics run stranded one step LATER than `daily-redrive`
 above: every partition has already succeeded, but the single
@@ -1069,7 +1088,7 @@ above: every partition has already succeeded, but the single
 (fixed idempotency key `metrics.daily_finalize:<run id>`, permanently
 deduped by the outbox) was discarded by River before `CompleteFinalize` ever
 ran — so the run sits `status='running'` forever despite 100% partition
-success. This is the finalize-side counterpart of the CHAOS-4358 gap
+success. This is the finalize-side counterpart of the partition-dispatch gap
 `daily-redrive` closes for partitions/dispatch.
 
 ```bash
@@ -1117,7 +1136,7 @@ Exactly one of two scopes is required:
   `--all-complete`'s own detection pass (and the `_detected_total` counter
   below) for visibility, but needs `--run` to actually redrive it.
   Before the detection pass itself, `--all-complete` also runs
-  `ReconcileOrphanedFinalizeRedriveRuns` (CHAOS-4405, see `metrics
+  `ReconcileOrphanedFinalizeRedriveRuns` (see `metrics
   finalize-redrive` below) to close out any `finalize-redrive`-published job
   that never reached a claim at all — otherwise that run's `'open'`
   provenance row would silently exclude it from this very detection pass
@@ -1149,7 +1168,7 @@ claim) — the extra row costs River queue capacity, not correctness. Avoid
 re-running `--all-complete` in a tight loop; check the query above for
 still-`pending`/`delivered` redrive rows first if in doubt.
 
-**Finalize-ledger repair (CHAOS-4409), `--run` only.** Before publishing,
+**Finalize-ledger repair, `--run` only.** Before publishing,
 `--run` repairs the compatibility bridge's own finalize ledger row
 for the named run (`metric_compatibility_executions`, `worker_kind='daily'
 operation='finalize'`) — the same bulk ledger repair `daily-redrive` above
@@ -1162,7 +1181,7 @@ evidence). Without this, a run whose finalize ledger row was stuck
 ledger's own `_reserve_execution` check refuses the identical execution
 identity regardless of how many times `ClaimFinalize`/`Finalize` retries at
 the Go layer — republishing alone can never fix it. Mirrors `daily-redrive`'s
-CHAOS-4304 ordering requirement exactly: the repair MUST land before any
+ordering requirement exactly: the repair MUST land before any
 finalize job publishes (a stuck row answers `ambiguous_refused` the instant
 a redriven job reaches it, undoing this same pass), and a nonzero
 `skipped_claim_active` (a row whose original claim still reads as live)
@@ -1196,7 +1215,7 @@ partitions succeeded, a live finalize lease still in flight) appears in
 `dev_health_daily_metrics_runs_finalized_by_sweep_total` (runs a fresh job
 was actually enqueued for), and
 `dev_health_daily_metrics_finalize_ledger_repair_rows_total{outcome}`
-(finalize-ledger rows the CHAOS-4409 repair above moved to
+(finalize-ledger rows the finalize-ledger repair above moved to
 `retry_authorized` vs. left alone for a still-live claim) are wired but not
 live for THIS caller, for the same reason `daily-redrive`'s own counter
 above is not: `workerctl` is a one-shot CLI with no Prometheus scrape
@@ -1205,7 +1224,7 @@ an automatic reconciler sweep) invokes the same Go functions. The
 `ledger_repair` field in this command's own JSON result (above) is the
 actual audit trail for a manual invocation today.
 
-#### `metrics finalize-redrive` (CHAOS-4405)
+#### `metrics finalize-redrive`
 
 Historical backfill: re-run `metrics.daily_finalize` for one organization
 across `[--from, --to]`, one calendar day at a time — **even for a day whose
@@ -1214,7 +1233,7 @@ above, which only ever repairs a run still stuck non-terminal: this
 command's whole point is re-executing a day's finalize AFTER it already
 completed, because `run_daily_metrics_finalize` now also writes
 `compounding_risk_daily`(scope='team') and `team_cognitive_load_daily`
-(CHAOS-4399, #1963) — a day finalized before that landed has zero rows in
+ — a day finalized before that landed has zero rows in
 either table and needs finalize re-run purely to backfill them.
 
 First preview with `--dry-run` — lists the days and current run state with
@@ -1235,7 +1254,7 @@ Then run for real:
 dho workers metrics finalize-redrive \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-05-01 --to 2026-05-31 \
-  --review-evidence "CHAOS-4405: backfilling compounding_risk_daily(team)/team_cognitive_load_daily for days finalized before #1963 landed the team-aggregation write" \
+  --review-evidence "backfilling compounding_risk_daily(team)/team_cognitive_load_daily for days finalized before the team-aggregation write existed" \
   --reason <code> --correlation-id <id>
 ```
 
@@ -1262,7 +1281,7 @@ the safe never-attempted/failed/expired-lease subset (`daily-finalize
 authorizing the state-mutating case.
 
 The `generation` reset is load-bearing, not cosmetic (a finding from this
-verb's own design review, posted on CHAOS-4405): the Python compatibility
+verb's own design review): the Python compatibility
 bridge's execution-ledger identity is `uuid5(run_id, family, generation,
 scope_digest)`. A bare `status`/`finalization_status` reset alone would
 leave the SAME identity that already reached `'succeeded'` the first time
@@ -1303,12 +1322,12 @@ dedupe key).
 `FindStrandedFinalizeRuns` excludes a run with an `'open'` row in
 `daily_metrics_finalize_redrive_events`, so an unattended sweep running
 concurrently cannot double-dispatch it. This is deliberately NOT permanent
-(a design correction from this verb's initial review, posted on
-CHAOS-4405/#1971): `CompleteFinalize`/`ReleaseFinalize` close this run's own
+(a design correction from this verb's initial review):
+`CompleteFinalize`/`ReleaseFinalize` close this run's own
 open row — to `'closed_succeeded'` or `'closed_failed'` — the instant that
 SPECIFIC claim resolves, same transaction as the run's own completion. A
 **failed** redriven finalize therefore reappears in `FindStrandedFinalizeRuns`
-immediately, exactly like any other ordinary CHAOS-4389 discard — an
+immediately, exactly like any other ordinary discard — an
 unattended sweep (or `daily-finalize --run <id>`) can recover it without an
 operator needing to remember which runs this verb specifically touched.
 
@@ -1359,9 +1378,9 @@ process). `redriven_failed` is different: it is observed by
 `'closed_failed'` — this one IS live, scraped from the worker process that
 actually processes the redriven job, not from this CLI.
 
-#### `metrics generation-repair` (CHAOS-10072)
+#### `metrics generation-repair`
 
-Before CHAOS-4442 the range finalize redrive replaced a run's whole generation
+Earlier, the range finalize redrive replaced a run's whole generation
 with `redrive:<nonce>`, which dropped the producer prefix
 (`fixed-schedule:daily_metrics_fanout:`) that partition recompute, manual
 `daily-start` coverage and the recommendations readiness gate match. The
@@ -1376,7 +1395,7 @@ list or rerun tag).
 ```bash
 dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-10-31 --dry-run
 dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-10-31 \
-  --reason generation_repair --correlation-id CHAOS-10072
+  --reason generation_repair --correlation-id <id>
 ```
 
 Output: `examined`, `repaired`, `would_repair`, `not_provable` (created under
@@ -1388,7 +1407,7 @@ so a second pass repairs nothing. Audited under the `metrics.finalize_redrive`
 action.
 
 A pass has its own time budget, `--timeout` (default `10m`, at most `1h`),
-not the 30 s deadline of other verbs (CHAOS-10139). When the budget ends
+not the 30 s deadline of other verbs. When the budget ends
 before the range is done the command exits 0 and prints
 `generation_repair.partial=true`, `resume_from` (the target day of the first
 row not handled) and `remaining`. Rows commit one by one, so rerun the same
@@ -1399,7 +1418,7 @@ telemetry is the log lines: a Warn line (`metric`
 line (`metric` `dev_health_generation_repair_partial_total`) on a partial. The
 counters themselves are recorded for a process that has a MeterProvider.
 
-#### `metrics partition-recompute` (CHAOS-4459)
+#### `metrics partition-recompute`
 
 Historical recompute: reset an already-`'succeeded'` daily-metrics run's
 **partitions** (not its finalize step — see `finalize-redrive` above for
@@ -1410,14 +1429,14 @@ one calendar day at a time. This is the partition-level gap
 partitions on a run still `status='running'` — a run whose partitions are
 ALL `'succeeded'` is invisible to it by construction, even when the family
 output those partitions wrote is now known to be wrong. Prod-observed
-motivating case (CHAOS-4459): the native `repo_user_commit` executor wrote
+motivating case: the native `repo_user_commit` executor wrote
 `org_id=""` on `repo_metrics_daily`/`user_metrics_daily`/`commit_metrics`
-before PR #1960 (CHAOS-4341) — every org-scoped read of those tables for a
+before a fix — every org-scoped read of those tables for a
 day computed before the fix sees zero rows, and no operator path could ever
 recompute that day once its partition read `'succeeded'`.
 
 `--org-stdin` replaces `--org` here too, with the same rules as for
-[`metrics daily-start`](#metrics-daily-start-chaos-5055).
+[`metrics daily-start`](#metrics-daily-start).
 
 ```bash
 dho workers metrics partition-recompute \
@@ -1434,7 +1453,7 @@ dho workers metrics partition-recompute \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-08-20 --to 2026-08-27 \
   --family repo_user_commit \
-  --review-evidence "CHAOS-4459: org-scoped commit_metrics/repo_metrics_daily/user_metrics_daily rows are 0 for this range because the partition succeeded under the pre-#1960 writer that stamped org_id=''" \
+  --review-evidence "org-scoped commit_metrics/repo_metrics_daily/user_metrics_daily rows are 0 for this range because the partition succeeded under the earlier writer that stamped org_id=''" \
   --reason <code> --correlation-id <id>
 ```
 
@@ -1501,18 +1520,18 @@ is wired but not live for THIS caller, for the same reason every other
 `workerctl` counter above is not: a one-shot CLI with no Prometheus scrape
 endpoint.
 
-#### `metrics remaining start` (CHAOS-4254)
+#### `metrics remaining start`
 
 Dispatch a **new** remaining-metrics run for a historical `(organization,
-family, day)` that no automatic trigger ever dispatched at all (CHAOS-4254) —
+family, day)` that no automatic trigger ever dispatched at all —
 sync never ran that day, or the row aged out of River's retention. This is
 narrower than it sounds: `jobs retry` recovers a `remaining_metric_runs` row
 that was dispatched and then discarded, and `metrics daily-redrive` above is
 DAILY-family-only (`daily_metrics_runs`/`daily_metrics_partitions`) and never
 touches the remaining family's native Go executors (dora, capacity, …) at
 all. Neither helps when the day was never computed in the first place — this
-command is also the prod recovery path for CHAOS-4384's dora-frozen-at-0
-incident, since a day the pre-fix same-day coverage bug froze at 0 rows
+command is also the prod recovery path for dora frozen at 0
+rows, since a day the pre-fix same-day coverage bug froze at 0 rows
 already has a "succeeded" partition and needs exactly this bypass.
 
 ```bash
@@ -1520,7 +1539,7 @@ dho workers metrics remaining start \
   --family dora \
   --day 2026-08-25 --to 2026-08-27 \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
-  --review-evidence "CHAOS-4384: dora frozen at 0 rows for 08-25..08-27 by the pre-fix same-day coverage bug (5ddab4c65); deployments/incidents have since landed for these closed days" \
+  --review-evidence "dora frozen at 0 rows for 08-25..08-27 by the pre-fix same-day coverage bug (5ddab4c65); deployments/incidents have since landed for these closed days" \
   --reason <code> --correlation-id <id>
 ```
 
@@ -1541,7 +1560,7 @@ below).
 
 **Coverage rule — deliberately not the same one the automatic dora trigger
 applies.** `StartRunTx`'s own `family=="dora"` cross-trigger dedup
-(CHAOS-4384) treats ANY succeeded partition for a day that has already
+ treats ANY succeeded partition for a day that has already
 CLOSED as terminal coverage, 0 rows or not, because for the automatic
 triggers a genuinely quiet closed day and a day nobody ever computed are
 indistinguishable. This command is more precise, because a human is
@@ -1553,7 +1572,7 @@ prior run under ANY generation counts):
 - An **exact single-day partition** (`backfill_days == 1`, the shape every
   automatic post-sync/fixed-schedule dispatch normally uses) is
   unambiguous: its `rows_written` evidence IS that day's own total. A
-  **0-row** exact match is exactly the CHAOS-4384 shape this command
+  **0-row** exact match is exactly the shape this command
   exists to recompute and is NOT refused; a **non-zero-row** exact match
   is refused (`"already_covered"`).
 - A **wide multi-day partition** (`backfill_days > 1`, e.g. a post-sync
@@ -1629,11 +1648,11 @@ JOIN remaining_metric_partitions partition ON partition.run_id = run.id
 WHERE run.org_id = '<org>' AND run.family = '<family>' AND run.generation = '<that day's printed generation>';
 ```
 
-##### `metrics remaining start --recompute` (CHAOS-9674)
+##### `metrics remaining start --recompute`
 
 `start` refuses a day that a succeeded partition already covers
 (`"already_covered"`). After a **basis change** (a metric rule changed, for
-example the change failure basis of CHAOS-9621) the covered days hold the old
+example the change failure basis) the covered days hold the old
 basis and must be rewritten. `--recompute` is the explicit, operator-only path
 for that. Preview first, then write:
 
@@ -1643,7 +1662,7 @@ dho workers metrics remaining start --recompute --dry-run --basis cfr-125 \
 
 dho workers metrics remaining start --recompute --basis cfr-125 \
   --family dora --org <org-uuid> --day 2026-09-01 --to 2026-09-30 \
-  --review-evidence "CHAOS-9621: canceled leaves deployment frequency, lead time and deployment failure rate" \
+  --review-evidence "canceled leaves deployment frequency, lead time and deployment failure rate" \
   --reason <code> --correlation-id <id>
 ```
 
@@ -1744,7 +1763,7 @@ The fixed kinds are `dispatch_sync_run`, `finalize_sync_run`, `post_sync`, and
 are serialized per semantic database, persist audit intent before changing
 state, and may return `outcome_unknown`; inspect the route before retrying.
 
-**A route command leaves no delivery behind (CHAOS-9964).** Every `routes apply|pause|drain|resume` call, an `apply` that changed
+**A route command leaves no delivery behind.** Every `routes apply|pause|drain|resume` call, an `apply` that changed
 nothing included, reconciles the deliveries of its kind that sit at a route generation other than the route's, after the
 route change (if any) is committed. For `finalize_sync_run` it re-arms every such delivery whose River job is missing, completed,
 discarded or cancelled and whose run is ready to finalize (so the real Finalize runs at the current generation), walking all of
@@ -1774,9 +1793,9 @@ with a live claim) is not changed. The run logs one line for each kind:
 `dho migrate river`, `routes apply` on a fresh database finds the route active
 and changes nothing.
 
-**`routes resume` no longer takes a `--transport` flag (CHAOS-5626).** The
+**`routes resume` no longer takes a `--transport` flag.** The
 celery transport is retired: no Celery consumer runs anywhere, and it is not a
-supported rollback target (ruling R146). `resume` now always resumes onto
+supported rollback target. `resume` now always resumes onto
 River, the only remaining transport. To roll back, redeploy a previously
 deployed Go revision from the rollback tag set.
 
@@ -1784,7 +1803,7 @@ deployed Go revision from the rollback tag set.
 
 ### `dho workers providersync`
 
-#### `providersync carry-team-ids` (CHAOS-8940)
+#### `providersync carry-team-ids`
 
 A provider team id carries its provider's prefix (`linear:<key>`,
 `jira:<uuid>`, `<system>:<id>` for a pushed team; see the team attribution
@@ -1825,7 +1844,7 @@ recompute that follows the carry.
 
 The organization comes from stdin only: `--org-stdin` is required and there
 is no `--org`, with the stdin rules of
-[`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
+[`metrics daily-start`](#metrics-daily-start). The verb prints no
 organization id. It prints counts only, under `carry_team_ids`: `teams`,
 `admin_teams`, `admin_teams_to_custom`, `admin_teams_not_carried`, `ambiguous_teams`,
 `teams_already_keyed`, `manual_members_folded`, `keyed_teams_activated`, `deleted_keyed_teams`, `memberships`, `project_ownership`, `repo_ownership`,
@@ -1841,7 +1860,7 @@ kubectl exec -i <worker-pod> -- dho workers providersync carry-team-ids \
   --org-stdin --reason <code> --correlation-id <id> < org-id-source
 ```
 
-#### `providersync compact-ownership-intervals` (CHAOS-9556)
+#### `providersync compact-ownership-intervals`
 
 A one-time data step. The old per-sync writer closed the open ownership row of
 an unchanged fact at every sync and opened a new one, so a key holds runs of
@@ -1863,11 +1882,11 @@ refused together with `--apply`. `--apply` needs `--reason` and
 Two runs merge when they are adjacent (`valid_to` of one is `valid_from` of
 the next) and every column but the version is equal: `project_key` (project
 table), `repo_id`, `match_type`, `share` (repository table; share drift is a
-real change, D5991), `is_primary`, `specificity`, `priority`. `updated_at` and
+real change), `is_primary`, `specificity`, `priority`. `updated_at` and
 `last_synced` are ignored. Open rows, gaps, close-before-open rows
 and rows of any other source are never touched. An overlap on a key is counted
 (`overlaps`); an adjacent equal-shape pair next to an overlap is still merged
-(the timeline stays exact; CHAOS-9675 tracks keeping such a key whole). A run is also kept when a row of
+(the timeline stays exact). A run is also kept when a row of
 another source of the same (provider, repository or project, team) would
 change which row wins the "newest version" choice of the cascade readers
 (`runs_kept_multi_source`). A tombstone is dropped unless it is the earliest row
@@ -1897,7 +1916,7 @@ until the next pin readback after the step and is dropped on the word of the GWC
 lead. In production the step runs inside a roll window (minutes :10-:33 or
 :46-:55 of the hour, between the hourly syncs), with the workers running.
 
-**Supported procedure and its limit (D6010).** Pause the providersync writers
+**Supported procedure and its limit.** Pause the providersync writers
 for the whole window (the scheduler, then the `sync` and `sync-provider`
 ScaledObjects at 0, wait for the running jobs of queues `sync` and
 `sync_provider` to drain), run the dry run, run `--apply --workers-paused`, read
@@ -1913,12 +1932,12 @@ next pin readback after the step, on the GWC lead's word.
 **Pause the workers first.** No per-organization lease exists that the tool could take (the sync leases are per sync unit), so a write, `--apply` or `--restore-run ... --apply`, is refused unless `--workers-paused` is given: the operator's statement that the sync workers that write ownership rows are paused for the organization. As the data side of that pause, the write is also refused (`ownership_compaction_writes_active`) while a part of either ownership table was modified within `--quiet-seconds` (default 60; 0 turns the check off) by the server clock (provider timestamps are not monotonic, so the check reads the server's part times, of any organization, and the `updated_at` and `last_synced` of the organization's rows); a run with nothing to do is not stopped by it. A dry run needs neither.
 
 `--org-stdin` (one organization on stdin, rules of
-[`metrics daily-start`](#metrics-daily-start-chaos-5055)) or `--all-orgs`
+[`metrics daily-start`](#metrics-daily-start)) or `--all-orgs`
 (every organization that holds a row of the source). A run always covers both
 ownership tables (there is no table option); `--batch-size` is the number of
 runs per insert (default 2000).
 
-**Time bound and progress (CHAOS-9704).** A compaction run first reads and
+**Time bound and progress.** A compaction run first reads and
 plans every table and organization (rows, runs, owner-answer differential) and
 writes only after every plan finished. `--timeout` (default `10m`) bounds that
 plan phase: on the deadline the verb exits non-zero with
@@ -1951,7 +1970,7 @@ kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-inter
   --all-orgs --apply --workers-paused --reason <code> --correlation-id <id>
 ```
 
-#### `providersync drain-removed-dependencies` (CHAOS-9706)
+#### `providersync drain-removed-dependencies`
 
 A data step. A link removed at the provider leaves its `work_item_dependencies`
 row behind (the table is insert-only), and nothing removed it. This verb deletes
@@ -1994,7 +2013,7 @@ kubectl exec -i <worker-pod> -- dho workers providersync drain-removed-dependenc
   --all-orgs --apply --workers-paused --reason <code> --correlation-id <id>
 ```
 
-#### `providersync retire-jira-project-as-team` (CHAOS-8888)
+#### `providersync retire-jira-project-as-team`
 
 Earlier versions of the Jira team catalog made a team of every Jira project
 (`teams.id` = the project key, `native_team_key` = the same key), with an
@@ -2037,7 +2056,7 @@ are closed when it has a Jira project link of that shape), the teams of the othe
 
 The organization comes from stdin only: `--org-stdin` is required and there
 is no `--org`. The stdin rules are those of
-[`metrics daily-start`](#metrics-daily-start-chaos-5055); empty stdin is a
+[`metrics daily-start`](#metrics-daily-start); empty stdin is a
 usage error (exit 2). The verb prints no organization id on stdout, stderr or
 in its own log lines; the audit row holds it. It prints counts only, under
 `retire_jira_project_as_team`: found (`teams`, `teams_with_manual_members`,
@@ -2082,7 +2101,7 @@ dho maintenance cleanup-all
 
 ## Service Credentials
 
-Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) present to the API. The `worker-operator` service is retired: nothing validates a `svc_worker_*` token, so its credentials authorize nothing (`dho workers` carries no token since CHAOS-6289). `create` and `rotate` refuse `--service worker-operator` (exit 1); `list` and `revoke` still work on the rows already stored. The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read`, `llm_config:read` (the org LLM config route) and `principal_access:read` (the per-call principal access read, CHAOS-12084). `worker-operator` still accepts `workers:read` and `workers:operate` at creation, but they authorize nothing; do not create new ones. The `worker-llm-config` service (`svc_wllm_*`) is retired with the worker categorize config route: nothing validates its tokens.
+Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) present to the API. The `worker-operator` service is retired: nothing validates a `svc_worker_*` token, so its credentials authorize nothing (`dho workers` carries no token any more). `create` and `rotate` refuse `--service worker-operator` (exit 1); `list` and `revoke` still work on the rows already stored. The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read`, `llm_config:read` (the org LLM config route) and `principal_access:read` (the per-call principal access read). `worker-operator` still accepts `workers:read` and `workers:operate` at creation, but they authorize nothing; do not create new ones. The `worker-llm-config` service (`svc_wllm_*`) is retired with the worker categorize config route: nothing validates its tokens.
 
 ```bash
 # Create a credential (the token is printed once)
@@ -2159,13 +2178,13 @@ dho ai allowlist list
 
 ## Work Graph
 
-> **CHAOS-4924:** the `dev-hops work-graph build` verb was deleted; the Python build compute is gone. To enqueue a fresh `workgraph.build` request, use `dho workers workgraph trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run] --reason <code> --correlation-id <id>`, or rely on the scheduled Go run. See [Run workers and jobs](../../operate/run/workers-and-jobs.md).
+> **Deleted:** the `dev-hops work-graph build` verb no longer exists; the Python build compute is gone. To enqueue a fresh `workgraph.build` request, use `dho workers workgraph trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run] --reason <code> --correlation-id <id>`, or rely on the scheduled Go run. See [Run workers and jobs](../../operate/run/workers-and-jobs.md).
 
 ---
 
 ## Investment
 
-> **CHAOS-5173:** the `dev-hops investment materialize` verb was deleted — it was a separate, direct-Python-compute entry point from the `investment.materialize` River kind, which is NATIVE and runs through the same worker dispatch/idempotency every other kind does. Use `dho workers investment trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] [--rerun-tag <tag>] --review-evidence "<text>" [--dry-run] --reason <code> --correlation-id <id>` to enqueue a fresh run through the native executor instead. The request key is org + `--from` + `--to` (+ `--rerun-tag`); reason and correlation id are not part of it. An identical earlier request is not enqueued again: the command prints `"status":"duplicate"` with `existing_state`, logs `duplicate request, no new job` and exits 1 — only `"status":"started"` (exit 0) means a new job was enqueued. To recompute the same window on purpose, pass a new `--rerun-tag` (1-32 characters of `A-Za-z0-9._-`, same rule as `metrics daily-start --rerun-tag`); the same tag twice is a duplicate again. It drops every flag with no Go-side equivalent (`--window-days`, `--repo-id`, `--team-id`, every LLM flag, `--force`, `--persist-evidence-snippets`, `--allow-unscoped`, `--analytics-db`/`--db`) — only an org id and an optional `--from`/`--to` window exist on the request.
+> **Deleted:** the `dev-hops investment materialize` verb no longer exists — it was a separate, direct-Python-compute entry point from the `investment.materialize` River kind, which is NATIVE and runs through the same worker dispatch/idempotency every other kind does. Use `dho workers investment trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] [--rerun-tag <tag>] --review-evidence "<text>" [--dry-run] --reason <code> --correlation-id <id>` to enqueue a fresh run through the native executor instead. The request key is org + `--from` + `--to` (+ `--rerun-tag`); reason and correlation id are not part of it. An identical earlier request is not enqueued again: the command prints `"status":"duplicate"` with `existing_state`, logs `duplicate request, no new job` and exits 1 — only `"status":"started"` (exit 0) means a new job was enqueued. To recompute the same window on purpose, pass a new `--rerun-tag` (1-32 characters of `A-Za-z0-9._-`, same rule as `metrics daily-start --rerun-tag`); the same tag twice is a duplicate again. It drops every flag with no Go-side equivalent (`--window-days`, `--repo-id`, `--team-id`, every LLM flag, `--force`, `--persist-evidence-snippets`, `--allow-unscoped`, `--analytics-db`/`--db`) — only an org id and an optional `--from`/`--to` window exist on the request.
 
 During preprocessing, the native materializer emits an `investment repo
 attribution` log record scoped by `org_id` and `run_id`. The `own_signal`,
@@ -2175,47 +2194,22 @@ attribution` log record scoped by `org_id` and `run_id`. The `own_signal`,
 are log fields, not Prometheus counters or a successful-run completion signal.
 See [Investment repository inheritance](../data-models/investment.md#repository-inheritance)
 for the allocation precedence and persisted evidence. These counts describe the
-hierarchy stage, before the final team ownership fallback.
+hierarchy stage; a unit with no repository evidence is unattributed (there is no team ownership fallback).
 
-The `investment team repository fallback` log record reports what the final
-equal-share fallback did with every component in the run. `allocated`,
-`own_repo`, `stronger_allocation`, `direct_repo_evidence`, `no_eligible_owner`
-and `window_skipped` partition the `components` count: they always sum to it.
-`repo_shares` counts the repository rows the fallback wrote, and `donor_rows`
-and `donor_issues` report the read side -- how much eligible ownership evidence
-the run loaded: the donor team rows of the issues plus the ownership rows of
-those donor teams that began at or before the run. `ownership_as_of` names the bound
-of that read, which is the run's own `computed_at`, never wall-clock time. Each
-unit's intervals are evaluated at the end of the unit's own span, never later
-than that bound; `ownership_as_of_first_unit` and `ownership_as_of_last_unit`
-name the earliest and the latest such time of the run, and are empty when no
-unit reached the fallback.
-
-**Every one of these fields is emitted on every run, including when its value is
-zero.** A field that disappears at zero cannot be told apart from a field that
-was never computed, so a zero is always written out. This matters for reading
-the record: a zero `allocated` on its own is ambiguous. With a high `own_repo`
-or `direct_repo_evidence` it means stronger evidence already resolved the units,
-which is the healthy case. With a high `no_eligible_owner` AND `donor_rows=0` it
-means no eligible ownership reached the run at all, which points at the team and
-repository-ownership sync, not at this allocator. A failed donor read is neither
-case -- it fails the run before anything is written.
-
-The run statistics expose the same counts as `repo_ownership_fallback`,
-`repo_ownership_own_repo`, `repo_ownership_stronger_allocation`,
-`repo_ownership_direct_repo_evidence`, `repo_ownership_no_eligible_owner`,
-`repo_ownership_window_skipped`, `repo_ownership_repo_shares`,
-`repo_ownership_donor_rows` and `repo_ownership_donor_issues`. No new CLI option
-is required. Inspect persisted `work_unit_repo_effort` rows from the latest
-generation to distinguish `team_ownership` from direct churn and
-`hierarchy_cascade`. See
-[Team ownership fallback](../data-models/investment.md#team-ownership-fallback).
+The run no longer emits an `investment team repository fallback` record, and
+the run statistics no longer carry the `repo_ownership_*` fields:
+the team-ownership fallback was removed. Inspect persisted
+`work_unit_repo_effort` rows from the latest generation to distinguish direct
+churn, `hierarchy_cascade` and the unattributed `empty` and
+`active_hours_unassigned` rows; rows of an older generation with
+`allocation_source=team_ownership` disappear as their units are recomputed. See
+[Units without repository evidence](../data-models/investment.md#units-without-repository-evidence).
 
 ---
 
 ## Recommendations
 
-> **CHAOS-5307:** the `dev-hops recommendations compute` preview verb was deleted — a Python CLI running `RuleEngine` directly is Python compute executing in production tooling, read-only or not (team-lead ruling). There is no `dev-hops` wrapper verb for recommendations. For the persisted, generation-deduped compute, use `dho workers metrics remaining trigger-backstop --family recommendations --team <team-uuid>` (or `--all-teams`) `--window <days> --review-evidence <why> --reason <code> --correlation-id <id>` directly — **not** `metrics remaining start`, which only accepts `complexity`/`dora`/`release_impact` and rejects `recommendations` outright. A Go-native `workerctl recommendations preview` verb is tracked as a follow-up so the read-only preview capability itself is not lost.
+> **Deleted:** the `dev-hops recommendations compute` preview verb no longer exists — a Python CLI running `RuleEngine` directly is Python compute executing in production tooling, read-only or not. There is no `dev-hops` wrapper verb for recommendations. For the persisted, generation-deduped compute, use `dho workers metrics remaining trigger-backstop --family recommendations --team <team-uuid>` (or `--all-teams`) `--window <days> --review-evidence <why> --reason <code> --correlation-id <id>` directly — **not** `metrics remaining start`, which only accepts `complexity`/`dora`/`release_impact` and rejects `recommendations` outright. A Go-native `workerctl recommendations preview` verb is tracked as a follow-up so the read-only preview capability itself is not lost.
 
 ---
 
@@ -2229,7 +2223,7 @@ AI-generated reports are managed through the GraphQL API and executed by Go's na
 
 1. **Create** a SavedReport via the Report Center UI or `createSavedReport` mutation
 2. **Trigger** execution manually ("Run Now") or via a cron schedule
-3. The trigger writes a durable outbox row, relayed to River and executed by Go's `report.execute_on_demand`/`report.execute_scheduled` (CHAOS-4440; CHAOS-3093 deleted the last Celery report task, `execute_saved_report`)
+3. The trigger writes a durable outbox row, relayed to River and executed by Go's `report.execute_on_demand`/`report.execute_scheduled` (no Celery report task remains)
 4. The engine fetches metrics from ClickHouse, generates insights, and renders markdown
 5. Results are persisted as a `ReportRun` with rendered content and provenance records
 
@@ -2243,7 +2237,7 @@ Each report requires a `ReportPlan` that defines scope, time range, sections, an
 
 ### Scheduling
 
-Reports can be scheduled with a five-field cron expression (via `scheduleCron` in the create/update mutation). Create and update validate the field count and value ranges before persistence. Invalid input returns an error that identifies how to correct it. The periodic scan for due reports was `dispatch_scheduled_reports` (a Celery beat task, run every 5 minutes) until CHAOS-4026 (2026-08-21) deleted it -- Go's `report.execute_scheduled` fixed schedule now owns that scan. `execute_saved_report` (the per-report execution work) was not part of that cleanup at the time, but CHAOS-3093 has since deleted it outright -- report execution is now Go-only end to end, dispatched through the durable outbox and River.
+Reports can be scheduled with a five-field cron expression (via `scheduleCron` in the create/update mutation). Create and update validate the field count and value ranges before persistence. Invalid input returns an error that identifies how to correct it. The periodic scan for due reports was `dispatch_scheduled_reports` (a Celery beat task, run every 5 minutes) until it was deleted. Go's `report.execute_scheduled` fixed schedule now owns that scan, and report execution is Go-only end to end, dispatched through the durable outbox and River.
 
 ### Worker Configuration
 
@@ -2365,7 +2359,7 @@ dho migrate postgres heads
 
 `upgrade` takes no revision argument: it applies the head baseline to an empty database, then every revision after the head. `downgrade` takes a target: a revision id (`0138` to `0145`, which reverts everything above it) or `-N` (revert N steps).
 
-`upgrade` and `status` require `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`, because the head has the River cutover (revision `0066`) applied, as production does, and `RIVER_DATABASE_SCHEMA` set to the head's River schema (`river`). `dho` refuses any other value and names it.
+`upgrade` and `status` require `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`, because the head has the River migration (revision `0066`) applied, as production does, and `RIVER_DATABASE_SCHEMA` set to the head's River schema (`river`). `dho` refuses any other value and names it.
 
 `dho migrate status --check` is read-only. It exits 1 if a required migration is pending and 0 if the application schema is current. Only this flat form takes `--check`: `dho migrate postgres status` takes no flags.
 
@@ -2423,7 +2417,7 @@ dho sync git --provider github \
   --repo myrepo
 
 # 3. Work items sync automatically via the native Go provider-sync route +
-#    webhooks (CHAOS-5351) -- no manual command. To force a backfill window
+#    webhooks -- no manual command. To force a backfill window
 #    for a specific sync config: dho backfill run --config-id <uuid>
 #    [--since ...] [--before ...]
 

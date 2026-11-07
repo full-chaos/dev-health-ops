@@ -9,10 +9,13 @@ internal/api/pybody
 internal/api/pyjson
 internal/api/pytime
 internal/api/recordvalidation
+internal/apiservice/accessrouting
 internal/atlassianteams
 internal/audit
+internal/auth/accessverify
 internal/auth/acraudience
 internal/auth/clientaddr
+internal/auth/contracts
 internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/edgetoken
@@ -21,8 +24,15 @@ internal/auth/passwordhash
 internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/pushevent
+internal/auth/pushlifecycle
+internal/auth/pushreconcile
+internal/auth/pushreconcile/pagereader
+internal/auth/pushreconcile/projectionreader
+internal/auth/pushreconcile/reconcilejob
+internal/auth/repoidentityevent
 internal/auth/repokey
 internal/auth/sessionid
+internal/authzenforce
 internal/cacheinvalidation
 internal/chmigrate
 internal/chmigrate/chgate
@@ -114,6 +124,7 @@ internal/platform/fernet
 internal/platform/health
 internal/platform/lifecycle
 internal/platform/logging
+internal/platform/netaddr
 internal/platform/otlpmetrics
 internal/platform/pgident
 internal/platform/postureguard
@@ -171,6 +182,7 @@ internal/teamprovider
 internal/teamresolve
 internal/testsupport/chschema
 internal/testsupport/containers
+internal/testsupport/edtokens
 internal/testsupport/egressallow
 internal/testsupport/fakehttp
 internal/testsupport/fakepg

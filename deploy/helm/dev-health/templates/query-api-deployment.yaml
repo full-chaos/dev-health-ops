@@ -261,6 +261,9 @@ spec:
               mountPath: {{ .Values.queryApi.envelope.jwksPath }}
               subPath: {{ base .Values.queryApi.envelope.jwksPath }}
               readOnly: true
+            {{- with .Values.queryApi.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- with .Values.queryApi.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}
@@ -286,6 +289,9 @@ spec:
             secretName: {{ include "dev-health.queryApiJwksSecretName" . }}
             items:
               - {key: {{ base .Values.queryApi.envelope.jwksPath }}, path: {{ base .Values.queryApi.envelope.jwksPath }}}
+        {{- with .Values.queryApi.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with .Values.queryApi.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

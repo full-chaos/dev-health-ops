@@ -32,6 +32,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/opportunities"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
@@ -181,7 +182,7 @@ func teamScopeConsumers() []struct {
 				query.Set("scope_id", scopeIDs[0])
 			}
 			request := httptest.NewRequest(http.MethodGet, "/api/v1/work-units?"+query.Encode(), nil)
-			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID}))
+			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID, Scope: pepgate.Legacy(teamScopeReachOrgID)}))
 			newWorkUnitsGetHandler(reader)(httptest.NewRecorder(), request)
 		}},
 		{"POST /api/v1/work-units", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
@@ -196,7 +197,7 @@ func teamScopeConsumers() []struct {
 				t.Fatalf("marshal body: %v", err)
 			}
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/work-units", bytes.NewReader(body))
-			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID}))
+			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID, Scope: pepgate.Legacy(teamScopeReachOrgID)}))
 			newWorkUnitsPostHandler(reader)(httptest.NewRecorder(), request)
 		}},
 		{"POST /api/v1/investment/explain", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
@@ -236,7 +237,7 @@ func teamScopeConsumers() []struct {
 			request := httptest.NewRequest(http.MethodPost,
 				"/api/v1/work-units/"+workUnitID+"/explain?"+query.Encode(), nil)
 			request.SetPathValue("work_unit_id", workUnitID)
-			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID}))
+			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID, Scope: pepgate.Legacy(teamScopeReachOrgID)}))
 			newWorkUnitExplainHandler(reader, nil, nil, nil, testPlatformGate{})(httptest.NewRecorder(), request)
 		}},
 		{"GET/POST /api/v1/opportunities", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {

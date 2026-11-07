@@ -37,6 +37,12 @@ type BackfillTarget struct {
 	// platform roles, so the backfill neither grants nor revokes one; a
 	// difference is reported as RoleSkipped.
 	PlatformRolesOwned bool
+	// InsertOnly creates the user when the auth schema does not hold it and
+	// never changes an existing one (CHAOS-13107: compose's auth-users-backfill,
+	// where auth-service owns users and public.users may be stale). An existing
+	// principal is reported as Kept. Off, the default, an existing user is made
+	// to agree with t.
+	InsertOnly bool
 }
 
 // notExpiredSQL is the expiry half of the platform role store's rule, over the
@@ -71,6 +77,8 @@ type BackfillResult struct {
 	// RoleExpiredGranted is the id of an expired assignment a person granted
 	// to a superuser: the backfill leaves it and reports it.
 	RoleExpiredGranted *uuid.UUID
+	// Kept is set when InsertOnly found the principal and wrote nothing.
+	Kept bool
 }
 
 type backfillState struct {
@@ -110,6 +118,11 @@ func (s *Store) BackfillUser(ctx context.Context, t BackfillTarget, dryRun bool)
 	st, found, err := s.readBackfillState(ctx, t.ID)
 	if err != nil {
 		return res, err
+	}
+	if found && t.InsertOnly {
+		// auth-service owns this user: public.users may be stale, so nothing is written (CHAOS-13107).
+		res.Kept = true
+		return res, nil
 	}
 	src := source{email: t.Email, emailLower: storedLoginKey(t.Email), active: t.Active, verified: t.Verified}
 	if !found {
@@ -350,7 +363,7 @@ WHERE issuer = $1 AND provider = $2 AND subject = $3`, key.Issuer, string(key.Pr
 	if dryRun {
 		return true, nil
 	}
-	if err := s.projectIdentity(ctx, key, t.ID); err != nil {
+	if err := s.projectIdentity(ctx, key, t.ID, ""); err != nil {
 		return false, err
 	}
 	return true, nil

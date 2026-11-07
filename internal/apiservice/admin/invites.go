@@ -127,6 +127,9 @@ func (h *handlers) createOrgInvite(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
 		return
 	}
+	if h.orgProvision == nil && h.invites.RefuseUnconfigured(w) {
+		return
+	}
 	emailRaw, role := input.Email, input.Role
 
 	// `uuid.UUID(current_user.user_id)` cannot fail here: the guard already

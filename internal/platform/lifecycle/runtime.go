@@ -32,6 +32,13 @@ type ShutdownBudgetSource interface {
 	ShutdownBudget() time.Duration
 }
 
+// ShutdownDrainSource is a component whose work can outlive its shutdown attempt
+// (a handler that ignores its cancelled context). The runtime stops the next
+// component only after Drained closes, or after the global shutdown deadline.
+type ShutdownDrainSource interface {
+	Drained() <-chan struct{}
+}
+
 // ShutdownTimeoutSource lets a component state the shutdown timeout the WHOLE
 // runtime needs when it differs from the configured one: the worker derives its
 // grace from the selected queues when --shutdown-timeout is not set, and the
@@ -204,6 +211,13 @@ func (r *Runtime) shutdown(parent context.Context, started []Component) error {
 		case <-attemptCtx.Done():
 			attemptCancel()
 			shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown component %s: %w", component.Name(), context.DeadlineExceeded))
+		}
+		if source, ok := component.(ShutdownDrainSource); ok {
+			select {
+			case <-source.Drained():
+			case <-shutdownCtx.Done():
+				shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown component %s: not drained: %w", component.Name(), context.DeadlineExceeded))
+			}
 		}
 	}
 	return errors.Join(shutdownErrs...)

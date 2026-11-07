@@ -1,6 +1,7 @@
 package apiservice
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/acrcredentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
@@ -150,12 +151,12 @@ type Deps struct {
 	Decryptor providerfoundation.FernetDecryptor
 	// GitHubApp and GitHubStateSigner configure the GitHub App install
 	// routes (internal/api/githubapp): the App's identity read from
-	// GITHUB_APP_* when the api starts, and the JWT secret, issuer and
+	// GITHUB_APP_* when the api starts, and the GITHUB_APP_STATE_SECRET key, issuer and
 	// audience its install state is signed with.
 	GitHubApp         githubapp.Config
 	GitHubStateSigner githubapp.Signer
-	// SSOStateSecret keys the SSO login state (OIDC, OAuth, SAML): SSO_STATE_SECRET, else JWT_SECRET_KEY.
-	SSOStateSecret, SSOStateSecretFallback string
+	// SSOStateSecret keys the SSO login state (OIDC, OAuth, SAML): SSO_STATE_SECRET only.
+	SSOStateSecret string
 	// GitHubAppHTTPClient, GitHubAppURL and GitHubAppAPIURL are the install
 	// callback's outbound seam: nil/empty in production (github.com and
 	// api.github.com, no redirects); the venue oracle points them at a stub.
@@ -205,10 +206,16 @@ type Deps struct {
 	// SELECT on projects. See EnvACRAccessProjectScope for the acr
 	// DisallowUnknownFields dependency and the roll order.
 	ACRAccessProjectScope bool
+	// ACRRevoker is the credential revoke route's acr client (EnvACRRevokeURL and its two siblings); nil is not
+	// configured, and the route answers 503.
+	ACRRevoker acrcredentials.Revoker
 	// SessionIssuer issues the session and sso routes' token pairs at
 	// auth-service when it owns sessions (AUTH_PROXY_SESSIONS); nil mints
 	// them in go-api.
 	SessionIssuer sessionissue.Issuer
+	// Delegator starts and ends the admin impersonation session at auth-service when AUTH_PROXY_IMPERSONATION is on;
+	// nil leaves go-api the writer of the session.
+	Delegator sessionissue.Delegator
 	// OrgReactivator reactivates an organization in auth-service before the
 	// admin PATCH writes is_active=true; nil (AUTH_PROXY_ORG_PROVISIONING off)
 	// leaves the PATCH as it was.
@@ -384,8 +391,13 @@ func buildDeps(
 		// per-probe check flapped readiness. The cached check runs it
 		// single-flight off the probe's deadline and serves a passing answer
 		// for a bounded window (see postgres.CachedPostureCheck).
+		apiPosture, err := apiPostureFor(authProxy, envsecrets.ProcessLookup)
+		if err != nil {
+			pool.Close()
+			return Deps{}, nil, dependencyFailure(ctx, logger, "api_platform_roles_owned", "api_platform_roles_owned_config_invalid", err)
+		}
 		postureCheck := postgres.NewCachedPostureCheck(
-			pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema, postgres.APIPosture(authProxy.Enabled(AuthSessions)),
+			pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema, apiPosture,
 			postgres.PostureCheckOptions{Logger: logger},
 		)
 		if err := registry.RegisterRequired(apiDatabaseCheck, postureCheck.Check); err != nil {

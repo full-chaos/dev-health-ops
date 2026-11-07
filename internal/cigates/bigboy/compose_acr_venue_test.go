@@ -7,9 +7,9 @@ import (
 )
 
 var (
-	composeACRAll   = []string{"acr-api", "acr-db-acl", "acr-db-init", "acr-entitlement-standin", "acr-falkordb", "acr-mcp", "acr-migrate", "acr-postgres", "acr-projector"}
-	composeACRVenue = []string{"acr-db-acl", "acr-db-init", "acr-entitlement-standin", "acr-migrate", "acr-postgres"}
-	composeACRUp    = []string{"acr-postgres", "acr-db-init", "acr-migrate", "acr-db-acl", "acr-entitlement-standin", "acr-falkordb", "acr-api", "acr-projector", "acr-mcp"}
+	composeACRAll   = []string{"acr-api", "acr-db-acl", "acr-db-init", "acr-falkordb", "acr-mcp", "acr-migrate", "acr-postgres", "acr-projector"}
+	composeACRVenue = []string{"acr-db-acl", "acr-db-init", "acr-migrate", "acr-postgres"}
+	composeACRUp    = []string{"acr-postgres", "acr-db-init", "acr-migrate", "acr-db-acl", "acr-falkordb", "acr-api", "acr-projector", "acr-mcp"}
 	composeACRPins  = []string{"BIGBOY_ACR_API_IMAGE", "BIGBOY_ACR_MCP_IMAGE", "BIGBOY_ACR_POSTGRES_IMAGE", "BIGBOY_ACR_NGINX_IMAGE", "BIGBOY_ACR_FALKORDB_IMAGE"}
 )
 
@@ -58,15 +58,13 @@ func composeACRDataHostPaths(g *guard) {
 	} {
 		g.expect(binds[key] == want, "bind %s has source %q, want the old project's host path %q", key, binds[key], want)
 	}
-	name := str(at(r.top, "volumes", "acr_entitlement_tmp", "name"))
-	g.expect(name == "dev-health-acr-entitlement-tmp", "volume acr_entitlement_tmp is named %q, want dev-health-acr-entitlement-tmp", name)
 }
 
 func composeACRContainerNames(g *guard) {
 	r := composeACR(g)
 	want := map[string]string{
 		"acr-api": "dev-health-acr-mcp-acr-api-1", "acr-db-acl": "dev-health-acr-mcp-acr-db-acl-1",
-		"acr-db-init": "dev-health-acr-mcp-acr-db-init-1", "acr-entitlement-standin": "dev-health-acr-mcp-acr-entitlement-standin-1",
+		"acr-db-init":  "dev-health-acr-mcp-acr-db-init-1",
 		"acr-falkordb": "dev-health-acr-mcp-falkordb-1", "acr-mcp": "dev-health-acr-mcp-acr-mcp-1",
 		"acr-migrate": "dev-health-acr-mcp-acr-migrate-1", "acr-postgres": "dev-health-acr-mcp-postgres-1",
 		"acr-projector": "dev-health-acr-mcp-acr-projector-1",
@@ -91,7 +89,7 @@ func composeACRNetworks(g *guard) {
 		want := []string{"acr"}
 		switch n {
 		case "acr-api":
-			want = []string{"acr", "dho-clickhouse-readers", "dho-query-internal"}
+			want = []string{"acr", "acr_auth_workload", "dho-clickhouse-readers", "dho-query-internal"}
 		case "acr-projector":
 			want = []string{"acr", "dho-clickhouse-readers"}
 		}
@@ -204,7 +202,7 @@ func composeACRImagesPinned(g *guard) {
 		{"BIGBOY_ACR_API_IMAGE", true, []string{"acr-api", "acr-migrate", "acr-projector"}},
 		{"BIGBOY_ACR_MCP_IMAGE", true, []string{"acr-mcp"}},
 		{"BIGBOY_ACR_POSTGRES_IMAGE", false, []string{"acr-postgres", "acr-db-init", "acr-db-acl"}},
-		{"BIGBOY_ACR_NGINX_IMAGE", false, []string{"acr-entitlement-standin"}},
+		{"BIGBOY_ACR_NGINX_IMAGE", false, nil}, // auth-issuer (profile auth): compose_auth_venue_test.go
 		{"BIGBOY_ACR_FALKORDB_IMAGE", false, []string{"acr-falkordb"}},
 	} {
 		re := composeDigestEndRe
@@ -254,18 +252,43 @@ func composeACRTalksToRealOps(g *guard) {
 	api := r.services["acr-api"]
 	env := mp(api["environment"])
 	g.expect(str(env["ACR_DEV_HEALTH_ENTITLEMENT_URL"]) == "http://go-api:8091", "acr-api ACR_DEV_HEALTH_ENTITLEMENT_URL=%q, want http://go-api:8091", str(env["ACR_DEV_HEALTH_ENTITLEMENT_URL"]))
-	g.expect(str(env["ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE"]) == "/run/secrets/acr_ops_svc_token", "acr-api entitlement token is not the acr_ops_svc_token secret file")
+	g.expect(str(env["ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL"]) == "workload", "acr-api ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=%q, want workload", str(env["ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL"]))
+	_, tokenFile := env["ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE"]
+	g.expect(!tokenFile, "acr-api still names a service token file (ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE)")
+	for k, want := range map[string]string{
+		"ACR_AUTH_WORKLOAD_EXCHANGE_URL":     "http://auth-service:8095",
+		"ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP": "true",
+		"ACR_AUTH_WORKLOAD_ISSUER":           composeAuthIssuer,
+		"ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE":   "/run/workload/acr-api.bootstrap",
+	} {
+		g.expect(str(env[k]) == want, "acr-api %s=%q, want %q", k, str(env[k]), want)
+	}
+	_, subjectFile := env["ACR_AUTH_WORKLOAD_SUBJECT_FILE"]
+	g.expect(!subjectFile, "acr-api names ACR_AUTH_WORKLOAD_SUBJECT_FILE too: the bootstrap file is the one subject")
 	var secrets []string
 	for _, s := range list(api["secrets"]) {
 		secrets = append(secrets, str(at(s, "source")))
 	}
-	g.expect(composeSet(secrets...)["acr_ops_svc_token"], "acr-api does not mount the secret acr_ops_svc_token (mounts %v)", secrets)
-	_, standin := mp(api["depends_on"])["acr-entitlement-standin"]
-	g.expect(!standin, "acr-api depends on the entitlement stand-in")
+	g.expect(!composeSet(secrets...)["acr_ops_svc_token"], "acr-api still mounts the secret acr_ops_svc_token (mounts %v)", secrets)
+	var bootstrap bool
+	for _, v := range list(api["volumes"]) {
+		if str(at(v, "source")) == "acr_workload_bootstrap" {
+			bootstrap = str(at(v, "type")) == "volume" && str(at(v, "target")) == "/run/workload" && at(v, "read_only") == true
+		}
+	}
+	g.expect(bootstrap, "acr-api does not mount the volume acr_workload_bootstrap read-only at /run/workload")
+	_, standin := composeMust(g, composeIn{profiles: []string{"acr", "acr-venue", "auth"}}).services["acr-entitlement-standin"]
+	g.expect(!standin, "the entitlement stand-in is still in the file: prod has none, and acr-api sends a workload token")
+	_, standinSecret := mp(r.top["secrets"])["acr_entitlement_token"]
+	g.expect(!standinSecret, "the file still declares the stand-in's secret acr_entitlement_token")
 	_, retries := env["ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES"]
 	g.expect(!retries, "acr-api sets the removed ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES")
-	file := str(at(r.top, "secrets", "acr_ops_svc_token", "file"))
-	g.expect(file == composeSecretsDir+"ops_svc_acr_token", "secret acr_ops_svc_token reads %q, want %sops_svc_acr_token", file, composeSecretsDir)
+	_, svcSecret := mp(r.top["secrets"])["acr_ops_svc_token"]
+	g.expect(!svcSecret, "the file still declares the secret acr_ops_svc_token")
+	text := g.read(composeFile)
+	for _, gone := range []string{"svc_acr_", "acr_ops_svc_token", "ops_svc_acr_token", "ACR_OPS_SVC_TOKEN_FILE"} {
+		g.expect(!strings.Contains(text, gone), "compose.bigboy.yml still names %s: the venue keeps no svc_acr_ service token", gone)
+	}
 	_, apiNet := mp(api["networks"])["dho-query-internal"]
 	_, goNet := mp(composeMust(g, composeIn{}).services["go-api"]["networks"])["dho-query-internal"]
 	g.expect(apiNet && goNet, "acr-api and go-api do not share the network dho-query-internal (acr-api %v, go-api %v)", apiNet, goNet)
@@ -273,18 +296,14 @@ func composeACRTalksToRealOps(g *guard) {
 
 const composeLLMSource = "ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"
 
-func composeACROrgLLMSourcePassedThrough(g *guard) {
+func composeACROrgLLMSourceIsGone(g *guard) {
 	for _, line := range strings.Split(g.read(composePins), "\n") {
-		g.expect(!strings.HasPrefix(line, composeLLMSource), "images.env sets %s (a persistent BYO setting bills chris's key)", composeLLMSource)
+		g.expect(!strings.HasPrefix(line, composeLLMSource), "images.env sets %s, which acr no longer reads (CHAOS-12997)", composeLLMSource)
 	}
-	off := composeACR(g)
-	got := mp(off.services["acr-api"]["environment"])[composeLLMSource]
-	g.expect(got == "", "acr-api %s renders %q with nothing set, want empty", composeLLMSource, got)
-	on := composeMust(g, composeIn{profiles: []string{"acr"}, env: composeEnv(map[string]string{composeLLMSource: "ops"})})
-	got = mp(on.services["acr-api"]["environment"])[composeLLMSource]
-	g.expect(got == "ops", "acr-api %s renders %q with the environment set to ops, want ops", composeLLMSource, got)
-	_, proj := mp(off.services["acr-projector"]["environment"])[composeLLMSource]
-	g.expect(!proj, "acr-projector reads %s; only acr-api does", composeLLMSource)
+	for _, name := range []string{"acr-api", "acr-projector", "acr-mcp"} {
+		_, passed := mp(composeACR(g).services[name]["environment"])[composeLLMSource]
+		g.expect(!passed, "%s passes %s, which acr no longer reads (CHAOS-12997)", name, composeLLMSource)
+	}
 }
 
 var (
@@ -354,6 +373,29 @@ func composeACROldDefaults(g *guard) {
 	g.expect(got == "false", "acr-projector %s=%q without the env-file line, want the old default false", key, got)
 }
 
+func composeACRDBInitScriptIsPinned(g *guard) {
+	r := composeACR(g)
+	pins := composeEnvFile(g.read(composePins))
+	want := pins["ACR_DB_INIT_SCRIPT"]
+	g.expect(strings.HasPrefix(want, "/var/lib/oci-cache/mcp-venue/") && strings.HasSuffix(want, ".sh"), "images.env ACR_DB_INIT_SCRIPT=%q is not a script path under /var/lib/oci-cache/mcp-venue/", want)
+	for _, n := range []string{"acr-db-init", "acr-db-acl"} {
+		var src []string
+		for _, v := range list(r.services[n]["volumes"]) {
+			if str(at(v, "target")) == "/usr/local/bin/acr-db-init" {
+				src = append(src, str(at(v, "source")))
+			}
+		}
+		g.expect(len(src) == 1 && src[0] == want, "%s mounts the script from %v, want only the ACR_DB_INIT_SCRIPT path %q (no hand-kept checkout)", n, src, want)
+	}
+	if strings.Contains(g.read(composeFile), "ACR_VENUE_DIR") {
+		g.failf("%s still names ACR_VENUE_DIR", composeFile)
+	}
+	pin := composeEnvFile(g.read("ci/bigboy/acr-db-init.pin"))
+	g.expect(regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(pins["BIGBOY_ACR_COMMIT"]), "images.env BIGBOY_ACR_COMMIT=%q is not a 40-hex acr commit", pins["BIGBOY_ACR_COMMIT"])
+	g.expect(pin["ACR_DB_INIT_COMMIT"] == pins["BIGBOY_ACR_COMMIT"], "acr-db-init.pin commit %q != images.env BIGBOY_ACR_COMMIT %q", pin["ACR_DB_INIT_COMMIT"], pins["BIGBOY_ACR_COMMIT"])
+	g.expect(regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(pin["ACR_DB_INIT_SHA256"]), "acr-db-init.pin sha256 %q is not 64 hex", pin["ACR_DB_INIT_SHA256"])
+}
+
 var composeACRChecks = []check{
 	{"the_default_stack_does_not_start_an_acr_service", composeACRDefaultStack},
 	{"each_acr_profile_renders_alone_and_adds_only_acr_services", composeACRProfilesAddOnlyACR},
@@ -366,9 +408,10 @@ var composeACRChecks = []check{
 	{"the_acr_images_are_pinned_by_registry_digest_and_a_missing_pin_fails_the_render", composeACRImagesPinned},
 	{"the_start_order_of_the_acr_stack_is_kept", composeACRStartOrder},
 	{"acr_api_talks_to_the_real_ops_and_the_stand_in_is_off_its_path", composeACRTalksToRealOps},
-	{"the_org_llm_config_source_is_passed_through_and_no_file_sets_it", composeACROrgLLMSourcePassedThrough},
+	{"the_removed_org_llm_config_source_is_not_passed_and_no_file_sets_it", composeACROrgLLMSourceIsGone},
 	{"the_switch_procedure_removes_the_old_containers_and_keeps_the_data", composeACRSwitchProcedure},
 	{"the_acr_settings_keep_the_old_defaults_where_the_cutover_changes_the_env", composeACROldDefaults},
+	{"the_acr_db_init_script_is_the_one_of_the_pinned_acr_commit", composeACRDBInitScriptIsPinned},
 }
 
 func TestComposeACRVenueReal(t *testing.T) { runReal(t, composeACRChecks...) }
@@ -382,15 +425,13 @@ func TestComposeACRVenuePlanted(t *testing.T) {
 			check: composeACRProfilesAddOnlyACR, want: "profiles [acr-venue] add"},
 		{name: "falkordb data moves", mutate: mut(composeFile, "source: /var/lib/oci-cache/mcp-venue/falkordb-data", "source: /var/lib/oci-cache/falkordb-new"),
 			check: composeACRDataHostPaths, want: "acr-falkordb /var/lib/falkordb/data"},
-		{name: "entitlement volume renamed", mutate: mut(composeFile, "name: dev-health-acr-entitlement-tmp", "name: acr-entitlement-tmp"),
-			check: composeACRDataHostPaths, want: "acr_entitlement_tmp"},
 		{name: "postgres container renamed", mutate: mut(composeFile, "container_name: dev-health-acr-mcp-postgres-1", "container_name: dev-health-acr-postgres-1"),
 			check: composeACRContainerNames, want: "acr-postgres container_name"},
 		{name: "falkordb alias lost", mutate: mut(composeFile, "aliases: [falkordb]", "aliases: [graph]"),
 			check: composeACRContainerNames, want: "acr-falkordb answers"},
-		{name: "ops postgres on the acr network", mutate: mut(composeFile, "    image: postgres:18-alpine\n    networks:\n      dev-health: null\n    ports:\n    - ${POSTGRES_PORT", "    image: postgres:18-alpine\n    networks:\n      dev-health: null\n      acr: null\n    ports:\n    - ${POSTGRES_PORT"),
+		{name: "ops postgres on the acr network", mutate: mut(composeFile, "    image: postgres:18-alpine\n    networks:\n      auth_plane: null\n      dev-health: null\n    ports:\n    - ${POSTGRES_PORT", "    image: postgres:18-alpine\n    networks:\n      auth_plane: null\n      dev-health: null\n      acr: null\n    ports:\n    - ${POSTGRES_PORT"),
 			check: composeACRContainerNames, want: "dev-health postgres"},
-		{name: "acr-api on the ops network", mutate: mut(composeFile, "      dho-clickhouse-readers: null\n      dho-query-internal: null\n    profiles: [acr]", "      dho-clickhouse-readers: null\n      dho-query-internal: null\n      dev-health: null\n    profiles: [acr]"),
+		{name: "acr-api on the ops network", mutate: mut(composeFile, "      acr_auth_workload: null\n      dho-clickhouse-readers: null\n      dho-query-internal: null\n    profiles: [acr]", "      acr_auth_workload: null\n      dho-clickhouse-readers: null\n      dho-query-internal: null\n      dev-health: null\n    profiles: [acr]"),
 			check: composeACRNetworks, want: "acr-api is on networks"},
 		{name: "acr-api query url by address", mutate: mut(composeFile, "ACR_DATA_QUERY_URL: http://query-api:8095", "ACR_DATA_QUERY_URL: http://10.199.79.2:8095"),
 			check: composeACRNetworks, want: "ACR_DATA_QUERY_URL"},
@@ -416,6 +457,10 @@ func TestComposeACRVenuePlanted(t *testing.T) {
 			check: composeACRSecretsAreFiles, want: "secret acr_runtime_dsn"},
 		{name: "dsn value inline", mutate: mut(composeFile, "ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn", "ACR_POSTGRES_MIGRATION_DSN: postgres://acr:pw@postgres/acr"),
 			check: composeACRSecretsAreFiles, want: "credential in a URL"},
+		{name: "acr-db-acl mounts a hand-kept checkout", mutate: mut(composeFile, "${ACR_DB_INIT_SCRIPT:?ACR_DB_INIT_SCRIPT is required (a line of the pins file ci/bigboy/images.env, kept in _records/images.env; acr-db-init-fetch.sh writes the script there at the pinned acr commit)}", "/home/ubuntu/devhealth/dev-health-acr-mcp/deploy/compose/acr-db-init.sh"),
+			check: composeACRDBInitScriptIsPinned, want: "mounts the script from"},
+		{name: "pin file drifts from images.env", copy: append([]string{"ci/bigboy/acr-db-init.pin"}, composeFiles...), mutate: mut("ci/bigboy/acr-db-init.pin", "ACR_DB_INIT_COMMIT=d168fa95", "ACR_DB_INIT_COMMIT=0000000"),
+			check: composeACRDBInitScriptIsPinned, want: "!= images.env BIGBOY_ACR_COMMIT"},
 		{name: "migrate runs the mcp image", mutate: mut(composeFile, "    image: ${BIGBOY_ACR_API_IMAGE:?", "    image: ${BIGBOY_ACR_MCP_IMAGE:?"),
 			check: composeACRImagesPinned, want: "acr-migrate renders image"},
 		{name: "falkordb pin has a default", mutate: mut(composeFile, "${BIGBOY_ACR_FALKORDB_IMAGE:?BIGBOY_ACR_FALKORDB_IMAGE is required", "${BIGBOY_ACR_FALKORDB_IMAGE:-falkordb/falkordb:latest"),
@@ -424,14 +469,26 @@ func TestComposeACRVenuePlanted(t *testing.T) {
 			check: composeACRImagesPinned, want: "pin BIGBOY_ACR_NGINX_IMAGE"},
 		{name: "mcp starts before api is up", mutate: mut(composeFile, "      acr-api:\n        condition: service_started", "      acr-api:\n        condition: service_healthy"),
 			check: composeACRStartOrder, want: "acr-mcp depends_on"},
+		{name: "the stand-in comes back", mutate: mut(composeFile, "  acr-api:\n    container_name: dev-health-acr-mcp-acr-api-1\n", "  acr-entitlement-standin:\n    image: ${BIGBOY_ACR_NGINX_IMAGE:?BIGBOY_ACR_NGINX_IMAGE is required}\n    profiles: [acr-venue]\n    restart: unless-stopped\n  acr-api:\n    container_name: dev-health-acr-mcp-acr-api-1\n"),
+			check: composeACRTalksToRealOps, want: "stand-in is still in the file"},
 		{name: "acr-api back on the stand-in", mutate: mut(composeFile, "${ACR_DEV_HEALTH_ENTITLEMENT_URL:-http://go-api:8091}", "${ACR_DEV_HEALTH_ENTITLEMENT_URL:-http://acr-entitlement-standin:8088}"),
 			check: composeACRTalksToRealOps, want: "ACR_DEV_HEALTH_ENTITLEMENT_URL"},
+		{name: "acr-api back on the service token", mutate: mut(composeFile, "      ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: workload\n", "      ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: service_token\n      ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_svc_token\n"),
+			check: composeACRTalksToRealOps, want: "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL"},
+		{name: "acr-api keeps the token file beside the workload", mutate: mut(composeFile, "      ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: workload\n", "      ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: workload\n      ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_entitlement_token\n"),
+			check: composeACRTalksToRealOps, want: "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE"},
+		{name: "acr-api issuer differs", mutate: mut(composeFile, "      ACR_AUTH_WORKLOAD_ISSUER: https://auth.bigboy.internal:8443\n", "      ACR_AUTH_WORKLOAD_ISSUER: https://auth.bigboy.internal\n"),
+			check: composeACRTalksToRealOps, want: "ACR_AUTH_WORKLOAD_ISSUER"},
+		{name: "acr-api bootstrap mount writable", mutate: mut(composeFile, "      source: acr_workload_bootstrap\n      target: /run/workload\n      read_only: true\n    working_dir: /tmp", "      source: acr_workload_bootstrap\n      target: /run/workload\n    working_dir: /tmp"),
+			check: composeACRTalksToRealOps, want: "acr_workload_bootstrap read-only"},
+		{name: "the svc token secret comes back", mutate: mut(composeFile, "  acr_falkordb_acl:\n    file:", "  acr_ops_svc_token:\n    file: ${ACR_OPS_SVC_TOKEN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/ops_svc_acr_token}\n  acr_falkordb_acl:\n    file:"),
+			check: composeACRTalksToRealOps, want: "acr_ops_svc_token"},
 		{name: "retries setting back", mutate: mut(composeFile, "      ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS: '1'\n", "      ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS: '1'\n      ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES: '2'\n"),
 			check: composeACRTalksToRealOps, want: "MAX_TRANSPORT_RETRIES"},
-		{name: "llm source defaults to ops", mutate: mut(composeFile, "${ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE:-}", "${ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE:-ops}"),
-			check: composeACROrgLLMSourcePassedThrough, want: "with nothing set"},
+		{name: "compose passes the removed llm source", mutate: mut(composeFile, "      ACR_CONTEXT_FABRIC_MODEL_PROVIDER: openai\n", "      ACR_CONTEXT_FABRIC_MODEL_PROVIDER: openai\n      ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE: ${ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE:-}\n"),
+			check: composeACROrgLLMSourceIsGone, want: "passes ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"},
 		{name: "env file sets the llm source", mutate: mut(composePins, "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true", "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true\nACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE=ops"),
-			check: composeACROrgLLMSourcePassedThrough, want: "images.env sets"},
+			check: composeACROrgLLMSourceIsGone, want: "images.env sets"},
 		{name: "down removes the volumes", copy: readme, mutate: mut("ci/bigboy/README.md", "-f compose.yml down`", "-f compose.yml down -v`"),
 			check: composeACRSwitchProcedure, want: "removes data"},
 		{name: "up starts the whole profile", copy: readme, mutate: mut("ci/bigboy/README.md", " acr-projector acr-mcp`", " acr-projector`"),

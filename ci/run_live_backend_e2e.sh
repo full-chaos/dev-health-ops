@@ -402,6 +402,9 @@ echo "==> starting dho api at ${BASE_URL}"
   # dho api refuses to start without JWT_SECRET_KEY until its HS256 verifier is removed: a random value per run that no minter reads.
   JWT_SECRET_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')" # go-api startup only
   export JWT_SECRET_KEY # go-api startup only
+  # Without a link secret the link routes answer 503 config_missing: a random value per run.
+  LINK_TOKEN_SECRET="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+  export LINK_TOKEN_SECRET
   exec "${BIN_DIR}/dho" api --api-addr="${API_HOST}:${API_PORT}" --http-addr="127.0.0.1:${API_OPERATOR_PORT}"
 ) >"${API_LOG_FILE}" 2>&1 &
 API_PID="$!"

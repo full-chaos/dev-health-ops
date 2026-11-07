@@ -9,16 +9,16 @@ lifecycle: active
 
 # Push projection drift alerts
 
-The group `auth_push_projection` in `alerts/rules.yml` holds five rules on the push credential projection (CHAOS-10897). No Prometheus loads that file in prod: it is the text of record, and the owner creates the rules in SigNoz from the builder JSON below at turn-on. Nothing here is run by a lane or a script. Do not print a Secret, an environment or a process argument list in any step.
+The group `auth_push_projection` in `alerts/rules.yml` holds five rules on the push credential projection. No Prometheus loads that file in prod: it is the text of record, and the owner creates the rules in SigNoz from the builder JSON below at turn-on. Nothing here is run by a script. Do not print a Secret, an environment or a process argument list in any step.
 
 ## Before you start
 
-- The rules `PushProjectionParkedGap` and `PushProjectionFinalRows` read gauges that the projection reader publishes today. The rules `PushCredentialProjectionDrift`, `PushCredentialProjectionDriftLive` and `PushReconcileNotRunning` read series of the reconcile probe (`devhealth_auth_push_reconcile_drift` and `devhealth_auth_push_reconcile_runs_total`). The probe is off until `PUSH_RECONCILE_PROBE=on` is set on the worker. Until then these three rules read no data and stay inactive.
+- The rules `PushProjectionParkedGap` and `PushProjectionFinalRows` read the gauges `devhealth_auth_push_projection_parked_rows` and `devhealth_auth_push_projection_final_rows`. Only an auth-service replica with `AUTH_PUSH_PROJECTION=on` runs the projection reader and publishes them (the default is off). Until that flag is on, these two rules read no data and stay inactive. The rules `PushCredentialProjectionDrift`, `PushCredentialProjectionDriftLive` and `PushReconcileNotRunning` read series of the reconcile probe (`devhealth_auth_push_reconcile_drift` and `devhealth_auth_push_reconcile_runs_total`). The probe is off until `PUSH_RECONCILE_PROBE=on` is set on the worker. Until then these three rules read no data and stay inactive.
 - The notification policy of the SigNoz org must send alerts with the label `team = platform` to the `accounts-email` channel. The JSON names no channel.
 
 ## Step 1: load the five rules
 
-Create each rule in SigNoz (Alerts, New alert, import JSON). PromQL rules do not evaluate on this SigNoz (D6417), so each block is a builder threshold rule. Only `PushCredentialProjectionDriftLive` is critical; the other four are warnings. Notes on the derivation:
+Create each rule in SigNoz (Alerts, New alert, import JSON). PromQL rules do not evaluate on this SigNoz, so each block is a builder threshold rule. Only `PushCredentialProjectionDriftLive` is critical; the other four are warnings. Notes on the derivation:
 
 - `PushCredentialProjectionDrift`: `max` of the drift gauge per `class`, above 0 for the 10 minute window with "all the times" matching. The probe runs every 5 minutes and keeps a finding only when two passes agree, so 10 minutes means two confirmed passes.
 - `PushCredentialProjectionDriftLive`: the same query with `class` limited to `status` and `scopes`, for 5 minutes. The projection reads a credential as live that the domain ended, or holds wider scopes.

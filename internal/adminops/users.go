@@ -144,11 +144,8 @@ func flagsWithHelp(env cli.Env, name, help string) *flag.FlagSet {
 
 // parseArgs parses the verb's flags: ok false means the exit code in code.
 func parseArgs(flags *flag.FlagSet, env cli.Env) (code int, ok bool) {
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK, false
-		}
-		return cli.ExitUsage, false
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code, false
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
@@ -339,6 +336,9 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 	op, closePool, code := usersWriteOperator(ctx, env, true, *superuser)
 	defer closePool()
 	if code != 0 {
+		if owned, err := usersOwnedFromEnv(env); err == nil && owned {
+			fmt.Fprintln(env.Stderr, "next step: dho auth users-create --email <email> --password-stdin (runs with the auth runtime login; it never grants a platform role)")
+		}
 		return code
 	}
 	user, err := op.CreateUser(ctx, admin.CreateUserInput{Email: email.value, Password: password.value,

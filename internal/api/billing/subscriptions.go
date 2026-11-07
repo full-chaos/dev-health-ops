@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -444,10 +445,10 @@ func falsy(value pyjson.Value) bool {
 // three mutation routes share: 400 "org_id required" for a superuser
 // without org_id, 404 "No subscription found".
 func (h handlers) subscriptionTarget(ctx context.Context, user *policy.User, orgParam *uuid.UUID) (*subscriptionRow, *reply, error) {
-	if h.pool == nil {
+	if h.db == nil {
 		return nil, nil, errNoPool
 	}
-	org, answer, err := h.resolveOrg(ctx, h.pool, user, orgParam)
+	org, answer, err := h.resolveOrg(ctx, h.db, user, orgParam)
 	if answer != nil || err != nil {
 		return nil, answer, err
 	}
@@ -455,7 +456,10 @@ func (h handlers) subscriptionTarget(ctx context.Context, user *policy.User, org
 		answer := detail(http.StatusBadRequest, "org_id required")
 		return nil, &answer, nil
 	}
-	sub, err := latestSubscription(ctx, h.pool, org)
+	if answer, err := h.servedOrgWriteRefusal(ctx, h.db, user, *org); answer != nil || err != nil {
+		return nil, answer, err
+	}
+	sub, err := latestSubscription(ctx, h.db, org)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -464,6 +468,32 @@ func (h handlers) subscriptionTarget(ctx context.Context, user *policy.User, org
 		return nil, &answer, nil
 	}
 	return sub, nil, nil
+}
+
+// servedOrgWriteRefusal is the role a billing write needs in served, the org it acts on (CHAOS-13143). The
+// route's Admin level judged the caller's role in the token's org only, so in an org_id org the caller's own
+// membership there must be owner or admin. A holder of admin.billing acts on any org, as resolveOrg admits it.
+// An impersonation session never gets here: readsOnly refuses every billing write in one. It runs before any
+// Stripe call or row write.
+func (h handlers) servedOrgWriteRefusal(ctx context.Context, q querier, user *policy.User, served uuid.UUID) (*reply, error) {
+	if user.Holds(policy.ActionAdminBilling) {
+		return nil, nil
+	}
+	if own, err := pythonparity.ParseUUID(user.OrgID); err == nil && own == served {
+		return nil, nil
+	}
+	var role string
+	err := q.QueryRow(ctx, `SELECT role FROM memberships WHERE user_id = $1 AND org_id = $2`, user.ID, served).Scan(&role)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	if role == "owner" || role == "admin" {
+		return nil, nil
+	}
+	h.logger.WarnContext(ctx, "billing: write refused without an admin role in the served org",
+		"user_id", user.ID.String(), "org_id", served.String())
+	answer := detail(http.StatusForbidden, "Admin access required")
+	return &answer, nil
 }
 
 var statusOK = func() *pyjson.Object {

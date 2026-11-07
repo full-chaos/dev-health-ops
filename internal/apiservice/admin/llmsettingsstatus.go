@@ -107,11 +107,7 @@ func (h *handlers) evaluateOrgLLMStatus(ctx context.Context, orgID string) (orgL
 		return orgLLMStatusEvaluation{Configured: true, ReasonCode: llmStatusReasonUnknownProvider, ProviderName: providerName}, nil
 	}
 
-	apiKeyRow, err := settingByKeyOn(ctx, h.store.Pool, orgID, llmCategory, "api_key")
-	if err != nil {
-		return orgLLMStatusEvaluation{}, err
-	}
-	apiKeyValue, err := h.settingValue(apiKeyRow)
+	key, err := h.scopeKey(ctx, h.store.Pool, orgID, "", false, true)
 	if err != nil {
 		return orgLLMStatusEvaluation{}, err
 	}
@@ -123,7 +119,7 @@ func (h *handlers) evaluateOrgLLMStatus(ctx context.Context, orgID string) (orgL
 	if err != nil {
 		return orgLLMStatusEvaluation{}, err
 	}
-	apiKey := strOrEmpty(apiKeyValue)
+	apiKey := key.Served()
 	baseURL := strOrEmpty(baseURLValue)
 	hash := baseURLHash(baseURL)
 
@@ -191,6 +187,7 @@ type agentReadinessRecord struct {
 	// failed probe, and the request parameters the probe dropped to pass.
 	ErrorParam    string   `json:"error_param,omitempty"`
 	ErrorCode     string   `json:"error_code,omitempty"`
+	ErrorMessage  string   `json:"error_message,omitempty"`
 	DroppedParams []string `json:"dropped_params,omitempty"`
 }
 
@@ -275,12 +272,20 @@ func readinessSafeFailureMessage(safeErrorCode *string) string {
 // readinessFailureMessage is readinessSafeFailureMessage, naming the refused
 // request parameter when the record holds one that is a plain token.
 func readinessFailureMessage(record *agentReadinessRecord) string {
+	message := readinessSafeFailureMessage(record.SafeErrorCode)
 	if record.SafeErrorCode != nil && *record.SafeErrorCode == errCodeInvalidRequest {
 		if param := vetProviderToken(record.ErrorParam); param != "" {
-			return "The configured Ask Dev model refused the request parameter " + param + "."
+			message = "The configured Ask Dev model refused the request parameter " + param + "."
 		}
 	}
-	return readinessSafeFailureMessage(record.SafeErrorCode)
+	if text := plainProviderText(record.ErrorMessage); text != "" {
+		message += " Provider error"
+		if code := vetProviderToken(record.ErrorCode); code != "" {
+			message += " (" + code + ")"
+		}
+		message += ": " + text
+	}
+	return message
 }
 
 // llmSettingsStatusResponse assembles LLMSettingsStatusResponse (settings.py's

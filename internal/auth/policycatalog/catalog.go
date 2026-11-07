@@ -34,6 +34,16 @@ const (
 	// exercise the action (G-51, ACP-ADR-10).
 	ImpersonationDenied  = "denied"
 	ImpersonationAllowed = "allowed"
+
+	// RepositoryScopeFiltered marks an action that reads repository-bound data: an allow carries the repositories
+	// the principal may read as an obligation. RepositoryScopeNone is the value of an action that does not.
+	RepositoryScopeFiltered = "filtered"
+	RepositoryScopeNone     = "none"
+
+	// PlatformAdminAllowed marks an organization action that a holder of admin.orgs is allowed without a membership
+	// role; PlatformAdminDenied, the value of an absent member, is the safe value.
+	PlatformAdminAllowed = "allowed"
+	PlatformAdminDenied  = "denied"
 )
 
 type Action struct {
@@ -44,6 +54,11 @@ type Action struct {
 	CacheClass   string
 	// Impersonation is ImpersonationDenied or ImpersonationAllowed.
 	Impersonation string
+	// RepositoryScope is RepositoryScopeFiltered or RepositoryScopeNone.
+	RepositoryScope string
+	// PlatformAdmin is true when a holder of the platform action admin.orgs is allowed the action in any active
+	// organization without a membership role that holds it (platform_admin allowed).
+	PlatformAdmin bool
 }
 
 type Role struct {
@@ -74,6 +89,10 @@ type actionsFile struct {
 		RiskClass     string `json:"risk_class"`
 		CacheClass    string `json:"cache_class"`
 		Impersonation string `json:"impersonation"`
+		// RepositoryScope is optional: an absent member is RepositoryScopeNone.
+		RepositoryScope string `json:"repository_scope"`
+		// PlatformAdmin is optional: an absent member is PlatformAdminDenied.
+		PlatformAdmin string `json:"platform_admin"`
 	} `json:"actions"`
 }
 
@@ -196,8 +215,25 @@ func Load(actionsJSON, rolesJSON []byte) (*Catalog, error) {
 		if a.Impersonation != ImpersonationDenied && a.Impersonation != ImpersonationAllowed {
 			return nil, invalid("action %q has a missing or unknown impersonation", a.Action)
 		}
+		repoScope := a.RepositoryScope
+		switch repoScope {
+		case "":
+			repoScope = RepositoryScopeNone
+		case RepositoryScopeFiltered, RepositoryScopeNone:
+		default:
+			return nil, invalid("action %q has an unknown repository_scope", a.Action)
+		}
+		switch a.PlatformAdmin {
+		case "", PlatformAdminDenied:
+		case PlatformAdminAllowed:
+			if a.Scope != ScopeOrganization || a.ResourceKind != ScopeOrganization {
+				return nil, invalid("action %q is not an organization action and cannot allow platform_admin", a.Action)
+			}
+		default:
+			return nil, invalid("action %q has an unknown platform_admin", a.Action)
+		}
 		act := Action{ID: a.Action, Scope: a.Scope, ResourceKind: a.ResourceKind, RiskClass: a.RiskClass, CacheClass: a.CacheClass,
-			Impersonation: a.Impersonation}
+			Impersonation: a.Impersonation, RepositoryScope: repoScope, PlatformAdmin: a.PlatformAdmin == PlatformAdminAllowed}
 		c.byAct[a.Action] = act
 		c.actions = append(c.actions, act)
 	}

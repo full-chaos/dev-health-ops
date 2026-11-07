@@ -19,6 +19,16 @@
       "layer": "pdp"
     },
     {
+      "file": "allow-platform-admin-member-writes-org-settings.json",
+      "id": "allow-platform-admin-member-writes-org-settings",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-no-membership-reads-org-integrations.json",
+      "id": "allow-platform-admin-no-membership-reads-org-integrations",
+      "layer": "pdp"
+    },
+    {
       "file": "cross-org-grant-in-a-leaves-b-on-the-default.json",
       "id": "cross-org-grant-in-a-leaves-b-on-the-default",
       "layer": "pdp"
@@ -131,6 +141,51 @@
     {
       "file": "org-action-service-account-is-no-membership.json",
       "id": "org-action-service-account-is-no-membership",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-unfiltered-allow-carries-only-the-tenant-scope.json",
+      "id": "org-unfiltered-allow-carries-only-the-tenant-scope",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-all-grants-dead-reads-org-wide.json",
+      "id": "org-wide-all-grants-dead-reads-org-wide",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-grant-role-lacks-the-action-reads-org-wide.json",
+      "id": "org-wide-grant-role-lacks-the-action-reads-org-wide",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-grants-over-the-old-bound-read-org-wide.json",
+      "id": "org-wide-grants-over-the-old-bound-read-org-wide",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-member-without-grants-carries-the-tenant-scope-only.json",
+      "id": "org-wide-member-without-grants-carries-the-tenant-scope-only",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-owner-with-a-grant-row-reads-org-wide.json",
+      "id": "org-wide-owner-with-a-grant-row-reads-org-wide",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-plain-snapshot-allows.json",
+      "id": "org-wide-plain-snapshot-allows",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-two-live-grants-read-org-wide.json",
+      "id": "org-wide-two-live-grants-read-org-wide",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-wildcard-grant-carries-the-tenant-scope-only.json",
+      "id": "org-wide-wildcard-grant-carries-the-tenant-scope-only",
       "layer": "pdp"
     },
     {
@@ -329,6 +384,11 @@
       "layer": "pdp"
     },
     {
+      "file": "repo-id-grant-path-unresolved.json",
+      "id": "repo-id-grant-path-unresolved",
+      "layer": "pdp"
+    },
+    {
       "file": "repo-live-grant-exact-key.json",
       "id": "repo-live-grant-exact-key",
       "layer": "pdp"
@@ -401,6 +461,11 @@
     {
       "file": "repo-service-account-without-grants.json",
       "id": "repo-service-account-without-grants",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-wildcard-key-is-refused.json",
+      "id": "repo-wildcard-key-is-refused",
       "layer": "pdp"
     },
     {

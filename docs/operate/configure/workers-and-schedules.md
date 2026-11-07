@@ -19,13 +19,10 @@ lifecycle: active
 # Workers, schedules, and queues
 
 **Go/River is the production owner of every current background job and every
-current production schedule.** Every Python Celery worker and Beat service has
-been stopped in production since 2026-08-19 (CHAOS-4026), and CHAOS-5589
-deleted the service definitions outright from every compose surface (R146:
-Celery transport is not a rollback target; CHAOS-6950 then deleted the
-production Compose file and the Swarm stack altogether). The Go/River fleet is
-the only worker topology now, folded into `compose.yml` as the unconditional
-default (CHAOS-3088) and rendered by the Helm chart. Configure
+current production schedule.** No Python Celery worker or Beat service runs in
+production, and no compose surface defines one: Celery transport is not a
+rollback target. The Go/River fleet is the only worker topology, defined in
+`compose.yml` as the unconditional default and rendered by the Helm chart. Configure
 and operate the Go worker groups and the Go scheduler described below; read
 the Celery section only to understand a queue name you find in an old issue,
 runbook, or `rollback_route` value.
@@ -38,18 +35,14 @@ this page does not repeat that content.
 
 ## Historical Celery topology (dormant)
 
-**ARCHIVED (CHAOS-4164, 2026-08-23) then DELETED (CHAOS-5589):** every
+**DELETED:** every
 `worker`/`worker-ingest`/`worker-external-ingest`/`worker-heavy`/`beat`
-Celery service definition is gone from every compose surface -- `compose.yml`
-first (gated behind `profiles: [celery-legacy]` under CHAOS-3088, then
-deleted outright), then the production Compose file and the Swarm stack (both
-since deleted entirely, CHAOS-6950) in the same ticket, once R146 established
-Celery is not a rollback target and no consumer had run since 2026-08-19.
-There is no compose surface left where the archived fleet can be brought
-back up.
+Celery service definition is gone from every compose surface, because Celery
+is not a rollback target and no Celery consumer runs. There is no compose
+surface left where the old fleet can be brought back up.
 
 Kept for context, not for operation -- nothing below is reproducible from
-this tree any more. Before 2026-08-19 these were configured together:
+this tree any more. These were configured together:
 
 - broker and result backend;
 - worker queue lists;
@@ -60,14 +53,12 @@ this tree any more. Before 2026-08-19 these were configured together:
 - Beat or scheduler ownership;
 - shutdown grace periods for long-running work.
 
-None of this is live. The queue names, the `worker`/`worker-heavy`/`worker-ingest`/`worker-external-ingest`/`beat`
-service split, and the `WORKER_*_ENABLED` provider switches referenced by older
-issues and runbooks are documented as historical vocabulary — with their Go
-successors — in the
+None of this is live. The Celery queue names, the `worker`/`worker-heavy`/`worker-ingest`/`worker-external-ingest`/`beat`
+service split, and the `WORKER_*_ENABLED` provider switches are not part of the product. Their Go successors are in the
 [generated queue mapping](../../contribute/architecture/go-worker-runtime.md#the-celery-to-river-queue-mapping-generated).
 Do not bring a Celery service back up to diagnose a live incident; it has no
-consumers wired to current queues and no operator has kept its routing
-current since the cutover.
+consumers wired to current queues and no operator keeps its routing
+current.
 
 ## Go worker groups
 
@@ -140,11 +131,9 @@ retries stop as soon as the checks pass.
 
 Do not treat a healthy container as a route change. Today, "what should run"
 is decided by the sync config (`IntegrationDataset.is_enabled`) and "where
-it's served" is decided by `-Q` topology — the two-plane model ratified in
-the [CHAOS-4054 decision record](https://linear.app/fullchaos/document/chaos-4054-two-plane-route-architecture-decision-record-7e5da955f899).
-The ~40 `WORKER_*_ENABLED` provider-route switches still exist in code as of
-this writing but are being deleted, not kept as a durable third plane or a
-break-glass switch — do not build new operational process around them.
+it's served" is decided by `-Q` topology — the two-plane model.
+The `WORKER_*_ENABLED` provider-route switches do not exist; there is no third
+plane or break-glass switch.
 A route change must still identify the job kind and contract version and
 prove that no duplicate or missing domain effect occurs; it no longer needs
 to preserve a Celery rollback path, because there is no live Celery consumer
@@ -210,15 +199,13 @@ the stale tags (`docker compose down -v` plus `docker image rm` for the
 families above, or `docker compose build`) and start again from one of
 the two paths.
 
-This default was `pull_policy: build` (forced rebuild every time) for one
-PR revision, to guard the CHAOS-5437 cross-tree posture-manifest lockstep
-(migrate and the worker fleet must come from the same tree or the worker
-refuses readiness by design) -- reverted because forcing a build made a
-digest pin unusable (`build tag cannot contain a digest`) and duplicated
-what a deployment-wide single-sha pin already guarantees. Lockstep safety
-now comes from pinning every one of these images to the SAME sha (as
-JOB 6's `job6-prebuild/*:<sha>` images do), not from forcing a build on
-every bring-up.
+The default is not `pull_policy: build` (forced rebuild every time): forcing
+a build would make a digest pin unusable (`build tag cannot contain a digest`)
+and would duplicate what a deployment-wide single-sha pin already guarantees.
+The posture-manifest lockstep (migrate and the worker fleet must come from the
+same tree or the worker refuses readiness by design) comes from pinning every
+one of these images to the SAME sha, not from forcing a build on every
+bring-up.
 
 ### Pinning the route-activate hook's operator image (Helm)
 
@@ -285,8 +272,7 @@ password for both services.
 
 ## Known divergences: local vs prod worker topology
 
-Recorded under the standing order that local/prod divergence is itself a
-defect (CHAOS-4164). These are known, not fixed here -- each is a rationale
+Local/prod divergence is itself a defect. These are known, not fixed here -- each is a rationale
 for why `docker compose config` on a laptop and the same command on the prod
 host legitimately disagree, so a future reader does not mistake one gap for
 a bug and re-discover it from scratch.
@@ -300,7 +286,7 @@ a bug and re-discover it from scratch.
   isolation differs (one saturated queue can starve the other locally) and
   anything keying off service *name* (dashboards, alert `job` regexes,
   runbooks) cannot match both shapes at once. This repo's own root
-  `compose.yml` is a separate thing again: as of the Go-default cutover it
+  `compose.yml` is a separate thing again: it
   folds in the split `go-worker-sync`/`go-worker-sync-provider` shape
   (matching prod's naming, not the local host stack's merged one) as its
   unconditional default.
@@ -310,8 +296,7 @@ a bug and re-discover it from scratch.
   profile is selected silently skips pulling the profiled images, so the
   first `up` under the profile can start stale or missing images without
   erroring. Local's `go-*` services are not profile-gated.
-- **Replica defaults.** The former `compose.go-workers.yml` (deleted,
-  CHAOS-6950) set
+- **Replica defaults.** The former `compose.go-workers.yml` (deleted) set
   `replicas: 0` as the compose *default* for `go-worker-heavy`; prod's actual
   replica count (3) comes from the deploy records, not the checked-in file. A
   reader of the file alone concludes heavy work is not running.
@@ -323,7 +308,7 @@ a bug and re-discover it from scratch.
   (`coverage,heartbeat,retention,webhooks`) are identical in both.
 - **Archived Celery naming, checked-in vs. actually deployed.** The Celery
   service names archived in this repo's former production Compose file
-  (deleted, CHAOS-6950) (`worker`, `worker-ingest`, `worker-external-ingest`, `worker-heavy`,
+  (deleted) (`worker`, `worker-ingest`, `worker-external-ingest`, `worker-heavy`,
   `beat`) do not match the fleet a live prod-host `docker compose config`
   snapshot showed at the time this was filed (`worker`, `worker-backfill`,
   `worker-bg`, `worker-heavy`, `worker-ingest`, `worker-wi`, `beat`) --
@@ -332,23 +317,7 @@ a bug and re-discover it from scratch.
   at all. The checked-in production compose file was already not the true
   source of prod's Celery topology before either side was archived; treat
   both as historical record of *a* Celery topology, not *the* deployed one.
-- **Helm/Kubernetes defaults matched compose (resolved, CHAOS-4195).** Before
-  this ticket, `deploy/helm/dev-health/values.yaml` defaulted `worker.enabled`,
-  `workerIngest.enabled`, `workerExternalIngest.enabled`,
-  `workerHeavy.enabled`, and `beat.enabled` to `true` and `goWorkers.enabled`
-  to `false`, with a `PAGERDUTY_WEBHOOK_TRANSPORT` switch defaulting to
-  `celery`;
-  `deploy/kubernetes/beat.yaml` (removed with the Python api) and `worker.yaml` were the matching plain
-  manifests. Chris's ruling on CHAOS-4195 was delete, not archive (unlike the
-  compose surfaces above, which have no equivalent live-vs-checked-in
-  divergence to preserve): the Celery Helm templates and Kubernetes manifests
-  are gone (and CHAOS-6950 later deleted the raw Kubernetes tree entirely),
-  and `goWorkers.enabled` now defaults to `true`. Helm now
-  agree with the compose reality this page describes: Go/River primary, no
-  Celery fleet to opt out of. `PAGERDUTY_WEBHOOK_TRANSPORT` itself is gone
-  (CHAOS-4105): it chose between two runtimes consuming the PagerDuty webhook
-  stream, and the Python one no longer exists, so there is nothing left to
-  choose.
+- **Helm/Kubernetes defaults match compose.** `goWorkers.enabled` defaults to `true` in `deploy/helm/dev-health/values.yaml`: Go/River is the only worker runtime, and there is no Celery fleet to opt out of.
 
 ## PostgreSQL requirements
 
@@ -411,8 +380,7 @@ is not a substitute for repairing a recoverable transport delivery.
 ## Schedules
 
 **The Go scheduler (`dev-health-scheduler`) is the sole production owner of
-current schedules.** Celery Beat is stopped in production (CHAOS-4026,
-2026-08-21) and no longer evaluates, mutates, or publishes anything; every
+current schedules.** Celery Beat does not run in production and does not evaluates, mutates, or publishes anything; every
 Beat cadence has either been proven redundant and deleted (for example the
 `ask-dev-retention-sweep` entry retired below) or reimplemented natively on
 the Go scheduler with organization entitlement, mutation, lease repair, and
@@ -549,21 +517,18 @@ empty verdict and clears the gauge. The value describes the schedule at its
 last evaluation; for an infrequent schedule, it can be one full period old.
 
 The Ask Dev expiry repair (`prune_ask_dev_conversations`) was built in Go
-first, with no Celery predecessor. CHAOS-3404 added the Beat entry
-`ask-dev-retention-sweep` for the same work at the same cadence as a stopgap
-while `producer_version` caught up to the v3 contract.
+first, with no Celery predecessor.
 
-**Resolved (CHAOS-3481, 2026-08-21):** `producer_version` for
+`producer_version` for
 `system.retention_cleanup` is now 3 (promoted once capability reports from
 every live Go consumer proved v3 compatibility), and the SKIP-LOCKED
 short-read false-success gap is closed (a `DrainConfirmer` check replaces the
 non-locking `count_expired()` read that used to report `partial` for a
 merely-contended backlog). Go now genuinely emits and drains this cadence.
-CHAOS-4026 (2026-08-21) deleted the now-redundant Celery `ask-dev-retention-sweep`
-Beat entry and its `run_ask_dev_retention_cleanup` task
-(`src/dev_health_ops/workers/ask_dev_retention.py`, removed with the Python api; Go owner `internal/jobs/system/retention_postgres.go`) as part of the broader
-Celery-retirement cleanup -- there is no longer a second purger to keep in
-sync with. Its staged v3 contract uses the table-scoped `ask_dev_conversations`
+The Celery `ask-dev-retention-sweep` Beat entry and its
+`run_ask_dev_retention_cleanup` task no longer exist; the Go owner is
+`internal/jobs/system/retention_postgres.go`, so there is no second purger to
+keep in sync with. Its staged v3 contract uses the table-scoped `ask_dev_conversations`
 policy at 05:30 UTC. Its cutoff is the occurrence time because each
 conversation already persists its exact expiry; adding an environment
 retention horizon would incorrectly extend or shorten the user's 0/30-day

@@ -30,16 +30,24 @@ type restFixture struct {
 	handler  http.Handler
 	reader   *accessReader
 	envelope string
+	priv     ed25519.PrivateKey
 }
 
 func newRESTFixture(t *testing.T, store *accessStore, setup *accessSetup, legacyOn bool) *restFixture {
+	t.Helper()
+	return newRESTFixtureServing(t, store, setup, legacyOn, nil)
+}
+
+// newRESTFixtureServing is newRESTFixture with the handler behind authenticateRESTRequest replaced by serve (GET and
+// POST), which runs with the verified claims on the request context.
+func newRESTFixtureServing(t *testing.T, store *accessStore, setup *accessSetup, legacyOn bool, serve http.HandlerFunc) *restFixture {
 	t.Helper()
 	verifier, priv := iaVerifier(t)
 	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(store))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &restFixture{envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"})}
+	f := &restFixture{priv: priv, envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"})}
 	if setup != nil {
 		f.reader = setup.reader
 		if err := routeEdgeVerifier(edge, setup.opts, legacyOn); err != nil {
@@ -55,6 +63,10 @@ func newRESTFixture(t *testing.T, store *accessStore, setup *accessSetup, legacy
 		r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 		switch r.Method {
 		case http.MethodGet, http.MethodPost:
+			if serve != nil {
+				serve(w, r)
+				return
+			}
 			_, _ = fmt.Fprintf(w, `{"org":%q}`, claims.OrgID)
 		default:
 			writeRESTMethodNotAllowed(w, r, "home")
@@ -153,18 +165,21 @@ func TestQueryAPIRESTOrgMissingIs403ForNonSuperuser(t *testing.T) {
 	edgeOrgless := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5})
 	forbidden := answer{http.StatusForbidden, `{"detail":"Organization context required"}`}
 	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
-	for name, token := range map[string]string{"user token": orgless, "edge token": edgeOrgless} {
-		if got := f.do(http.MethodGet, token); got != forbidden {
-			t.Errorf("%s with no org: got %+v, want %+v", name, got, forbidden)
-		}
+	const userCarrier = "user token"
+	if got := f.do(http.MethodGet, orgless); got != forbidden {
+		t.Errorf("%s with no org: got %+v, want %+v", userCarrier, got, forbidden)
+	}
+	if got := f.do(http.MethodGet, edgeOrgless); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
+		t.Errorf("edge token (retired HS256 class) with no org: got %+v, want 401", got)
 	}
 	super := newAccessStore()
 	super.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
 	f = newRESTFixture(t, super, testAccess(m.keys, nil, accessTestNow), true)
-	for name, token := range map[string]string{"user token": orgless, "edge token": edgeOrgless} {
-		if got := f.do(http.MethodGet, token); got.Status != http.StatusOK || got.Body != `{"org":""}` {
-			t.Errorf("superuser %s with no org: got %+v, want 200 with no org", name, got)
-		}
+	if got := f.do(http.MethodGet, orgless); got.Status != http.StatusOK || got.Body != `{"org":""}` {
+		t.Errorf("superuser %s with no org: got %+v, want 200 with no org", userCarrier, got)
+	}
+	if got := f.do(http.MethodGet, edgeOrgless); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
+		t.Errorf("superuser edge token (retired HS256 class) with no org: got %+v, want 401", got)
 	}
 }
 
@@ -188,8 +203,8 @@ func TestQueryAPIRESTEnvelopeStillReachesTheEnvelopeVerifierWhenIssuerSet(t *tes
 	}
 }
 
-// The counters see one accepted user token and one accepted edge token on the
-// route template, the D2 telemetry that proves when HS256 reaches zero.
+// The counters see one accepted user token and one refused edge token on the
+// route template: the edge token is the retired HS256 class, refused alg_not_allowed.
 func TestQueryAPIRESTCountsEachClassOnTheRouteTemplate(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
@@ -197,12 +212,12 @@ func TestQueryAPIRESTCountsEachClassOnTheRouteTemplate(t *testing.T) {
 	if got := f.do(http.MethodPost, m.mint(ecUser, nil, nil)); got.Status != http.StatusOK {
 		t.Fatalf("user token: %+v", got)
 	}
-	if got := f.do(http.MethodGet, ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})); got.Status != http.StatusOK {
-		t.Fatalf("edge token: %+v", got)
+	if got := f.do(http.MethodGet, ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
+		t.Fatalf("edge token: %+v, want 401", got)
 	}
 	want := map[string]int64{
-		accessverify.AcceptedMetric + "|class=user_access_token,profile=POST /api/v1/home,service=dev-health-query-api":     1,
-		accessverify.AcceptedMetric + "|class=ops_access_token_hs256,profile=GET /api/v1/home,service=dev-health-query-api": 1,
+		accessverify.AcceptedMetric + "|class=user_access_token,profile=POST /api/v1/home,service=dev-health-query-api": 1,
+		accessverify.RefusedMetric + "|profile=GET /api/v1/home,reason=alg_not_allowed,service=dev-health-query-api":    1,
 	}
 	got := f.reader.counts(t)
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -248,9 +263,9 @@ func ecMintEdgeTokenRaw(t *testing.T, claims map[string]any) string {
 	return signed
 }
 
-// Q5: the issuer alone builds the verifier; its validator has no HS256
-// verifier, so the edge token is refused the same 401 an unconfigured pod
-// gave it, and the user token is served.
+// Q5: the issuer alone builds the verifier; the edge token is refused the same
+// 401 an unconfigured pod gave it (alg_not_allowed: no row opts into HS256),
+// and the user token is served.
 func TestQueryAPIRESTIssuerAloneServesOnlyTheUserToken(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
@@ -261,8 +276,8 @@ func TestQueryAPIRESTIssuerAloneServesOnlyTheUserToken(t *testing.T) {
 	if got := f.do(http.MethodGet, ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
 		t.Fatalf("edge token with no edge secret: got %+v, want 401", got)
 	}
-	if got := f.reader.counts(t)[accessverify.RefusedMetric+"|profile=GET /api/v1/home,reason=not_configured,service=dev-health-query-api"]; got != 1 {
-		t.Fatalf("the HS256 refusal is not counted not_configured: %d", got)
+	if got := f.reader.counts(t)[accessverify.RefusedMetric+"|profile=GET /api/v1/home,reason=alg_not_allowed,service=dev-health-query-api"]; got != 1 {
+		t.Fatalf("the HS256 refusal is not counted alg_not_allowed: %d", got)
 	}
 }
 
@@ -282,7 +297,7 @@ func TestQueryAPIRESTIssuerSetDrift(t *testing.T) {
 		"edge token, users store error that is not unavailable": {
 			func(s *accessStore) { s.errUserState = errors.New("syntax error") }, http.MethodGet, edge,
 			answer{http.StatusInternalServerError, `{"detail":"Internal Server Error"}`},
-			answer{http.StatusServiceUnavailable, restUnavailable}},
+			answer{http.StatusUnauthorized, restRefusal}},
 		"edge token whose sub is not a string": {
 			nil, http.MethodGet, badSub,
 			answer{http.StatusInternalServerError, `{"detail":"Internal Server Error"}`},

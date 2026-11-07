@@ -1,6 +1,4 @@
-# Credential-class inventory (CHAOS-3273 Wave 0 freeze)
-
-> **Note:** The Python api (FastAPI and Strawberry) that this page inventories was removed. This page is a record of that Python surface, not of the Go api.
+# Credential-class inventory
 
 !!! info "Machine-readable contract"
     This page is prose over
@@ -10,62 +8,51 @@
     below carries a `repo/path:line` anchor in the JSON — this page does not
     repeat every anchor inline, it summarizes.
 
-## Why this exists
+## Scope
 
-dev-health is building a dedicated Go `auth-service` that will become
-authoritative for principals, sessions, tokens, orgs, memberships, roles,
-service accounts, workload identities, grants, authz decisions, and audit.
-Before any authority moves, this inventory freezes the **current** state
-across the three repos that mint or validate credentials today:
+This page lists the credential classes that dev-health services mint or
+validate today. It covers the three repositories that handle credentials:
 
-- **ops** (`dev-health-ops`) — Python FastAPI + Go workers
-- **web** (`dev-health-web`) — Next.js 16 / Auth.js
-- **acr** (`dev-health-acr`) — Go `acr-api` + `acr-mcp`
+- **ops** (`dev-health-ops`): the Go api, auth-service, query-api and workers
+- **web** (`dev-health-web`): Next.js 16 / Auth.js
+- **acr** (`dev-health-acr`): Go `acr-api` + `acr-mcp`
 
-The motivating defect is **CHAOS-3271**: ops' global `OrgIdMiddleware` ran
-*every* `Authorization: Bearer` value through the user-JWT decoder, so a
-valid opaque `svc_acr_*` service credential was parsed as a JWT and threw
-`"Not enough segments"`. That specific crash is fixed (PR #1338) — a path
-prefix exemption for `/api/v1/internal/acr/*` — but the underlying pattern
-(one generic decoder sees every bearer credential class before the intended
-validator does) is not closed. This inventory is the closed vocabulary a
-later CI gate keys on: **a class missing here is a class the gate can never
-catch.**
-
-Design docs (read the guardrails at minimum):
-
-- [ADR — Implement the Auth Control Plane in Go](https://linear.app/fullchaos/document/adr-implement-the-auth-control-plane-in-go-c056c6f30e86)
-- [Engineering Guardrails](https://linear.app/fullchaos/document/engineering-guardrails-go-native-dev-health-auth-control-plane-974bdb93843a)
-- [TRD](https://linear.app/fullchaos/document/trd-go-native-dev-health-auth-control-plane-527b6cfb2b0f)
-- [PRD](https://linear.app/fullchaos/document/prd-go-native-dev-health-auth-control-plane-cd91f1f85d1f)
-- [CHAOS-3273](https://linear.app/fullchaos/issue/CHAOS-3273)
+The inventory is the closed vocabulary that the
+[endpoint profiles](endpoint-profiles.md) and the CI gate key on: a class
+missing here cannot be named by a profile row. One hazard runs through it: a
+generic decoder that sees every bearer credential before the validator that
+owns it. [Credentials that reach a validator that is not their own](#credentials-that-reach-a-validator-that-is-not-their-own)
+shows where that happens today.
 
 ## Reading this table
 
 `status` values:
 
-- **active** — minted and validated on the paths inspected this pass.
+- **active** — minted and validated today.
 - **unconsumed** — minted/stored but no validator was found anywhere in
   ops/web/acr.
 - **legacy_permissive** — the validator silently no-ops when its config is
   unset (fails **open**, not closed). Flagged per the engineering
   guardrails' explicit ban on "missing config means auth disabled in
   production."
-- **optional_feature** — gated behind a license entitlement or an optional
-  Python import.
+- **optional_feature** — gated behind a license entitlement.
+- **retired** — no endpoint-profile row may accept the class. The contracts
+  gate `TestNoEndpointProfileRowAcceptsARetiredClass` refuses a row that lists
+  one. The class stays in the registry so refusal reasons and audit records
+  can still name it.
 
 | Class | Status | Principal type | Permissive-when-unconfigured |
 | --- | --- | --- | --- |
 | `auth_js_browser_session` | active | human | |
-| `ops_access_token_hs256` | active | human | |
+| `ops_access_token_hs256` | retired | human | |
 | `ops_refresh_token` | active | human | |
 | `social_oauth_exchange` | active | human | |
 | `sso_saml_exchange` | optional_feature | human | |
 | `sso_oidc_exchange` | optional_feature | human | |
 | `org_context_header` | active | human | |
 | `impersonation_session` | active | human | |
-| `internal_svc_acr_token` | **unconsumed** | service_account | no route accepts it (CHAOS-11242); stored rows list/rotate/revoke only |
-| `internal_svc_worker_token` | **unconsumed** | service_account | mint retired (CHAOS-10044); stored rows list/revoke only |
+| `internal_svc_acr_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |
+| `internal_svc_worker_token` | **unconsumed** | service_account | mint retired; stored rows list/revoke only |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
 | `acr_browser_refresh_token` | optional_feature | human | |
@@ -95,15 +82,17 @@ Design docs (read the guardrails at minimum):
 | `workload_bootstrap_credential` | optional_feature | workload | |
 | `service_account_key` | **unconsumed** | service_account | issued by the key routes; no route accepts it |
 | `service_account_token` | **unconsumed** | service_account | contract only; nothing mints or verifies it yet |
+| `oauth_authorization_code` | **unconsumed** | human | minted at consent; the token endpoint that redeems it is not built |
+| `oauth_consent_csrf_token` | active | human | minted at describe, checked at approve and deny |
 
-**30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
+**30 classes** (31 with `effective_principal_envelope`, below). 5 were not in the minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
 `internal_svc_worker_token`,
 `acr_workload_identity_exchange`, `org_invite_token`, `license_key`, and the
 distinction between `sso_saml_exchange`/`sso_oidc_exchange` as two classes
 rather than one.
 
-**`effective_principal_envelope` (CHAOS-4737).** query-api, a sixth deployed
+**`effective_principal_envelope`.** query-api, a sixth deployed
 app, was outside the ops/web/acr inventories, and the signed envelope it
 verifies was a credential class the vocabulary did not name. It is now class 31
 and query-api's three surfaces have rows in
@@ -111,16 +100,16 @@ and query-api's three surfaces have rows in
 has exactly one issuer, the edge (`internal/envelopemint`); query-api only
 verifies, so no exception to one active issuer per token class is needed.
 
-**`refresh_credential` (CHAOS-10228).** The opaque refresh credential of the
+**`refresh_credential`.** The opaque refresh credential of the
 auth-service session domain (TRD section 11): `dhr1_` plus 32 random bytes,
 stored as its SHA-256 only, single use with a 30 s grace and family reuse
 revocation. It is class 32. auth-service is its only issuer and its only
 validator (`POST /v1/token/refresh`); its four API routes and three operator
 routes have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`.
-It does not replace `ops_refresh_token` yet: go-api still mints that one until
-the session cutover.
+It is not `ops_refresh_token`: go-api mints that class, and
+`refresh_credential` is auth-service's own.
 
-**`internal_svc_authsess_token` (CHAOS-10465).** The go-api service credential
+**`internal_svc_authsess_token`.** The go-api service credential
 (`svc_authsess_` plus 32 random bytes, service `auth-session-issuer`, scope
 `sessions:issue`) that `POST /internal/v1/sessions` accepts. It shares the
 `internal_service_credentials` table with `svc_acr_` and `svc_worker_`, which
@@ -137,27 +126,27 @@ provisioning audit rows name the actor, the request id and the calling
 credential (`credential_id` here, or `caller_principal_id` and `workload_jti`
 for the go-api workload token).
 
-Four read scopes name the versioned read API (CHAOS-10995; contracts only, no
+Four read scopes name the versioned read API (contracts only, no
 route serves them yet): `principals:read`, `organizations:read`,
 `memberships:read` and `grants:read`. A read holds its read scope and a write
 scope never satisfies one (`contracts.ReadScopeAllows`). A mint verb that issues
 them and the routes that check them come with the routes.
 
-**`org_invite_token` (CHAOS-11798).** The invite link token: `signedtoken.Build`
+**`org_invite_token`.** The invite link token: `signedtoken.Build`
 over the invite id (32 lowercase hex characters, a dot, 64 lowercase hex
 characters), stored only as its SHA-256 digest. go-api mints it
 (`internal/apiservice/admin/invites.go`) and so does auth-service's invite
 aggregate behind `POST /internal/v1/invites/create`, which answers it once; go-api
 (`internal/api/session/invites.go`) and the auth-service invite aggregate validate
-it. Its earlier registry anchors named Python files that no longer exist.
+it.
 
-**`link_credential` (CHAOS-10688).** The one-time e-mail link token of the
+**`link_credential`.** The one-time e-mail link token of the
 auth-service local flows (e-mail verification, password reset): 32 random bytes,
 base64url, stored as its SHA-256 only in `link_credentials`, bound to one
 purpose, single use, expiry by the database clock (24 h verification, 1 h
 reset). auth-service verify and reset accept only this class, never the go-api
 signed tokens (`email_verification_token`, `password_reset_token`), so a go-api
-link issued before the cutover lapses and the user asks for a new one. A
+link issued before the move to auth-service lapses and the user asks for a new one. A
 password change does not delete other outstanding links; they lapse at expiry.
 A reset link redeems only while the user's `public.users.token_version` still
 equals the value it was issued against (`issued_token_version`); every password
@@ -168,13 +157,13 @@ Purpose binding is proven by `TestVerifyAndResetRedeemOnlyTheirOwnPurpose` and
 profile rows when they are mounted.
 
 
-**`pagerduty_webhook_signature` (CHAOS-10707).** The inbound delivery signature
+**`pagerduty_webhook_signature`.** The inbound delivery signature
 of `POST /api/v1/webhooks/pagerduty/{binding_id}`: `X-PagerDuty-Signature`, a
 comma-separated list of at most 8 `v1=<hex>` HMAC-SHA256 values over the raw
 body, checked against the secret stored encrypted on the addressed binding row.
 It is distinct from `pagerduty_oauth_credential`, the outbound OAuth credential
 that ops sends to PagerDuty.
-**`user_access_token` (CHAOS-10442).** The EdDSA user access token of TRD
+**`user_access_token`.** The EdDSA user access token of TRD
 section 11, the successor of `ops_access_token_hs256`. It is class 33. Its wire
 contract is `access-token.v1`: header {alg EdDSA, typ at+jwt, kid}; claims iss,
 aud (one of `dev-health-api`, `auth-service`, `acr-api`, `acr-mcp`), sub, principal_type, sid, jti,
@@ -182,16 +171,14 @@ iat, nbf, exp, optional org_id and scope. It carries no role, email, profile,
 superuser bit or token version: authorization is checked per request. Its
 lifetime is at most the 60 min HS256-compat ceiling. The class is
 `unconsumed`: nothing mints or verifies it yet.
-The audiences `acr-api` and `acr-mcp` (scopes `acr:api` and `acr:mcp`,
-CHAOS-12248) are ACR's: acr-api accepts `acr-api` only and acr-mcp `acr-mcp`
+The audiences `acr-api` and `acr-mcp` (scopes `acr:api` and `acr:mcp`) are ACR's: acr-api accepts `acr-api` only and acr-mcp `acr-mcp`
 only. go-api, query-api and auth-service refuse both. No ops platform token
 carries one: the session token settings (`AUTH_JWT_AUDIENCE`,
 `AUTH_LEGACY_JWT_AUDIENCE`, go-api's `JWT_AUDIENCE`), the HS256 edge-token
 verifier and signer, the envelope verifier and both minters refuse them. The
-mint that will issue them is a separate one (ACP-ADR-13), not built yet
-(CHAOS-12082 step O2).
+mint that will issue them is a separate one not built yet.
 
-**`workload_token` (CHAOS-10782).** The EdDSA workload token of TRD section 11
+**`workload_token`.** The EdDSA workload token of TRD section 11
 for one internal service caller. Its wire contract is `workload-token.v1`:
 header {alg EdDSA, typ `workload+jwt`, kid}; claims iss, aud (exactly one
 service), sub, principal_type `workload`, jti, iat, nbf, exp; no `org_id`, no
@@ -236,18 +223,18 @@ disables a credential with `auth-migrate workloads bootstrap-create`,
 `bootstrap-rotate`, `bootstrap-revoke` and `bootstrap-disable` (migration role;
 see the [bootstrap credential runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md)).
 
-**`service_account_key` (CHAOS-12273).** The key of an organization's service
+**`service_account_key`.** The key of an organization's service
 account: `fcsak_` and 32 random bytes as unpadded base64url. The store verbs
 exist in `internal/auth/serviceaccount`, and the routes
 `/internal/v1/service-accounts/keys/*` issue, rotate, revoke and list keys.
-No route accepts a key. A key authenticates nowhere until the use leaf CHAOS-12362 lands,
+No route accepts a key. A key authenticates nowhere yet,
 so the class is `unconsumed`. It is no bearer: go-api and the auth-service
 session issue route refuse its prefix before any validator. The registry
 (`auth.credential_registry`) keeps the SHA-256 digest of the whole value, never
 the value. Each key change is one `service_account.key_changed` provisioning
 event that names the credential row id.
 
-**`service_account_token` (CHAOS-12362).** The EdDSA token the exchange of a
+**`service_account_token`.** The EdDSA token the exchange of a
 service account key will issue. Its wire contract is `service-account-token.v1`:
 header {alg EdDSA, typ `sa+jwt`, kid}; claims iss, aud (exactly `dev-health-api`),
 sub (the account), principal_type `service_account`, org_id (the account's
@@ -262,8 +249,26 @@ Its issue will write the append-only audit event
 `auth.service_account.token_issued`, naming the credential row id, never the
 key value.
 
-**`acr_browser_refresh_token` (CHAOS-12141).** The refresh token of the ACR
-first-party browser client (acr CHAOS-12124): `acrrt_` and 32 random bytes as
+**`oauth_authorization_code` and `oauth_consent_csrf_token`.**
+The two secrets of auth-service's OAuth 2.1 authorization server (ADR-13).
+`POST /oauth/authorize`, action `describe`, binds an authorization request to
+the bearer's web session once and returns the consent anti-CSRF token:
+`fcocs_` and 32 random bytes as unpadded base64url. Action `approve` or `deny`
+must carry it in the form body field `csrf_token`, with the same web session
+and principal; one decision spends it, and it ends with its request (10
+minutes). `approve` mints the authorization code, `fcoac_` and 32 random bytes,
+inside the consent's audit commit, and returns it once on the client's exact
+redirect. It is single use, lives 60 seconds and is bound to the client, the
+redirect, the RFC 8707 resource and the S256 challenge. auth-service keeps the
+SHA-256 of each on `auth.oauth_authorization_requests`, never the value; no
+audit row holds either. Neither is a bearer, and no route takes either as
+one. The code is `unconsumed` until the token endpoint (O4)
+redeems it. The anti-CSRF token is `active`: describe mints it and
+approve and deny check it. The routes mount with `AUTH_TOKEN_ISSUER_URL` set;
+no ingress or go-api proxy path reaches them from outside.
+
+**`acr_browser_refresh_token`.** The refresh token of the ACR
+first-party browser client: `acrrt_` and 32 random bytes as
 unpadded base64url. The Ask Dev web browser gets it from the authorization code
 exchange of acr-api's OAuth server and presents it only as a form body field:
 `refresh_token` on `POST /token` (`grant_type=refresh_token`), `token` on
@@ -278,7 +283,7 @@ any other reuse revokes the whole family. The family ends 12 h after login and
 no refresh extends it; an ended family is purged after a grace. acr-api serves
 it only with a browser client configured, so the class is `optional_feature`.
 
-## The CHAOS-3271 class: credentials that reach a validator that is not their own
+## Credentials that reach a validator that is not their own
 
 The org scope (`Scope.OrgScope`, `internal/api/policy/scope.go:128`) reads every
 request's `authorization` header through `Scope.headerAuthenticate`
@@ -300,13 +305,13 @@ returns a refusal, and `Scope.headerAuthenticate` treats a refusal as no user
 (`internal/api/policy/scope.go:116-118`), so the request proceeds as anonymous
 through the org scope and its *real* validator still gets a turn. **But the
 credential still transited a validator it does not own**, which is exactly the
-shape CHAOS-3271 warns about. Every class below hits
+shape this section describes. Every class below hits
 this:
 
 | Credential class | Route(s) | Exempted from the path prefix? |
 | --- | --- | --- |
 | `internal_svc_worker_token` (`svc_worker_*`) | none found (see below) | **No** — no HTTP validator exists for it anywhere, so if one were ever wired up at a non-`/api/v1/internal/acr/` path it would silently degrade to anonymous first. |
-| `external_push_ingest_token` (`fcpush_*`) | External Push data-plane endpoints | **No.** The module docstring for `external_ingest/auth.py` says as much: *"OrgIdMiddleware only understands user JWTs and takes its anonymous pass-through branch for an `fcpush_...` bearer"* — meaning the decode attempt still happens, it just fails harmlessly. |
+| `external_push_ingest_token` (`fcpush_*`) | External Push data-plane endpoints | **No.** The org scope only understands user JWTs and takes its anonymous pass-through branch for an `fcpush_...` bearer: the decode attempt still happens, it just fails harmlessly. |
 
 Only `internal_svc_acr_token` (`svc_acr_*`) got the fix. The fix is a path
 exemption, not a credential-class dispatch — so it only protects whatever
@@ -327,7 +332,7 @@ preferring one. This is the shape a class-aware gate should generalize.
 
 ## Retired: the legacy ingest path
 
-The legacy `POST /api/v1/ingest/*` routes are retired (CHAOS-11813). go-api
+The legacy `POST /api/v1/ingest/*` routes are retired. go-api
 mounts none of them and reads none of their settings
 (`INGEST_API_KEYS`, `INGEST_SIGNING_SECRET`,
 `DEV_HEALTH_LEGACY_INGEST_ENABLED`, `DEV_HEALTH_LEGACY_INGEST_SUNSET`), so each
@@ -335,7 +340,7 @@ path answers 404. Their deployment-wide key carried no organization and the
 handler wrote the body's `org_id` as given: retiring the routes removed that
 cross-tenant write path. Its two credential classes (the deployment-wide API
 key and the HMAC body signature) are deleted from the registry, the wire
-schemas and the stored-class CHECK (auth migration 0036, CHAOS-11820).
+schemas and the stored-class CHECK (auth migration 0036).
 
 The engineering guardrails say: "missing config must never mean auth
 disabled in production." The webhook validators in
@@ -347,7 +352,7 @@ when its secret is unset.
 
 ## Unconsumed credential: `svc_worker_*`
 
-**Mint retired (CHAOS-10044).** `dho service-credentials create` and `rotate` refuse
+**Mint retired.** `dho service-credentials create` and `rotate` refuse
 `--service worker-operator` before a database is opened (exit 1, one JSON error line on
 stderr); no `svc_worker_*` token is issued any more. `list` and `revoke` keep working on
 the rows already stored, active and revoked. No row was migrated or deleted.
@@ -357,45 +362,24 @@ the same code path as `svc_acr_*`
 (`internal/apiservice/admin/servicecredentials.go`), with
 its own scope set (`workers:read`, `workers:operate`,
 `internal/apiservice/admin/servicecredentials.go:36-44`). No HTTP route in ops, web, or acr was found
-that validates a `svc_worker_`-prefixed bearer token — the internal acr routes
-(`internal/apiservice/acr/internalauth.go`) accept only the acr-api workload token. Either this is
-scaffolding for a not-yet-wired consumer, or a consumer exists in the Go
-worker binaries or `dev-health-go` outside this lane's assigned read scope.
-Flagged rather than guessed.
+that validates a `svc_worker_`-prefixed bearer token — the internal acr routes (`internal/apiservice/acr/internalauth.go`)
+accept only the acr-api workload token. A consumer, if any, lives in the Go
+worker binaries or `dev-health-go`, outside this repository's HTTP routes.
 
-## Not anchored this pass
+## Infrastructure and exchange classes
 
 - **`infrastructure_deployment_credentials`** (DB/Kubernetes/TLS/deployment
-  identities) — only confirmed the deployment manifests exist
-  (`deploy/helm/dev-health/templates/secret.yaml`, `deploy/helm/dev-health/templates/serviceaccount.yaml`);
-  no application-code read/validate path was traced. This is the
-  least-verified class in the inventory.
-- **`acr_workload_identity_exchange`**'s subject-token (Kubernetes
-  ServiceAccount JWT) validator lives in `github.com/full-chaos/dev-health-go/authverify`
-  — a fourth repo outside this lane's assigned scope (ops/web/acr only).
-- **`sso_saml_exchange`** / **`sso_oidc_exchange`** — the router's gating
-  (`@require_feature("sso")`) and schemas are anchored; the actual
-  SAML-signature/OIDC-code verification logic in
-  `internal/api/sso/` was not read this pass.
-- **`license_key`** — whether `LicenseValidator`/`licensing/gating.py` fails
-  open or closed when `LICENSE_PUBLIC_KEY` or the license string itself is
-  unset was not traced to its call site.
-- **`pagerduty_oauth_credential`** — the Python-side
-  `oauth.py`/`oauth_lifecycle.py`/`oauth_storage.py`/`oauth_authorization_store.py`
-  were only grepped for filenames, not read line by line.
+  identities) are provisioned by the Helm chart
+  (`deploy/helm/dev-health/templates/secret.yaml`, `deploy/helm/dev-health/templates/serviceaccount.yaml`).
+  They are deployment inputs, not application tokens.
+- **`acr_workload_identity_exchange`** accepts a Kubernetes ServiceAccount JWT as
+  its subject token; that token is validated by
+  `github.com/full-chaos/dev-health-go/authverify`.
 
-Every gap above is also recorded per-class in the `gaps` array of
+Each class has its anchors and unknown fields recorded in the `gaps` array of
 [`credential-classes.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/credential-classes.json).
-No field in the JSON was guessed from a name; an unanchored fact is `null`
-with a `gaps` entry, never a filled-in guess.
 
-## mkdocs navigation
-
-This page is declared under the existing explicit `Reference:` nav block in
-`mkdocs.yml` (nav is explicit here, not `awesome-pages`) — see the `Auth:`
-entry alongside `API`, `GraphQL`, `CLI`, etc.
-
-## query-api: the MCP caller-class listener (CHAOS-7085)
+## query-api: the MCP caller-class listener
 
 query-api serves the hosted MCP's validated free-form GraphQL query on a
 separate listener (`--mcp-addr` / `QUERY_API_MCP_ADDR`, chart
@@ -411,12 +395,11 @@ and the chart's NetworkPolicy admits only the pod selectors in
 A pod that can reach the port can read any org through the allowlisted
 fields; it cannot write.
 
-## Go api: the internal listener (CHAOS-7181)
+## Go api: the internal listener
 
 The Go api serves `/api/v1/internal/acr/*` behind two controls: the network,
 and the acr-api workload token on every route (the only bearer accepted; a
-`svc_acr_` service credential gets the uniform 401 before any credential read,
-CHAOS-11242). Those
+`svc_acr_` service credential gets the uniform 401 before any credential read). Those
 routes are mounted only on the
 internal listener (`--api-internal-addr` / `DEV_HEALTH_API_INTERNAL_ADDR`,
 chart `goApi.internal.port`, default 8091), never on the public api listener,

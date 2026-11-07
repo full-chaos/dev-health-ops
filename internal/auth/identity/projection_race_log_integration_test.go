@@ -219,7 +219,7 @@ func TestRaceLostIdentityProjectionLogsAWarnRefusal(t *testing.T) {
 		e.loseTheRace(t, ctx, "external_identities",
 			`INSERT INTO auth.external_identities (id, principal_id, issuer, provider, subject) VALUES ($1, $2, $3, $4, $5)`,
 			[]any{uuid.New(), user, key.Issuer, string(key.Provider), key.Subject}, func() {
-				err = e.store.projectIdentity(ctx, key, user)
+				err = e.store.projectIdentity(ctx, key, user, string(key.Provider))
 			})
 	})
 	if err != nil {

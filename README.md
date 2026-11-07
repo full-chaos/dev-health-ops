@@ -103,7 +103,7 @@ dho fixtures generate --sink "$CLICKHOUSE_URI" --provider synthetic \
   --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph
 ```
 
-Create the first user and organization with `dho admin users create` and
+Create the first user and organization with `dho auth users-create` and
 `dho admin orgs create`. Full walkthrough:
 [get started](docs/get-started/index.md),
 [evaluate locally](docs/operate/install/local-evaluation.md).

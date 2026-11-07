@@ -26,10 +26,10 @@ func TestParseRootStopsAtTheFirstPositional(t *testing.T) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 	// Before the command they are errors.
-	if _, err := p.ParseRoot([]string{"--llm", "x", "cmd"}, none); err == nil || !strings.Contains(err.Msg, "ambiguous option: --llm") {
+	if _, err := p.ParseRoot([]string{"--llm", "x", "cmd"}, none); err == nil || !strings.Contains(err.Msg, "ambiguous option: could match") {
 		t.Errorf("an ambiguous abbreviation before the command: %v", err)
 	}
-	if _, err := p.ParseRoot([]string{"--bogus", "cmd"}, none); err == nil || !strings.Contains(err.Msg, "unrecognized arguments: --bogus") {
+	if _, err := p.ParseRoot([]string{"--bogus", "cmd"}, none); err == nil || !strings.Contains(err.Msg, "unrecognized arguments (1)") {
 		t.Errorf("an unknown option before the command: %v", err)
 	}
 	// A value that looks like an option is not a value.

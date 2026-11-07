@@ -28,6 +28,8 @@ ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 source "${SCRIPT_DIR}/lib/auth_rotation_probe.sh"
 # shellcheck source=ci/lib/registry_retry.sh
 source "${SCRIPT_DIR}/lib/registry_retry.sh"
+# shellcheck source=ci/lib/auth_workload_session_issue.sh
+source "${SCRIPT_DIR}/lib/auth_workload_session_issue.sh"
 
 readonly PG_IMAGE="postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
 readonly DIGEST_RE='^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$'
@@ -62,8 +64,9 @@ if [ "${PRINT_PLAN}" = 1 ]; then
     'stage smoke:    up (postgres, clickhouse, valkey, migrate chain, auth-service, go-api, issuer-tls); register + verify one user;' \
     '                login; token header kid is a; JWKS (https, rehearsal CA) lists a; go-api /api/v1/auth/me accepts the token.' \
     'S1 planned:     adopt; stage b; register b (pending, published); activate b refused before 300 s with the remaining seconds,' \
-    '                allowed after; overlap: a-token still accepted by go-api, b-token accepted, no non-2xx on the probe;' \
-    '                rollback a (a active), rollback b (b active); retire a refused before 4200 s, allowed after; a leaves the JWKS.' \
+    '                allowed after; overlap: a-token still accepted by go-api and served by query-api, b-token accepted by both,' \
+    '                the probe asks both every 0.5 s: no go-api non-2xx, no query-api 401/000/5xx; rollback a (a active), rollback b' \
+    '                (b active); retire a refused before 4200 s, allowed after; a leaves the JWKS; the b-token after it on both.' \
     'S2 compromise:  stage c and d, register both (published 300 s+); sessions under b; compromise b -successor c: b leaves the JWKS' \
     '                and is denied, c signs, the sessions of b are revoked (refresh refused), a session of a and the session of c still' \
     '                refresh; every verb on b refused; a manifest that names b active changes nothing.' \
@@ -121,9 +124,9 @@ POSTGRES_PASSWORD="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
 AUTH_RUNTIME_DATABASE_PASSWORD="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
 AUTH_SESSION_SUCCESSOR_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
 AUTH_LOGIN_LOCKOUT_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
-AUTH_SESSION_ISSUE_TOKEN="svc_authsess_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
-[[ "${AUTH_SESSION_ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "could not build a session issue credential"
-export POSTGRES_PASSWORD AUTH_RUNTIME_DATABASE_PASSWORD AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY AUTH_SESSION_ISSUE_TOKEN
+export POSTGRES_PASSWORD AUTH_RUNTIME_DATABASE_PASSWORD AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY
+# go-api's workload token carries the rehearsal issuer: auth-service signs under it (the override) and go-api checks it.
+export AUTH_TOKEN_ISSUER_URL="${ISSUER_URL}"
 # go-api mail settings come from the webproof override; mail is not delivered in this rehearsal (the user is verified in SQL).
 export AUTH_PROOF_SMTP_PORT=2525
 export REHEARSAL_ISSUER_URL="${ISSUER_URL}"
@@ -233,15 +236,13 @@ docker volume inspect "${KEYS_VOL}" >/dev/null 2>&1 || die "the keys volume ${KE
 write_manifest a:active
 stage_keys a.pem
 
+# go-api presents its workload token on the session issue route: the bootstrap credential and the api principal first.
+# The bootstrap pulls in auth-migrate, which grants auth.sessions to AUTH_SESSION_READER_ROLES (the override): those roles
+# come from go-river-provision (go-api's chain), so it runs first.
+compose --profile auth run --rm --pull never go-river-provision >/dev/null || die "go-river-provision failed"
+auth_workload_session_issue compose --pull never || die "the go-api workload credential is not ready"
 registry_retry_run rotation-up -- compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 900 go-api query-api auth-service issuer-tls
 psql_one() { compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At -c "$1"; }
-compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
-  < <(printf '\\set token %s\n' "'${AUTH_SESSION_ISSUE_TOKEN}'"; cat <<'SQL'
-INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-VALUES (gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'token', 'UTF8')), 'hex'), left(:'token', 16),
-        '["sessions:issue"]', now());
-SQL
-  ) || die "could not store the session issue credential"
 
 # A recreated container gets new ephemeral host ports: read them again after every recreate.
 refresh_ports() {
@@ -315,14 +316,21 @@ login_signs_by() { # login_signs_by KID: wait out the key-state refresh (15 s), 
   sleep $((KEY_STATE_REFRESH + 5))
   login_user && kid_is "${L_ACCESS}" "$1"
 }
-probe_bg() { # probe_bg TOKEN OUTFILE SECONDS: GET /api/v1/auth/me every 0.5 s
-  local tok="$1" out="$2" end=$((SECONDS + $3)) n=0
+probe_bg() { # probe_bg TOKEN OUTFILE SECONDS: go-api GET /api/v1/auth/me and query-api GET /api/v1/filters/options every 0.5 s
+  # Both calls of a tick run at once, beside the 0.5 s wait: a tick lasts 0.5 s, or as long as the slower call.
+  local tok="$1" out="$2" end=$((SECONDS + $3)) n=0 go_pid query_pid
   : >"${out}"
   while [ "${SECONDS}" -lt "${end}" ]; do
     n=$((n + 1))
-    printf '%d %s\n' "${n}" "$(api_code "${tok}" /api/v1/auth/me)" >>"${out}"
+    api_code "${tok}" /api/v1/auth/me >"${out}.go" &
+    go_pid=$!
+    query_code "${tok}" >"${out}.query" &
+    query_pid=$!
     sleep 0.5
+    wait "${go_pid}" "${query_pid}" || true
+    printf '%d %s %s\n' "${n}" "$(cat "${out}.go")" "$(cat "${out}.query")" >>"${out}"
   done
+  rm -f "${out}.go" "${out}.query"
 }
 
 # Predicates for check (they run in this shell, so they see the helpers above).
@@ -604,6 +612,8 @@ check s1-a-retiring eq "$(key_state a)" retiring
 check s1-new-token-signed-by-b login_signs_by b
 check s1-go-api-accepts-b me_accepts "${L_ACCESS}"
 check s1-a-token-still-accepted-in-overlap me_accepts "${TOK_A2}"
+check s1-query-api-serves-b query_serves "${L_ACCESS}"
+check s1-query-api-serves-the-a-token-in-overlap query_serves "${TOK_A2}"
 check s1-a-and-b-both-published wait_jwks_kids "a b" 60
 wait "${PROBE_PID}" || true
 PROBE_PID=""
@@ -662,6 +672,8 @@ rec_line "note: every token a signed has expired by the retire floor, so the a-t
 keys_cmd rollback -kid a
 check s1-retired-a-would-return-only-as-pending out_has "a: retired -> pending"
 check s1-b-signs-after-retire login_signs_by b
+check s1-go-api-accepts-b-after-retire me_accepts "${L_ACCESS}"
+check s1-query-api-serves-b-after-retire query_serves "${L_ACCESS}"
 write_manifest b:active c:pending d:pending
 stage_keys b.pem c.pem d.pem
 

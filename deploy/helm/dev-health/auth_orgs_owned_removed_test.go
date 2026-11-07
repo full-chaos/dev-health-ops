@@ -104,22 +104,6 @@ func TestOrgsOwnedPhase5IsCancelled(t *testing.T) {
 	}
 }
 
-// ssoJit=true has no supported phase until CHAOS-12678 re-homes it.
-func TestSSOJITTrueIsRefusedUntil12678(t *testing.T) {
-	const on = "authService.ssoJit=true"
-	for name, args := range map[string][]string{
-		"phase 2":       phaseArgs(2, "--set", on),
-		"phase 3":       phaseArgs(3, "--set", on),
-		"phase 4 goApi": phaseArgs(4, "--set", "authService.usersOwnedStage=goApi", "--set", on),
-		"phase 4 owned": phaseArgs(4, "--set", on),
-	} {
-		_, out, err := renderAuth(t, args...)
-		if err == nil || !strings.Contains(out, "CHAOS-12678") {
-			t.Errorf("%s: rendered: err=%v out=%.300s", name, err, out)
-		}
-	}
-}
-
 // No render at a phase the chart accepts carries AUTH_ORGS_OWNED, and no template still writes the env line or reads the ladder flag.
 func TestOrgsOwnedHasNoRenderedOrTemplatedConsumer(t *testing.T) {
 	for phase := 0; phase <= 4; phase++ {

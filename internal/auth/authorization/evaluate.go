@@ -12,6 +12,7 @@ const (
 	resourcePlatform     = "platform"
 	resourceRepository   = "repository"
 	wildcardKey          = "*"
+	platformAdminAction  = "admin.orgs"
 	maxFieldLen          = 128
 )
 
@@ -49,7 +50,12 @@ func NormalizeRequest(r Request) (Request, bool) {
 // Evaluator decides requests under one catalog.
 type Evaluator struct {
 	cat catalogView
+	// redaction maps role and action to the field classes an allow of the pair must have removed
+	// (vocabulary/redaction-classes.v1.json rules).
+	redaction map[redactionKey][]string
 }
+
+type redactionKey struct{ role, action string }
 
 // catalogView is the read side of a catalog the evaluator needs; the
 // embedded *policycatalog.Catalog is the only one outside tests.
@@ -61,7 +67,11 @@ type catalogView interface {
 }
 
 // NewEvaluator decides under the embedded catalog only; a caller cannot supply one.
-func NewEvaluator() *Evaluator { return newEvaluator(policycatalog.Default()) }
+func NewEvaluator() *Evaluator {
+	e := newEvaluator(policycatalog.Default())
+	e.redaction = embeddedRedactionRules(e.cat)
+	return e
+}
 
 func newEvaluator(c catalogView) *Evaluator { return &Evaluator{cat: c} }
 
@@ -77,6 +87,11 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 
 	r, ok := NormalizeRequest(r)
 	if !ok {
+		return deny(ReasonInvalidRequest)
+	}
+	// A repository decision names one repository; the wildcard key stays a valid request shape (the wire
+	// accepts it) and is refused here, so no allowlist ever holds it.
+	if r.ResourceKind == resourceRepository && r.ResourceKey == wildcardKey {
 		return deny(ReasonInvalidRequest)
 	}
 	act, err := e.cat.Action(r.Action)
@@ -109,6 +124,12 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 		if s.OrganizationStatus(r.OrganizationID) != StatusActive {
 			return deny(ReasonOrganizationInactive)
 		}
+		// The legacy admin guard admits a holder of admin.orgs before it reads the membership row; the flagged
+		// actions are exactly the organization actions of its rows, so the holder gets the owner's allow shape.
+		if act.PlatformAdmin && e.cat.Allows(s.PlatformRole(), platformAdminAction) {
+			return Decision{Allowed: true, Reason: ReasonAllowedByPlatformAdmin, PolicyRevision: rev,
+				Obligations: &Obligations{TenantScope: r.OrganizationID}}
+		}
 		m, found := s.Membership(r.OrganizationID)
 		if !found {
 			return deny(ReasonNoMembership)
@@ -117,7 +138,7 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 			return deny(ReasonOrgMismatch)
 		}
 		if m.Status != StatusActive {
-			return deny(ReasonMembershipInactive)
+			return deny(ReasonNoMembership)
 		}
 		roleID = m.Role
 	default:
@@ -134,5 +155,8 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 	if !e.cat.Allows(roleID, act.ID) {
 		return deny(ReasonRoleLacksAction)
 	}
-	return Decision{Allowed: true, Reason: ReasonAllowedByRole, PolicyRevision: rev}
+	if act.Scope == policycatalog.ScopePlatform {
+		return Decision{Allowed: true, Reason: ReasonAllowedByRole, PolicyRevision: rev}
+	}
+	return e.organizationAllow(r, act, s, roleID, rev)
 }

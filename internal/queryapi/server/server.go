@@ -474,7 +474,8 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// caller either way.
 	mux.HandleFunc("/api/v1/", apiV1CatchAllNotFound)
 
-	handler := markResponseModelRoutes(mux)
+	handler, gate := gatedPlaneHandler(lookup, mux)
+	cleanups = append(cleanups, gate.Wait)
 	// CHAOS-7096: internalMux already carries /query/proof-write (mounted
 	// above, in the same scope as handlers.ProofWrite) when that route is
 	// configured. This fallthrough registration makes every OTHER path
@@ -486,7 +487,7 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// reachable through the public listener, which is built from handler
 	// and never sees internalMux at all.
 	internalMux.Handle("/", handler)
-	return &Plane{Handler: handler, InternalHandler: internalMux, MCPHandler: mcpMux, Ready: ready, Probes: probes, Close: closeAll}, nil
+	return &Plane{Handler: handler, InternalHandler: internalMux, MCPHandler: withGate(mcpMux, gate), Ready: ready, Probes: probes, Close: closeAll}, nil
 }
 
 // recordErrorCount stamps the number of errors a GraphQL response carried on

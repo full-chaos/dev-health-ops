@@ -1,16 +1,12 @@
 package apiservice
 
 import (
-	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
-	"os"
 	"strings"
 
 	"github.com/full-chaos/dev-health-go/workloadtoken"
 
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
 )
 
 // The credential go-api's provisioning clients (member, invite, organization
@@ -22,19 +18,14 @@ const (
 	// EnvAuthSessionIssueCredential selects the credential of go-api's session issue client, the same two values; unset
 	// is credentialSessionCompat.
 	EnvAuthSessionIssueCredential = "AUTH_SESSION_ISSUE_CREDENTIAL"
-	// EnvAuthWorkloadSubjectFile is a projected ServiceAccount token file,
-	// the workload exchange's subject on Kubernetes.
-	EnvAuthWorkloadSubjectFile = "AUTH_WORKLOAD_SUBJECT_FILE"
-	// EnvAuthWorkloadBootstrapFile is a workload bootstrap credential file,
-	// the workload exchange's subject on Compose.
-	EnvAuthWorkloadBootstrapFile = "AUTH_WORKLOAD_BOOTSTRAP_FILE"
-	// EnvAuthWorkloadIssuer is the issuer (auth-service's token issuer URL)
-	// every workload token must carry.
-	EnvAuthWorkloadIssuer = "AUTH_WORKLOAD_ISSUER"
+	// The workload inputs, read by workloadinput.NewClient.
+	EnvAuthWorkloadSubjectFile   = workloadinput.EnvSubjectFile
+	EnvAuthWorkloadBootstrapFile = workloadinput.EnvBootstrapFile
+	EnvAuthWorkloadIssuer        = workloadinput.EnvIssuer
 )
 
 const (
-	credentialWorkload      = "workload"
+	credentialWorkload      = workloadinput.CredentialWorkload
 	credentialSessionCompat = "session_compat"
 )
 
@@ -51,7 +42,7 @@ type sessionCredential struct {
 }
 
 // workloadAsk is one switch that is on and one selector that chose the workload credential.
-type workloadAsk struct{ flag, selector string }
+type workloadAsk = workloadinput.Ask
 
 // selectsWorkload reads selector when flag is on: false for unset, empty and session_compat, true for workload, and a
 // start-up error naming the selector for any other value. The value is compared as it is, except that trimSpace
@@ -85,7 +76,7 @@ func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (pr
 		}
 		if ok {
 			provisioningAsks = true
-			asks = append(asks, workloadAsk{EnvAuthProxyOrgProvisioning, EnvAuthProvisioningCredential})
+			asks = append(asks, workloadAsk{Flag: EnvAuthProxyOrgProvisioning, Selector: EnvAuthProvisioningCredential})
 		}
 	}
 	if cfg.Enabled(AuthSessions) {
@@ -96,7 +87,7 @@ func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (pr
 		}
 		if ok {
 			sessionAsks = true
-			asks = append(asks, workloadAsk{sessionsFlag, EnvAuthSessionIssueCredential})
+			asks = append(asks, workloadAsk{Flag: sessionsFlag, Selector: EnvAuthSessionIssueCredential})
 		}
 	}
 	if len(asks) == 0 {
@@ -117,97 +108,7 @@ func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (pr
 	return provisioning, session, nil
 }
 
-// workloadInputError is a workload client error that names the bad input; its text is what the error always said.
-type workloadInputError struct{ variable, text string }
-
-func (e *workloadInputError) Error() string { return e.text }
-
-// newWorkloadClient builds the one workloadtoken.Client from AUTH_WORKLOAD_SUBJECT_FILE | AUTH_WORKLOAD_BOOTSTRAP_FILE,
-// AUTH_WORKLOAD_ISSUER and the origin of AUTH_PROXY_URL. Every error names the switches and selectors that asked for
-// it and the missing or invalid variable, never a path.
+// newWorkloadClient builds the one workloadtoken.Client over the origin of AUTH_PROXY_URL (workloadinput.NewClient).
 func newWorkloadClient(cfg AuthProxyConfig, lookup func(string) (string, bool), asks []workloadAsk) (*workloadtoken.Client, error) {
-	parts := make([]string, 0, len(asks))
-	for _, ask := range asks {
-		parts = append(parts, fmt.Sprintf("%s is on and %s=%s", ask.flag, ask.selector, credentialWorkload))
-	}
-	fail := func(variable, format string, args ...any) (*workloadtoken.Client, error) {
-		return nil, &workloadInputError{variable: variable, text: fmt.Sprintf("%s: %s", strings.Join(parts, ", "), fmt.Sprintf(format, args...))}
-	}
-	bothFiles := EnvAuthWorkloadSubjectFile + "," + EnvAuthWorkloadBootstrapFile
-	subjectPath, _ := lookup(EnvAuthWorkloadSubjectFile)
-	bootstrapPath, _ := lookup(EnvAuthWorkloadBootstrapFile)
-	subjectPath, bootstrapPath = strings.TrimSpace(subjectPath), strings.TrimSpace(bootstrapPath)
-	var subject workloadtoken.Subject
-	var subjectEnv, path string
-	switch {
-	case subjectPath != "" && bootstrapPath != "":
-		return fail(bothFiles, "set only one of %s and %s", EnvAuthWorkloadSubjectFile, EnvAuthWorkloadBootstrapFile)
-	case subjectPath != "":
-		subject, subjectEnv, path = workloadtoken.KubernetesTokenFile(subjectPath), EnvAuthWorkloadSubjectFile, subjectPath
-	case bootstrapPath != "":
-		subject, subjectEnv, path = workloadtoken.BootstrapCredentialFile(bootstrapPath), EnvAuthWorkloadBootstrapFile, bootstrapPath
-	default:
-		return fail(bothFiles, "set %s or %s", EnvAuthWorkloadSubjectFile, EnvAuthWorkloadBootstrapFile)
-	}
-	if !readableFile(path) {
-		return fail(subjectEnv, "%s must name a readable file", subjectEnv)
-	}
-	issuer, _ := lookup(EnvAuthWorkloadIssuer)
-	issuer = strings.TrimSpace(issuer)
-	if issuer == "" {
-		return fail(EnvAuthWorkloadIssuer, "%s is not set", EnvAuthWorkloadIssuer)
-	}
-	if u, err := url.Parse(issuer); err != nil || u.Scheme != "https" || u.Host == "" {
-		return fail(EnvAuthWorkloadIssuer, "%s must be an https URL", EnvAuthWorkloadIssuer)
-	}
-	client, err := workloadtoken.New(workloadtoken.Config{
-		ExchangeURL:    cfg.Upstream.String(),
-		AllowPlainHTTP: cfg.Upstream.Scheme == "http",
-		Subject:        subject,
-		Issuer:         issuer,
-		Timeout:        cfg.Timeout,
-		Transport:      exchangeTransport(),
-	})
-	if err != nil {
-		var refused *workloadtoken.ConfigFieldError
-		if errors.As(err, &refused) {
-			if variable := refusedConfigVariable(refused.Field, subjectEnv); variable != "" {
-				return fail(variable, "%s is refused by the workload token client: %v", variable, err)
-			}
-		}
-		return fail("", "workload token client: %v", err)
-	}
-	return client, nil
-}
-
-// refusedConfigVariable names the environment variable a refused workloadtoken.Config field was read from. The
-// timeout and the transport are set in code, so they name none.
-func refusedConfigVariable(field workloadtoken.ConfigField, subjectEnv string) string {
-	switch field {
-	case workloadtoken.FieldIssuer:
-		return EnvAuthWorkloadIssuer
-	case workloadtoken.FieldExchangeURL:
-		return EnvAuthProxyURL
-	case workloadtoken.FieldSubject:
-		return subjectEnv
-	}
-	return ""
-}
-
-// exchangeTransport carries the workload exchange: the shared outbound transport, no environment proxy.
-func exchangeTransport() *http.Transport { return httpguard.SharedTransport() }
-
-// readableFile reports whether path is a regular file this process can open.
-// It reads nothing from it, and callers never put the path in an error.
-func readableFile(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return false
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	_ = file.Close()
-	return true
+	return workloadinput.NewClient(cfg.Upstream, cfg.Timeout, lookup, asks)
 }

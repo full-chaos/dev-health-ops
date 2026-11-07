@@ -17,8 +17,9 @@ lifecycle: active
 
 A delegated session lets a platform administrator act as an organization
 member. It is one row of `auth.sessions`: `principal_id` is the target, and
-`actor_principal_id` is the real actor. No caller uses these routes yet: go-api
-moves to them in a later change.
+`actor_principal_id` is the real actor. go-api calls these routes for its admin
+impersonation while `AUTH_PROXY_IMPERSONATION` is on (see [go-api's
+impersonation](#go-apis-impersonation)); with it off no caller uses them.
 
 ## Start
 
@@ -130,6 +131,46 @@ The row stores the actions the session may use. The set is the delegable actions
 of the target's organization role. When the actor holds `platform_owner` at
 start, it is the role's full action set. The target role is an organization role,
 so no platform action enters.
+
+## go-api's impersonation
+
+With `AUTH_PROXY_IMPERSONATION=true` (chart value
+`goApi.authProxy.impersonation`, refused below `authService.phase` 2), go-api's
+`POST /api/v1/admin/impersonate` checks the target as before and then starts a
+delegated session of the caller's own session (reason `admin_impersonation`).
+The answer is `200` with exactly these members:
+
+| Member | Value |
+| --- | --- |
+| `status` | `active` |
+| `target_user` | `id`, `email`, `org_id`, `role` |
+| `expires_at` | The session's end, at most 15 minutes after the start |
+| `access_token` | The target's token from the start above |
+| `token_type` | `bearer` |
+| `expires_in` | As in the start above |
+| `session_access_token` | Under the eddsa class only |
+
+There is no refresh: the session lasts at most 15 minutes, not the
+`IMPERSONATION_TTL_MINUTES` (default 60) of a go-api impersonation row.
+
+| Refusal | Answer |
+| --- | --- |
+| The caller's token carries no auth-service session | `409` "Impersonation needs an authentication-service session; sign in again" |
+| auth-service refuses, fails or is down | `503`, and nothing changes in go-api |
+| `AUTH_PROXY_SESSIONS` off (go-api logs one ERROR line and sets `devhealth_api_auth_proxy_impersonation_config_invalid`) | `503` |
+
+`POST /api/v1/admin/impersonate/stop` ends the caller's open delegated session
+at auth-service and answers `200` with `status` `stopped`; with no open session
+it answers `400` "No active impersonation session" as before. Stop needs the
+administrator's own session: the delegated bearer is refused on every
+`/api/v1/admin` route. go-api refuses an impersonation caller fail-closed on
+PDP-enforced rows (outcome `impersonation_refused`); the stop
+route is exempt and is decided by the PDP with the administrator's own bearer.
+With the web change below live, the Superadmin UI is refused in every tab while
+a delegated token is live.
+
+Do not turn the switch on before the web change that swaps the browser session
+to the delegated token at start and restores it at stop is live.
 
 ## Metric
 

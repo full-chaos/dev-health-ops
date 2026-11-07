@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,28 +23,26 @@ type OAuthSSOCandidate struct {
 	BaseURL      string
 }
 
-// OAuthSSOKey returns the row key for a candidate. A key is carried only when
-// the row's issuer is the social issuer of its type: the row's subject
-// namespace is then the social namespace, so the key can only match the
-// account the user already holds. The base_url is the social host exactly, or
-// with ONE trailing slash; any other spelling (self-hosted) is never carried:
-// selfHosted is set and key is nil. public.users has no column that tells an
-// OAuth-SSO user from a plain social user (go-api writes the same auth_provider
-// and subject, sso_provider_id NULL, for both): a social user in the row's org
-// gets the row key too, which only ever matches the account it already owns.
-func OAuthSSOKey(c OAuthSSOCandidate) (key *identity.ExternalKey, selfHosted bool) {
-	issuer, ok := identity.SocialIssuer(identity.Provider(c.AuthProvider))
-	if !ok {
-		return nil, false
+// OAuthSSOKey returns the row key for a candidate: the issuer is the fixed social issuer of its type, except for a
+// GitLab row, whose issuer is the lowercase scheme and host of the row's configured base_url (identity.OAuthIssuer),
+// so a self-hosted instance is its own namespace and a numeric id on it is never the gitlab.com account. A base_url
+// that names no host is never carried (key nil). public.users has no column that tells an OAuth-SSO user from a plain
+// social user (go-api writes the same auth_provider and subject for both, sso_provider_id NULL on gitlab.com): a
+// social user in the row's org gets the row key too, which only ever matches the account it already owns.
+func OAuthSSOKey(c OAuthSSOCandidate) *identity.ExternalKey {
+	provider := identity.Provider(c.AuthProvider)
+	if !provider.IsSocial() {
+		return nil
 	}
-	if base := strings.TrimSuffix(c.BaseURL, "/"); base != "" && base != issuer {
-		return nil, true
+	issuer, err := identity.OAuthIssuer(provider, c.BaseURL)
+	if err != nil {
+		return nil
 	}
 	k := identity.ExternalKey{Issuer: issuer, Provider: identity.Provider(c.RowID.String()), Subject: c.Subject}
 	if k.Validate() != nil {
-		return nil, false
+		return nil
 	}
-	return &k, false
+	return &k
 }
 
 // OAuthSSOCursor is the keyset position of a candidate page.
@@ -63,12 +60,11 @@ type OAuthSSOSink interface {
 
 // OAuthSSOReport is the outcome of RunOAuthSSO. Counts only.
 type OAuthSSOReport struct {
-	DryRun               bool
-	Users                int
-	Linked               int
-	Ambiguous            int
-	SelfHostedUnbindable int
-	Skipped              map[string]int
+	DryRun    bool
+	Users     int
+	Linked    int
+	Ambiguous int
+	Skipped   map[string]int
 }
 
 // Lines renders the report as stable key=value lines.
@@ -77,7 +73,6 @@ func (r OAuthSSOReport) Lines() []string {
 		fmt.Sprintf("oauth_sso_users=%d", r.Users),
 		fmt.Sprintf("oauth_sso_keys_linked=%d", r.Linked),
 		fmt.Sprintf("oauth_sso_ambiguous_row=%d", r.Ambiguous),
-		fmt.Sprintf("oauth_sso_selfhosted_unbindable=%d", r.SelfHostedUnbindable),
 	}
 	classes := make([]string, 0, len(r.Skipped))
 	for c := range r.Skipped {
@@ -107,20 +102,11 @@ func RunOAuthSSO(ctx context.Context, src OAuthSSOSource, sink OAuthSSOSink, opt
 			return
 		}
 		rep.Users++
-		selfHosted := false
-		for _, c := range group {
-			if _, sh := OAuthSSOKey(c); sh {
-				selfHosted = true
-			}
-		}
-		if selfHosted {
-			rep.SelfHostedUnbindable++
-		}
 		switch {
 		case len(group) > 1:
 			rep.Ambiguous++
 		default:
-			if key, _ := OAuthSSOKey(group[0]); key != nil {
+			if key := OAuthSSOKey(group[0]); key != nil {
 				linked, err := sink.CarryExtraIdentity(ctx, group[0].UserID, *key, opts.DryRun)
 				switch {
 				case err != nil:

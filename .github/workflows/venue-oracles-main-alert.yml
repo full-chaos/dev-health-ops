@@ -1,4 +1,4 @@
-# CHAOS-9597: a red main-push `Venue oracles` run opens or updates ONE GitHub issue.
+# CHAOS-9597, CHAOS-13243: a red main-push run of a workflow in ci/main-red-workflows.tsv opens or updates ONE GitHub issue.
 #
 # The main venue run is informational (R430, no PR check carries it), and a red run on
 # main once sat unseen for two days. This workflow runs after every completed main-push
@@ -16,11 +16,20 @@
 #
 # CHECKOUT. A workflow_run job checks out the default branch, never the run's commit, so
 # the script that runs is the one on main.
-name: Venue oracles main alert
+name: Main red alert
 
 on:
   workflow_run:
-    workflows: ['Venue oracles']
+    workflows:
+      - Venue oracles
+      - Go
+      - Go quality
+      - Go auth service
+      - Go workers compose proof
+      - Live Backend E2E
+      - Build Docker images
+      - Tests
+      - CodeQL
     types: [completed]
 
 permissions: {}
@@ -30,11 +39,14 @@ jobs:
     if: github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # One alert job at a time, so two completions cannot both find "no issue" and open two.
+    # One alert job at a time PER WORKFLOW, so two completions of one workflow cannot both find "no issue" and
+    # open two, and a slow workflow does not queue behind another. GitHub keeps one pending job per group: a third
+    # completion replaces a waiting second one, whose run then misses the issue comment; the state is read from the
+    # API on each run, so the issue is still opened and closed right.
     # On the JOB, after the `if`: a manual or non-main run is skipped before it takes the
     # group and cannot evict a queued main alert. Never cancelled.
     concurrency:
-      group: venue-oracles-main-alert
+      group: main-red-alert-${{ github.event.workflow_run.name }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -45,10 +57,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Open, update or close the main venue-oracles issue
+      - name: Open, update or close the main-red issue
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_WORKFLOW: ${{ github.event.workflow_run.name }}
           RUN_ID: ${{ github.event.workflow_run.id }}
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}

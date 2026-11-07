@@ -66,6 +66,16 @@ type GoldenSpec struct {
 	// Scrub it must be deterministic and idempotent, and it is not applied to
 	// the authorization header.
 	KeyScrub func(text string) string
+	// GoBlanked lists, by exact pattern ("body $.session_access_token"), a leaf the Go plane's answer has blanked
+	// on replay that the recording never blanked, with the reason its value is not stable (CHAOS-13107). The
+	// header's "blanked" is the recording's own count, inside the bytes SHA256 pins, so it is never edited: a
+	// Go-only blanked path is declared here, one path each. A pattern the header lists ("body $.access_token") is
+	// a leaf the recording projected whose Go projection differs by design: the test compares it by a place holder
+	// on both planes and reports each such comparison with Golden.Unvalued. A pattern with a glob, an empty reason,
+	// or a golden whose header lists nothing, is refused when the golden opens; a pattern that blanked no leaf (or,
+	// listed, was never compared unvalued) by Finish fails the test. A blanked value is not an unchecked one: the
+	// test that declares a pattern checks the value itself.
+	GoBlanked map[string]string
 }
 
 // Golden is an opened GoldenSpec.
@@ -90,7 +100,9 @@ type Golden struct {
 	// retired counts, per ruling, the answers and row comparisons the test
 	// retired (golden_retired.go).
 	retired map[string]retiredCount
-	state   goldenState
+	// goBlankedSeen records which GoldenSpec.GoBlanked patterns blanked a leaf.
+	goBlankedSeen map[string]bool
+	state         goldenState
 }
 
 // answerSlot is one answer a Golden handed out.
@@ -212,6 +224,9 @@ func openGolden(spec GoldenSpec, test string) (*Golden, error) {
 	if len(g.loaded.Header.ProducerDigest) != 64 {
 		return nil, fmt.Errorf("golden %s names no producer digest: it was not recorded by this harness", spec.Path)
 	}
+	if err := g.goBlankedErr(); err != nil {
+		return nil, err
+	}
 	return g, nil
 }
 
@@ -324,6 +339,9 @@ func bearerIdentity(value string) string {
 	token, ok := strings.CutPrefix(value, "Bearer ")
 	if !ok {
 		return value
+	}
+	if recorded, ok := recordedCallers.Load(token); ok {
+		return recorded.(string)
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -678,6 +696,9 @@ func (g *Golden) Finish(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := g.unusedRows(); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.unusedGoBlanked(); err != nil {
 		t.Fatal(err)
 	}
 	WriteGoOnlyProof(t, "Go against the Python plane's answers executed on build "+g.spec.PythonBuild+" (frozen golden "+filepath.Base(g.spec.Path)+")"+g.retiredText())

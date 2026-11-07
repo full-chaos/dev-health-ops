@@ -7,22 +7,15 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
-
-// LLMConfigScope is the credential scope the llm-config route requires. A
-// svc_acr_ credential minted before this scope existed holds only
-// entitlements:read and is refused with 403 until it is rotated.
-const LLMConfigScope = "llm_config:read"
 
 const llmConfigSchemaVersion = "acr_llm_config.v1"
 
@@ -45,18 +38,6 @@ const (
 // only: byo_no_<purpose>_config (byo_no_investigate_config on the acr route).
 func noConfigReasonFor(purpose llmorgsettings.Purpose) string {
 	return "byo_no_" + string(purpose) + "_config"
-}
-
-// ErrCredentialInvalid is a missing, unknown, revoked or expired credential.
-var ErrCredentialInvalid = errors.New("service credential invalid")
-
-// ErrCredentialScope is a valid credential that lacks the required scope.
-var ErrCredentialScope = errors.New("service credential lacks the required scope")
-
-// CredentialVerifier checks an acr service bearer token for one scope and
-// returns the credential's id, safe to log (never the token).
-type CredentialVerifier interface {
-	Verify(ctx context.Context, token, scope string) (credentialID string, err error)
 }
 
 // LLMConfigSource reads an org's stored BYO LLM config.
@@ -101,13 +82,14 @@ func countLLMConfig(ctx context.Context, outcome string) {
 }
 
 // llmConfigHandler serves GET .../orgs/{org_id}/llm-config. Order: bearer
-// (401), scope (403), org id (404), store (503), config (200 or 404). No
+// (401; only the acr-api workload token, 403 for another workload), org id
+// (404), store (503), config (200 or 404). No
 // branch logs or returns the key, the token, or an error that could carry one.
-func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logger *slog.Logger, workload *WorkloadAuth) http.Handler {
+func llmConfigHandler(source LLMConfigSource, logger *slog.Logger, workload *WorkloadAuth) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		w.Header().Set("Cache-Control", "no-store")
-		if verifier == nil || source == nil {
+		if source == nil {
 			logger.ErrorContext(ctx, "acr llm-config: route not configured")
 			countLLMConfig(ctx, "unconfigured")
 			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
@@ -118,37 +100,15 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			unauthorized(ctx, w, "missing")
 			return
 		}
-		var credentialID string
-		switch {
-		case isWorkloadToken(token):
-			if _, reason := workload.decide(token); reason != "" {
-				refuseWorkloadLLMConfig(ctx, w, logger, reason)
-				return
-			}
-			countWorkloadAccepted(ctx, routeLLMConfig)
-		case !strings.HasPrefix(token, acrTokenPrefix):
+		if !isWorkloadToken(token) {
 			unauthorized(ctx, w, "invalid")
 			return
-		default:
-			var err error
-			credentialID, err = verifier.Verify(ctx, token, LLMConfigScope)
-			switch {
-			case errors.Is(err, ErrCredentialInvalid):
-				unauthorized(ctx, w, "invalid")
-				return
-			case errors.Is(err, ErrCredentialScope):
-				logger.InfoContext(ctx, "acr llm-config: scope refused", slog.String("credential_id", credentialID))
-				countLLMConfig(ctx, "forbidden")
-				writeDetail(w, http.StatusForbidden, "Forbidden")
-				return
-			case err != nil:
-				logger.ErrorContext(ctx, "acr llm-config: credential lookup failed", slog.String("error_type", errorKind(err)))
-				countLLMConfig(ctx, "credential_unavailable")
-				writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
-				return
-			}
-			countSvcAcrCompat(ctx, routeLLMConfig)
 		}
+		if _, reason := workload.decide(token); reason != "" {
+			refuseWorkloadLLMConfig(ctx, w, logger, reason)
+			return
+		}
+		countWorkloadAccepted(ctx, routeLLMConfig)
 		orgID := r.PathValue("org_id")
 		if _, err := uuid.Parse(orgID); err != nil {
 			countLLMConfig(ctx, "bad_org")
@@ -180,7 +140,7 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 				outcome, reason = "byo_no_purpose_config", noConfigReasonFor(cfg.UnresolvedPurpose)
 			}
 			logger.InfoContext(ctx, "acr llm-config: none served",
-				slog.String("org_id", orgID), slog.String("credential_id", credentialID), slog.String("reason", reason))
+				slog.String("org_id", orgID), slog.String("reason", reason))
 			countLLMConfig(ctx, outcome)
 			// A machine-readable marker: a client that must tell "this org has
 			// no config" from a missing route (an old replica, a wrong target)
@@ -199,7 +159,7 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 		}
 		if cfg.KeyInBaseURL || llmorgsettings.BaseURLCarriesKey(cfg.BaseURL, cfg.APIKey.Reveal()) {
 			logger.WarnContext(ctx, "acr llm-config: none served",
-				slog.String("org_id", orgID), slog.String("credential_id", credentialID), slog.String("reason", NoConfigReasonBaseURLCarriesKey))
+				slog.String("org_id", orgID), slog.String("reason", NoConfigReasonBaseURLCarriesKey))
 			countLLMConfig(ctx, NoConfigReasonBaseURLCarriesKey)
 			w.Header().Set(NoConfigHeader, NoConfigValue)
 			w.Header().Set(NoConfigReasonHeader, NoConfigReasonBaseURLCarriesKey)
@@ -208,7 +168,7 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 		}
 		body := llmConfigBody(orgID, cfg)
 		logger.InfoContext(ctx, "acr llm-config: served",
-			slog.String("org_id", orgID), slog.String("credential_id", credentialID), slog.String("version", cfg.Version))
+			slog.String("org_id", orgID), slog.String("version", cfg.Version))
 		countLLMConfig(ctx, "served")
 		out := pyjson.NewObject()
 		out.Set("schema_version", body.SchemaVersion)
@@ -266,46 +226,4 @@ func bearerToken(r *http.Request) (string, bool) {
 // a connection string or row value.
 func errorKind(err error) string {
 	return fmt.Sprintf("%T", err)
-}
-
-// PostgresCredentialVerifier checks svc_acr_ tokens against
-// internal_service_credentials, the table `service-credentials create` writes
-// (admin/servicecredentials.go: token_hash is the hex SHA-256 of the token).
-// It is read-only; last_used_at is not touched.
-type PostgresCredentialVerifier struct {
-	Pool *pgxpool.Pool
-	Now  func() time.Time
-	// Service and TokenPrefix name the credential family this verifier accepts;
-	// empty means acr (svc_acr_).
-	Service     string
-	TokenPrefix string
-}
-
-const (
-	acrTokenPrefix = "svc_acr_"
-)
-
-func (v PostgresCredentialVerifier) Verify(ctx context.Context, token, scope string) (string, error) {
-	service, prefix := v.Service, v.TokenPrefix
-	if service == "" {
-		service, prefix = "acr", acrTokenPrefix
-	}
-	if !strings.HasPrefix(token, prefix) {
-		return "", ErrCredentialInvalid
-	}
-	now := time.Now().UTC()
-	if v.Now != nil {
-		now = v.Now()
-	}
-	cred, found, err := PostgresCredentialStore{Pool: v.Pool}.Find(ctx, token)
-	if err != nil {
-		return "", err
-	}
-	if !found || cred.ServiceName != service || !cred.Valid(now) {
-		return "", ErrCredentialInvalid
-	}
-	if !cred.Has(scope) {
-		return cred.ID, ErrCredentialScope
-	}
-	return cred.ID, nil
 }

@@ -22,7 +22,7 @@ func authServer(t *testing.T, store EntitlementStore, creds CredentialStore, lim
 	t.Helper()
 	mux := http.NewServeMux()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	for _, route := range Routes(Deps{Store: store, Auth: creds, Limiter: limiter, Logger: logger}) {
+	for _, route := range Routes(Deps{Store: store, Auth: creds, Limiter: limiter, Logger: logger, Workload: testWorkload}) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	return mux
@@ -38,39 +38,27 @@ func do(h http.Handler, path, authorization string) *httptest.ResponseRecorder {
 	return recorder
 }
 
-func credsFor() *fakeCredentials {
-	past := time.Now().Add(-time.Hour)
-	f := newFakeCredentials()
-	f.creds["svc_acr_revoked-token-0123456789"] = Credential{ID: "cred-revoked", ServiceName: "acr", Scopes: []string{EntitlementScope}, RevokedAt: &past}
-	f.creds["svc_acr_expired-token-0123456789"] = Credential{ID: "cred-expired", ServiceName: "acr", Scopes: []string{EntitlementScope}, ExpiresAt: &past}
-	f.creds["svc_acr_other-svc-token-0123456789"] = Credential{ID: "cred-other", ServiceName: "worker-operator", Scopes: []string{EntitlementScope}}
-	f.creds["svc_acr_llm-only-token-0123456789"] = Credential{ID: "cred-llm", ServiceName: "acr", Scopes: []string{"llm_config:read"}}
-	return f
-}
+func credsFor() *fakeCredentials { return newFakeCredentials() }
 
-// TestInternalAcrRoutesBearerMatrix is api/internal/acr.py's auth order on
-// both routes: 401 for a missing, malformed, unknown or inactive token, 403
-// for a missing scope. The entitlement route audits each outcome and stamps
-// last_used_at after validity and before the scope check; health does
-// neither.
+// TestInternalAcrRoutesBearerMatrix: the acr-api workload token is the only
+// accepted bearer. Every other header, a svc_acr_ service credential
+// included, is the uniform 401 "Unauthorized" with outcome
+// missing_or_malformed_token; the entitlement route audits each outcome with
+// a NULL credential_id, health audits nothing.
 func TestInternalAcrRoutesBearerMatrix(t *testing.T) {
+	refused := &auditRow{"", someOrg, "missing_or_malformed_token"}
 	cases := []struct {
-		name       string
-		header     string
-		status     int
-		audit      *auditRow
-		usedBefore bool
+		name   string
+		header string
+		status int
+		audit  *auditRow
 	}{
-		{"no header", "", 401, &auditRow{"", someOrg, "missing_or_malformed_token"}, false},
-		{"lowercase scheme", "bearer " + entToken, 401, &auditRow{"", someOrg, "missing_or_malformed_token"}, false},
-		{"wrong prefix", "Bearer svc_worker_x-0123456789", 401, &auditRow{"", someOrg, "missing_or_malformed_token"}, false},
-		{"prefix only", "Bearer svc_acr_", 401, &auditRow{"", someOrg, "missing_or_malformed_token"}, false},
-		{"unknown", "Bearer svc_acr_nobody-0123456789", 401, &auditRow{"", someOrg, "unknown_token"}, false},
-		{"revoked", "Bearer svc_acr_revoked-token-0123456789", 401, &auditRow{"cred-revoked", someOrg, "inactive_token"}, false},
-		{"expired", "Bearer svc_acr_expired-token-0123456789", 401, &auditRow{"cred-expired", someOrg, "inactive_token"}, false},
-		{"other service", "Bearer svc_acr_other-svc-token-0123456789", 401, &auditRow{"cred-other", someOrg, "inactive_token"}, false},
-		{"missing scope", "Bearer svc_acr_llm-only-token-0123456789", 403, &auditRow{"cred-llm", someOrg, "insufficient_scope"}, true},
-		{"valid", "Bearer " + entToken, 200, &auditRow{"cred-ent", someOrg, "success"}, true},
+		{"no header", "", 401, refused},
+		{"lowercase scheme", "bearer " + entToken, 401, refused},
+		{"svc_worker_", "Bearer svc_worker_x-0123456789", 401, refused},
+		{"svc_acr_ prefix only", "Bearer svc_acr_", 401, refused},
+		{"svc_acr_ credential", "Bearer svc_acr_entitlements-token-0123456789", 401, refused},
+		{"workload token", "Bearer " + entToken, 200, &auditRow{"", someOrg, "success"}},
 	}
 	for _, tc := range cases {
 		t.Run("entitlement/"+tc.name, func(t *testing.T) {
@@ -79,11 +67,11 @@ func TestInternalAcrRoutesBearerMatrix(t *testing.T) {
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), tc.status)
 			}
+			if tc.status == 401 && rec.Body.String() != `{"detail":"Unauthorized"}` {
+				t.Fatalf("body = %s, want the uniform refusal", rec.Body.String())
+			}
 			if !reflect.DeepEqual(creds.audits, []auditRow{*tc.audit}) {
 				t.Fatalf("audits = %+v, want [%+v]", creds.audits, *tc.audit)
-			}
-			if got := len(creds.used) == 1; got != tc.usedBefore {
-				t.Fatalf("last_used_at stamped = %v, want %v", got, tc.usedBefore)
 			}
 		})
 		t.Run("health/"+tc.name, func(t *testing.T) {
@@ -92,8 +80,8 @@ func TestInternalAcrRoutesBearerMatrix(t *testing.T) {
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), tc.status)
 			}
-			if len(creds.audits) != 0 || len(creds.used) != 0 {
-				t.Fatalf("health wrote audits %+v used %v; Python health writes neither", creds.audits, creds.used)
+			if len(creds.audits) != 0 {
+				t.Fatalf("health wrote audits %+v; health writes none", creds.audits)
 			}
 		})
 	}
@@ -119,7 +107,7 @@ func TestInternalAcrEntitlementAuditsTheLookupOutcome(t *testing.T) {
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
 			}
-			want := []auditRow{{"cred-ent", someOrg, tc.outcome}}
+			want := []auditRow{{"", someOrg, tc.outcome}}
 			if !reflect.DeepEqual(creds.audits, want) {
 				t.Fatalf("audits = %+v, want %+v", creds.audits, want)
 			}
@@ -134,14 +122,6 @@ func TestInternalAcrRoutesFailClosed(t *testing.T) {
 				t.Fatalf("status = %d, want 503: an unconfigured route must never serve", rec.Code)
 			}
 		})
-		t.Run(name+"/credential lookup fails", func(t *testing.T) {
-			creds := credsFor()
-			creds.findErr = errBoom
-			rec := do(authServer(t, &fakeStore{}, creds, nil), path, "Bearer "+entToken)
-			if rec.Code != 503 || len(creds.audits) != 0 {
-				t.Fatalf("status = %d audits %+v, want 503 and none", rec.Code, creds.audits)
-			}
-		})
 	}
 	t.Run("entitlement/audit write fails", func(t *testing.T) {
 		creds := credsFor()
@@ -152,18 +132,11 @@ func TestInternalAcrRoutesFailClosed(t *testing.T) {
 			}
 		}
 	})
-	t.Run("entitlement/last_used write fails", func(t *testing.T) {
-		creds := credsFor()
-		creds.markErr = errBoom
-		if rec := do(authServer(t, &fakeStore{}, creds, nil), entitlementPath+someOrg, "Bearer "+entToken); rec.Code != 503 {
-			t.Fatalf("status = %d, want 503", rec.Code)
-		}
-	})
 }
 
 // TestInternalAcrRoutesShareOnePerAddressBudget: INTERNAL_ACR_AUTH_ATTEMPT_IP_LIMIT
 // is one bucket per client address across both routes and every org id, and a
-// refused attempt reaches neither the credential store nor the audit.
+// refused attempt writes no audit row.
 func TestInternalAcrRoutesShareOnePerAddressBudget(t *testing.T) {
 	limit := httpapi.Limit{ID: "test_internal_acr", Count: 3, Window: time.Minute}
 	creds := credsFor()
@@ -174,7 +147,7 @@ func TestInternalAcrRoutesShareOnePerAddressBudget(t *testing.T) {
 			t.Fatalf("attempt %d: status = %d", i, rec.Code)
 		}
 	}
-	findsBefore, auditsBefore := creds.findCalls, len(creds.audits)
+	auditsBefore := len(creds.audits)
 	rec := do(h, healthPath, "Bearer "+entToken)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("4th attempt = %d %s, want 429", rec.Code, rec.Body.String())
@@ -182,8 +155,8 @@ func TestInternalAcrRoutesShareOnePerAddressBudget(t *testing.T) {
 	if want := `{"detail":"Too many authentication attempts"}`; rec.Body.String() != want {
 		t.Fatalf("body = %s, want %s", rec.Body.String(), want)
 	}
-	if creds.findCalls != findsBefore || len(creds.audits) != auditsBefore {
-		t.Fatal("a rate-limited attempt must not reach the credential store or the audit")
+	if len(creds.audits) != auditsBefore {
+		t.Fatal("a rate-limited attempt must not reach the audit")
 	}
 	other := httptest.NewRequest(http.MethodGet, healthPath, nil)
 	other.Header.Set("Authorization", "Bearer "+entToken)
@@ -194,27 +167,3 @@ func TestInternalAcrRoutesShareOnePerAddressBudget(t *testing.T) {
 		t.Fatalf("another address = %d, want 200: the budget is per address", recorder.Code)
 	}
 }
-
-func TestCredentialValidAtItsExpiryInstant(t *testing.T) {
-	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	revoked := now.Add(-time.Second)
-	for name, tc := range map[string]struct {
-		cred Credential
-		want bool
-	}{
-		"no expiry":     {Credential{}, true},
-		"future":        {Credential{ExpiresAt: ptr(now.Add(time.Second))}, true},
-		"exactly now":   {Credential{ExpiresAt: ptr(now)}, true},
-		"one ns past":   {Credential{ExpiresAt: ptr(now.Add(-time.Nanosecond))}, false},
-		"revoked":       {Credential{RevokedAt: &revoked}, false},
-		"revoked+valid": {Credential{RevokedAt: &revoked, ExpiresAt: ptr(now.Add(time.Hour))}, false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := tc.cred.Valid(now); got != tc.want {
-				t.Fatalf("Valid = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-func ptr(t time.Time) *time.Time { return &t }

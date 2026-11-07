@@ -83,21 +83,19 @@ var wlRoutesUnderTest = []wlRoute{
 type wlHarness struct {
 	handler http.Handler
 	creds   *fakeCredentials
-	llm     *fakeVerifier
 	logs    *bytes.Buffer
 }
 
 func newWLHarness(t *testing.T, workload *WorkloadAuth) wlHarness {
 	t.Helper()
 	acrMetricReader()
-	creds, llm, logs := credsFor(), &fakeVerifier{}, &bytes.Buffer{}
-	creds.creds[entToken] = Credential{ID: "cred-ent", ServiceName: "acr", Scopes: []string{EntitlementScope, PrincipalAccessScope}}
+	creds, logs := credsFor(), &bytes.Buffer{}
 	mux := http.NewServeMux()
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	for _, route := range Routes(Deps{Store: &fakeStore{}, Auth: creds, LLMConfig: configured(), Credentials: llm, Logger: logger, Workload: workload, Access: &fakeAccessStore{}}) {
+	for _, route := range Routes(Deps{Store: &fakeStore{}, Auth: creds, LLMConfig: configured(), Logger: logger, Workload: workload, Access: &fakeAccessStore{}}) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
-	return wlHarness{handler: mux, creds: creds, llm: llm, logs: logs}
+	return wlHarness{handler: mux, creds: creds, logs: logs}
 }
 
 func wlCounts(t *testing.T, name string) map[string]int64 {
@@ -136,9 +134,6 @@ func TestWorkloadTokenAcceptedOnEveryRoute(t *testing.T) {
 			if got := wlDelta(before, wlCounts(t, "devhealth_acr_workload_accepted_total")); !reflect.DeepEqual(got, map[string]int64{route.key: 1}) {
 				t.Fatalf("accepted counter delta = %v", got)
 			}
-			if h.creds.findCalls != 0 || len(h.creds.used) != 0 {
-				t.Fatalf("workload token touched the credential store: finds %d used %v", h.creds.findCalls, h.creds.used)
-			}
 			if route.key == routeEntitlement {
 				if want := []auditRow{{"", someOrg, "success"}}; !reflect.DeepEqual(h.creds.audits, want) || !reflect.DeepEqual(h.creds.principals, []string{wlSubject}) {
 					t.Fatalf("audits %+v principals %v, want %+v [%s]", h.creds.audits, h.creds.principals, want, wlSubject)
@@ -169,16 +164,6 @@ func TestWorkloadAuditCarriesThePrincipalOnEveryEntitlementOutcome(t *testing.T)
 				t.Fatalf("audits %+v principals %v", creds.audits, creds.principals)
 			}
 		})
-	}
-}
-
-func TestSvcAcrAuditHasNoPrincipal(t *testing.T) {
-	h := newWLHarness(t, nil)
-	if rec := do(h.handler, entitlementPath+someOrg, "Bearer "+entToken); rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	if want := []auditRow{{"cred-ent", someOrg, "success"}}; !reflect.DeepEqual(h.creds.audits, want) || !reflect.DeepEqual(h.creds.principals, []string{""}) {
-		t.Fatalf("audits %+v principals %v", h.creds.audits, h.creds.principals)
 	}
 }
 
@@ -245,9 +230,6 @@ func TestWorkloadTokenRefusalTable(t *testing.T) {
 				if got := wlDelta(before, wlCounts(t, "devhealth_acr_workload_refused_total")); !reflect.DeepEqual(got, map[string]int64{route.key + "/" + tc.reason: 1}) {
 					t.Fatalf("refused counter delta = %v, want %s/%s once", got, route.key, tc.reason)
 				}
-				if h.creds.findCalls != 0 || len(h.creds.used) != 0 || h.llm.gotToken != "" {
-					t.Fatalf("a refused workload token reached a store: finds %d used %v verifier token %q", h.creds.findCalls, h.creds.used, h.llm.gotToken)
-				}
 				if route.key == routeEntitlement {
 					outcome := outcomeWorkloadRefused
 					if tc.status == 403 {
@@ -262,7 +244,9 @@ func TestWorkloadTokenRefusalTable(t *testing.T) {
 	}
 }
 
-func TestOtherCredentialClassesNeverReachAStoreOrTheVerifier(t *testing.T) {
+// Every other credential class, a svc_acr_ service credential included, gets
+// the uniform 401 on every route and is never counted as a workload refusal.
+func TestOtherCredentialClassesAreRefusedUniformly(t *testing.T) {
 	signer := newWLSigner(t)
 	userHeader := wlHeader()
 	userHeader["typ"] = "at+jwt"
@@ -271,43 +255,25 @@ func TestOtherCredentialClassesNeverReachAStoreOrTheVerifier(t *testing.T) {
 		"user access token": "Bearer " + signer.sign(userHeader, wlClaims()),
 		"fcacr":             "Bearer fcacr_0123456789abcdef",
 		"hs256":             "Bearer " + hs256,
+		"svc_acr":           "Bearer svc_acr_entitlements-token-0123456789",
 		"svc_worker":        "Bearer svc_worker_x-0123456789",
 		"svc_authsess":      "Bearer svc_authsess_x-0123456789",
 		"push key":          "Bearer dh_push_0123456789abcdef",
 	}
-	for _, route := range wlRoutesUnderTest[:2] {
+	for _, route := range wlRoutesUnderTest {
 		for name, bearer := range bearers {
 			t.Run(route.key+"/"+name, func(t *testing.T) {
 				h := newWLHarness(t, wlAuth(t, signer, "dev-health-api"))
 				before := wlCounts(t, "devhealth_acr_workload_refused_total")
 				rec := do(h.handler, route.path, bearer)
-				if rec.Code != http.StatusUnauthorized {
-					t.Fatalf("status = %d, want 401", rec.Code)
-				}
-				if h.creds.findCalls != 0 || len(h.creds.used) != 0 {
-					t.Fatalf("store touched: finds %d used %v", h.creds.findCalls, h.creds.used)
+				if rec.Code != http.StatusUnauthorized || strings.TrimSpace(rec.Body.String()) != `{"detail":"Unauthorized"}` {
+					t.Fatalf("status = %d %s, want the uniform 401", rec.Code, rec.Body.String())
 				}
 				if got := wlDelta(before, wlCounts(t, "devhealth_acr_workload_refused_total")); len(got) != 0 {
 					t.Fatalf("a non-workload token was counted as a workload refusal: %v", got)
 				}
 			})
 		}
-	}
-}
-
-func TestSvcAcrStillAcceptedDuringMigration(t *testing.T) {
-	signer := newWLSigner(t)
-	for _, route := range wlRoutesUnderTest {
-		t.Run(route.key, func(t *testing.T) {
-			h := newWLHarness(t, wlAuth(t, signer, "dev-health-api"))
-			token := entToken
-			if route.key == routeLLMConfig {
-				token = testToken
-			}
-			if rec := do(h.handler, route.path, "Bearer "+token); rec.Code != http.StatusOK {
-				t.Fatalf("status = %d %s, want 200", rec.Code, rec.Body.String())
-			}
-		})
 	}
 }
 
@@ -375,31 +341,6 @@ func TestWorkloadRefusalCountedAndLoggedByReason(t *testing.T) {
 	}
 }
 
-func TestSvcAcrCompatCounterCountsOnlySvcAcr(t *testing.T) {
-	signer := newWLSigner(t)
-	workloadToken := signer.sign(wlHeader(), wlClaims())
-	for _, route := range wlRoutesUnderTest {
-		t.Run(route.key, func(t *testing.T) {
-			h := newWLHarness(t, wlAuth(t, signer, "dev-health-api"))
-			svc := entToken
-			if route.key == routeLLMConfig {
-				svc = testToken
-			}
-			before := wlCounts(t, "devhealth_acr_svc_acr_compat_total")
-			do(h.handler, route.path, "Bearer "+workloadToken)
-			do(h.handler, route.path, "Bearer svc_acr_nobody-0123456789")
-			do(h.handler, route.path, "")
-			if got := wlDelta(before, wlCounts(t, "devhealth_acr_svc_acr_compat_total")); len(got) != 0 {
-				t.Fatalf("compat counted a workload token or a refusal: %v", got)
-			}
-			do(h.handler, route.path, "Bearer "+svc)
-			if got := wlDelta(before, wlCounts(t, "devhealth_acr_svc_acr_compat_total")); !reflect.DeepEqual(got, map[string]int64{route.key: 1}) {
-				t.Fatalf("compat delta = %v, want one svc_acr_ use on %s", got, route.key)
-			}
-		})
-	}
-}
-
 func TestWorkloadVerifierForTheWrongAudienceRefusesEveryToken(t *testing.T) {
 	signer := newWLSigner(t)
 	h := newWLHarness(t, wlAuth(t, signer, "auth-service"))
@@ -462,8 +403,8 @@ func TestUnsupportedClassesWriteOnlyTheParityAuditRow(t *testing.T) {
 			if want := []auditRow{{"", someOrg, "missing_or_malformed_token"}}; !reflect.DeepEqual(h.creds.audits, want) || !reflect.DeepEqual(h.creds.principals, []string{""}) {
 				t.Fatalf("audits %+v principals %v, want exactly the parity row %+v with a NULL principal", h.creds.audits, h.creds.principals, want)
 			}
-			if h.creds.findCalls != 0 || len(h.creds.used) != 0 || keys.calls != 0 || h.llm.gotToken != "" {
-				t.Fatalf("a lookup happened: finds %d used %v key reads %d verifier token %q", h.creds.findCalls, h.creds.used, keys.calls, h.llm.gotToken)
+			if keys.calls != 0 {
+				t.Fatalf("a key lookup happened: %d key reads", keys.calls)
 			}
 			for _, secret := range []string{token, remainder} {
 				if strings.Contains(h.logs.String(), secret) || strings.Contains(h.creds.audits[0].outcome, secret) || strings.Contains(h.creds.audits[0].orgID, secret) {
@@ -530,9 +471,6 @@ func TestWorkloadClassIsChosenByTheHeaderAlone(t *testing.T) {
 				if !strings.Contains(h.logs.String(), "acr internal: workload token refused") || !strings.Contains(h.logs.String(), `"reason":"contract"`) {
 					t.Fatalf("no workload refusal log line: %s", h.logs.String())
 				}
-				if h.creds.findCalls != 0 || h.llm.gotToken != "" {
-					t.Fatalf("a store or verifier was called: finds %d verifier token %q", h.creds.findCalls, h.llm.gotToken)
-				}
 			})
 		}
 		for name, token := range garbage {
@@ -593,8 +531,8 @@ func TestUnsupportedClassesOnLLMConfigTouchNoStoreOrKey(t *testing.T) {
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want 401", rec.Code)
 			}
-			if h.creds.findCalls != 0 || h.llm.gotToken != "" || keys.calls != 0 {
-				t.Fatalf("a lookup happened: finds %d verifier token %q key reads %d", h.creds.findCalls, h.llm.gotToken, keys.calls)
+			if keys.calls != 0 {
+				t.Fatalf("a key lookup happened: %d key reads", keys.calls)
 			}
 			if got := wlDelta(before, wlCounts(t, "devhealth_acr_workload_refused_total")); len(got) != 0 {
 				t.Fatalf("counted as a workload refusal: %v", got)

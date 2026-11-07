@@ -19,9 +19,9 @@ import (
 // it (go-api's serviceScopes).
 const ScopeMembershipsWrite = "memberships:write"
 
-// CheckScope is Check for another scope of the session issuer credential: the
-// same row rules (session issuer service, unrevoked, unexpired), holding
-// scope. A refusal is a Refusal with a nil error; err is set only when the
+// CheckScope accepts token when it is the session issuer's: unrevoked,
+// unexpired (a credential is still valid at its expires_at instant, as the
+// service-credentials verbs read it), and holding scope. A refusal is a Refusal with a nil error; err is set only when the
 // lookup failed.
 func (p PG) CheckScope(ctx context.Context, token contracts.SecretString, scope string) (Credential, Refusal, error) {
 	if !tokenPattern.MatchString(token.Reveal()) {

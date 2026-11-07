@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
 )
 
@@ -28,26 +27,19 @@ func userTokensWithIssuer(t *testing.T) []usertokens.Token {
 	return append(usertokens.All(t), usertokens.Token{Kind: "eddsa-issuer", Value: compact})
 }
 
-// The session issue route (POST /internal/v1/sessions) accepts only an auth-session-issuer credential
-// (svc_authsess_ + 43 base64url characters). Every kind of user token, as the Authorization bearer, is
-// refused 401 invalid_credentials at the credential gate: no credential-row lookup (counted on the real
-// servicecred checker's pool), no user or membership read, no principal projection, no session created,
-// no session-issued audit row, no echo of the token in the body or the logs.
+// The session issue route (POST /internal/v1/sessions) accepts only the go-api workload token. Every kind
+// of user token, as the Authorization bearer, is refused 401 invalid_credentials at the credential gate:
+// no user or membership read, no principal projection, no session created, no session-issued audit row,
+// no echo of the token in the body or the logs.
 func TestIssueSessionRefusesUserTokens(t *testing.T) {
 	tokens := userTokensWithIssuer(t)
-	pool, connects := usertokens.CountingPool(t)
 	f := newCompatFixture(t)
-	f.serviceCreds = servicecred.PG{Pool: pool}
-	f.buildCompat()
 	for _, tok := range tokens {
 		response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), map[string]string{"Authorization": "Bearer " + tok.Value})
 		if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), reasonInvalidCredentials) {
 			t.Errorf("%s: %d %s, want 401 %s", tok.Kind, response.Code, response.Body, reasonInvalidCredentials)
 		}
 		usertokens.NoLeak(t, tok.Kind+" body", response.Body.String(), tokens)
-	}
-	if got := connects.Count(); got != 0 {
-		t.Errorf("a user token reached the credential table: %d connection attempt(s), want 0", got)
 	}
 	if n := len(f.sessions.created); n != 0 {
 		t.Errorf("%d session(s) minted for a user token, want 0", n)
@@ -63,19 +55,11 @@ func TestIssueSessionRefusesUserTokens(t *testing.T) {
 	usertokens.NoLeak(t, "the logs", f.logs.String(), tokens)
 }
 
-// The control: a well-formed issuer credential passes the shape gate and goes to the credential table, so
-// the same counting pool shows a non-zero count (and the route answers 503, the store being unreachable).
-func TestIssueSessionControlAnIssuerShapedCredentialReachesTheLookup(t *testing.T) {
-	pool, connects := usertokens.CountingPool(t)
+// The control: the go-api workload token passes the same gate, so the refusals above are the gate's.
+func TestIssueSessionControlTheWorkloadTokenPassesTheGate(t *testing.T) {
 	f := newCompatFixture(t)
-	f.serviceCreds = servicecred.PG{Pool: pool}
-	f.buildCompat()
-	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"),
-		map[string]string{"Authorization": "Bearer svc_authsess_" + strings.Repeat("A", 43)})
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("%d %s, want 503 (the lookup was attempted and the store refused)", response.Code, response.Body)
-	}
-	if connects.Count() == 0 {
-		t.Fatal("an issuer-shaped credential never reached the lookup: the counting pool detects nothing")
+	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer())
+	if response.Code != http.StatusOK || len(f.sessions.created) != 1 {
+		t.Fatalf("%d %s, %d session(s): want 200 and one session", response.Code, response.Body, len(f.sessions.created))
 	}
 }

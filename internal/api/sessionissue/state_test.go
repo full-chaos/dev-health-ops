@@ -19,7 +19,7 @@ func stateClient(t *testing.T, handler http.HandlerFunc, timeout time.Duration) 
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	token := testToken(t)
-	client, err := New(baseOf(t, server.URL), token, timeout)
+	client, err := newTestClient(t, baseOf(t, server.URL), token, timeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func errorDocument(status int, reason string) string {
 func TestStateSendsTheSessionAndReadsTheState(t *testing.T) {
 	sessionID, principal, org := uuid.New(), uuid.New(), uuid.New()
 	var gotMethod, gotPath, gotAuth, gotBody, gotType string
-	client, _ := stateClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, token := stateClient(t, func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		gotMethod, gotPath, gotAuth, gotBody, gotType = r.Method, r.URL.Path, r.Header.Get("Authorization"), string(raw), r.Header.Get("Content-Type")
 		w.Header().Set("Content-Type", "application/json")
@@ -47,8 +47,8 @@ func TestStateSendsTheSessionAndReadsTheState(t *testing.T) {
 	if gotMethod != http.MethodPost || gotPath != PathState || gotType != "application/json" || gotBody != `{"session_id":"`+sessionID.String()+`"}` {
 		t.Fatalf("request %s %s %q body %s", gotMethod, gotPath, gotType, gotBody)
 	}
-	if gotAuth != "Bearer "+client.token {
-		t.Fatal("the request does not present the session issuer credential")
+	if gotAuth != "Bearer "+token {
+		t.Fatal("the request does not present the workload token")
 	}
 	if state.PrincipalID != principal || state.OrganizationID == nil || *state.OrganizationID != org || !state.Revoked || state.Expired ||
 		state.LegacyTokenVersion == nil || *state.LegacyTokenVersion != 3 {

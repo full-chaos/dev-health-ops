@@ -11,7 +11,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "53"

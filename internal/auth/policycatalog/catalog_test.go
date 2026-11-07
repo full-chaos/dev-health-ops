@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	actionsSHA = "adc30003b4c7903456e1222db039ebb865c7c1348e51997375caeeefac59e1e4"
+	actionsSHA = "e38b5f8d4b42bb76aee82ac1d16f3fd64b984eeca7cc9be0f12b01f0b5544982"
 	rolesSHA   = "01694e80b7f03a278c0594bfcc21b35f28b954a7956db2db3198cf3d638f77e7"
 )
 
@@ -703,7 +703,7 @@ func TestThePlatformAdminActionsAreTheAdminGuardAndTheLegacyQueryAPIActions(t *t
 	}
 	sort.Strings(got)
 	want := []string{"analytics.read", "billing.manage", "git.read", "integrations.read", "integrations.write",
-		"members.invite", "members.manage", "members.read", "metrics.read", "reports.write", "settings.write", "teams.write",
+		"members.invite", "members.manage", "metrics.read", "reports.write", "settings.write", "teams.write",
 		"work_items.read"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("platform_admin actions %v, want %v", got, want)

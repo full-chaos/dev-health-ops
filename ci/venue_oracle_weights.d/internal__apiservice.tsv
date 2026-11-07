@@ -1,3 +1,4 @@
+internal/apiservice	TestAdminMemberListAnswersAsLegacyVenueOracle	600	unmeasured
 internal/apiservice	TestExternalIngestPayloadHashVenueOracle	242
 internal/apiservice	TestExternalIngestVenueOracle	67
 internal/apiservice	TestVenueOracleCredentialAdmin	84

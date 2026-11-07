@@ -15,8 +15,7 @@ import (
 // The catalog flag must name exactly these.
 var platformAdminActions = []string{
 	"analytics.read", "billing.manage", "git.read", "integrations.read", "integrations.write", "members.invite",
-	"members.manage", "members.read", "metrics.read", "reports.write", "settings.write", "teams.write",
-	"work_items.read",
+	"members.manage", "metrics.read", "reports.write", "settings.write", "teams.write", "work_items.read",
 }
 
 func flaggedActions(t *testing.T) []string {

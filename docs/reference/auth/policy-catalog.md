@@ -228,7 +228,7 @@ The order matters. For a holder on a flagged action, the platform-admin rule com
 
 The flag is on two sets of actions:
 
-- The organization actions of the go-api `policy.Admin` and `policy.AdminOrg` rows, which admit an `admin.orgs` holder before they read the membership: `billing.manage`, `integrations.read`, `integrations.write`, `members.invite`, `members.manage`, `members.read`, `settings.write` and `teams.write`.
+- The organization actions of the go-api `policy.Admin` and `policy.AdminOrg` rows, which admit an `admin.orgs` holder before they read the membership: `billing.manage`, `integrations.read`, `integrations.write`, `members.invite`, `members.manage`, `settings.write` and `teams.write`.
 - The query-api actions whose legacy path admits a superuser in any organization: `analytics.read`, `metrics.read`, `git.read`, `work_items.read` and `reports.write`. `analytics.export` is not flagged.
 
 A test in `internal/auth/contracts` holds the flag equal to those two sets. It also fails when a profile row outside them asks a flagged action, or when a flagged action is `repository_scope: filtered` or has a redaction rule.

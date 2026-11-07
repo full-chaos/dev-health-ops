@@ -251,6 +251,7 @@ internal/testsupport/egressallow
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed
+internal/testsupport/pinrig
 internal/testsupport/programoracle
 internal/testsupport/pydanticecho
 internal/testsupport/usertokens

@@ -56,7 +56,7 @@ func TestPlanRefusesAStateRowWithoutItsState(t *testing.T) {
 	}
 	o.States = statesFor(t, "34")
 	for name, row := range map[string]string{
-		"in the path":  "34\tPOST\t/api/v1/admin/integrations/{x}/install-callback\tA\tno\tgithub\t-\tmatch\t/api/v1/admin/integrations/{state}/install-callback\t{}\n",
+		"in the path":  "47\tGET\t/api/v1/admin/integrations/{integration_id}\tA\tno\t-\t-\tmatch\t/api/v1/admin/integrations/{state}\t-\n",
 		"not a string": "34\tPOST\t/api/v1/admin/integrations/github/install-callback\tA\tno\tgithub\t-\tmatch\t/api/v1/admin/integrations/github/install-callback\t{\"s\":\"x{state}\"}\n",
 	} {
 		if _, err := MakePlan(mustRows(t, testRowsHeader+row), venue, o); err == nil || strings.Contains(err.Error(), "st-") {

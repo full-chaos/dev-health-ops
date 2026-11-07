@@ -41,8 +41,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -474,6 +476,10 @@ type DiffOptions struct {
 	// Retirements are more rulings' retired requests, each with its own Pin,
 	// handled as Retire is; the first that matches a request wins, after Retire.
 	Retirements []Retirement
+	// KnownDivergences are tracked gaps: the Python answer of a matching request stays the wanted one. While the Go
+	// answer differs, the request's subtest is SKIPPED naming the ticket; once the answers agree the subtest fails,
+	// so the entry is removed. A retired request is never also a known divergence.
+	KnownDivergences []KnownDivergence
 	// OrglessTokens are the access tokens (not their labels) of the seeded callers that carry no organization
 	// and are not superusers. Only a request sent with one of them can be a D6145 org-less refusal
 	// (intendedOrglessRefusal); nil turns the rule off.
@@ -506,6 +512,53 @@ type DiffOptions struct {
 type Retirement struct {
 	Match func(request Request) bool
 	Pin   *GoPin
+}
+
+// NotUUIDOrgClaimGap and RoleClaimGap are the product rule 1 gaps of a user access token whose claims the legacy
+// HS256 path trusted (CHAOS-13227 residuals): the access-token.v1 verifier refuses an org claim that is
+// not a canonical lowercase UUID, and a user access token has no role claim, so a caller with no membership row in
+// its org claim has the member role where legacy used the claimed role.
+const (
+	NotUUIDOrgClaimGap = "CHAOS-13262, rule 1: the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)"
+	RoleClaimGap       = "CHAOS-13261, rule 1: no role claim, so a caller without a membership row in its org claim is a member where legacy used the claimed role"
+)
+
+// KnownDivergence is one tracked gap's requests (DiffOptions.KnownDivergences): Ticket names the gap ("CHAOS-<n>: why").
+type KnownDivergence struct {
+	Match  func(request Request) bool
+	Ticket string
+}
+
+// knownDivergence is the Ticket of the first KnownDivergence that matches request.
+func (o DiffOptions) knownDivergence(request Request) (string, bool) {
+	for _, known := range o.KnownDivergences {
+		if known.Match(request) {
+			return known.Ticket, true
+		}
+	}
+	return "", false
+}
+
+// knownDivergenceErr is the failure of a known divergence whose answers now agree: the entry must be removed.
+func knownDivergenceErr(name, ticket string, same bool) error {
+	if same {
+		return fmt.Errorf("%s: the Go answer now equals the Python answer: remove the known divergence (%s)", name, ticket)
+	}
+	return nil
+}
+
+var knownDivergenceTicket = regexp.MustCompile(`^CHAOS-[0-9]+\b`)
+
+// KnownDivergenceSkip skips t as a known divergence. The message is the form the venue-oracles verb of ci/check_go.sh
+// accepts: "KNOWN-DIVERGENCE CHAOS-<n> python=<answer> go=<answer>", so a skip shows that both planes ran; the verb
+// also needs the ticket, test and row in testdata/known_divergences.tsv. ticket starts with its CHAOS id.
+func KnownDivergenceSkip(t *testing.T, ticket, python, goAnswer, detail string) {
+	t.Helper()
+	id := knownDivergenceTicket.FindString(ticket)
+	if id == "" || python == "" || goAnswer == "" || strings.ContainsAny(python+goAnswer, " :\n") {
+		t.Fatalf("known divergence %q: needs a CHAOS id and both answers without blanks, got python=%q go=%q", ticket, python, goAnswer)
+	}
+	t.Skipf("KNOWN-DIVERGENCE %s python=%s go=%s: %s\n%s", id, python, goAnswer, ticket, detail)
 }
 
 // retiringPin is the Pin of the ruling that retired request's Python answer, or nil.
@@ -552,6 +605,11 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 	for _, retirement := range options.Retirements {
 		if retirement.Match == nil || retirement.Pin == nil || options.Golden == nil {
 			t.Fatal("diff: a Retirement needs a Match, a Pin and a Golden")
+		}
+	}
+	for _, known := range options.KnownDivergences {
+		if known.Match == nil || !knownDivergenceTicket.MatchString(known.Ticket) || strings.ContainsAny(known.Ticket, "\n\r") {
+			t.Fatal("diff: a KnownDivergence needs a Match and a one-line Ticket that starts with its CHAOS id")
 		}
 	}
 	var receipt strings.Builder
@@ -617,6 +675,21 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 			continue
 		}
 		same, compared, pyShown, goShown := Compare(request, pythonResponse, goResponse, compareOptions)
+		if ticket, known := options.knownDivergence(request); known {
+			fmt.Fprintf(&receipt, "%-58s python=%d go=%d SKIP (%s)\n", request.Name, python[index].Status, goResponse.Status, ticket)
+			detail := ""
+			if !same {
+				pyShown.Status, goShown.Status = python[index].Status, goResponse.Status
+				detail = DescribeDifference(request.Name, pyShown, goShown, compared)
+			}
+			t.Run(request.Name, func(t *testing.T) {
+				if err := knownDivergenceErr(request.Name, ticket, same); err != nil {
+					t.Fatal(err)
+				}
+				KnownDivergenceSkip(t, ticket, strconv.Itoa(python[index].Status), strconv.Itoa(goResponse.Status), detail)
+			})
+			continue
+		}
 		fmt.Fprintf(&receipt, "%-58s python=%d go=%d %s\n", request.Name, python[index].Status, goResponse.Status, Mark(same))
 		if !same {
 			pyShown.Status, goShown.Status = python[index].Status, goResponse.Status

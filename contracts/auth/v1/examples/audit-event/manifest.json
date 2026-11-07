@@ -44,6 +44,10 @@
     {
       "file": "valid-producer-authorize-high-risk-decided.json",
       "why": "The auth.authorize.high_risk_decided row (ops #5530): decision id, the 24-code decision vocabulary, a repository resource, the caller's workload attributes."
+    },
+    {
+      "file": "valid-producer-authorize-delegated-decided.json",
+      "why": "The auth.authorize.delegated_decided row: the real actor, the target user as subject, the delegated session as target_kind/target_id, the decision ids."
     }
   ],
   "reject": [

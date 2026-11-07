@@ -37,6 +37,8 @@ const (
 	VerdictGap                  = "GAP"
 	VerdictKShort               = "K_SHORT"
 	VerdictLegacyDisagrees      = "CONTROL_LEGACY_DISAGREES"
+	VerdictSkippedSeam          = "SKIPPED_SEAM"
+	VerdictSkippedNoOrg         = "SKIPPED_NOORG"
 	VerdictStricter             = "MISMATCH_STRICTER"
 	VerdictWider                = "MISMATCH_WIDER"
 )
@@ -171,6 +173,8 @@ func ParseRulings(raw []byte) ([]Ruling, error) {
 type JudgeOptions struct {
 	K     int
 	Grace time.Duration
+	// NoOrg is the enforcement counter evidence for the superuser's no-organization skips; nil gives none.
+	NoOrg NoOrgEvidence
 }
 
 // SlotVerdict is one slot and what its evidence says.
@@ -183,10 +187,20 @@ type SlotVerdict struct {
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced:
 		return true
 	}
 	return false
+}
+
+// seamSkipRows are the rows on which the superuser, whose token has no organization, is answered by the served-org seam
+// (CHAOS-13209, #5862): the request names an organization, the seam keeps the legacy answer and asks the decision
+// point nothing, so the shadow's result is "skipped" and enforcement equals legacy by construction. The result line
+// carries no reason, so the pass is pinned to these rows and to the superuser; any other skip fails the run.
+var seamSkipRows = []string{
+	"GET /api/v1/admin/orgs/{org_id}/members", "POST /api/v1/admin/orgs/{org_id}/members",
+	"DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}", "PATCH /api/v1/admin/orgs/{org_id}/members/{user_id}",
+	"GET /api/v1/billing/entitlements/{org_id}", "GET /api/v1/licensing/entitlements/{org_id}",
 }
 
 // RowVerdict is one row (or control) and its cells, by caller kind.
@@ -204,6 +218,15 @@ type Report struct {
 	Void    bool
 	Pass    bool
 	Reasons []string
+}
+
+// VerdictCounts counts the slots by verdict; a seam skip is its own count, never a match.
+func (r Report) VerdictCounts() map[string]int {
+	out := map[string]int{}
+	for _, sv := range r.Slots {
+		out[sv.Verdict]++
+	}
+	return out
 }
 
 // Exit is 0 when every row passes, 1 when a row fails, 3 when the run is void.
@@ -247,10 +270,13 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 			judgeSlot(&sv, results, ev, rulings, o.Grace)
 			controlLegacyHolds(&sv)
 		}
-		if sv.Expect != expectMismatch && !sv.Pass() {
-			fail("FAIL: slot %d row %s %s %s: %s%s", slot.Seq, slot.Row, slot.Caller, slot.Key(), sv.Verdict, hint(sv))
-		}
 		report.Slots = append(report.Slots, sv)
+	}
+	relabelNoOrgSkips(report.Slots, o.NoOrg)
+	for _, sv := range report.Slots {
+		if sv.Expect != expectMismatch && !sv.Pass() {
+			fail("FAIL: slot %d row %s %s %s: %s%s", sv.Seq, sv.Row, sv.Caller, sv.Key(), sv.Verdict, hint(sv))
+		}
 	}
 	if len(sent) > 0 {
 		from, to := sent[0].Start.Add(-windowSkew), sent[len(sent)-1].End.Add(o.Grace)
@@ -377,6 +403,9 @@ func judgeSlot(sv *SlotVerdict, results []resultLine, ev Evidence, rulings []Rul
 		}
 	default:
 		sv.Verdict = resultVerdicts[line.result]
+		if line.result == "skipped" && sv.Caller == "superuser" && slices.Contains(seamSkipRows, sv.Key()) {
+			sv.Verdict = VerdictSkippedSeam
+		}
 	}
 }
 
@@ -482,7 +511,7 @@ func rowVerdicts(slots []SlotVerdict, k int) []RowVerdict {
 func cellPasses(counts map[string]int, row string) bool {
 	for verdict := range counts {
 		switch verdict {
-		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled:
+		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced:
 		default:
 			if !(strings.HasPrefix(row, "C") && controlMismatch(verdict)) {
 				return false
@@ -527,5 +556,5 @@ func (r Report) WriteTable(w io.Writer) error {
 
 // controlMismatch: the verdicts a control slot must have, a mismatch with its tuple.
 func controlMismatch(verdict string) bool {
-	return verdict == VerdictMismatch || verdict == VerdictMismatchIntentional || verdict == VerdictMismatchRuled
+	return verdict == VerdictEnforcedDeny || verdict == VerdictMismatch || verdict == VerdictMismatchIntentional || verdict == VerdictMismatchRuled
 }

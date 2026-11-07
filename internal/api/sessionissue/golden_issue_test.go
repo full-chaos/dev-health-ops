@@ -21,8 +21,6 @@ import (
 
 const goldenPath = "testdata/outgoing_issue.golden.json"
 
-const goldenToken = "svc_authsess_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-
 var (
 	goldenPrincipal   = uuid.MustParse("22222222-2222-4222-8222-222222222222")
 	goldenOrg         = uuid.MustParse("11111111-1111-4111-8111-111111111111")
@@ -30,7 +28,7 @@ var (
 )
 
 // goldenRequest is one outgoing issue request as the server saw it, with the bearer replaced by a placeholder that
-// keeps its credential class prefix.
+// names its credential class.
 type goldenRequest struct {
 	Case    string              `json:"case"`
 	Method  string              `json:"method"`
@@ -40,10 +38,13 @@ type goldenRequest struct {
 }
 
 func bearerPlaceholder(value string) string {
-	if strings.HasPrefix(value, "Bearer svc_authsess_") {
-		return "Bearer svc_authsess_<PLACEHOLDER>"
+	switch {
+	case strings.HasPrefix(value, "Bearer svc_"):
+		return "Bearer svc_<RETIRED-CREDENTIAL>"
+	case strings.HasPrefix(value, "Bearer ") && strings.Count(value, ".") == 2:
+		return "Bearer <WORKLOAD-TOKEN>"
 	}
-	return "Bearer <NOT-svc_authsess_>"
+	return "Bearer <OTHER>"
 }
 
 // issueServer is an auth-service issue route that records every request it receives, and serves the workload token
@@ -162,10 +163,11 @@ func renderGolden(requests []goldenRequest) []byte {
 	return append(raw, '\n')
 }
 
-// The outgoing issue request of every case, with the session credential, is pinned by testdata/outgoing_issue.golden.json.
+// The outgoing issue request of every case, with the workload token, is pinned by testdata/outgoing_issue.golden.json.
 func TestOutgoingIssueRequestsMatchTheGolden(t *testing.T) {
 	s := newIssueServer(t)
-	client, err := sessionissue.New(s.URL, goldenToken, time.Second)
+	s.exchange = issuedAnswer(mintWorkloadToken(t))
+	client, err := sessionissue.NewWorkload(s.URL, newWorkloadClient(t, s), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

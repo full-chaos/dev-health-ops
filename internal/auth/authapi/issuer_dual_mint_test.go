@@ -197,7 +197,7 @@ func compatFixtureWith(t *testing.T, issuer *Issuer) *compatFixture {
 func issueAnswerFor(t *testing.T, issuer *Issuer) []byte {
 	t.Helper()
 	f := compatFixtureWith(t, issuer)
-	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer)
+	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer())
 	if response.Code != http.StatusOK {
 		t.Fatalf("issue status %d: %s", response.Code, response.Body)
 	}

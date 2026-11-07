@@ -32,6 +32,7 @@ internal/api/webhookintake	removed_providers_test.go	.	tree	*.go
 internal/apiservice	api_posture_test.go	internal/apiservice	dir	*
 internal/apiservice	endpoint_profile_scan_test.go	unexpressed	-	*.go
 internal/apiservice	enforcer_test.go	internal/apiservice	dir	*
+internal/apiservice	member_list_row_cells_test.go	internal/apiservice/admin	dir	*
 internal/apiservice/admin	operator_password_test.go	internal/apiservice/admin	dir	*
 internal/apiservice/admin	routeguard_test.go	internal/apiservice/admin	dir	*
 internal/apiservice/admin	routeguard_test.go	unexpressed	-	-

@@ -83,8 +83,7 @@ audiences, never resource URIs.
   forms, and none may.
   - Form S, `session.WirePrincipalID`: `prn_` and the 22 base64url characters (no padding) of the 16 bytes.
     Access and workload token `sub` and `act.sub`, session records (`principal_id`, `actor_principal_id`),
-    config subjects (`AUTH_ACR_WORKLOAD_SUBJECT`, `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT` and the other subject
-    settings), authorize decisions, credential bodies (`principal_id`, `created_by`) and the principal,
+    config subjects (`AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT` and the other subject settings), authorize decisions, credential bodies (`principal_id`, `created_by`) and the principal,
     membership and grant read API.
   - Form U, `provisioning.WireID`: `prn_` and the canonical UUID text (36 characters).
     Provisioning events and the audit wire: `aggregate_id`, `actor_principal_id`, `subject_principal_id`, `owner_principal_id` and the
@@ -92,9 +91,8 @@ audiences, never resource URIs.
     The SQL join of `aggregate_revisions.aggregate_id` builds the same text (`'prn_' || id::text`).
   - Internal go-api and auth-service bodies and the database carry the bare UUID. A token `org_id` claim is the
     bare UUID too.
-  - A U form is never a token `sub` or a config subject; a verifier refuses it. The chart refuses a UUID-form
-    `AUTH_ACR_WORKLOAD_SUBJECT` at render time, and go-api logs an ERROR and sets
-    `dev_health_api_acr_workload_subject_config_invalid` while still starting (D6465).
+  - A U form is never a token `sub` or a config subject; a verifier refuses it. go-api's internal acr routes take the acr-api
+    principal from the workload registry and compare it to the token `sub` in form S.
   - If a consumer ever needs both, the one function is a pure `PrincipalWireToUUID` in
     `contracts/provisioning` that accepts either form and returns the uuid. It is not added until a second
     consumer exists.

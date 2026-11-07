@@ -1,0 +1,228 @@
+package shadowvenue
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func TestCheckBaseAcceptsOnlyAPlainLoopbackOrigin(t *testing.T) {
+	for _, ok := range []string{"http://127.0.0.1:8093", "http://localhost:8093", "http://[::1]:8093", "http://127.0.0.1:8093/"} {
+		if _, err := CheckBase(ok); err != nil {
+			t.Errorf("%s refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"https://api.fullchaos.dev", "http://api.fullchaos.dev", "http://10.0.0.5:8093", "http://go-api:8000",
+		"https://127.0.0.1:8093", "http://user:pw@127.0.0.1:8093", "http://127.0.0.1:8093/api", "127.0.0.1:8093",
+		"http://127.0.0.1.example.com:8093", "http://0.0.0.0:8093", "http://127.0.0.1:8093?x=1",
+	} {
+		if _, err := CheckBase(bad); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+}
+
+func TestReadPasswordReadsAnOwnerOnlyFileAndNeverEchoesIt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "p.pw")
+	if err := os.WriteFile(path, []byte("s3cret-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadPassword(path)
+	if err != nil || got != "s3cret-value" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadPassword(path); err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("a group-readable file: %v", err)
+	}
+	empty := filepath.Join(dir, "e.pw")
+	if err := os.WriteFile(empty, []byte("\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadPassword(empty); err == nil {
+		t.Fatal("an empty file accepted")
+	}
+	link := filepath.Join(dir, "l.pw")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadPassword(link); err == nil {
+		t.Fatal("a symlink accepted")
+	}
+	// An owner-only FIFO passes every mode check but the regular-file one; reading it would block the driver.
+	fifo := filepath.Join(dir, "f.pw")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := ReadPassword(fifo); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a FIFO accepted")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadPassword blocked on a FIFO")
+	}
+}
+
+type seenRequest struct {
+	method, path, auth, body string
+	at                       time.Time
+}
+
+// fakeAPI is a loopback go-api: login answers a token per email, every other route answers 403 for a member token.
+type fakeAPI struct {
+	srv  *httptest.Server
+	mu   sync.Mutex
+	seen []seenRequest
+}
+
+func newFakeAPI(t *testing.T) *fakeAPI {
+	t.Helper()
+	f := &fakeAPI{}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.seen = append(f.seen, seenRequest{method: r.Method, path: r.URL.Path, auth: r.Header.Get("Authorization"), body: string(raw), at: time.Now()})
+		f.mu.Unlock()
+		if r.URL.Path == "/api/v1/auth/login" {
+			var in struct{ Email, Password string }
+			_ = json.Unmarshal(raw, &in)
+			if !strings.HasPrefix(in.Password, "fake-") {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"detail":"Invalid credentials ` + in.Password + `"}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "tok-" + in.Email, "token_type": "bearer"})
+			return
+		}
+		if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer tok-m@") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func TestLoginReadsTheAccessTokenAndKeepsTheBodyOutOfItsError(t *testing.T) {
+	api := newFakeAPI(t)
+	base, err := CheckBase(api.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	venue, _ := testPrincipals(t)
+	d := &Driver{Base: base, Client: api.srv.Client()}
+	member, _ := venue.Principal("member-A")
+	token, err := d.Login(context.Background(), member, venue.Orgs["A"])
+	if err != nil || token != "tok-m@example.test" {
+		t.Fatalf("%q %v", token, err)
+	}
+	if !strings.Contains(api.seen[0].body, `"org_id":"`+testOrgA+`"`) {
+		t.Fatalf("login body has no org_id: %s", api.seen[0].body)
+	}
+	super, _ := venue.Principal("superuser")
+	if _, err := d.Login(context.Background(), super, ""); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(api.seen[1].body, "org_id") {
+		t.Fatalf("an org-less login sent org_id: %s", api.seen[1].body)
+	}
+	bad := member
+	path := filepath.Join(t.TempDir(), "bad.pw")
+	if err := os.WriteFile(path, []byte("wrong-pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bad.PasswordFile = path
+	_, err = d.Login(context.Background(), bad, venue.Orgs["A"])
+	if err == nil || strings.Contains(err.Error(), "wrong-pw") || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("a refused login: %v", err)
+	}
+}
+
+// Drive sends one request at a time, gap apart, with the cell's token and body, and writes one slot line each; the
+// slots file holds no token.
+func TestDriveSendsEverySlotInOrderAndWritesTheSlotsFile(t *testing.T) {
+	api := newFakeAPI(t)
+	base, _ := CheckBase(api.srv.URL)
+	plan, err := planOf(t,
+		"58\tGET\t/api/v1/admin/teams\tA\tno\t-\t-\tmatch\t/api/v1/admin/teams\t-\n"+
+			"59\tPOST\t/api/v1/admin/teams\tA\tno\t-\t-\tmatch\t/api/v1/admin/teams\t{\"name\":\"x\"}\n"+
+			"22\tPOST\t/api/v1/billing/plans/pull-stripe\tA\tno\tstripe\t-\tmatch\t/api/v1/billing/plans/pull-stripe\t-\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var slept []time.Duration
+	d := &Driver{Base: base, Client: api.srv.Client(), Gap: 2500 * time.Millisecond,
+		Sleep: func(_ context.Context, gap time.Duration) error { slept = append(slept, gap); return nil }}
+	tokens := map[string]string{"member-A": "tok-m@example.test", "admin-A": "tok-a@example.test", "superuser": "tok-s@example.test"}
+	var out bytes.Buffer
+	if err := d.Drive(context.Background(), plan, tokens, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.seen) != 18 {
+		t.Fatalf("%d requests, want 18 (the stripe row is a gap)", len(api.seen))
+	}
+	if len(slept) != 18 {
+		t.Fatalf("%d gaps, want one after each request", len(slept))
+	}
+	if api.seen[0].auth != "Bearer tok-m@example.test" || api.seen[3].auth != "Bearer tok-a@example.test" || api.seen[6].auth != "Bearer tok-s@example.test" {
+		t.Fatalf("tokens: %q %q %q", api.seen[0].auth, api.seen[3].auth, api.seen[6].auth)
+	}
+	if api.seen[0].body != "" || api.seen[9].method != "POST" || api.seen[9].body != `{"name":"x"}` {
+		t.Fatalf("bodies: %q %s %q", api.seen[0].body, api.seen[9].method, api.seen[9].body)
+	}
+	if strings.Contains(out.String(), "tok-") {
+		t.Fatal("the slots file holds a token")
+	}
+	slots, err := ParseSlots(out.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(slots) != 21 {
+		t.Fatalf("%d slot lines, want 21 (18 sent, one gap per stripe cell)", len(slots))
+	}
+	if slots[0].Status != http.StatusForbidden || slots[3].Status != http.StatusOK || !slots[0].End.After(slots[0].Start) {
+		t.Fatalf("slot 1 %+v slot 4 %+v", slots[0], slots[3])
+	}
+	if !slots[20].Gap() || !strings.Contains(slots[20].Note, "stripe") {
+		t.Fatalf("last slot %+v is no gap", slots[20])
+	}
+	missing := map[string]string{"member-A": "tok-m@example.test"}
+	if err := d.Drive(context.Background(), plan, missing, io.Discard); err == nil {
+		t.Fatal("a plan with a principal that has no token was driven")
+	}
+}
+
+func TestDriveRefusesAGapShorterThanTheShadowTimeout(t *testing.T) {
+	api := newFakeAPI(t)
+	base, _ := CheckBase(api.srv.URL)
+	plan, _ := planOf(t, "58\tGET\t/api/v1/admin/teams\tA\tno\t-\t-\tmatch\t/api/v1/admin/teams\t-\n")
+	d := &Driver{Base: base, Client: api.srv.Client(), Gap: 2 * time.Second}
+	tokens := map[string]string{"member-A": "a", "admin-A": "b", "superuser": "c"}
+	if err := d.Drive(context.Background(), plan, tokens, io.Discard); err == nil {
+		t.Fatal("a 2 s gap was accepted")
+	}
+	if len(api.seen) != 0 {
+		t.Fatalf("%d requests sent before the refusal", len(api.seen))
+	}
+}

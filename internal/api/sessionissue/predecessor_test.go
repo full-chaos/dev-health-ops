@@ -24,7 +24,7 @@ func TestIssueSendsThePredecessorOnlyWhenOneIsNamed(t *testing.T) {
 		_, _ = io.WriteString(w, `{"access_token":"a","refresh_token":"r","token_type":"bearer"}`)
 	}))
 	defer server.Close()
-	client, err := New(baseOf(t, server.URL), testToken(t), time.Second)
+	client, err := newTestClient(t, baseOf(t, server.URL), testToken(t), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestIssueMapsAnEndedPredecessorToErrSessionEnded(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(tc.answer)
 			defer server.Close()
-			client, err := New(baseOf(t, server.URL), testToken(t), time.Second)
+			client, err := newTestClient(t, baseOf(t, server.URL), testToken(t), time.Second)
 			if err != nil {
 				t.Fatal(err)
 			}

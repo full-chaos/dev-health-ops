@@ -83,9 +83,14 @@ func WritePlatformDecisionRefusal(w http.ResponseWriter, _ error) {
 }
 
 // platformDecisionsFor is the request's platform decisions, or nil when the admin cell is off or the decision point
-// cannot judge the caller (a legacy HS256 token keeps main's answer, as on an enforced row).
-func (e *Enforcer) platformDecisionsFor(bearer string, user *User) *platformDecisions {
+// cannot judge the caller (a legacy HS256 token keeps main's answer, as on an enforced row). A read by a caller with a
+// live go-api impersonation row is nil too: the decision point would judge the admin's own bearer, not the session, so
+// that read keeps the legacy answer end to end, its handler's platform questions included.
+func (e *Enforcer) platformDecisionsFor(r *http.Request, bearer string, user *User) *platformDecisions {
 	if e == nil || !e.sw.On(platformNamespace) || bearer == "" || !user.accessToken {
+		return nil
+	}
+	if ImpersonationFrom(r.Context()) != nil && readMethod(r.Method) {
 		return nil
 	}
 	return &platformDecisions{enforcer: e, bearer: bearer}
@@ -102,7 +107,7 @@ func (e *Enforcer) askPlatform(ctx context.Context, bearer, action string) (held
 		e.logger.WarnContext(ctx, "api enforcement: no verdict for a platform question, the handler refuses", slog.String("action", action))
 		return false, false
 	}
-	if decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), pep.Request{}, false) {
+	if decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), pep.Request{}, false, false) {
 		e.logger.WarnContext(ctx, "api enforcement: a platform allow carries an obligation, no verdict", slog.String("action", action))
 		return false, false
 	}

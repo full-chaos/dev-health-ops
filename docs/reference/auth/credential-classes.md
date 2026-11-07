@@ -51,7 +51,7 @@ shows where that happens today.
 | `sso_oidc_exchange` | optional_feature | human | |
 | `org_context_header` | active | human | |
 | `impersonation_session` | active | human | |
-| `internal_svc_acr_token` | active | service_account | |
+| `internal_svc_acr_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |
 | `internal_svc_worker_token` | **unconsumed** | service_account | mint retired; stored rows list/revoke only |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
@@ -110,16 +110,19 @@ It is not `ops_refresh_token`: go-api mints that class, and
 `refresh_credential` is auth-service's own.
 
 **`internal_svc_authsess_token`.** The go-api service credential
-(`svc_authsess_` plus 32 random bytes, service `auth-session-issuer`, scope
-`sessions:issue`) that `POST /internal/v1/sessions` accepts. It shares the
+(`svc_authsess_` plus 32 random bytes, service `auth-session-issuer`). Its first
+scope, `sessions:issue`, is retired: `POST /internal/v1/sessions`,
+`/internal/v1/sessions/state` and `/internal/v1/sessions/delegated{,/end}` take
+only the go-api workload token and refuse this credential from the bearer text,
+counted in `auth.session.retired_credential_refusals{operation}`. It shares the
 `internal_service_credentials` table with `svc_acr_` and `svc_worker_`, which
 carry other prefixes, services and scopes. auth-service is its only validator
-(`servicecred.PG.Check`); the verbs of `dev-hops service-credentials` mint,
+(`servicecred.PG.CheckScope`); the verbs of `dev-hops service-credentials` mint,
 rotate and revoke it. A second scope, `memberships:write`, which no other
 service may hold, lets go-api call the internal provisioning routes
 (`/internal/v1/memberships/*`, `/internal/v1/invites/*`,
 `/internal/v1/organizations/{deprovision,reactivate,suspend}`, mounted by `AUTH_MEMBERSHIP_ROUTES`;
-`servicecred.PG.CheckScope`). The route, the ten provisioning routes and
+`servicecred.PG.CheckScope`). The session issue route, the ten provisioning routes and
 go-api's four compatibility routes (`/api/v1/auth/{login,refresh,logout,social-login}`)
 have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`. The
 provisioning audit rows name the actor, the request id and the calling
@@ -362,8 +365,8 @@ the same code path as `svc_acr_*`
 (`internal/apiservice/admin/servicecredentials.go`), with
 its own scope set (`workers:read`, `workers:operate`,
 `internal/apiservice/admin/servicecredentials.go:36-44`). No HTTP route in ops, web, or acr was found
-that validates a `svc_worker_`-prefixed bearer token — `internal/apiservice/acr/internalauth.go:57-71`
-`extractToken` only accepts the `svc_acr_` prefix. A consumer, if any, lives in the Go
+that validates a `svc_worker_`-prefixed bearer token — the internal acr routes (`internal/apiservice/acr/internalauth.go`)
+accept only the acr-api workload token. A consumer, if any, lives in the Go
 worker binaries or `dev-health-go`, outside this repository's HTTP routes.
 
 ## Infrastructure and exchange classes
@@ -398,8 +401,8 @@ fields; it cannot write.
 ## Go api: the internal listener
 
 The Go api serves `/api/v1/internal/acr/*` behind two controls: the network,
-and a `svc_acr_` bearer check on every route (health and
-entitlements, llm-config adds its own scope). Those
+and the acr-api workload token on every route (the only bearer accepted; a
+`svc_acr_` service credential gets the uniform 401 before any credential read). Those
 routes are mounted only on the
 internal listener (`--api-internal-addr` / `DEV_HEALTH_API_INTERNAL_ADDR`,
 chart `goApi.internal.port`, default 8091), never on the public api listener,

@@ -10,11 +10,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
-// platformAdminActions is the admin-guard set: the organization actions of the go-api policy.Admin and
-// policy.AdminOrg profile rows. The catalog flag must name exactly these.
+// platformAdminActions is the admin-guard set (the organization actions of the go-api policy.Admin and
+// policy.AdminOrg profile rows) and the query-api actions whose legacy path admits a superuser in any organization.
+// The catalog flag must name exactly these.
 var platformAdminActions = []string{
-	"billing.manage", "integrations.read", "integrations.write", "members.invite", "members.manage",
-	"members.read", "settings.write", "teams.write",
+	"analytics.read", "billing.manage", "git.read", "integrations.read", "integrations.write", "members.invite",
+	"members.manage", "metrics.read", "reports.write", "settings.write", "teams.write", "work_items.read",
 }
 
 func flaggedActions(t *testing.T) []string {
@@ -82,15 +83,17 @@ func TestPlatformAdminCellsOverTheFlaggedActions(t *testing.T) {
 			e.Evaluate(req, platformAdminSnapshot("platform_admin", "", StatusActive)), ReasonAllowedByPlatformAdmin)
 		wantOwnerShapeAllow(t, a+" injected admin.orgs-only role + member",
 			injected.Evaluate(req, platformAdminSnapshot("orgs_only", "member", StatusActive)), ReasonAllowedByPlatformAdmin)
-		for _, org := range []Status{StatusUnknown, StatusSuspended, StatusRemoved} {
-			for _, member := range []string{"", "member", "owner"} {
+		for _, member := range []string{"", "member", "owner"} {
+			wantOwnerShapeAllow(t, a+" platform_admin + "+member+" in a suspended org",
+				e.Evaluate(req, platformAdminSnapshot("platform_admin", member, StatusSuspended)), ReasonAllowedByPlatformAdmin)
+			for _, org := range []Status{StatusUnknown, StatusRemoved} {
 				if d := e.Evaluate(req, platformAdminSnapshot("platform_admin", member, org)); d.Allowed || d.Reason != ReasonOrganizationInactive {
 					t.Errorf("%s platform_admin + %q in org %v: %+v, want deny organization_inactive", a, member, org, d)
 				}
 			}
 		}
-		// members.read is a member action: a member is allowed them by role, with or
-		// without platform_owner; every other flagged action is refused to a member without admin.orgs.
+		// A flagged action the member role holds is allowed to a member by role, with or without platform_owner;
+		// every other flagged action is refused to a member without admin.orgs.
 		memberHolds := policycatalog.Default().Allows("member", a)
 		for _, platform := range []string{"platform_owner", ""} {
 			d := e.Evaluate(req, platformAdminSnapshot(platform, "member", StatusActive))
@@ -140,16 +143,26 @@ func TestPlatformAdminGetsNoUnflaggedOrganizationAction(t *testing.T) {
 	}
 }
 
-// The inactive-organization narrowing is kept for an admin.orgs holder (acp/pm condition 1), both ways: an active
-// organization with no membership row allows, the holder's own inactive organization denies, and the platform-scope
-// actions (the admin organization list, reactivate, status and delete rows) stay allowed with the organization inactive.
-func TestPlatformAdminInactiveOrganizationNarrowingIsKept(t *testing.T) {
+// acp D3 (x) word, 2026-11-06, CHAOS-13240: a holder's suspended organization allows the flagged actions.
+func TestPlatformAdminSuspendedOrganizationAllowsAHolderOnly(t *testing.T) {
 	e := NewEvaluator()
 	for _, a := range flaggedActions(t) {
+		req := orgRequest(a)
 		wantOwnerShapeAllow(t, a+" active org, no membership row",
-			e.Evaluate(orgRequest(a), platformAdminSnapshot("platform_admin", "", StatusActive)), ReasonAllowedByPlatformAdmin)
-		if d := e.Evaluate(orgRequest(a), platformAdminSnapshot("platform_admin", "owner", StatusSuspended)); d.Allowed || d.Reason != ReasonOrganizationInactive {
-			t.Errorf("%s own inactive org: %+v, want deny organization_inactive", a, d)
+			e.Evaluate(req, platformAdminSnapshot("platform_admin", "", StatusActive)), ReasonAllowedByPlatformAdmin)
+		wantOwnerShapeAllow(t, a+" suspended org, no membership row",
+			e.Evaluate(req, platformAdminSnapshot("platform_admin", "", StatusSuspended)), ReasonAllowedByPlatformAdmin)
+		wantOwnerShapeAllow(t, a+" own suspended org",
+			e.Evaluate(req, platformAdminSnapshot("platform_admin", "owner", StatusSuspended)), ReasonAllowedByPlatformAdmin)
+		if d := e.Evaluate(req, platformAdminSnapshot("platform_admin", "", StatusUnknown)); d.Allowed || d.Reason != ReasonOrganizationInactive {
+			t.Errorf("%s platform_admin, unknown org: %+v, want deny organization_inactive", a, d)
+		}
+		for _, platform := range []string{"", "platform_owner"} {
+			for _, member := range []string{"viewer", "member", "admin", "owner"} {
+				if d := e.Evaluate(req, platformAdminSnapshot(platform, member, StatusSuspended)); d.Allowed || d.Reason != ReasonOrganizationInactive {
+					t.Errorf("%s %q + %s in a suspended org: %+v, want deny organization_inactive", a, platform, member, d)
+				}
+			}
 		}
 	}
 	role, err := policycatalog.Default().Role("platform_admin")

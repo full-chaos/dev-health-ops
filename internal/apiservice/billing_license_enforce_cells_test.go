@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -357,14 +359,24 @@ func TestBillingClassARowsAskNothingWithTheSwitchOff(t *testing.T) {
 	}
 }
 
-// Class A with its namespace on: a caller with a live go-api impersonation row is refused with a 403 before any PDP
-// call (12814 option A). This cell changes when CHAOS-13106 judges a read as the target user (D6714).
+// Class A with its namespace on: a caller with a live go-api impersonation row asks no PDP. A write is refused with a
+// 403 (12814 option A, as built); a read keeps the answer the row gives with its cell off (product rule 1).
 func TestBillingClassARowsRefuseAnImpersonatingCallerBeforeThePDP(t *testing.T) {
 	pdp := newBillingCellPDP(t, "allow")
-	rig := newCellRig(t, cellAllNamespaces, pdp.client(t), false)
-	impersonating := bearer(rig.minter.mint(probeAdminUser, map[string]any{"sid": sessionid.Wire(cellAdminSID), "org_id": nil}))
+	rig, off := newCellRig(t, cellAllNamespaces, pdp.client(t), false), newCellRig(t, "", nil, false)
+	impersonating := func(rig *cellRig) map[string]string {
+		return bearer(rig.minter.mint(probeAdminUser, map[string]any{"sid": sessionid.Wire(cellAdminSID), "org_id": nil}))
+	}
 	for _, key := range classAKeys() {
-		status, body, header := rig.serve(key, impersonating)
+		status, body, header := rig.serve(key, impersonating(rig))
+		if method, _, _ := strings.Cut(key, " "); method == http.MethodGet {
+			legacyStatus, legacyBody, legacyHeader := off.serve(key, impersonating(off))
+			if status != legacyStatus || body != legacyBody || header.Get("X-Impersonating") != legacyHeader.Get("X-Impersonating") {
+				t.Errorf("%s: %d %s X-Impersonating %q, want the cells-off %d %s %q", key, status, body, header.Get("X-Impersonating"),
+					legacyStatus, legacyBody, legacyHeader.Get("X-Impersonating"))
+			}
+			continue
+		}
 		if status != http.StatusForbidden || body != `{"detail":"Not allowed in an impersonation session"}` || header.Get("X-Impersonating") != "true" {
 			t.Errorf("%s: %d %s X-Impersonating %q, want 403 for the impersonation session", key, status, body, header.Get("X-Impersonating"))
 		}
@@ -445,8 +457,9 @@ func cellNamingOrg(key string, org uuid.UUID, headers map[string]string) *http.R
 }
 
 // Class A organization rows with their namespace on: a request that names another organization than the token's
-// (probeUser is a member of probeOtherOrg) is refused with a 403 and the level's body before any PDP call; naming
-// the token's own organization is decided by the PDP once, on that organization.
+// (probeUser is a member of probeOtherOrg) keeps the answer of the same rig with every namespace off, with no PDP call
+// (product rule 1, D6773: the legacy guard and the handler decide it); naming the token's own organization is decided
+// by the PDP once, on that organization.
 func TestBillingClassAOrgRowsServeOnlyTheTokenOrganization(t *testing.T) {
 	var orgRows []string
 	for _, key := range classAKeys() {
@@ -462,15 +475,15 @@ func TestBillingClassAOrgRowsServeOnlyTheTokenOrganization(t *testing.T) {
 			t.Fatalf("%s names its organization neither in org_id nor in {org_id}", key)
 		}
 		pdp := newBillingCellPDP(t, "allow")
+		legacyRig := newCellRig(t, "", pdp.client(t), false)
+		legacy := httptest.NewRecorder()
+		legacyRig.handler.ServeHTTP(legacy, cellNamingOrg(key, probeOtherOrg, legacyRig.userBearer()))
 		rig := newCellRig(t, cellAllNamespaces, pdp.client(t), false)
 		recorder := httptest.NewRecorder()
 		rig.handler.ServeHTTP(recorder, cellNamingOrg(key, probeOtherOrg, rig.userBearer()))
-		wantBody := `{"detail":"Access denied"}`
-		if b, ok := cellDenyBody[key]; ok {
-			wantBody = b
-		}
-		if status, body := recorder.Code, strings.TrimSpace(recorder.Body.String()); status != http.StatusForbidden || body != wantBody {
-			t.Errorf("%s naming another org: %d %s, want 403 %s", key, status, body, wantBody)
+		wantStatus, wantBody := legacy.Code, strings.TrimSpace(legacy.Body.String())
+		if status, body := recorder.Code, strings.TrimSpace(recorder.Body.String()); status != wantStatus || body != wantBody {
+			t.Errorf("%s naming another org: %d %s, want the legacy %d %s", key, status, body, wantStatus, wantBody)
 		}
 		if n := len(pdp.calls()); n != 0 {
 			t.Errorf("%s naming another org: %d PDP calls, want 0", key, n)
@@ -541,4 +554,16 @@ func TestBillingRowsWithoutAnActionAreNeverDecidedByThePDP(t *testing.T) {
 	if n := len(pdp.calls()); n != 0 {
 		t.Errorf("%d PDP calls on rows with no action, want 0", n)
 	}
+}
+
+// unreachableClickHouse is a ClickHouse connection that never connects: clickhouse.Open dials on first use, and nothing
+// listens on port 1. A tag-only test file takes it from here, so it does not import the driver's root package itself.
+func unreachableClickHouse(t *testing.T) driver.Conn {
+	t.Helper()
+	conn, err := clickhouse.Open(&clickhouse.Options{Addr: []string{"127.0.0.1:1"}, DialTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
 }

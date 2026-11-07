@@ -2,61 +2,55 @@ package acr
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/full-chaos/dev-health-go/authverify"
 )
 
-const (
-	entToken      = "svc_acr_entitlements-token-0123456789"
-	entOnlyScopes = "entitlements:read"
+// testSigner, testWorkload and entToken are the acr-api workload identity the
+// route tests present: entToken is a valid workload token for testWorkload at
+// wlNow, the only credential the internal acr routes accept.
+var (
+	testSigner   = newPackageSigner()
+	testWorkload = newPackageWorkload(testSigner)
+	entToken     = testSigner.sign(wlHeader(), wlClaims())
 )
+
+func newPackageSigner() wlSigner {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return wlSigner{pub: pub, priv: priv}
+}
+
+func newPackageWorkload(signer wlSigner) *WorkloadAuth {
+	verifier, err := authverify.NewWorkloadVerifier(authverify.WorkloadVerifierConfig{
+		Issuer: wlIssuer, Audience: "dev-health-api", Keys: authverify.StaticKeys{wlKid: signer.pub},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return &WorkloadAuth{Verifier: verifier, Source: StaticSubject(wlSubject), Now: func() time.Time { return wlNow }}
+}
 
 type auditRow struct{ credentialID, orgID, outcome string }
 
 // fakeCredentials is a hand-controlled CredentialStore that records every
-// MarkUsed and Audit call.
+// Audit call.
 type fakeCredentials struct {
-	mu          sync.Mutex
-	creds       map[string]Credential
-	findErr     error
-	markErr     error
-	auditErr    error
-	audits      []auditRow
-	principals  []string
-	used        []string
-	findCalls   int
-	lastUsedAts []time.Time
+	mu         sync.Mutex
+	auditErr   error
+	audits     []auditRow
+	principals []string
 }
 
-func newFakeCredentials() *fakeCredentials {
-	return &fakeCredentials{creds: map[string]Credential{
-		entToken: {ID: "cred-ent", ServiceName: "acr", Scopes: []string{entOnlyScopes}},
-	}}
-}
-
-func (f *fakeCredentials) Find(_ context.Context, token string) (Credential, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.findCalls++
-	if f.findErr != nil {
-		return Credential{}, false, f.findErr
-	}
-	cred, ok := f.creds[token]
-	return cred, ok, nil
-}
-
-func (f *fakeCredentials) MarkUsed(_ context.Context, id string, at time.Time) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.markErr != nil {
-		return f.markErr
-	}
-	f.used = append(f.used, id)
-	f.lastUsedAts = append(f.lastUsedAts, at)
-	return nil
-}
+func newFakeCredentials() *fakeCredentials { return &fakeCredentials{} }
 
 func (f *fakeCredentials) Audit(_ context.Context, id, principalID, orgID, outcome string) error {
 	f.mu.Lock()
@@ -71,7 +65,7 @@ func (f *fakeCredentials) Audit(_ context.Context, id, principalID, orgID, outco
 
 var errBoom = errors.New("boom")
 
-// getAuthed GETs url with the valid entitlements credential.
+// getAuthed GETs url with the valid acr-api workload token.
 func getAuthed(url string) (*http.Response, error) {
 	request, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {

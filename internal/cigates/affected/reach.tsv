@@ -10,6 +10,7 @@ cmd/faultproxy	main.go	cmd/faultproxy
 cmd/gqlgen-guard	main.go	cmd/gqlgen-guard
 cmd/loadtest	main.go	cmd/loadtest
 cmd/registrydump	main.go	cmd/registrydump
+cmd/shadow-venue	main.go	cmd/shadow-venue
 cmd/strip-agent-attribution	main.go	cmd/strip-agent-attribution
 internal/api/credentials	probes.go	cmd/dho
 internal/api/credentials	probes.go	deploy/helm/dev-health
@@ -775,6 +776,8 @@ internal/queryapi/quadrant	identity.go	internal/queryapi/quadrant
 internal/queryapi/quadrant	identity.go	internal/queryapi/server
 internal/queryapi/quadrant	identity.go	internal/queryapiservice
 internal/queryapi/quadrant	identity.go	internal/websmoke
+internal/shadowvenue	drive.go	cmd/shadow-venue
+internal/shadowvenue	drive.go	internal/shadowvenue
 internal/synccli	target.go	cmd/dho
 internal/synccli	target.go	internal/synccli
 internal/syncdispatchcontract	routes.go	cmd/dho
@@ -1022,7 +1025,6 @@ internal/testsupport/venueoracle	gopin.go	internal/apiservice/admin
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/authflowvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/billingvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/metricsvenue
-internal/testsupport/venueoracle	gopin.go	internal/apiservice/ssovenue
 internal/testsupport/venueoracle	gopin.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	opened.go	internal/admincli
 internal/testsupport/venueoracle	opened.go	internal/adminops

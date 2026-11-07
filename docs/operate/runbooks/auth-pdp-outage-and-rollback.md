@@ -70,8 +70,8 @@ What does not exist on `main`:
 ### Rule out other causes
 
 - A `403` is a PDP deny, not an outage. Triage the reason with [Auth shadow PDP triage](auth-shadow-pdp-triage.md).
-- A legacy HS256 token, a delegated (impersonation) session, or an organization route with no organization keeps the legacy answer and is never refused with a `503` (`enforce.go:147-152`, `unjudgedReason` at `:192`). They are counted in `dev_health_authz_enforcement_unjudged_total{route,reason}` (`enforcecounters.go:14`).
-- An allow with a `redaction`, `minimum_assurance` or `step_up` obligation is a `503` for every such request, however healthy the PDP is. So is a `repository_allowlist` or `repository_scope` allow: no route is listed with no repository dimension (`goAPIRoutesWithoutRepositoryDimension` is empty, `enforce.go:52`). The only log signal is the second WARN line above.
+- A legacy HS256 token, a delegated (impersonation) session, an organization route with no organization, or a request that serves another organization than the token's (path `{org_id}` or `org_id` query) keeps the legacy answer and is never refused with a `503` (`enforce.go:147-152`, `unjudgedReason` at `:192`). They are counted in `dev_health_authz_enforcement_unjudged_total{route,reason}` (`enforcecounters.go:14`).
+- An allow with a `redaction` or `step_up` obligation, or a `minimum_assurance` other than `aal1` on a read, is a `503` for every such request, however healthy the PDP is. So is a `repository_allowlist` or `repository_scope` allow: no route is listed with no repository dimension (`goAPIRoutesWithoutRepositoryDimension` is empty, `enforce.go:52`). The only log signal is the second WARN line above.
 
 ## Roll back
 
@@ -95,3 +95,7 @@ The test is `TestRollbackCannotReactivateRevokedAccess` (`internal/api/policy/en
 - The legacy guard decides the routes again. Shadow comparison (`AUTH_SHADOW_PDP`) is separate and unchanged: see [Auth shadow PDP triage](auth-shadow-pdp-triage.md).
 - Before the next turn-on: the `unjudged` count of the row must be 0 for the window its leaf names (`docs/reference/auth/readiness-and-slo.md:76`), and auth-service must list go-api's workload principal in `AUTH_AUTHORIZE_CALLER_SUBJECTS` (`docs/reference/auth/authn-authz.md:162`).
 - Field reference for the switch: [Enforcement switch](../../reference/auth/authn-authz.md#enforcement-switch).
+
+## Before a turn-on: platform role parity read
+
+Before a go-api or query-api enforcement cell turns on (F7, F8, F9), run the read in `deploy/scripts/auth_preflip_platform_role_parity.sql` once, read-only, against the production database (`BEGIN TRANSACTION READ ONLY;`, the file, `ROLLBACK;`). Record its output on the flip ticket. The flip goes on only when every count except `superusers` is 0. A non-zero `superusers_without_platform_admin` or `platform_admin_not_superuser` means go-api's superuser flag and the decision point's platform role disagree for that user; a non-zero `platform_admin_on_disabled_copy_of_active_user` means the decision point would admit a platform admin that go-api refuses (product rule 1). Fix the data first, then read again. This is a point-in-time read, not a start refusal and not a wait. A cell in `internal/api/policy` runs the same file.

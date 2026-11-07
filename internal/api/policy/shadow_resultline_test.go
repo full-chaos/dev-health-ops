@@ -108,14 +108,14 @@ func TestShadowResultLineAtEveryResultSite(t *testing.T) {
 				o.served = servedOrg{named: true, raw: strangerOrg}
 				return o
 			}(),
-			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "admin", "result": "match"}},
+			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "admin", "result": "skipped"}},
 		{"served org other, legacy allow", nil, nil,
 			func() ShadowObservation {
 				o := observation("GET /api/v1/admin/teams", ShadowCallerAdmin, true)
 				o.served = servedOrg{named: true, raw: strangerOrg}
 				return o
 			}(),
-			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "admin", "result": "mismatch"}},
+			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "admin", "result": "skipped"}},
 		{"decider panics", func(*testing.T) pep.Decider { return panics }, nil,
 			observation("GET /api/v1/admin/orgs", ShadowCallerSuperuser, true),
 			map[string]string{"route": "GET /api/v1/admin/orgs", "namespace": "admin", "caller": "superuser", "result": "error"}},

@@ -34,7 +34,7 @@ func (f *fakeStore) Lookup(_ context.Context, orgID string) (Entitlement, error)
 func newTestServer(store EntitlementStore) *httptest.Server {
 	mux := http.NewServeMux()
 	for _, route := range Routes(Deps{
-		Store: store, Auth: newFakeCredentials(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store: store, Auth: newFakeCredentials(), Workload: testWorkload, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
@@ -283,9 +283,10 @@ func TestEntitlementLookupLogsTheACRBasisAtInfo(t *testing.T) {
 			var logs bytes.Buffer
 			mux := http.NewServeMux()
 			for _, route := range Routes(Deps{
-				Store:  &fakeStore{entitlement: Entitlement{OrgID: "the-org-id", AgentContextRuntime: basis != "none", ACRBasis: basis}},
-				Auth:   newFakeCredentials(),
-				Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+				Store:    &fakeStore{entitlement: Entitlement{OrgID: "the-org-id", AgentContextRuntime: basis != "none", ACRBasis: basis}},
+				Auth:     newFakeCredentials(),
+				Workload: testWorkload,
+				Logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
 			}) {
 				mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 			}

@@ -4,20 +4,26 @@ package session_test
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-go/workloadtoken"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
@@ -54,26 +60,13 @@ func newcomer(t *testing.T, ctx context.Context, st stack) string {
 	return changeToken(t, st, id.String(), email, "", "member", 0)
 }
 
-func issueCredential(t *testing.T) string {
-	t.Helper()
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
-		t.Fatal(err)
-	}
-	return "svc_authsess_" + base64.RawURLEncoding.EncodeToString(random)
-}
-
 func issueClient(t *testing.T, base string) *sessionissue.Client {
 	t.Helper()
 	parsed, err := url.Parse(base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := sessionissue.New(parsed, issueCredential(t), 2*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return client
+	return workloadIssueClient(t, parsed)
 }
 
 // fakeIssueRoute is auth-service's issue route: it answers a fixed pair and
@@ -224,4 +217,45 @@ func TestSessionsOwnedByAuthAnswer503WhenTheIssueRouteIsDown(t *testing.T) {
 	if passwordHashOf(t, ctx, st, changeAlice) == hashBefore {
 		t.Fatal("the password change was not committed before its session was asked for")
 	}
+}
+
+// workloadIssueClient is go-api's session issue client presenting a workload token: its exchange (a local server)
+// answers a claims-valid token, which the fake issue route takes as any bearer. Kept local (no shared test API); it
+// folds into internal/testsupport/workloadclient once CHAOS-12782 lands.
+func workloadIssueClient(t *testing.T, base *url.URL) *sessionissue.Client {
+	t.Helper()
+	const issuer = "https://auth.example.test"
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := base64.RawURLEncoding
+	now := time.Now().Unix()
+	payload := fmt.Sprintf(`{"iss":%q,"aud":"auth-service","sub":"prn_AAAAAAAAAAAAAAAAAAAAAA","principal_type":"workload","jti":"%024d","iat":%d,"nbf":%d,"exp":%d}`,
+		issuer, 7, now, now, now+300)
+	input := enc.EncodeToString([]byte(`{"alg":"EdDSA","typ":"workload+jwt","kid":"test-key"}`)) + "." + enc.EncodeToString([]byte(payload))
+	minted := input + "." + enc.EncodeToString(ed25519.Sign(key, []byte(input)))
+	exchange := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": minted, "issued_token_type": workloadtoken.TokenTypeJWT, "token_type": "Bearer", "expires_in": 300})
+	}))
+	t.Cleanup(exchange.Close)
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "bootstrap")
+	if err := os.WriteFile(path, []byte(workloadtoken.BootstrapPrefix+enc.EncodeToString(random)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workload, err := workloadtoken.New(workloadtoken.Config{ExchangeURL: exchange.URL, AllowPlainHTTP: true, Issuer: issuer,
+		Subject: workloadtoken.BootstrapCredentialFile(path), Transport: &http.Transport{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := sessionissue.NewWorkload(base, workload, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
 }

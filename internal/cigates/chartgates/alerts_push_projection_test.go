@@ -11,8 +11,11 @@ import (
 // auth_push_projection) and their SigNoz builder form in the runbook page
 // pushRunbook. CHAOS-10897 plan 6.1 and 6.2: the rule text decides the series,
 // the window, the threshold and the severity; the runbook JSON says the same;
-// the rules route by notification policy (usePolicy true, no channel in the
-// JSON), and ONLY the status and scopes rule is critical.
+// every rule names the channel accounts-email with renotify and does not use
+// the notification policy (the live form, as every other prod rule), ParkedGap
+// matches all the times on space max, NotRunning matches all the times and
+// alerts on absent for 180 minutes, and ONLY the status and scopes rule is
+// critical.
 
 const (
 	pushGroup   = "auth_push_projection"
@@ -45,17 +48,17 @@ var pushRules = []pushRule{
 var pushWants = []rbWant{
 	{alert: pushDrift, ruleLabel: "class", groupBy: "class",
 		summary:     "Push credential projection differs from the domain",
-		description: "Class {{$labels.class}}: two confirmed reconcile passes ten minutes apart saw the push projection differ from the credential domain. Next: Step 3 in docs/operate/runbooks/auth-push-projection-drift-alerts.md."},
+		description: "Class {{$labels.class}}: two confirmed reconcile passes ten minutes apart saw the push projection differ from the credential domain. Next: Step 3 in docs/operate/runbooks/auth-push-projection-drift-alerts.md.", routed: true},
 	{alert: pushDriftLive, filter: "class REGEXP 'status|scopes'", ruleLabel: "class", groupBy: "class",
 		summary:     "Push projection holds a credential live or wider than the domain",
-		description: "Class {{$labels.class}}: the projection reads a credential as live that the domain ended, or with wider scopes. Next: Step 3 in docs/operate/runbooks/auth-push-projection-drift-alerts.md."},
-	{alert: pushParkedGap,
+		description: "Class {{$labels.class}}: the projection reads a credential as live that the domain ended, or with wider scopes. Next: Step 3 in docs/operate/runbooks/auth-push-projection-drift-alerts.md.", routed: true},
+	{alert: pushParkedGap, routed: true, match: "all_the_times", space: "max",
 		summary:     "Push projection rows stayed parked for an hour",
 		description: "Parked projection rows did not clear for an hour, longer than the retry backoff allows. Next: Step 4 in docs/operate/runbooks/auth-push-projection-drift-alerts.md."},
-	{alert: pushFinalRows,
+	{alert: pushFinalRows, routed: true,
 		summary:     "Push projection has final rows that need a person",
 		description: "Final projection rows (malformed, unknown organization or conflict) stay for five minutes and are never retried. Next: Step 4 in docs/operate/runbooks/auth-push-projection-drift-alerts.md."},
-	{alert: pushNotRunning, filter: "outcome = 'ok'",
+	{alert: pushNotRunning, filter: "outcome = 'ok'", routed: true, match: "all_the_times", absentFor: 180,
 		summary:     "Push projection reconcile has not completed for three hours",
 		description: "No reconcile pass finished ok in three hours, so the drift rules cannot fire. Next: Step 5 in docs/operate/runbooks/auth-push-projection-drift-alerts.md."},
 }
@@ -93,8 +96,8 @@ func pushRunbookMatchesTheRules(g *guard) {
 
 func pushRunbookHasNoPromQLRule(g *guard) {
 	text := g.read(pushRunbook)
-	for _, banned := range []string{"promql_rule", "promQueries", `"queryType": "promql"`, `"channels"`} {
-		g.expect(!strings.Contains(text, banned), "the runbook contains %q: PromQL does not evaluate on this SigNoz, and the rules route by notification policy", banned)
+	for _, banned := range []string{"promql_rule", "promQueries", `"queryType": "promql"`} {
+		g.expect(!strings.Contains(text, banned), "the runbook contains %q: PromQL does not evaluate on this SigNoz", banned)
 	}
 }
 
@@ -393,7 +396,7 @@ func TestPushProjectionAlertGuardsRealTree(t *testing.T) {
 	runReal(t,
 		check{"push-alerts-are-the-group", pushAlertsAreTheGroup},
 		check{"push-runbook-matches-the-rules", pushRunbookMatchesTheRules},
-		check{"push-runbook-has-no-promql-rule-or-channel", pushRunbookHasNoPromQLRule},
+		check{"push-runbook-has-no-promql-rule", pushRunbookHasNoPromQLRule},
 		check{"push-runbook-step2-allows-absent-drift", pushRunbookStep2AllowsAbsentDrift},
 		check{"push-metric-names-are-emitted", pushMetricNamesAreEmitted},
 		check{"push-alerts-fire-on-seeded-series", pushAlertsFireOnSeededSeries},
@@ -412,7 +415,16 @@ func TestPushProjectionAlertGuardsPlantedDefects(t *testing.T) {
 		{"drift-rule-made-critical", both, mut(rulesRel, "severity: warning\n          team: platform\n        annotations:\n          summary: \"Push credential projection differs", "severity: critical\n          team: platform\n        annotations:\n          summary: \"Push credential projection differs"), pushAlertsAreTheGroup, "critical"},
 		pb("runbook-for-differs", pushDrift, `"evalWindow": "10m"`, `"evalWindow": "5m"`, "evalWindow"),
 		pb("runbook-severity-differs", pushDriftLive, `"severity": "critical"`, `"severity": "warning"`, "import label severity"),
-		pb("runbook-names-a-channel", pushDrift, `"usePolicy": true`, `"usePolicy": false`, "usePolicy"),
+		pb("runbook-uses-policy", pushDrift, `"usePolicy": false`, `"usePolicy": true`, "usePolicy"),
+		pb("runbook-drops-the-channel", pushDrift, `"accounts-email"`, ``, "import channels"),
+		pb("runbook-names-another-channel", pushFinalRows, `"accounts-email"`, `"other-channel"`, "import channels"),
+		pb("runbook-stops-renotify", pushDriftLive, `"enabled": true`, `"enabled": false`, "renotify"),
+		pb("runbook-renotify-interval", pushFinalRows, `"interval": "4h"`, `"interval": "1h"`, "renotify"),
+		pb("parked-gap-at-least-once", pushParkedGap, `"matchType": "all_the_times"`, `"matchType": "at_least_once"`, "matchType"),
+		pb("parked-gap-space-min", pushParkedGap, `"spaceAggregation": "max"`, `"spaceAggregation": "min"`, "spaceAggregation"),
+		pb("not-running-at-least-once", pushNotRunning, `"matchType": "all_the_times"`, `"matchType": "at_least_once"`, "matchType"),
+		pb("not-running-no-absent", pushNotRunning, `"alertOnAbsent": true`, `"alertOnAbsent": false`, "alertOnAbsent"),
+		pb("not-running-absent-for-differs", pushNotRunning, `"absentFor": 180`, `"absentFor": 60`, "absentFor"),
 		pb("runbook-metric-differs", pushFinalRows, `"metricName": "`+pushFinalMetric+`"`, `"metricName": "devhealth_auth_push_projection_final"`, "metricName"),
 		{"runbook-step2-stops-on-any-no-data", both, mut(pushRunbook, "No data for the run counter, the parked rows or the final rows, or an absent drift gauge while the run counter is not advancing, means", `A query that returns "no data" means`), pushRunbookStep2AllowsAbsentDrift, "Step 2 stop rule"},
 		{"parked-rule-uses-max", both, mut(rulesRel, "min_over_time("+pushParkedMetric, "max_over_time("+pushParkedMetric), pushAlertsFireOnSeededSeries, "rule 3 fires although"},

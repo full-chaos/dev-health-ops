@@ -178,10 +178,16 @@ func judge(args []string, stdout, stderr io.Writer) int {
 	slotsPath := fs.String("slots", "", "slots file drive wrote")
 	logPath := fs.String("log", "", "go-api JSON log of the run (docker logs --since <drive start>)")
 	rulingsPath := fs.String("rulings", "", "mismatch tuples with a passing pm verdict")
+	noOrgBefore := fs.String("noorg-before", "", "go-api /metrics scrape taken before the drive (with -noorg-after: the enforcement no_org counter evidence)")
+	noOrgAfter := fs.String("noorg-after", "", "go-api /metrics scrape taken after the drive")
 	out := fs.String("out", "", "per-row table to create, 0600")
 	k := fs.Int("k", 3, "requests per cell")
 	grace := fs.Duration("grace", 2200*time.Millisecond, "time after an answer in which its result line may land")
 	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if (*noOrgBefore == "") != (*noOrgAfter == "") {
+		fmt.Fprintln(stderr, "judge: -noorg-before and -noorg-after go together")
 		return exitUsage
 	}
 	rawSlots, err := os.ReadFile(*slotsPath)
@@ -221,7 +227,26 @@ func judge(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "judge: -out is required")
 		return exitUsage
 	}
-	report := shadowvenue.Judge(slots, ev, rulings, shadowvenue.JudgeOptions{K: *k, Grace: *grace})
+	var noOrg shadowvenue.NoOrgEvidence
+	if *noOrgBefore != "" {
+		before, err := os.ReadFile(*noOrgBefore)
+		if err != nil {
+			fmt.Fprintf(stderr, "-noorg-before: %v\n", err)
+			return exitUsage
+		}
+		after, err := os.ReadFile(*noOrgAfter)
+		if err != nil {
+			fmt.Fprintf(stderr, "-noorg-after: %v\n", err)
+			return exitUsage
+		}
+		delta, err := shadowvenue.ParseUnjudgedDelta(before, after)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+		noOrg = delta
+	}
+	report := shadowvenue.Judge(slots, ev, rulings, shadowvenue.JudgeOptions{K: *k, Grace: *grace, NoOrg: noOrg})
 	file, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		fmt.Fprintf(stderr, "judge: -out %s: %v\n", *out, errors.Unwrap(err))

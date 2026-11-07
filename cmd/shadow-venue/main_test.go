@@ -116,3 +116,19 @@ func TestFinishFailsAStepWhoseOutputFileDidNotClose(t *testing.T) {
 		t.Fatalf("an earlier failure was replaced by %d", code)
 	}
 }
+
+func TestJudgeTakesTheTwoNoOrgScrapesTogetherOrNotAtAll(t *testing.T) {
+	dir := t.TempDir()
+	one := filepath.Join(dir, "before.prom")
+	if err := os.WriteFile(one, []byte("# HELP dev_health_authz_enforcement_unjudged_total x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	args := []string{"judge", "-slots", filepath.Join(dir, "nope"), "-log", filepath.Join(dir, "nope"), "-out", filepath.Join(dir, "t.tsv"), "-noorg-before", one}
+	if code := run(context.Background(), args, &out, &errOut); code != exitUsage {
+		t.Fatalf("one scrape only: code %d", code)
+	}
+	if !strings.Contains(errOut.String(), "go together") {
+		t.Fatalf("stderr %q", errOut.String())
+	}
+}

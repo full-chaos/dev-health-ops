@@ -204,7 +204,8 @@ VALUES ($1, $2, 'v1:not-decryptable-here', now() - interval '2 hours', now() - i
 				if python == projected {
 					t.Fatalf("the Go rows now equal the Python rows: remove the known divergence (%s)", venueoracle.NotUUIDOrgClaimGap)
 				}
-				t.Skipf("%s:\n python: %s\n go:     %s", venueoracle.NotUUIDOrgClaimGap, python, projected)
+				venueoracle.KnownDivergenceSkip(t, venueoracle.NotUUIDOrgClaimGap, rowsDigest(python), rowsDigest(projected),
+					" python: "+python+"\n go:     "+projected)
 			})
 			return
 		}
@@ -340,4 +341,10 @@ func normalizeAuthorizeURL(t *testing.T, body string) string {
 		return body
 	}
 	return string(out)
+}
+
+// rowsDigest names a row snapshot in a known divergence skip: "rows-" and the first 12 hex of its sha256.
+func rowsDigest(rows string) string {
+	sum := sha256.Sum256([]byte(rows))
+	return "rows-" + hex.EncodeToString(sum[:])[:12]
 }

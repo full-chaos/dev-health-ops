@@ -345,7 +345,7 @@ run_providersync_bounded() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-skips JSON_LOG LEDGER NAME...|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -397,6 +397,10 @@ usage() {
          weights ci/venue_oracle_weights.d/): the hosted job runs COUNT matrix
          legs, each within its time limit however many rows a change selects. A
          leg whose slice is empty is a plain no-op.
+  venue-oracle-skips JSON_LOG LEDGER NAME...
+         Judge the skips a go test -json log of venue oracle tests holds, as the
+         venue-oracles verb does: only a KNOWN-DIVERGENCE CHAOS-<n> skip with
+         python= and go= whose ticket, test and row the ledger holds passes.
   venue-oracle-plan COUNT
          Print the cost-balanced plan of COUNT legs: every run row with its leg
          and weight, then one "#leg" line per leg (rows, predicted seconds).
@@ -1957,6 +1961,66 @@ venue_oracle_changed_selects() {
   return 1
 }
 
+# venue_oracle_skips JSON_LOG LEDGER NAME... judges every skip a venue oracle test (or one of its subtests) reported in
+# the go test -json log. A skip passes only as a known divergence of product rule 1: its message starts
+# "KNOWN-DIVERGENCE CHAOS-<n>", carries python=<answer> and go=<answer> (both planes ran), and the ledger
+# (internal/testsupport/venueoracle/known_divergences.tsv: ticket, test, row, reason) holds that ticket, test and row.
+# CI does not ask the tracker. Every other skip is an ERROR. It prints one "KNOWN <ticket>" line per passing skip and
+# returns 1 when any skip is refused.
+venue_oracle_skips() {
+  local json_log="$1" ledger="$2" name skip_test ticket py go top row skips refused=0
+  shift 2
+  [ -r "${ledger}" ] || { printf 'ERROR: venue oracle known-divergence ledger %s is missing or unreadable\n' "${ledger}" >&2; return 1; }
+  for name in "$@"; do
+    # Each line is read on its own (fromjson?): a line go test wrote that is not an event never hides a skip event.
+    skips="$(jq -Rrs --arg name "${name}" '
+      [ split("\n")[] | fromjson? | objects ] as $all
+      | [ $all[] | select((.Test // "") == $name or ((.Test // "") | startswith($name + "/"))) ] as $events
+      | [ $events[] | select(.Action == "skip") | .Test ] | unique[] as $test
+      | ([ $events[] | select(.Action == "output" and .Test == $test) | .Output
+           | select(test("^ +[^ ]+\\.go:[0-9]+: KNOWN-DIVERGENCE ")) ] | first // "") as $line
+      | [ $test,
+          (($line | capture("^ +[^ ]+\\.go:[0-9]+: KNOWN-DIVERGENCE (?<t>CHAOS-[0-9]+)\\b") | .t) // ""),
+          (($line | capture(" python=(?<v>[^ :\n]+)") | .v) // ""),
+          (($line | capture(" go=(?<v>[^ :\n]+)") | .v) // "") ]
+      | @tsv' "${json_log}")" || { printf 'ERROR: venue oracle %s: cannot read the skips of %s\n' "${name}" "${json_log}" >&2; refused=1; continue; }
+    while IFS=$'\t' read -r skip_test ticket py go; do
+      [ -n "${skip_test}" ] || continue
+      if [ -z "${ticket}" ]; then
+        printf 'ERROR: venue oracle %s reported SKIP without a KNOWN-DIVERGENCE CHAOS-<n> message -- a discovered venue oracle test must never skip under this verb; no real comparison ran\n' "${skip_test}" >&2
+        refused=1
+        continue
+      fi
+      if [ -z "${py}" ] || [ -z "${go}" ]; then
+        printf 'ERROR: venue oracle %s reported a KNOWN-DIVERGENCE %s skip without python=<answer> go=<answer>: no proof that both planes ran\n' "${skip_test}" "${ticket}" >&2
+        refused=1
+        continue
+      fi
+      top="${skip_test%%/*}"
+      row=""
+      [ "${top}" = "${skip_test}" ] || row="${skip_test#*/}"
+      if ! awk -F'\t' -v t="${ticket}" -v n="${top}" -v r="${row}" \
+          'substr($0, 1, 1) != "#" && $1 == t && $2 == n && $3 == r && r != "" {found = 1} END {exit found ? 0 : 1}' "${ledger}"; then
+        printf 'ERROR: venue oracle %s reported a KNOWN-DIVERGENCE %s skip that the ledger %s does not hold (ticket, test, row)\n' "${skip_test}" "${ticket}" "${ledger}" >&2
+        refused=1
+        continue
+      fi
+      printf 'KNOWN %s %s python=%s go=%s\n' "${ticket}" "${skip_test}" "${py}" "${go}"
+    done <<< "${skips}"
+  done
+  return "${refused}"
+}
+
+# venue_oracle_known_summary reads venue_oracle_skips "KNOWN" lines on stdin and prints the one loud line of a run:
+# how many known-divergence skips passed and under which tickets.
+venue_oracle_known_summary() {
+  local lines count tickets
+  lines="$(awk '$1 == "KNOWN"')"
+  count="$(printf '%s\n' "${lines}" | awk '$1 == "KNOWN" {n++} END {print n + 0}')"
+  tickets="$(printf '%s\n' "${lines}" | awk '$1 == "KNOWN" {print $2}' | sort -u | paste -sd' ' -)"
+  printf 'KNOWN-DIVERGENCE skips: %d (tickets %s)\n' "${count}" "${tickets:-none}"
+}
+
 check_venue_oracles() {
   local shard="${1:-}" shard_count="${2:-}" changed="${VENUE_CHANGED_FILE:-}"
   if [ -n "${changed}" ]; then
@@ -2113,8 +2177,9 @@ check_venue_oracles() {
     printf 'venue-oracles: %d registered test(s) across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
   fi
 
-  local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0 tmo
-  local -a compared=() go_only=()
+  local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0 tmo known
+  local known_ledger="${ROOT}/internal/testsupport/venueoracle/known_divergences.tsv"
+  local -a compared=() go_only=() known_lines=()
   for index in "${!vo_dirs[@]}"; do
     rel="./${vo_dirs[${index}]#"${ROOT}"/}"
     pattern="^(${vo_names[${index}]})\$"
@@ -2152,12 +2217,13 @@ check_venue_oracles() {
     local -a this_names=()
     IFS='|' read -ra this_names <<< "${vo_names[${index}]}"
     for name in "${this_names[@]}"; do
-      if jq -e --arg name "${name}" \
-          'select(.Action == "skip") | select(.Test == $name or ((.Test // "") | startswith($name + "/")))' \
-          "${json_log}" >/dev/null 2>&1; then
-        printf 'ERROR: venue oracle %s (or one of its subtests) reported SKIP -- a discovered venue oracle test must never skip under this verb; no real comparison ran\n' "${name}" >&2
+      if ! known="$(venue_oracle_skips "${json_log}" "${known_ledger}" "${name}")"; then
         failed=1
-      elif [ ! -f "${pkg_proof_dir}/${name}" ]; then
+      elif [ -n "${known}" ]; then
+        printf '%s\n' "${known}"
+        known_lines+=("${known}")
+      fi
+      if [ ! -f "${pkg_proof_dir}/${name}" ]; then
         printf 'ERROR: venue oracle %s did not run a real comparison (no proof file in its own package directory -- venueoracle.Diff was likely never reached)\n' "${name}" >&2
         failed=1
       else
@@ -2176,6 +2242,7 @@ check_venue_oracles() {
   done
 
   rm -rf -- "${proof_dir}"
+  printf '%s\n' "${known_lines[@]+"${known_lines[@]}"}" | venue_oracle_known_summary
   printf 'venue-oracles summary: %d discovered; %d compared both planes; %d Go-only (no Python plane); %d local-only (not run here)\n' \
     "${total}" "${#compared[@]}" "${#go_only[@]}" "${#local_only[@]}"
   for name in "${go_only[@]}"; do printf '  go-only:    %s\n' "${name}"; done
@@ -5250,6 +5317,15 @@ case "${1:-all}" in
     else
       for pkg in "$@"; do printf 'plain %s\n' "${pkg}"; done
     fi
+    ;;
+  venue-oracle-skips)
+    [ "$#" -ge 4 ] || die "venue-oracle-skips accepts JSON_LOG LEDGER NAME..."
+    shift
+    skips_rc=0
+    skips_out="$(venue_oracle_skips "$@")" || skips_rc=$?
+    [ -z "${skips_out}" ] || printf '%s\n' "${skips_out}"
+    printf '%s\n' "${skips_out}" | venue_oracle_known_summary
+    exit "${skips_rc}"
     ;;
   venue-oracle-plan)
     [ "$#" -eq 2 ] || die "venue-oracle-plan accepts COUNT"

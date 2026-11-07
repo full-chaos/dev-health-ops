@@ -429,7 +429,7 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 				if same {
 					t.Fatalf("the Go answer now equals the legacy answer: remove the skip (%s)", reason)
 				}
-				t.Skipf("%s:\n%s", reason, detail)
+				venueoracle.KnownDivergenceSkip(t, reason, strconv.Itoa(pyResponses[index].Status), strconv.Itoa(goProjected.Status), detail)
 			})
 			out[s.name] = [2]venueoracle.Response{pyResponses[index], goResponse}
 			continue

@@ -44,6 +44,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -548,6 +549,18 @@ func knownDivergenceErr(name, ticket string, same bool) error {
 
 var knownDivergenceTicket = regexp.MustCompile(`^CHAOS-[0-9]+\b`)
 
+// KnownDivergenceSkip skips t as a known divergence. The message is the form the venue-oracles verb of ci/check_go.sh
+// accepts: "KNOWN-DIVERGENCE CHAOS-<n> python=<answer> go=<answer>", so a skip shows that both planes ran; the verb
+// also needs the ticket, test and row in known_divergences.tsv. ticket starts with its CHAOS id.
+func KnownDivergenceSkip(t *testing.T, ticket, python, goAnswer, detail string) {
+	t.Helper()
+	id := knownDivergenceTicket.FindString(ticket)
+	if id == "" || python == "" || goAnswer == "" || strings.ContainsAny(python+goAnswer, " :\n") {
+		t.Fatalf("known divergence %q: needs a CHAOS id and both answers without blanks, got python=%q go=%q", ticket, python, goAnswer)
+	}
+	t.Skipf("KNOWN-DIVERGENCE %s python=%s go=%s: %s\n%s", id, python, goAnswer, ticket, detail)
+}
+
 // retiringPin is the Pin of the ruling that retired request's Python answer, or nil.
 func (o DiffOptions) retiringPin(request Request) *GoPin {
 	if o.Retire != nil && o.Retire(request) {
@@ -673,7 +686,7 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 				if err := knownDivergenceErr(request.Name, ticket, same); err != nil {
 					t.Fatal(err)
 				}
-				t.Skipf("%s:\n%s", ticket, detail)
+				KnownDivergenceSkip(t, ticket, strconv.Itoa(python[index].Status), strconv.Itoa(goResponse.Status), detail)
 			})
 			continue
 		}

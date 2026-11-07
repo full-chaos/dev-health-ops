@@ -56,7 +56,7 @@ fails at load, before anything is applied.
 | `0006` | The commit guard: a trigger that refuses a write to a guarded table outside a transaction armed by `internal/audit`. See [audit and outbox](auth-control-plane-audit-outbox.md). |
 | `0007` | The remaining credential registry columns. |
 
-Wave 1 migrations are **additive only** (a test over the embedded SQL enforces
+The migrations are **additive only** (a test over the embedded SQL enforces
 it): no existing row moves, no writer changes, no drops.
 
 ## Applying and checking
@@ -82,7 +82,7 @@ attempts in all. Each timed-out attempt logs a warning
 run with `could not take its locks in time`, and the version table stays at the
 last migration that committed: run `auth-migrate` again when the open
 transaction ends. The timeout is not set on the session, so a second
-`auth-migrate` still waits for the first one's advisory lock (CHAOS-12200).
+`auth-migrate` still waits for the first one's advisory lock.
 `--check` prints
 `auth schema current at version N` and exits 0, or reports the current and head
 versions and exits 1; it never creates the schema or the version table. Run the
@@ -112,7 +112,7 @@ grants back exactly the manifest. Highlights:
   `expires_at`, `revoked_at`) and `UPDATE (revoked_at)`. It lets
   `compatRefresh` exchange a go-api refresh token once for an auth-service
   session and revoke a reused token's go-api family. The posture reports a
-  missing or wider privilege on that table. CHAOS-10408 removes the grant when
+  missing or wider privilege on that table. The grant is removed when
   no live go-api refresh token is left.
 - Every session row stores `legacy_token_version` (migration 0016), the
   user's `public.users.token_version` when the session was created. A refresh

@@ -57,7 +57,6 @@ go-api:
 
 | Class | Rows |
 | --- | --- |
-| `ops_access_token_hs256` | 196 |
 | `user_access_token` | 196 |
 | `external_push_ingest_token` | 5 |
 | `internal_svc_acr_token` | 4 |
@@ -77,7 +76,6 @@ query-api:
 
 | Class | Rows |
 | --- | --- |
-| `ops_access_token_hs256` | 35 |
 | `user_access_token` | 35 |
 | `effective_principal_envelope` | 34 |
 
@@ -87,7 +85,6 @@ auth-service:
 | --- | --- |
 | `internal_svc_authsess_token` | 13 |
 | `workload_token` | 11 |
-| `ops_access_token_hs256` | 6 |
 | `user_access_token` | 6 |
 | `refresh_credential` | 3 |
 | `sso_oidc_exchange` | 2 |
@@ -102,7 +99,7 @@ go-api and query-api take a bearer access token. Four access-token shapes exist.
 
 | Shape | Class | Header | Used by |
 | --- | --- | --- | --- |
-| Legacy edge token | `ops_access_token_hs256` | `alg` HS256 | go-api, query-api, auth-service session routes |
+| Legacy edge token | `ops_access_token_hs256` | `alg` HS256 | none: the class is `retired`, every row refuses it (`alg_not_allowed`) |
 | User access token | `user_access_token` | `alg` EdDSA, `typ` `at+jwt`, audience `dev-health-api` | go-api (196 rows), query-api only when `AUTH_ACCESS_TOKEN_ISSUER` is set, auth-service lists the class on 6 session, identity and change-password rows, but the validator text of those rows describes an HS256 token only |
 | Workload token | `workload_token` | `typ` `workload+jwt` | go-api (4 rows), auth-service internal routes |
 | Effective principal envelope | `effective_principal_envelope` | `alg` EdDSA | query-api |
@@ -195,7 +192,7 @@ A platform role holds platform actions only. An organization role never comes fr
 
 ## query-api
 
-query-api authenticates every protected REST route with `authenticateRESTRequest` (`internal/queryapi/server/rest_error_response.go`). It has no per-route action check. Its 37 protected rows all have `action: unknown`, with a declared gap tracked in CHAOS-11042.
+query-api authenticates every protected REST route with `authenticateRESTRequest` (`internal/queryapi/server/rest_error_response.go`). It has no per-route action check. Its 37 protected rows all have `action: unknown`, with a declared gap.
 
 | Condition | Answer |
 | --- | --- |
@@ -215,16 +212,16 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | Method and route | Class | Accepted credential classes | Tenant requirement |
 | --- | --- | --- | --- |
 | `POST /v1/token/refresh` | protected | `refresh_credential` | `none` |
-| `GET /v1/sessions/current` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `POST /v1/sessions/revoke` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `POST /v1/sessions/revoke-all` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `POST /v1/identities/social` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `DELETE /v1/identities/social/{id}` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
+| `GET /v1/sessions/current` | protected | `user_access_token` | `none` |
+| `POST /v1/sessions/revoke` | protected | `user_access_token` | `none` |
+| `POST /v1/sessions/revoke-all` | protected | `user_access_token` | `none` |
+| `POST /v1/identities/social` | protected | `user_access_token` | `none` |
+| `DELETE /v1/identities/social/{id}` | protected | `user_access_token` | `none` |
 | `POST /api/v1/auth/login` | public | none | `unset` |
 | `POST /api/v1/auth/refresh` | protected | `refresh_credential` | `none` |
 | `POST /api/v1/auth/logout` | protected | `refresh_credential` | `none` |
-| `POST /api/v1/auth/validate` | protected | `ops_access_token_hs256`, `user_access_token` (body field `token`) | `none` |
-| `POST /api/v1/auth/switch-org` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
+| `POST /api/v1/auth/validate` | protected | `user_access_token` (body field `token`) | `none` |
+| `POST /api/v1/auth/switch-org` | protected | `user_access_token` | `none` |
 | `POST /api/v1/auth/social-login` | protected | `social_oauth_exchange` | `none` |
 | `POST /internal/v1/sessions` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
 | `POST /internal/v1/sessions/state` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
@@ -267,7 +264,7 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | `POST /api/v1/auth/resend-verification` | public | none | `none` |
 | `POST /api/v1/auth/forgot-password` | public | none | `none` |
 | `POST /api/v1/auth/reset-password` | public | none | `none` |
-| `POST /api/v1/auth/change-password` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
+| `POST /api/v1/auth/change-password` | protected | `user_access_token` | `none` |
 | `GET /healthz` | public | none | `unset` |
 | `GET /readyz` | public | none | `unset` |
 | `GET /metrics` | public | none | `unset` |
@@ -291,13 +288,13 @@ Source: `contracts/auth/v1/endpoint-profiles.auth-service.json`. The OpenAPI doc
 
 ## Planned, not built
 
-| Item | Ticket |
+| Item | Status |
 | --- | --- |
-| Policy decision point routes `POST /v1/authorize` and `POST /v1/authorize:batch`. No Go route serves them. | CHAOS-10841 |
-| Actor chain, delegation limits and obligations in the decision point. | CHAOS-10839 |
-| Delegated (impersonation) session with an actor chain. | CHAOS-10987 |
-| Explicit platform actions for the superuser-inherited sites (`admin.billing`, `admin.flags`, `admin.audit`, `admin.impersonate`, `admin.telemetry`, `admin.stats`). Not in the catalog on `main`. | CHAOS-11847 |
-| Server actions and route handlers in web use single decisions. | CHAOS-10883 |
-| Check of the query-api rows and the GraphQL map against live behaviour. | CHAOS-11042 |
+| Policy decision point routes `POST /v1/authorize` and `POST /v1/authorize:batch`. No Go route serves them. | Planned |
+| Actor chain, delegation limits and obligations in the decision point. | Planned |
+| Delegated (impersonation) session with an actor chain. | Planned |
+| Explicit platform actions for the superuser-inherited sites (`admin.billing`, `admin.flags`, `admin.audit`, `admin.impersonate`, `admin.telemetry`, `admin.stats`). Not in the catalog on `main`. | Planned |
+| Server actions and route handlers in web use single decisions. | Planned |
+| Check of the query-api rows and the GraphQL map against live behaviour. | Planned |
 
 The catalog described here is version 4. Changes from the tickets above will change the version. Check `contracts/auth/v1/vocabulary/actions.v1.json` for the current one.

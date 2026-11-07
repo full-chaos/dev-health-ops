@@ -12,7 +12,7 @@ import (
 
 // membersActions is today's action of every members-namespace row of the go-api profile (leaf 6.7).
 var membersActions = map[string]string{
-	"GET /api/v1/admin/orgs/{org_id}/members":              "members.read",
+	"GET /api/v1/admin/orgs/{org_id}/members":              "members.manage",
 	"POST /api/v1/admin/orgs/{org_id}/members":             "members.manage",
 	"PATCH /api/v1/admin/orgs/{org_id}/members/{user_id}":  "members.manage",
 	"DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}": "members.manage",

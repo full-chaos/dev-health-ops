@@ -3456,7 +3456,7 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": "members.read",
+      "action": "members.manage",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",

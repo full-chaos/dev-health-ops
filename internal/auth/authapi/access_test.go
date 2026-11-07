@@ -141,7 +141,7 @@ func TestSessionRoutesAcceptTheAuthServiceEdDSAToken(t *testing.T) {
 // field token, not a bearer; the bearer censuses name it as their exemption.
 const validateBodyTokenProfile = "POST " + PatternCompatValidate
 
-func TestEveryAuthServiceBearerRowAcceptsTheUserTokenAndKeepsTheLegacyOptIn(t *testing.T) {
+func TestEveryAuthServiceBearerRowAcceptsTheUserTokenOnly(t *testing.T) {
 	rows, err := AuthServiceAccessRows()
 	if err != nil {
 		t.Fatal(err)
@@ -177,8 +177,8 @@ func TestEveryAuthServiceBearerRowAcceptsTheUserTokenAndKeepsTheLegacyOptIn(t *t
 	}
 	for _, profile := range want {
 		row, ok := byProfile[profile]
-		if !ok || !row.AcceptsUser || !row.LegacyHS256 {
-			t.Errorf("row %q = %+v (found %v), want accepts_user and legacy_hs256", profile, row, ok)
+		if !ok || !row.AcceptsUser || row.LegacyHS256 {
+			t.Errorf("row %q = %+v (found %v), want accepts_user and no legacy_hs256 (ops_access_token_hs256 is retired)", profile, row, ok)
 		}
 	}
 }
@@ -272,8 +272,11 @@ func TestTheLegacyHS256TokenIsAcceptedOnlyOnARowThatOptsIn(t *testing.T) {
 	}
 }
 
+// On a row that opts in, the HS256 path keeps its own refusal reason. No
+// inventory row opts in any more (ops_access_token_hs256 is retired), so the row
+// is planted; the inventory's refusal is TestEveryHS256TokenIsRefusedOnTheSessionRows.
 func TestALegacyTokenKeepsItsOwnRefusalReason(t *testing.T) {
-	a := newAccessFixture(t)
+	a := newAccessFixtureWith(t, []accessverify.Row{{Service: AccessService, Profile: "GET /v1/sessions/current", AcceptsUser: true, LegacyHS256: true}}, nil)
 	hs, err := NewIssuer(strings.Repeat("z", 40), testIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		t.Fatal(err)
@@ -383,11 +386,10 @@ func TestUserBearerRefusesAnEmptyOrInvalidSidMalformed(t *testing.T) {
 	}
 }
 
-// Today's state, pinned: a session-route caller holding the dev-health-api
-// EdDSA token is refused with the audience reason on a user_access_token row,
-// while the HS256 token still passes on the row's legacy opt-in. The issuer
-// must mint audience auth-service for these callers before HS256 retires.
-func TestAnApiAudienceEdDSATokenIsRefusedOnASessionRowWhileTheLegacyTokenPasses(t *testing.T) {
+// A session-route caller holding the dev-health-api EdDSA token is refused with
+// the audience reason on a user_access_token row, and the HS256 token is
+// refused too: ops_access_token_hs256 is retired, no row opts in.
+func TestEveryHS256TokenIsRefusedOnTheSessionRows(t *testing.T) {
 	a := newAccessFixture(t)
 	rows, err := AuthServiceAccessRows()
 	if err != nil {
@@ -397,7 +399,7 @@ func TestAnApiAudienceEdDSATokenIsRefusedOnASessionRowWhileTheLegacyTokenPasses(
 		if row.Profile == "POST "+PatternOAuthAuthorize {
 			continue // the user access token only, pinned by TestDecideTakesTheUserAccessTokenOnly
 		}
-		if !row.AcceptsUser || !row.LegacyHS256 {
+		if !row.AcceptsUser || row.LegacyHS256 {
 			t.Fatalf("row %s: accepts_user=%v legacy_hs256=%v", row.Profile, row.AcceptsUser, row.LegacyHS256)
 		}
 	}
@@ -413,8 +415,9 @@ func TestAnApiAudienceEdDSATokenIsRefusedOnASessionRowWhileTheLegacyTokenPasses(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + compact}); r.Code != http.StatusOK {
-		t.Fatalf("the legacy HS256 token = %d %s", r.Code, r.Body)
+	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + compact}), http.StatusUnauthorized, "malformed")
+	if got := a.counter(accessverify.RefusedMetric, map[string]string{"profile": "GET /v1/sessions/current", "reason": accessverify.ReasonAlgNotAllowed}); got != 1 {
+		t.Errorf("refused alg_not_allowed = %d, want 1", got)
 	}
 }
 
@@ -513,10 +516,11 @@ func TestChangePasswordWithAnEdDSABearerReturnsAnEdDSATokenOfTheNewSession(t *te
 }
 
 // Under the eddsa class the issuer's audience is the session route audience, and
-// go-api's HS256 token carries go-api's own audience: a live HS256 token keeps
-// working on the rows that opt in, and a token of any other audience is refused.
+// go-api's HS256 token carries go-api's own audience: on a row that opts in (a
+// planted row: no inventory row opts in since ops_access_token_hs256 is retired)
+// a live HS256 token works, and a token of any other audience is refused.
 func TestUnderTheEdDSAClassTheLegacyTokenKeepsGoAPIsAudience(t *testing.T) {
-	a := newAccessFixture(t)
+	a := newAccessFixtureWith(t, []accessverify.Row{{Service: AccessService, Profile: "GET /v1/sessions/current", AcceptsUser: true, LegacyHS256: true}}, nil)
 	for audience, want := range map[string]int{contracts.PlatformAPIAudience: http.StatusOK, "query-api": http.StatusUnauthorized, AccessTokenAudience: http.StatusUnauthorized} {
 		hs, err := NewIssuer(testSecret, testIssuer, audience)
 		if err != nil {

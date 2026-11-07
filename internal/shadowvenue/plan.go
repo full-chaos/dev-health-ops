@@ -247,9 +247,6 @@ func MakePlan(rows []Row, v Venue, o PlanOptions) (Plan, error) {
 			if err != nil {
 				return Plan{}, err
 			}
-			if err := o.Frozen.Holds(path, body); err != nil {
-				return Plan{}, fmt.Errorf("plan: destructive row %s in pool org %s: %w", row.ID, org, err)
-			}
 			for _, cell := range v.cells(row, org, false) {
 				if cell.gap != "" {
 					return Plan{}, fmt.Errorf("plan: destructive row %s: %s", row.ID, strings.TrimPrefix(cell.gap, "gap: "))

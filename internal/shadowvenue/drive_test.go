@@ -309,3 +309,26 @@ func TestCheckVenueBaseAcceptsOnlyTheRecordedGoAPIAddress(t *testing.T) {
 		t.Error("a drive named none (the after read's run) accepted")
 	}
 }
+
+// The driver itself, not only its command, refuses a base CheckVenueBase refuses: a venue IP with no record, at the
+// first request, before anything is sent.
+func TestDriverChecksItsOriginAtEveryRequest(t *testing.T) {
+	venue, _ := testPrincipals(t)
+	member, _ := venue.Principal("member-A")
+	d := &Driver{Base: "http://" + testGoAPIIP + ":8000", Client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("a request was sent")
+		return nil, nil
+	})}}
+	if _, err := d.Login(context.Background(), member, venue.Orgs["A"]); err == nil || !strings.Contains(err.Error(), "-egress") {
+		t.Fatalf("login on an unchecked venue base: %v", err)
+	}
+	slot := Slot{Seq: 1, Row: "58", Caller: "member", Principal: "member-A", Expect: "match", K: 1, Method: "GET", Route: "/api/v1/admin/teams", Path: "/api/v1/admin/teams", Body: none}
+	d.Gap, d.Sleep = MinGap, func(context.Context, time.Duration) error { return nil }
+	if err := d.Drive(context.Background(), Plan{Slots: []Slot{slot}}, map[string]string{"member-A": "tok"}, io.Discard); err == nil || !strings.Contains(err.Error(), "-egress") {
+		t.Fatalf("drive on an unchecked venue base: %v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

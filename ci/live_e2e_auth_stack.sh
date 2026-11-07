@@ -50,6 +50,11 @@ flag_rows() {
   awk -F'\t' -v scope="$1" '/^#/ || $1 == "scope" || NF == 0 { next } $1 == scope { print $2 "=" $3 }' "${FLAGS}"
 }
 
+# flag_value SCOPE NAME: the value of one flags row.
+flag_value() {
+  awk -F'\t' -v scope="$1" -v name="$2" '/^#/ || NF == 0 { next } $1 == scope && $2 == name { print $3 }' "${FLAGS}"
+}
+
 dsn() {
   printf "host=%s port=%s user=%s password='%s' dbname=%s sslmode=disable" "${PGHOST_USE}" "${PGPORT_USE}" "$1" "$2" "${PGDATABASE_USE}"
 }
@@ -85,7 +90,12 @@ raw_env() {
         "SSL_CERT_FILE=${state}/tls/ca.pem"
       ;;
     web)
+      # web reads the session token with the class auth-service issues (its flags row), never a second copy.
+      local token_class
+      token_class="$(flag_value auth-service AUTH_ACCESS_TOKEN_CLASS)"
+      [ -n "${token_class}" ] || die "the flags table has no auth-service AUTH_ACCESS_TOKEN_CLASS row"
       printf '%s\n' \
+        "AUTH_ACCESS_TOKEN_CLASS=${token_class}" \
         "AUTH_ACCESS_TOKEN_ISSUER=${ISSUER}" \
         "NODE_EXTRA_CA_CERTS=${state}/tls/ca.pem" \
         "AUTH_INTERNAL_URL=http://${AUTH_API_ADDR}" \

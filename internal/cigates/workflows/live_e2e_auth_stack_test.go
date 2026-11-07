@@ -433,3 +433,11 @@ func TestLiveE2EWebEnvHasTheWorkloadInputs(t *testing.T) {
 		t.Errorf("FAIL: web workload issuer %q, access token issuer %q", env["AUTH_WORKLOAD_ISSUER"], env["AUTH_ACCESS_TOKEN_ISSUER"])
 	}
 }
+
+// web reads the session token with the class auth-service issues; unset, web reads hs256_compat and refuses an EdDSA token.
+func TestLiveE2EWebReadsTheTokenClassAuthServiceIssues(t *testing.T) {
+	web, issuer := liveStackEnv(t, "web"), liveStackEnv(t, "auth-service")
+	if issuer["AUTH_ACCESS_TOKEN_CLASS"] == "" || web["AUTH_ACCESS_TOKEN_CLASS"] != issuer["AUTH_ACCESS_TOKEN_CLASS"] {
+		t.Errorf("FAIL: web token class %q, auth-service token class %q", web["AUTH_ACCESS_TOKEN_CLASS"], issuer["AUTH_ACCESS_TOKEN_CLASS"])
+	}
+}

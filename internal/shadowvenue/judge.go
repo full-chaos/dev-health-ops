@@ -187,7 +187,7 @@ type SlotVerdict struct {
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced:
 		return true
 	}
 	return false
@@ -511,7 +511,7 @@ func rowVerdicts(slots []SlotVerdict, k int) []RowVerdict {
 func cellPasses(counts map[string]int, row string) bool {
 	for verdict := range counts {
 		switch verdict {
-		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg:
+		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced:
 		default:
 			if !(strings.HasPrefix(row, "C") && controlMismatch(verdict)) {
 				return false
@@ -556,5 +556,5 @@ func (r Report) WriteTable(w io.Writer) error {
 
 // controlMismatch: the verdicts a control slot must have, a mismatch with its tuple.
 func controlMismatch(verdict string) bool {
-	return verdict == VerdictMismatch || verdict == VerdictMismatchIntentional || verdict == VerdictMismatchRuled
+	return verdict == VerdictEnforcedDeny || verdict == VerdictMismatch || verdict == VerdictMismatchIntentional || verdict == VerdictMismatchRuled
 }

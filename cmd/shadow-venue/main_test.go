@@ -132,3 +132,10 @@ func TestJudgeTakesTheTwoNoOrgScrapesTogetherOrNotAtAll(t *testing.T) {
 		t.Fatalf("stderr %q", errOut.String())
 	}
 }
+
+func TestJudgeEnforcedNeedsEveryInput(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"judge-enforced", "-out", filepath.Join(t.TempDir(), "t.tsv")}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "is required") {
+		t.Fatalf("no inputs: code %d, stderr %q", code, errOut.String())
+	}
+}

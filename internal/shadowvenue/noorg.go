@@ -30,29 +30,50 @@ func (d UnjudgedDelta) Delta(key string) (int, bool) { n, ok := d[key]; return n
 // that does not declare the metric (no # HELP line) is no evidence, and a series that went down means the process
 // restarted between the scrapes: both are refused.
 func ParseUnjudgedDelta(before, after []byte) (UnjudgedDelta, error) {
-	b, err := noOrgSeries(before)
+	all, err := ParseUnjudgedReasons(before, after)
 	if err != nil {
-		return nil, fmt.Errorf("before scrape: %w", err)
-	}
-	a, err := noOrgSeries(after)
-	if err != nil {
-		return nil, fmt.Errorf("after scrape: %w", err)
+		return nil, err
 	}
 	out := UnjudgedDelta{}
-	for key, was := range b {
-		if now, ok := a[key]; !ok || now < was {
-			return nil, fmt.Errorf("route %s: the no_org counter went from %d to %d: the process restarted or the series vanished", key, was, a[key])
+	for route, reasons := range all {
+		if n, ok := reasons["no_org"]; ok {
+			out[route] = n
 		}
-	}
-	for key, now := range a {
-		out[key] = now - b[key]
 	}
 	return out, nil
 }
 
-func noOrgSeries(scrape []byte) (map[string]int, error) {
+// ParseUnjudgedReasons is the per-route, per-reason increase of the unjudged counter between two scrapes, with the
+// same refusals as ParseUnjudgedDelta.
+func ParseUnjudgedReasons(before, after []byte) (map[string]map[string]int, error) {
+	b, err := unjudgedSeries(before)
+	if err != nil {
+		return nil, fmt.Errorf("before scrape: %w", err)
+	}
+	a, err := unjudgedSeries(after)
+	if err != nil {
+		return nil, fmt.Errorf("after scrape: %w", err)
+	}
+	out := map[string]map[string]int{}
+	for route, reasons := range b {
+		for reason, was := range reasons {
+			if now, ok := a[route][reason]; !ok || now < was {
+				return nil, fmt.Errorf("route %s reason %s: the counter went from %d to %d: the process restarted or the series vanished", route, reason, was, a[route][reason])
+			}
+		}
+	}
+	for route, reasons := range a {
+		out[route] = map[string]int{}
+		for reason, now := range reasons {
+			out[route][reason] = now - b[route][reason]
+		}
+	}
+	return out, nil
+}
+
+func unjudgedSeries(scrape []byte) (map[string]map[string]int, error) {
 	declared := false
-	out := map[string]int{}
+	out := map[string]map[string]int{}
 	scanner := bufio.NewScanner(bytes.NewReader(scrape))
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	for scanner.Scan() {
@@ -81,9 +102,6 @@ func noOrgSeries(scrape []byte) (map[string]int, error) {
 				route = val[1 : len(val)-1]
 			}
 		}
-		if reason != "no_org" {
-			continue
-		}
 		n, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
 		if err != nil || n < 0 || n != float64(int(n)) {
 			return nil, fmt.Errorf("series %s has value %q", route, value)
@@ -91,7 +109,10 @@ func noOrgSeries(scrape []byte) (map[string]int, error) {
 		if route == "" {
 			return nil, errors.New("a no_org series has no route label")
 		}
-		out[route] += int(n)
+		if out[route] == nil {
+			out[route] = map[string]int{}
+		}
+		out[route][reason] += int(n)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err

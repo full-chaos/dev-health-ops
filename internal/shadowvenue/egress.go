@@ -2,6 +2,7 @@ package shadowvenue
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"slices"
 	"strings"
@@ -16,7 +17,7 @@ var StubHosts = []string{"api.github.com", "api.pagerduty.com", "api.stripe.com"
 // The stub_* keys are the stub's own status file (cmd/venue-extstub -status): its mode, its answer-table digest and its
 // start time; the run needs the frozen run mode in every read and one stub process across the reads.
 var egressKeys = []string{"when", "network_internal", "networks", "default_route", "public_tcp", "public_dns", "stub_tcp", "hosts_pinned", "image",
-	"stub_mode", "stub_config", "stub_started"}
+	"stub_mode", "stub_config", "stub_started", "goapi_ip"}
 
 var imageDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
@@ -85,8 +86,11 @@ func checkEgress(reads []EgressRead, want []string) []string {
 		if !imageDigest.MatchString(r.Fields["stub_config"]) {
 			voids = append(voids, fmt.Sprintf("egress record %s: stub_config %q is not a sha256 digest", r.Name, r.Fields["stub_config"]))
 		}
+		if ip := net.ParseIP(r.Fields["goapi_ip"]); ip == nil || !ip.IsPrivate() {
+			voids = append(voids, fmt.Sprintf("egress record %s: goapi_ip %q is not a private IP", r.Name, r.Fields["goapi_ip"]))
+		}
 		if i > 0 && reads[0].Err == nil {
-			for _, key := range []string{"image", "networks", "stub_config", "stub_started"} {
+			for _, key := range []string{"image", "networks", "stub_config", "stub_started", "goapi_ip"} {
 				if r.Fields[key] != reads[0].Fields[key] {
 					voids = append(voids, fmt.Sprintf("egress record %s: %s %s differs from %s's %s", r.Name, key, r.Fields[key], reads[0].Name, reads[0].Fields[key]))
 				}

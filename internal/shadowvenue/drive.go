@@ -25,14 +25,30 @@ const loginPath = "/api/v1/auth/login"
 // CheckBase accepts only a plain-http loopback origin with no path, query or credentials: the venue's published
 // go-api port. A production or LAN host is refused here, before any request.
 func CheckBase(raw string) (*url.URL, error) {
+	return CheckVenueBase(raw, EgressRead{})
+}
+
+// CheckVenueBase is CheckBase that also accepts go-api's own address on the venue's internal network (a container on an
+// internal-only network has no published port): the host must be the private IP the egress record read just before the
+// drive names as goapi_ip, and that record must be readable and say the network is internal with no default route. Any
+// other host is refused before any request.
+func CheckVenueBase(raw string, record EgressRead) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || u.Opaque != "" {
-		return nil, fmt.Errorf("base %q: want http://127.0.0.1:<port> (loopback, no path, query or credentials)", raw)
+		return nil, fmt.Errorf("base %q: want http://127.0.0.1:<port> (loopback) or go-api's venue IP, no path, query or credentials", raw)
 	}
 	host := u.Hostname()
 	ip := net.ParseIP(host)
-	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return nil, fmt.Errorf("base %q: the host is not loopback", raw)
+	switch {
+	case host == "localhost" || (ip != nil && ip.IsLoopback()):
+	case ip == nil || !ip.IsPrivate():
+		return nil, fmt.Errorf("base %q: the host is neither loopback nor a private IP", raw)
+	case record.Err != nil || record.Fields == nil:
+		return nil, fmt.Errorf("base %q: a non-loopback base needs the readable egress record of the read before the drive (-egress)", raw)
+	case record.Fields["network_internal"] != "true" || record.Fields["default_route"] != "none":
+		return nil, fmt.Errorf("base %q: egress record %s does not show an internal network with no default route", raw, record.Name)
+	case net.ParseIP(record.Fields["goapi_ip"]) == nil || !net.ParseIP(record.Fields["goapi_ip"]).Equal(ip):
+		return nil, fmt.Errorf("base %q: the host is not go-api's venue address %q in egress record %s", raw, record.Fields["goapi_ip"], record.Name)
 	}
 	u.Path = ""
 	return u, nil
@@ -239,6 +255,3 @@ func ParseSlots(raw []byte) ([]Slot, error) {
 	}
 	return slots, nil
 }
-
-// CheckVenueBase: skeleton, loopback only.
-func CheckVenueBase(raw string, record EgressRead) (*url.URL, error) { return CheckBase(raw) }

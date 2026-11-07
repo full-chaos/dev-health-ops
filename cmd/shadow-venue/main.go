@@ -75,7 +75,8 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 	statesPath := fs.String("states", "", "owner-only (0600) file of the minted single-use states, one per slot of a row whose body names {state}")
 	k := fs.Int("k", 3, "requests per cell")
 	allow := fs.String("allow-external", "", "comma-separated outside services a request may reach (stripe, pagerduty, github, mail)")
-	base := fs.String("base", "", "venue go-api origin, loopback only (drive)")
+	base := fs.String("base", "", "venue go-api origin: loopback, or go-api's venue-int IP named by -egress (drive)")
+	egressPath := fs.String("egress", "", "egress record read just before this drive (drive; needed for a non-loopback -base)")
 	out := fs.String("out", "", "slots file to create, 0600 (drive)")
 	gap := fs.Duration("gap", 2500*time.Millisecond, "wait after each answer (drive)")
 	loginOnly := fs.Bool("login-only", false, "sign each principal of the plan in and stop: no row request is sent, no slots file is written (drive)")
@@ -109,7 +110,11 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		}
 		return exitOK
 	}
-	origin, err := shadowvenue.CheckBase(*base)
+	var record shadowvenue.EgressRead
+	if reads := readEgress(*egressPath); len(reads) == 1 {
+		record = reads[0]
+	}
+	origin, err := shadowvenue.CheckVenueBase(*base, record)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage

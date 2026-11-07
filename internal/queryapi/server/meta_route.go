@@ -100,7 +100,7 @@ func newMetaWorkHandler() http.HandlerFunc {
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: meta: encode response failed: request_id=%s err=%v",
-				envelopeRequestID(r), encodeErr)
+				logSafeRequestID(envelopeRequestID(r)), encodeErr)
 			writeModelFailure(w)
 		}
 	}

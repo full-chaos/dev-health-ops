@@ -207,3 +207,11 @@ func readFileForCensus(p string) (string, error) {
 	b, err := os.ReadFile(p)
 	return string(b), err
 }
+
+func TestLogSafeRequestIDStripsCRAndLF(t *testing.T) {
+	for in, want := range map[string]string{"": "", "req-123_ok.~": "req-123_ok.~", "a\nb": "ab", "a\rb": "ab", "a\r\nb\n\rc": "abc"} {
+		if got := logSafeRequestID(in); got != want {
+			t.Errorf("logSafeRequestID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

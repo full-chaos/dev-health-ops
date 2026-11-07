@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"slices"
@@ -70,6 +71,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 	base := fs.String("base", "", "venue go-api origin, loopback only (drive)")
 	out := fs.String("out", "", "slots file to create, 0600 (drive)")
 	gap := fs.Duration("gap", 2500*time.Millisecond, "wait after each answer (drive)")
+	loginOnly := fs.Bool("login-only", false, "sign each principal of the plan in and stop: no row request is sent, no slots file is written (drive)")
 	destructive := fs.Bool("destructive", false, "send the destructive rows (last, throwaway org only); without it they are gaps")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -94,9 +96,12 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	if *out == "" {
+	if *out == "" && !*loginOnly {
 		fmt.Fprintln(stderr, "drive: -out is required")
 		return exitUsage
+	}
+	if *loginOnly {
+		return loginPrincipals(ctx, origin, plan, venue, stdout, stderr)
 	}
 	file, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -128,6 +133,26 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 	}
 	fmt.Fprintf(stdout, "drive: done %s, slots in %s\n", time.Now().UTC().Format(time.RFC3339), *out)
 	return finish(file, exitOK, stderr)
+}
+
+// loginPrincipals signs every principal of the plan in once and sends nothing else: it shows what the drive's own
+// sign-ins change.
+func loginPrincipals(ctx context.Context, origin *url.URL, plan shadowvenue.Plan, venue shadowvenue.Venue, stdout, stderr io.Writer) int {
+	driver := &shadowvenue.Driver{Base: origin, Client: newClient()}
+	done := map[string]bool{}
+	for _, s := range plan.Slots {
+		if s.Gap() || done[s.Principal] {
+			continue
+		}
+		done[s.Principal] = true
+		p, _ := venue.Principal(s.Principal)
+		if _, err := driver.Login(ctx, p, venue.Orgs[p.Org]); err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitFail
+		}
+	}
+	fmt.Fprintf(stdout, "login-only: %d sign-ins, no row request\n", len(done))
+	return exitOK
 }
 
 // newClient sends on the no-proxy outbound transport and never follows a redirect: a bearer reaches only the venue

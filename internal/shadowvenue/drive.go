@@ -44,6 +44,8 @@ func CheckVenueBase(raw string, record EgressRead, runID string) (*url.URL, erro
 		return nil, fmt.Errorf("base %q: egress record %s does not show an internal network with no default route", raw, record.Name)
 	case !net.ParseIP(record.Fields["goapi_ip"]).Equal(ip):
 		return nil, fmt.Errorf("base %q: the host is not go-api's venue address %q in egress record %s", raw, record.Fields["goapi_ip"], record.Name)
+	case runID == "" || runID == noRun || record.Fields["run_id"] != runID:
+		return nil, fmt.Errorf("base %q: egress record %s names run %q, not this drive's run %q (-run-id)", raw, record.Name, record.Fields["run_id"], runID)
 	}
 	u.Path = ""
 	return u, nil
@@ -121,7 +123,11 @@ func (d *Driver) Login(ctx context.Context, p Principal, orgID string) (string, 
 		in["org_id"] = orgID
 	}
 	body, _ := json.Marshal(in)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.Base+loginPath, bytes.NewReader(body))
+	origin, err := d.origin()
+	if err != nil {
+		return "", fmt.Errorf("login %s: %w", p.Name, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, origin.String()+loginPath, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("login %s: build request", p.Name)
 	}
@@ -186,7 +192,11 @@ func (d *Driver) send(ctx context.Context, slot *Slot, token string) error {
 	if slot.Body != none {
 		body = strings.NewReader(slot.Body)
 	}
-	req, err := http.NewRequestWithContext(ctx, slot.Method, d.Base+slot.Path, body)
+	origin, err := d.origin()
+	if err != nil {
+		return fmt.Errorf("drive: slot %d: %w", slot.Seq, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, slot.Method, origin.String()+slot.Path, body)
 	if err != nil {
 		return fmt.Errorf("drive: slot %d: build request", slot.Seq)
 	}

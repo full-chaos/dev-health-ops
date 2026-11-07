@@ -51,6 +51,12 @@ func ParseEgress(name string, raw []byte) EgressRead {
 		}
 		read.Fields[key] = value
 	}
+	for _, key := range egressKeys {
+		if read.Fields[key] == "" {
+			read.Err = fmt.Errorf("key %s missing", key)
+			return read
+		}
+	}
 	return read
 }
 
@@ -88,6 +94,15 @@ func checkEgress(reads []EgressRead, want []string) []string {
 		}
 		if !imageDigest.MatchString(r.Fields["stub_config"]) {
 			voids = append(voids, fmt.Sprintf("egress record %s: stub_config %q is not a sha256 digest", r.Name, r.Fields["stub_config"]))
+		}
+		if (want[i] == "after") != (r.Fields["run_id"] == noRun) {
+			voids = append(voids, fmt.Sprintf("egress record %s: run_id %q: the %s read must name %s", r.Name, r.Fields["run_id"], want[i],
+				map[bool]string{true: "none", false: "the drive it precedes"}[want[i] == "after"]))
+		}
+		for j := 0; j < i; j++ {
+			if reads[j].Err == nil && r.Fields["run_id"] == reads[j].Fields["run_id"] {
+				voids = append(voids, fmt.Sprintf("egress record %s names run %q like %s: each read precedes its own drive", r.Name, r.Fields["run_id"], reads[j].Name))
+			}
 		}
 		if !net.ParseIP(r.Fields["goapi_ip"]).IsPrivate() {
 			voids = append(voids, fmt.Sprintf("egress record %s: goapi_ip %q is not a private IP", r.Name, r.Fields["goapi_ip"]))

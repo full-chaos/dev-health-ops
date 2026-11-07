@@ -174,7 +174,8 @@ type JudgeOptions struct {
 	K     int
 	Grace time.Duration
 	// NoOrg is the enforcement counter evidence for the superuser's no-organization skips; nil gives none.
-	NoOrg    NoOrgEvidence
+	NoOrg NoOrgEvidence
+	// Outbound is the venue stub's evidence of outside calls (checkOutbound).
 	Outbound Outbound
 }
 
@@ -183,7 +184,8 @@ type SlotVerdict struct {
 	Slot
 	Verdict, DecisionID, Ruling string
 	Tuple                       Tuple
-	Outbound                    int
+	// Outbound is the number of outside calls the venue stub saw in the slot's window.
+	Outbound int
 }
 
 // Pass reports whether the slot's evidence passes it.
@@ -275,6 +277,14 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 		report.Slots = append(report.Slots, sv)
 	}
 	relabelNoOrgSkips(report.Slots, o.NoOrg)
+	outbound := checkOutbound(slots, o.Outbound, o.Grace)
+	for i := range report.Slots {
+		report.Slots[i].Outbound = outbound.hits[report.Slots[i].Seq]
+	}
+	for _, reason := range outbound.voids {
+		void("%s", reason)
+	}
+	report.Reasons = append(report.Reasons, outbound.fails...)
 	for _, sv := range report.Slots {
 		if sv.Expect != expectMismatch && !sv.Pass() {
 			fail("FAIL: slot %d row %s %s %s: %s%s", sv.Seq, sv.Row, sv.Caller, sv.Key(), sv.Verdict, hint(sv))
@@ -290,6 +300,7 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 		}
 	}
 	report.Rows = rowVerdicts(report.Slots, o.K)
+	markNoReach(report.Rows, outbound)
 	controls := 0
 	for _, rv := range report.Rows {
 		if strings.HasPrefix(rv.Row, "C") {

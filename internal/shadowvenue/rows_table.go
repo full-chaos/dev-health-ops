@@ -3,25 +3,27 @@ package shadowvenue
 // DefaultRows is the row table of the go-api shadow rows at this commit, plus the control cells. It is Go source, not a
 // data file, so a change to it runs the Go workflow.
 var DefaultRows = []byte(`# The venue driver's row table: one go-api shadow row per line (row = PLAN-10851-2 section 2 number), or a control cell (C<n>).
-# Columns: row method route org destructive ext principal expect path body. org = a principals-file org label;
-# placeholders in path and body: {org} {org:<label>} {user:<principal>} {uuid:<kind>} {name:<kind>} {missing}.
+# Columns: row method route org destructive ext principal expect path body. org = a principals-file org label, or T on
+# a destructive row: the throwaway pool, one fresh pool org per k (-throwaway-pool). Placeholders in path and body:
+# {org} {org:<label>} {owner} {user:<principal>} {uuid:<kind>} {name:<kind>} {missing}; a destructive row may use only
+# {org}, {owner} and {missing}.
 # ext names the outside service a legacy-allowed request can reach; the driver sends it only with -allow-external <ext>.
 row	method	route	org	destructive	ext	principal	expect	path	body
 C1	GET	/api/v1/admin/teams	A	no	-	drift-S	mismatch	/api/v1/admin/teams	-
 C2	GET	/api/v1/admin/integrations	A	no	-	drift-S	mismatch	/api/v1/admin/integrations	-
-1	POST	/api/v1/admin/orgs/{org_id}/invites	A	no	mail	-	match	/api/v1/admin/orgs/{org}/invites	{"email":"p13140-invitee@venue-proof.fullchaos.dev","role":"member"}
+1	POST	/api/v1/admin/orgs/{org_id}/invites	T	yes	mail	-	match	/api/v1/admin/orgs/{org}/invites	{"email":"p13140-invitee@venue-proof.fullchaos.dev","role":"member"}
 2	GET	/api/v1/admin/orgs/{org_id}/members	A	no	-	-	match	/api/v1/admin/orgs/{org}/members	-
 3	POST	/api/v1/admin/orgs/{org_id}/members	A	no	-	-	match	/api/v1/admin/orgs/{org}/members	{"user_id":"{missing}","role":"member"}
 4	DELETE	/api/v1/admin/orgs/{org_id}/members/{user_id}	A	no	-	-	match	/api/v1/admin/orgs/{org}/members/{missing}	-
 5	PATCH	/api/v1/admin/orgs/{org_id}/members/{user_id}	A	no	-	-	match	/api/v1/admin/orgs/{org}/members/{missing}	{"role":"member"}
-6	POST	/api/v1/admin/orgs/{org_id}/transfer-ownership	C	yes	-	-	match	/api/v1/admin/orgs/{org}/transfer-ownership	{"new_owner_id":"{missing}"}
+6	POST	/api/v1/admin/orgs/{org_id}/transfer-ownership	T	yes	-	-	match	/api/v1/admin/orgs/{org}/transfer-ownership	{"new_owner_id":"{missing}"}
 7	GET	/api/v1/admin/feature-flags	A	no	-	-	match	/api/v1/admin/feature-flags	-
 8	PATCH	/api/v1/admin/feature-flags/{flag_id}	A	no	-	-	match	/api/v1/admin/feature-flags/{missing}	{}
-9	POST	/api/v1/admin/impersonate	C	yes	-	-	match	/api/v1/admin/impersonate	{"user_id":"{user:owner-C}"}
-10	POST	/api/v1/admin/impersonate/stop	C	yes	-	-	match	/api/v1/admin/impersonate/stop	-
+9	POST	/api/v1/admin/impersonate	T	yes	-	-	match	/api/v1/admin/impersonate	{"user_id":"{owner}"}
+10	POST	/api/v1/admin/impersonate/stop	T	yes	-	-	match	/api/v1/admin/impersonate/stop	-
 11	GET	/api/v1/admin/orgs	A	no	-	-	match	/api/v1/admin/orgs	-
 12	POST	/api/v1/admin/orgs	A	no	-	-	match	/api/v1/admin/orgs	{}
-13	DELETE	/api/v1/admin/orgs/{org_id}	C	yes	-	-	match	/api/v1/admin/orgs/{org}	-
+13	DELETE	/api/v1/admin/orgs/{org_id}	T	yes	-	-	match	/api/v1/admin/orgs/{org}	-
 14	GET	/api/v1/admin/orgs/{org_id}	A	no	-	-	match	/api/v1/admin/orgs/{org}	-
 15	PATCH	/api/v1/admin/orgs/{org_id}	A	no	-	-	match	/api/v1/admin/orgs/{org}	{}
 16	GET	/api/v1/admin/orgs/{org_id}/feature-overrides	A	no	-	-	match	/api/v1/admin/orgs/{org}/feature-overrides	-

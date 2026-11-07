@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/authverify"
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/golang-jwt/jwt/v5"
@@ -208,16 +207,6 @@ type msrRig struct {
 	pool             *pgxpool.Pool
 }
 
-func msrUnreachableClickHouse(t *testing.T) clickhouse.Conn {
-	t.Helper()
-	conn, err := clickhouse.Open(&clickhouse.Options{Addr: []string{"127.0.0.1:1"}, DialTimeout: time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	return conn
-}
-
 func newMsrRig(t *testing.T, ctx context.Context) *msrRig {
 	t.Helper()
 	instance := pgschema.Start(ctx, t)
@@ -255,7 +244,7 @@ VALUES ('` + msrInvoice + `', '` + msrOrgB.String() + `', 'in_msr_b', 'cus_msr_b
 	rig := &msrRig{minter: newEdDSAMinter(t), pool: pool}
 	rig.pdp = newMsrPDP(t, pool)
 	store := msrStore{PGStore: policy.PGStore{Pool: pool}, sessions: sessions}
-	clickHouse := msrUnreachableClickHouse(t)
+	clickHouse := unreachableClickHouse(t)
 	build := func(enforcer *policy.Enforcer) http.Handler {
 		verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
 		if err != nil {

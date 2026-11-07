@@ -9,12 +9,15 @@
 package shadowvenue
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
@@ -130,9 +133,61 @@ func (r Row) check(destructive string) error {
 	return nil
 }
 
+// rowClass is a route's class: its outside service (ext) and whether it is destructive.
+type rowClass struct {
+	ext         string
+	destructive bool
+}
+
+// embeddedRows is the embedded row table as the package was built, copied at init so no later change of DefaultRows
+// can move a class.
+var embeddedRows = append([]byte(nil), DefaultRows...)
+
+// ClassTableSHA256 pins the class table, the one canonical source of each route's class (ADDENDUM-13267-1; acp): the
+// sha256 of the sorted lines "METHOD /route<TAB>ext<TAB>destructive" of the embedded table's 95 rows. A change of any
+// row's class changes it, and classes refuses to serve a table that does not hash to it.
+const ClassTableSHA256 = "43b9757556e20e361026f1e8484cb70e06add49bd1f04d2cedde1140c49d88b4"
+
+// classDigest is the sha256 of a class table in the ClassTableSHA256 form.
+func classDigest(table map[string]rowClass) string {
+	lines := make([]string, 0, len(table))
+	for key, c := range table {
+		lines = append(lines, fmt.Sprintf("%s\t%s\t%v", key, c.ext, c.destructive))
+	}
+	slices.Sort(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n") + "\n"))
+	return hex.EncodeToString(sum[:])
+}
+
+// classes are the classes of the embedded table's rows by route key: a custom row table may change a row's path or
+// body, never its class (the row table is an input; the classes are code, pinned by ClassTableSHA256).
+var classes = sync.OnceValue(func() map[string]rowClass {
+	rows, err := ParseRows(embeddedRows)
+	if err != nil {
+		panic("shadowvenue: the embedded row table does not parse: " + err.Error())
+	}
+	out := map[string]rowClass{}
+	for _, row := range rows {
+		if !row.Control() {
+			out[row.Key()] = rowClass{ext: row.Ext, destructive: row.Destructive}
+		}
+	}
+	if got := classDigest(out); got != ClassTableSHA256 {
+		panic("shadowvenue: the embedded class table hashes to " + got + ", not the pinned ClassTableSHA256")
+	}
+	return out
+})
+
+// classOf is the class of a route key, ok false for a route the embedded table does not hold.
+func classOf(key string) (rowClass, bool) {
+	c, ok := classes()[key]
+	return c, ok
+}
+
 // CheckRows holds the rows to go-api's shadow rows in profiles (an endpoint-profiles.go-api.json), read by the
 // shadow's own parser: every shadow row is in the table exactly once, the table has no other row, and every
-// control is a shadow row.
+// control is a shadow row. Each row keeps its route's class (classOf): its ext and destructive columns are the
+// embedded table's, and a control names no outside service.
 func CheckRows(rows []Row, profiles []byte) error {
 	shadowRows, err := policy.ParseShadowRows(profiles, accessrouting.Service)
 	if err != nil {
@@ -168,10 +223,39 @@ func CheckRows(rows []Row, profiles []byte) error {
 			problems = append(problems, fmt.Sprintf("shadow row %s is not in the table", key))
 		}
 	}
+	if _, err := CheckRowClasses(rows); err != nil {
+		problems = append(problems, err.Error())
+	}
 	if len(problems) > 0 {
 		return fmt.Errorf("rows: the table differs from the profile shadow rows:\n  %s", strings.Join(problems, "\n  "))
 	}
 	return nil
+}
+
+// CheckRowClasses is the one class check of a row table, which plan, judge and judge-enforced all call first. Every row,
+// data or control, must carry its route's pinned class (classOf: ext AND destructive), and a control must sit on a plain
+// route (no outside service, not destructive). A route the embedded table does not hold has the zero class, which no
+// parsed row has, so it is refused too. It returns each row id's class.
+func CheckRowClasses(rows []Row) (map[string]rowClass, error) {
+	out := map[string]rowClass{}
+	var problems []string
+	for _, row := range rows {
+		c, _ := classOf(row.Key())
+		got := rowClass{ext: row.Ext, destructive: row.Destructive}
+		switch {
+		case c != got:
+			problems = append(problems, fmt.Sprintf("row %s: %s has the class ext %s, destructive %v; the table names ext %s, destructive %v",
+				row.ID, row.Key(), c.ext, c.destructive, row.Ext, row.Destructive))
+		case row.Control() && (c.ext != none || c.destructive):
+			problems = append(problems, fmt.Sprintf("control %s: %s has the class ext %s, destructive %v; a control stays on a plain route",
+				row.ID, row.Key(), c.ext, c.destructive))
+		}
+		out[row.ID] = c
+	}
+	if len(problems) > 0 {
+		return nil, fmt.Errorf("class: the row table differs from the pinned route classes:\n  %s", strings.Join(problems, "\n  "))
+	}
+	return out, nil
 }
 
 // validJSON reports whether body is one JSON value.

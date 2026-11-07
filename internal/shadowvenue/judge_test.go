@@ -56,7 +56,7 @@ func judge(t *testing.T, slots []Slot, lines []string, rulings ...Ruling) Report
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Judge(slots, ev, rulings, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond})
+	return Judge(slots, ev, rulings, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Rows: tableOf(slots, nil)}})
 }
 
 // controlsOK are two control cells of one slot each... K=3, so three slots per control.

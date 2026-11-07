@@ -34,7 +34,7 @@ func TestABootstrapCredentialOpensNoQueryAPISurface(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/buildinfo", nil)
 	request.Header.Set("Authorization", "Bearer "+value)
-	newBuildInfoHandler(verifier)(recorder, request)
+	newBuildInfoHandler(verifier, nil, nil)(recorder, request)
 	if recorder.Code != http.StatusUnauthorized || strings.Contains(recorder.Body.String(), value) {
 		t.Fatalf("/buildinfo answered %d %q, want 401 without the value", recorder.Code, recorder.Body.String())
 	}

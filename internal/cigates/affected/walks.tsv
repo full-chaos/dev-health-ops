@@ -458,6 +458,7 @@ internal/scheduler/fixed	readiness_timeout_test.go	internal/scheduler/fixed	dir	
 internal/scheduler/sync	venue_golden_address_test.go	internal/scheduler/sync/testdata/golden	dir	*
 internal/schedulerservice	fixed_test.go	contracts/jobs/v1	tree	*
 internal/schedulerservice	readiness_timeout_test.go	internal/schedulerservice	dir	*
+internal/shadowvenue	requestsites_test.go	unexpressed	-	-
 internal/storage/clickhouse/liverow	census_test.go	cmd	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	internal	tree	*.go
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/api	tree	*

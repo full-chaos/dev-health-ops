@@ -44,7 +44,7 @@ Three pages go with this one: [policy catalog](policy-catalog.md) (the closed li
 
 A route with no profile row fails CI. The Go tests that check the rows are `internal/apiservice/endpoint_profile_rows_test.go`, `internal/queryapi/server/` and `internal/auth/contracts/endpoint_profiles_*_test.go`.
 
-`contracts/auth/v1/credential-classes.json` lists 37 credential classes by `class_id` (29 active, 6 optional_feature, 2 unconsumed; principal types: 17 human, 8 external_source, 5 workload, 3 service_account, 3 infrastructure, 1 client_credential). The class names are the closed vocabulary that every profile row uses in `accepted_credential_classes`. The class page [credential classes](credential-classes.md) is a Python-era record. The JSON is authoritative.
+`contracts/auth/v1/credential-classes.json` lists 37 credential classes by `class_id` (28 active, 6 optional_feature, 3 unconsumed; principal types: 17 human, 8 external_source, 5 workload, 3 service_account, 3 infrastructure, 1 client_credential). The class names are the closed vocabulary that every profile row uses in `accepted_credential_classes`. The class page [credential classes](credential-classes.md) is a Python-era record. The JSON is authoritative.
 
 !!! note "Status field versus profile rows"
     The `status` of `user_access_token` in `credential-classes.json` is `unconsumed`. The profile rows of go-api, query-api and auth-service list it as an accepted class. Read the profile rows for what a route accepts.
@@ -59,7 +59,6 @@ go-api:
 | --- | --- |
 | `user_access_token` | 196 |
 | `external_push_ingest_token` | 5 |
-| `internal_svc_acr_token` | 4 |
 | `org_context_header` | 4 |
 | `workload_token` | 4 |
 | `social_oauth_exchange` | 3 |

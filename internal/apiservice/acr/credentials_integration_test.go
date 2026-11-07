@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	adminapi "github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -19,9 +20,10 @@ import (
 
 // TestEntitlementRouteUnderTheAPIRolePosture runs the real routes over the
 // real alembic schema as the api login the real `migrate roles` and `migrate
-// river` commands provision and grant: those grants must be enough for
-// last_used_at and the audit insert, and the rows must be what
-// api/internal/acr.py wrote.
+// river` commands provision and grant: those grants must be enough for the
+// audit insert. A live svc_acr_ credential row is refused with the uniform
+// 401, its audit row names no credential and its last_used_at stays NULL; the
+// workload token is served and audited with its principal.
 func TestEntitlementRouteUnderTheAPIRolePosture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -86,7 +88,7 @@ func TestEntitlementRouteUnderTheAPIRolePosture(t *testing.T) {
 	if _, err := admin.Exec(ctx, `INSERT INTO internal_service_credentials
 		(id, service_name, token_hash, token_prefix, scopes, created_at)
 		VALUES (gen_random_uuid(), 'acr', $1, $2, '["entitlements:read"]'::json, now())`,
-		hashToken(token), token[:16]); err != nil {
+		adminapi.HashServiceToken(token), token[:16]); err != nil {
 		t.Fatal(err)
 	}
 	var credentialID string
@@ -96,14 +98,15 @@ func TestEntitlementRouteUnderTheAPIRolePosture(t *testing.T) {
 
 	handler := authServer(t, &fakeStore{}, PostgresCredentialStore{Pool: probe}, nil)
 	for _, tc := range []struct {
-		header  string
-		status  int
-		outcome string
-		cred    bool
+		header    string
+		status    int
+		outcome   string
+		rows      int
+		principal string
 	}{
-		{"Bearer " + token, http.StatusOK, "success", true},
-		{"Bearer svc_acr_unknown-0123456789abcdef", http.StatusUnauthorized, "unknown_token", false},
-		{"", http.StatusUnauthorized, "missing_or_malformed_token", false},
+		{"Bearer " + entToken, http.StatusOK, "success", 1, wlSubject},
+		{"Bearer " + token, http.StatusUnauthorized, "missing_or_malformed_token", 1, ""},
+		{"", http.StatusUnauthorized, "missing_or_malformed_token", 2, ""},
 	} {
 		request := httptest.NewRequest(http.MethodGet, entitlementPath+someOrg, nil)
 		if tc.header != "" {
@@ -114,21 +117,24 @@ func TestEntitlementRouteUnderTheAPIRolePosture(t *testing.T) {
 		if recorder.Code != tc.status {
 			t.Fatalf("%q: status = %d %s, want %d", tc.header, recorder.Code, recorder.Body.String(), tc.status)
 		}
-		var rows int
-		var linked bool
-		if err := admin.QueryRow(ctx, `SELECT count(*), coalesce(bool_and(credential_id::text = $2), false)
+		var rows, linked, principals int
+		if err := admin.QueryRow(ctx, `SELECT count(*), count(credential_id), count(*) FILTER (WHERE principal_id = $2)
 			FROM internal_service_credential_audits
 			WHERE outcome = $1 AND requested_org_id = $3 AND action = 'acr_entitlement_lookup'`,
-			tc.outcome, credentialID, someOrg).Scan(&rows, &linked); err != nil {
+			tc.outcome, tc.principal, someOrg).Scan(&rows, &linked, &principals); err != nil {
 			t.Fatal(err)
 		}
-		if rows != 1 || linked != tc.cred {
-			t.Fatalf("%q: audit rows = %d linked = %v, want 1 and %v", tc.header, rows, linked, tc.cred)
+		wantPrincipals := 0
+		if tc.principal != "" {
+			wantPrincipals = rows
+		}
+		if rows != tc.rows || linked != 0 || principals != wantPrincipals {
+			t.Fatalf("%q: audit rows = %d linked = %d principals = %d, want %d, 0, %d", tc.header, rows, linked, principals, tc.rows, wantPrincipals)
 		}
 	}
 	var stamped bool
 	if err := admin.QueryRow(ctx, `SELECT last_used_at IS NOT NULL FROM internal_service_credentials WHERE id = $1::uuid`,
-		credentialID).Scan(&stamped); err != nil || !stamped {
-		t.Fatalf("last_used_at stamped = %v err = %v, want true", stamped, err)
+		credentialID).Scan(&stamped); err != nil || stamped {
+		t.Fatalf("last_used_at stamped = %v err = %v, want false: a refused svc_acr_ credential is never read", stamped, err)
 	}
 }

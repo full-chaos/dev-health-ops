@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -55,13 +54,7 @@ func TestInternalLLMConfigServesInvestigatePurpose(t *testing.T) {
 	pgseed.FeatureFlag(ctx, t, pool, uuid.NewString(), "byo_llm", "team", true)
 	org := uuid.NewString()
 	pgseed.Org(ctx, t, pool, org, "enterprise")
-	const token = "svc_acr_purpose-0123456789abcdef"
-	if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials
-		(id, service_name, token_hash, token_prefix, scopes, created_at)
-		VALUES (gen_random_uuid(), 'acr', $1, $2, '["llm_config:read"]'::json, now())`,
-		admin.HashServiceToken(token), token[:16]); err != nil {
-		t.Fatal(err)
-	}
+	workload, bearer := listenerWorkload(t)
 	plain := func(key, value string) { pgseed.Setting(ctx, t, pool, org, "llm", key, value, false) }
 	secret := func(key, value string) {
 		sealed, err := decryptor.Encrypt([]byte(value))
@@ -77,7 +70,7 @@ func TestInternalLLMConfigServesInvestigatePurpose(t *testing.T) {
 	plain("purpose:explain:model", "explain-model")
 
 	server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(),
-		InternalRoutes(Deps{Pool: pool, Decryptor: decryptor}, quietLog()))
+		InternalRoutes(Deps{Pool: pool, Decryptor: decryptor, ACRWorkload: workload}, quietLog()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +78,7 @@ func TestInternalLLMConfigServesInvestigatePurpose(t *testing.T) {
 	fetch := func() map[string]string {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+org+"/llm-config", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Authorization", bearer)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {

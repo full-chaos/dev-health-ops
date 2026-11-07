@@ -230,6 +230,11 @@ volumes:
   # auth-workload-bootstrap and mounted read-only into go-api only.
   workload_bootstrap:
     driver: local
+  # The wire principal id of the api workload (prn_..., not a secret), written by
+  # auth-workload-subject and mounted read-only into auth-service, which reads it
+  # as AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT_FILE.
+  workload_subject:
+    driver: local
   # CHAOS-13107: the TLS pair of the local token issuer (auth-issuer), written
   # once by auth-issuer-tls-init. key/ (0700, uid 101) holds issuer.key (0600)
   # and only auth-issuer mounts it; ca/ (0755) holds issuer.pem (0644), the
@@ -1219,9 +1224,9 @@ services:
       GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
       GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
       # The workload bootstrap credential, as a read-only file (written by
-      # auth-workload-bootstrap, profile `auth`). go-api reads it only when
-      # AUTH_SESSION_ISSUE_CREDENTIAL or AUTH_PROVISIONING_CREDENTIAL selects
-      # `workload`; both are unset by default. The issuer must equal
+      # auth-workload-bootstrap). go-api reads it for the session issue call
+      # (AUTH_SESSION_ISSUE_CREDENTIAL below) and when
+      # AUTH_PROVISIONING_CREDENTIAL selects `workload`. The issuer must equal
       # auth-service's AUTH_TOKEN_ISSUER_URL: a token carries the issuer it was
       # signed under. A path, never the credential.
       AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/api.bootstrap
@@ -1241,14 +1246,10 @@ services:
       AUTH_PROXY_LOCAL_LOGIN: "true"
       AUTH_PROXY_CREDENTIALS: "true"
       AUTH_PROXY_SOCIAL: "true"
-      # The session issue credential is session_compat (AUTH_SESSION_ISSUE_CREDENTIAL
-      # unset): this auth-session-issuer service credential, whose SHA-256 the
-      # auth-session-issue-seed one-shot writes to internal_service_credentials.
-      # A local default like the other keys of this file; both services read
-      # the same variable. Not the workload credential: auth-service accepts a
-      # workload token on the route only for a principal id the registry makes
-      # at random, which no compose default can name.
-      AUTH_SESSION_ISSUE_TOKEN: ${AUTH_SESSION_ISSUE_TOKEN:-svc_authsess_local-dev-session-issue-token-0123456789abc}
+      # The session issue credential is go-api's workload token, read from the bootstrap file above
+      # (auth-workload-bootstrap writes it once on the first `up`; a later `up` skips it). auth-service
+      # accepts that token on the route for the principal id auth-workload-subject writes to its volume.
+      AUTH_SESSION_ISSUE_CREDENTIAL: workload
       # The issuer go-api verifies the EdDSA access token against: the same
       # value auth-service signs under. go-api fetches its discovery document
       # and JWKS over https from auth-issuer and trusts the local CA through
@@ -1309,13 +1310,12 @@ services:
       valkey:
         condition: service_started
       # CHAOS-13107: sessions are auth-service's. Its health covers the auth
-      # schema, the grants and the fence; the seed writes the row of go-api's
-      # session issue credential; the TLS step makes the ca/ subpath mounted
-      # above. Never auth-workload-bootstrap: a later `up` runs it again and
-      # bootstrap-create refuses a workload with a live credential.
+      # schema, the grants and the fence; the bootstrap one-shot writes go-api's
+      # workload credential file (a later `up` skips it: -if-absent); the TLS
+      # step makes the ca/ subpath mounted above.
       auth-service:
         condition: service_healthy
-      auth-session-issue-seed:
+      auth-workload-bootstrap:
         condition: service_completed_successfully
       auth-issuer-tls-init:
         condition: service_completed_successfully
@@ -1668,17 +1668,20 @@ services:
       auth-grants:
         condition: service_completed_successfully
 
-  # The workload bootstrap credential (profile `auth`), in three one-shots, never a dependency of a running service:
-  # a later `up` would run bootstrap-create again, and it refuses a workload with a live credential. Run
-  # `run --rm auth-workload-bootstrap`: compose starts the other two before it, and each is safe to run again.
+  # The workload bootstrap credential and its principal id, in four one-shots that every `up` runs and each is safe to
+  # run again: bootstrap-create -if-absent skips a workload that holds a live credential, and the subject file is
+  # replaced atomically with the same id. go-api depends on auth-workload-bootstrap and auth-service on
+  # auth-workload-subject; compose starts the volume and seed one-shots before them.
   # auth-workload-volume: a new named volume is root-owned, the writer runs as uid 65532; it changes the directory
   # only when it is not already 65532:700 (the container has no CAP_FOWNER, so a second chmod would fail).
   # auth-workload-seed: seeds the workload registry. auth-workload-bootstrap: writes the credential of the `api`
   # workload to /run/workload/api.bootstrap (0600) and keeps only its hash. go-api reads the file from a read-only
-  # mount; auth-service never mounts it. `down -v` deletes the volume.
+  # mount; auth-service never mounts it. auth-workload-subject: writes the wire principal id of `api` (not a secret) to
+  # /run/workload-subject/api.subject, which auth-service mounts read-only. `down -v` deletes both volumes. A volume
+  # lost alone leaves the credential live and go-api without its file: run
+  # `auth-migrate workloads bootstrap-disable -workload api -apply`, then `up` again.
   auth-workload-volume:
     image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-    profiles: [auth]
     network_mode: none
     restart: "no"
     read_only: true
@@ -1687,14 +1690,14 @@ services:
     cap_add: [CHOWN]
     security_opt: [no-new-privileges:true]
     entrypoint: ["/bin/sh", "-eu", "-c"]
-    command: ['[ "$$(stat -c %u:%a /run/workload)" = 65532:700 ] || { chmod 0700 /run/workload && chown 65532:65532 /run/workload; }']
+    command: ['for d in /run/workload /run/workload-subject; do [ "$$(stat -c %u:%a $$d)" = 65532:700 ] || { chmod 0700 $$d && chown 65532:65532 $$d; }; done']
     volumes:
       - workload_bootstrap:/run/workload
+      - workload_subject:/run/workload-subject
 
   auth-workload-seed:
     image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
     command: ["workloads", "seed", "-apply"]
-    profiles: [auth]
     networks: [auth_plane]
     restart: "no"
     read_only: true
@@ -1713,8 +1716,7 @@ services:
 
   auth-workload-bootstrap:
     image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
-    command: ["workloads", "bootstrap-create", "-workload", "api", "-out", "/run/workload/api.bootstrap", "-apply"]
-    profiles: [auth]
+    command: ["workloads", "bootstrap-create", "-workload", "api", "-out", "/run/workload/api.bootstrap", "-if-absent", "-apply"]
     networks: [auth_plane]
     restart: "no"
     read_only: true
@@ -1729,6 +1731,29 @@ services:
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
     volumes:
       - workload_bootstrap:/run/workload
+    depends_on:
+      auth-workload-volume:
+        condition: service_completed_successfully
+      auth-workload-seed:
+        condition: service_completed_successfully
+
+  auth-workload-subject:
+    image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+    command: ["workloads", "subject", "-workload", "api", "-out", "/run/workload-subject/api.subject", "-apply"]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+    volumes:
+      - workload_subject:/run/workload-subject
     depends_on:
       auth-workload-volume:
         condition: service_completed_successfully
@@ -1774,9 +1799,9 @@ services:
       # The workload-token exchange for a Compose bootstrap credential. Off by
       # default; on, it needs the issuer (a signed claim, https, nothing dials
       # it) and the go-api principal. A blank value is unset.
-      AUTH_WORKLOAD_BOOTSTRAP: ${AUTH_WORKLOAD_BOOTSTRAP:-false}
+      AUTH_WORKLOAD_BOOTSTRAP: ${AUTH_WORKLOAD_BOOTSTRAP:-true}
       AUTH_TOKEN_ISSUER_URL: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
-      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}
+      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT_FILE: /run/workload-subject/api.subject
       # CHAOS-13107: auth-service owns the sessions and mints the EdDSA access
       # token, as in production: signed with AUTH_SIGNING_KEY_FILE, iss
       # AUTH_TOKEN_ISSUER_URL (served by auth-issuer), aud dev-health-api (the
@@ -1815,6 +1840,10 @@ services:
         read_only: true
         volume:
           subpath: private
+      - type: volume
+        source: workload_subject
+        target: /run/workload-subject
+        read_only: true
     healthcheck:
       test: ["CMD", "/usr/local/bin/auth-service", "--healthcheck"]
       interval: 10s
@@ -1833,45 +1862,10 @@ services:
       # CHAOS-13107: the users are copied before auth-service serves.
       auth-users-backfill:
         condition: service_completed_successfully
+      auth-workload-subject:
+        condition: service_completed_successfully
       valkey:
         condition: service_healthy
-
-  # CHAOS-13107: the row of go-api's session issue credential (session_compat). auth-service accepts the
-  # svc_authsess_ token go-api presents only when public.internal_service_credentials holds its SHA-256 for the
-  # auth-session-issuer service with the sessions:issue scope; this writes that row once, for the same compose value
-  # go-api reads (AUTH_SESSION_ISSUE_TOKEN), and a later `up` changes nothing. It connects as the database superuser
-  # (the table owner) after the ops migrate made the table. The token reaches psql through `\getenv`, never argv, and
-  # nothing is printed.
-  auth-session-issue-seed:
-    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-    networks: [auth_plane]
-    restart: "no"
-    read_only: true
-    user: "70:70"
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp]
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        psql -q -v ON_ERROR_STOP=1 -v VERBOSITY=terse <<'SQL'
-        \getenv token AUTH_SESSION_ISSUE_TOKEN
-        INSERT INTO public.internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-          SELECT gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'token', 'UTF8')), 'hex'),
-                 left(:'token', 16), '["sessions:issue"]'::json, clock_timestamp()
-          WHERE NOT EXISTS (SELECT 1 FROM public.internal_service_credentials
-                            WHERE token_hash = encode(sha256(convert_to(:'token', 'UTF8')), 'hex'));
-        SQL
-    environment:
-      PGHOST: postgres
-      PGPORT: "5432"
-      PGUSER: ${POSTGRES_USER:-postgres}
-      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      PGDATABASE: ${POSTGRES_DB:-postgres}
-      AUTH_SESSION_ISSUE_TOKEN: ${AUTH_SESSION_ISSUE_TOKEN:-svc_authsess_local-dev-session-issue-token-0123456789abc}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
 
   # CHAOS-13107: the TLS pair of the local token issuer, made once into the volume auth_issuer_tls: an ECDSA P-256
   # self-signed certificate (CA flag set, valid 365 days) for auth.dev-health.internal, by the Go toolchain's own

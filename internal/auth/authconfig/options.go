@@ -267,7 +267,8 @@ var optionRegistry = []Option{
 	},
 	{
 		Env: EnvSessionIssueWorkloadSubject, Kind: KindString, Group: GroupSession,
-		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. Needs " +
+		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. " +
+			EnvSessionIssueWorkloadSubject + "_FILE reads it from a mounted file instead (the two are mutually exclusive). Needs " +
 			EnvTokenIssuerURL,
 	},
 	{

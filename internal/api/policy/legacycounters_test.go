@@ -171,7 +171,7 @@ func TestLegacyRoleSourceNotCountedWithoutADecisionSource(t *testing.T) {
 	}
 	rec := recordLegacy(t)
 	got := guardServe(t, Admin, tokenOrgStore(false, ""), validAuth(t, nil))
-	if got.status != 401 || rec.get("role_source/membership_row")+rec.get("role_source/claim_fallback") != 0 {
+	if got.status != 403 || rec.get("role_source/membership_row")+rec.get("role_source/claim_fallback") != 0 {
 		t.Fatalf("a caller without a membership row counted a role source: %d %v", got.status, rec.keys())
 	}
 }

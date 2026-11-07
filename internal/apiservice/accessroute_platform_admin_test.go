@@ -1,9 +1,9 @@
 package apiservice
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -68,35 +68,64 @@ func platformAdminRig(t *testing.T, superuser bool) (http.Handler, *eddsaMinter)
 	return server.Handler(), minter
 }
 
-// legacyPlatformAdminProbeBody is the HS256 path's answer on each row below for a superuser probe with no membership in
-// probeTargetOrg (role member, the users row's profile, token version 3): the executed legacy run on main 98c7d4f56,
-// log 13154-legacy-rec-98c7d4f5.log sha256 8ba2f74cdd64 (LEGACY-REC superuser=true lines, 200 on each row).
-const legacyPlatformAdminProbeBody = `{"org":"00000000-0000-4000-8000-0000000000b3","user":{"email":"user@example.test","full_name":"Probe User","is_superuser":true,"org_id":"00000000-0000-4000-8000-0000000000b3","role":"member","token_version":3,"user_id":"00000000-0000-4000-8000-0000000000a1","username":"user"}}` + "\n"
+// legacyProbeBody is the HS256 path's 200 body on the probe rows below for the probe user (role member, the users
+// row's profile, token version 3) in org: the executed legacy runs on main 98c7d4f56 (log 13154-legacy-rec-98c7d4f5.log
+// sha256 8ba2f74cdd64) and 715e3f93d (log 13154-legacy-rec-pa-715e3f93.log, LEGACY-REC-PA lines).
+func legacyProbeBody(org string, superuser bool) string {
+	return fmt.Sprintf(`{"org":%q,"user":{"email":"user@example.test","full_name":"Probe User","is_superuser":%v,"org_id":%q,"role":"member","token_version":3,"user_id":"00000000-0000-4000-8000-0000000000a1","username":"user"}}`, org, superuser, org) + "\n"
+}
+
+// legacyXOrgRefusal is the HS256 path's answer on an org-scoped admin row for a caller with no membership and no
+// platform action (same logs).
+const legacyXOrgRefusal = `{"detail": "X-Org-Id not permitted for this user"}`
 
 // Product rule 1 (D6773): on org-scoped admin rows a platform admin whose
 // token names an org it holds no membership row in gets, with a user access
 // token, the HS256 path's answer byte for byte. A caller without the platform
-// action keeps the routed refusal.
+// action gets the HS256 path's answer too (CHAOS-13227): the X-Org-Id refusal
+// for an org that exists on an org-scoped row, and the claimed org on an
+// org-less row. A claim that is not a UUID is refused by the access-token.v1
+// verifier itself, where legacy goes on in the claimed org: CHAOS-13262.
 func TestProductRule1PlatformAdminWithoutMembershipAnswersAsLegacy(t *testing.T) {
-	rows := []string{"/api/v1/admin/audit-logs", "/api/v1/admin/credentials", "/api/v1/admin/backfill-jobs"}
+	rows := []string{"/api/v1/admin/audit-logs", "/api/v1/admin/credentials", "/api/v1/admin/backfill-jobs", probeAuthenticated}
+	serve := func(handler http.Handler, path, bearer string) (int, string) {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", bearer)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code, recorder.Body.String()
+	}
+	target := probeTargetOrg.String()
 	for _, superuser := range []bool{true, false} {
 		routed, minter := platformAdminRig(t, superuser)
-		eddsa := "Bearer " + minter.mint(probeUser, map[string]any{"org_id": probeTargetOrg.String()})
+		eddsa := "Bearer " + minter.mint(probeUser, map[string]any{"org_id": target})
 		for _, path := range rows {
-			request := httptest.NewRequest(http.MethodGet, path, nil)
-			request.Header.Set("Authorization", eddsa)
-			recorder := httptest.NewRecorder()
-			routed.ServeHTTP(recorder, request)
-			gotStatus, gotBody := recorder.Code, recorder.Body.String()
-			if superuser {
-				if gotStatus != http.StatusOK || gotBody != legacyPlatformAdminProbeBody {
-					t.Fatalf("%s superuser: user access token %d %s, HS256 200 %s", path, gotStatus, gotBody, legacyPlatformAdminProbeBody)
-				}
-				continue
+			wantStatus, wantBody := http.StatusOK, legacyProbeBody(target, superuser)
+			if !superuser && path != probeAuthenticated {
+				wantStatus, wantBody = http.StatusForbidden, legacyXOrgRefusal
 			}
-			if gotStatus != http.StatusUnauthorized || strings.TrimSpace(gotBody) != genericRefusal {
-				t.Fatalf("%s non-member without the platform action: %d %s, want the routed 401", path, gotStatus, gotBody)
+			if gotStatus, gotBody := serve(routed, path, eddsa); gotStatus != wantStatus || gotBody != wantBody {
+				t.Fatalf("%s superuser %v: user access token %d %s, HS256 %d %s", path, superuser, gotStatus, gotBody, wantStatus, wantBody)
 			}
 		}
 	}
+	t.Run("org claim not a UUID", func(t *testing.T) {
+		routed, minter := platformAdminRig(t, false)
+		eddsa := "Bearer " + minter.mint(probeUser, map[string]any{"org_id": "not-a-uuid"})
+		refused := []string{}
+		for _, path := range rows {
+			wantStatus, wantBody := http.StatusOK, legacyProbeBody("not-a-uuid", false)
+			gotStatus, gotBody := serve(routed, path, eddsa)
+			switch {
+			case gotStatus == wantStatus && gotBody == wantBody:
+			case gotStatus == http.StatusUnauthorized:
+				refused = append(refused, path)
+			default:
+				t.Fatalf("%s: user access token %d %s, HS256 %d %s", path, gotStatus, gotBody, wantStatus, wantBody)
+			}
+		}
+		if len(refused) > 0 {
+			t.Skipf("CHAOS-13262: the access-token.v1 verifier refuses an org claim that is not a UUID (401) where legacy answers: %v", refused)
+		}
+	})
 }

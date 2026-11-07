@@ -75,7 +75,6 @@ func TestTokenOrgMembershipIsTheLivePublicRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Run("removed member: the legacy answer", func(t *testing.T) {
-		t.Skip("CHAOS-13227, rule 1: routed answers 401")
 		for _, level := range []Authz{Authenticated, Admin, AdminOrg} {
 			if got := call(level); got.status != http.StatusForbidden || got.body != denied {
 				t.Fatalf("removed, level %v: %d %q, want the X-Org-Id refusal", level, got.status, got.body)
@@ -95,20 +94,33 @@ func TestTokenOrgMembershipIsTheLivePublicRow(t *testing.T) {
 	// role claim decides an admin level); only an existing org without the
 	// row is refused.
 	t.Run("unknown org claim: the legacy answer", func(t *testing.T) {
-		t.Skip("CHAOS-13227, rule 1: routed answers 401 for an unknown org claim")
-		for _, claimed := range []string{uuid.NewString(), "not-a-uuid"} {
+		// Legacy (HS256, role claim admin): 200 in the claimed org on every level and X-Org-Id. A user access token has
+		// no role claim, so a caller without a membership row is a member: an admin level answers 403 (CHAOS-13261,
+		// a known divergence, for either claim here); the production access-token.v1 verifier refuses a claim that is
+		// not a UUID (401, CHAOS-13262; this rig's validator is a fixture, so that refusal shows in the venue cells).
+		for kind, claimed := range map[string]string{"uuid": uuid.NewString(), "not-a-uuid": "not-a-uuid"} {
 			other := "Bearer " + sign(t, claims(func(c jwt.MapClaims) {
 				c["sub"], c["org_id"], c["role"], c["tv"] = user.String(), claimed, "admin", 0
 			}))
 			for _, level := range []Authz{Authenticated, Admin, AdminOrg} {
 				for _, header := range []string{"", claimed} {
-					headers := map[string]string{"Authorization": other}
-					if header != "" {
-						headers["X-Org-Id"] = header
-					}
-					if got := serve(chain(level), http.MethodGet, "/x", headers); got.status != 200 || !strings.HasPrefix(got.body, "org="+claimed+" ") {
-						t.Fatalf("org claim %q, level %v, X-Org-Id %q: %d %q, want main's 200 in the claimed org", claimed, level, header, got.status, got.body)
-					}
+					name := kind + "/" + level.String() + "/x-org-id=" + map[bool]string{true: "claimed", false: "none"}[header != ""]
+					t.Run(name, func(t *testing.T) {
+						headers := map[string]string{"Authorization": other}
+						if header != "" {
+							headers["X-Org-Id"] = header
+						}
+						got := serve(chain(level), http.MethodGet, "/x", headers)
+						switch {
+						case got.status == 200 && strings.HasPrefix(got.body, "org="+claimed+" "):
+						case kind == "not-a-uuid" && got.status == http.StatusUnauthorized:
+							t.Skipf("KNOWN-DIVERGENCE CHAOS-13262 python=200 go=401: the access-token.v1 verifier refuses an org claim that is not a UUID")
+						case got.status == http.StatusForbidden && level != Authenticated:
+							t.Skipf("KNOWN-DIVERGENCE CHAOS-13261 python=200 go=403: a user access token has no role claim, so a caller without a membership row is a member")
+						default:
+							t.Fatalf("org claim %q, level %v, X-Org-Id %q: %d %q, want main's 200 in the claimed org", claimed, level, header, got.status, got.body)
+						}
+					})
 				}
 			}
 		}

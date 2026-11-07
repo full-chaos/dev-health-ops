@@ -50,22 +50,26 @@ func countReads(store *fakeStore, key [2]uuid.UUID) int {
 	return n
 }
 
-// The org scope serves the token's own org to a member, with no X-Org-Id and
-// with an X-Org-Id naming that org. Without ReadOnce the row is read twice:
-// by the access check and by the org scope.
+// The org scope serves the token's own org only while the caller has a
+// membership row there, with no X-Org-Id and with an X-Org-Id naming that org;
+// a caller without one gets the header refusal (legacy, CHAOS-13227). Without
+// ReadOnce the row is read twice: by the access check and by the org scope.
 func TestOrgScopeReadsTheMembershipOfTheTokensOwnOrg(t *testing.T) {
 	cases := []struct {
 		name   string
+		member bool
 		header string
 		status int
 		body   string
 	}{
-		{name: "member, no header", status: 200, body: "org=" + ownOrg + " "},
-		{name: "member, header own org", header: ownOrg, status: 200, body: "org=" + ownOrg + " "},
+		{name: "member, no header", member: true, status: 200, body: "org=" + ownOrg + " "},
+		{name: "member, header own org", member: true, header: ownOrg, status: 200, body: "org=" + ownOrg + " "},
+		{name: "removed, no header", status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
+		{name: "removed, header own org", header: ownOrg, status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			store := tokenOrgStore(true, "member")
+			store := tokenOrgStore(tc.member, "member")
 			headers := map[string]string{"Authorization": "Bearer " + sign(t, claims(nil))}
 			if tc.header != "" {
 				headers["X-Org-Id"] = tc.header
@@ -121,8 +125,9 @@ func TestTokenOrgMembershipIsNotReadForAnOrglessToken(t *testing.T) {
 }
 
 // The guard decides an admin level on the membership's current role in the
-// token's org, not the role claim. A caller with no membership there is
-// refused by the access check (401) at every level.
+// token's org, not the role claim. A caller with no membership there gets the
+// legacy answer (CHAOS-13227): the X-Org-Id refusal at an admin level, served
+// at a level the guard alone decides.
 func TestGuardReadsTheRoleOfTheTokensOwnOrgMembership(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -137,9 +142,9 @@ func TestGuardReadsTheRoleOfTheTokensOwnOrgMembership(t *testing.T) {
 		{name: "claim admin, now member, admin org", level: AdminOrg, claim: "admin", member: true, role: "member", status: 403, body: `{"detail":"Admin access required"}`},
 		{name: "claim member, now admin", level: Admin, claim: "member", member: true, role: "admin", status: 200},
 		{name: "claim owner, still owner", level: AdminOrg, claim: "owner", member: true, role: "owner", status: 200},
-		{name: "removed, admin", level: Admin, claim: "admin", status: 401, body: invalidToken},
-		{name: "removed, admin org", level: AdminOrg, claim: "admin", status: 401, body: invalidToken},
-		{name: "removed, authenticated, guard only", level: Authenticated, claim: "member", status: 401, body: invalidToken},
+		{name: "removed, admin", level: Admin, claim: "admin", status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
+		{name: "removed, admin org", level: AdminOrg, claim: "admin", status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
+		{name: "removed, authenticated, guard only", level: Authenticated, claim: "member", status: 200},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

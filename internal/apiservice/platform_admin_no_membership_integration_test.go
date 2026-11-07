@@ -79,11 +79,12 @@ func ruleOneServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, issuer *edt
 
 // Product rule 1 (D6773): through the wired handlers on Postgres and ClickHouse, a platform admin whose token
 // names an org it holds no membership row in gets, with a user access token, the HS256 path's answer byte for
-// byte. A user without the platform action and without the membership keeps the routed refusal. CHAOS-13126
-// retired the HS256 class on every routed row: on the listener the HS256 token is the generic 401. The HS256
-// answers are the executed legacy run on main 98c7d4f56 (log 13154-legacy-rec-int-98c7d4f5.log sha256 2faa72118ecc, LEGACY-REC-INT
-// lines); the sync config's id and its created_at / updated_at are this run's, so the body is compared with them
-// named.
+// byte. A user without the platform action and without the membership gets the HS256 path's answer too
+// (CHAOS-13227: the X-Org-Id refusal). CHAOS-13126 retired the HS256 class on every routed row: on the listener the
+// HS256 token is the generic 401. The HS256 answers are the executed legacy runs on main 98c7d4f56 (log
+// 13154-legacy-rec-int-98c7d4f5.log sha256 2faa72118ecc, LEGACY-REC-INT lines) and d7e374652 (log
+// 13154-legacy-rec-plain-d7e37465.log sha256 bb390396dbdf, LEGACY-REC-PLAIN lines); the sync config's id and its
+// created_at / updated_at are this run's, so the body is compared with them named.
 func TestProductRule1PlatformAdminWithoutMembershipWiredHandlers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -176,8 +177,8 @@ VALUES ($1, $2, 'rule-one', 'github', '[]'::json, '{}'::json, true, now(), now()
 		if status, body := serve(routed, path, hs256(super, "rule-one-super@example.com")); status != http.StatusUnauthorized || strings.TrimSpace(body) != genericRefusal {
 			t.Errorf("%s HS256 on the routed listener %d %s, want the retired-class 401 %s", path, status, body, genericRefusal)
 		}
-		if status, body := serve(routed, path, eddsa(plain)); status != http.StatusUnauthorized || !strings.Contains(body, "Invalid or expired token") {
-			t.Errorf("%s user without the platform action or the membership: %d %s, want the routed 401", path, status, body)
+		if status, body := serve(routed, path, eddsa(plain)); status != http.StatusForbidden || body != `{"detail": "X-Org-Id not permitted for this user"}` {
+			t.Errorf("%s user without the platform action or the membership: user access token %d %s, HS256 403 X-Org-Id not permitted", path, status, body)
 		}
 	}
 }

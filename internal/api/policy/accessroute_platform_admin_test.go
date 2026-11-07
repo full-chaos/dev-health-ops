@@ -10,10 +10,11 @@ import (
 // Product rule 1 (D6773): a platform admin needs no membership row in the
 // token org, for every token class. The user access token path builds the
 // principal the HS256 path built for the same caller and org: the org of the
-// token, the non-member role, the live superuser flag and platform set. The
-// HS256 answers are the executed legacy run on main 98c7d4f56 (log
-// 13154-legacy-rec-98c7d4f5.log sha256 8ba2f74cdd64, LEGACY-REC lines); a
-// caller the HS256 path refused (credential or CheckTokenOrg) is a refusal here.
+// token, the non-member role, the live superuser flag and platform set. A
+// caller without admin.orgs gets that principal too (CHAOS-13227); the token
+// org check then refuses it, as it refused the HS256 principal. The HS256
+// answers are the executed legacy run on main 98c7d4f56 (log
+// 13154-legacy-rec-98c7d4f5.log sha256 8ba2f74cdd64, LEGACY-REC lines).
 func TestProductRule1RoutedPlatformAdminWithoutMembershipIsTheLegacyPrincipal(t *testing.T) {
 	const otherOrg = "66666666-6666-4666-8666-666666666666"
 	adminOrgs := rule.PlatformOf(rule.ActionAdminOrgs)
@@ -27,24 +28,26 @@ func TestProductRule1RoutedPlatformAdminWithoutMembershipIsTheLegacyPrincipal(t 
 	cases := map[string]struct {
 		state  UserState
 		legacy *principal
+		admit  bool
 	}{
-		"superuser":                        {state: UserState{IsActive: true, IsSuperuser: true}, legacy: &principal{otherOrg, "member", true, true, true, userID.String()}},
-		"admin.orgs platform role":         {state: UserState{IsActive: true, Platform: &adminOrgs}, legacy: &principal{otherOrg, "member", true, false, true, userID.String()}},
-		"platform role without admin.orgs": {state: UserState{IsActive: true, Platform: &support}},
-		"no platform action":               {state: UserState{IsActive: true}},
+		"superuser":                        {state: UserState{IsActive: true, IsSuperuser: true}, legacy: &principal{otherOrg, "member", true, true, true, userID.String()}, admit: true},
+		"admin.orgs platform role":         {state: UserState{IsActive: true, Platform: &adminOrgs}, legacy: &principal{otherOrg, "member", true, false, true, userID.String()}, admit: true},
+		"platform role without admin.orgs": {state: UserState{IsActive: true, Platform: &support}, legacy: &principal{otherOrg, "member", false, false, false, userID.String()}},
+		"no platform action":               {state: UserState{IsActive: true}, legacy: &principal{otherOrg, "member", false, false, false, userID.String()}},
 		"deactivated superuser":            {state: UserState{IsSuperuser: true}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			store := newAccessStore()
 			store.users[userID] = tc.state
-			routedUser, routedErr := routed(t, store, &fakeValidator{result: userClaims(func(c *AccessTokenClaims) {
+			auth := routed(t, store, &fakeValidator{result: userClaims(func(c *AccessTokenClaims) {
 				org := otherOrg
 				c.OrgID = &org
-			})}).Authenticate(ctx, "x.y.z")
+			})})
+			routedUser, routedErr := auth.Authenticate(ctx, "x.y.z")
 			if tc.legacy == nil {
 				if routedUser != nil || !IsRefusal(routedErr) {
-					t.Fatalf("routed user %+v err %v, want a refusal", routedUser, routedErr)
+					t.Fatalf("routed user %+v err %v, want a refusal (legacy: credential refused)", routedUser, routedErr)
 				}
 				return
 			}
@@ -54,6 +57,10 @@ func TestProductRule1RoutedPlatformAdminWithoutMembershipIsTheLegacyPrincipal(t 
 			got := principal{routedUser.OrgID, routedUser.Role, routedUser.IsAdmin(), routedUser.IsSuperuser, routedUser.Holds(ActionAdminOrgs), routedUser.ID.String()}
 			if got != *tc.legacy || routedUser.Role != nonMemberRole {
 				t.Fatalf("routed principal %+v, legacy %+v", got, *tc.legacy)
+			}
+			// The HS256 path kept the token org only through CheckTokenOrg, which admitted exactly an admin.orgs holder.
+			if err := auth.CheckTokenOrg(ctx, routedUser); (err == nil) != tc.admit {
+				t.Fatalf("the token org check: %v, want admit %v (legacy)", err, tc.admit)
 			}
 		})
 	}

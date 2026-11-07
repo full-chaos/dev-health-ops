@@ -65,7 +65,6 @@ func TestLegacyGuardRefusesAMemberOfASuspendedOrganization(t *testing.T) {
 	}
 	setActive(false)
 	t.Run("suspended org: the legacy answer", func(t *testing.T) {
-		t.Skip("CHAOS-13227, rule 1: routed answers 401")
 		for _, level := range []Authz{Authenticated, Admin, AdminOrg} {
 			if got := call(level); got.status != http.StatusForbidden || got.body != denied {
 				t.Fatalf("suspended org, level %v: %d %q, want the X-Org-Id refusal", level, got.status, got.body)

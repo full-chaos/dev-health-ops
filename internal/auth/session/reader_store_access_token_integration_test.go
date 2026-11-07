@@ -144,13 +144,23 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 		t.Fatalf("user %+v", user)
 	}
 	for name, token := range map[string]string{
-		"revoked session":      mint(revoked.Session.ID, &org),
-		"unknown session":      mint(uuid.New(), &org),
-		"org without a member": mint(live.Session.ID, &otherOrg),
+		"revoked session": mint(revoked.Session.ID, &org),
+		"unknown session": mint(uuid.New(), &org),
 	} {
 		if _, err := auth.Authenticate(routed, token); !policy.IsRefusal(err) {
 			t.Errorf("%s: err = %v, want a refusal", name, err)
 		}
+	}
+	// Product rule 1: an org claim without a membership row is the legacy HS256 answer at the authenticator: the
+	// recorded literal of policy/principal.go userFromClaims (no membership read, the claimed org, role member for a
+	// token with no role claim, the same user id; the HS256 class is retired here). The token org is refused later, by
+	// the org scope, the guard or CheckTokenOrg, on the same real rows.
+	got, err := auth.Authenticate(routed, mint(live.Session.ID, &otherOrg))
+	if err != nil || got.ID != principal || got.OrgID != otherOrg.String() || got.Role != "member" {
+		t.Fatalf("org without a member: user %+v err %v, want the legacy principal (id %s, org %s, role member)", got, err, principal, otherOrg)
+	}
+	if err := auth.CheckTokenOrg(ctx, got); !policy.IsRefusal(err) {
+		t.Errorf("org without a member: CheckTokenOrg err = %v, want a refusal", err)
 	}
 	if _, err := admin.Exec(ctx, `UPDATE public.users SET token_version = token_version + 1 WHERE id = $1`, principal); err != nil {
 		t.Fatal(err)

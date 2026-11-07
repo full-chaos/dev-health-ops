@@ -106,25 +106,27 @@ func (v *EdgeVerifier) Routed() bool { return v != nil && v.auth.Routed() }
 
 // VerifyRouted authenticates token against the row of profile ("METHOD
 // /route") through the profile-routed validator, then applies Verify's
-// organization rule to either class: a caller with no organization is
-// refused with OrgRequiredError unless the live users row is a superuser's.
-// An error wrapping policy.ErrUnavailable decided nothing; a refusal is
-// policy.IsRefusal. The edge outcome telemetry counts the HS256 class only.
+// membership and organization rules to either class: a token org without a
+// membership row is refused (CheckTokenOrg, the legacy edge answer), and a
+// caller with no organization is refused with OrgRequiredError unless the
+// live users row is a superuser's. An error wrapping policy.ErrUnavailable
+// decided nothing; a refusal is policy.IsRefusal. The edge outcome telemetry
+// counts the HS256 class only.
 func (v *EdgeVerifier) VerifyRouted(ctx context.Context, profile, token string) (*EdgeClaims, error) {
 	edge := AccessClassOf(token) == AccessClassEdge
 	user, err := v.auth.Authenticate(policy.WithRouteProfile(ctx, profile), token)
 	if err != nil {
 		return nil, fmt.Errorf("principal: edge: %w", err)
 	}
-	if edge {
-		if err := v.auth.CheckTokenOrg(ctx, user); err != nil {
+	if err := v.auth.CheckTokenOrg(ctx, user); err != nil {
+		if edge {
 			reason := ReasonUserRefused
 			if !policy.IsRefusal(err) {
 				reason = ReasonUserLookupFailed
 			}
 			v.reject(ctx, reason, nil, requestMetaFrom(ctx))
-			return nil, fmt.Errorf("principal: edge: %w", err)
 		}
+		return nil, fmt.Errorf("principal: edge: %w", err)
 	}
 	if user.OrgID == "" && !user.IsSuperuser {
 		if edge {

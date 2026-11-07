@@ -6475,7 +6475,7 @@
           "note": "Pattern:",
           "path": "internal/apiservice/acr/handlers.go"
         },
-        "description": "routeAuth: the internal listener verifies, before any read, the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), the only credential it accepts; every other bearer, a svc_acr_ service credential included, is refused 401 before any credential read, with a keyed attempt limiter."
+        "description": "routeAuth: the internal listener verifies, before any read, the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to the principal of the acr-api workload in the workload registry; no scope claim), the only credential it accepts; every other bearer, a svc_acr_ service credential included, is refused 401 before any credential read, with a keyed attempt limiter."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/handlers.go:148); the workload token carries no organization binding that the handler compares with it",
@@ -6520,7 +6520,7 @@
           "note": "Pattern:",
           "path": "internal/apiservice/acr/handlers.go"
         },
-        "description": "routeAuth: the internal listener verifies, before any read, the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), the only credential it accepts; every other bearer, a svc_acr_ service credential included, is refused 401 before any credential read, with a keyed attempt limiter."
+        "description": "routeAuth: the internal listener verifies, before any read, the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to the principal of the acr-api workload in the workload registry; no scope claim), the only credential it accepts; every other bearer, a svc_acr_ service credential included, is refused 401 before any credential read, with a keyed attempt limiter."
       },
       "public_rationale": null,
       "resource_resolver": "none: the route reads no organization (internal/apiservice/acr/handlers.go:73)",
@@ -6567,7 +6567,7 @@
           "note": "Pattern:",
           "path": "internal/apiservice/acr/handlers.go"
         },
-        "description": "llmConfigHandler (its own bearer check) verifies, before any read, the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), the only credential it accepts; every other bearer, a svc_acr_ service credential included, is refused 401 before any credential read."
+        "description": "llmConfigHandler (its own bearer check) verifies, before any read, the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to the principal of the acr-api workload in the workload registry; no scope claim), the only credential it accepts; every other bearer, a svc_acr_ service credential included, is refused 401 before any credential read."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization (internal/apiservice/acr/llmconfig.go:112); the workload token carries no organization binding that the handler compares with it",
@@ -6614,7 +6614,7 @@
           "note": "Pattern:",
           "path": "internal/apiservice/acr/access.go"
         },
-        "description": "routeAuth: the internal listener verifies, before any read, the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), the only credential it accepts; every other bearer, a svc_acr_ service credential included, is refused 401 before any credential read, with its own keyed attempt limiter (internal_acr_access_attempt, 6000 per minute per client address). The route writes no audit row."
+        "description": "routeAuth: the internal listener verifies, before any read, the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to the principal of the acr-api workload in the workload registry; no scope claim), the only credential it accepts; every other bearer, a svc_acr_ service credential included, is refused 401 before any credential read, with its own keyed attempt limiter (internal_acr_access_attempt, 6000 per minute per client address). The route writes no audit row."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization and {user_id} the principal (internal/apiservice/acr/access.go:147); an organization with no organizations row is 404 acr_organization_unknown; the workload token carries no organization binding that the handler compares with it",

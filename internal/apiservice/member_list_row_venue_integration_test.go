@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,11 +75,15 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), probeOrg, user, role)
 		pdp.reset("evaluate")
 		off := membersDo(legacy, adminMemberListKey, legacyCallers[name].token)
 		on := membersDo(enforced, adminMemberListKey, enforcedCallers[name].token)
-		t.Logf("OBSERVED %s: legacy %d %.80s; enforced %d %.80s; reasons %v", name, off.status, off.body, on.status, on.body, pdp.reasonsSeen())
+		leaks := strings.Contains(on.body, "@example.test")
+		t.Logf("OBSERVED %s: legacy %d %.80s; enforced %d %.80s; reasons %v; enforced body holds the member list: %v", name, off.status, off.body, on.status, on.body, pdp.reasonsSeen(), leaks)
 		if off.status != on.status || off.body != on.body {
 			t.Errorf("%s: legacy %d %s, enforced %d %s, want the same answer", name, off.status, off.body, on.status, on.body)
 		}
 		if refused {
+			if leaks {
+				t.Errorf("%s: the enforced answer holds the member list", name)
+			}
 			if on.status != http.StatusForbidden || on.body != adminRequiredBody {
 				t.Errorf("%s: enforced %d %s, want the legacy 403 %s", name, on.status, on.body, adminRequiredBody)
 			}

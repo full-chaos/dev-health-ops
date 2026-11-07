@@ -5,15 +5,17 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/authverify"
+
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 )
 
 const (
-	acrWorkloadIssuer  = "https://auth.example.test"
+	acrWorkloadIssuer = "https://auth.example.test"
+	// acrWorkloadSubject is the wire principal id of the acr-api workload in the registry the tests stand in for.
 	acrWorkloadSubject = "prn_AAAAAAAAAAAAAAAAAAAAAA"
 )
 
@@ -39,13 +41,13 @@ func TestWorkloadVerifierBuiltForDevHealthAPIAudience(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := authverify.StaticKeys{"k1": pub}
-	lookup := acrWorkloadLookup(map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: acrWorkloadSubject})
-	workload, err := buildACRWorkload(lookup, keys, nil)
+	lookup := acrWorkloadLookup(map[string]string{envAccessTokenIssuer: acrWorkloadIssuer})
+	workload, err := buildACRWorkload(lookup, keys, acr.StaticSubject(acrWorkloadSubject))
 	if err != nil || workload == nil {
 		t.Fatalf("workload %v err %v", workload, err)
 	}
-	if workload.Subject != acrWorkloadSubject {
-		t.Fatalf("subject %q", workload.Subject)
+	if got, err := workload.Source.Subject(t.Context()); err != nil || got != acrWorkloadSubject {
+		t.Fatalf("subject %q err %v", got, err)
 	}
 	now := time.Now()
 	if _, err := workload.Verifier.Verify(acrWorkloadToken(t, priv, "dev-health-api", now), now); err != nil {
@@ -57,20 +59,22 @@ func TestWorkloadVerifierBuiltForDevHealthAPIAudience(t *testing.T) {
 	}
 }
 
-func TestBuildACRWorkloadIsOffUnlessIssuerAndSubjectAreSet(t *testing.T) {
+func TestBuildACRWorkloadIsOffUnlessIssuerKeysAndSourceAreSet(t *testing.T) {
 	keys := authverify.StaticKeys{}
+	source := acr.StaticSubject(acrWorkloadSubject)
 	for name, tc := range map[string]struct {
-		env  map[string]string
-		keys authverify.KeySource
+		env    map[string]string
+		keys   authverify.KeySource
+		source acr.SubjectSource
 	}{
-		"nothing set":   {map[string]string{}, keys},
-		"no subject":    {map[string]string{envAccessTokenIssuer: acrWorkloadIssuer}, keys},
-		"no issuer":     {map[string]string{envACRWorkloadSubject: acrWorkloadSubject}, keys},
-		"blank subject": {map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: "  "}, keys},
-		"no key source": {map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: acrWorkloadSubject}, nil},
+		"nothing set":   {map[string]string{}, keys, nil},
+		"no source":     {map[string]string{envAccessTokenIssuer: acrWorkloadIssuer}, keys, nil},
+		"no issuer":     {map[string]string{}, keys, source},
+		"blank issuer":  {map[string]string{envAccessTokenIssuer: "  "}, keys, source},
+		"no key source": {map[string]string{envAccessTokenIssuer: acrWorkloadIssuer}, nil, source},
 	} {
 		t.Run(name, func(t *testing.T) {
-			workload, err := buildACRWorkload(acrWorkloadLookup(tc.env), tc.keys, nil)
+			workload, err := buildACRWorkload(acrWorkloadLookup(tc.env), tc.keys, tc.source)
 			if workload != nil || err != nil {
 				t.Fatalf("workload %v err %v, want the path off", workload, err)
 			}
@@ -78,35 +82,18 @@ func TestBuildACRWorkloadIsOffUnlessIssuerAndSubjectAreSet(t *testing.T) {
 	}
 }
 
-func TestBuildACRWorkloadRefusesASubjectThatIsNotAPrincipalID(t *testing.T) {
-	for _, subject := range []string{"acr-api", "ses_AAAAAAAAAAAAAAAAAAAAAA", "prn_" + string(make([]byte, 300))} {
-		lookup := acrWorkloadLookup(map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: subject})
-		if workload, err := buildACRWorkload(lookup, authverify.StaticKeys{}, nil); err == nil || workload != nil {
-			t.Fatalf("subject %.12q accepted", subject)
-		}
+// The retired AUTH_ACR_WORKLOAD_SUBJECT pin is not read: with it set to another principal the registry's is the one
+// the routes accept, and the variable is no longer a name the package knows.
+func TestTheRetiredPinIsNotRead(t *testing.T) {
+	lookup := acrWorkloadLookup(map[string]string{
+		envAccessTokenIssuer:        acrWorkloadIssuer,
+		"AUTH_ACR_WORKLOAD_SUBJECT": "prn_BBBBBBBBBBBBBBBBBBBBBB",
+	})
+	workload, err := buildACRWorkload(lookup, authverify.StaticKeys{}, acr.StaticSubject(acrWorkloadSubject))
+	if err != nil || workload == nil {
+		t.Fatalf("workload %v err %v", workload, err)
 	}
-}
-
-func TestBuildACRWorkloadNamesTheVariableNeverTheValue(t *testing.T) {
-	for name, subject := range map[string]string{
-		"invalid character": "prn_invalid!",
-		"empty suffix":      "prn_",
-		"suffix too long":   "prn_" + strings.Repeat("A", 65),
-		"space inside":      "prn_AAAA BBBB",
-	} {
-		t.Run(name, func(t *testing.T) {
-			lookup := acrWorkloadLookup(map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: subject})
-			workload, err := buildACRWorkload(lookup, authverify.StaticKeys{}, nil)
-			if err == nil || workload != nil {
-				t.Fatalf("subject %q accepted", subject)
-			}
-			if !strings.Contains(err.Error(), envACRWorkloadSubject) || strings.Contains(err.Error(), subject) {
-				t.Fatalf("error %q must name the variable and never its value", err)
-			}
-		})
-	}
-	lookup := acrWorkloadLookup(map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: "prn_" + strings.Repeat("A", 64)})
-	if workload, err := buildACRWorkload(lookup, authverify.StaticKeys{}, nil); err != nil || workload == nil {
-		t.Fatalf("a 64 character suffix: %v %v", workload, err)
+	if got, _ := workload.Source.Subject(t.Context()); got != acrWorkloadSubject {
+		t.Fatalf("subject %q: the retired pin was read", got)
 	}
 }

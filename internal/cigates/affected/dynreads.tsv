@@ -18,6 +18,11 @@ cmd/registrydump	main.go
 cmd/shadow-venue	main.go
 cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
+cmd/venue-extstub	cert.go
+cmd/venue-extstub	main.go
+cmd/venue-extstub	seed_test.go
+cmd/venue-extstub	stub.go
+cmd/venue-extstub	stub_test.go
 deploy/helm/dev-health	auth_phase_test.go
 deploy/helm/dev-health	auth_sso_settings_test.go
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go
@@ -263,6 +268,8 @@ internal/cigates/integrationshards	shard_run_tee_bound_test.go
 internal/cigates/integrationshards	shard_start_order_test.go
 internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
+internal/cigates/livee2e	tokenreview.go
+internal/cigates/livee2e	tokenreview_cli_test.go
 internal/cigates/membershipreads	membershipreads.go
 internal/cigates/nopython	nopython_test.go
 internal/cigates/nopython	tests_python_test.go

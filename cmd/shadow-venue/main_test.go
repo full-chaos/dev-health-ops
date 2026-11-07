@@ -97,3 +97,22 @@ func TestTheDriverClientNeverFollowsARedirect(t *testing.T) {
 		t.Fatalf("status %d, other origin saw %d requests", resp.StatusCode, seen)
 	}
 }
+
+// A failed close of an output file is a lost write: it turns a passing step into a failed one and says so.
+func TestFinishFailsAStepWhoseOutputFileDidNotClose(t *testing.T) {
+	file, err := os.Create(filepath.Join(t.TempDir(), "out.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	if code := finish(file, exitOK, &errOut); code != exitOK {
+		t.Fatalf("a clean close changed the code to %d", code)
+	}
+	errOut.Reset()
+	if code := finish(file, exitOK, &errOut); code != exitFail || !strings.Contains(errOut.String(), "close") {
+		t.Fatalf("a failed close gave code %d, stderr %q", code, errOut.String())
+	}
+	if code := finish(file, exitUsage, &errOut); code != exitUsage {
+		t.Fatalf("an earlier failure was replaced by %d", code)
+	}
+}

@@ -100,7 +100,6 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		fmt.Fprintf(stderr, "drive: -out %s: %v\n", *out, errors.Unwrap(err))
 		return exitUsage
 	}
-	defer file.Close()
 	driver := &shadowvenue.Driver{Base: origin, Client: newClient(), Gap: *gap}
 	tokens := map[string]string{}
 	for _, s := range plan.Slots {
@@ -111,21 +110,21 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		token, err := driver.Login(ctx, p, venue.Orgs[p.Org])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
-			return exitFail
+			return finish(file, exitFail, stderr)
 		}
 		tokens[s.Principal] = token
 	}
 	fmt.Fprintf(stdout, "drive: %d slots, gap %s, start %s\n", len(plan.Slots), *gap, time.Now().UTC().Format(time.RFC3339))
 	if err := driver.Drive(ctx, plan, tokens, file); err != nil {
 		fmt.Fprintln(stderr, err)
-		return exitFail
+		return finish(file, exitFail, stderr)
 	}
 	if err := file.Sync(); err != nil {
 		fmt.Fprintln(stderr, err)
-		return exitFail
+		return finish(file, exitFail, stderr)
 	}
 	fmt.Fprintf(stdout, "drive: done %s, slots in %s\n", time.Now().UTC().Format(time.RFC3339), *out)
-	return exitOK
+	return finish(file, exitOK, stderr)
 }
 
 // newClient sends on the no-proxy outbound transport and never follows a redirect: a bearer reaches only the venue
@@ -227,10 +226,9 @@ func judge(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "judge: -out %s: %v\n", *out, errors.Unwrap(err))
 		return exitUsage
 	}
-	defer file.Close()
 	if err := report.WriteTable(file); err != nil {
 		fmt.Fprintln(stderr, err)
-		return exitUsage
+		return finish(file, exitUsage, stderr)
 	}
 	for _, reason := range report.Reasons {
 		fmt.Fprintln(stdout, reason)
@@ -242,5 +240,16 @@ func judge(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	fmt.Fprintf(stdout, "judge: rows %d, rows passed %d, void %v, exit %d, table %s\n", len(report.Rows), passed, report.Void, report.Exit(), *out)
-	return report.Exit()
+	return finish(file, report.Exit(), stderr)
+}
+
+// finish closes an output file and keeps code, unless the close fails on a step that passed: a lost write fails it.
+func finish(file *os.File, code int, stderr io.Writer) int {
+	if err := file.Close(); err != nil {
+		fmt.Fprintf(stderr, "close %s: %v\n", file.Name(), err)
+		if code == exitOK {
+			return exitFail
+		}
+	}
+	return code
 }

@@ -13,7 +13,14 @@ import (
 
 func initiateRequest(t *testing.T, body string) (*httptest.ResponseRecorder, Provider) {
 	t.Helper()
-	p := Provider{ID: uuid.New(), OrgID: uuid.New(), Protocol: "saml", Status: "active", Config: Config{SSOURL: "https://idp.example/sso"}}
+	return initiateRequestOn(t, body, true)
+}
+
+// initiateRequestOn sends body to the initiate route of a provider whose
+// allow_idp_initiated is allowIdP.
+func initiateRequestOn(t *testing.T, body string, allowIdP bool) (*httptest.ResponseRecorder, Provider) {
+	t.Helper()
+	p := Provider{ID: uuid.New(), OrgID: uuid.New(), Protocol: "saml", Status: "active", AllowIdPInitiated: allowIdP, Config: Config{SSOURL: "https://idp.example/sso"}}
 	h := Handlers{Service: &Service{Providers: oneProvider{p}, Entitlements: allowAll{}, Flows: &flowsOnly{}, BaseURL: func() string { return "https://sp.example.com" }}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /saml/{provider_id}/initiate", h.Initiate)
@@ -118,6 +125,46 @@ func TestInitiateKeepsTheDecodeErrorForDataAfterTheObject(t *testing.T) {
 		text := rec.Body.String()
 		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(text, "Request body must be a JSON object") || strings.Contains(text, "string_unicode") {
 			t.Errorf("%s: status=%d body=%s", body, rec.Code, text)
+		}
+	}
+}
+
+// go-api (internal/api/sso/saml.go initiateSAMLAuth) replaces the caller's
+// relay_state with its own value on a provider without IdP-initiated sign-in,
+// and never reads it there, so a lone surrogate in it is not refused.
+func TestInitiateReplacesTheCallerRelayStateWhenIdPInitiatedSignInIsOff(t *testing.T) {
+	const caller = "caller-chosen"
+	seen := map[string]bool{}
+	for _, body := range []string{
+		`{"relay_state":"` + caller + `"}`,
+		`{"relay_state":"` + caller + `\ud800"}`,
+		"{\"relay_state\":\"" + caller + "\xed\xa0\x80\"}",
+		`{"RELAY_STATE":"` + caller + `"}`,
+		`{"relay_state":null}`,
+		`{}`,
+	} {
+		for range 2 {
+			rec, _ := initiateRequestOn(t, body, false)
+			var out struct {
+				RedirectURL string `json:"redirect_url"`
+			}
+			if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+				t.Errorf("%q: status=%d body=%s", body, rec.Code, rec.Body.String())
+				continue
+			}
+			parsed, err := url.Parse(out.RedirectURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			relay := parsed.Query()["RelayState"]
+			if len(relay) != 1 || len(relay[0]) != 43 || strings.Contains(out.RedirectURL, caller) {
+				t.Errorf("%q: RelayState=%q redirect=%s", body, relay, out.RedirectURL)
+				continue
+			}
+			if seen[relay[0]] {
+				t.Errorf("%q: RelayState %q was issued twice", body, relay[0])
+			}
+			seen[relay[0]] = true
 		}
 	}
 }

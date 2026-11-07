@@ -481,22 +481,41 @@ It reads `CLICKHOUSE_URI` and, without `--org`, the first `--orgs` rows of `orga
 
 ## Admin Commands
 
-User and organization management commands. The `admin users`, `admin orgs` and `admin billing` verbs (and `billing reconcile`) use the first PostgreSQL database that is set: `MIGRATION_DATABASE_URI`, then `API_DATABASE_URI`, then `POSTGRES_URI`. On Kubernetes, run them in the go-api pod (`kubectl exec -i deploy/<release>-go-api -- dho admin users create ...`): it has `API_DATABASE_URI`, the role the admin API writes users and organizations with. A worker pod has only `POSTGRES_URI`, the domain role, which cannot write users. The other `admin` verbs use `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
+User and organization management commands. The `admin users`, `admin orgs` and `admin billing` verbs (and `billing reconcile`) use the first PostgreSQL database that is set: `MIGRATION_DATABASE_URI`, then `API_DATABASE_URI`, then `POSTGRES_URI`. On Kubernetes, run them in the go-api pod (`kubectl exec -i deploy/<release>-go-api -- dho admin users create ...`): it has `API_DATABASE_URI`, the role the admin API writes users and organizations with. A worker pod has only `POSTGRES_URI`, the domain role, which cannot write users. The other `admin` verbs use `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`. While auth-service owns users (`AUTH_USERS_OWNED=true`), `admin users create` refuses: use `dho auth users-create`.
 
 > **Important:** Users must belong to an organization to log in. Always create an organization after creating a user.
 
 ### Create the first admin
 
-A stack on empty volumes has no user. Create the first user and its organization with the two admin verbs below. On the Compose stack, run them in the `migrate` service: its image is `dho`, so the arguments after the service name are the `dho` arguments, and it has the database login these verbs use. Read the password from standard input (the first line of a file here), never from an argument:
+A stack on empty volumes has no user. While auth-service owns users (`AUTH_USERS_OWNED=true`, the Compose default), create the first user with `dho auth users-create`, then its organization with `dho admin orgs create`. On the Compose stack, run them in the `migrate` service: its image is `dho`, so the arguments after the service name are the `dho` arguments, and it has the logins these verbs use. Read the password from standard input (the first line of a file here), never from an argument:
 
 ```bash
-docker compose run --rm --no-deps -T migrate admin users create \
-  --email admin@example.com --full-name "Admin User" --superuser --password-stdin < password.txt
+docker compose run --rm --no-deps -T migrate auth users-create \
+  --email admin@example.com --full-name "Admin User" --password-stdin < password.txt
 docker compose run --rm --no-deps -T migrate admin orgs create \
   --name "My Organization" --owner-email admin@example.com
 ```
 
-Outside Compose, run the same verbs with `dho` and the database environment set (`dho admin users create ...`, then `dho admin orgs create ...`). Remove the password file afterwards.
+`dho auth users-create` writes the principal, the verified local login and the `public.users` row in one commit, and prints `user_created principal=<id>`. It gives no organization, no membership and no platform role, and it refuses without `AUTH_USERS_OWNED=true`. It refuses `--superuser` before it writes anything, and names the next step: with no active platform administrator, `auth-migrate platform-role-bootstrap -principal <id> -confirm` after a plain create; with one, `dho auth platform-role-grant`. While `AUTH_PLATFORM_ROLES_OWNED` is not true, `public.users.is_superuser` is the authority and the auth runtime role cannot write it, so the refusal names the owner (migration) login step of the [platform roles runbook](../../operate/runbooks/auth-platform-roles-flip-and-rollback.md).
+
+With `AUTH_USERS_OWNED=false`, `dho admin users create` makes the user instead (`--superuser` works there while `AUTH_PLATFORM_ROLES_OWNED` is not true). While auth-service owns users, `dho admin users create` refuses and names `dho auth users-create`. On Kubernetes, `dho auth users-create` needs the auth runtime login (`AUTH_DATABASE_URI`), which the go-api pod does not have. Running it there is a later step (pm), not a recipe here. Remove the password file afterwards.
+
+### `auth users-create`
+
+Create a verified local user while auth-service owns users. It connects with the auth runtime login (`AUTH_DATABASE_URI` or `AUTH_DATABASE_URI_FILE`, and `AUTH_DATABASE_SCHEMA`).
+
+```bash
+dho auth users-create --email admin@example.com --full-name "Admin User" --password-stdin < password.txt
+```
+
+| Option | Description |
+|--------|-------------|
+| `--email` | Login email (required) |
+| `--full-name` | Display name |
+| `--password-stdin` | Read the password from the first line of standard input (required; there is no password argument and no password variable) |
+| `--superuser` | Always refused, before any write, with the next step named (see above) |
+
+Exit 3 (refused) with nothing written: users are not owned, the password fails the shared policy, the email exists, or `--superuser` was given.
 
 ### `admin users create`
 

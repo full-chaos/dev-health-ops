@@ -5,6 +5,7 @@ package authschema
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -42,8 +43,16 @@ func TestWorkloadReaderRoleReadsTheRegistryAndTheQueryAPIRoleDoesNot(t *testing.
 		return Options{Schema: env.schema, RuntimeRole: env.runtimeRole, SessionReaderRoles: []string{api, query}, WorkloadReaderRoles: workload,
 			Logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
 	}
+	// Never set: nobody holds the read and the run is not refused.
+	if _, err := Apply(ctx, env.migration, options()); err != nil {
+		t.Fatalf("Apply with no workload reader (never set): %v", err)
+	}
 	if _, err := Apply(ctx, env.migration, options(api)); err != nil {
 		t.Fatalf("Apply with a workload reader: %v", err)
+	}
+	// Set to set: a re-apply changes nothing and is not refused.
+	if _, err := Apply(ctx, env.migration, options(api)); err != nil {
+		t.Fatalf("Apply again with the same workload reader: %v", err)
 	}
 
 	const registry = `SELECT w.principal_id, w.name, w.organization_id, w.audiences, w.disabled_at, p.id, p.disabled_at
@@ -97,13 +106,68 @@ func TestWorkloadReaderRoleReadsTheRegistryAndTheQueryAPIRoleDoesNot(t *testing.
 		t.Fatalf("a go-api role holding the workload read while no role is named for it must be a violation: %v %s", err, describe(found))
 	}
 
-	if _, err := Apply(ctx, env.migration, options()); err != nil {
-		t.Fatalf("Apply with no workload reader: %v", err)
+	// Set to unset: removing a read a running service depends on is a narrowing, refused until the digest it prints is
+	// acknowledged; the refusal changes nothing.
+	refusal := options()
+	_, err = Apply(ctx, env.migration, refusal)
+	digest := narrowingDigestOf(t, err)
+	if err := readerStatement(ctx, apiPool, registry); err != nil {
+		t.Fatalf("the refused run changed the go-api role's read: %v", err)
+	}
+	var narrowed *NarrowingError
+	if !errors.As(err, &narrowed) {
+		t.Fatalf("set to unset: %v", err)
+	}
+	for _, want := range []string{"workloads", "principals"} {
+		found := false
+		for _, lost := range narrowed.Lost {
+			found = found || lost.Object == want
+		}
+		if !found {
+			t.Errorf("the refusal does not name a lost %s column: %+v", want, narrowed.Lost)
+		}
+	}
+	acknowledged := options()
+	acknowledged.AcknowledgeNarrowing = digest
+	if _, err := Apply(ctx, env.migration, acknowledged); err != nil {
+		t.Fatalf("Apply with no workload reader and the acknowledgement: %v", err)
 	}
 	if err := readerStatement(ctx, apiPool, registry); err == nil || !strings.Contains(err.Error(), "permission denied") {
-		t.Fatalf("unset, the go-api role still reads the registry: %v", err)
+		t.Fatalf("unset and acknowledged, the go-api role still reads the registry: %v", err)
 	}
 	if found, err := VerifyRuntimePosture(ctx, conn.Conn(), options()); err != nil || len(found) != 0 {
 		t.Fatalf("posture with no workload reader: %v %s", err, describe(found))
+	}
+}
+
+// The same set-to-unset refusal with the platform roles switch ON: the principals read stays (it is the platform read
+// too), the workloads read is revoked, and the run still needs the acknowledgement.
+func TestWorkloadReaderRemovalNeedsTheAcknowledgementWithPlatformRolesOn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+	api, apiPool := newSessionReader(t, ctx, env, "auth_wl_api_on")
+	options := func(workload ...string) Options {
+		return Options{Schema: env.schema, RuntimeRole: env.runtimeRole, SessionReaderRoles: []string{api}, WorkloadReaderRoles: workload,
+			PlatformRolesOwned: true, Logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+	}
+	if _, err := Apply(ctx, env.migration, options(api)); err != nil {
+		t.Fatalf("Apply with a workload reader: %v", err)
+	}
+	_, err := Apply(ctx, env.migration, options())
+	digest := narrowingDigestOf(t, err)
+	if err := readerStatement(ctx, apiPool, `SELECT principal_id FROM auth.workloads`); err != nil {
+		t.Fatalf("the refused run changed the read: %v", err)
+	}
+	acknowledged := options()
+	acknowledged.AcknowledgeNarrowing = digest
+	if _, err := Apply(ctx, env.migration, acknowledged); err != nil {
+		t.Fatalf("acknowledged: %v", err)
+	}
+	if err := readerStatement(ctx, apiPool, `SELECT principal_id FROM auth.workloads`); err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("the workloads read survives: %v", err)
+	}
+	if err := readerStatement(ctx, apiPool, `SELECT id, kind, disabled_at FROM auth.principals`); err != nil {
+		t.Fatalf("the platform roles read of principals was lost: %v", err)
 	}
 }

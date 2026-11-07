@@ -94,3 +94,28 @@ func TestSplitWorkloadReadersKeepsTheOthersPlain(t *testing.T) {
 		t.Fatalf("unset: plain %v workload %v: nobody may hold the registry read", plain, workload)
 	}
 }
+
+func columnRecord(table, column string) GrantRecord {
+	return GrantRecord{Kind: "column", Object: table, Column: column, Privilege: "SELECT"}
+}
+
+// Removing the workload registry read is a narrowing, named by the reader, whatever the platform roles switch says:
+// every workload-set column a reader loses is in the refusal; a column no declared read names is not.
+func TestReaderNarrowingCountsTheWorkloadRegistryRead(t *testing.T) {
+	var before []GrantRecord
+	for _, read := range WorkloadReaderReads() {
+		for _, column := range read.Columns {
+			before = append(before, columnRecord(read.Table, column))
+		}
+	}
+	before = append(before, columnRecord("sessions", "expires_at"))
+	lost := readerNarrowing("api", before, nil)
+	if len(lost) != 7 {
+		t.Fatalf("%d lost workload reads counted, want the 5 workloads and 2 principals columns: %+v", len(lost), lost)
+	}
+	for _, g := range lost {
+		if g.Role != "api" || g.Object == "sessions" {
+			t.Errorf("unexpected record %+v", g)
+		}
+	}
+}

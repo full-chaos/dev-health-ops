@@ -253,6 +253,11 @@ up_service() {
 
 # compose.yml's migrate service refuses a database that already holds objects but no alembic_version table, and
 # auth-migrate creates the auth schema: leg acp starts go-api (and with it migrate) first and auth-service after it.
+# CHAOS-13126: go-api verifies the venue's EdDSA tokens with its issuer's key set (authverify's JWKS client dials
+# <issuer>/.well-known/), so go-api and auth-service run with the issuer compose's auth-issuer serves (compose.yml's
+# AUTH_TOKEN_ISSUER_URL default), set before the first up. The workload lib keeps a caller value; its own default
+# names a host nothing serves.
+export AUTH_TOKEN_ISSUER_URL="https://auth.dev-health.internal:8443"
 printf 'step 1: up --build --wait go-api (project %s)\n' "${PROJECT}"
 up_service go-api
 if [ "${LEG}" = "acp" ]; then
@@ -400,6 +405,7 @@ if [ "${LEG}" = "acp" ]; then
   # CHAOS-11387: this leg runs with auth-service owning users (CI and local only; prod and the other leg stay off).
   # users-backfill refuses once the flag is true and auth-service is not ready while public.users and auth.users
   # have gaps, so the copy runs first, with the flag still off; then grants and auth-service, then go-api.
+  # The compose migrate service defaults AUTH_USERS_OWNED to true (dho auth users-create), so the copy sets it off itself.
   # AUTH_CORPUS_USERS_UNOWNED=1 skips it: the non-vacuity run, which must still pass the golden through the not-owned quirks.
   # The corpus test seeds its users first (it signals ${SEEDED_FILE}), so this runs once they exist, as a real switch has users
   # first; the test is then handed the forwarded set (${FLIPPED_FILE}) and goes on. Step 1e needs auth-service and go-api up, not the test.
@@ -408,7 +414,7 @@ if [ "${LEG}" = "acp" ]; then
     (
       export "AUTH_DATABASE_URI=host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable"
       timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
-        run --rm --no-deps -e AUTH_DATABASE_URI migrate auth users-backfill
+        run --rm --no-deps -e AUTH_DATABASE_URI -e AUTH_USERS_OWNED=false migrate auth users-backfill
     ) || die "users-backfill failed"
     # The flag is set for these two commands only (not exported): the go-api recreates that follow take it from the state.
     AUTH_USERS_OWNED=true timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
@@ -495,6 +501,26 @@ if [[ " ${FORWARDED[*]-} " == *" sessions "* ]]; then
   printf 'sessions forwarded: session_access_token checked against issuer %s\n' "${DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER}"
   export DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER
 fi
+
+# CHAOS-13154: go-api verifies user access tokens (EdDSA) of auth-service's issuer only, so the venue mints its seed
+# tokens under auth-service's own signing key (and writes their sessions into the auth schema). The key is copied out of
+# the running auth-service into a mode 0600 file in a mode 0700 directory of this run's private ${WORK}, which cleanup
+# removes on every exit; the test reads only its path. No key byte goes to an argument, a variable, the environment or
+# the output (docker compose cp writes the file itself; its own output is discarded). The key id is the one compose
+# renders for auth-service; nothing else of the rendered config is read or printed.
+[ -n "${DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER:-}" ] || die "sessions are not forwarded: go-api trusts auth-service's tokens only, and the venue has no issuer to mint under"
+SIGNING_DIR="${WORK}/signing"
+(umask 077 && mkdir -m 0700 -- "${SIGNING_DIR}") || die "could not make the signing key directory"
+(umask 077 && compose cp auth-service:/run/auth/signing/envelope-private-key.pem "${SIGNING_DIR}/signing.pem" >/dev/null 2>&1) \
+  || die "could not copy auth-service's signing key into the run directory"
+chmod 0600 -- "${SIGNING_DIR}/signing.pem" || die "could not make the signing key file 0600"
+config_json="$(compose config --format json)" || die "could not render the compose config of leg ${LEG}"
+DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_ID="$(jq -r '.services["auth-service"].environment.AUTH_SIGNING_KEY_ID // ""' <<<"${config_json}")" \
+  || die "could not read auth-service's AUTH_SIGNING_KEY_ID from the rendered compose config"
+unset config_json
+[ -n "${DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_ID}" ] || die "auth-service names no AUTH_SIGNING_KEY_ID"
+export DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_FILE="${SIGNING_DIR}/signing.pem" DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_ID
+printf 'venue tokens: minted under auth-service key id %s (key file 0600 in the run directory)\n' "${DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_ID}"
 
 printf 'step 2: TestAuthFlowVenueOracle through the base-URL runner\n'
 export DEV_HEALTH_VENUE_ORACLES=1

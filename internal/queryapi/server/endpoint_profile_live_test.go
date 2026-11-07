@@ -768,12 +768,65 @@ func driveBuildInfo(t *testing.T, row liveRow) *liveObs {
 		}
 		q.bearer = iaEnvelopeExpiredAt(t, stack.priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}, time.Now().Add(-time.Minute))
 		o.wantStatus(listener+": envelope past its exp", stack.live(q), http.StatusUnauthorized)
+		buildInfoUserTokenCells(t, o, listener, q, first.body)
 	}
 	o.textHas("resource_resolver", "none:")
 	o.impersonationPolicy(false)
 	o.textHas("current_state_cache_behavior", "none: no state read", "nothing is cached")
 	o.statusText()
 	return o
+}
+
+// buildInfoUserTokenCells: /buildinfo serves a user access token only when its live users row is a platform admin
+// (admin.orgs) acting as itself; an organization role, an active impersonation session and a delegated token each get
+// the bare 401 every unaccepted class gets, before any build identity is written.
+func buildInfoUserTokenCells(t *testing.T, o *liveObs, listener string, q liveReq, identity string) {
+	t.Helper()
+	answer := func(shape func(*accessStore), extra map[string]any) liveAnswer {
+		minter := newAccessMinter(t)
+		store := newAccessStore()
+		if shape != nil {
+			shape(store)
+		}
+		stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow), true)
+		q2 := q
+		q2.bearer = minter.mint(ecUser, extra, nil)
+		return stack.live(q2)
+	}
+	for name, cell := range map[string]struct {
+		shape func(*accessStore)
+		extra map[string]any
+	}{
+		"platform-admin user token":             {asSuperuser, nil},
+		"platform-admin user token with no org": {asSuperuser, map[string]any{"org_id": nil}},
+	} {
+		got := answer(cell.shape, cell.extra)
+		o.see(got.status)
+		if got.status != http.StatusOK || got.body != identity {
+			o.fail("%s: %s: status %d body %q, want 200 and the build identity %q", listener, name, got.status, trim(got.body), trim(identity))
+		}
+	}
+	refused := map[string]struct {
+		shape func(*accessStore)
+		extra map[string]any
+	}{
+		"platform-admin user token with an active impersonation session": {func(s *accessStore) { asSuperuser(s); withSession(s) }, nil},
+		"delegated platform-admin user token":                            {asSuperuser, map[string]any{"act": map[string]any{"sub": wirePrincipal(liveActor)}}},
+	}
+	for _, role := range []string{"viewer", "member", "admin", "owner"} {
+		role := role
+		refused[role+" user token"] = struct {
+			shape func(*accessStore)
+			extra map[string]any
+		}{func(s *accessStore) { s.roles = map[[2]uuid.UUID]string{{ecUser, ecOrg}: role} }, nil}
+	}
+	for name, cell := range refused {
+		got := answer(cell.shape, cell.extra)
+		o.wantStatus(listener+": "+name, got, http.StatusUnauthorized)
+		if strings.Contains(got.body, identity) || strings.TrimSpace(got.body) != "unauthorized" {
+			o.fail("%s: %s: body %q, want the bare refusal and no build identity", listener, name, trim(got.body))
+		}
+	}
 }
 
 func driveGraphQL(t *testing.T, row liveRow) *liveObs {

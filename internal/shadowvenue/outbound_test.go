@@ -2,6 +2,7 @@ package shadowvenue
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,28 @@ func stripeRun(t *testing.T) ([]Slot, []string, []string) {
 	return slots, lines, hits
 }
 
+const testImage = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+// egressText is a passing egress record of the read when.
+func egressText(when string) string {
+	return "when=" + when + "\nnetwork_internal=true\nnetworks=venue-int\ndefault_route=none\npublic_tcp=refused\npublic_dns=fail\nstub_tcp=ok\n" +
+		"hosts_pinned=api.github.com,api.pagerduty.com,api.stripe.com,github.com,identity.pagerduty.com\nimage=" + testImage + "\n"
+}
+
+func egressReads(when ...string) []EgressRead {
+	var out []EgressRead
+	for _, w := range when {
+		out = append(out, ParseEgress(w+".txt", []byte(egressText(w))))
+	}
+	return out
+}
+
 func judgeOutbound(t *testing.T, slots []Slot, lines, hits []string, logged bool) Report {
+	t.Helper()
+	return judgeOutboundEgress(t, slots, lines, hits, logged, egressReads("before", "between"))
+}
+
+func judgeOutboundEgress(t *testing.T, slots []Slot, lines, hits []string, logged bool, egress []EgressRead) Report {
 	t.Helper()
 	ev, err := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
 	if err != nil {
@@ -48,7 +70,7 @@ func judgeOutbound(t *testing.T, slots []Slot, lines, hits []string, logged bool
 		t.Fatal(err)
 	}
 	ext := map[string]string{"C1": none, "C2": none, "27": "stripe", "58": none}
-	return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: logged, Hits: parsed, Ext: ext}})
+	return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: logged, Hits: parsed, Ext: ext, Egress: egress}})
 }
 
 func TestJudgeOutboundPassesWhenEveryAllowedSlotReachesTheStub(t *testing.T) {
@@ -217,7 +239,7 @@ func TestEnforcedOutboundParity(t *testing.T) {
 				ext[s.Row] = none
 			}
 		}
-		r.in.Outbound = Outbound{Logged: true, Hits: hits, Ext: ext}
+		r.in.Outbound = Outbound{Logged: true, Hits: hits, Ext: ext, Egress: egressReads("before", "between", "after")}
 		return r
 	}
 	if rep := build().judge(); rep.Void || !rep.Pass {
@@ -257,5 +279,143 @@ func TestEnforcedOutboundParity(t *testing.T) {
 		if rep.Void != c.void || rep.Pass || !strings.Contains(joined, c.want) {
 			t.Errorf("%s: void %v pass %v, reasons:\n%s", name, rep.Void, rep.Pass, joined)
 		}
+	}
+}
+
+// Each egress defect voids the run: a record missing, unreadable or failing a fact, a read out of order, and an image
+// digest or network that differs between the reads.
+func TestJudgeOutboundEgressEachPlantedDefectIsVoid(t *testing.T) {
+	slots, lines, hits := stripeRun(t)
+	if r := judgeOutboundEgress(t, slots, lines, hits, true, egressReads("before", "between")); r.Void || !r.Pass {
+		t.Fatalf("good records: void %v pass %v: %v", r.Void, r.Pass, r.Reasons)
+	}
+	bad := func(key, value string) []EgressRead {
+		text := egressText("between")
+		lines := strings.Split(text, "\n")
+		for i, l := range lines {
+			if strings.HasPrefix(l, key+"=") {
+				lines[i] = key + "=" + value
+			}
+		}
+		return []EgressRead{egressReads("before")[0], ParseEgress("between.txt", []byte(strings.Join(lines, "\n")))}
+	}
+	cases := map[string][]EgressRead{
+		"no record":            nil,
+		"one record":           egressReads("before"),
+		"unreadable":           {egressReads("before")[0], {Name: "between.txt", Err: errors.New("unreadable")}},
+		"a key missing":        {egressReads("before")[0], ParseEgress("between.txt", []byte(strings.Replace(egressText("between"), "stub_tcp=ok\n", "", 1)))},
+		"an unknown key":       {egressReads("before")[0], ParseEgress("between.txt", []byte(egressText("between")+"proxy=none\n"))},
+		"a key twice":          {egressReads("before")[0], ParseEgress("between.txt", []byte(egressText("between")+"stub_tcp=ok\n"))},
+		"reads out of order":   egressReads("between", "before"),
+		"network not internal": bad("network_internal", "false"),
+		"a default route":      bad("default_route", "via 172.18.0.1"),
+		"public tcp open":      bad("public_tcp", "open"),
+		"public dns resolves":  bad("public_dns", "ok"),
+		"stub unreachable":     bad("stub_tcp", "refused"),
+		"a host not pinned":    bad("hosts_pinned", "api.stripe.com"),
+		"not a digest":         bad("image", "latest"),
+		"image differs":        bad("image", "sha256:"+strings.Repeat("2", 64)),
+		"network differs":      bad("networks", "venue-other"),
+		"two networks":         bad("networks", "venue-int,bridge"),
+	}
+	for name, reads := range cases {
+		r := judgeOutboundEgress(t, slots, lines, hits, true, reads)
+		if !r.Void || !strings.Contains(strings.Join(r.Reasons, "\n"), "egress") {
+			t.Errorf("%s: void %v, reasons %v", name, r.Void, r.Reasons)
+		}
+	}
+}
+
+// A NO_OUTBOUND row passes with no hit in any slot and fails on one hit; its reason goes into the row table. In the
+// enforced run a yardstick hit on it fails too.
+func TestNoOutboundRowPassesWithoutAHitAndFailsOnOne(t *testing.T) {
+	const key = "POST /api/v1/admin/integrations/github/install-url"
+	run := func(withHit bool) Report {
+		slots, lines := controlsOK()
+		var hitLines []string
+		seq := len(slots) + 1
+		for _, caller := range callerOrder {
+			for k := 1; k <= 3; k++ {
+				s := slotAt(seq, "81", caller, k)
+				s.Method, s.Route, s.Path = "POST", "/api/v1/admin/integrations/github/install-url", "/api/v1/admin/integrations/github/install-url"
+				if caller == "admin" && k == 2 && withHit {
+					hitLines = append(hitLines, hitLine(s.Start.Add(time.Millisecond), "github", "api.github.com"))
+				}
+				slots = append(slots, s)
+				lines = append(lines, result(s, 500*time.Millisecond, "match", "dec_"+strings.Repeat(string(rune('a'+seq)), 24)))
+				seq++
+			}
+		}
+		ev, _ := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+		parsed, _ := ParseStubLog([]byte(strings.Join(hitLines, "\n")))
+		ext := map[string]string{"C1": none, "C2": none, "81": "github"}
+		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Hits: parsed, Ext: ext, Egress: egressReads("before", "between")}})
+	}
+	clean := run(false)
+	if clean.Void || !clean.Pass {
+		t.Fatalf("no hit: void %v pass %v: %v", clean.Void, clean.Pass, clean.Reasons)
+	}
+	var notes string
+	for _, rv := range clean.Rows {
+		if rv.Row == "81" {
+			notes = strings.Join(rv.Notes, ";")
+		}
+	}
+	if !strings.Contains(notes, "NO_OUTBOUND: "+NoOutboundRows[key]) {
+		t.Fatalf("row 81 notes %q lack the pinned reason", notes)
+	}
+	if hit := run(true); hit.Void || hit.Pass || !strings.Contains(strings.Join(hit.Reasons, "\n"), "pinned NO_OUTBOUND") {
+		t.Fatalf("one hit: void %v pass %v: %v", hit.Void, hit.Pass, hit.Reasons)
+	}
+	if _, ok := NoOutboundRows["POST /api/v1/admin/integrations/pagerduty/authorize"]; !ok || len(NoOutboundRows) != 2 {
+		t.Fatalf("pinned rows %v, want rows 36 and 81 only (acp Q-A2)", NoOutboundRows)
+	}
+}
+
+// In the enforced run a NO_OUTBOUND row passes on 0 hits in both runs; a hit in the yardstick file, or in the enforced
+// stub log, fails it.
+func TestEnforcedNoOutboundRowFailsOnAHitInEitherRun(t *testing.T) {
+	const key = "POST /api/v1/admin/integrations/github/install-url"
+	build := func() *enfRun {
+		r := newEnfRun()
+		seq := len(r.in.Slots) + 1
+		for _, caller := range callerOrder {
+			for k := 1; k <= 3; k++ {
+				start := enfT0.Add(time.Duration(seq-1) * 3 * time.Second)
+				s := Slot{Seq: seq, Row: "81", Caller: caller, Principal: caller, Expect: "match", K: k, Method: "POST",
+					Route: "/api/v1/admin/integrations/github/install-url", Path: "/api/v1/admin/integrations/github/install-url", Start: start, End: start.Add(100 * time.Millisecond), Status: 200}
+				r.in.Slots = append(r.in.Slots, s)
+				r.in.Yard = append(r.in.Yard, YardSlot{Row: "81", Caller: caller, K: k, Key: key, Status: 200, Verdict: VerdictMatch})
+				seq++
+			}
+		}
+		for _, s := range r.in.Slots {
+			r.in.YardOutbound = append(r.in.YardOutbound, OutboundSlot{Row: s.Row, Caller: s.Caller, K: s.K, Key: s.Key(), Status: s.Status})
+		}
+		r.in.Namespaces[key] = "integrations"
+		r.in.Grace = 2200 * time.Millisecond
+		r.in.YardOutboundGiven = true
+		ext := map[string]string{"81": "github"}
+		for _, s := range r.in.Slots {
+			if ext[s.Row] == "" {
+				ext[s.Row] = none
+			}
+		}
+		r.in.Outbound = Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between", "after")}
+		return r
+	}
+	if rep := build().judge(); rep.Void || !rep.Pass {
+		t.Fatalf("no hit: void %v pass %v: %v", rep.Void, rep.Pass, rep.Reasons)
+	}
+	yardHit := build()
+	yardHit.in.YardOutbound[len(yardHit.in.YardOutbound)-1].Hits = 1
+	if rep := yardHit.judge(); rep.Pass || !strings.Contains(strings.Join(rep.Reasons, "\n"), "in the yardstick, but the row is pinned NO_OUTBOUND") {
+		t.Errorf("a yardstick hit: pass %v: %v", rep.Pass, rep.Reasons)
+	}
+	runHit := build()
+	last := runHit.in.Slots[len(runHit.in.Slots)-1]
+	runHit.in.Outbound.Hits = []StubHit{{At: last.Start.Add(time.Millisecond), Service: "github", Method: "POST", Host: "api.github.com", Path: "/x"}}
+	if rep := runHit.judge(); rep.Pass || !strings.Contains(strings.Join(rep.Reasons, "\n"), "but the row is pinned NO_OUTBOUND") {
+		t.Errorf("an enforced hit: pass %v: %v", rep.Pass, rep.Reasons)
 	}
 }

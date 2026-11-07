@@ -142,6 +142,7 @@ type PlanOptions struct {
 	Throwaway     string
 	Pool          []string
 	Frozen        ThrowawayIDs
+	States        States
 	OnlyRows      []string
 	AllowExternal []string
 	K             int

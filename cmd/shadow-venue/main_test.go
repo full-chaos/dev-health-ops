@@ -20,7 +20,8 @@ func principalsFile(t *testing.T) string {
 	b.WriteString("org\tA\t-\t11111111-1111-4111-8111-111111111111\tA\t-\t-\n")
 	b.WriteString("org\tB\t-\t22222222-2222-4222-8222-222222222222\tB\t-\t-\n")
 	b.WriteString("org\tC\t-\t33333333-3333-4333-8333-333333333333\tC\t-\t-\n")
-	for i, p := range []string{"member-A\tA\tmember", "admin-A\tA\towner", "drift-S\tA\tplatform_admin", "superuser\t-\tplatform_admin", "owner-C\tC\towner"} {
+	b.WriteString("org\tE\t-\t66666666-6666-4666-8666-666666666666\tE\t-\t-\n")
+	for i, p := range []string{"member-A\tA\tmember", "admin-A\tA\towner", "drift-S\tA\tplatform_admin", "superuser\t-\tplatform_admin", "owner-C\tC\towner", "member-E\tE\tmember", "admin-E\tE\tadmin"} {
 		f := strings.Split(p, "\t")
 		pw := filepath.Join(dir, f[0]+".pw")
 		if err := os.WriteFile(pw, []byte("fake\n"), 0o600); err != nil {
@@ -28,6 +29,7 @@ func principalsFile(t *testing.T) string {
 		}
 		b.WriteString("principal\t" + f[0] + "\t" + f[0] + "@example.test\t4444444" + string(rune('0'+i)) + "-4444-4444-8444-444444444444\t" + f[1] + "\t" + f[2] + "\t" + pw + "\n")
 	}
+	b.WriteString("invoice_open\tinv\t-\t77777777-7777-4777-8777-777777777777\tE\t-\t-\n")
 	for _, s := range []string{"team", "integration", "dataset", "feature_override"} {
 		b.WriteString(s + "\t" + s + "\t-\t55555555-5555-4555-8555-555555555555\tA\t-\t-\n")
 	}

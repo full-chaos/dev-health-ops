@@ -277,7 +277,7 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 		report.Slots = append(report.Slots, sv)
 	}
 	relabelNoOrgSkips(report.Slots, o.NoOrg)
-	outbound := checkOutbound(slots, o.Outbound, o.Grace)
+	outbound := checkOutbound(slots, o.Outbound, o.Grace, nil)
 	for i := range report.Slots {
 		report.Slots[i].Outbound = outbound.hits[report.Slots[i].Seq]
 	}

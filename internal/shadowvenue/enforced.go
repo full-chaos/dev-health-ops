@@ -345,7 +345,7 @@ func ParseYardstick(raw []byte) ([]YardSlot, error) {
 // to the same reach rule, and gives a passing slot whose outside calls differ from its yardstick slot's
 // MISMATCH_OUTBOUND. Without external rows and without a yardstick outbound file there is nothing to compare.
 func judgeOutboundEnforced(report *Report, in EnforcedInput) outboundCheck {
-	check := checkOutbound(in.Slots, in.Outbound, in.Grace)
+	check := checkOutbound(in.Slots, in.Outbound, in.Grace, nil)
 	external := map[string]bool{}
 	for _, s := range sentSlots(in.Slots) {
 		if ext := in.Outbound.Ext[s.Row]; ext != "" && ext != none {

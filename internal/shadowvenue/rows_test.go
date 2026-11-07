@@ -118,3 +118,31 @@ func TestDefaultRowsDestructiveRowsActInThePool(t *testing.T) {
 		t.Fatalf("destructive rows %v, want 1,6,9,10,13", got)
 	}
 }
+
+// The external rows of the embedded table act in org E; the rows that need a minted state are 34 and 37 only, and the
+// NO_OUTBOUND rows are external rows of the table.
+func TestDefaultRowsExternalRowsActInOrgE(t *testing.T) {
+	var external, state []string
+	keys := map[string]bool{}
+	for _, row := range mustRows(t, string(DefaultRows)) {
+		keys[row.Key()] = row.Ext != none
+		if row.Ext == none || row.Destructive {
+			continue
+		}
+		external = append(external, row.ID)
+		if row.Org != "E" {
+			t.Errorf("row %s: external in org %s", row.ID, row.Org)
+		}
+		if strings.Contains(row.Body, statePlaceholder) {
+			state = append(state, row.ID)
+		}
+	}
+	if len(external) != 17 || strings.Join(state, ",") != "34,37" {
+		t.Fatalf("external rows %v, state rows %v", external, state)
+	}
+	for key := range NoOutboundRows {
+		if !keys[key] {
+			t.Errorf("pinned %s is no external row of the table", key)
+		}
+	}
+}

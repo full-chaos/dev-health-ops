@@ -62,7 +62,11 @@ type Outbound struct {
 	Logged bool
 	Hits   []StubHit
 	Ext    map[string]string
+	Egress []EgressRead
 }
+
+// NoOutboundRows: skeleton, none pinned yet.
+var NoOutboundRows = map[string]string{}
 
 // RowExt maps each row id of rows to its ext.
 func RowExt(rows []Row) map[string]string {
@@ -102,7 +106,7 @@ type outboundCheck struct {
 // row sent with no stub log, a hit in no window, a hit of a service the stub does not serve. Fail: a hit of a service
 // other than the slot row's ext, a denied slot (401/403) with a hit, an external row none of whose allowed slots (not
 // 401/403, at least one) reached the stub, or one with no allowed slot at all.
-func checkOutbound(slots []Slot, ob Outbound, grace time.Duration) outboundCheck {
+func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []string) outboundCheck {
 	out := outboundCheck{hits: map[int]int{}}
 	sent := sentSlots(slots)
 	external := map[string]bool{}

@@ -112,7 +112,6 @@ internal/llmbudget
 internal/llmorgsettings
 internal/mcpclass
 internal/mintcli/edgetoken
-internal/mintcli/envelope
 internal/netclass
 internal/operationalbackfill
 internal/operationalordering

@@ -16,3 +16,6 @@ tools/codex-review/test-exec-classify.sh	l=$(newlog pytest); block "$l" "/bin/ba
 tools/codex-review/test-exec-classify.sh	.venv/bin/pytest -q tests/x.py\" in /w" " succeeded in 10ms:" "1 passed"; check "pytest on a later line" "$l" "0 1 0"
 tools/codex-review/codex-review.sh	RUVCACHE="${CODEX_REVIEW_UV_CACHE_DIR:-${UV_CACHE_DIR:-/var/lib/oci-cache/uv}}"
 tools/codex-review/codex-review.sh	s ~ /uv run|\.venv\/bin\/pytest/ ||
+ci/check_go.sh	(($line | capture(" python=(?<v>[^ :\n]+)") | .v) // ""),
+ci/check_go.sh	printf 'ERROR: venue oracle %s reported a KNOWN-DIVERGENCE %s skip without python=<answer> go=<answer>: no proof that both planes ran\n' "${skip_test}" "${ticket}" >&2
+ci/check_go.sh	printf 'KNOWN %s %s python=%s go=%s\n' "${ticket}" "${skip_test}" "${py}" "${go}"

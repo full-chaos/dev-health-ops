@@ -241,3 +241,78 @@ func TestAuthJobsGrantProjectionReadsToTheListedRoles(t *testing.T) {
 		}
 	}
 }
+
+// auth-migrate and auth-grants pass the workload reader roles only when some are listed, so the default render and
+// every existing release render the same Jobs as before.
+func TestAuthJobsGrantTheWorkloadRegistryReadOnlyToTheListedRoles(t *testing.T) {
+	jobs := []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"}
+	docs, out, err := renderAuth(t, authBase...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	for _, job := range jobs {
+		if value, set := containerEnvValue(t, authDoc(docs, "Job", job), "AUTH_WORKLOAD_READER_ROLES"); set {
+			t.Errorf("%s: the default render sets AUTH_WORKLOAD_READER_ROLES=%q; want it unset", job, value)
+		}
+	}
+	docs, out, err = renderAuth(t, append(append([]string{}, authBase...),
+		"--set-json", `authService.migrate.sessionReaderRoles=["devhealth_api","devhealth_query"]`,
+		"--set-json", `authService.migrate.workloadReaderRoles=["devhealth_api"]`)...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	for _, job := range jobs {
+		if value, _ := containerEnvValue(t, authDoc(docs, "Job", job), "AUTH_WORKLOAD_READER_ROLES"); value != "devhealth_api" {
+			t.Errorf("%s: AUTH_WORKLOAD_READER_ROLES = %q, want devhealth_api", job, value)
+		}
+		if value, _ := containerEnvValue(t, authDoc(docs, "Job", job), "AUTH_SESSION_READER_ROLES"); value != "devhealth_api,devhealth_query" {
+			t.Errorf("%s: AUTH_SESSION_READER_ROLES = %q changed", job, value)
+		}
+	}
+}
+
+// The auth-grants Job passes only authService.migrate.sessionReaderRoles as session readers, while auth-migrate takes the
+// union with sessionReaders (go-api's and query-api's logins). A workload reader must be one of the session readers the SAME
+// run names, or auth-migrate refuses the run, so the grants Job renders AUTH_WORKLOAD_READER_ROLES only for roles in its own
+// session reader list; the migrate Job, which holds the union, renders them all.
+func TestGrantsJobRendersOnlyWorkloadReadersItsSessionReadersName(t *testing.T) {
+	prod := append(append([]string{}, authBase...),
+		"--set", "authService.migrate.sessionReaders.goApi=devhealth_api",
+		"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query_api",
+		"--set-json", `authService.migrate.workloadReaderRoles=["devhealth_api"]`)
+	docs, out, err := renderAuth(t, prod...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	if value, _ := containerEnvValue(t, authDoc(docs, "Job", "a-dev-health-auth-migrate"), "AUTH_WORKLOAD_READER_ROLES"); value != "devhealth_api" {
+		t.Errorf("auth-migrate AUTH_WORKLOAD_READER_ROLES = %q, want devhealth_api", value)
+	}
+	if value, set := containerEnvValue(t, authDoc(docs, "Job", "a-dev-health-auth-grants"), "AUTH_WORKLOAD_READER_ROLES"); set {
+		t.Errorf("auth-grants AUTH_WORKLOAD_READER_ROLES = %q with no session reader role of its own: auth-migrate refuses a workload reader that is not a session reader", value)
+	}
+	both := append(append([]string{}, authBase...),
+		"--set-json", `authService.migrate.sessionReaderRoles=["devhealth_api","devhealth_query"]`,
+		"--set-json", `authService.migrate.workloadReaderRoles=["devhealth_api","devhealth_other"]`)
+	docs, out, err = renderAuth(t, both...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	if value, _ := containerEnvValue(t, authDoc(docs, "Job", "a-dev-health-auth-grants"), "AUTH_WORKLOAD_READER_ROLES"); value != "devhealth_api" {
+		t.Errorf("auth-grants AUTH_WORKLOAD_READER_ROLES = %q, want only devhealth_api (the one its session readers name)", value)
+	}
+}
+
+// auth-migrate trims every role name it reads from its env (a padded value is the role), so the grants Job compares trimmed names
+// too: a padded sessionReaderRoles or workloadReaderRoles entry must not drop a workload reader.
+func TestGrantsJobTrimsRoleNamesLikeAuthMigrate(t *testing.T) {
+	sets := append(append([]string{}, authBase...),
+		"--set-json", `authService.migrate.sessionReaderRoles=[" devhealth_api ","devhealth_query"]`,
+		"--set-json", `authService.migrate.workloadReaderRoles=["devhealth_api "]`)
+	docs, out, err := renderAuth(t, sets...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	if value, _ := containerEnvValue(t, authDoc(docs, "Job", "a-dev-health-auth-grants"), "AUTH_WORKLOAD_READER_ROLES"); value != "devhealth_api" {
+		t.Errorf("auth-grants AUTH_WORKLOAD_READER_ROLES = %q, want devhealth_api: a padded role name dropped the workload reader", value)
+	}
+}

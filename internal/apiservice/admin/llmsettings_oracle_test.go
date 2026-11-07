@@ -485,16 +485,16 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 			deps.Decryptor = decryptor
 		}
 	})
-	claimRetirement, claimPin := orgClaimRetirement(t, "testdata/orgclaim/llmsettings_"+mode+".go-pin.json", llmSettingsOrgClaimPinSHA256[mode],
-		"get org id not a uuid", "get org missing", "W put org not a uuid", "W put org missing", "W put 422 beats org check",
-		"W delete org not a uuid", "W delete org missing")
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		Retire: func(request venueoracle.Request) bool {
 			return llmModelRetired[request.Name] || llmDelegatedRetired[request.Name] || (withKey && llmUndecryptableRetired[request.Name])
 		},
-		Pin:         pin,
-		Retirements: []venueoracle.Retirement{claimRetirement},
+		Pin: pin,
+		KnownDivergences: []venueoracle.KnownDivergence{
+			orgClaimGap(venueoracle.NotUUIDOrgClaimGap, "get org id not a uuid", "W put org not a uuid", "W put 422 beats org check", "W delete org not a uuid"),
+			orgClaimGap(venueoracle.RoleClaimGap, "get org missing", "W put org missing", "W delete org missing"),
+		},
 	})
 	t.Log(receipt)
 
@@ -514,7 +514,7 @@ FROM settings ORDER BY org_id, category, key`)
 	if withKey {
 		checkBudgetLockSerializes(t, ctx, venue, goBase, orgs["empty"].id, venue.Tokens["empty"])
 	}
-	venueoracle.FinishPins(t, pin, claimPin)
+	venueoracle.FinishPins(t, pin)
 	golden.Finish(t)
 }
 

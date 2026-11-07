@@ -11,8 +11,8 @@ import (
 
 // CHAOS-13209 D3 (x), acp 2026-11-06: the legacy go-api answer, one real row per platform_admin-flagged action, for a
 // superuser with no membership row (EdDSA, org claim B) when B is active and when B is suspended, and, as the
-// control, for an admin member of B. A measurement: each answer is a CELL line; the test fails only on no answer. A
-// guard refusal is 401 or 403 with the guard's body; any other answer means the request was admitted.
+// control, for an admin member of B. A measurement: each answer is a CELL line; the test fails on no answer, and on a
+// 401 while B is active (the token did not pass authentication, so the cell measures nothing). A guard refusal is 401 or 403 with the guard's body; any other answer means the request was admitted.
 func TestLegacyGoAPIFlaggedActionsInAnInactiveOrganization(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -44,6 +44,9 @@ func TestLegacyGoAPIFlaggedActionsInAnInactiveOrganization(t *testing.T) {
 				status, body, _ := rig.do(rig.legacy, c.method, c.path, c.body, caller.token)
 				if status == 0 {
 					t.Fatalf("%s %s %s: no answer", caller.label, c.method, c.path)
+				}
+				if state.active && status == http.StatusUnauthorized {
+					t.Errorf("%s %s %s: 401 %s with org B active, want an answer past authentication", caller.label, c.method, c.path, body)
 				}
 				t.Logf("CELL|D3x|go-api legacy|org B %s|%s|%s|%s %s|%d|%s", state.label, caller.label, c.action, c.method, c.path, status, body)
 			}

@@ -82,6 +82,11 @@ func ParseLog(r io.Reader) (Evidence, error) {
 		n++
 		var rec map[string]any
 		if json.Unmarshal(scanner.Bytes(), &rec) != nil {
+			for _, msg := range []string{MsgResult, MsgMismatch, MsgServedOther} {
+				if strings.Contains(scanner.Text(), `"`+msg+`"`) {
+					return Evidence{}, fmt.Errorf("log line %d: a %q line that is not JSON: the evidence is unreadable", n, msg)
+				}
+			}
 			continue
 		}
 		msg, _ := rec["msg"].(string)

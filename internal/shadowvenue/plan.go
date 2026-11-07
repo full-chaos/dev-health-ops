@@ -28,7 +28,7 @@ func (p Principal) Caller() string {
 	return policy.ShadowCaller(strings.HasPrefix(p.Role, "platform_admin"), p.Role)
 }
 
-type seed struct{ Name, UUID string }
+type seed struct{ Name, UUID, Org string }
 
 // Venue is the principals file: the proof orgs by label, the principals, and the seed rows by kind.
 type Venue struct {
@@ -85,7 +85,7 @@ func ParsePrincipals(raw []byte) (Venue, error) {
 			v.Principals = append(v.Principals, p)
 		default:
 			if _, dup := v.seeds[kind]; !dup {
-				v.seeds[kind] = seed{Name: name, UUID: strings.ToLower(id)}
+				v.seeds[kind] = seed{Name: name, UUID: strings.ToLower(id), Org: org}
 			}
 		}
 	}
@@ -315,7 +315,9 @@ func (v Venue) throwawayOnly(row Row, throwaway string) error {
 					return fmt.Errorf("plan: destructive row %s names user %s, who is not in the throwaway org %s", row.ID, m[2], throwaway)
 				}
 			case "uuid", "name":
-				return fmt.Errorf("plan: destructive row %s names a seed of org A; only the throwaway org %s is allowed", row.ID, throwaway)
+				if s, ok := v.seeds[m[2]]; !ok || s.Org != throwaway {
+					return fmt.Errorf("plan: destructive row %s names seed %s, which is not a seed of the throwaway org %s", row.ID, m[2], throwaway)
+				}
 			}
 		}
 	}

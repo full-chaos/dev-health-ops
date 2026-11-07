@@ -464,3 +464,18 @@ func TestJudgeFailsAnIntentionalRefusalOfARequestLegacyServed(t *testing.T) {
 		}
 	}
 }
+
+// A line that names a shadow evidence message but is not JSON is evidence the judge cannot read: it refuses the log
+// instead of skipping the line (a truncated duplicate must not pass a run).
+func TestParseLogRefusesATruncatedShadowEvidenceLine(t *testing.T) {
+	good := logLine(t0, MsgResult, "route", "GET /x", "caller", "member", "result", "match", "decision_id", "dec_1")
+	for _, msg := range []string{MsgResult, MsgMismatch, MsgServedOther} {
+		truncated := `{"time":"` + t0.Format(time.RFC3339Nano) + `","level":"INFO","msg":"` + msg + `","route":"GET /x","caller":"mem`
+		if _, err := ParseLog(strings.NewReader(good + "\n" + truncated + "\n")); err == nil {
+			t.Errorf("a truncated %q line was skipped", msg)
+		}
+	}
+	if _, err := ParseLog(strings.NewReader(good + "\nnot json, and about something else\n")); err != nil {
+		t.Errorf("a line that is no evidence was refused: %v", err)
+	}
+}

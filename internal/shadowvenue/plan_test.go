@@ -216,3 +216,27 @@ func TestPlanDestructiveRowsAreGapsUnlessAsked(t *testing.T) {
 		t.Fatal("a destructive row outside the throwaway org passed while destructive rows are off")
 	}
 }
+
+// A seed of the throwaway org may be named by a destructive row; a seed of another org still may not.
+func TestPlanAllowsAThrowawayOrgSeedInADestructiveRow(t *testing.T) {
+	_, raw := testPrincipals(t)
+	const seedC = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	venue, err := ParsePrincipals([]byte(raw + "cteam\tc-team\t-\t" + seedC + "\tC\t-\t-\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := func(path, body string) string {
+		return "13\tDELETE\t/api/v1/admin/orgs/{org_id}\tC\tyes\t-\t-\tmatch\t" + path + "\t" + body + "\n"
+	}
+	for name, line := range map[string]string{
+		"uuid in the path": row("/api/v1/admin/orgs/{uuid:cteam}", "-"),
+		"name in the path": row("/api/v1/admin/orgs/{name:cteam}", "-"),
+	} {
+		if _, err := MakePlan(mustRows(t, testRowsHeader+line), venue, PlanOptions{Throwaway: "C", K: 1, Destructive: true}); err != nil {
+			t.Errorf("%s: a throwaway-org seed was refused: %v", name, err)
+		}
+	}
+	if _, err := MakePlan(mustRows(t, testRowsHeader+row("/api/v1/admin/orgs/{uuid:team}", "-")), venue, PlanOptions{Throwaway: "C", K: 1, Destructive: true}); err == nil {
+		t.Error("a seed of org A was accepted in a destructive row")
+	}
+}

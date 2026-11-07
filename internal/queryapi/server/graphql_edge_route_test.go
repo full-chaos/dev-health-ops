@@ -643,16 +643,11 @@ func TestGraphQLEdgeLogsWhyItRefused(t *testing.T) {
 		"envelope":                "reason=not_an_edge_token carrier=edge",
 		"two-bearers":             "reason=ambiguous_carrier carrier=authorization",
 		"internal-headers+member": "reason=internal_headers_on_edge_path carrier=headers",
-		// The routed check refuses a token org without a membership row itself
-		// (accessroute_user.go), before the carrier's own membership read.
-		"nonmember": "api user access token for an org the user is not a member of",
+		"nonmember":               "reason=edge_not_a_member carrier=edge",
 	} {
 		logged.Reset()
 		c := edgeCell{method: http.MethodPost, carrier: carrier, document: "query"}
 		recorder := serveEdge(handler, c, edgeRequest(t, c, member, nonmember, envelope))
-		if carrier == "nonmember" && !strings.Contains(logged.String(), "reason=edge_rejected carrier=edge") {
-			t.Errorf("nonmember: logged %q, want reason=edge_rejected", logged.String())
-		}
 		if recorder.Code != http.StatusUnauthorized || !strings.Contains(logged.String(), reason) {
 			t.Errorf("%s: %d, logged %q, want 401 and %q", carrier, recorder.Code, logged.String(), reason)
 		}

@@ -63,4 +63,4 @@ When the new action makes the PDP and legacy disagree, the mismatch is `unresolv
 
 ## 6. What this guide does not cover
 
-Turning enforcement on (per namespace and service, CHAOS-10852) and its outage and rollback runbook are not on `main`. They are added by their own pull requests.
+Turning enforcement on (per namespace and service) and its outage and rollback runbook are not on `main`. They are added by their own pull requests.

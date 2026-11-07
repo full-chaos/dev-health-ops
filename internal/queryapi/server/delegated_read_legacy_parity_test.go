@@ -167,6 +167,12 @@ var dlpRows = []string{"/api/v1/home", "/api/v1/flame", "/api/v1/drilldown/prs",
 // stub: it echoes the organization and the scope kind the request may serve (no ClickHouse read).
 func dlpHandler(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.Gate) http.Handler {
 	t.Helper()
+	return dlpHandlerFor(t, store, m, gate, dlpRows)
+}
+
+// dlpHandlerFor is dlpHandler over the route patterns routes.
+func dlpHandlerFor(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.Gate, routes []string) http.Handler {
+	t.Helper()
 	verifier, _ := iaVerifier(t)
 	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(store))
 	if err != nil {
@@ -177,7 +183,7 @@ func dlpHandler(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.Gat
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	for _, row := range dlpRows {
+	for _, row := range routes {
 		mux.HandleFunc(row, func(w http.ResponseWriter, r *http.Request) {
 			claims, ok := authenticateRESTRequest(w, r, verifier, edge, "parity")
 			if !ok {
@@ -234,6 +240,11 @@ type dlpRig struct {
 
 func newDLPRig(t *testing.T, assurance string) *dlpRig {
 	t.Helper()
+	return newDLPRigFor(t, assurance, dlpRows)
+}
+
+func newDLPRigFor(t *testing.T, assurance string, routes []string) *dlpRig {
+	t.Helper()
 	m := newAccessMinter(t)
 	store := newAccessStore()
 	org := ecOrg.String()
@@ -254,12 +265,16 @@ func newDLPRig(t *testing.T, assurance string) *dlpRig {
 		Chain:             []authorization.Hop{{ActorPrincipalID: wirePrincipal(dlpSUI), PermittedActions: []string{"analytics.read", "metrics.read", "git.read", "work_items.read"}}},
 		ActorPlatformRole: "platform_admin", TargetOrganizationID: org, Assurance: assurance}})
 	return &dlpRig{pdp: p, token: token,
-		legacy:   dlpHandler(t, store, m, dlpGate(t, pdp.ModeOff, "", nil)),
-		enforced: dlpHandler(t, store, m, dlpGate(t, pdp.ModeEnforce, dlpReadCells, p))}
+		legacy:   dlpHandlerFor(t, store, m, dlpGate(t, pdp.ModeOff, "", nil), routes),
+		enforced: dlpHandlerFor(t, store, m, dlpGate(t, pdp.ModeEnforce, dlpReadCells, p), routes)}
 }
 
 func (h *dlpRig) serve(row string, handler http.Handler) dlpAnswer {
-	req := httptest.NewRequest(http.MethodGet, row, nil)
+	return h.serveAs(http.MethodGet, row, handler)
+}
+
+func (h *dlpRig) serveAs(method, path string, handler http.Handler) dlpAnswer {
+	req := httptest.NewRequest(method, path, nil)
 	req.Header.Set("Authorization", "Bearer "+h.token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

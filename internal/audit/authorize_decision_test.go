@@ -79,3 +79,10 @@ func TestAppendAllRefusesBeforeItWrites(t *testing.T) {
 		t.Errorf("a valid set with no pool: %v, want the no-pool refusal", err)
 	}
 }
+
+func TestDelegatedDecisionEventTypeIsAppendOnly(t *testing.T) {
+	if EventAuthorizeDelegatedDecided != "auth.authorize.delegated_decided" || !appendOnlyEventTypes[EventAuthorizeDelegatedDecided] {
+		t.Fatalf("%q append-only=%v, want auth.authorize.delegated_decided append-only", EventAuthorizeDelegatedDecided,
+			appendOnlyEventTypes[EventAuthorizeDelegatedDecided])
+	}
+}

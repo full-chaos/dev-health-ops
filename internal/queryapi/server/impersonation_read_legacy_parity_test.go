@@ -18,7 +18,8 @@ import (
 // A superuser with a live go-api impersonation row (its own bearer, EdDSA or HS256, token org ecOrg) reads an enforced
 // query-api REST row. The REST path (authenticateRESTRouted) reads no impersonation row on either side, so both serve
 // the token organization, not the target's, and the enforce-on answer equals the cells-off answer. The EdDSA bearer
-// is asked of the PDP as the admin in the token organization; the HS256 bearer is exempt.
+// is asked of the PDP as the admin in the token organization and served; the HS256 edge class is retired, so both
+// sides refuse it the same way.
 func TestALiveRowCallersReadOnAnEnforcedQueryAPIRowEqualsTheLegacyAnswer(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
@@ -61,9 +62,11 @@ func TestALiveRowCallersReadOnAnEnforcedQueryAPIRowEqualsTheLegacyAnswer(t *test
 				on.code, on.body, off.code, off.body, len(calls), strings.Join(calls, "; "))
 			// The scope kind says who built the scope (pepgate.Legacy or the PDP allow); the served organization and its
 			// reach are the answer.
-			if on.code != off.code || withoutScopeKind(on.body) != withoutScopeKind(off.body) || off.code != http.StatusOK ||
-				!strings.Contains(off.body, `"org":"`+org+`"`) {
-				t.Errorf("%s GET %s: enforce-on %d %s, cells-off %d %s; want equal 200 answers in the token organization", token.name, row, on.code, on.body, off.code, off.body)
+			if on.code != off.code || withoutScopeKind(on.body) != withoutScopeKind(off.body) {
+				t.Errorf("%s GET %s: enforce-on %d %s, cells-off %d %s; want the cells-off answer", token.name, row, on.code, on.body, off.code, off.body)
+			}
+			if token.name == "EdDSA" && (off.code != http.StatusOK || !strings.Contains(off.body, `"org":"`+org+`"`)) {
+				t.Errorf("EdDSA GET %s: cells-off %d %s, want 200 in the token organization", row, off.code, off.body)
 			}
 		}
 	}

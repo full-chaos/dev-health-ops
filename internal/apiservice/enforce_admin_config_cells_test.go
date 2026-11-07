@@ -755,9 +755,10 @@ func TestAdminConfigCellsOnPlatformAdminIsDecidedByTheEvaluator(t *testing.T) {
 	}
 }
 
-// A platform admin with no membership row in the token org, on a legacy token, is not a user access token, so the
-// Enforcer does not judge it (no decision point call) and the legacy guard admits the admin.orgs holder: the
-// handler answers, on or off.
+// A platform admin with no membership row in the token org reaches the handler on every row, on or off (D6773).
+// Before CHAOS-13126 this caller came on the HS256 token, which no row accepts now; the yardstick is the answer main
+// f496ee5d gave that HS256 caller (handler, never a guard refusal), now asked of the same caller's user access token.
+// Off, the decision point is not asked; on, the Enforcer judges the user access token once per row.
 func TestAdminConfigCellsOnPlatformAdminWithoutMembershipRow(t *testing.T) {
 	pdp := newCellPDP(t)
 	for _, on := range []bool{false, true} {
@@ -768,15 +769,19 @@ func TestAdminConfigCellsOnPlatformAdminWithoutMembershipRow(t *testing.T) {
 		handler, minter := adminConfigServerWith(t, enforcer, withPlatformAdmins)
 		callers := cellCallers(minter)
 		pdp.register(callers)
-		legacy := probeHS256(t, probeKey, map[string]any{"sub": cellPlatformNoRow.String(), "org_id": probeOrg.String(), "role": "member", "tv": 0})
+		token := callers["platform admin + no membership"].token
 		for _, key := range sortedAdminConfigKeys() {
 			pdp.reset("evaluate")
-			got := cellDo(handler, key, legacy, nil)
+			got := cellDo(handler, key, token, nil)
 			if isGuardRefusal(got) {
-				t.Errorf("on=%v %s legacy token: %d %s, want the handler's answer", on, key, got.status, got.body)
+				t.Errorf("on=%v %s user access token: %d %s, want the handler's answer", on, key, got.status, got.body)
 			}
-			if calls := pdp.calls(); len(calls) != 0 {
-				t.Errorf("on=%v %s: %d decision point calls, want 0", on, key, len(calls))
+			want := 0
+			if on {
+				want = 1
+			}
+			if calls := pdp.calls(); len(calls) != want {
+				t.Errorf("on=%v %s: %d decision point calls, want %d", on, key, len(calls), want)
 			}
 		}
 	}
@@ -784,25 +789,31 @@ func TestAdminConfigCellsOnPlatformAdminWithoutMembershipRow(t *testing.T) {
 
 // D6773 (chris 2026-11-06, 13:12Z): a platform admin never needs a membership row, and every token class gives the
 // same answer as the legacy path today, not stricter and not wider. With a user access token and no membership row
-// in the token org, each row must answer exactly what the legacy (HS256) token of the same caller gets for the same
-// request, on or off. Today the authenticator refuses it with 401 before the guard: a known defect that
-// CHAOS-13206 fixes.
+// in the token org, each row must answer exactly what the legacy path answered that caller on main f496ee5d (the
+// HS256 token, retired by CHAOS-13126): the 200 principal echo, on or off.
 func TestAdminConfigCellsPlatformAdminWithoutMembershipRowAnswersAsLegacy(t *testing.T) {
-	t.Skip("known defect, D6773, CHAOS-13206")
 	echoParityWithLegacy(t, cellPlatformNoRow, "platform admin + no membership")
 }
 
-// The control for the cell above: the platform admin WITH an org role of member gets the same echoed principal on a
-// user access token and on the legacy token, on or off, so the echo compare is not vacuous.
+// The control for the cell above: the platform admin WITH an org role of member gets the echo the legacy path gave it
+// on main f496ee5d, on or off, so the echo compare is not vacuous.
 func TestAdminConfigCellsPlatformAdminWithMembershipRowEchoesAsLegacy(t *testing.T) {
 	echoParityWithLegacy(t, cellPlatformMember, "platform admin + org member")
 }
 
+// legacyEcho is the principal echo the HS256 token of user (org claim probeOrg, role member) got on every admin-config
+// row on main f496ee5d, on or off: the yardstick recorded before CHAOS-13126 retired that token class.
+func legacyEcho(user uuid.UUID) string {
+	return `{"holds_admin_orgs":true,"is_admin":true,"is_superuser":true,"org":"` + probeOrg.String() + `","org_id":"` +
+		probeOrg.String() + `","role":"member","user_id":"` + user.String() + `"}` + "\n"
+}
+
 // echoParityWithLegacy compares, on every row and on or off, the answer of the caller's user access token with the
-// answer of the HS256 legacy token of the same caller, over the principal echo behind the production guard.
+// legacy path's answer to the same caller (legacyEcho), over the principal echo behind the production guard.
 func echoParityWithLegacy(t *testing.T, user uuid.UUID, caller string) {
 	t.Helper()
 	pdp := newCellPDP(t)
+	want := legacyEcho(user)
 	for _, on := range []bool{false, true} {
 		var enforcer func(*testing.T) *policy.Enforcer
 		if on {
@@ -811,18 +822,44 @@ func echoParityWithLegacy(t *testing.T, user uuid.UUID, caller string) {
 		handler, minter := adminConfigEchoServer(t, enforcer, withPlatformAdmins)
 		callers := cellCallers(minter)
 		pdp.register(callers)
-		legacy := probeHS256(t, probeKey, map[string]any{"sub": user.String(), "org_id": probeOrg.String(), "role": "member", "tv": 0})
 		rows := 0
 		for _, key := range sortedAdminConfigKeys() {
 			rows++
 			pdp.reset("evaluate")
-			want := cellDo(handler, key, legacy, nil)
-			if want.status != http.StatusOK {
-				t.Errorf("on=%v %s: legacy token answer %d %s, want the 200 echo", on, key, want.status, want.body)
-			}
 			got := cellDo(handler, key, callers[caller].token, nil)
-			if got.status != want.status || got.body != want.body {
-				t.Errorf("on=%v %s: %d %s, want the legacy answer %d %s (D6773)", on, key, got.status, got.body, want.status, want.body)
+			if got.status != http.StatusOK || got.body != want {
+				t.Errorf("on=%v %s: %d %s, want the legacy answer 200 %s (D6773)", on, key, got.status, got.body, want)
+			}
+		}
+		if rows != 61 {
+			t.Errorf("on=%v: %d rows, want 61", on, rows)
+		}
+	}
+}
+
+// CHAOS-13126: ops_access_token_hs256 is retired. The HS256 token of the platform admin with no membership row, the
+// caller the cells above took on before, is the generic 401 on every admin-config row, on or off, and the decision
+// point is not asked.
+func TestAdminConfigCellsRefuseTheRetiredHS256Token(t *testing.T) {
+	pdp := newCellPDP(t)
+	for _, on := range []bool{false, true} {
+		var enforcer func(*testing.T) *policy.Enforcer
+		if on {
+			enforcer = func(t *testing.T) *policy.Enforcer { return newCellEnforcer(t, pdp, adminConfigNamespaces, false) }
+		}
+		handler, minter := adminConfigServerWith(t, enforcer, withPlatformAdmins)
+		pdp.register(cellCallers(minter))
+		hs256 := probeHS256(t, probeKey, map[string]any{"sub": cellPlatformNoRow.String(), "org_id": probeOrg.String(), "role": "member", "tv": 0})
+		rows := 0
+		for _, key := range sortedAdminConfigKeys() {
+			rows++
+			pdp.reset("evaluate")
+			got := cellDo(handler, key, hs256, nil)
+			if got.status != http.StatusUnauthorized || strings.TrimSpace(got.body) != genericRefusal {
+				t.Errorf("on=%v %s HS256 token: %d %s, want 401 %s", on, key, got.status, got.body, genericRefusal)
+			}
+			if calls := pdp.calls(); len(calls) != 0 {
+				t.Errorf("on=%v %s: %d decision point calls, want 0", on, key, len(calls))
 			}
 		}
 		if rows != 61 {
@@ -833,9 +870,10 @@ func echoParityWithLegacy(t *testing.T, user uuid.UUID, caller string) {
 
 // With the 6.8 cells off, the answer to each caller on each row is the same with no Enforcer and with an Enforcer
 // whose namespaces are other ones, and it is the legacy answer: the org admin, the platform admin with an org role
-// of member and the platform admin on a legacy token reach the handler, the org member gets the 403, the platform
-// admin with no membership row gets today's 401 (known defect D6773, CHAOS-13206: only byte-equality is checked for it
-// here). The decision point is never asked.
+// of member and the platform admin with no membership row (D6773) reach the handler, the org member gets the 403.
+// The no-membership platform admin's own cell, on the HS256 token on main f496ee5d (handler answer, byte-equal on
+// both servers), now runs on that caller's user access token (CHAOS-13126 retired the HS256 class). The decision
+// point is never asked.
 func TestAdminConfigCellsOffPlatformAdminKeepsTheLegacyAnswer(t *testing.T) {
 	pdp := newCellPDP(t)
 	plain, plainMinter := adminConfigServerWith(t, nil, withPlatformAdmins)
@@ -845,11 +883,10 @@ func TestAdminConfigCellsOffPlatformAdminKeepsTheLegacyAnswer(t *testing.T) {
 	plainCallers, otherCallers := cellCallers(plainMinter), cellCallers(otherMinter)
 	pdp.register(otherCallers)
 	pdp.reset("evaluate")
-	legacy := probeHS256(t, probeKey, map[string]any{"sub": cellPlatformNoRow.String(), "org_id": probeOrg.String(), "role": "member", "tv": 0})
 	legacyAnswer := map[string]func(cellAnswer) bool{
 		"org admin":                      func(a cellAnswer) bool { return !isGuardRefusal(a) },
 		"platform admin + org member":    func(a cellAnswer) bool { return !isGuardRefusal(a) },
-		"platform admin + no membership": func(cellAnswer) bool { return true }, // D6773 known defect, CHAOS-13206
+		"platform admin + no membership": func(a cellAnswer) bool { return !isGuardRefusal(a) },
 		"org member":                     func(a cellAnswer) bool { return a.status == http.StatusForbidden && a.body == adminRequiredBody },
 	}
 	rows := 0
@@ -865,9 +902,10 @@ func TestAdminConfigCellsOffPlatformAdminKeepsTheLegacyAnswer(t *testing.T) {
 				t.Errorf("%s / %s: %d %s is not the legacy answer", key, name, a.status, a.body)
 			}
 		}
-		a, b := cellDo(plain, key, legacy, nil), cellDo(other, key, legacy, nil)
+		a := cellDo(plain, key, plainCallers["platform admin + no membership"].token, nil)
+		b := cellDo(other, key, otherCallers["platform admin + no membership"].token, nil)
 		if a.status != b.status || a.body != b.body || isGuardRefusal(a) {
-			t.Errorf("%s / legacy token: %d %s vs %d %s, want byte-equal handler answers", key, a.status, a.body, b.status, b.body)
+			t.Errorf("%s / no-membership platform admin, user access token: %d %s vs %d %s, want byte-equal handler answers", key, a.status, a.body, b.status, b.body)
 		}
 	}
 	if rows != 61 {

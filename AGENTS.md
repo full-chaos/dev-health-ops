@@ -150,8 +150,7 @@ What does NOT change: never touch another lane's namespace, never
 `kiac down`/`delete`/prune a cluster you did not create, and never run
 host-wide `container system` verbs — they stop every kiac VM on the machine.
 
-Recipe, cost, and the testcontainers-per-suite policy:
-[docs/contribute/development/lane-isolation-kiac.md](docs/contribute/development/lane-isolation-kiac.md).
+Recipe, cost, and the testcontainers-per-suite policy: see the Linear document "Lane isolation on a kiac cluster (internal, moved from public docs)".
 
 ## Landing the plane
 

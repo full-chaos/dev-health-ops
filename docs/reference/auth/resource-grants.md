@@ -27,7 +27,7 @@ For the organization roles a membership holds, see [Organization roles, members 
 ## Which table decides
 
 Grants live in `auth.resource_grants`. They are auth-native data: there is no public copy. The grantee is a member, and
-`public.memberships` decides whether the member is active (D6651). A grant never makes a person a member.
+`public.memberships` decides whether the member is active. A grant never makes a person a member.
 
 ## What a grant holds
 

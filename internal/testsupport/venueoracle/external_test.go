@@ -103,6 +103,13 @@ func TestExternalRequiredFollowsTheBaseURL(t *testing.T) {
 			t.Errorf("malformed base URL %q was accepted", bad)
 		}
 	}
+	for _, name := range []string{EnvExternalIssuer, EnvExternalSigningKeyFile, EnvExternalSigningKeyID} {
+		t.Setenv(name, "")
+	}
+	if _, _, err := ExternalRequired("http://target.test"); err == nil {
+		t.Error("an external run with no token issuer was accepted: the target refuses every token the venue could mint")
+	}
+	useExternalIssuer(t, 0o600)
 	if stores, ok, err := ExternalRequired("http://target.test"); err != nil || !ok || stores.ValkeyURI != "redis://h:6379/1" {
 		t.Errorf("complete stores: %+v ok=%v err=%v", stores, ok, err)
 	}

@@ -621,6 +621,11 @@ services:
       # protocol (9000), not HTTP (8123).
       CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # CHAOS-13196: `docker compose run --rm -T migrate auth users-create --email E --password-stdin` makes a user auth-service
+      # can log in, with the auth runtime login (it is no part of `migrate upgrade`, which ignores all three).
+      AUTH_DATABASE_URI: host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
     depends_on:
       postgres:
         condition: service_healthy

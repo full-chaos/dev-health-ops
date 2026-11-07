@@ -9,7 +9,7 @@ lifecycle: active
 
 # Push projection drift alerts
 
-The group `auth_push_projection` in `alerts/rules.yml` holds five rules on the push credential projection (CHAOS-10897). No Prometheus loads that file in prod: it is the text of record, and the owner creates the rules in SigNoz from the builder JSON below at turn-on. Nothing here is run by a lane or a script. Do not print a Secret, an environment or a process argument list in any step.
+The group `auth_push_projection` in `alerts/rules.yml` holds five rules on the push credential projection. No Prometheus loads that file in prod: it is the text of record, and the owner creates the rules in SigNoz from the builder JSON below at turn-on. Nothing here is run by a script. Do not print a Secret, an environment or a process argument list in any step.
 
 ## Before you start
 
@@ -18,7 +18,7 @@ The group `auth_push_projection` in `alerts/rules.yml` holds five rules on the p
 
 ## Step 1: load the five rules
 
-Create each rule in SigNoz (Alerts, New alert, import JSON). PromQL rules do not evaluate on this SigNoz (D6417), so each block is a builder threshold rule. Only `PushCredentialProjectionDriftLive` is critical; the other four are warnings. Notes on the derivation:
+Create each rule in SigNoz (Alerts, New alert, import JSON). PromQL rules do not evaluate on this SigNoz, so each block is a builder threshold rule. Only `PushCredentialProjectionDriftLive` is critical; the other four are warnings. Notes on the derivation:
 
 - `PushCredentialProjectionDrift`: `max` of the drift gauge per `class`, above 0 for the 10 minute window with "all the times" matching. The probe runs every 5 minutes and keeps a finding only when two passes agree, so 10 minutes means two confirmed passes.
 - `PushCredentialProjectionDriftLive`: the same query with `class` limited to `status` and `scopes`, for 5 minutes. The projection reads a credential as live that the domain ended, or holds wider scopes.

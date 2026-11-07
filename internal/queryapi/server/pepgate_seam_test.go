@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-go/pep/pepfake"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -333,35 +334,78 @@ func TestSeamRESTCellOffIsTodaysPath(t *testing.T) {
 	}
 }
 
-// P14: the exempt classes (HS256 edge token, envelope) never ask, with every cell on and a PDP that denies: today's
-// read, the Legacy scope, one exempt count per class.
+// P14: the exempt class (envelope) never asks, with every cell on and a PDP that denies: today's read, the Legacy
+// scope, one exempt count. The routed HS256 edge token, the other exempt class on main f496ee5d, is retired
+// (CHAOS-13126); its caller on the user access token is checked below against main's read.
 func TestSeamRESTExemptCallersStayOnTodaysPath(t *testing.T) {
 	for _, route := range seamRoutes() {
 		t.Run(route.name, func(t *testing.T) {
-			edge := func(*seamStack) string { return (&gatedREST{}).edgeToken(t) }
 			envelope := func(s *seamStack) string { return s.envelope }
-			legacyEdge, legacyEnvelope := legacyRun(t, route, edge), legacyRun(t, route, envelope)
+			legacyEnvelope := legacyRun(t, route, envelope)
 			decider := seamDenier(t)
 			gate, reader := seamGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
-			for name, tc := range map[string]struct {
-				bearer func(*seamStack) string
-				legacy seamRun
-			}{"edge": {edge, legacyEdge}, "envelope": {envelope, legacyEnvelope}} {
-				s := newSeamStack(t, route)
-				got := s.run(gate, tc.bearer(s))
-				if !got.same(tc.legacy) {
-					t.Fatalf("%s differs from today's path:\n got %d %q\nwant %d %q", name, got.status, got.body, tc.legacy.status, tc.legacy.body)
-				}
-				if len(s.seen) != 1 || s.seen[0].Scope != pepgate.Legacy(ecOrg.String()) {
-					t.Fatalf("%s: handler saw %+v, want Scope Legacy", name, s.seen)
-				}
+			s := newSeamStack(t, route)
+			got := s.run(gate, envelope(s))
+			if !got.same(legacyEnvelope) {
+				t.Fatalf("envelope differs from today's path:\n got %d %q\nwant %d %q", got.status, got.body, legacyEnvelope.status, legacyEnvelope.body)
+			}
+			if len(s.seen) != 1 || s.seen[0].Scope != pepgate.Legacy(ecOrg.String()) {
+				t.Fatalf("envelope: handler saw %+v, want Scope Legacy", s.seen)
 			}
 			if decider.calls.Load() != 0 {
 				t.Fatalf("an exempt caller asked the PDP %d times", decider.calls.Load())
 			}
 			counts := (&gatedREST{reader: reader}).counter(t, "dev_health_query_api_pdp_exempt_total")
-			if counts["action="+route.action+",class=ops_access_token_hs256"] != 1 || counts["action="+route.action+",class=effective_principal_envelope"] != 1 {
-				t.Fatalf("exempt counts %v, want one per class", counts)
+			if counts["action="+route.action+",class=effective_principal_envelope"] != 1 {
+				t.Fatalf("exempt counts %v, want one envelope", counts)
+			}
+		})
+		// The caller of the routed HS256 edge token on main f496ee5d (exempt: today's read, 0 PDP calls) now comes on
+		// its user access token, which the PDP judges: with the real Evaluator over the catalog for a member or an
+		// admin of the org (as production policy answers), the enforced run is main's read, after one PDP call.
+		t.Run(route.name+"/edge caller, user access token", func(t *testing.T) {
+			org := ecOrg.String()
+			legacyEdge := legacyRun(t, route, userBearer)
+			for _, role := range []string{"member", "admin"} {
+				d := authorization.NewEvaluator().Evaluate(authorization.Request{Action: route.action, ResourceKind: "organization", OrganizationID: org}, productRule2Snapshot{role: role})
+				if !d.Allowed || d.Obligations == nil {
+					t.Fatalf("%s: decision point answered %+v", role, d)
+				}
+				s := newSeamStack(t, route)
+				rule := seamAllow(s, func(r *pepfake.Rule) {
+					r.TenantScope, r.RepositoryScope, r.RepositoryAllowlist = d.Obligations.TenantScope, string(d.Obligations.RepositoryScope), d.Obligations.RepositoryAllowlist
+				})
+				decider := &seamDecider{Decider: pepfake.New(rule)}
+				gate, _ := seamGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
+				if got := s.run(gate, s.user); !got.same(legacyEdge) {
+					t.Fatalf("%s: edge caller differs from main's read:\n got %d %q\nwant %d %q", role, got.status, got.body, legacyEdge.status, legacyEdge.body)
+				}
+				if decider.calls.Load() != 1 {
+					t.Fatalf("%s: PDP asked %d times, want 1", role, decider.calls.Load())
+				}
+			}
+		})
+	}
+}
+
+// CHAOS-13126: ops_access_token_hs256 is retired. On the routed stack, with every cell on and a PDP that denies, the
+// HS256 edge token is the generic 401: no read, no handler, no PDP call, no exempt count.
+func TestSeamRESTRoutedHS256EdgeTokenIsTheRetiredClass(t *testing.T) {
+	for _, route := range seamRoutes() {
+		t.Run(route.name, func(t *testing.T) {
+			decider := seamDenier(t)
+			gate, reader := seamGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
+			s := newSeamStack(t, route)
+			got := s.run(gate, (&gatedREST{}).edgeToken(t))
+			if got.status != http.StatusUnauthorized || strings.TrimSpace(got.body) != restRefusal || len(got.statements) != 0 {
+				t.Fatalf("HS256 edge token: %d %q with %d statements, want 401 %s and none", got.status, got.body, len(got.statements), restRefusal)
+			}
+			if len(s.seen) != 0 || decider.calls.Load() != 0 {
+				t.Fatalf("handler saw %+v, PDP asked %d times, want neither", s.seen, decider.calls.Load())
+			}
+			counts := (&gatedREST{reader: reader}).counter(t, "dev_health_query_api_pdp_exempt_total")
+			if counts["action="+route.action+",class=ops_access_token_hs256"] != 0 {
+				t.Fatalf("exempt counts %v, want no ops_access_token_hs256 count", counts)
 			}
 		})
 	}

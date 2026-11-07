@@ -400,7 +400,8 @@ usage() {
   venue-oracle-skips JSON_LOG LEDGER NAME...
          Judge the skips a go test -json log of venue oracle tests holds, as the
          venue-oracles verb does: only a KNOWN-DIVERGENCE CHAOS-<n> skip with
-         python= and go= whose ticket, test and row the ledger holds passes.
+         the answers of both planes whose ticket, test and row the ledger holds
+         passes.
   venue-oracle-plan COUNT
          Print the cost-balanced plan of COUNT legs: every run row with its leg
          and weight, then one "#leg" line per leg (rows, predicted seconds).

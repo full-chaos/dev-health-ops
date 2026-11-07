@@ -289,6 +289,7 @@ func TestCheckVenueBaseAcceptsOnlyTheRecordedGoAPIAddress(t *testing.T) {
 	}{
 		"no record":            {"http://" + testGoAPIIP + ":8000", EgressRead{}},
 		"unreadable record":    {"http://" + testGoAPIIP + ":8000", EgressRead{Name: "x", Err: os.ErrNotExist}},
+		"a malformed record":   {"http://" + testGoAPIIP + ":8000", ParseEgress("before.txt", []byte(egressText("before")+"goapi_ip="+testGoAPIIP+"\n"))},
 		"another private ip":   {"http://172.30.0.9:8000", good},
 		"a public ip":          {"http://8.8.8.8:8000", set("goapi_ip", "8.8.8.8")},
 		"a host name":          {"http://go-api:8000", set("goapi_ip", "go-api")},

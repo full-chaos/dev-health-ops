@@ -43,7 +43,7 @@ func CheckVenueBase(raw string, record EgressRead) (*url.URL, error) {
 	case host == "localhost" || (ip != nil && ip.IsLoopback()):
 	case ip == nil || !ip.IsPrivate():
 		return nil, fmt.Errorf("base %q: the host is neither loopback nor a private IP", raw)
-	case record.Err != nil:
+	case record.Err != nil || record.Fields == nil:
 		return nil, fmt.Errorf("base %q: a non-loopback base needs the readable egress record of the read before the drive (-egress)", raw)
 	case record.Fields["network_internal"] != "true" || record.Fields["default_route"] != "none":
 		return nil, fmt.Errorf("base %q: egress record %s does not show an internal network with no default route", raw, record.Name)

@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -348,5 +349,25 @@ func TestUnservedPinnedHostsAreLoggedUnknownAnd421(t *testing.T) {
 		if rec["service"] != unknownService || rec["host"] != UnservedHosts[i] {
 			t.Errorf("hit %d: %v", i, rec)
 		}
+	}
+}
+
+// The unserved list is the frozen census of 16 sorted, distinct hosts, and the config digest changes with it.
+func TestUnservedHostsIsTheFrozenCensusAndInTheDigest(t *testing.T) {
+	if !slices.IsSorted(UnservedHosts) || len(slices.Compact(slices.Clone(UnservedHosts))) != 16 || len(UnservedHosts) != 16 {
+		t.Fatalf("UnservedHosts %v: want 16 sorted distinct hosts", UnservedHosts)
+	}
+	for _, host := range []string{"gitlab.com", "api.linear.app", "app.launchdarkly.com", "api.atlassian.com", "api.eu.pagerduty.com", "api.resend.com"} {
+		if !slices.Contains(UnservedHosts, host) {
+			t.Errorf("%s is not pinned", host)
+		}
+	}
+	before := configDigest(modeRun)
+	saved := UnservedHosts
+	UnservedHosts = saved[1:]
+	after := configDigest(modeRun)
+	UnservedHosts = saved
+	if before == after {
+		t.Fatal("the config digest does not change with the unserved host list")
 	}
 }

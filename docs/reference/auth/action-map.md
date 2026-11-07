@@ -88,7 +88,7 @@ Each profile row (`contracts/auth/v1/endpoint-profile.schema.json`) has an `acti
 | `integrations.write` | `PATCH /api/v1/admin/integrations/{integration_id}` | AdminOrg | `org_scoped` |
 | `integrations.write` | `PATCH /api/v1/admin/integrations/{integration_id}/datasets` | AdminOrg | `org_scoped` |
 | `integrations.write` | `PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id}` | AdminOrg | `org_scoped` |
-| `members.read` | `GET /api/v1/admin/orgs/{org_id}/members` | Admin | `org_scoped` |
+| `members.manage` | `GET /api/v1/admin/orgs/{org_id}/members` | Admin | `org_scoped` |
 | `members.invite` | `POST /api/v1/admin/orgs/{org_id}/invites` | Admin | `org_scoped` |
 | `members.manage` | `POST /api/v1/admin/orgs/{org_id}/members` | Admin | `org_scoped` |
 | `members.manage` | `DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}` | Admin | `org_scoped` |

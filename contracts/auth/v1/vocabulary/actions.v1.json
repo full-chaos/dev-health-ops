@@ -142,8 +142,7 @@
       "risk_class": "low",
       "cache_class": "decision_bound",
       "impersonation": "allowed",
-      "repository_scope": "none",
-      "platform_admin": "allowed"
+      "repository_scope": "none"
     },
     {
       "action": "members.invite",

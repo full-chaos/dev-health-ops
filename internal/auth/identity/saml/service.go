@@ -144,8 +144,16 @@ func (s *Service) Initiate(ctx context.Context, providerID uuid.UUID, relayState
 }
 
 // InitiateFor stores a new request for a resolved provider and builds the
-// AuthnRequest redirect.
+// AuthnRequest redirect. A provider without IdP-initiated sign-in gets a new
+// random RelayState in place of relayState, as go-api seals its own there.
 func (s *Service) InitiateFor(ctx context.Context, p Provider, relayState string) (Initiation, error) {
+	if !p.AllowIdPInitiated {
+		issued, err := newNonce()
+		if err != nil {
+			return Initiation{}, err
+		}
+		relayState = issued
+	}
 	base := s.BaseURL()
 	requestID, err := newRequestID()
 	if err != nil {
@@ -157,7 +165,7 @@ func (s *Service) InitiateFor(ctx context.Context, p Provider, relayState string
 	}
 	now := s.now()
 	if err := s.Flows.SaveFlow(ctx, Flow{
-		ProviderID: p.ID, RequestID: requestID, BindingHash: bindingHash(nonce), ExpiresAt: now.Add(FlowTTL),
+		ProviderID: p.ID, RequestID: requestID, BindingHash: flowBinding(p, nonce, relayState), ExpiresAt: now.Add(FlowTTL),
 	}); err != nil {
 		return Initiation{}, fmt.Errorf("saml: store request: %w", err)
 	}
@@ -187,7 +195,7 @@ type SignIn struct {
 }
 
 // Consume resolves the provider and completes a sign-in.
-func (s *Service) Consume(ctx context.Context, providerID uuid.UUID, posted string, cookie func(string) string) (SignIn, error) {
+func (s *Service) Consume(ctx context.Context, providerID uuid.UUID, posted, relayState string, cookie func(string) string) (SignIn, error) {
 	p, err := s.Resolve(ctx, providerID, true)
 	if err != nil {
 		return SignIn{}, err
@@ -195,7 +203,7 @@ func (s *Service) Consume(ctx context.Context, providerID uuid.UUID, posted stri
 	if err := s.BoundToRoute(ctx, p, providerID); err != nil {
 		return SignIn{}, err
 	}
-	return s.ConsumeFor(ctx, p, posted, cookie)
+	return s.ConsumeFor(ctx, p, posted, relayState, cookie)
 }
 
 // BoundToRoute refuses a response unless the provider row is the one the
@@ -220,7 +228,7 @@ func (s *Service) BoundToRoute(ctx context.Context, p Provider, routeID uuid.UUI
 // Every sign-in ends in the provider's organization: an account that is not
 // a member after the membership seam ran is ErrNotOrgMember, and a miss
 // creates an account only through the membership seam (see provisionNew).
-func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, cookie func(string) string) (SignIn, error) {
+func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted, relayState string, cookie func(string) string) (SignIn, error) {
 	raw, err := DecodeResponse(posted)
 	if err != nil {
 		return SignIn{}, s.refuse(ctx, p, err)
@@ -251,7 +259,7 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		return SignIn{}, s.refuse(ctx, p, err)
 	}
 
-	if err := s.matchRequest(ctx, p, v, cookie, now); err != nil {
+	if err := s.matchRequest(ctx, p, v, cookie, relayState, now); err != nil {
 		return SignIn{}, s.refuse(ctx, p, err)
 	}
 	if err := s.Uses.UseAssertion(ctx, p.ID, v.Issuer, v.AssertionID, v.NotOnOrAfter); err != nil {
@@ -337,7 +345,7 @@ func (s *Service) requireMember(ctx context.Context, p Provider, principalID uui
 // provider whose binding cookie this browser holds; a response that names none
 // is accepted only for a provider with allow_idp_initiated = true. Every other
 // check has already applied.
-func (s *Service) matchRequest(ctx context.Context, p Provider, v Verified, cookie func(string) string, now time.Time) error {
+func (s *Service) matchRequest(ctx context.Context, p Provider, v Verified, cookie func(string) string, relayState string, now time.Time) error {
 	if v.InResponseTo == "" {
 		if !p.AllowIdPInitiated {
 			return ErrUnsolicited
@@ -351,7 +359,7 @@ func (s *Service) matchRequest(ctx context.Context, p Provider, v Verified, cook
 	if nonce == "" {
 		return ErrFlowNotFound
 	}
-	return s.Flows.ConsumeFlow(ctx, p.ID, v.InResponseTo, bindingHash(nonce), now)
+	return s.Flows.ConsumeFlow(ctx, p.ID, v.InResponseTo, flowBinding(p, nonce, relayState), now)
 }
 
 // provisionNew handles a sign-in whose key matches no account. An asserted

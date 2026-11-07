@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -96,15 +95,9 @@ func TestInternalLLMConfigOwnModelTurnedOff(t *testing.T) {
 	pgseed.Org(ctx, t, pool, nothingOff, "enterprise")
 	pgseed.Setting(ctx, t, pool, nothingOff, "llm", "own_model_enabled", "false", false)
 
-	acrToken := "svc_acr_" + uuid.NewString()
-	if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials
-		(id, service_name, token_hash, token_prefix, scopes, created_at)
-		VALUES (gen_random_uuid(), 'acr', $1, $2, '["llm_config:read", "entitlements:read"]'::json, now())`,
-		admin.HashServiceToken(acrToken), acrToken[:16]); err != nil {
-		t.Fatal(err)
-	}
+	workload, bearer := listenerWorkload(t)
 	server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(),
-		InternalRoutes(Deps{Pool: pool, Decryptor: decryptor}, quietLog()))
+		InternalRoutes(Deps{Pool: pool, Decryptor: decryptor, ACRWorkload: workload}, quietLog()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +105,7 @@ func TestInternalLLMConfigOwnModelTurnedOff(t *testing.T) {
 	get := func(path string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Header.Set("Authorization", "Bearer "+acrToken)
+		req.Header.Set("Authorization", bearer)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		return rec

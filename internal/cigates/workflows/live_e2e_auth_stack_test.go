@@ -185,7 +185,7 @@ func liveE2ENoXxdPath(t *testing.T, fake string) string {
 	return fake + ":" + bin
 }
 
-func runLiveE2EUp(t *testing.T, path, fake, state string) {
+func runLiveE2EUp(t *testing.T, path, fake, state string) string {
 	t.Helper()
 	cmd := exec.Command("bash", "ci/live_e2e_auth_stack.sh", "up", state)
 	cmd.Dir = repoRoot(t)
@@ -202,6 +202,7 @@ func runLiveE2EUp(t *testing.T, path, fake, state string) {
 		logged, _ := os.ReadFile(filepath.Join(state, "logs", "auth-service.log"))
 		t.Fatalf("FAIL: up did not start auth-service: %v\n%s\nauth-service.log:\n%s", err, out.String(), logged)
 	}
+	return out.String()
 }
 
 // The web workflow runs the script by a path relative to the ops checkout. `up` changes directory into the state
@@ -209,7 +210,8 @@ func runLiveE2EUp(t *testing.T, path, fake, state string) {
 func TestLiveE2EAuthStackUpStartsAuthServiceWhenRunByARelativePath(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	fake := liveE2EUpFakes(t, state)
-	runLiveE2EUp(t, fake+":"+os.Getenv("PATH"), fake, state)
+	out := runLiveE2EUp(t, fake+":"+os.Getenv("PATH"), fake, state)
+	assertUpWiredTheWebCaller(t, state, out)
 }
 
 // Hosted race legs have no xxd. The workload subject is the uuid of the fake psql row as prn_ and unpadded base64url.
@@ -224,8 +226,12 @@ func TestLiveE2EAuthStackUpNeedsNoXxdAndPinsTheWorkloadSubject(t *testing.T) {
 	if want := "prn_Ox4sTV9gSnGLkgwdLj9KWw"; string(got) != want {
 		t.Fatalf("FAIL: workload subject %q, want %q", got, want)
 	}
-	// up binds the web workload, writes the web subject and the reviewer token, and saves the auth-service environment
-	// (mode 0600) that start-auth reuses.
+}
+
+// up binds the web workload, writes the web subject and the reviewer token, and saves the auth-service environment
+// (mode 0600) that start-auth reuses.
+func assertUpWiredTheWebCaller(t *testing.T, state, out string) {
+	t.Helper()
 	saved, err := os.ReadFile(filepath.Join(state, "auth-service.env"))
 	if err != nil {
 		t.Fatalf("FAIL: up saved no auth-service environment: %v", err)
@@ -236,8 +242,8 @@ func TestLiveE2EAuthStackUpNeedsNoXxdAndPinsTheWorkloadSubject(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(state, "auth-service.env")); err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("FAIL: auth-service.env mode %v err %v, want 0600", info, err)
 	}
-	if !strings.Contains(out.String(), "step 5b") || !strings.Contains(out.String(), "step 6b") {
-		t.Errorf("FAIL: up skipped the web binding or the fake TokenReview step:\n%s", out.String())
+	if !strings.Contains(out, "step 5b") || !strings.Contains(out, "step 6b") {
+		t.Errorf("FAIL: up skipped the web binding or the fake TokenReview step:\n%s", out)
 	}
 }
 

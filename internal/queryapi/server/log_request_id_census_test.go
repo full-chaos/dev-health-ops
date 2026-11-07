@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -73,7 +74,10 @@ var (
 // the rest of the module need not compile here. A package it cannot load is recorded in errs: the census stops
 // with that error instead of reading an unresolved name as "not a request id". With -trimpath the test binary
 // has no built-in GOROOT, so it is taken from the environment or from `go env GOROOT`.
-type censusImporter struct{ errs *[]string }
+type censusImporter struct {
+	errs    *[]string
+	standIn map[string]bool
+}
 
 func (ci censusImporter) Import(path string) (*types.Package, error) {
 	censusImporterOnce.Do(func() {
@@ -96,6 +100,9 @@ func (ci censusImporter) Import(path string) (*types.Package, error) {
 	}
 	pkg := types.NewPackage(path, filepath.Base(path))
 	pkg.MarkComplete()
+	if ci.standIn != nil {
+		ci.standIn[filepath.Base(path)] = true
+	}
 	return pkg, nil
 }
 
@@ -214,11 +221,60 @@ func (c *censusCtx) tainted(e ast.Expr, vars map[string]bool) bool {
 	return false
 }
 
+// censusTypeCheck type-checks the files as package "p". It returns every package the importer could not load and
+// every type error that is not an undefined member of a package the census gives an empty stand-in for.
+func censusTypeCheck(fset *token.FileSet, list []*ast.File) (*types.Info, []string) {
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
+	var importErrs, tcErrs []string
+	stand := map[string]bool{}
+	for _, f := range list {
+		for _, im := range f.Imports {
+			path, _ := strconv.Unquote(im.Path.Value)
+			first, _, _ := strings.Cut(path, "/")
+			if !strings.Contains(first, ".") || strings.HasSuffix(path, "/internal/auth/httpapi") {
+				continue
+			}
+			name := filepath.Base(path)
+			if parent := filepath.Base(filepath.Dir(path)); len(name) > 1 && name[0] == 'v' && strings.Trim(name[1:], "0123456789") == "" {
+				name = parent
+			}
+			if im.Name != nil {
+				name = im.Name.Name
+			}
+			stand[name] = true
+		}
+	}
+	conf := types.Config{
+		Importer:    censusImporter{errs: &importErrs, standIn: stand},
+		FakeImportC: true,
+		Error: func(err error) {
+			msg := err.Error()
+			if te, ok := err.(types.Error); ok {
+				msg = fmt.Sprintf("%s: %s", fset.Position(te.Pos), te.Msg)
+				if rest, ok := strings.CutPrefix(te.Msg, "undefined: "); ok {
+					if pkg, _, _ := strings.Cut(rest, "."); stand[pkg] {
+						return
+					}
+				}
+				if strings.Contains(te.Msg, " undefined (type ") && strings.Contains(te.Msg, " has no field or method ") {
+					return // a member promoted from a stand-in package's embedded type
+				}
+				if strings.Contains(te.Msg, "declared and not used") || strings.Contains(te.Msg, "imported and not used") {
+					return
+				}
+			}
+			tcErrs = append(tcErrs, msg)
+		},
+	}
+	conf.Check("p", fset, list, info)
+	return info, append(importErrs, tcErrs...)
+}
+
 // requestIDReads parses the files and returns the raw request id reads that sit inside a log call's arguments
 // (log) and those that do not (other), as "file:line" and "file#func" entries. A read wrapped in logSafeRequestID
 // is neither. A local assigned from a raw read (also through an index, a slice or strings.*), and a parameter named
 // requestID, count as raw where a log call uses them. A header name is a constant by its value, as go/types computes it.
-func requestIDReads(t *testing.T, files map[string]string, allowed map[string]string) (logUses, other, forwards []string) {
+func requestIDReads(t *testing.T, files map[string]string, allowed map[string]string) (logUses, other, forwards, usedAllowed []string) {
 	t.Helper()
 	fset := token.NewFileSet()
 	parsed := map[string]*ast.File{}
@@ -236,12 +292,9 @@ func requestIDReads(t *testing.T, files map[string]string, allowed map[string]st
 		parsed[name] = f
 		list = append(list, f)
 	}
-	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
-	var importErrs []string
-	conf := types.Config{Importer: censusImporter{errs: &importErrs}, Error: func(error) {}, FakeImportC: true}
-	conf.Check("p", fset, list, info)
-	if len(importErrs) > 0 {
-		t.Fatalf("the census cannot load a package it type-checks from source (GOROOT=%q): %s", build.Default.GOROOT, strings.Join(importErrs, "; "))
+	info, tcErrs := censusTypeCheck(fset, list)
+	if len(tcErrs) > 0 {
+		t.Fatalf("the census type check failed (GOROOT=%q), so a callee or constant may be unresolved:\n  %s", build.Default.GOROOT, strings.Join(tcErrs, "\n  "))
 	}
 	c := &censusCtx{info: info, t: t, fset: fset}
 	for name, f := range parsed {
@@ -311,7 +364,14 @@ func requestIDReads(t *testing.T, files map[string]string, allowed map[string]st
 							return false
 						}
 						if callee := c.calleeKey(n); callee != "" && !inLog && !strings.HasPrefix(callee, "strings.") {
-							if _, ok := allowed[callee]; !ok {
+							if _, ok := allowed[callee]; ok {
+								for _, a := range n.Args {
+									if c.tainted(a, vars) {
+										usedAllowed = append(usedAllowed, callee)
+										break
+									}
+								}
+							} else {
 								for _, a := range n.Args {
 									if c.tainted(a, vars) {
 										forwards = append(forwards, fmt.Sprintf("%s:%d %s", name, fset.Position(a.Pos()).Line, callee))
@@ -341,7 +401,8 @@ func requestIDReads(t *testing.T, files map[string]string, allowed map[string]st
 	sort.Strings(logUses)
 	sort.Strings(other)
 	sort.Strings(forwards)
-	return logUses, other, forwards
+	sort.Strings(usedAllowed)
+	return logUses, other, forwards, usedAllowed
 }
 
 // calleeKey names the callee by what it resolves to, not by its spelling: "builtin.len", "local.name" (this
@@ -464,7 +525,7 @@ func a(r R) { WithRequestID(nil, envelopeRequestID(r)) }`, "p.go#a#1", 0, 1},
 		"second read in a function":          {`func a(r R) { _ = envelopeRequestID(r); _ = envelopeRequestID(r) }`, "p.go#a#1,p.go#a#2", 0, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
-			logUses, other, forwards := requestIDReads(t, map[string]string{"p.go": pre + tc.body}, requestIDForwardAllowed)
+			logUses, other, forwards, _ := requestIDReads(t, map[string]string{"p.go": pre + tc.body}, requestIDForwardAllowed)
 			if len(forwards) != tc.forwards {
 				t.Errorf("forwards = %v, want %d", forwards, tc.forwards)
 			}
@@ -480,10 +541,9 @@ func a(r R) { WithRequestID(nil, envelopeRequestID(r)) }`, "p.go#a#1", 0, 1},
 
 // censusProblems is every way the files break the rule: a raw request id in a log call, a raw id passed to a
 // callee that is not listed, a raw read outside a log call with no row, and a row no read uses.
-func censusProblems(t *testing.T, files map[string]string, exemptions, allowed map[string]string) []string {
+func censusProblems(t *testing.T, files map[string]string, exemptions, allowed map[string]string) (out, usedAllowed []string) {
 	t.Helper()
-	logUses, other, forwards := requestIDReads(t, files, allowed)
-	var out []string
+	logUses, other, forwards, usedAllowed := requestIDReads(t, files, allowed)
 	for _, l := range logUses {
 		out = append(out, "raw request id reaches a log call: "+l)
 	}
@@ -503,7 +563,7 @@ func censusProblems(t *testing.T, files map[string]string, exemptions, allowed m
 		}
 	}
 	sort.Strings(out)
-	return out
+	return out, usedAllowed
 }
 
 func TestEveryRequestIDLogUseIsLogSafe(t *testing.T) {
@@ -522,8 +582,27 @@ func TestEveryRequestIDLogUseIsLogSafe(t *testing.T) {
 		}
 		files[p] = b
 	}
-	for _, p := range censusProblems(t, files, requestIDExemptions, requestIDForwardAllowed) {
+	problems, used := censusProblems(t, files, requestIDExemptions, requestIDForwardAllowed)
+	for _, p := range problems {
 		t.Error(p)
+	}
+	seen := map[string]bool{}
+	for _, u := range used {
+		seen[u] = true
+	}
+	for _, anchor := range []string{
+		"net/http.Header.Set",
+		"github.com/full-chaos/dev-health-ops/internal/queryapi/principal.WithRequestMeta",
+		"github.com/full-chaos/dev-health-ops/internal/auth/httpapi.WithRequestID",
+	} {
+		if !seen[anchor] {
+			t.Errorf("census anchor did not resolve in the real tree: %s (a load that resolves nothing is a failure)", anchor)
+		}
+	}
+	for k := range requestIDForwardAllowed {
+		if !seen[k] {
+			t.Errorf("listed non-log callee no call in the real tree resolves to: %s", k)
+		}
 	}
 }
 
@@ -556,7 +635,8 @@ func setHeader(string) {}`, "has no row: p.go#other#1"},
 		"stale row": {`func restScopeOrg(r R) {}`, "stale request id row: p.go#restScopeOrg#1"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := strings.Join(censusProblems(t, map[string]string{"p.go": pre + tc.body}, rows, allowed), "\n")
+			probs, _ := censusProblems(t, map[string]string{"p.go": pre + tc.body}, rows, allowed)
+			got := strings.Join(probs, "\n")
 			if tc.want == "" && got != "" || tc.want != "" && !strings.Contains(got, tc.want) {
 				t.Errorf("problems = %q, want to contain %q", got, tc.want)
 			}
@@ -565,7 +645,7 @@ func setHeader(string) {}`, "has no row: p.go#other#1"},
 	t.Run("forward to a listed non-log callee passes", func(t *testing.T) {
 		src := pre + `func restScopeOrg(r R) { setHeader(envelopeRequestID(r)) }
 func setHeader(string) {}`
-		if got := censusProblems(t, map[string]string{"p.go": src}, rows, allowed); len(got) != 0 {
+		if got, _ := censusProblems(t, map[string]string{"p.go": src}, rows, allowed); len(got) != 0 {
 			t.Fatalf("problems = %v, want none", got)
 		}
 	})
@@ -608,5 +688,26 @@ func TestCensusImporterRecordsAPackageItCannotLoad(t *testing.T) {
 	}
 	if pkg, err := (censusImporter{errs: &errs}).Import("example.com/other"); err != nil || pkg == nil || len(errs) != 1 {
 		t.Fatalf("module package: %v %v, recorded %v; want an empty package and no new record", pkg, err, errs)
+	}
+}
+
+func TestCensusTypeCheckFailsLoudOnUnresolvedImportsAndTypeErrors(t *testing.T) {
+	for name, tc := range map[string]struct{ src, want string }{
+		"unresolvable standard import": {"package p\nimport \"nosuchstdpkg/inner\"\nvar _ = inner.X\n", "nosuchstdpkg/inner"},
+		"type error":                   {"package p\nvar x int = \"s\"\n", "cannot use"},
+		"anchors resolve":              {"package p\nimport (\"net/http\"; \"example.com/other\")\nfunc a(w http.ResponseWriter) { w.Header().Set(\"a\", \"b\"); other.F() }\n", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "p.go", tc.src, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, errs := censusTypeCheck(fset, []*ast.File{f})
+			got := strings.Join(errs, "\n")
+			if tc.want == "" && got != "" || tc.want != "" && !strings.Contains(got, tc.want) {
+				t.Fatalf("errors = %q, want to contain %q", got, tc.want)
+			}
+		})
 	}
 }

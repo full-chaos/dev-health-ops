@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
-	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 const (
@@ -53,7 +53,7 @@ func acrSubjectOf(rows []acrWorkloadRow) (string, error) {
 	if len(live) != 1 {
 		return "", acr.ErrSubjectNotConfigured
 	}
-	return session.WirePrincipalID(live[0].principal), nil
+	return acrWirePrincipalID(live[0].principal), nil
 }
 
 // newACRSubjectSource reads the acr workload from the workload registry in the auth schema through the api pool. A
@@ -91,4 +91,11 @@ func acrSubjectSourceOf(pool *pgxpool.Pool, authSchema string) acr.SubjectSource
 		return nil
 	}
 	return newACRSubjectSource(pool, authSchema)
+}
+
+// acrWirePrincipalID is the session wire form of a principal id, "prn_" and the 22 base64url characters of its 16
+// bytes: the form a workload token's sub carries (session.WirePrincipalID, not imported here: that package would link
+// the whole session stack into every binary that links go-api's routes).
+func acrWirePrincipalID(id uuid.UUID) string {
+	return "prn_" + base64.RawURLEncoding.EncodeToString(id[:])
 }

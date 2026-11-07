@@ -47,3 +47,16 @@ func TestNoPoolMeansNoRegistrySource(t *testing.T) {
 		t.Fatalf("a nil pool gave a source %v: the routes must refuse every workload token as not_configured", source)
 	}
 }
+
+func TestACRWirePrincipalIDIsTheSessionWireForm(t *testing.T) {
+	for id, want := range map[string]string{
+		"00000000-0000-0000-0000-000000000000": "prn_AAAAAAAAAAAAAAAAAAAAAA",
+		"00000000-0000-0000-0000-000000000001": "prn_AAAAAAAAAAAAAAAAAAAAAQ",
+		"ffffffff-ffff-ffff-ffff-ffffffffffff": "prn______________________w",
+		"0123456789abcdef0123456789abcdef":     "prn_ASNFZ4mrze8BI0VniavN7w",
+	} {
+		if got := acrWirePrincipalID(uuid.MustParse(id)); got != want {
+			t.Errorf("%s: %q, want %q", id, got, want)
+		}
+	}
+}

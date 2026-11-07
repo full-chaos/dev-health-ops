@@ -15,6 +15,7 @@ cmd/gqlgen-guard	main.go
 cmd/gqlgen-guard	main_test.go
 cmd/loadtest	main.go
 cmd/registrydump	main.go
+cmd/shadow-venue	main.go
 cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
 deploy/helm/dev-health	auth_phase_test.go
@@ -36,6 +37,7 @@ internal/apiservice	accessroute_unset_test.go
 internal/apiservice	endpoint_profile_rows_test.go
 internal/apiservice	endpoint_profile_scan_test.go
 internal/apiservice	githubapp_config.go
+internal/apiservice	member_list_row_cells_test.go
 internal/apiservice/admin	routeguard_test.go
 internal/apiservice/authflowvenue	auth_flow_venue_oracle_integration_test.go
 internal/apiservice/authflowvenue	linkformat_test.go
@@ -559,11 +561,13 @@ internal/queryapi/server	endpoint_profile_same_line_test.go
 internal/queryapi/server	explain_422_test.go
 internal/queryapi/server	graphql_edge_go_only_operations_test.go
 internal/queryapi/server	graphql_edge_venue_oracle_integration_test.go
+internal/queryapi/server	graphql_ingress_scope_test.go
 internal/queryapi/server	graphql_shadow_test.go
 internal/queryapi/server	home_coverage_oracle_capture_integration_test.go
 internal/queryapi/server	home_coverage_oracle_policy_guard_integration_test.go
 internal/queryapi/server	internal_auth_test.go
 internal/queryapi/server	investment_scope_pin_wiring_test.go
+internal/queryapi/server	listener_gate_census_test.go
 internal/queryapi/server	mcp_proof_route_retired_test.go
 internal/queryapi/server	mutation_documents_test.go
 internal/queryapi/server	org_scope_census_test.go
@@ -610,6 +614,7 @@ internal/reconcilerservice	pool_composition_test.go
 internal/reconcilerservice	readiness_timeout_test.go
 internal/rivermigrate	deploy_wiring_test.go
 internal/scheduler/sync	venue_golden_address_test.go
+internal/shadowvenue	drive.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go
 internal/storage/postgres	openers_test.go

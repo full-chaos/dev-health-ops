@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
 )
 
@@ -71,6 +72,36 @@ func writeSecretFile(path, value string) (err error) {
 	return nil
 }
 
+// replaceSecretFile writes value to a new 0600 file in path's directory, syncs it and renames it over path, then syncs
+// the directory: a reader sees the old file or the new one, never a partial one, and a failure leaves path as it was.
+// Only bootstrap-create -if-absent uses it, for a workload with no live value, where the file it replaces is dead.
+func replaceSecretFile(path, value string) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".bootstrap-*") // #nosec G304 -- the operator-chosen output path's directory
+	if err != nil {
+		return errors.New("the -out directory is not writable")
+	}
+	name := tmp.Name()
+	if err := fillSecretFile(tmp, value); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return errors.New("the -out file could not be closed")
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return errors.New("the -out file could not be replaced")
+	}
+	if err := syncDir(dir); err != nil {
+		_ = os.Remove(path)
+		return errors.New("the -out directory could not be synced")
+	}
+	return nil
+}
+
 func fillSecretFile(f *os.File, value string) error {
 	if err := f.Chmod(0o600); err != nil {
 		return errors.New("the -out file mode could not be set")
@@ -99,12 +130,26 @@ func runBootstrap(ctx context.Context, store bootstrapStore, parsed workloadsArg
 	}
 	switch parsed.verb {
 	case "bootstrap-create", "bootstrap-rotate":
+		if parsed.ifAbsent {
+			live, err := store.LiveBootstrap(ctx, parsed.name)
+			if err != nil {
+				return fail(parsed.verb, err)
+			}
+			if len(live) > 0 {
+				fmt.Fprintf(stdout, "workloads %s skipped: workload=%s live=%d (-if-absent; no change written, no file written)\n", parsed.verb, parsed.name, len(live))
+				return 0
+			}
+		}
 		value, err := workload.MintBootstrap()
 		if err != nil {
 			fmt.Fprintln(stderr, "workloads error: the system random source failed")
 			return 1
 		}
-		if err := writeSecretFile(parsed.out, value); err != nil {
+		write := writeSecretFile
+		if parsed.ifAbsent {
+			write = replaceSecretFile
+		}
+		if err := write(parsed.out, value); err != nil {
 			fmt.Fprintf(stderr, "workloads error: %s: %v (nothing was registered)\n", parsed.verb, err)
 			return 1
 		}
@@ -152,7 +197,7 @@ func bootstrapDryRun(ctx context.Context, store bootstrapStore, parsed workloads
 		fmt.Fprintf(stdout, "workloads bootstrap-revoke dry run: credential=%s status=%s (no change written)\n", parsed.credentialID, state)
 		return 0
 	}
-	if parsed.out != "" {
+	if parsed.out != "" && !parsed.ifAbsent {
 		if _, err := os.Lstat(parsed.out); err == nil {
 			fmt.Fprintf(stderr, "workloads error: %s dry run: %v\n", parsed.verb, errOutExists)
 			return 1
@@ -172,4 +217,66 @@ func bootstrapDryRun(ctx context.Context, store bootstrapStore, parsed workloads
 		fmt.Fprintf(stdout, "live credential=%s expires_at=%s\n", c.ID, expiry)
 	}
 	return 0
+}
+
+// subjectStore is what the subject verb uses of *workload.Store.
+type subjectStore interface {
+	Lookup(ctx context.Context, name string) (*workload.Info, error)
+}
+
+// runSubject writes the wire principal id of a registered workload to -out. The id names a principal and holds no
+// secret, so the file is world-readable; it replaces -out atomically, so a rerun with the same registry changes nothing.
+func runSubject(ctx context.Context, store subjectStore, parsed workloadsArgs, stdout, stderr io.Writer) int {
+	info, err := store.Lookup(ctx, parsed.name)
+	if err != nil {
+		fmt.Fprintf(stderr, "workloads error: subject failed (%s)\n", failureClass(err))
+		return 1
+	}
+	subject := session.WirePrincipalID(info.PrincipalID)
+	if !parsed.apply {
+		fmt.Fprintf(stdout, "workloads subject dry run: workload=%s subject=%s (no file written)\n", parsed.name, subject)
+		return 0
+	}
+	if err := replaceFile(parsed.out, subject, 0o644); err != nil {
+		fmt.Fprintf(stderr, "workloads error: subject: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "workloads subject applied: workload=%s subject=%s out=%s\n", parsed.name, subject, parsed.out)
+	return 0
+}
+
+// replaceFile writes value to a new file beside path, syncs it and renames it over path; a failure leaves path as it was.
+func replaceFile(path, value string, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".subject-*") // #nosec G304 -- the operator-chosen output path's directory
+	if err != nil {
+		return errors.New("the -out directory is not writable")
+	}
+	name := tmp.Name()
+	fail := func(msg string) error {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return errors.New(msg)
+	}
+	if _, err := io.WriteString(tmp, value); err != nil {
+		return fail("the -out file could not be written")
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		return fail("the -out file mode could not be set")
+	}
+	if err := tmp.Sync(); err != nil {
+		return fail("the -out file could not be synced")
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return errors.New("the -out file could not be closed")
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return errors.New("the -out file could not be replaced")
+	}
+	if err := syncDir(dir); err != nil {
+		return errors.New("the -out directory could not be synced")
+	}
+	return nil
 }

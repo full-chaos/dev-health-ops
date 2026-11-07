@@ -487,7 +487,7 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// reachable through the public listener, which is built from handler
 	// and never sees internalMux at all.
 	internalMux.Handle("/", handler)
-	return &Plane{Handler: handler, InternalHandler: internalMux, MCPHandler: withGate(mcpMux, gate), Ready: ready, Probes: probes, Close: closeAll}, nil
+	return &Plane{Handler: handler, InternalHandler: withGate(internalMux, gate), MCPHandler: withGate(mcpMux, gate), Ready: ready, Probes: probes, Close: closeAll}, nil
 }
 
 // recordErrorCount stamps the number of errors a GraphQL response carried on

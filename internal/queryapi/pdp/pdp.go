@@ -79,6 +79,9 @@ const (
 	ResultNotConfigured = "not_configured"
 	ResultNotCarriedOut = "not_carried_out"
 	ResultNoPDP         = "no_decision_point"
+	// ResultNoOrg: an enforced row asked with no organization; the PDP cannot judge an organization action without
+	// one, so today's answer stands.
+	ResultNoOrg = "no_org"
 )
 
 // The closed local reasons of a 503 the gate makes itself on an enforced route.
@@ -373,7 +376,8 @@ func shadowRowsOf(actions map[string]string) (map[string]policy.ShadowRow, error
 // pepgate.Legacy(orgID) (today's path) and a gate built in shadow or enforce mode asks in the background, never
 // changing the answer. Enforced: a PDP deny is a *DenyError (403); no verdict, no client, or an allow whose
 // obligations query-api does not carry out is a local *DenyError (503); an allow is the scope scopeOf builds. A
-// misconfigured gate refuses every row with a local *DenyError. Every refusal carries the zero Scope.
+// misconfigured gate refuses every row with a local *DenyError. Every refusal carries the zero Scope. An enforced row
+// asked with no organization is pepgate.Legacy(""), with no PDP call.
 func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) (pepgate.Scope, error) {
 	if g == nil {
 		return pepgate.Legacy(orgID), nil
@@ -406,6 +410,11 @@ func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) (pe
 	case g.decider == nil:
 		g.count(ctx, ModeEnforce, ResultNoPDP, label)
 		return pepgate.Scope{}, &DenyError{Reason: ReasonNoDecisionPoint, Local: true}
+	case orgID == "":
+		// Only a superuser passes the verifier with no organization (principal.OrgRequiredError otherwise); its HS256
+		// token gets the same Legacy scope (product rule 1, D6773).
+		g.count(ctx, ModeEnforce, ResultNoOrg, label)
+		return pepgate.Legacy(orgID), nil
 	}
 	decision := g.decider.Decide(ctx, g.request(action, bearer, orgID))
 	switch {
@@ -432,10 +441,9 @@ func (g *Gate) request(action, bearer, orgID string) pep.Request {
 
 // scopeOf is the scope of an allow, or the closed reason it is not carried out. Fail-closed order: the decision and
 // its tenant_scope must both name the request's organization, compared as UUIDs (the scope carries the canonical
-// form); redaction,
-// minimum_assurance and step_up are not carried out; repository_scope organization, or an allowlist holding "*", is
-// every repository; any other allowlist is a ceiling only on a route whose class the registry narrows; neither repository
-// member is the tenant alone for an action the catalog marks repository_scope none, and no repository otherwise.
+// form); redaction, a minimum_assurance above aal1 and step_up are not carried out; repository_scope organization,
+// or an allowlist holding "*", is every repository; any other allowlist is a ceiling only on a route whose class the
+// registry narrows; neither repository member is the tenant alone for an action the catalog marks repository_scope none, and no repository otherwise.
 func (g *Gate) scopeOf(d pep.Decision, profile, action, orgID string) (pepgate.Scope, pep.Reason, string) {
 	org, ok := canonicalUUID(orgID)
 	if !ok {
@@ -448,7 +456,8 @@ func (g *Gate) scopeOf(d pep.Decision, profile, action, orgID string) (pepgate.S
 	if tenant, ok := o.TenantScope(); !ok || !sameUUID(tenant, org) {
 		return pepgate.Scope{}, ReasonTenantMismatch, ""
 	}
-	if _, ok := o.MinimumAssurance(); ok || len(o.Redaction()) != 0 || o.StepUpRequired() {
+	// Every session query-api accepts is aal1 (session.AssuranceOf), so that level is met; a higher one is not.
+	if level, ok := o.MinimumAssurance(); (ok && level != pep.AssuranceAAL1) || len(o.Redaction()) != 0 || o.StepUpRequired() {
 		return pepgate.Scope{}, ReasonNotCarriedOut, ""
 	}
 	switch {

@@ -21,15 +21,12 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
 const (
-	compatCounterName = "auth.session.issue_compat_uses"
-	outcomeCounter    = "auth.api.session_route_outcomes"
-	authsessClass     = "internal_svc_authsess_token"
+	outcomeCounter = "auth.api.session_route_outcomes"
 )
 
 // issueCountingKeys counts reads of the signer's key set and can fail them.
@@ -179,14 +176,13 @@ func (w *workloadIssueFixture) requireSuccessReasonsAreClosed() {
 	}
 }
 
-// nothingRead asserts a refusal touched no store: no credential check, no
-// users read, no projection, no session.
+// nothingRead asserts a refusal touched no store: no users read, no
+// projection, no session.
 func (w *workloadIssueFixture) nothingRead(name string) {
 	w.t.Helper()
-	if len(w.creds.checked()) != 0 || w.users.calls != 0 || len(w.sessions.created) != 0 ||
-		len(w.projector.userCalls) != 0 || len(w.projector.orgCalls) != 0 {
-		w.t.Fatalf("%s: a refusal read stores: checks %d users %d sessions %d projections %d/%d", name,
-			len(w.creds.checked()), w.users.calls, len(w.sessions.created), len(w.projector.userCalls), len(w.projector.orgCalls))
+	if w.users.calls != 0 || len(w.sessions.created) != 0 || len(w.projector.userCalls) != 0 || len(w.projector.orgCalls) != 0 {
+		w.t.Fatalf("%s: a refusal read stores: users %d sessions %d projections %d/%d", name,
+			w.users.calls, len(w.sessions.created), len(w.projector.userCalls), len(w.projector.orgCalls))
 	}
 }
 
@@ -220,7 +216,7 @@ func refusalWithoutPerRequestFields(t *testing.T, body []byte) string {
 }
 
 // T1: the go-api workload token (aud auth-service, the configured subject)
-// issues a session, with no service credential check, and the audit row names
+// issues a session, and the audit row names
 // the workload as the actor and its jti, never a credential id.
 func TestIssueSessionAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 	w := newWorkloadIssueFixture(t)
@@ -228,9 +224,6 @@ func TestIssueSessionAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 	response := w.issue(header)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", response.Code, response.Body)
-	}
-	if len(w.creds.checked()) != 0 {
-		t.Fatalf("the workload path checked a service credential: %v", w.creds.checked())
 	}
 	if len(w.sessions.created) != 1 {
 		t.Fatalf("%d sessions created", len(w.sessions.created))
@@ -260,8 +253,8 @@ func TestIssueSessionAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 		t.Fatalf("session_issue success outcomes with reason accepted = %d, want 1", got)
 	}
 	w.requireSuccessReasonsAreClosed()
-	if got, _ := w.counter(compatCounterName, nil); got != 0 {
-		t.Fatalf("a workload issue counted %d compat uses", got)
+	if got, _ := w.counter(retiredRefusalsCounter, nil); got != 0 {
+		t.Fatalf("a workload issue counted %d retired-credential refusals", got)
 	}
 }
 
@@ -349,11 +342,10 @@ func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
 			t.Fatalf("%s: refusal body %s differs from %s", name, got, golden)
 		}
 	}
-	// The same body, but for the per-request fields, as today's refusal of a revoked svc_authsess_ credential.
+	// The same body, but for the per-request fields, as the refusal of the retired svc_authsess_ credential.
 	w := newWorkloadIssueFixture(t)
-	w.creds.refusal = servicecred.RefusedRevoked
-	if got := refusalWithoutPerRequestFields(t, w.issue(issuerBearer).Body.Bytes()); got != golden {
-		t.Fatalf("a revoked service credential answers %s, want the workload refusal %s", got, golden)
+	if got := refusalWithoutPerRequestFields(t, w.issue(retiredSessionIssuerBearer).Body.Bytes()); got != golden {
+		t.Fatalf("the retired service credential answers %s, want the workload refusal %s", got, golden)
 	}
 }
 
@@ -431,74 +423,6 @@ func TestIssueSessionAnswers503WhenTheKeySetIsUnavailable(t *testing.T) {
 	w.nothingRead("key outage")
 }
 
-// T12: svc_authsess_ still issues, and every accepted use is counted by class.
-func TestIssueSessionCountsAcceptedServiceCredentialUse(t *testing.T) {
-	w := newWorkloadIssueFixture(t)
-	for range 2 {
-		if response := w.issue(issuerBearer); response.Code != http.StatusOK {
-			t.Fatalf("status %d: %s", response.Code, response.Body)
-		}
-	}
-	if len(w.creds.checked()) != 2 || w.creds.checked()[0] != issuerToken {
-		t.Fatalf("checks %v", w.creds.checked())
-	}
-	if got, _ := w.counter(compatCounterName, map[string]string{"class": authsessClass}); got != 2 {
-		t.Fatalf("compat uses = %d, want 2", got)
-	}
-	w.requireSuccessReasonsAreClosed()
-}
-
-// T13: only an accepted svc_authsess_ use counts: not a refusal, not a
-// workload accept, not a workload refusal.
-func TestTheCompatCounterCountsOnlyAcceptedServiceCredentialUse(t *testing.T) {
-	w := newWorkloadIssueFixture(t)
-	w.creds.refusal = servicecred.RefusedRevoked
-	expectError(t, w.issue(issuerBearer), http.StatusUnauthorized, "invalid_credentials")
-	w.creds.err = errors.New("db down")
-	expectError(t, w.issue(issuerBearer), http.StatusServiceUnavailable, "store_unavailable")
-	w.creds.refusal, w.creds.err = "", nil
-	good, _ := w.mint("workload+jwt", nil)
-	if response := w.issue(good); response.Code != http.StatusOK {
-		t.Fatalf("workload issue: %d %s", response.Code, response.Body)
-	}
-	bad, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) { c.Aud = "dev-health-api" })
-	expectError(t, w.issue(bad), http.StatusUnauthorized, "invalid_credentials")
-	if got, _ := w.counter(compatCounterName, nil); got != 0 {
-		t.Fatalf("compat uses = %d, want 0", got)
-	}
-}
-
-// T14: the compat series exists at 0 before any use, with the class label
-// alone, set to the credential class id.
-func TestTheCompatCounterIsDeclaredAtZeroWithTheClassLabelOnly(t *testing.T) {
-	w := newWorkloadIssueFixture(t)
-	var rm metricdata.ResourceMetrics
-	if err := w.reader.Collect(context.Background(), &rm); err != nil {
-		t.Fatal(err)
-	}
-	var found bool
-	for _, scope := range rm.ScopeMetrics {
-		for _, m := range scope.Metrics {
-			if m.Name != compatCounterName {
-				continue
-			}
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			if !ok || len(sum.DataPoints) != 1 {
-				t.Fatalf("compat counter data %+v, want one series", m.Data)
-			}
-			point := sum.DataPoints[0]
-			attrs := point.Attributes.ToSlice()
-			if point.Value != 0 || len(attrs) != 1 || string(attrs[0].Key) != "class" || attrs[0].Value.AsString() != authsessClass {
-				t.Fatalf("series %+v, want class=%s at 0", point, authsessClass)
-			}
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("the compat counter is not declared")
-	}
-}
-
 // T15: no token text reaches a log line, an audit row, a metric label or an
 // answer, on accept or refusal.
 func TestIssueSessionLeaksNoTokenText(t *testing.T) {
@@ -507,7 +431,7 @@ func TestIssueSessionLeaksNoTokenText(t *testing.T) {
 	wrong, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) { c.Aud = "dev-health-api" })
 	expired, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) { c.Exp, c.Nbf, c.Iat = c.Exp-900, c.Nbf-900, c.Iat-900 })
 	var bodies []string
-	for _, header := range []map[string]string{good, wrong, expired, issuerBearer, bearerOf("fcwlb_" + strings.Repeat("B", 43))} {
+	for _, header := range []map[string]string{good, wrong, expired, retiredSessionIssuerBearer, bearerOf("fcwlb_" + strings.Repeat("B", 43))} {
 		bodies = append(bodies, w.issue(header).Body.String())
 	}
 	var rm metricdata.ResourceMetrics
@@ -533,7 +457,7 @@ func TestIssueSessionLeaksNoTokenText(t *testing.T) {
 		}
 	}
 	haystack := strings.Join(bodies, "\n") + w.logs.String() + labels.String() + rows.String()
-	for _, header := range []map[string]string{good, wrong, expired, issuerBearer} {
+	for _, header := range []map[string]string{good, wrong, expired, retiredSessionIssuerBearer} {
 		value := strings.TrimPrefix(header["Authorization"], "Bearer ")
 		for _, part := range strings.Split(value, ".") {
 			if len(part) > 20 && strings.Contains(haystack, part) {
@@ -546,33 +470,30 @@ func TestIssueSessionLeaksNoTokenText(t *testing.T) {
 	}
 }
 
-// T17: without a configured workload subject, a workload token is refused as
-// any wrong credential, and the key set is not read.
+// T17: without a configured workload subject the route is not mounted: a
+// workload token gets 404, and the key set is not read.
 func TestIssueSessionRefusesWorkloadTokensWhenTheWorkloadPathIsOff(t *testing.T) {
 	w := newWorkloadIssueFixture(t)
 	header, _ := w.mint("workload+jwt", nil)
 	w.workload = nil
 	w.buildCompat()
-	expectError(t, w.issue(header), http.StatusUnauthorized, "invalid_credentials")
+	if response := w.issue(header); response.Code != http.StatusNotFound {
+		t.Fatalf("workload path off: %d %s, want 404", response.Code, response.Body)
+	}
 	w.nothingRead("workload path off")
 	if w.keys.reads != 0 {
 		t.Fatalf("the key set was read %d times with the path off", w.keys.reads)
 	}
-	if response := w.issue(issuerBearer); response.Code != http.StatusOK {
-		t.Fatalf("svc_authsess_ with the workload path off: %d %s", response.Code, response.Body)
-	}
 }
 
-// The workload path alone mounts the route; svc_authsess_ is then refused.
+// The workload path mounts the route; svc_authsess_ is refused on it.
 func TestIssueSessionIsMountedByTheWorkloadPathAlone(t *testing.T) {
 	w := newWorkloadIssueFixture(t)
-	w.creds = nil
-	w.buildCompat()
 	header, _ := w.mint("workload+jwt", nil)
 	if response := w.issue(header); response.Code != http.StatusOK {
-		t.Fatalf("workload issue without service credentials: %d %s", response.Code, response.Body)
+		t.Fatalf("workload issue: %d %s", response.Code, response.Body)
 	}
-	expectError(t, w.issue(issuerBearer), http.StatusUnauthorized, "invalid_credentials")
+	expectError(t, w.issue(retiredSessionIssuerBearer), http.StatusUnauthorized, "invalid_credentials")
 }
 
 func TestNewSessionIssueWorkloadRefusesBadConfigurationNamingNoValue(t *testing.T) {
@@ -687,8 +608,7 @@ func TestAForgedTokenWithTheRightAudienceAndSubjectReachesTheVerifierAndIsRefuse
 	if !strings.Contains(w.logs.String(), `"refusal":"signature"`) {
 		t.Fatalf("the verifier did not refuse on the signature: %s", w.logs.String())
 	}
-	w.creds.refusal = servicecred.RefusedRevoked
-	if got, want := refusalWithoutPerRequestFields(t, response.Body.Bytes()), refusalWithoutPerRequestFields(t, w.issue(issuerBearer).Body.Bytes()); got != want {
+	if got, want := refusalWithoutPerRequestFields(t, response.Body.Bytes()), refusalWithoutPerRequestFields(t, w.issue(retiredSessionIssuerBearer).Body.Bytes()); got != want {
 		t.Fatalf("forged-token body %s differs from %s", got, want)
 	}
 }
@@ -737,7 +657,7 @@ func TestTheRouteRechecksTheVerifiedClaimsAfterVerify(t *testing.T) {
 		if len(w.sessions.created) != before {
 			t.Fatalf("%s: a session was created on claims the route must refuse", name)
 		}
-		if len(w.creds.checked()) != 0 || w.users.calls != usersBefore {
+		if w.users.calls != usersBefore {
 			t.Fatalf("%s: a refusal read stores", name)
 		}
 	}

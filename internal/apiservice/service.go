@@ -439,7 +439,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_workload_credential", "api_workload_credential_config_invalid", err)
 	}
-	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup, sessionCred)
+	deps.SessionIssuer, err = sessionIssuer(authProxy, sessionCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
@@ -613,18 +613,16 @@ func configureWith(
 // /api/v1/internal/* routes. They are NOT part of Routes, so the public
 // listener has no handler for them; only the listener bound to
 // APIInternalAddress serves them. The network boundary (the chart's
-// NetworkPolicy, no Ingress) is the first control; every route also checks a
-// svc_acr_ bearer (CHAOS-9993).
+// NetworkPolicy, no Ingress) is the first control; every route also checks
+// the acr-api workload token, the only bearer it accepts.
 func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var store acr.EntitlementStore
 	var llmConfig acr.LLMConfigSource
-	var credentials acr.CredentialVerifier
 	var auth acr.CredentialStore
 	var access acr.PrincipalAccessStore
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
 		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeInvestigate)
-		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
 		auth = acr.PostgresCredentialStore{Pool: deps.Pool, Now: deps.Now}
 		// The users, membership and impersonation reads run on go-api's pool
 		// (policy.PGStore with the auth schema, as the authenticator reads it).
@@ -655,7 +653,7 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		counters = httpapi.NewMemoryCounters(deps.Now)
 	}
 	return internalRoutesWith(acr.Deps{
-		Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials,
+		Store: store, Logger: logger, LLMConfig: llmConfig,
 		Auth: auth, Limiter: httpapi.NewKeyedLimiter(counters, acr.AuthAttemptLimit),
 		Workload: deps.ACRWorkload,
 		Access:   access, AccessLimiter: httpapi.NewKeyedLimiter(counters, acr.AccessAttemptLimit),

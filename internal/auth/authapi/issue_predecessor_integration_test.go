@@ -65,12 +65,12 @@ func newSwitchLive(t *testing.T, ctx context.Context) *switchLive {
 	}
 	routes, err := CompatRoutes(CompatDeps{
 		Sessions: p.store, Users: users, Issuer: newEdDSAIssuer(t, signer, testAudience),
-		Logger:             slog.New(slog.DiscardHandler),
-		Projector:          &fakeProjector{orgs: map[uuid.UUID]bool{orgA: true, orgB: true}, gone: map[uuid.UUID]bool{}},
-		AppendAudit:        func(context.Context, audit.AuditEvent) error { return nil },
-		ServiceCredentials: &fakeServiceCredentials{id: uuid.NewString()},
-		Meter:              sdkmetric.NewMeterProvider().Meter("test"),
-		Limits:             mustLimits(t, httpapi.NewMemoryCounters(nil)),
+		Logger:        slog.New(slog.DiscardHandler),
+		Projector:     &fakeProjector{orgs: map[uuid.UUID]bool{orgA: true, orgB: true}, gone: map[uuid.UUID]bool{}},
+		AppendAudit:   func(context.Context, audit.AuditEvent) error { return nil },
+		IssueWorkload: testIssueWorkload(),
+		Meter:         sdkmetric.NewMeterProvider().Meter("test"),
+		Limits:        mustLimits(t, httpapi.NewMemoryCounters(nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func (l *switchLive) issue(t *testing.T, org uuid.UUID, predecessor *uuid.UUID) 
 	if predecessor != nil {
 		body = issueBodyWithPredecessor(l.user, org.String(), `"`+predecessor.String()+`"`)
 	}
-	response := post(l.server, PatternIssueSession, body, issuerBearer)
+	response := post(l.server, PatternIssueSession, body, issuerBearer())
 	if response.Code != http.StatusOK {
 		return response.Code, uuid.Nil
 	}
@@ -201,7 +201,7 @@ func TestConcurrentSwitchesFromOneSessionLeaveOneSuccessor(t *testing.T) {
 			go func(i int) {
 				defer wg.Done()
 				<-start
-				response := post(l.server, PatternIssueSession, issueBodyWithPredecessor(l.user, l.orgB.String(), `"`+predecessor.String()+`"`), issuerBearer)
+				response := post(l.server, PatternIssueSession, issueBodyWithPredecessor(l.user, l.orgB.String(), `"`+predecessor.String()+`"`), issuerBearer())
 				statuses[i] = response.Code
 			}(i)
 		}
@@ -306,7 +306,7 @@ func TestARefreshRacingASupersedeLeavesNoLivePredecessor(t *testing.T) {
 	ctx := context.Background()
 	l := newSwitchLive(t, ctx)
 	for round := 0; round < 8; round++ {
-		response := post(l.server, PatternIssueSession, issueBody(l.user, l.orgA.String(), "pwd"), issuerBearer)
+		response := post(l.server, PatternIssueSession, issueBody(l.user, l.orgA.String(), "pwd"), issuerBearer())
 		if response.Code != http.StatusOK {
 			t.Fatalf("round %d: sign in %d", round, response.Code)
 		}
@@ -336,7 +336,7 @@ func TestARefreshRacingASupersedeLeavesNoLivePredecessor(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			switched = post(l.server, PatternIssueSession, issueBodyWithPredecessor(l.user, l.orgB.String(), `"`+predecessor.String()+`"`), issuerBearer).Code
+			switched = post(l.server, PatternIssueSession, issueBodyWithPredecessor(l.user, l.orgB.String(), `"`+predecessor.String()+`"`), issuerBearer()).Code
 		}()
 		close(start)
 		wg.Wait()

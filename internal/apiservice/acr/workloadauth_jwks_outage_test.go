@@ -98,9 +98,6 @@ func TestWorkloadJWKSOutageAnswers503OnEveryRoute(t *testing.T) {
 				if got := wlDelta(llmBefore, llmConfigRequestCounts(t)); len(got) != 0 {
 					t.Fatalf("an outage added llm-config request outcome series: %v", got)
 				}
-				if h.creds.findCalls != 0 || len(h.creds.used) != 0 || h.llm.gotToken != "" {
-					t.Fatalf("an unavailable verdict reached a store: finds %d used %v", h.creds.findCalls, h.creds.used)
-				}
 			})
 		}
 	}

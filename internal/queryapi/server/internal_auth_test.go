@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
@@ -158,7 +159,8 @@ func TestQueryAnswersTheSameClaimsForBothCarriers(t *testing.T) {
 			if len(*seen) != 2 || (*seen)[0] != (*seen)[1] {
 				t.Fatalf("carriers disagree: %+v", *seen)
 			}
-			want := authctx.Claims{OrgID: identity.org, Role: identity.role, IsSuperuser: identity.super, ImpersonationActive: identity.imp}
+			want := authctx.Claims{OrgID: identity.org, Role: identity.role, IsSuperuser: identity.super, ImpersonationActive: identity.imp,
+				Scope: pepgate.Legacy(identity.org)}
 			if (*seen)[0] != want {
 				t.Fatalf("got %+v want %+v", (*seen)[0], want)
 			}

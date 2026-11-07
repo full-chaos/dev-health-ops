@@ -16,7 +16,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
@@ -121,7 +120,7 @@ func TestIssueRefusesBeforeSessionWriteWhenSignerUnavailable(t *testing.T) {
 	f := newCompatFixture(t)
 	f.issuer = newEdDSAIssuer(t, signer, testAudience)
 	f.buildCompat()
-	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer)
+	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer())
 	expectError(t, response, http.StatusServiceUnavailable, reasonDependency)
 	if len(f.sessions.created) != 0 {
 		t.Fatalf("%d sessions written before the token could be signed", len(f.sessions.created))
@@ -171,13 +170,13 @@ func TestIssueRefusalsBeforePreflightKeepTheirCodes(t *testing.T) {
 	}{
 		"no bearer": {header: nil, body: func(f *compatFixture) string { return issueBody(f.principal, "", "pwd") },
 			status: http.StatusUnauthorized, reason: reasonInvalidCredentials},
-		"refused service credential": {mutate: func(f *compatFixture) { f.creds.refusal = servicecred.RefusedRevoked }, header: issuerBearer,
+		"retired service credential": {header: retiredSessionIssuerBearer,
 			body: func(f *compatFixture) string { return issueBody(f.principal, "", "pwd") }, status: http.StatusUnauthorized, reason: reasonInvalidCredentials},
-		"malformed body": {header: issuerBearer, body: func(*compatFixture) string { return `{"principal_id":1}` },
+		"malformed body": {header: issuerBearer(), body: func(*compatFixture) string { return `{"principal_id":1}` },
 			status: http.StatusUnauthorized, reason: reasonMalformed},
-		"unknown principal": {header: issuerBearer, body: func(*compatFixture) string { return issueBody(stranger, "", "pwd") },
+		"unknown principal": {header: issuerBearer(), body: func(*compatFixture) string { return issueBody(stranger, "", "pwd") },
 			status: http.StatusForbidden, reason: reasonPrincipalNotFound},
-		"not a member": {header: issuerBearer, body: func(f *compatFixture) string { return issueBody(f.principal, uuid.NewString(), "pwd") },
+		"not a member": {header: issuerBearer(), body: func(f *compatFixture) string { return issueBody(f.principal, uuid.NewString(), "pwd") },
 			status: http.StatusForbidden, reason: reasonNotEntitled},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -395,7 +394,7 @@ func TestRefreshAndIssueUnderHS256AreUnchanged(t *testing.T) {
 		t.Fatalf("not refresh-response.v1: %v", err)
 	}
 	c := newCompatFixture(t)
-	issued := c.do(http.MethodPost, PatternIssueSession, issueBody(c.principal, c.org.String(), "pwd"), issuerBearer)
+	issued := c.do(http.MethodPost, PatternIssueSession, issueBody(c.principal, c.org.String(), "pwd"), issuerBearer())
 	if issued.Code != http.StatusOK || len(c.sessions.created) != 1 || len(c.projector.userCalls) != 1 || len(c.projector.orgCalls) != 1 {
 		t.Fatalf("issue status %d, created %d, projected %v %v", issued.Code, len(c.sessions.created), c.projector.userCalls, c.projector.orgCalls)
 	}
@@ -415,7 +414,7 @@ func TestRefreshAndIssueUnderEdDSACheckThenWriteThenSign(t *testing.T) {
 	c := newCompatFixture(t)
 	c.issuer = newEdDSAIssuer(t, issueSigner, testAudience)
 	c.buildCompat()
-	issued := c.do(http.MethodPost, PatternIssueSession, issueBody(c.principal, c.org.String(), "pwd"), issuerBearer)
+	issued := c.do(http.MethodPost, PatternIssueSession, issueBody(c.principal, c.org.String(), "pwd"), issuerBearer())
 	if issued.Code != http.StatusOK || len(c.sessions.created) != 1 || issueSigner.checks.Load() != 1 || issueSigner.signs.Load() != 2 {
 		t.Fatalf("issue status %d, created %d, checks %d, signs %d: %s",
 			issued.Code, len(c.sessions.created), issueSigner.checks.Load(), issueSigner.signs.Load(), issued.Body)
@@ -457,7 +456,7 @@ func TestIssueForAGoneUserOrOrganizationAnswers503WhileTheSignerIsUnavailable(t 
 			mutate(f)
 			f.issuer = newEdDSAIssuer(t, signer, testAudience)
 			f.buildCompat()
-			response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer)
+			response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer())
 			expectError(t, response, http.StatusServiceUnavailable, reasonDependency)
 			if len(f.sessions.created) != 0 || len(f.projector.userCalls) != 0 || len(f.projector.orgCalls) != 0 || signer.signs.Load() != 0 {
 				t.Fatalf("created %d, projected %v %v, signs %d", len(f.sessions.created), f.projector.userCalls, f.projector.orgCalls, signer.signs.Load())
@@ -466,7 +465,7 @@ func TestIssueForAGoneUserOrOrganizationAnswers503WhileTheSignerIsUnavailable(t 
 			mutate(healthy)
 			healthy.issuer = newEdDSAIssuer(t, readableKeySigner(t), testAudience)
 			healthy.buildCompat()
-			if code := healthy.do(http.MethodPost, PatternIssueSession, issueBody(healthy.principal, healthy.org.String(), "pwd"), issuerBearer).Code; code != http.StatusForbidden {
+			if code := healthy.do(http.MethodPost, PatternIssueSession, issueBody(healthy.principal, healthy.org.String(), "pwd"), issuerBearer()).Code; code != http.StatusForbidden {
 				t.Fatalf("control with a healthy signer: %d, want 403", code)
 			}
 		})

@@ -53,7 +53,7 @@ func TestProductRule2GoAPIMemberWithOneRepositoryGrantReadsOrgWideMetrics(t *tes
 			if !decision.Allowed() {
 				t.Fatalf("fake decision point refused: %v", decision.Reason())
 			}
-			if !obligationsCarriedOut(decision.Obligations(), request, false) {
+			if !obligationsCarriedOut(decision.Obligations(), request, false, true) {
 				t.Fatalf("%s: allow for a member with one repository grant is not carried out on a route with a repository dimension (allowlist %v)", action, d.Obligations.RepositoryAllowlist)
 			}
 		})

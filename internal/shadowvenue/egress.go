@@ -17,7 +17,10 @@ var StubHosts = []string{"api.github.com", "api.pagerduty.com", "api.stripe.com"
 // The stub_* keys are the stub's own status file (cmd/venue-extstub -status): its mode, its answer-table digest and its
 // start time; the run needs the frozen run mode in every read and one stub process across the reads.
 var egressKeys = []string{"when", "network_internal", "networks", "default_route", "public_tcp", "public_dns", "stub_tcp", "hosts_pinned", "image",
-	"stub_mode", "stub_config", "stub_started", "goapi_ip"}
+	"stub_mode", "stub_config", "stub_started", "goapi_ip", "run_id"}
+
+// noRun is the run_id of the read after the last drive, which precedes no drive.
+const noRun = "none"
 
 var imageDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
@@ -29,8 +32,8 @@ type EgressRead struct {
 	Err    error
 }
 
-// ParseEgress reads one egress record: key=value lines of egressKeys, each at most once, no other key, no empty value.
-// A key that is missing fails checkEgress.
+// ParseEgress reads one egress record: key=value lines, every key of egressKeys exactly once, no other key, no empty
+// value. run_id names the drive the read precedes (the driver's -run-id), or none for the read after the last drive.
 func ParseEgress(name string, raw []byte) EgressRead {
 	read := EgressRead{Name: name, Fields: map[string]string{}}
 	for n, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {

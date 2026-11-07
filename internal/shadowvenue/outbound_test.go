@@ -42,7 +42,13 @@ const (
 	testImage      = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	testStubConfig = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
 	testGoAPIIP    = "172.30.0.5"
+	testRunID      = "13267-4a"
 )
+
+// runIDOf is the run id a read of when precedes: before -> 4a, between -> 4b, after -> none.
+func runIDOf(when string) string {
+	return map[string]string{"before": "13267-4a", "between": "13267-4b", "after": "none"}[when]
+}
 
 // noSeed is a given, empty seed-mode log.
 var noSeed = SeedLog{Given: true}
@@ -51,7 +57,7 @@ var noSeed = SeedLog{Given: true}
 func egressText(when string) string {
 	return "when=" + when + "\nnetwork_internal=true\nnetworks=venue-int\ndefault_route=none\npublic_tcp=refused\npublic_dns=fail\nstub_tcp=ok\n" +
 		"hosts_pinned=api.github.com,api.pagerduty.com,api.stripe.com,github.com,identity.pagerduty.com\nimage=" + testImage + "\n" +
-		"stub_mode=run\nstub_config=" + testStubConfig + "\nstub_started=2026-11-07T15:00:00Z\ngoapi_ip=" + testGoAPIIP + "\n"
+		"stub_mode=run\nstub_config=" + testStubConfig + "\nstub_started=2026-11-07T15:00:00Z\ngoapi_ip=" + testGoAPIIP + "\nrun_id=" + runIDOf(when) + "\n"
 }
 
 func egressReads(when ...string) []EgressRead {
@@ -307,6 +313,15 @@ func TestJudgeOutboundEgressEachPlantedDefectIsVoid(t *testing.T) {
 		}
 		return []EgressRead{egressReads("before")[0], ParseEgress("between.txt", []byte(strings.Join(lines, "\n")))}
 	}
+	set2 := func(when, key, value string) EgressRead {
+		lines := strings.Split(egressText(when), "\n")
+		for i, l := range lines {
+			if strings.HasPrefix(l, key+"=") {
+				lines[i] = key + "=" + value
+			}
+		}
+		return ParseEgress(when+".txt", []byte(strings.Join(lines, "\n")))
+	}
 	both := func(key, value string) []EgressRead {
 		var out []EgressRead
 		for _, when := range []string{"before", "between"} {
@@ -342,6 +357,11 @@ func TestJudgeOutboundEgressEachPlantedDefectIsVoid(t *testing.T) {
 		"goapi ip differs":     bad("goapi_ip", "172.30.0.6"),
 		"goapi ip public":      both("goapi_ip", "8.8.8.8"),
 		"goapi ip no ip":       both("goapi_ip", "go-api"),
+		"a key missing in both": {ParseEgress("before.txt", []byte(strings.Replace(egressText("before"), "stub_started=2026-11-07T15:00:00Z\n", "", 1))),
+			ParseEgress("between.txt", []byte(strings.Replace(egressText("between"), "stub_started=2026-11-07T15:00:00Z\n", "", 1)))},
+		"an empty value in both":         both("stub_started", ""),
+		"run id of the next drive twice": {egressReads("before")[0], set2("between", "run_id", "13267-4a")},
+		"run id none before the end":     {egressReads("before")[0], set2("between", "run_id", "none")},
 		"networks empty": {ParseEgress("before.txt", []byte(strings.Replace(egressText("before"), "networks=venue-int", "networks=", 1))),
 			ParseEgress("between.txt", []byte(strings.Replace(egressText("between"), "networks=venue-int", "networks=", 1)))},
 	}

@@ -22,17 +22,12 @@ const MinGap = 2300 * time.Millisecond
 
 const loginPath = "/api/v1/auth/login"
 
-// CheckBase accepts only a plain-http loopback origin with no path, query or credentials: the venue's published
-// go-api port. A production or LAN host is refused here, before any request.
-func CheckBase(raw string) (*url.URL, error) {
-	return CheckVenueBase(raw, EgressRead{})
-}
-
-// CheckVenueBase is CheckBase that also accepts go-api's own address on the venue's internal network (a container on an
-// internal-only network has no published port): the host must be the private IP the egress record read just before the
-// drive names as goapi_ip, and that record must be readable and say the network is internal with no default route. Any
-// other host is refused before any request.
-func CheckVenueBase(raw string, record EgressRead) (*url.URL, error) {
+// CheckVenueBase is the one check of every origin the driver sends to: a plain-http origin with no path, query or
+// credentials whose host is loopback, or go-api's own address on the venue's internal network (a container on an
+// internal-only network has no published port). Such a host must be the private IP the egress record read just before
+// this drive names as goapi_ip; that record must be readable, show an internal network with no default route, and name
+// this drive's run id (run_id), so a record of another drive is refused. Any other host is refused before any request.
+func CheckVenueBase(raw string, record EgressRead, runID string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || u.Opaque != "" {
 		return nil, fmt.Errorf("base %q: want http://127.0.0.1:<port> (loopback) or go-api's venue IP, no path, query or credentials", raw)
@@ -74,9 +69,12 @@ func ReadPassword(path string) (string, error) {
 	return value, nil
 }
 
-// Driver sends a plan's slots to the venue go-api, one at a time.
+// Driver sends a plan's slots to the venue go-api, one at a time. Base is the raw origin; every request takes its origin
+// from CheckVenueBase(Base, Egress, RunID) (origin), so no request path has a check of its own.
 type Driver struct {
-	Base   *url.URL
+	Base   string
+	Egress EgressRead
+	RunID  string
 	Client *http.Client
 	// Gap is the wait after each answer; at least MinGap.
 	Gap time.Duration
@@ -86,6 +84,9 @@ type Driver struct {
 	Sleep  func(context.Context, time.Duration) error
 	Now    func() time.Time
 }
+
+// origin is the checked origin of a request.
+func (d *Driver) origin() (*url.URL, error) { return CheckVenueBase(d.Base, d.Egress, d.RunID) }
 
 func (d *Driver) now() time.Time {
 	if d.Now != nil {
@@ -120,7 +121,7 @@ func (d *Driver) Login(ctx context.Context, p Principal, orgID string) (string, 
 		in["org_id"] = orgID
 	}
 	body, _ := json.Marshal(in)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.Base.String()+loginPath, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.Base+loginPath, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("login %s: build request", p.Name)
 	}
@@ -185,7 +186,7 @@ func (d *Driver) send(ctx context.Context, slot *Slot, token string) error {
 	if slot.Body != none {
 		body = strings.NewReader(slot.Body)
 	}
-	req, err := http.NewRequestWithContext(ctx, slot.Method, d.Base.String()+slot.Path, body)
+	req, err := http.NewRequestWithContext(ctx, slot.Method, d.Base+slot.Path, body)
 	if err != nil {
 		return fmt.Errorf("drive: slot %d: build request", slot.Seq)
 	}

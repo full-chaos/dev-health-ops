@@ -19,7 +19,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"slices"
@@ -77,6 +76,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 	allow := fs.String("allow-external", "", "comma-separated outside services a request may reach (stripe, pagerduty, github, mail)")
 	base := fs.String("base", "", "venue go-api origin: loopback, or go-api's venue-int IP named by -egress (drive)")
 	egressPath := fs.String("egress", "", "egress record read just before this drive (drive; needed for a non-loopback -base)")
+	runID := fs.String("run-id", "", "this drive's run id; the -egress record must name it as run_id (drive)")
 	out := fs.String("out", "", "slots file to create, 0600 (drive)")
 	gap := fs.Duration("gap", 2500*time.Millisecond, "wait after each answer (drive)")
 	loginOnly := fs.Bool("login-only", false, "sign each principal of the plan in and stop: no row request is sent, no slots file is written (drive)")
@@ -114,8 +114,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 	if reads := readEgress(*egressPath); len(reads) == 1 {
 		record = reads[0]
 	}
-	origin, err := shadowvenue.CheckVenueBase(*base, record)
-	if err != nil {
+	if _, err := shadowvenue.CheckVenueBase(*base, record, *runID); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
@@ -124,14 +123,14 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		return exitUsage
 	}
 	if *loginOnly {
-		return loginPrincipals(ctx, origin, plan, venue, stdout, stderr)
+		return loginPrincipals(ctx, &shadowvenue.Driver{Base: *base, Egress: record, RunID: *runID, Client: newClient()}, plan, venue, stdout, stderr)
 	}
 	file, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		fmt.Fprintf(stderr, "drive: -out %s: %v\n", *out, errors.Unwrap(err))
 		return exitUsage
 	}
-	driver := &shadowvenue.Driver{Base: origin, Client: newClient(), Gap: *gap, Frozen: frozen}
+	driver := &shadowvenue.Driver{Base: *base, Egress: record, RunID: *runID, Client: newClient(), Gap: *gap, Frozen: frozen}
 	tokens := map[string]string{}
 	for _, s := range plan.Slots {
 		if s.Gap() || tokens[s.Principal] != "" {
@@ -160,8 +159,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 
 // loginPrincipals signs every principal of the plan in once and sends nothing else: it shows what the drive's own
 // sign-ins change.
-func loginPrincipals(ctx context.Context, origin *url.URL, plan shadowvenue.Plan, venue shadowvenue.Venue, stdout, stderr io.Writer) int {
-	driver := &shadowvenue.Driver{Base: origin, Client: newClient()}
+func loginPrincipals(ctx context.Context, driver *shadowvenue.Driver, plan shadowvenue.Plan, venue shadowvenue.Venue, stdout, stderr io.Writer) int {
 	done := map[string]bool{}
 	for _, s := range plan.Slots {
 		if s.Gap() || done[s.Principal] {

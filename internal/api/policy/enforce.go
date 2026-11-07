@@ -227,7 +227,7 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 			slog.String("namespace", row.Namespace), slog.String("reason", string(decision.Reason())))
 		return enforceUnavailable
 	}
-	if decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), request, e.noRepositoryDimension[o.pattern]) {
+	if decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), request, e.noRepositoryDimension[o.pattern], o.read) {
 		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
 		e.logger.WarnContext(ctx, "api enforcement: the allow carries an obligation go-api does not carry out, no verdict, the route is refused",
 			slog.String("namespace", row.Namespace))
@@ -262,7 +262,7 @@ func (e *Enforcer) decideAdminOr(ctx context.Context, o enforceObservation, row 
 	}
 	allowed := false
 	for i, decision := range decisions {
-		if decision.Local() || (decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), requests[i], e.noRepositoryDimension[o.pattern])) {
+		if decision.Local() || (decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), requests[i], e.noRepositoryDimension[o.pattern], o.read)) {
 			countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
 			e.logger.WarnContext(ctx, "api enforcement: no verdict for an admin-or row, the route is refused",
 				slog.String("route", o.pattern), slog.String("reason", string(decision.Reason())))
@@ -320,16 +320,17 @@ func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
 
 // obligationsCarriedOut reports whether go-api carries out every obligation of an allow for request. A tenant scope
 // is carried out when it is the request's organization; a repository allowlist or the organization repository
-// scope only on a route with no repository dimension; redaction, minimum assurance and step-up never. An allow with
+// scope only on a route with no repository dimension; a minimum assurance of aal1 on a read only (every session
+// go-api accepts is aal1, session.AssuranceOf); redaction, another assurance level and step-up never. An allow with
 // one obligation not carried out is no verdict: it is neither served nor a deny.
-func obligationsCarriedOut(o pep.Obligations, request pep.Request, noRepositoryDimension bool) bool {
+func obligationsCarriedOut(o pep.Obligations, request pep.Request, noRepositoryDimension, read bool) bool {
 	if tenant, ok := o.TenantScope(); ok && tenant != request.OrganizationID {
 		return false
 	}
 	if (o.RepositoryRestricted() || o.RepositoryScopeOrganization()) && !noRepositoryDimension {
 		return false
 	}
-	if _, ok := o.MinimumAssurance(); ok {
+	if level, ok := o.MinimumAssurance(); ok && (level != pep.AssuranceAAL1 || !read) {
 		return false
 	}
 	return len(o.Redaction()) == 0 && !o.StepUpRequired()

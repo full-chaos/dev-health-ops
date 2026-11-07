@@ -441,10 +441,9 @@ func (g *Gate) request(action, bearer, orgID string) pep.Request {
 
 // scopeOf is the scope of an allow, or the closed reason it is not carried out. Fail-closed order: the decision and
 // its tenant_scope must both name the request's organization, compared as UUIDs (the scope carries the canonical
-// form); redaction,
-// minimum_assurance and step_up are not carried out; repository_scope organization, or an allowlist holding "*", is
-// every repository; any other allowlist is a ceiling only on a route whose class the registry narrows; neither repository
-// member is the tenant alone for an action the catalog marks repository_scope none, and no repository otherwise.
+// form); redaction, a minimum_assurance above aal1 and step_up are not carried out; repository_scope organization,
+// or an allowlist holding "*", is every repository; any other allowlist is a ceiling only on a route whose class the
+// registry narrows; neither repository member is the tenant alone for an action the catalog marks repository_scope none, and no repository otherwise.
 func (g *Gate) scopeOf(d pep.Decision, profile, action, orgID string) (pepgate.Scope, pep.Reason, string) {
 	org, ok := canonicalUUID(orgID)
 	if !ok {
@@ -457,7 +456,8 @@ func (g *Gate) scopeOf(d pep.Decision, profile, action, orgID string) (pepgate.S
 	if tenant, ok := o.TenantScope(); !ok || !sameUUID(tenant, org) {
 		return pepgate.Scope{}, ReasonTenantMismatch, ""
 	}
-	if _, ok := o.MinimumAssurance(); ok || len(o.Redaction()) != 0 || o.StepUpRequired() {
+	// Every session query-api accepts is aal1 (session.AssuranceOf), so that level is met; a higher one is not.
+	if level, ok := o.MinimumAssurance(); (ok && level != pep.AssuranceAAL1) || len(o.Redaction()) != 0 || o.StepUpRequired() {
 		return pepgate.Scope{}, ReasonNotCarriedOut, ""
 	}
 	switch {

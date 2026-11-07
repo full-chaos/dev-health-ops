@@ -6,9 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
@@ -29,6 +32,24 @@ func sessionEnvironment(env map[string]string) map[string]string {
 	env[authconfig.EnvTrustedProxies] = "127.0.0.1"
 	env[authconfig.EnvValkeyURI] = testValkeyURI
 	return env
+}
+
+// testIssueSubject is a made-up go-api workload principal: with it (and the
+// token issuer) the session issue, state and delegated routes mount; they take
+// only the go-api workload token.
+var testIssueSubject = session.WirePrincipalID(uuid.MustParse("6a1f0c2e-3b4d-4e5f-8a6b-7c8d9e0f1a2b"))
+
+// workloadIssueEnvironment sets the go-api workload subject in env, which must
+// set the token issuer.
+func workloadIssueEnvironment(env map[string]string) map[string]string {
+	env[authconfig.EnvSessionIssueWorkloadSubject] = testIssueSubject
+	return env
+}
+
+// probeSigner is the token signer configure builds for cfg, never read here:
+// the session issue routes' workload path takes its published key set.
+func probeSigner(cfg authconfig.Config) *token.Signer {
+	return token.NewFileSigner(token.FileConfig{KeySetPath: cfg.SigningKeySetPath, KeyPath: cfg.SigningKeyPath, KeyID: cfg.SigningKeyID})
 }
 
 // compatEnvironment is sessionEnvironment with the login route mounted too.

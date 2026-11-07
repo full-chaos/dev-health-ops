@@ -122,11 +122,11 @@ VALUES ($1, $2, NULL, 'local', true, true, false, $3, now(), now())`, user, "d-"
 func (l *delegatedLive) server(t *testing.T) http.Handler {
 	t.Helper()
 	routes, err := CompatRoutes(CompatDeps{Sessions: l.store, Users: l.users, Issuer: l.issuer, Projector: l.identity,
-		Logger:             slog.New(slog.DiscardHandler),
-		AppendAudit:        func(context.Context, audit.AuditEvent) error { return nil },
-		ServiceCredentials: &fakeServiceCredentials{id: uuid.NewString()},
-		Meter:              sdkmetric.NewMeterProvider().Meter("test"),
-		Limits:             mustLimits(t, httpapi.NewMemoryCounters(nil)),
+		Logger:        slog.New(slog.DiscardHandler),
+		AppendAudit:   func(context.Context, audit.AuditEvent) error { return nil },
+		IssueWorkload: testIssueWorkload(),
+		Meter:         sdkmetric.NewMeterProvider().Meter("test"),
+		Limits:        mustLimits(t, httpapi.NewMemoryCounters(nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ type startedAnswer struct {
 
 func (l *delegatedLive) start(t *testing.T, server http.Handler) (uuid.UUID, string) {
 	t.Helper()
-	r := post(server, PatternDelegatedSession, l.body(), issuerBearer)
+	r := post(server, PatternDelegatedSession, l.body(), issuerBearer())
 	if r.Code != http.StatusCreated {
 		t.Fatalf("start %d: %s", r.Code, r.Body)
 	}
@@ -204,7 +204,7 @@ func TestDelegatedMintFailureEndsTheRealRow(t *testing.T) {
 	defer cancel()
 	l := newDelegatedLive(t, ctx)
 	l.users.roleErr = errors.New("read failed")
-	r := post(l.server(t), PatternDelegatedSession, l.body(), issuerBearer)
+	r := post(l.server(t), PatternDelegatedSession, l.body(), issuerBearer())
 	if r.Code != http.StatusServiceUnavailable {
 		t.Fatalf("start %d: %s", r.Code, r.Body)
 	}
@@ -226,16 +226,16 @@ func TestDelegatedEndRouteEndsOnlyADelegatedRow(t *testing.T) {
 	server := l.server(t)
 	id, _ := l.start(t, server)
 	endBody := func(id uuid.UUID) string { return `{"session_id":"` + id.String() + `"}` }
-	if r := post(server, PatternDelegatedSessionEnd, endBody(l.base), issuerBearer); r.Code != http.StatusNotFound {
+	if r := post(server, PatternDelegatedSessionEnd, endBody(l.base), issuerBearer()); r.Code != http.StatusNotFound {
 		t.Fatalf("plain session %d: %s", r.Code, r.Body)
 	}
-	if r := post(server, PatternDelegatedSessionEnd, endBody(id), issuerBearer); r.Code != http.StatusNoContent {
+	if r := post(server, PatternDelegatedSessionEnd, endBody(id), issuerBearer()); r.Code != http.StatusNoContent {
 		t.Fatalf("end %d: %s", r.Code, r.Body)
 	}
 	if !l.ended(t, ctx, id) || l.ended(t, ctx, l.base) {
 		t.Fatalf("delegated ended %v, base ended %v", l.ended(t, ctx, id), l.ended(t, ctx, l.base))
 	}
-	if r := post(server, PatternDelegatedSessionEnd, endBody(id), issuerBearer); r.Code != http.StatusNoContent {
+	if r := post(server, PatternDelegatedSessionEnd, endBody(id), issuerBearer()); r.Code != http.StatusNoContent {
 		t.Fatalf("second end %d: %s", r.Code, r.Body)
 	}
 }
@@ -254,7 +254,7 @@ func TestGoAPITakesTheDelegatedTokenUntilTheSessionEnds(t *testing.T) {
 	if user.UserID != l.target.String() || user.ImpersonatedBy == nil || *user.ImpersonatedBy != l.actor.String() {
 		t.Fatalf("user %+v", user)
 	}
-	if r := post(server, PatternDelegatedSessionEnd, `{"session_id":"`+id.String()+`"}`, issuerBearer); r.Code != http.StatusNoContent {
+	if r := post(server, PatternDelegatedSessionEnd, `{"session_id":"`+id.String()+`"}`, issuerBearer()); r.Code != http.StatusNoContent {
 		t.Fatalf("end %d: %s", r.Code, r.Body)
 	}
 	if _, err := l.authenticator.Authenticate(ctx, access); err == nil {
@@ -309,7 +309,7 @@ func TestSwitchFromADelegatedSessionIsRefusedOverARealRow(t *testing.T) {
 	l := newDelegatedLive(t, ctx)
 	server := l.server(t)
 	id, _ := l.start(t, server)
-	r := post(server, PatternIssueSession, issueBodyWithPredecessor(l.target, l.org.String(), `"`+id.String()+`"`), issuerBearer)
+	r := post(server, PatternIssueSession, issueBodyWithPredecessor(l.target, l.org.String(), `"`+id.String()+`"`), issuerBearer())
 	if r.Code != http.StatusForbidden {
 		t.Fatalf("switch %d: %s", r.Code, r.Body)
 	}

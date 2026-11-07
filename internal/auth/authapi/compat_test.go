@@ -290,14 +290,12 @@ type compatFixture struct {
 	appendMu   sync.Mutex
 	appendErr  error
 	social     SocialExchange
-	creds      *fakeServiceCredentials
-	// serviceCreds, when set, replaces creds as the issue route's credential checker.
-	serviceCreds ServiceCredentials
-	orgB         uuid.UUID
-	orgD         uuid.UUID
-	counters     httpapi.CounterStore
-	// workload, usersWrap and meter, when set, feed the issue route's workload
-	// path, a counting Users and a readable meter.
+	orgB       uuid.UUID
+	orgD       uuid.UUID
+	counters   httpapi.CounterStore
+	// workload is the session issue routes' workload path (testIssueWorkload
+	// by default; nil leaves them unmounted); usersWrap and meter, when set,
+	// feed a counting Users and a readable meter.
 	workload  *SessionIssueWorkload
 	usersWrap Users
 	meter     metric.Meter
@@ -311,7 +309,7 @@ const (
 func newCompatFixture(t *testing.T) *compatFixture {
 	t.Helper()
 	f := &compatFixture{fixture: newHS256Fixture(t), attempts: &fakeAttempts{}, orgB: uuid.New(), orgD: uuid.New(),
-		counters: httpapi.NewMemoryCounters(nil), creds: &fakeServiceCredentials{id: uuid.NewString()}}
+		counters: httpapi.NewMemoryCounters(nil), workload: testIssueWorkload()}
 	hash := "hash:" + compatPassword
 	f.loginUsers = &fakeLoginUsers{byEmail: map[string]*local.User{
 		compatEmail: {ID: f.principal, IsActive: true, IsVerified: true, PasswordHash: &hash},
@@ -330,13 +328,6 @@ func newCompatFixture(t *testing.T) *compatFixture {
 }
 
 func (f *compatFixture) buildCompat() {
-	var creds ServiceCredentials
-	if f.creds != nil {
-		creds = f.creds
-	}
-	if f.serviceCreds != nil {
-		creds = f.serviceCreds
-	}
 	var users Users = f.users
 	if f.usersWrap != nil {
 		users = f.usersWrap
@@ -357,7 +348,6 @@ func (f *compatFixture) buildCompat() {
 			f.appended = append(f.appended, event)
 			return f.appendErr
 		},
-		ServiceCredentials: creds,
 		Login: &LoginConfig{
 			Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey),
 			Compare: func(hash, password string) bool { return hash == "hash:"+password },

@@ -67,8 +67,10 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if issuer != "" {
 		env[authconfig.EnvTokenIssuerURL] = issuer
 		// The workload-token exchange needs the token issuer: the probe turns it
-		// on whenever an issuer is set.
+		// on whenever an issuer is set, and the go-api workload subject, which
+		// mounts the session issue routes, with it.
 		exchangeEnvironment(t, env)
+		workloadIssueEnvironment(env)
 	}
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(provisioningEnvironment(ssoEnvironment(compatEnvironment(env))))})
 	if err != nil {
@@ -557,8 +559,9 @@ func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
 	served := servedAuthRoutesWithIssuer(t, "")
 	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
 	// The workload-token exchange and the OAuth authorization server need the issuer too, so their rows are stale as well,
-	// and so are the bearer routes: without the issuer there is no access check to verify a user bearer with.
-	wantStale := []string{"DELETE /v1/identities/social/{id}@api", "GET /.well-known/oauth-authorization-server/oauth@api", "GET /.well-known/openid-configuration@api", "GET /oauth/.well-known/jwks.json@api", "GET /oauth/.well-known/openid-configuration@api", "GET /oauth/authorize@api", "GET /v1/sessions/current@api", "HEAD /.well-known/openid-configuration@api", "POST /api/v1/auth/change-password@api", "POST /api/v1/auth/switch-org@api", "POST /api/v1/auth/validate@api", "POST /internal/v1/token/exchange@api", "POST /oauth/authorize@api", "POST /v1/identities/social@api", "POST /v1/sessions/revoke-all@api", "POST /v1/sessions/revoke@api"}
+	// and so are the bearer routes (without the issuer there is no access check to verify a user bearer with) and the
+	// session issue routes, which take only the go-api workload token.
+	wantStale := []string{"DELETE /v1/identities/social/{id}@api", "GET /.well-known/oauth-authorization-server/oauth@api", "GET /.well-known/openid-configuration@api", "GET /oauth/.well-known/jwks.json@api", "GET /oauth/.well-known/openid-configuration@api", "GET /oauth/authorize@api", "GET /v1/sessions/current@api", "HEAD /.well-known/openid-configuration@api", "POST /api/v1/auth/change-password@api", "POST /api/v1/auth/switch-org@api", "POST /api/v1/auth/validate@api", "POST /internal/v1/sessions/delegated/end@api", "POST /internal/v1/sessions/delegated@api", "POST /internal/v1/sessions/state@api", "POST /internal/v1/sessions@api", "POST /internal/v1/token/exchange@api", "POST /oauth/authorize@api", "POST /v1/identities/social@api", "POST /v1/sessions/revoke-all@api", "POST /v1/sessions/revoke@api"}
 	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
 		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)
 	}

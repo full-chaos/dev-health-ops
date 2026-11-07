@@ -807,13 +807,15 @@ func TestConfigureReadsTheAuthProxySettings(t *testing.T) {
 	t.Setenv(AuthProxyFlagEnv(AuthLocalLogin), "")
 	t.Setenv(AuthProxyFlagEnv(AuthSessions), "true")
 	t.Setenv(EnvAuthProxyURL, stub.URL)
-	t.Setenv(sessionissue.EnvToken, "")
+	t.Setenv(sessionissue.EnvToken, testIssueToken(t))
 	components, err = configure(ctx, reachableDatabase(config.Config{APIAddress: "127.0.0.1:0"}), health.NewRegistry(time.Second), quietLogger())
 	closeComponents(components)
-	if !errors.As(err, &coded) || coded.DependencyReason() != "api_session_issue_config_invalid" {
-		t.Fatalf("sessions on without an issue credential: err = %v, want reason api_session_issue_config_invalid", err)
+	if !errors.As(err, &coded) || coded.DependencyReason() != "api_workload_credential_config_invalid" {
+		t.Fatalf("sessions on without the workload credential: err = %v, want reason api_workload_credential_config_invalid", err)
 	}
-	t.Setenv(sessionissue.EnvToken, testIssueToken(t))
+	for k, v := range workloadEnv(t, nil) {
+		t.Setenv(k, v)
+	}
 	components, err = configure(ctx, reachableDatabase(config.Config{APIAddress: "127.0.0.1:0"}), health.NewRegistry(time.Second), quietLogger())
 	if err != nil {
 		t.Fatalf("configure: %v", err)
@@ -869,7 +871,9 @@ func TestConfigureLogsTheAuthProxyRouting(t *testing.T) {
 				t.Setenv(AuthProxyFlagEnv(aggregate), testCase.env[AuthProxyFlagEnv(aggregate)])
 			}
 			t.Setenv(EnvAuthProxyURL, testCase.env[EnvAuthProxyURL])
-			t.Setenv(sessionissue.EnvToken, testIssueToken(t))
+			for k, v := range workloadEnv(t, nil) {
+				t.Setenv(k, v)
+			}
 			var logs bytes.Buffer
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()

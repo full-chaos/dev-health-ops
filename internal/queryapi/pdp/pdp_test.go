@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -191,26 +193,35 @@ func TestPDPEnforceDenyIsATypedDeny(t *testing.T) {
 	}
 }
 
+// refusedTransport refuses every dial. A closed httptest port is not a refusal: another listener can take the freed
+// port and answer.
+type refusedTransport struct{}
+
+func (refusedTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+}
+
 // Enforce (the cell on): PDP down (refused connection, 503, timeout) is a typed local deny, never a pass.
 func TestPDPEnforceDownIsATypedLocalDeny(t *testing.T) {
-	closed := httptest.NewServer(http.NotFoundHandler())
-	closedURL := closed.URL
-	closed.Close()
+	refused, err := pep.New(pep.Config{BaseURL: "http://pdp.invalid", AllowPlainHTTP: true, HTTPClient: &http.Client{Transport: refusedTransport{}}, ClientService: ClientService, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
 	failing := pdptest.New(t)
 	failing.Fail(http.StatusServiceUnavailable)
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { time.Sleep(1500 * time.Millisecond) }))
 	t.Cleanup(slow.Close)
 	for name, tc := range map[string]struct {
-		base   string
-		reason pep.Reason
+		decider pep.Decider
+		reason  pep.Reason
 	}{
-		"refused": {closedURL, pep.ReasonUnreachable},
-		"503":     {failing.URL, pep.ReasonUnavailable},
-		"timeout": {slow.URL, pep.ReasonTimeout},
+		"refused": {refused, pep.ReasonUnreachable},
+		"503":     {pepClient(t, failing.URL), pep.ReasonUnavailable},
+		"timeout": {pepClient(t, slow.URL), pep.ReasonTimeout},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, cfg := newMeter(t)
-			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, tc.base), cells("analytics")
+			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, tc.decider, cells("analytics")
 			_, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
 			denied, ok := err.(*DenyError)
 			if !ok || !denied.Local || denied.Reason != tc.reason {
@@ -476,6 +487,9 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 		"no repository member on filtered one": {acrTestProfile, map[string]any{"tenant_scope": org}, false, ReasonNoRepositoryRule, ResultNotCarriedOut},
 		"tenant only on a metrics read":        {testProfile, map[string]any{"tenant_scope": org}, true, "", ResultAllow},
 		"minimum assurance":                    {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal2"}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"minimum assurance aal1":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal1"}, true, "", ResultAllow},
+		"minimum assurance aal3":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal3"}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"minimum assurance unknown":            {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal9"}, false, pep.ReasonUnknownObligation, ResultUnavailable},
 		"step up":                              {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "step_up": true}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"unknown obligation key":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "audit": true}, false, pep.ReasonUnknownObligation, ResultUnavailable},
 		"unknown repository scope":             {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "everything"}, false, pep.ReasonUnknownObligation, ResultUnavailable},

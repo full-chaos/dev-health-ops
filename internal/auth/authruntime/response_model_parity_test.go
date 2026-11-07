@@ -96,6 +96,7 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 		authconfig.EnvTokenIssuerURL:   "https://issuer.example.test",
 	}
 	exchangeEnvironment(t, env)
+	workloadIssueEnvironment(env)
 	env = provisioningEnvironment(ssoEnvironment(compatEnvironment(env)))
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {

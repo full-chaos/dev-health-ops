@@ -78,7 +78,10 @@ type env struct {
 	authServerOne *httptest.Server
 	runtimeOne    *pgxpool.Pool
 	issueOne      *sessionissue.Client
-	signer        *edgetoken.Signer
+	// issuePlane is go-api's workload principal and its token key: the session
+	// issue route takes only the go-api workload token.
+	issuePlane *issuePlane
+	signer     *edgetoken.Signer
 	// tokens mints the routed EdDSA user access tokens go-api's routes verify.
 	tokens     *edtokens.Issuer
 	linkSecret string

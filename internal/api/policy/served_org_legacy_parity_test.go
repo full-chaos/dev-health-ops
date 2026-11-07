@@ -89,19 +89,23 @@ func TestServedOrgViewerOfAAdminOfBIsRefusedOnBothPaths(t *testing.T) {
 }
 
 // The impersonation refusal runs before the served-org seam (CHAOS-13210 builds on this order): an impersonating
-// caller gets the same answer whether the request names its own organization or another one, with no PDP call.
+// caller's write is refused 403 impersonation_refused whether it names its own organization or another one, with no
+// PDP call.
 func TestServedOrgSeamRunsAfterTheImpersonationRefusal(t *testing.T) {
-	answer := func(org string) (response, int) {
+	const path = "/api/v1/billing/subscriptions/cancel?org_id="
+	for _, org := range []string{ownOrg, strangerOrg} {
+		rec := recordEnforce(t)
 		pdp := newTestPDP(t, allowAll)
-		h := impersonating(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), servedOrgEnforcer(t, pdp, "billing")))
-		got := enforceRequest(h, http.MethodGet, "/api/v1/billing/invoices?org_id="+org)
-		return got, len(pdp.calls())
-	}
-	own, ownCalls := answer(ownOrg)
-	other, otherCalls := answer(strangerOrg)
-	if other.status != own.status || other.body != own.body || ownCalls != 0 || otherCalls != 0 {
-		t.Errorf("impersonating, another org: %d %q (%d PDP calls), want the own-org answer %d %q (%d calls) and none",
-			other.status, other.body, otherCalls, own.status, own.body, ownCalls)
+		guard := NewGuard(routed(t, personaStore(personaAdmin), &fakeValidator{result: userClaims(nil)}), quiet())
+		guard.SetEnforcer(servedOrgEnforcer(t, pdp, "billing"))
+		mux := http.NewServeMux()
+		mux.Handle("POST /api/v1/billing/subscriptions/cancel", guard.Wrap(Admin, echo))
+		got := enforceRequest(impersonating(mux), http.MethodPost, path+org)
+		if got.status != http.StatusForbidden || got.body != impersonationRefusalBody || len(pdp.calls()) != 0 ||
+			!slices.Equal(rec.snapshot(), []string{"billing/impersonation_refused"}) {
+			t.Errorf("impersonating write, org %s: %d %q, %d PDP calls, outcomes %v, want 403 %q, none and [billing/impersonation_refused]",
+				org, got.status, got.body, len(pdp.calls()), rec.snapshot(), impersonationRefusalBody)
+		}
 	}
 }
 

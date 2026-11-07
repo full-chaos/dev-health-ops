@@ -315,6 +315,7 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 	slotsPath := fs.String("slots", "", "slots file the enforced drive wrote")
 	yardPath := fs.String("yardstick", "", "verdicts file of the paired run with enforcement off")
 	yardDigest := fs.String("yardstick-digest", "", "file with the data digest taken before the yardstick run")
+	yardDigestAfter := fs.String("yardstick-digest-after", "", "file with the data digest taken after the yardstick run")
 	digestBefore := fs.String("digest-before", "", "file with the data digest taken before this run")
 	digestAfter := fs.String("digest-after", "", "file with the data digest taken after this run")
 	envPath := fs.String("enforce-env", "", "readback of the venue go-api environment (docker inspect env or the GO_API_AUTHZ_ENFORCE line)")
@@ -339,7 +340,7 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 		return raw, true
 	}
 	files := map[string][]byte{}
-	for name, path := range map[string]string{"slots": *slotsPath, "yardstick": *yardPath, "yardstick-digest": *yardDigest, "digest-before": *digestBefore,
+	for name, path := range map[string]string{"slots": *slotsPath, "yardstick": *yardPath, "yardstick-digest": *yardDigest, "yardstick-digest-after": *yardDigestAfter, "digest-before": *digestBefore,
 		"digest-after": *digestAfter, "enforce-env": *envPath, "metrics-before": *metricsBefore, "metrics-after": *metricsAfter} {
 		raw, ok := read(name, path)
 		if !ok {
@@ -374,7 +375,7 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	report := shadowvenue.JudgeEnforced(shadowvenue.EnforcedInput{Slots: slots, Yard: yard, K: *k, EnforceEnv: string(files["enforce-env"]), Namespaces: namespaces,
-		YardDigest: strings.TrimSpace(string(files["yardstick-digest"])), DigestBefore: strings.TrimSpace(string(files["digest-before"])),
+		YardDigest: strings.TrimSpace(string(files["yardstick-digest"])), YardDigestAfter: strings.TrimSpace(string(files["yardstick-digest-after"])), DigestBefore: strings.TrimSpace(string(files["digest-before"])),
 		DigestAfter: strings.TrimSpace(string(files["digest-after"])), MetricsBefore: files["metrics-before"], MetricsAfter: files["metrics-after"]})
 	file, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {

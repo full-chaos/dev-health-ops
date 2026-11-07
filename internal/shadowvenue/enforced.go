@@ -41,8 +41,9 @@ type EnforcedInput struct {
 	// row key to its action namespace, so the namespaces the run needs are known.
 	EnforceEnv string
 	Namespaces map[string]string
-	// The data digest of the yardstick run, taken before this run, and after it: all three must be equal.
-	YardDigest, DigestBefore, DigestAfter string
+	// The data digests, all four equal: before the yardstick run, after it, before this run, after it. A write that a
+	// run made and did not restore shows as a difference.
+	YardDigest, YardDigestAfter, DigestBefore, DigestAfter string
 	// go-api /metrics scrapes before and after the run, for the unjudged counter.
 	MetricsBefore, MetricsAfter []byte
 }
@@ -94,10 +95,11 @@ func JudgeEnforced(in EnforcedInput) Report {
 			void("namespace %s is not enforced on the venue go-api, but a row of it runs", ns)
 		}
 	}
-	if in.YardDigest == "" || in.DigestBefore == "" || in.DigestAfter == "" {
-		void("a data digest is missing (yardstick %q, before %q, after %q)", in.YardDigest, in.DigestBefore, in.DigestAfter)
-	} else if in.YardDigest != in.DigestBefore || in.DigestBefore != in.DigestAfter {
-		void("the data digest differs (yardstick %.12s, before %.12s, after %.12s): the seeded state is not the yardstick's", in.YardDigest, in.DigestBefore, in.DigestAfter)
+	digests := []string{in.YardDigest, in.YardDigestAfter, in.DigestBefore, in.DigestAfter}
+	if slices.Contains(digests, "") {
+		void("a data digest is missing (yardstick before %q, yardstick after %q, before %q, after %q)", in.YardDigest, in.YardDigestAfter, in.DigestBefore, in.DigestAfter)
+	} else if slices.Min(digests) != slices.Max(digests) {
+		void("the data digest differs (yardstick before %.12s, yardstick after %.12s, before %.12s, after %.12s): the seeded state is not the yardstick's, or a run left a change", in.YardDigest, in.YardDigestAfter, in.DigestBefore, in.DigestAfter)
 	}
 	reasons, err := ParseUnjudgedReasons(in.MetricsBefore, in.MetricsAfter)
 	if err != nil {

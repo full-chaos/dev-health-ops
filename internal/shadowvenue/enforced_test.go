@@ -42,7 +42,7 @@ func newEnfRun() *enfRun {
 		Slots: r.slots, Yard: r.yard, K: 3,
 		EnforceEnv: "PATH=/usr/bin\nGO_API_AUTHZ_ENFORCE=admin,billing,integrations,license,members,settings,teams\n",
 		Namespaces: map[string]string{teamsKey: "teams", "GET /api/v1/admin/integrations": "integrations", seamKey: "members", noOrgKey: "billing"},
-		YardDigest: enfDigest, DigestBefore: enfDigest, DigestAfter: enfDigest,
+		YardDigest: enfDigest, YardDigestAfter: enfDigest, DigestBefore: enfDigest, DigestAfter: enfDigest,
 		MetricsBefore: scrape(unjudged(noOrgKey, "no_org", "5"), unjudged(seamKey, "served_org", "2")),
 		MetricsAfter:  scrape(unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5")),
 	}
@@ -76,6 +76,8 @@ func TestEnforcedEachPlantedDefectIsRed(t *testing.T) {
 		"enforce list empty":              {func(r *enfRun) { r.in.EnforceEnv = "GO_API_AUTHZ_ENFORCE=" }, true, "enforce"},
 		"yardstick digest none":           {func(r *enfRun) { r.in.YardDigest = "" }, true, "missing"},
 		"yardstick digest differs":        {func(r *enfRun) { r.in.YardDigest = strings.Repeat("c", 64) }, true, "differs"},
+		"yardstick after digest differs":  {func(r *enfRun) { r.in.YardDigestAfter = strings.Repeat("d", 64) }, true, "differs"},
+		"yardstick after digest none":     {func(r *enfRun) { r.in.YardDigestAfter = "" }, true, "missing"},
 		"digest before differs":           {func(r *enfRun) { r.in.DigestBefore = strings.Repeat("a", 64) }, true, "digest"},
 		"digest after differs":            {func(r *enfRun) { r.in.DigestAfter = strings.Repeat("b", 64) }, true, "digest"},
 		"control not enforced":            {func(r *enfRun) { r.in.Slots[0].Status = 200 }, true, "control"},

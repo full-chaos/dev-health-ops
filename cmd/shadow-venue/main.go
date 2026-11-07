@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"time"
 
@@ -239,6 +240,16 @@ func judge(args []string, stdout, stderr io.Writer) int {
 			passed++
 		}
 	}
+	counts := report.VerdictCounts()
+	verdicts := make([]string, 0, len(counts))
+	for verdict := range counts {
+		verdicts = append(verdicts, verdict)
+	}
+	slices.Sort(verdicts)
+	for i, verdict := range verdicts {
+		verdicts[i] = fmt.Sprintf("%s %d", verdict, counts[verdict])
+	}
+	fmt.Fprintf(stdout, "judge: slots %s\n", strings.Join(verdicts, ", "))
 	fmt.Fprintf(stdout, "judge: rows %d, rows passed %d, void %v, exit %d, table %s\n", len(report.Rows), passed, report.Void, report.Exit(), *out)
 	return finish(file, report.Exit(), stderr)
 }

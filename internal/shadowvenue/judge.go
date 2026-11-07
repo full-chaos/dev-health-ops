@@ -217,6 +217,15 @@ type Report struct {
 	Reasons []string
 }
 
+// VerdictCounts counts the slots by verdict; a seam skip is its own count, never a match.
+func (r Report) VerdictCounts() map[string]int {
+	out := map[string]int{}
+	for _, sv := range r.Slots {
+		out[sv.Verdict]++
+	}
+	return out
+}
+
 // Exit is 0 when every row passes, 1 when a row fails, 3 when the run is void.
 func (r Report) Exit() int {
 	switch {

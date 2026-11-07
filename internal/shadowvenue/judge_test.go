@@ -530,3 +530,17 @@ func TestSeamSkipRowsAreOrgNamingShadowRows(t *testing.T) {
 		}
 	}
 }
+
+// A seam skip is counted on its own: never folded into MATCH in the verdict counts.
+func TestVerdictCountsKeepTheSeamSkipApart(t *testing.T) {
+	slot := slotAt(1, "2", "superuser", 1)
+	slot.Method, slot.Route, slot.Path = "GET", "/api/v1/admin/orgs/{org_id}/members", "/api/v1/admin/orgs/{org_id}/members"
+	ev, err := ParseLog(strings.NewReader(result(slot, 300*time.Millisecond, "skipped", "") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := Judge([]Slot{slot}, ev, nil, JudgeOptions{K: 1, Grace: 2200 * time.Millisecond}).VerdictCounts()
+	if counts[VerdictSkippedSeam] != 1 || counts[VerdictMatch] != 0 {
+		t.Fatalf("counts %v", counts)
+	}
+}

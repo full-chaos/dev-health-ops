@@ -396,8 +396,9 @@ func TestJudgeServedOtherMismatchTakesTheWarnInItsWindow(t *testing.T) {
 	for name, offset := range map[string]time.Duration{"in window": 10 * time.Millisecond, "before": -60 * time.Millisecond, "after": 2500 * time.Millisecond} {
 		slots, lines := controlsOK()
 		cell := cellOf(7, "2", "admin")
-		for _, slot := range cell {
-			lines = append(lines, result(slot, 10*time.Millisecond, "mismatch", ""), served(slot, offset))
+		for i := range cell {
+			cell[i].Status = 403
+			lines = append(lines, result(cell[i], 10*time.Millisecond, "mismatch", ""), served(cell[i], offset))
 		}
 		report := judge(t, append(slots, cell...), lines)
 		want := VerdictMismatchNoTuple
@@ -439,5 +440,27 @@ func TestControlC1IsGreenOnlyWhenTheLegacyGuardServedIt(t *testing.T) {
 	ev, _ := ParseLog(strings.NewReader(result(slot, 500*time.Millisecond, "match", "") + "\n"))
 	if v := Judge([]Slot{slot}, ev, nil, JudgeOptions{K: 1, Grace: 2200 * time.Millisecond}).Slots[0].Verdict; controlMismatch(v) {
 		t.Fatalf("red: a match: %s", v)
+	}
+}
+
+// A row whose shadow refuses what the legacy guard served is stricter than legacy (product rule: not stricter, not
+// wider), even when the class is intentional; the same refusal of a request the guard also refused is equal.
+func TestJudgeFailsAnIntentionalRefusalOfARequestLegacyServed(t *testing.T) {
+	for status, want := range map[int]string{200: VerdictStricter, 403: VerdictMismatchIntentional} {
+		slots, lines := controlsOK()
+		cell := cellOf(7, "2", "superuser")
+		for i := range cell {
+			cell[i].Status = status
+			lines = append(lines, result(cell[i], 10*time.Millisecond, "mismatch", ""),
+				logLine(cell[i].Start.Add(10*time.Millisecond), MsgServedOther, "route", cell[i].Key(), "caller", "superuser", "class", "intentional",
+					"legacy", "allow", "shadow", "deny", "reason", "served_org_not_judged_org", "namespace", "members"))
+		}
+		report := judge(t, append(slots, cell...), lines)
+		if got := report.Slots[6].Verdict; got != want {
+			t.Errorf("status %d: %s, want %s", status, got, want)
+		}
+		if status == 200 && report.Pass {
+			t.Error("a stricter row passed the run")
+		}
 	}
 }

@@ -37,6 +37,8 @@ const (
 	VerdictGap                  = "GAP"
 	VerdictKShort               = "K_SHORT"
 	VerdictLegacyDisagrees      = "CONTROL_LEGACY_DISAGREES"
+	VerdictStricter             = "MISMATCH_STRICTER"
+	VerdictWider                = "MISMATCH_WIDER"
 )
 
 var resultVerdicts = map[string]string{
@@ -290,6 +292,21 @@ func controlLegacyHolds(sv *SlotVerdict) {
 	}
 }
 
+// intentionalMustEqualLegacy holds an intentional mismatch on a row to the product rule that the answer under enforce
+// equals legacy: the shadow's answer must be what the guard really answered (HTTP 403 = deny). A served-org refusal
+// of a request the guard also refused is equal; one the guard served is stricter, and a shadow allow of a refused
+// request is wider. Both fail the row.
+func intentionalMustEqualLegacy(sv *SlotVerdict) {
+	legacyDenied, shadowDenied := sv.Status == 403, sv.Tuple.Shadow == "deny"
+	switch {
+	case legacyDenied == shadowDenied:
+	case shadowDenied:
+		sv.Verdict = VerdictStricter
+	default:
+		sv.Verdict = VerdictWider
+	}
+}
+
 func sentSlots(slots []Slot) []Slot {
 	var out []Slot
 	for _, s := range slots {
@@ -342,6 +359,9 @@ func judgeSlot(sv *SlotVerdict, results []resultLine, ev Evidence, rulings []Rul
 		sv.Verdict = VerdictMismatch
 		if tuple.Class == "intentional" {
 			sv.Verdict = VerdictMismatchIntentional
+			if sv.Expect != expectMismatch {
+				intentionalMustEqualLegacy(sv)
+			}
 			return
 		}
 		for _, r := range rulings {

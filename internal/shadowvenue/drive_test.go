@@ -305,4 +305,7 @@ func TestCheckVenueBaseAcceptsOnlyTheRecordedGoAPIAddress(t *testing.T) {
 			t.Errorf("%s: %s accepted", name, c.base)
 		}
 	}
+	if _, err := CheckVenueBase("http://"+testGoAPIIP+":8000", set("run_id", "none"), "none"); err == nil {
+		t.Error("a drive named none (the after read's run) accepted")
+	}
 }

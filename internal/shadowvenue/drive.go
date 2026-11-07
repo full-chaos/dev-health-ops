@@ -44,7 +44,7 @@ func CheckVenueBase(raw string, record EgressRead, runID string) (*url.URL, erro
 		return nil, fmt.Errorf("base %q: egress record %s does not show an internal network with no default route", raw, record.Name)
 	case !net.ParseIP(record.Fields["goapi_ip"]).Equal(ip):
 		return nil, fmt.Errorf("base %q: the host is not go-api's venue address %q in egress record %s", raw, record.Fields["goapi_ip"], record.Name)
-	case runID == "" || runID == noRun || record.Fields["run_id"] != runID:
+	case runID == noRun || record.Fields["run_id"] != runID:
 		return nil, fmt.Errorf("base %q: egress record %s names run %q, not this drive's run %q (-run-id)", raw, record.Name, record.Fields["run_id"], runID)
 	}
 	u.Path = ""

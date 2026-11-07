@@ -182,7 +182,7 @@ VALUES ($1, $2, $3, 'viewer', now(), now(), now())`, uuid.New(), edgeUsersOrg, s
 		{"inactive user", inactiveUser, "api user access token valid but user not found or deactivated"},
 		{"user with no row", goneUser, "api user access token valid but user not found or deactivated"},
 		{"session pinned before a token_version bump", staleUser, "api access denied: session predates the token_version"},
-		{"active user with no membership in the token's org", nonMember, "api user access token for an org the user is not a member of"},
+		{"active user with no membership in the token's org", nonMember, "api access token for an org the user is not a member of"},
 	} {
 		code, body, logged := serve(c.user)
 		if code != http.StatusUnauthorized || body != restRefusal || strings.Count(logged, "level=WARN") != 1 ||

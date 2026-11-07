@@ -69,3 +69,23 @@ func TestRoutedPlatformAdminMemberKeepsTheMembershipRole(t *testing.T) {
 		t.Fatalf("user %+v err %v, want the membership role admin in %s", user, err, ownOrg)
 	}
 }
+
+// Product rule 1 (D6773): a user access token with no org claim (an org-less
+// caller, a superuser or not) gets the role the HS256 path gave the same
+// caller: go-api's login mints role "member" with no org
+// (internal/api/session/tokens.go:156) and userFromClaims defaults an absent
+// role to "member". Both org claim forms (absent, empty) are org-less.
+func TestRoutedUserWithoutAnOrgClaimHasTheLegacyMemberRole(t *testing.T) {
+	ctx := WithRouteProfile(context.Background(), "GET /p")
+	empty := ""
+	for name, org := range map[string]*string{"no org claim": nil, "empty org claim": &empty} {
+		for _, superuser := range []bool{true, false} {
+			store := newAccessStore()
+			store.users[userID] = UserState{IsActive: true, IsSuperuser: superuser}
+			user, err := routed(t, store, &fakeValidator{result: userClaims(func(c *AccessTokenClaims) { c.OrgID = org })}).Authenticate(ctx, "x.y.z")
+			if err != nil || user.OrgID != "" || user.Role != "member" {
+				t.Fatalf("%s, superuser %v: user %+v err %v, want org \"\" and the legacy role \"member\"", name, superuser, user, err)
+			}
+		}
+	}
+}

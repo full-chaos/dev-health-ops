@@ -251,12 +251,14 @@ func TestDriveRefusesAVenueIPWithoutItsEgressRecord(t *testing.T) {
 	}
 }
 
-// A -rows table that drops a row's external class is refused by plan and drive before any request.
+// The reviewer's form: a -rows table with every external row's ext set to - is refused by plan (and so by drive)
+// before any request, naming each row.
 func TestPlanRefusesARowTableThatReclassifiesARow(t *testing.T) {
-	var lines []string
+	var lines, external []string
 	for _, line := range strings.Split(string(shadowvenue.DefaultRows), "\n") {
-		if f := strings.Split(line, "\t"); len(f) == 10 && f[0] == "22" {
+		if f := strings.Split(line, "\t"); len(f) == 10 && f[5] != "-" && f[5] != "ext" && f[4] == "no" {
 			f[5] = "-"
+			external = append(external, f[0])
 			line = strings.Join(f, "\t")
 		}
 		lines = append(lines, line)
@@ -267,6 +269,14 @@ func TestPlanRefusesARowTableThatReclassifiesARow(t *testing.T) {
 	}
 	var out, errOut bytes.Buffer
 	if code := run(context.Background(), []string{"plan", "-principals", principalsFile(t), "-rows", path}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "class") {
-		t.Fatalf("plan with row 22 reclassified: code %d, stderr %q", code, errOut.String())
+		t.Fatalf("plan with the external rows made internal: code %d, stderr %q", code, errOut.String())
+	}
+	if len(external) != 17 {
+		t.Fatalf("%d external rows changed, want 17", len(external))
+	}
+	for _, id := range external {
+		if !strings.Contains(errOut.String(), "row "+id+":") {
+			t.Errorf("row %s is not named in the refusal", id)
+		}
 	}
 }

@@ -163,3 +163,68 @@ func TestParseEgressRefusesABlankFirstDuplicateOfEveryKey(t *testing.T) {
 		}
 	}
 }
+
+// The reviewer's form: every external row of the table with ext - at once. The judge, given that table and slots of
+// every external route, voids the run on each such row, with no stub log, no egress and no seed log.
+func TestJudgeVoidsTheTableWithEveryExternalRowMadeInternal(t *testing.T) {
+	slots, lines := controlsOK()
+	ext := map[string]string{"C1": none, "C2": none}
+	seq := len(slots) + 1
+	var external []Row
+	for _, row := range mustRows(t, string(DefaultRows)) {
+		if row.Ext != none && !row.Destructive {
+			external = append(external, row)
+		}
+	}
+	for _, row := range external {
+		ext[row.ID] = none
+		s := slotAt(seq, row.ID, "admin", 1)
+		s.Method, s.Route, s.Path = row.Method, row.Route, row.Route
+		slots = append(slots, s)
+		lines = append(lines, result(s, 500*time.Millisecond, "match", "dec_"+strings.Repeat(string(rune('a'+seq%26)), 20)+itoa(1000+seq)))
+		seq++
+	}
+	ev, err := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := Judge(slots, ev, nil, JudgeOptions{K: 1, Grace: 2200 * time.Millisecond, Outbound: Outbound{Ext: ext}})
+	joined := strings.Join(r.Reasons, "\n")
+	if !r.Void {
+		t.Fatalf("the reviewer's table passed the judge: %v", r.Reasons)
+	}
+	for _, row := range external {
+		if !strings.Contains(joined, "row "+row.ID+": the row table names ext \"-\"") {
+			t.Errorf("row %s not voided for its class", row.ID)
+		}
+	}
+}
+
+// With no row table the judge takes the service of each hit's slot from the route: a hit of the route's own service
+// is no mismatch.
+func TestJudgeWithNoTableComparesHitsToTheRouteService(t *testing.T) {
+	slots, ev := stripeSlots(t)
+	var hits []StubHit
+	for _, s := range slots[6:] {
+		hits = append(hits, StubHit{At: s.Start.Add(10 * time.Millisecond), Service: "stripe", Method: "GET", Host: "api.stripe.com", Path: "/v1/products"})
+	}
+	r := Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Hits: hits, Egress: egressReads("before", "between"), Seed: noSeed}})
+	if r.Void || !r.Pass {
+		t.Fatalf("void %v pass %v: %v", r.Void, r.Pass, r.Reasons)
+	}
+}
+
+// The strict egress parse, one key each: a blank-first duplicate, a value-first duplicate and an empty value are each
+// refused as they are read.
+func TestParseEgressStrictForms(t *testing.T) {
+	good := egressText("before")
+	for name, text := range map[string]string{
+		"blank-first duplicate": "stub_tcp=\n" + good,
+		"value-first duplicate": good + "stub_tcp=ok\n",
+		"empty value":           strings.Replace(good, "stub_tcp=ok", "stub_tcp=", 1),
+	} {
+		if read := ParseEgress("before.txt", []byte(text)); read.Err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}

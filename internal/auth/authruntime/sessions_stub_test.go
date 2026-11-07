@@ -78,8 +78,9 @@ func TestSessionRoutesWithKeysMountTheRealRefreshLogoutAndNoStub(t *testing.T) {
 			t.Fatalf("%s: the real route answered the stub", pattern)
 		}
 	}
-	if len(routesNamed(routes, issuePattern)) != 1 {
-		t.Fatalf("the session issue route is mounted %d times; want once", len(routesNamed(routes, issuePattern)))
+	// Without the go-api workload binding the session issue route is not mounted: it takes no other credential.
+	if len(routesNamed(routes, issuePattern)) != 0 {
+		t.Fatalf("the session issue route is mounted %d times without the workload binding; want 0", len(routesNamed(routes, issuePattern)))
 	}
 }
 

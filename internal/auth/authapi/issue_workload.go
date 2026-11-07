@@ -21,11 +21,9 @@ import (
 )
 
 const (
-	// compatUsesMetric counts accepted svc_authsess_ uses of the issue route,
-	// by credential class only.
-	compatUsesMetric = "auth.session.issue_compat_uses"
-	// compatClass is the one class the compat counter counts.
-	compatClass = "internal_svc_authsess_token"
+	// retiredRefusalsMetric counts, by operation, the session route requests refused because they presented the
+	// retired session issuer credential (svc_authsess_): a caller still on it shows here, never in the answer.
+	retiredRefusalsMetric = "auth.session.retired_credential_refusals"
 
 	// issueWorkloadAudience is the audience the issue route accepts: the one
 	// workload audience the registry gives the go-api workload.
@@ -140,12 +138,11 @@ func NewSessionIssueWorkload(cfg SessionIssueWorkloadConfig) (*SessionIssueWorkl
 	return &SessionIssueWorkload{verifier: verifier, subject: cfg.Subject, now: now}, nil
 }
 
-// issueCaller is who asked for the session: a service credential row, or a
-// workload principal and its token's jti.
+// issueCaller is who asked for the session: the workload principal and its
+// token's jti.
 type issueCaller struct {
-	credentialID string
-	workload     *uuid.UUID
-	jti          string
+	workload *uuid.UUID
+	jti      string
 }
 
 // authorize decides a workload-typed bearer. It refuses a wrong audience or
@@ -185,28 +182,19 @@ func (s *SessionIssueWorkload) authorize(bearer string) (issueCaller, string, er
 	return issueCaller{workload: &principal, jti: claims.TokenID}, "", nil
 }
 
-// issueCallerFor authorizes the bearer of op's route (session issue or state).
-// On a refusal it has already answered, and ok is false.
+// issueCallerFor authorizes the bearer of op's route (session issue, state or
+// delegated): only the go-api workload token is served. The session issuer
+// credential (svc_authsess_) is retired: it is refused from the bearer text
+// alone, before any store or key-set read, and counted by operation. Every
+// refusal is the one 401; the reason is only logged. On a refusal it has
+// already answered, and ok is false.
 func (h compatHandlers) issueCallerFor(w http.ResponseWriter, r *http.Request, bearer, op string) (issueCaller, bool) {
 	ctx := r.Context()
 	class, reason := classifyIssueBearer(bearer)
 	switch class {
 	case issueClassCompat:
-		if h.ServiceCredentials == nil {
-			h.rec.logger.WarnContext(ctx, "session issue refused: service credentials are off", "operation", op)
-			break
-		}
-		credential, refused, err := h.ServiceCredentials.Check(ctx, contracts.NewSecretString(bearer))
-		if err != nil {
-			h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
-			return issueCaller{}, false
-		}
-		if refused != "" {
-			h.rec.logger.WarnContext(ctx, "session issue refused: service credential", "refusal", string(refused), "operation", op)
-			break
-		}
-		h.rec.compatUses.Add(ctx, 1, metric.WithAttributes(attribute.String("class", compatClass)))
-		return issueCaller{credentialID: credential.ID}, true
+		h.rec.retiredRefusals.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", op)))
+		h.rec.logger.WarnContext(ctx, "session issue refused: service credential", "refusal", "retired_credential_class", "operation", op)
 	case issueClassWorkload:
 		caller, why, err := h.IssueWorkload.authorize(bearer)
 		if err != nil {

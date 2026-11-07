@@ -22,7 +22,7 @@ func issueBodyWithPredecessor(principal uuid.UUID, org string, predecessor strin
 func TestIssueSessionWithAPredecessorSupersedesIt(t *testing.T) {
 	f := newCompatFixture(t)
 	predecessor := uuid.New()
-	response := f.do(http.MethodPost, PatternIssueSession, issueBodyWithPredecessor(f.principal, f.org.String(), `"`+predecessor.String()+`"`), issuerBearer)
+	response := f.do(http.MethodPost, PatternIssueSession, issueBodyWithPredecessor(f.principal, f.org.String(), `"`+predecessor.String()+`"`), issuerBearer())
 	if response.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", response.Code, response.Body)
 	}
@@ -37,7 +37,7 @@ func TestIssueSessionWithAPredecessorSupersedesIt(t *testing.T) {
 		t.Fatalf("event %+v", created.event)
 	}
 	g := newCompatFixture(t)
-	if response := g.do(http.MethodPost, PatternIssueSession, issueBody(g.principal, g.org.String(), "pwd"), issuerBearer); response.Code != http.StatusOK ||
+	if response := g.do(http.MethodPost, PatternIssueSession, issueBody(g.principal, g.org.String(), "pwd"), issuerBearer()); response.Code != http.StatusOK ||
 		len(g.sessions.created) != 1 || g.sessions.created[0].predecessor != nil {
 		t.Fatalf("a body without a predecessor: status %d created %+v", response.Code, g.sessions.created)
 	}
@@ -54,7 +54,7 @@ func TestIssueSessionRefusesAMalformedPredecessor(t *testing.T) {
 		"wire form id": `"ses_` + strings.Repeat("A", 22) + `"`,
 	} {
 		f := newCompatFixture(t)
-		expectError(t, f.do(http.MethodPost, PatternIssueSession, issueBodyWithPredecessor(f.principal, "", value), issuerBearer),
+		expectError(t, f.do(http.MethodPost, PatternIssueSession, issueBodyWithPredecessor(f.principal, "", value), issuerBearer()),
 			http.StatusUnauthorized, "malformed")
 		if len(f.sessions.created) != 0 {
 			t.Fatalf("%s: a malformed predecessor created a session", name)
@@ -62,9 +62,9 @@ func TestIssueSessionRefusesAMalformedPredecessor(t *testing.T) {
 	}
 	f := newCompatFixture(t)
 	body := strings.TrimSuffix(issueBodyWithPredecessor(f.principal, "", `"`+uuid.NewString()+`"`), "}") + `,"x":1}`
-	expectError(t, f.do(http.MethodPost, PatternIssueSession, body, issuerBearer), http.StatusUnauthorized, "malformed")
+	expectError(t, f.do(http.MethodPost, PatternIssueSession, body, issuerBearer()), http.StatusUnauthorized, "malformed")
 	body = `{"principal_id":"` + f.principal.String() + `","amr":["pwd"],"predecessor_session_id":"` + uuid.NewString() + `","x":1}`
-	expectError(t, f.do(http.MethodPost, PatternIssueSession, body, issuerBearer), http.StatusUnauthorized, "malformed")
+	expectError(t, f.do(http.MethodPost, PatternIssueSession, body, issuerBearer()), http.StatusUnauthorized, "malformed")
 	if len(f.sessions.created) != 0 {
 		t.Fatal("a fifth member or a missing organization_id created a session")
 	}
@@ -84,7 +84,7 @@ func TestIssueSessionMapsThePredecessorRefusals(t *testing.T) {
 	} {
 		f := newCompatFixture(t)
 		f.sessions.createErr = tc.err
-		expectError(t, f.do(http.MethodPost, PatternIssueSession, issueBodyWithPredecessor(f.principal, "", `"`+uuid.NewString()+`"`), issuerBearer),
+		expectError(t, f.do(http.MethodPost, PatternIssueSession, issueBodyWithPredecessor(f.principal, "", `"`+uuid.NewString()+`"`), issuerBearer()),
 			tc.status, tc.reason)
 	}
 }

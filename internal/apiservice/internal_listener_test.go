@@ -184,8 +184,8 @@ func listenerWorkload(t *testing.T) (*acr.WorkloadAuth, string) {
 		t.Fatal(err)
 	}
 	workload, err := buildACRWorkload(acrWorkloadLookup(map[string]string{
-		envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: acrWorkloadSubject,
-	}), authverify.StaticKeys{"k1": pub}, nil)
+		envAccessTokenIssuer: acrWorkloadIssuer,
+	}), authverify.StaticKeys{"k1": pub}, acr.StaticSubject(acrWorkloadSubject))
 	if err != nil || workload == nil {
 		t.Fatalf("workload %v err %v", workload, err)
 	}

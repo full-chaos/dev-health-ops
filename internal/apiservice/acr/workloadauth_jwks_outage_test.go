@@ -67,7 +67,7 @@ func wlJWKSAuth(t *testing.T, mode, publishedKid string, signer wlSigner) (*Work
 	}
 	claims := wlClaims()
 	claims["iss"] = srv.URL
-	return &WorkloadAuth{Verifier: verifier, Subject: wlSubject, Now: func() time.Time { return wlNow }}, signer.sign(wlHeader(), claims)
+	return &WorkloadAuth{Verifier: verifier, Source: StaticSubject(wlSubject), Now: func() time.Time { return wlNow }}, signer.sign(wlHeader(), claims)
 }
 
 func TestWorkloadJWKSOutageAnswers503OnEveryRoute(t *testing.T) {

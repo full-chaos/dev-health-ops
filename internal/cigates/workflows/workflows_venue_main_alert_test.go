@@ -2,6 +2,8 @@ package workflows_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
@@ -14,8 +16,9 @@ import (
 // (a fake `gh` driving ci/venue-main-alert.sh) stay in Python until the venue-script port (CHAOS-10178).
 
 const (
-	mainAlertFile = ".github/workflows/venue-oracles-main-alert.yml"
-	mainAlertIf   = "github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push'"
+	mainAlertFile  = ".github/workflows/venue-oracles-main-alert.yml"
+	mainAlertGroup = "main-red-alert-${{ github.event.workflow_run.name }}"
+	mainAlertIf    = "github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push'"
 )
 
 var secretsWord = regexp.MustCompile(`\bsecrets\b`)
@@ -46,11 +49,36 @@ func stringLeafMatching(v any, re *regexp.Regexp) string {
 	return ""
 }
 
+// mainRedCovered reads ci/main-red-workflows.tsv and returns the covered workflow names, checking that each row's file
+// exists and carries that exact name (a renamed workflow would otherwise stop alerting silently).
+func mainRedCovered(t *testing.T, root string) ([]any, []string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "ci", "main-red-workflows.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []any
+	var bad []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) != 5 {
+			t.Fatalf("main-red-workflows.tsv row %q has %d fields, want 5", line, len(f))
+		}
+		if got := asString(loadWf(t, root, f[1])["name"]); got != f[0] {
+			bad = append(bad, fmt.Sprintf("main-red-workflows.tsv: %s is named %q, the row says %q: a renamed workflow stops alerting", f[1], got, f[0]))
+		}
+		names = append(names, f[0])
+	}
+	return names, bad
+}
+
 func venueMainAlertViolations(t *testing.T, root string) []string {
 	t.Helper()
 	doc := loadWf(t, root, "venue-oracles-main-alert.yml")
-	venueName := asString(loadWf(t, root, "venue-oracles.yml")["name"])
-	var out []string
+	covered, out := mainRedCovered(t, root)
 
 	events := triggerEvents(doc)
 	cfg, ok := events["workflow_run"]
@@ -63,8 +91,8 @@ func venueMainAlertViolations(t *testing.T, root string) []string {
 		if keys := sortedKeys(run); !reflect.DeepEqual(keys, []string{"types", "workflows"}) {
 			out = append(out, fmt.Sprintf("workflow_run declares %v, want only types and workflows: a branches or branches-ignore filter suppresses alerts for main runs", keys))
 		}
-		if got := asList(run["workflows"]); !reflect.DeepEqual(got, []any{venueName}) {
-			out = append(out, fmt.Sprintf("workflow_run.workflows is %v, want [%s]: the alert must listen to the venue workflow by its exact name", got, venueName))
+		if got := asList(run["workflows"]); !reflect.DeepEqual(got, covered) {
+			out = append(out, fmt.Sprintf("workflow_run.workflows is %v, want %v: the alert must listen to each covered workflow by its exact name, in ci/main-red-workflows.tsv order", got, covered))
 		}
 		if got := asList(run["types"]); !reflect.DeepEqual(got, []any{"completed"}) {
 			out = append(out, fmt.Sprintf("workflow_run.types is %v, want [completed]", got))
@@ -88,8 +116,8 @@ func venueMainAlertViolations(t *testing.T, root string) []string {
 		out = append(out, "a workflow-level concurrency group is declared: it would take the group before the job's if and a non-main run could evict a queued main alert; put it on the job")
 	}
 	conc := asMap(job["concurrency"])
-	if got := asString(conc["group"]); got != "venue-oracles-main-alert" {
-		out = append(out, fmt.Sprintf("the alert job's concurrency group is %q, want venue-oracles-main-alert: two completions could both find no issue and open two", got))
+	if got := asString(conc["group"]); got != mainAlertGroup {
+		out = append(out, fmt.Sprintf("the alert job's concurrency group is %q, want %q: one group per workflow, so two completions of one workflow cannot both open an issue and another workflow cannot evict a queued alert", got, mainAlertGroup))
 	}
 	if cancel, ok := conc["cancel-in-progress"].(bool); !ok || cancel {
 		out = append(out, fmt.Sprintf("the alert job's cancel-in-progress is %v, want the literal false: a cancelled alert drops a red main run", conc["cancel-in-progress"]))
@@ -117,6 +145,7 @@ func venueMainAlertViolations(t *testing.T, root string) []string {
 		}
 		env := asMap(runSteps[0]["env"])
 		for key, want := range map[string]string{
+			"RUN_WORKFLOW":   "${{ github.event.workflow_run.name }}",
 			"RUN_ID":         "${{ github.event.workflow_run.id }}",
 			"RUN_CONCLUSION": "${{ github.event.workflow_run.conclusion }}",
 			"RUN_SHA":        "${{ github.event.workflow_run.head_sha }}",
@@ -142,28 +171,38 @@ func TestVenueMainAlertWorkflowShape(t *testing.T) {
 func TestVenueMainAlertWorkflowPlantedDefects(t *testing.T) {
 	root := repoRoot(t)
 	const f = mainAlertFile
-	files := []string{f, venueWorkflow}
-	trig := "workflow_run:\n    workflows: ['Venue oracles']\n    types: [completed]\n"
+	const tsv = "ci/main-red-workflows.tsv"
+	files := []string{f, venueWorkflow, tsv}
+	for _, w := range []string{"go", "go-quality", "go-auth-service", "go-workers-compose-proof", "live-e2e", "docker-images", "test", "codeql-analysis"} {
+		files = append(files, ".github/workflows/"+w+".yml")
+	}
+	trigAll := "workflow_run:\n    workflows:\n      - Venue oracles\n      - Go\n      - Go quality\n      - Go auth service\n      - Go workers compose proof\n      - Live Backend E2E\n      - Build Docker images\n      - Tests\n      - CodeQL\n    types: [completed]\n"
 	cases := []struct {
 		name string
 		muts []mutation
 		want []string
 	}{
-		{"listens to a misspelt workflow", []mutation{{f, "workflows: ['Venue oracles']", "workflows: ['Venue Oracles']"}}, []string{"workflow_run.workflows"}},
+		{"listens to a misspelt workflow", []mutation{{f, "      - Venue oracles\n", "      - Venue Oracles\n"}}, []string{"workflow_run.workflows"}},
 		{"listens to the wrong event type", []mutation{{f, "types: [completed]", "types: [requested]"}}, []string{"workflow_run.types"}},
-		{"bare workflow_run trigger", []mutation{{f, trig, "workflow_run:\n"}}, []string{"workflow_run trigger is bare"}},
-		{"workflow_run replaced by push", []mutation{{f, trig, "push:\n"}}, []string{"no workflow_run trigger"}},
-		{"scalar trigger", []mutation{{f, "on:\n  " + trig, "on: push\n"}}, []string{"no workflow_run trigger"}},
+		{"bare workflow_run trigger", []mutation{{f, trigAll, "workflow_run:\n"}}, []string{"workflow_run trigger is bare"}},
+		{"workflow_run replaced by push", []mutation{{f, trigAll, "push:\n"}}, []string{"no workflow_run trigger"}},
+		{"scalar trigger", []mutation{{f, "on:\n  " + trigAll, "on: push\n"}}, []string{"no workflow_run trigger"}},
+		{"a covered workflow is dropped from the listener", []mutation{{f, "      - Go quality\n", ""}}, []string{"workflow_run.workflows"}},
+		{"a workflow is listened to but not in the table", []mutation{{f, "      - CodeQL\n", "      - CodeQL\n      - Security Scan\n"}}, []string{"workflow_run.workflows"}},
+		{"a covered workflow is renamed", []mutation{{".github/workflows/go-quality.yml", "name: Go quality\n", "name: Go quality gate\n"}}, []string{"is named"}},
+		{"the table row is dropped", []mutation{{tsv, "Tests\ttest.yml", "#Tests\ttest.yml"}}, []string{"workflow_run.workflows"}},
+		{"the group ignores the workflow", []mutation{{f, "group: main-red-alert-${{ github.event.workflow_run.name }}", "group: main-red-alert"}}, []string{"concurrency group"}},
+		{"the workflow name is not passed", []mutation{{f, "          RUN_WORKFLOW: ${{ github.event.workflow_run.name }}\n", ""}}, []string{"env RUN_WORKFLOW"}},
 		{"workflow_run gains a branch filter", []mutation{{f, "types: [completed]", "types: [completed]\n    branches: [release]"}}, []string{"workflow_run declares [branches types workflows]"}},
 		{"workflow_run gains a branches-ignore filter", []mutation{{f, "types: [completed]", "types: [completed]\n    branches-ignore: [main]"}}, []string{"workflow_run declares [branches-ignore types workflows]"}},
-		{"the venue workflow is renamed", []mutation{{venueWorkflow, "name: Venue oracles\n", "name: Venue oracle suite\n"}}, []string{"workflow_run.workflows"}},
+		{"the venue workflow is renamed", []mutation{{venueWorkflow, "name: Venue oracles\n", "name: Venue oracle suite\n"}}, []string{"is named"}},
 		{"the push-only filter is dropped", []mutation{{f, " && github.event.workflow_run.event == 'push'", ""}}, []string{"only main push runs may alert"}},
 		{"top-level permissions granted", []mutation{{f, "permissions: {}\n", "permissions:\n  contents: read\n"}}, []string{"top-level permissions"}},
 		{"top-level permissions removed", []mutation{{f, "permissions: {}\n", ""}}, []string{"top-level permissions"}},
 		{"job token loses least privilege", []mutation{{f, "      issues: write\n    steps:", "      issues: write\n      pull-requests: write\n    steps:"}}, []string{"least privilege"}},
 		{"job token cannot write issues", []mutation{{f, "      issues: write\n    steps:", "      issues: read\n    steps:"}}, []string{"least privilege"}},
 		{"workflow-level concurrency", []mutation{{f, "permissions: {}\n", "permissions: {}\nconcurrency:\n  group: x\n  cancel-in-progress: false\n"}}, []string{"workflow-level concurrency"}},
-		{"alert group renamed", []mutation{{f, "group: venue-oracles-main-alert", "group: venue-alert"}}, []string{"concurrency group"}},
+		{"alert group renamed", []mutation{{f, "group: main-red-alert-${{ github.event.workflow_run.name }}", "group: venue-alert"}}, []string{"concurrency group"}},
 		{"alert jobs may be cancelled", []mutation{{f, "      cancel-in-progress: false", "      cancel-in-progress: true"}}, []string{"cancel-in-progress"}},
 		{"cancel-in-progress becomes an expression", []mutation{{f, "      cancel-in-progress: false", "      cancel-in-progress: ${{ false }}"}}, []string{"cancel-in-progress"}},
 		{"event data reaches the shell", []mutation{{f, "run: bash ci/venue-main-alert.sh", "run: bash ci/venue-main-alert.sh ${{ github.event.workflow_run.head_branch }}"}}, []string{"run script holds a ${{ }} expression"}},
@@ -174,8 +213,8 @@ func TestVenueMainAlertWorkflowPlantedDefects(t *testing.T) {
 		{"the alert script is only in a comment", []mutation{{f, "run: bash ci/venue-main-alert.sh", `run: '# bash ci/venue-main-alert.sh'`}}, []string{"must run exactly `bash ci/venue-main-alert.sh`"}},
 		{"the alert failure is swallowed", []mutation{{f, "run: bash ci/venue-main-alert.sh", "run: bash ci/venue-main-alert.sh || true"}}, []string{"must run exactly `bash ci/venue-main-alert.sh`"}},
 		{"the alert script is skipped by an early exit", []mutation{{f, "run: bash ci/venue-main-alert.sh", "run: |\n          exit 0\n          bash ci/venue-main-alert.sh"}}, []string{"must run exactly `bash ci/venue-main-alert.sh`"}},
-		{"the alert step is never run", []mutation{{f, "      - name: Open, update or close the main venue-oracles issue\n", "      - name: Open, update or close the main venue-oracles issue\n        if: false\n"}}, []string{"the alert step declares if"}},
-		{"the alert step may fail silently", []mutation{{f, "      - name: Open, update or close the main venue-oracles issue\n", "      - name: Open, update or close the main venue-oracles issue\n        continue-on-error: true\n"}}, []string{"the alert step declares continue-on-error"}},
+		{"the alert step is never run", []mutation{{f, "      - name: Open, update or close the main-red issue\n", "      - name: Open, update or close the main-red issue\n        if: false\n"}}, []string{"the alert step declares if"}},
+		{"the alert step may fail silently", []mutation{{f, "      - name: Open, update or close the main-red issue\n", "      - name: Open, update or close the main-red issue\n        continue-on-error: true\n"}}, []string{"the alert step declares continue-on-error"}},
 		{"the alert job may fail silently", []mutation{{f, "    timeout-minutes: 10\n", "    timeout-minutes: 10\n    continue-on-error: true\n"}}, []string{"the alert job declares continue-on-error"}},
 		{"a secret is read through the index form", []mutation{{f, "          RUN_SHA: ${{ github.event.workflow_run.head_sha }}\n", "          RUN_SHA: ${{ github.event.workflow_run.head_sha }}\n          LINEAR: ${{ secrets['LINEAR_API_KEY'] }}\n"}}, []string{"reads a secret"}},
 		{"all secrets are passed", []mutation{{f, "          RUN_SHA: ${{ github.event.workflow_run.head_sha }}\n", "          RUN_SHA: ${{ github.event.workflow_run.head_sha }}\n          ALL: ${{ toJSON(secrets) }}\n"}}, []string{"reads a secret"}},

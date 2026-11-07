@@ -20,7 +20,7 @@ const (
 	FallbackInvariantHeldLog = "issue-pr fallback invariant held"
 	// FallbackBesideNativeCounter adds the rows of every check, 0 included. It
 	// carries no attribute: the organization is named by the log line only. A
-	// value that increases above 0 is a breach; no alert rule reads it yet.
+	// value that increases above 0 is a breach; the rule IssuePRFallbackInvariantBreached in alerts/rules.yml reads it.
 	FallbackBesideNativeCounter = "workgraph_issue_pr_fallback_beside_native_rows_total"
 	// The same check, one counter per side, so the metrics alone name which side
 	// breached. A row can be on more than one side, so the sides do

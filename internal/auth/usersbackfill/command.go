@@ -37,13 +37,13 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "auth",
 		Kind:    cli.Group,
-		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, repo-identities-sync, platform-role-grant, platform-role-revoke, platform-role-list",
+		Summary: "auth control plane operator verbs: users-backfill, users-create, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, repo-identities-sync, platform-role-grant, platform-role-revoke, platform-role-list",
 		Children: append([]cli.Command{{
 			Name:    "users-backfill",
 			Kind:    cli.Verb,
 			Summary: "copy public.users into the auth schema (idempotent; counts only)",
 			Run:     run,
-		}, {
+		}, usersCreateCommand(), {
 			Name:    "users-reconcile",
 			Kind:    cli.Verb,
 			Summary: "compare public.users with the auth schema in one read-only snapshot (counts only; exit 1 on any gated diff; -platform-roles-gate also gates no_active_platform_admin, run it before the platform roles flip)",
@@ -82,6 +82,7 @@ func run(ctx context.Context, env cli.Env) int {
 	flags.SetOutput(env.Stderr)
 	dryRun := flags.Bool("dry-run", false, "read and report; write nothing")
 	batch := flags.Int("batch", 500, "users read per page")
+	insertOnly := flags.Bool("insert-only", false, "create the auth users that are missing and never change an existing one (compose's auth-users-backfill, where auth-service owns users)")
 	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
 		return code
 	}
@@ -101,6 +102,7 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintf(env.Stderr, "users-backfill: %s must be true or false\n", platformrole.OwnedEnv)
 		return cli.ExitFailure
 	}
+	opts.InsertOnly = *insertOnly
 	pool, schema, code := connectFn(ctx, env, "users-backfill")
 	if code != cli.ExitOK {
 		return code

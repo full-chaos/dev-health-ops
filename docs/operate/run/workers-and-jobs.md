@@ -13,22 +13,17 @@ lifecycle: active
 
 # Run workers and jobs
 
-**Celery is retired (CHAOS-4026, 2026-08-21): zero Python celery services run
-in prod since the 2026-08-19 stop.** Go owns every periodic maintenance
-cadence this doc used to describe running via `dev-hops workers start-worker`/
-`start-scheduler` -- those two CLI subcommands were deleted (they were the
-last CLI-level way to falsify CUT-18's "no Celery process is running"
-criterion). The Go worker deployment contract selects queues; it does not
+**Celery is retired: no Python Celery service runs in production.** Go owns
+every periodic maintenance cadence. The `dev-hops workers start-worker` and
+`start-scheduler` subcommands do not exist. The Go worker deployment contract selects queues; it does not
 change the canonical job-kind-to-queue mapping. The Go processes are started
 with `dho worker` and `dho scheduler`.
 
-**CHAOS-4164 (2026-08-23), superseded:** the checked-in compose files were
-first marked ARCHIVED with the Celery `worker`/`beat` fleet still defined, and
-CHAOS-5589 then deleted those definitions (CHAOS-6950 deleted the production
-Compose file and the Swarm stack altogether). See
+**No checked-in compose file or chart defines a Celery `worker`/`beat`
+fleet.** See
 [Workers, schedules, and queues § Historical Celery topology (dormant)](../configure/workers-and-schedules.md#historical-celery-topology-dormant)
 and [§ Known divergences](../configure/workers-and-schedules.md#known-divergences-local-vs-prod-worker-topology)
-for the archival record and the local/prod parity gaps found alongside it.
+for the archival record and the local/prod parity gaps.
 {: .fc-page-lede }
 
 The Go worker, scheduler, reconciler, and stream-runner binaries are separate
@@ -37,10 +32,9 @@ or production job ownership.
 
 ## Start the active runtime
 
-`dev-hops workers start-worker`/`start-scheduler` no longer exist (CHAOS-4026)
+`dev-hops workers start-worker`/`start-scheduler` do not exist
 -- there is no Python Celery worker/beat process to start anywhere: the Celery
-app was deleted (CHAOS-7059) and the non-prod acceptance compose file starts
-no Celery service.
+app is gone and the non-prod acceptance compose file starts no Celery service.
 
 ### Start a Go worker group
 
@@ -92,7 +86,7 @@ outside this repository keep working.
 
 #### There are no provider route switches
 
-CHAOS-4054 deleted them. The forty `WORKER_<PROVIDER>_<DATASET>_ENABLED`
+The forty `WORKER_<PROVIDER>_<DATASET>_ENABLED`
 variables no longer exist in either runtime, and setting one has no effect
 anywhere. Capability is always on in the binary: every provider/dataset pair
 the capability matrix marks `route_ready` is executable.
@@ -259,8 +253,7 @@ appears in the owning status surface and that freshness or output advances.
 6. Verify queue age, failure rate, retries, and downstream freshness after each
    step.
 7. Verify the Go worker stack still owns every route it is deployed for; Celery
-   has not run in prod since 2026-08-19 (CHAOS-4026), so there is no fallback
-   route to preserve.
+   does not run in production, so there is no fallback route to preserve.
 
 Do not purge queues, delete execution rows, or change a route merely to make a
 deployment appear healthy. Those actions can discard work or create duplicate

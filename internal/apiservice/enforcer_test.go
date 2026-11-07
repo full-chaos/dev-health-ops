@@ -212,6 +212,31 @@ func TestGoAPIBuildsOneDecisionPointClient(t *testing.T) {
 	}
 }
 
+// The one PEP client is the plain one: no production file of this package builds the PEP allow cache, so a PDP outage
+// refuses a read at once, never at a cache expiry. A PEP cache needs its own outage and expiry cells before it ships.
+func TestGoAPIBuildsNoPEPDecisionCache(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hits []string
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "NewCachedClient(") {
+			hits = append(hits, name)
+		}
+	}
+	if len(hits) != 0 {
+		t.Fatalf("files that build a PEP decision cache: %v", hits)
+	}
+}
+
 // The shadow and the Enforcer get the same client, so one workload exchange serves both.
 func TestTheShadowAndTheEnforcerShareOneDecisionPointClient(t *testing.T) {
 	pdp := newShadowPDPServer(t)

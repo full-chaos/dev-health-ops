@@ -97,5 +97,5 @@ Rules for the issuer URL:
 3. From the go-api pod network, the same two requests answer 200 with the certificate trusted.
 4. The counter `devhealth_auth_access_token_refused_total` for go-api and query-api has no reason `unavailable`.
 5. The preconditions of the eddsa class are met. See
-   [Auth sessions flip and rollback](../runbooks/auth-sessions-flip-and-rollback.md#access-token-class-eddsa-w3-d1)
+   [Auth sessions flip and rollback](../runbooks/auth-sessions-flip-and-rollback.md#access-token-class-eddsa)
    and [legacy compatibility and rollback](../runbooks/auth-legacy-compat-and-rollback.md).

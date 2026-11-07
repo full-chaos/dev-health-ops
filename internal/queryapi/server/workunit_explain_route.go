@@ -250,7 +250,11 @@ func newWorkUnitExplainHandler(
 			writeRESTUnauthorized(w, r, "work_unit_explain", "Not authenticated")
 			return
 		}
-		r, admitted := admitModel(gate, w, r, "work_unit_explain", claims.OrgID)
+		org, ok := restScopeOrg(w, r, "work_unit_explain", claims)
+		if !ok {
+			return
+		}
+		r, admitted := admitModel(gate, w, r, "work_unit_explain", org)
 		if !admitted {
 			return
 		}
@@ -259,7 +263,7 @@ func newWorkUnitExplainHandler(
 
 		parsed, validationErrors := parseWorkUnitExplainQuery(r)
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -271,14 +275,14 @@ func newWorkUnitExplainHandler(
 		// "none" constructs NoneProvider and never touches a credential at
 		// all.
 		kind, resolveErr := investmentexplain.ResolveProviderKindForOrg(
-			r.Context(), parsed.llmProvider, claims.OrgID, orgSettings)
+			r.Context(), parsed.llmProvider, org, orgSettings)
 		if resolveErr != nil {
 			// The org's stored base_url raised urlsplit's ValueError while
 			// "auto" was resolved: the route answers 422 with its text
 			// (`except (ValueError, LLMError) as exc: ... detail=str(exc)`).
 			if detail, raised := investmentexplain.ProviderValueError(
-				r.Context(), resolveErr, kind, claims.OrgID, orgSettings); raised {
-				writeRESTError(w, r, "work_unit_explain", claims.OrgID, http.StatusUnprocessableEntity, detail)
+				r.Context(), resolveErr, kind, org, orgSettings); raised {
+				writeRESTError(w, r, "work_unit_explain", org, http.StatusUnprocessableEntity, detail)
 				return
 			}
 			// resolve_provider_name's only failure is an "auto" request
@@ -286,7 +290,7 @@ func newWorkUnitExplainHandler(
 			// _missing_provider_error("auto") -- the resolver's own Go
 			// message is not that text, so the ported literal is used
 			// rather than the error's.
-			writeRESTError(w, r, "work_unit_explain", claims.OrgID, http.StatusUnprocessableEntity,
+			writeRESTError(w, r, "work_unit_explain", org, http.StatusUnprocessableEntity,
 				missingLLMProviderDetail(providerNameAuto))
 			return
 		}
@@ -297,8 +301,8 @@ func newWorkUnitExplainHandler(
 			// ValueError's text. Python raises that before it builds any
 			// provider, so it comes before the unsupported-provider 501.
 			if detail, raised := investmentexplain.ProviderValueError(
-				r.Context(), nil, kind, claims.OrgID, orgSettings); raised {
-				writeRESTError(w, r, "work_unit_explain", claims.OrgID, http.StatusUnprocessableEntity, detail)
+				r.Context(), nil, kind, org, orgSettings); raised {
+				writeRESTError(w, r, "work_unit_explain", org, http.StatusUnprocessableEntity, detail)
 				return
 			}
 			// A provider Python genuinely serves but this port has no client
@@ -306,17 +310,17 @@ func newWorkUnitExplainHandler(
 			// "credential missing" 422 -- the same guard, for the same
 			// reason, as investment/explain's own.
 			if _, unsupported := investmentexplain.ResolveUnsupportedProviderKindForOrg(
-				r.Context(), parsed.llmProvider, claims.OrgID, orgSettings); unsupported {
-				writeRESTError(w, r, "work_unit_explain", claims.OrgID, http.StatusNotImplemented, "unsupported_provider")
+				r.Context(), parsed.llmProvider, org, orgSettings); unsupported {
+				writeRESTError(w, r, "work_unit_explain", org, http.StatusNotImplemented, "unsupported_provider")
 				return
 			}
-			if !investmentexplain.IsLLMAvailableForOrg(r.Context(), parsed.llmProvider, claims.OrgID, orgSettings) {
+			if !investmentexplain.IsLLMAvailableForOrg(r.Context(), parsed.llmProvider, org, orgSettings) {
 				// get_provider's own `if not _provider_has_required_config`
 				// branch raises _missing_provider_error(provider_name) --
 				// the RESOLVED name, not the requested one, which is what
 				// an "auto" request that resolved to a configured-but-
 				// unusable provider reports.
-				writeRESTError(w, r, "work_unit_explain", claims.OrgID, http.StatusUnprocessableEntity,
+				writeRESTError(w, r, "work_unit_explain", org, http.StatusUnprocessableEntity,
 					missingLLMProviderDetail(string(kind)))
 				return
 			}
@@ -333,14 +337,14 @@ func newWorkUnitExplainHandler(
 		// homeValidScopeLevels (home_route.go) is that Literal set, reused
 		// rather than restated.
 		if !homeValidScopeLevels[parsed.scopeType] {
-			writeWorkUnitExplainUnavailable(w, r, claims.OrgID,
+			writeWorkUnitExplainUnavailable(w, r, org,
 				fmt.Errorf("work_unit_explain: ScopeFilter construction: scope_type %q is not one of the valid levels", parsed.scopeType))
 			return
 		}
 
 		startTS, endTS, windowErr := timeWindow(drilldownTimeFilterMap(parsed.rangeDays, parsed.startDate, parsed.endDate))
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "work_unit_explain", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "work_unit_explain", org)
 			return
 		}
 
@@ -352,9 +356,9 @@ func newWorkUnitExplainHandler(
 		// (it has no query parameter for it), so only scope_id can carry a
 		// repo reference here.
 		reposNamed := len(teamscope.NamedRepoRefs(parsed.scopeType, scopeIDs, nil)) > 0
-		repoIDs, err := reader.ResolveRepoFilterIDs(r.Context(), parsed.scopeType, scopeIDs, nil, claims.OrgID)
+		repoIDs, err := reader.ResolveRepoFilterIDs(r.Context(), parsed.scopeType, scopeIDs, nil, org)
 		if err != nil {
-			writeWorkUnitExplainUnavailable(w, r, claims.OrgID, err)
+			writeWorkUnitExplainUnavailable(w, r, org, err)
 			return
 		}
 		// ResolveRepoFilterIDs resolves only the explicit repo refs a request
@@ -368,11 +372,11 @@ func newWorkUnitExplainHandler(
 		var teamCondition string
 		var teamBindings []dhclickhouse.Binding
 		if parsed.scopeType == "team" && len(scopeIDs) > 0 {
-			teamCondition, teamBindings = teamscope.RepoCondition(claims.OrgID, repoScopeColumn, scopeIDs, time.Now().UTC())
+			teamCondition, teamBindings = teamscope.RepoCondition(org, repoScopeColumn, scopeIDs, time.Now().UTC())
 		}
 
 		investments, err := reader.BuildWorkUnitInvestments(r.Context(), investmentexplain.BuildWorkUnitInvestmentsOptions{
-			OrgID:              claims.OrgID,
+			OrgID:              org,
 			StartTS:            startTS,
 			EndTS:              endTS,
 			RepoIDs:            repoIDs,
@@ -384,11 +388,11 @@ func newWorkUnitExplainHandler(
 			WorkUnitID:         workUnitID,
 		})
 		if err != nil {
-			writeWorkUnitExplainUnavailable(w, r, claims.OrgID, err)
+			writeWorkUnitExplainUnavailable(w, r, org, err)
 			return
 		}
 		if len(investments) == 0 {
-			writeWorkUnitExplainNotFound(w, r, claims.OrgID, workUnitID)
+			writeWorkUnitExplainNotFound(w, r, org, workUnitID)
 			return
 		}
 
@@ -396,14 +400,14 @@ func newWorkUnitExplainHandler(
 			categorize.CompletionResult, string, string, error,
 		) {
 			return investmentexplain.CompleteWorkUnitExplanationForOrg(
-				ctx, requestedProvider, requestedModel, claims.OrgID, orgSettings, budgetStore, fullPrompt)
+				ctx, requestedProvider, requestedModel, org, orgSettings, budgetStore, fullPrompt)
 		}
 
 		explanation, err := workunitexplain.ExplainWorkUnit(
 			r.Context(), writer, complete,
 			workunitexplain.FromWorkUnitInvestment(investments[0]),
 			workunitexplain.Options{
-				OrgID:                claims.OrgID,
+				OrgID:                org,
 				LLMProvider:          parsed.llmProvider,
 				LLMModel:             parsed.llmModel,
 				ResolvedProviderKind: kind,
@@ -416,11 +420,11 @@ func newWorkUnitExplainHandler(
 			// never reaches Python's LLMError branch, so it must not reach
 			// this one either.
 			if class, isLLM := categorize.ClassifyLLMError(err); isLLM {
-				writeRESTError(w, r, "work_unit_explain", claims.OrgID,
+				writeRESTError(w, r, "work_unit_explain", org,
 					workUnitExplainLLMErrorStatus(class), err.Error())
 				return
 			}
-			writeWorkUnitExplainUnavailable(w, r, claims.OrgID, err)
+			writeWorkUnitExplainUnavailable(w, r, org, err)
 			return
 		}
 
@@ -428,7 +432,7 @@ func newWorkUnitExplainHandler(
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if err := writeModelResponse(w, explanation); err != nil {
 			log.Printf("query-api: work_unit_explain: write response failed: org_id=%s request_id=%s err=%v",
-				claims.OrgID, envelopeRequestID(r), err)
+				org, logSafeRequestID(envelopeRequestID(r)), err)
 			writeModelFailure(w)
 		}
 	}

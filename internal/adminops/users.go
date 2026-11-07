@@ -336,6 +336,9 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 	op, closePool, code := usersWriteOperator(ctx, env, true, *superuser)
 	defer closePool()
 	if code != 0 {
+		if owned, err := usersOwnedFromEnv(env); err == nil && owned {
+			fmt.Fprintln(env.Stderr, "next step: dho auth users-create --email <email> --password-stdin (runs with the auth runtime login; it never grants a platform role)")
+		}
 		return code
 	}
 	user, err := op.CreateUser(ctx, admin.CreateUserInput{Email: email.value, Password: password.value,

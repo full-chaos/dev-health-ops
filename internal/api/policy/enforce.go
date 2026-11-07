@@ -64,10 +64,12 @@ var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceO
 // because a guard that cannot get a verdict must not fall back to the check the switch replaced. An allow with an
 // obligation go-api does not carry out (see obligationsCarriedOut) is such a failure. A caller with a live go-api
 // impersonation row presents the admin's own bearer, which the decision point would judge as the admin, not as the
-// delegation: it is refused before any call, except on the stop route. A delegated session's own bearer is decided
+// delegation: its read of a route that is not a platform wrap keeps the legacy answer (served as the target
+// organization, product rule 1) and any other request is refused, as the legacy platform wrap refuses it, both before
+// any call, except on the stop route. A delegated session's own bearer is decided
 // like any other. The one exception is a caller the decision point cannot judge (a legacy HS256 token, an
-// organization route with no organization): that request keeps the legacy answer, which is the same answer the
-// route gives with its cell off.
+// organization route with no organization, an impersonation read): that request keeps the legacy answer, which is the
+// same answer the route gives with its cell off.
 // Operator runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md
 type Enforcer struct {
 	decider pep.Decider
@@ -132,6 +134,9 @@ const (
 	enforceNoDecisionPoint
 	// enforceImpersonationRefused: the caller has a live go-api impersonation row. The route is refused with a 403.
 	enforceImpersonationRefused
+	// enforceSessionRowUnavailable: the caller's go-api impersonation row could not be read. The route is refused with
+	// the dependency failure 503.
+	enforceSessionRowUnavailable
 )
 
 // enforceObservation is what the guard tells the Enforcer about one authenticated request. It holds values only.
@@ -142,8 +147,32 @@ type enforceObservation struct {
 	userAccessToken bool
 	// impersonating: a live go-api impersonation row is in force for the caller's own bearer.
 	impersonating bool
+	// read: the request method writes nothing (readMethod, the legacy RefuseImpersonation's rule).
+	read bool
+	// platformWrap: the route is a platform wrap, whose legacy guard refuses a live row itself (Guard.wrap, Superuser).
+	platformWrap bool
 	// served: the organization a path or query parameter names for the handler to serve (servedOrgOf).
 	served servedOrg
+	// adminOr: the route is mounted WrapAdminOr: an organization admin of the token's organization passes too.
+	adminOr bool
+	// platform, when set, keeps the request's platform answers for HoldsPlatform.
+	platform *platformDecisions
+}
+
+// adminOrOrgAction is the organization action that stands for the legacy Admin level on an admin-or row: only the
+// owner and admin roles hold it.
+const adminOrOrgAction = "members.manage"
+
+// decides reports whether the decision point decides pattern: its row is enforced and a decision point is configured.
+func (e *Enforcer) decides(pattern string) (namespace string, ok bool) {
+	if e == nil || e.unconfigured {
+		return "", false
+	}
+	row, ok := e.rows[pattern]
+	if !ok || !e.sw.On(row.Namespace) {
+		return "", false
+	}
+	return row.Namespace, true
 }
 
 func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerdict {
@@ -158,7 +187,13 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
 		return enforceNoDecisionPoint
 	}
-	if o.impersonating && o.pattern != stopImpersonationPattern {
+	if o.impersonating && !liveRowExempt(o.pattern) {
+		if o.read && !o.platformWrap {
+			countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedImpersonation)
+			e.logger.DebugContext(ctx, "api enforcement: an impersonation read keeps the legacy answer",
+				slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+			return enforceLegacy
+		}
 		countEnforce(ctx, row.Namespace, enforceOutcomeImpersonationRefused)
 		e.logger.WarnContext(ctx, "api enforcement: impersonation caller refused on an enforced row",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
@@ -178,6 +213,9 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace), slog.String("reason", reason))
 		return enforceLegacy
 	}
+	if o.adminOr && row.ResourceType == policycatalog.ScopePlatform {
+		return e.decideAdminOr(ctx, o, row, org)
+	}
 	request := pep.Request{PrincipalReference: o.bearer, Action: row.Action, ResourceType: row.ResourceType, ResourceKey: shadowPlatformKey}
 	if row.ResourceType == policycatalog.ScopeOrganization {
 		request.ResourceKey, request.OrganizationID = org, org
@@ -195,7 +233,47 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 			slog.String("namespace", row.Namespace))
 		return enforceUnavailable
 	}
+	if row.ResourceType == policycatalog.ScopePlatform && o.platform != nil {
+		o.platform.seed(row.Action, decision.Allowed())
+	}
 	if decision.Allowed() {
+		countEnforce(ctx, row.Namespace, enforceOutcomeAllow)
+		return enforceAllow
+	}
+	countEnforce(ctx, row.Namespace, enforceOutcomeDeny)
+	return enforceDeny
+}
+
+// decideAdminOr decides an admin-or row with one batch: the row's platform action, and adminOrOrgAction in the
+// token's organization when there is one. Either allow passes. A missing, failed or local answer, or an allow whose
+// obligations go-api does not carry out, is no verdict: the route is refused with a 503. The platform answer is kept
+// for the request: a handler that acts cross-org asks HoldsPlatform, never the organization answer.
+func (e *Enforcer) decideAdminOr(ctx context.Context, o enforceObservation, row ShadowRow, org string) enforceVerdict {
+	requests := []pep.Request{{PrincipalReference: o.bearer, Action: row.Action, ResourceType: policycatalog.ScopePlatform, ResourceKey: shadowPlatformKey}}
+	if org != "" {
+		requests = append(requests, pep.Request{PrincipalReference: o.bearer, Action: adminOrOrgAction,
+			ResourceType: policycatalog.ScopeOrganization, ResourceKey: org, OrganizationID: org})
+	}
+	decisions, failed := e.askBatch(ctx, requests)
+	if failed || len(decisions) != len(requests) {
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		e.logger.WarnContext(ctx, "api enforcement: no verdict for an admin-or row, the route is refused", slog.String("route", o.pattern))
+		return enforceUnavailable
+	}
+	allowed := false
+	for i, decision := range decisions {
+		if decision.Local() || (decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), requests[i], e.noRepositoryDimension[o.pattern])) {
+			countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+			e.logger.WarnContext(ctx, "api enforcement: no verdict for an admin-or row, the route is refused",
+				slog.String("route", o.pattern), slog.String("reason", string(decision.Reason())))
+			return enforceUnavailable
+		}
+		allowed = allowed || decision.Allowed()
+	}
+	if o.platform != nil {
+		o.platform.seed(row.Action, decisions[0].Allowed())
+	}
+	if allowed {
 		countEnforce(ctx, row.Namespace, enforceOutcomeAllow)
 		return enforceAllow
 	}
@@ -213,6 +291,18 @@ func (e *Enforcer) ask(ctx context.Context, request pep.Request) (decision pep.D
 	ctx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
 	return e.decider.Decide(ctx, request), false
+}
+
+// askBatch calls the decider's batch and turns a panic into a failure.
+func (e *Enforcer) askBatch(ctx context.Context, requests []pep.Request) (decisions []pep.Decision, failed bool) {
+	defer func() {
+		if recover() != nil {
+			decisions, failed = nil, true
+		}
+	}()
+	ctx, cancel := context.WithTimeout(ctx, e.timeout)
+	defer cancel()
+	return e.decider.DecideBatch(ctx, requests), false
 }
 
 // unjudgedReason says why the decision point cannot judge a request, or "" when it can. A token that is not a user
@@ -256,17 +346,35 @@ type pdpHooks struct {
 func (g *Guard) SetEnforcer(e *Enforcer) { g.pdp.enforcer = e }
 
 // enforceVerdict asks the Enforcer about one authenticated request.
-func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string) enforceVerdict {
+func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, platformRoute bool, gt gate, platform *platformDecisions) enforceVerdict {
 	if g.pdp.enforcer == nil {
 		return enforceNotCovered
 	}
 	ctx := r.Context()
+	impersonating := ImpersonationFrom(ctx) != nil
+	// The session context is set for a holder of admin.impersonate only. On an enforced write or platform row the live
+	// row decides for any caller, as the guard's own refusals do (Guard.sessionRow): a caller whose admin.impersonate
+	// was revoked while its row is live is refused too. A read of any other row reads no row (the read limit).
+	if namespace, enforced := g.pdp.enforcer.decides(r.Pattern); enforced && !impersonating && !liveRowExempt(r.Pattern) &&
+		(platformRoute || !readMethod(r.Method)) {
+		session, err := g.sessionRow(r, user.ID)
+		if err != nil {
+			countEnforce(ctx, namespace, enforceOutcomeErrorDeny)
+			g.logger.ErrorContext(ctx, "api enforcement: impersonation row lookup failed; refusing the request",
+				slog.String("route", r.Pattern), slog.String("namespace", namespace), slog.Bool("unavailable", isUnavailable(err)),
+				slog.String("missing_grant", MissingGrant(err)), slog.Any("error", err))
+			// The session state is unknown: the shadow is not asked either.
+			return enforceSessionRowUnavailable
+		}
+		impersonating = session != nil
+	}
 	verdict := g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
-		userAccessToken: user.accessToken, impersonating: ImpersonationFrom(ctx) != nil, served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern])})
+		userAccessToken: user.accessToken, impersonating: impersonating, read: readMethod(r.Method), platformWrap: platformRoute,
+		served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern]), adminOr: gt.kind == gateAdminOr, platform: platform})
 	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
 	// impersonation_refused without a decision point call.
 	if verdict == enforceImpersonationRefused {
-		g.observeShadow(r, user, bearer, false)
+		g.observeShadowAs(r, user, bearer, false, true)
 	}
 	return verdict
 }
@@ -284,6 +392,9 @@ func writeEnforceRefusal(w http.ResponseWriter, level Authz, verdict enforceVerd
 		return
 	case enforceImpersonationRefused:
 		WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
+		return
+	case enforceSessionRowUnavailable:
+		WriteAuthFailure(w, "", ErrUnavailable)
 		return
 	}
 	WriteDetail(w, http.StatusForbidden, enforceDenyDetail(level), nil)

@@ -154,6 +154,15 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 		users []*fullUser
 		err   error
 	)
+	holdsAdminUsers := false
+	if xOrgID == "" {
+		held, decisionErr := policy.HoldsPlatform(ctx, user, policy.ActionAdminUsers)
+		if decisionErr != nil {
+			policy.WritePlatformDecisionRefusal(w, decisionErr)
+			return
+		}
+		holdsAdminUsers = held
+	}
 	switch {
 	case xOrgID != "":
 		orgID, parseErr := uuid.Parse(xOrgID)
@@ -166,10 +175,10 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		users, err = h.store.listUsersByOrg(ctx, orgID, filter)
-	case user.Holds(policy.ActionAdminUsers):
+	case holdsAdminUsers:
 		users, err = h.store.listAllUsers(ctx, filter)
 	default:
-		orgIDRaw, ok := orgIDForNonSuperuser(w, user)
+		orgIDRaw, ok := orgIDForNonSuperuser(ctx, w, user)
 		if !ok {
 			return
 		}
@@ -196,7 +205,7 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) getUser(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgIDRaw, ok := orgIDForNonSuperuser(w, user)
+	orgIDRaw, ok := orgIDForNonSuperuser(ctx, w, user)
 	if !ok {
 		return
 	}
@@ -371,10 +380,15 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) createUserOrg(ctx context.Context, w http.ResponseWriter, r *http.Request, caller *policy.User) (uuid.UUID, bool) {
 	raw := requestedOrgHeader(r)
 	if raw == "" {
-		if caller.Holds(policy.ActionAdminUsers) {
+		held, err := policy.HoldsPlatform(ctx, caller, policy.ActionAdminUsers)
+		if err != nil {
+			policy.WritePlatformDecisionRefusal(w, err)
+			return uuid.Nil, false
+		}
+		if held {
 			return uuid.Nil, true
 		}
-		claim, ok := orgIDForNonSuperuser(w, caller)
+		claim, ok := orgIDForNonSuperuser(ctx, w, caller)
 		if !ok {
 			return uuid.Nil, false
 		}
@@ -429,7 +443,7 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgIDRaw, ok := orgIDForNonSuperuser(w, user)
+	orgIDRaw, ok := orgIDForNonSuperuser(ctx, w, user)
 	if !ok {
 		return
 	}
@@ -507,7 +521,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgIDRaw, ok := orgIDForNonSuperuser(w, user)
+	orgIDRaw, ok := orgIDForNonSuperuser(ctx, w, user)
 	if !ok {
 		return
 	}
@@ -658,7 +672,7 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgIDRaw, ok := orgIDForNonSuperuser(w, user)
+	orgIDRaw, ok := orgIDForNonSuperuser(ctx, w, user)
 	if !ok {
 		return
 	}

@@ -130,6 +130,7 @@ func Routes(deps Deps) []httpapi.Route {
 		store:           store,
 		audit:           auditWriter,
 		cache:           cache,
+		handoffs:        valkeyHandoffs{client: deps.Valkey},
 		guard:           deps.Guard,
 		logger:          logger,
 		clickHouseDSN:   deps.ClickHouseDSN,
@@ -158,6 +159,7 @@ func Routes(deps Deps) []httpapi.Route {
 func (h *handlers) routes() []httpapi.Route {
 	var out []httpapi.Route
 	out = append(out, h.impersonationRoutes()...)
+	out = append(out, h.handoffRoutes()...)
 	out = append(out, h.userRoutes()...)
 	out = append(out, h.orgRoutes()...)
 	out = append(out, h.governanceRoutes()...)
@@ -172,6 +174,10 @@ type handlers struct {
 	cache  *impersonationCache
 	guard  *policy.Guard
 	logger *slog.Logger
+
+	// handoffs is the one-use record of each impersonation start handoff.
+	handoffs valkeyHandoffs
+
 	// clickHouseDSN, decryptor, pagerDuty and httpDoer are the org-deletion
 	// route's own dependencies (CHAOS-6306); every other handler in this
 	// package ignores them.

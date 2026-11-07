@@ -19,7 +19,7 @@ auth-service mints one class of access token at a time. `hs256_compat` is the de
 that go-api minted before auth-service existed. `eddsa` mints the Ed25519 token of
 [access-token.v1](../../reference/auth/access-token-claims.md). This page says what each class means for
 every service, what must be true before the flip, and how to go back. The steps of the flip itself are in
-[Auth sessions flip and rollback](auth-sessions-flip-and-rollback.md#access-token-class-eddsa-w3-d1). This page gives no prod context,
+[Auth sessions flip and rollback](auth-sessions-flip-and-rollback.md#access-token-class-eddsa). This page gives no prod context,
 no Secret value and no values path.
 
 ## What each class means
@@ -42,10 +42,9 @@ mints a token of the other class.
 
 go-api, query-api and auth-service pick the validator for a route from its endpoint-profile row and from the
 `alg` of the token. The row says whether the route accepts the EdDSA token (`user_access_token`) and whether
-`legacy_hs256` is true. In the contract files today, every row that accepts `user_access_token` also has
-`legacy_hs256` true: 196 go-api rows, 35 query-api rows and 6 auth-service rows. So an HS256 token that was
-minted before the flip is still accepted after it, until it expires (60 minutes at most). No client has to
-change its token handling at the moment of the flip, except the two preconditions below.
+`legacy_hs256` is true. In the contract files today, no row has `legacy_hs256` true: the class
+`ops_access_token_hs256` is `retired`, so every row refuses an HS256 token with `alg_not_allowed`. A rollback
+to HS256 acceptance is a revert of that contract change, not a setting.
 
 ## Preconditions of the eddsa flip
 

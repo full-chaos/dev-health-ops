@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/opportunities"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -84,7 +85,7 @@ func TestNewOpportunitiesPostHandlerRequiresAuthContext(t *testing.T) {
 func TestNewOpportunitiesGetHandlerBadRangeDaysIs422(t *testing.T) {
 	handler := newOpportunitiesGetHandler(emptyRowsHomeClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/opportunities?range_days=abc", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -113,7 +114,7 @@ func TestNewOpportunitiesGetHandlerBadRangeDaysIs422(t *testing.T) {
 func TestNewOpportunitiesGetHandlerBadCompareDaysIs422(t *testing.T) {
 	handler := newOpportunitiesGetHandler(emptyRowsHomeClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/opportunities?compare_days=xyz", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -135,7 +136,7 @@ func TestNewOpportunitiesGetHandlerBadCompareDaysIs422(t *testing.T) {
 func TestNewOpportunitiesGetHandlerInvalidScopeTypeIs503(t *testing.T) {
 	handler := newOpportunitiesGetHandler(emptyRowsHomeClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/opportunities?scope_type=bogus", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -156,7 +157,7 @@ func TestNewOpportunitiesGetHandlerInvalidScopeTypeIs503(t *testing.T) {
 func TestNewOpportunitiesGetHandlerHappyPathShape(t *testing.T) {
 	handler := newOpportunitiesGetHandler(emptyRowsHomeClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/opportunities?scope_type=org", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -184,7 +185,7 @@ func TestNewOpportunitiesGetHandlerHappyPathShape(t *testing.T) {
 func TestNewOpportunitiesPostHandlerMissingBodyIs422(t *testing.T) {
 	handler := newOpportunitiesPostHandler(emptyRowsHomeClient{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/opportunities", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -208,7 +209,7 @@ func TestNewOpportunitiesPostHandlerMissingBodyIs422(t *testing.T) {
 func TestNewOpportunitiesPostHandlerMissingFiltersIs422(t *testing.T) {
 	handler := newOpportunitiesPostHandler(emptyRowsHomeClient{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/opportunities", strings.NewReader(`{}`))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -234,7 +235,7 @@ func TestNewOpportunitiesPostHandlerMissingFiltersIs422(t *testing.T) {
 func TestNewOpportunitiesPostHandlerInvalidScopeLevelIs422(t *testing.T) {
 	handler := newOpportunitiesPostHandler(emptyRowsHomeClient{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/opportunities", strings.NewReader(`{"filters":{"scope":{"level":"bogus"}}}`))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -256,7 +257,7 @@ func TestNewOpportunitiesPostHandlerBodyTooLargeIs413(t *testing.T) {
 	handler := newOpportunitiesPostHandler(emptyRowsHomeClient{})
 	oversized := strings.Repeat("a", opportunitiesMaxBodyBytes+1)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/opportunities", strings.NewReader(`{"filters":{"why":{"work_category":["`+oversized+`"]}}}`))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -269,7 +270,7 @@ func TestNewOpportunitiesPostHandlerBodyTooLargeIs413(t *testing.T) {
 func TestNewOpportunitiesPostHandlerHappyPathShape(t *testing.T) {
 	handler := newOpportunitiesPostHandler(emptyRowsHomeClient{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/opportunities", strings.NewReader(`{"filters":{}}`))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {

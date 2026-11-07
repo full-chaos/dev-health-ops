@@ -429,7 +429,7 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 			return nil, false
 		}
 		h.Logger.InfoContext(ctx, "authorize decision", "decision_id", doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode,
-			"cache", item.cache)
+			"reason", string(item.decision.Reason), "cache", item.cache)
 		// The owner-exemption audit event is written by a follow-up change,
 		// outside this read-only transaction; until then the exemption is only
 		// this log line.

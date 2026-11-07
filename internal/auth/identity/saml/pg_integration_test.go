@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -243,6 +244,10 @@ func (h *harness) respond(o resp) string {
 	return b64(h.idp.response(h.t, o))
 }
 
+// relayKey holds the issued RelayState in an initiate cookie map; no cookie
+// has this name, and consume posts it back as the echo.
+const relayKey = "\x00relay_state"
+
 func (h *harness) initiate() (requestID string, cookies map[string]string) {
 	h.t.Helper()
 	init, err := h.svc.Initiate(context.Background(), h.provider.ID, "")
@@ -253,11 +258,15 @@ func (h *harness) initiate() (requestID string, cookies map[string]string) {
 	if init.CookieName != saml.BindingCookieName(requestID) || init.CookiePath != saml.ACSPath(h.provider, baseURL) {
 		h.t.Fatalf("binding cookie %q path %q does not match request %q", init.CookieName, init.CookiePath, requestID)
 	}
-	return requestID, map[string]string{init.CookieName: init.CookieValue}
+	redirect, err := url.Parse(init.RedirectURL)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return requestID, map[string]string{init.CookieName: init.CookieValue, relayKey: redirect.Query().Get("RelayState")}
 }
 
 func (h *harness) consume(posted string, cookies map[string]string) (saml.SignIn, error) {
-	return h.svc.Consume(context.Background(), h.provider.ID, posted, func(name string) string { return cookies[name] })
+	return h.svc.Consume(context.Background(), h.provider.ID, posted, cookies[relayKey], func(name string) string { return cookies[name] })
 }
 
 func (h *harness) member(principal uuid.UUID) {
@@ -369,9 +378,15 @@ func TestSAMLRequestIDIsSingleUse(t *testing.T) {
 		if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET allow_idp_initiated = true WHERE id = $1`, h.provider.ID); err != nil {
 			t.Fatal(err)
 		}
+		// The request was stored with the RelayState binding of a provider
+		// without IdP-initiated sign-in; the nonce-only binding of the flipped
+		// row matches no stored request, used or open.
 		_, err := h.consume(h.respond(resp{inResponseTo: requestID, nameID: nid("user-1"), email: "a@example.com"}), cookies)
-		if !errors.Is(err, saml.ErrFlowConsumed) {
-			t.Fatalf("err = %v, want ErrFlowConsumed", err)
+		if !errors.Is(err, saml.ErrFlowNotFound) {
+			t.Fatalf("err = %v, want ErrFlowNotFound", err)
+		}
+		if n := h.count(`SELECT count(*) FROM auth.sso_flow_states WHERE provider_id = $1 AND consumed_at IS NULL`, h.provider.ID); n != 0 {
+			t.Fatalf("%d open requests, want the used one to stay used", n)
 		}
 	})
 }
@@ -627,7 +642,7 @@ func TestSAMLSubjectIsScopedByProviderAndIssuer(t *testing.T) {
 	}
 
 	// The same subject from another issuer through the home provider row.
-	signIn, err = home.svc.Consume(context.Background(), home.provider.ID,
+	signIn, err = home.svc.Consume(context.Background(), home.provider.ID, "",
 		b64(otherIdP.response(t, resp{nameID: nid("home-subject"), destination: strp(home.sp().ACSURL),
 			recipient: strp(home.sp().ACSURL), audiences: [][]string{{home.sp().EntityID}}})), nil)
 	if err == nil {
@@ -792,7 +807,7 @@ func TestSAMLResponseIsBoundToTheRowOfItsRoute(t *testing.T) {
 	if rec.Code == http.StatusOK || len(issuer.got) != 0 {
 		t.Fatalf("a response addressed to row A signed in through row B's route: %d %s %+v", rec.Code, rec.Body, issuer.got)
 	}
-	if _, err := b.svc.Consume(context.Background(), b.provider.ID, posted, nil); !errors.Is(err, saml.ErrConfig) {
+	if _, err := b.svc.Consume(context.Background(), b.provider.ID, posted, "", nil); !errors.Is(err, saml.ErrConfig) {
 		t.Fatalf("row B with an override naming row A: err = %v, want ErrConfig", err)
 	}
 	if _, err := a.consume(a.respond(resp{nameID: nid("user-1"), email: "a@example.com"}), nil); err != nil {
@@ -813,7 +828,7 @@ func TestSAMLPrefixedACSOverrideIsRefused(t *testing.T) {
 	}
 	posted := b64(h.idp.response(t, resp{nameID: nid("user-1"), email: "a@example.com", destination: strp(acs), recipient: strp(acs),
 		audiences: [][]string{{h.provider.SPEntityID(baseURL)}}}))
-	if _, err := h.svc.Consume(context.Background(), h.provider.ID, posted, nil); !errors.Is(err, saml.ErrConfig) {
+	if _, err := h.svc.Consume(context.Background(), h.provider.ID, posted, "", nil); !errors.Is(err, saml.ErrConfig) {
 		t.Fatalf("prefixed override: err = %v, want ErrConfig", err)
 	}
 }

@@ -55,11 +55,11 @@ func TestPlanRefusesAStateRowWithoutItsState(t *testing.T) {
 		t.Fatalf("states of another row: %v", err)
 	}
 	o.States = statesFor(t, "34")
-	for name, row := range map[string]string{
-		"in the path":  "47\tGET\t/api/v1/admin/integrations/{integration_id}\tA\tno\t-\t-\tmatch\t/api/v1/admin/integrations/{state}\t-\n",
-		"not a string": "34\tPOST\t/api/v1/admin/integrations/github/install-callback\tA\tno\tgithub\t-\tmatch\t/api/v1/admin/integrations/github/install-callback\t{\"s\":\"x{state}\"}\n",
+	for name, c := range map[string]struct{ row, want string }{
+		"in the path":  {"47\tGET\t/api/v1/admin/integrations/{integration_id}\tA\tno\t-\t-\tmatch\t/api/v1/admin/integrations/{state}\t-\n", "{state} may stand in the body only"},
+		"not a string": {"34\tPOST\t/api/v1/admin/integrations/github/install-callback\tA\tno\tgithub\t-\tmatch\t/api/v1/admin/integrations/github/install-callback\t{\"s\":\"x{state}\"}\n", ""},
 	} {
-		if _, err := MakePlan(mustRows(t, testRowsHeader+row), venue, o); err == nil || strings.Contains(err.Error(), "st-") {
+		if _, err := MakePlan(mustRows(t, testRowsHeader+c.row), venue, o); err == nil || strings.Contains(err.Error(), "st-") || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

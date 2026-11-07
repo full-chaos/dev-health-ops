@@ -74,10 +74,11 @@ func ReadPassword(path string) (string, error) {
 // Driver sends a plan's slots to the venue go-api, one at a time. Base is the raw origin; every request takes its origin
 // from CheckVenueBase(Base, Egress, RunID) (origin), so no request path has a check of its own.
 type Driver struct {
-	Base   string
-	Egress EgressRead
-	RunID  string
-	Client *http.Client
+	Base          string
+	AllowExternal []string
+	Egress        EgressRead
+	RunID         string
+	Client        *http.Client
 	// Gap is the wait after each answer; at least MinGap.
 	Gap time.Duration
 	// Frozen is the frozen throwaway ids: before any request, a slot that is destructive by its own flag or by its

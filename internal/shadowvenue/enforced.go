@@ -345,7 +345,7 @@ func ParseYardstick(raw []byte) ([]YardSlot, error) {
 // to the same reach rule, and gives a passing slot whose outside calls differ from its yardstick slot's
 // MISMATCH_OUTBOUND. Without external rows and without a yardstick outbound file there is nothing to compare.
 func judgeOutboundEnforced(report *Report, in EnforcedInput) outboundCheck {
-	check := checkOutbound(in.Slots, in.Outbound, in.Grace, nil)
+	check := checkOutbound(in.Slots, in.Outbound, in.Grace, []string{"before", "between", "after"})
 	external := map[string]bool{}
 	for _, s := range sentSlots(in.Slots) {
 		if ext := in.Outbound.Ext[s.Row]; ext != "" && ext != none {
@@ -372,6 +372,14 @@ func judgeOutboundEnforced(report *Report, in EnforcedInput) outboundCheck {
 	}
 	slices.Sort(rows)
 	for _, row := range rows {
+		if reason, ok := NoOutboundRows[keyOfYard(in.YardOutbound, row)]; ok {
+			for _, y := range in.YardOutbound {
+				if y.Row == row && y.Hits > 0 {
+					check.fails = append(check.fails, fmt.Sprintf("FAIL: row %s %s k=%d: %d outside calls in the yardstick, but the row is pinned NO_OUTBOUND (%s)", row, y.Caller, y.K, y.Hits, reason))
+				}
+			}
+			continue
+		}
 		allowed, reached := 0, 0
 		for _, y := range in.YardOutbound {
 			if y.Row != row || denied(y.Status) {
@@ -399,4 +407,14 @@ func judgeOutboundEnforced(report *Report, in EnforcedInput) outboundCheck {
 		}
 	}
 	return check
+}
+
+// keyOfYard is the route key of row in the yardstick outbound file, "" when the row is not in it.
+func keyOfYard(yard []OutboundSlot, row string) string {
+	for _, y := range yard {
+		if y.Row == row {
+			return y.Key
+		}
+	}
+	return ""
 }

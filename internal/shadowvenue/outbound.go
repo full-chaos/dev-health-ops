@@ -17,6 +17,14 @@ var StubServices = []string{"stripe", "pagerduty", "github", "mail"}
 // VerdictOutboundDiffers: the enforced slot made a different number of outside calls than the yardstick slot.
 const VerdictOutboundDiffers = "MISMATCH_OUTBOUND"
 
+// NoOutboundRows are the external rows that make no outside call on any path (acp, ADDENDUM-13267-1 Q-A2), by row key,
+// with the code-argued reason. They pass on status equality and on 0 stub hits in every slot of both runs; one hit fails
+// the row. The reason goes into the row table.
+var NoOutboundRows = map[string]string{
+	"POST /api/v1/admin/integrations/pagerduty/authorize": "builds the PagerDuty authorize URL only (internal/apiservice/admin/pagerduty_authorize.go:67-99)",
+	"POST /api/v1/admin/integrations/github/install-url":  "builds the GitHub App install URL only (internal/api/githubapp/routes.go:110-135)",
+}
+
 // StubHit is one request the venue stub served. The stub logs no header, body or query.
 type StubHit struct {
 	At                          time.Time
@@ -57,16 +65,13 @@ func ParseStubLog(raw []byte) ([]StubHit, error) {
 }
 
 // Outbound is a run's stub evidence. Logged reports whether the stub log was given (an empty log is a log); Ext maps
-// each row id to its ext column.
+// each row id to its ext column; Egress are the run's egress records (ParseEgress), in read order.
 type Outbound struct {
 	Logged bool
 	Hits   []StubHit
 	Ext    map[string]string
 	Egress []EgressRead
 }
-
-// NoOutboundRows: skeleton, none pinned yet.
-var NoOutboundRows = map[string]string{}
 
 // RowExt maps each row id of rows to its ext.
 func RowExt(rows []Row) map[string]string {
@@ -98,22 +103,28 @@ func denied(status int) bool { return status == 401 || status == 403 }
 type outboundCheck struct {
 	hits         map[int]int
 	voids, fails []string
-	// noReach are the external rows no allowed slot of which reached the stub.
-	noReach []string
+	// noReach are the external rows no allowed slot of which reached the stub; pinned the NO_OUTBOUND rows that ran.
+	noReach, pinned []string
 }
 
 // checkOutbound gives each stub hit to the sent slot whose window [start-skew, end+grace] holds it. Void: an external
-// row sent with no stub log, a hit in no window, a hit of a service the stub does not serve. Fail: a hit of a service
-// other than the slot row's ext, a denied slot (401/403) with a hit, an external row none of whose allowed slots (not
-// 401/403, at least one) reached the stub, or one with no allowed slot at all.
+// row sent with no stub log or without the egress records egressWant names (checkEgress), a hit in no window, a hit of
+// a service the stub does not serve. Fail: a hit of a service other than the slot row's ext, a denied slot (401/403)
+// with a hit, an external row none of whose allowed slots (not 401/403) reached the stub, or a NO_OUTBOUND row with a
+// hit.
 func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []string) outboundCheck {
 	out := outboundCheck{hits: map[int]int{}}
 	sent := sentSlots(slots)
 	external := map[string]bool{}
+	keyOf := map[string]string{}
 	for _, s := range sent {
 		if ext := ob.Ext[s.Row]; ext != "" && ext != none {
 			external[s.Row] = true
+			keyOf[s.Row] = s.Key()
 		}
+	}
+	if len(external) > 0 || len(ob.Egress) > 0 {
+		out.voids = append(out.voids, checkEgress(ob.Egress, egressWant)...)
 	}
 	if !ob.Logged {
 		if len(external) > 0 {
@@ -162,6 +173,15 @@ func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []
 	}
 	slices.Sort(rows)
 	for _, row := range rows {
+		if reason, ok := NoOutboundRows[keyOf[row]]; ok {
+			out.pinned = append(out.pinned, row)
+			for _, s := range sent {
+				if s.Row == row && out.hits[s.Seq] > 0 {
+					out.fails = append(out.fails, fmt.Sprintf("FAIL: slot %d row %s %s: %d outside calls, but the row is pinned NO_OUTBOUND (%s)", s.Seq, row, s.Caller, out.hits[s.Seq], reason))
+				}
+			}
+			continue
+		}
 		allowed, reached := 0, 0
 		for _, s := range sent {
 			if s.Row != row || denied(s.Status) {
@@ -180,12 +200,15 @@ func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []
 	return out
 }
 
-// markNoReach fails the rows of check.noReach in rows.
+// markNoReach fails the rows of check.noReach in rows and notes the reason of each NO_OUTBOUND row.
 func markNoReach(rows []RowVerdict, check outboundCheck) {
 	for i := range rows {
 		if slices.Contains(check.noReach, rows[i].Row) {
 			rows[i].Pass = false
 			rows[i].Notes = append(rows[i].Notes, "no allowed caller reached the stub")
+		}
+		if slices.Contains(check.pinned, rows[i].Row) {
+			rows[i].Notes = append(rows[i].Notes, "NO_OUTBOUND: "+NoOutboundRows[rows[i].Key])
 		}
 	}
 }

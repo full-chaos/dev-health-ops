@@ -2,10 +2,11 @@
 // go-api's log (internal/shadowvenue). It sends to a loopback origin only.
 //
 //	shadow-venue plan  -principals <tsv> [-rows <tsv>] [-profiles <json>] [-only-rows 1,22] [-k 3] [-allow-external a,b]
-//	                   [-destructive -throwaway-pool T1,T2,T3 -throwaway-ids <tsv>] [-throwaway-org T]
+//	                   [-destructive -throwaway-pool T1,T2,T3 -throwaway-ids <tsv>] [-throwaway-org T] [-states <tsv, 0600>]
 //	shadow-venue drive -base http://127.0.0.1:8093 -principals <tsv> -out <slots.tsv> [plan flags] [-gap 2.5s]
 //	shadow-venue judge -slots <slots.tsv> -log <go-api log> -out <table.tsv> [-k 3] [-grace 2.2s] [-rulings <tsv>]
-//	                   [-rows <tsv>] [-stub-log <jsonl>] [-outbound-out <tsv>]
+//	                   [-rows <tsv>] [-stub-log <jsonl>] [-outbound-out <tsv>] [-egress-before <txt> -egress-between <txt>]
+//	shadow-venue judge-enforced ... [-stub-log <jsonl> -yardstick-outbound <tsv>] [-egress-before -egress-between -egress-after]
 //
 // Exit: 0 every row passes (judge) or the step finished; 1 a row fails; 2 usage or input; 3 the run is void.
 package main
@@ -71,6 +72,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 	pool := fs.String("throwaway-pool", "", "comma-separated principals-file org labels, one per k: destructive slot k acts in the k-th (with -destructive)")
 	idsPath := fs.String("throwaway-ids", "", "frozen throwaway ids file (kind label uuid): no other id may be sent by a destructive slot (with -destructive)")
 	only := fs.String("only-rows", "", "comma-separated row ids the run sends; the controls always run")
+	statesPath := fs.String("states", "", "owner-only (0600) file of the minted single-use states, one per slot of a row whose body names {state}")
 	k := fs.Int("k", 3, "requests per cell")
 	allow := fs.String("allow-external", "", "comma-separated outside services a request may reach (stripe, pagerduty, github, mail)")
 	base := fs.String("base", "", "venue go-api origin, loopback only (drive)")
@@ -86,8 +88,13 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
+	states, err := readStates(*statesPath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
 	plan, venue, err := makePlan(*principals, *rowsPath, *profiles, shadowvenue.PlanOptions{Throwaway: *throwaway, Pool: list(*pool),
-		Frozen: frozen, OnlyRows: list(*only), AllowExternal: list(*allow), K: *k, Destructive: *destructive})
+		Frozen: frozen, States: states, OnlyRows: list(*only), AllowExternal: list(*allow), K: *k, Destructive: *destructive})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
@@ -194,6 +201,43 @@ func readFrozen(path string) (shadowvenue.ThrowawayIDs, error) {
 	return shadowvenue.ParseThrowawayIDs(raw)
 }
 
+// readStates reads the owner-only states file; "" gives none. No state value reaches an error.
+func readStates(path string) (shadowvenue.States, error) {
+	if path == "" {
+		return shadowvenue.States{}, nil
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return shadowvenue.States{}, fmt.Errorf("-states: %w", errors.Unwrap(err))
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return shadowvenue.States{}, fmt.Errorf("-states %s: want an owner-only (0600) regular file", path)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return shadowvenue.States{}, fmt.Errorf("-states %s: unreadable", path)
+	}
+	return shadowvenue.ParseStates(raw)
+}
+
+// readEgress reads the egress records named by paths, in order; "" is a read not given. An unreadable file is a
+// record with its error: the judge voids on it.
+func readEgress(paths ...string) []shadowvenue.EgressRead {
+	var out []shadowvenue.EgressRead
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			out = append(out, shadowvenue.EgressRead{Name: path, Err: errors.New("unreadable")})
+			continue
+		}
+		out = append(out, shadowvenue.ParseEgress(path, raw))
+	}
+	return out
+}
+
 // readRows reads a row table; "" is the embedded one.
 func readRows(path string) ([]shadowvenue.Row, error) {
 	raw := shadowvenue.DefaultRows
@@ -271,6 +315,8 @@ func judge(args []string, stdout, stderr io.Writer) int {
 	rowsPath := fs.String("rows", "", "row table of the drive (its ext column); empty = the embedded one")
 	stubLog := fs.String("stub-log", "", "venue stub JSON-lines log over the run (required when an external row was sent)")
 	outboundOut := fs.String("outbound-out", "", "per-slot outside-call counts file to create, 0600 (the yardstick of a later enforced run)")
+	egressBefore := fs.String("egress-before", "", "egress record read before the yardstick run")
+	egressBetween := fs.String("egress-between", "", "egress record read after the yardstick run, before the enforced run")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -339,6 +385,7 @@ func judge(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
+	outbound.Egress = readEgress(*egressBefore, *egressBetween)
 	report := shadowvenue.Judge(slots, ev, rulings, shadowvenue.JudgeOptions{K: *k, Grace: *grace, NoOrg: noOrg, Outbound: outbound})
 	file, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -432,6 +479,9 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 	rowsPath := fs.String("rows", "", "row table of the drive (its ext column); empty = the embedded one")
 	stubLog := fs.String("stub-log", "", "venue stub JSON-lines log over this run (required when an external row was sent)")
 	yardOutbound := fs.String("yardstick-outbound", "", "outbound file of the yardstick run (judge -outbound-out; required when an external row was sent)")
+	egressBefore := fs.String("egress-before", "", "egress record read before the yardstick run")
+	egressBetween := fs.String("egress-between", "", "egress record read between the two runs")
+	egressAfter := fs.String("egress-after", "", "egress record read after this run")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -487,6 +537,7 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
+	outbound.Egress = readEgress(*egressBefore, *egressBetween, *egressAfter)
 	var yardOut []shadowvenue.OutboundSlot
 	if *yardOutbound != "" {
 		raw, err := os.ReadFile(*yardOutbound)

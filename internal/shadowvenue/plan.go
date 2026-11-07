@@ -137,7 +137,8 @@ var anyUUID = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[
 // Frozen the throwaway ids (ParseThrowawayIDs) frozen before the run: every pool org and its principals must be in it,
 // no other org or principal may be, and every UUID a destructive slot sends must be in it. OnlyRows, when set, names
 // the rows the run sends (the controls always run); AllowExternal the outside services a request may reach; K the
-// requests per cell; Destructive sends the destructive rows, which are gaps without it.
+// requests per cell; Destructive sends the destructive rows, which are gaps without it. States holds the minted
+// single-use state of each slot of a row whose body names {state}.
 type PlanOptions struct {
 	Throwaway     string
 	Pool          []string
@@ -222,6 +223,9 @@ func MakePlan(rows []Row, v Venue, o PlanOptions) (Plan, error) {
 			for i := 1; i <= o.K; i++ {
 				slot := base
 				slot.K = i
+				if slot.Body, err = o.States.fill(body, row.ID, cell.caller, i); err != nil {
+					return Plan{}, err
+				}
 				add(slot)
 			}
 		}
@@ -375,6 +379,9 @@ func (v Venue) resolveRow(row Row, org string) (path, body string, err error) {
 	if path, err = v.resolve(row, org, row.Path); err != nil {
 		return "", "", err
 	}
+	if strings.Contains(path, statePlaceholder) {
+		return "", "", fmt.Errorf("plan: row %s: {state} may stand in the body only", row.ID)
+	}
 	if !pathFits(row.Route, path) {
 		return "", "", fmt.Errorf("plan: row %s: path %q does not fit route %q", row.ID, path, row.Route)
 	}
@@ -391,7 +398,7 @@ func (v Venue) resolveRow(row Row, org string) (path, body string, err error) {
 }
 
 // resolve fills the placeholders of text: {org} (org), {org:<label>}, {owner} (the one owner of org),
-// {user:<principal>}, {uuid:<seed kind>}, {name:<seed kind>} and {missing}.
+// {user:<principal>}, {uuid:<seed kind>}, {name:<seed kind>} and {missing}; {state} stays for the slot (States.fill).
 func (v Venue) resolve(row Row, org, text string) (string, error) {
 	var failure error
 	out := placeholder.ReplaceAllStringFunc(text, func(match string) string {
@@ -445,6 +452,8 @@ func (v Venue) value(org, name, arg string) (string, error) {
 		return "", errors.New("no seed of that kind with a name")
 	case name == "missing" && arg == "":
 		return MissingID, nil
+	case name == "state" && arg == "":
+		return statePlaceholder, nil
 	}
 	return "", errors.New("unknown placeholder")
 }

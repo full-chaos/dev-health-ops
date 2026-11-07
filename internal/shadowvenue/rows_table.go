@@ -6,7 +6,8 @@ var DefaultRows = []byte(`# The venue driver's row table: one go-api shadow row 
 # Columns: row method route org destructive ext principal expect path body. org = a principals-file org label, or T on
 # a destructive row: the throwaway pool, one fresh pool org per k (-throwaway-pool). Placeholders in path and body:
 # {org} {org:<label>} {owner} {user:<principal>} {uuid:<kind>} {name:<kind>} {missing}; a destructive row may use only
-# {org}, {owner} and {missing}.
+# {org}, {owner} and {missing}. {state} (a body string value only) is the slot's minted single-use state (-states).
+# The external rows (ext != -) act in org E, the seeded org of the external evidence (ADDENDUM-13267-1 section 5).
 # ext names the outside service a legacy-allowed request can reach; the driver sends it only with -allow-external <ext>.
 row	method	route	org	destructive	ext	principal	expect	path	body
 C1	GET	/api/v1/admin/teams	A	no	-	drift-S	mismatch	/api/v1/admin/teams	-
@@ -32,31 +33,31 @@ C2	GET	/api/v1/admin/integrations	A	no	-	drift-S	mismatch	/api/v1/admin/integrat
 19	PATCH	/api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}	A	no	-	-	match	/api/v1/admin/orgs/{org}/feature-overrides/{uuid:feature_override}	{}
 20	GET	/api/v1/admin/platform/audit-logs	A	no	-	-	match	/api/v1/admin/platform/audit-logs	-
 21	GET	/api/v1/admin/platform/stats	A	no	-	-	match	/api/v1/admin/platform/stats	-
-22	POST	/api/v1/billing/plans/pull-stripe	A	no	stripe	-	match	/api/v1/billing/plans/pull-stripe	-
+22	POST	/api/v1/billing/plans/pull-stripe	E	no	stripe	-	match	/api/v1/billing/plans/pull-stripe	-
 23	GET	/api/v1/billing/invoices	A	no	-	-	match	/api/v1/billing/invoices	-
 24	GET	/api/v1/billing/invoices/{invoice_id}	A	no	-	-	match	/api/v1/billing/invoices/{missing}	-
-25	POST	/api/v1/billing/invoices/{invoice_id}/void	A	no	stripe	-	match	/api/v1/billing/invoices/{missing}/void	-
+25	POST	/api/v1/billing/invoices/{invoice_id}/void	E	no	stripe	-	match	/api/v1/billing/invoices/{uuid:invoice_open}/void	-
 26	GET	/api/v1/billing/subscriptions	A	no	-	-	match	/api/v1/billing/subscriptions	-
-27	POST	/api/v1/billing/subscriptions/cancel	A	no	stripe	-	match	/api/v1/billing/subscriptions/cancel	{}
-28	POST	/api/v1/billing/subscriptions/change-plan	A	no	stripe	-	match	/api/v1/billing/subscriptions/change-plan	{}
+27	POST	/api/v1/billing/subscriptions/cancel	E	no	stripe	-	match	/api/v1/billing/subscriptions/cancel	{}
+28	POST	/api/v1/billing/subscriptions/change-plan	E	no	stripe	-	match	/api/v1/billing/subscriptions/change-plan	{"price_id":"price_venue_stub"}
 29	GET	/api/v1/billing/subscriptions/history	A	no	-	-	match	/api/v1/billing/subscriptions/history	-
 30	GET	/api/v1/billing/subscriptions/list	A	no	-	-	match	/api/v1/billing/subscriptions/list	-
-31	POST	/api/v1/billing/subscriptions/reactivate	A	no	stripe	-	match	/api/v1/billing/subscriptions/reactivate	{}
+31	POST	/api/v1/billing/subscriptions/reactivate	E	no	stripe	-	match	/api/v1/billing/subscriptions/reactivate	{}
 32	GET	/api/v1/admin/integrations	A	no	-	-	match	/api/v1/admin/integrations	-
 33	POST	/api/v1/admin/integrations	A	no	-	-	match	/api/v1/admin/integrations	{}
-34	POST	/api/v1/admin/integrations/github/install-callback	A	no	github	-	match	/api/v1/admin/integrations/github/install-callback	{}
-35	POST	/api/v1/admin/integrations/pagerduty/api-token	A	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/api-token	{}
-36	POST	/api/v1/admin/integrations/pagerduty/authorize	A	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/authorize	{}
-37	POST	/api/v1/admin/integrations/pagerduty/callback	A	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/callback	{}
-38	POST	/api/v1/admin/integrations/pagerduty/client-credentials	A	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/client-credentials	{}
+34	POST	/api/v1/admin/integrations/github/install-callback	E	no	github	-	match	/api/v1/admin/integrations/github/install-callback	{"installation_id":1,"state":"{state}","code":"venue-stub-code"}
+35	POST	/api/v1/admin/integrations/pagerduty/api-token	E	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/api-token	{"subdomain":"venue-stub","api_token":"venue-stub-api-token"}
+36	POST	/api/v1/admin/integrations/pagerduty/authorize	E	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/authorize	{}
+37	POST	/api/v1/admin/integrations/pagerduty/callback	E	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/callback	{"state":"{state}","code":"venue-stub-code"}
+38	POST	/api/v1/admin/integrations/pagerduty/client-credentials	E	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/client-credentials	{"subdomain":"venue-stub","client_id":"venue-stub-client","client_secret":"venue-stub-client-secret"}
 39	POST	/api/v1/admin/integrations/pagerduty/disconnect	A	no	-	-	match	/api/v1/admin/integrations/pagerduty/disconnect	{}
-40	GET	/api/v1/admin/integrations/pagerduty/services	A	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/services	-
+40	GET	/api/v1/admin/integrations/pagerduty/services	E	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/services	-
 41	GET	/api/v1/admin/integrations/pagerduty/status	A	no	-	-	match	/api/v1/admin/integrations/pagerduty/status	-
-42	POST	/api/v1/admin/integrations/pagerduty/webhook-bindings	A	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/webhook-bindings	{}
+42	POST	/api/v1/admin/integrations/pagerduty/webhook-bindings	E	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/webhook-bindings	{}
 43	GET	/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}	A	no	-	-	match	/api/v1/admin/integrations/pagerduty/webhook-bindings/{missing}	-
-44	POST	/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate	A	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/webhook-bindings/{missing}/activate	{}
-45	POST	/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/revoke	A	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/webhook-bindings/{missing}/revoke	{}
-46	POST	/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/rotate	A	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/webhook-bindings/{missing}/rotate	{}
+44	POST	/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate	E	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/webhook-bindings/{missing}/activate	{}
+45	POST	/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/revoke	E	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/webhook-bindings/{missing}/revoke	{}
+46	POST	/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/rotate	E	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/webhook-bindings/{missing}/rotate	{}
 47	GET	/api/v1/admin/integrations/{integration_id}	A	no	-	-	match	/api/v1/admin/integrations/{uuid:integration}	-
 48	PATCH	/api/v1/admin/integrations/{integration_id}	A	no	-	-	match	/api/v1/admin/integrations/{uuid:integration}	{}
 49	GET	/api/v1/admin/integrations/{integration_id}/datasets	A	no	-	-	match	/api/v1/admin/integrations/{uuid:integration}/datasets	-
@@ -91,8 +92,8 @@ C2	GET	/api/v1/admin/integrations	A	no	-	drift-S	mismatch	/api/v1/admin/integrat
 78	GET	/api/v1/admin/teams/{team_id}/infer-members	A	no	-	-	match	/api/v1/admin/teams/{missing}/infer-members	-
 79	PATCH	/api/v1/admin/sync-configs/{config_id}	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}	{}
 80	POST	/api/v1/admin/impersonate/handoff/consume	C	no	-	-	match	/api/v1/admin/impersonate/handoff/consume	{}
-81	POST	/api/v1/admin/integrations/github/install-url	A	no	github	-	match	/api/v1/admin/integrations/github/install-url	{}
-82	POST	/api/v1/admin/integrations/pagerduty/preflight	A	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/preflight	{}
+81	POST	/api/v1/admin/integrations/github/install-url	E	no	github	-	match	/api/v1/admin/integrations/github/install-url	{}
+82	POST	/api/v1/admin/integrations/pagerduty/preflight	E	no	pagerduty	-	match	/api/v1/admin/integrations/pagerduty/preflight	{}
 83	POST	/api/v1/admin/integrations/{integration_id}/backfill	A	no	-	-	match	/api/v1/admin/integrations/{missing}/backfill	{}
 84	POST	/api/v1/admin/integrations/{integration_id}/discover	A	no	-	-	match	/api/v1/admin/integrations/{missing}/discover	{}
 85	POST	/api/v1/admin/integrations/{integration_id}/sync	A	no	-	-	match	/api/v1/admin/integrations/{missing}/sync	{}

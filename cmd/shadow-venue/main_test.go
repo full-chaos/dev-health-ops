@@ -215,3 +215,23 @@ func TestDriveLoginOnlySendsOnlySignIns(t *testing.T) {
 		}
 	}
 }
+
+// -states is an owner-only file: a group- or world-readable one is refused before any plan.
+func TestPlanRefusesAStatesFileOthersCanRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "states.tsv")
+	if err := os.WriteFile(path, []byte("row\tcaller\tk\tstate\n34\tadmin\t1\tst-a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"plan", "-principals", principalsFile(t), "-states", path}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "owner-only") {
+		t.Fatalf("a 0644 states file: code %d, stderr %q", code, errOut.String())
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	errOut.Reset()
+	if code := run(context.Background(), []string{"plan", "-principals", principalsFile(t), "-states", path}, &out, &errOut); code != exitOK || strings.Contains(errOut.String()+out.String(), "st-a") {
+		t.Fatalf("a 0600 states file: code %d, stderr %q", code, errOut.String())
+	}
+}

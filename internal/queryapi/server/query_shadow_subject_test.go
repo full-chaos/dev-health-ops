@@ -36,25 +36,29 @@ func TestQueryHandsTheOperationItsBearer(t *testing.T) {
 	// Served through a mux: a routed token is judged by the row of the pattern the mux recorded.
 	routes := http.NewServeMux()
 	routes.Handle("/query", newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, newQueryAPIUserStoreFrom(store), "", nil))
-	handler := routes.ServeHTTP
+	routed := routes.ServeHTTP
+	// No row lists the HS256 class, so that token reaches /query only on an authenticator that does not route by row.
+	edgeStore := ecMemberStore()
+	unrouted := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, ecEdgeAuth(t, edgeStore), edgeStore, "", nil)
 
 	user := m.mint(ecUser, nil, nil)
 	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
 	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: "org-env", Role: "member"})
 	cells := []struct {
-		name   string
-		carry  func(*http.Request)
-		want   graph.ShadowSubject
-		wantOK bool
+		name    string
+		handler http.HandlerFunc
+		carry   func(*http.Request)
+		want    graph.ShadowSubject
+		wantOK  bool
 	}{
-		{"user access token", irBearer(user), graph.ShadowSubject{Bearer: user, UserAccessToken: true, SkipReason: policy.ShadowReasonNone}, true},
-		{"edge token", irBearer(edge), graph.ShadowSubject{Bearer: edge, SkipReason: policy.ShadowReasonHS256}, true},
-		{"envelope", irBearer(envelope), graph.ShadowSubject{Bearer: envelope, SkipReason: policy.ShadowReasonEnvelope}, true},
-		{"headers", iaHeaders("org-hdr", "member", false, false), graph.ShadowSubject{}, false},
+		{"user access token", routed, irBearer(user), graph.ShadowSubject{Bearer: user, UserAccessToken: true, SkipReason: policy.ShadowReasonNone}, true},
+		{"edge token", unrouted, irBearer(edge), graph.ShadowSubject{Bearer: edge, SkipReason: policy.ShadowReasonHS256}, true},
+		{"envelope", routed, irBearer(envelope), graph.ShadowSubject{Bearer: envelope, SkipReason: policy.ShadowReasonEnvelope}, true},
+		{"headers", routed, iaHeaders("org-hdr", "member", false, false), graph.ShadowSubject{}, false},
 	}
 	for _, cell := range cells {
 		got = nil
-		if code := iaPost(t, handler, cell.carry); code != http.StatusOK || len(got) != 1 {
+		if code := iaPost(t, cell.handler, cell.carry); code != http.StatusOK || len(got) != 1 {
 			t.Errorf("%s: %d, ran %d times, want 200 once", cell.name, code, len(got))
 			continue
 		}

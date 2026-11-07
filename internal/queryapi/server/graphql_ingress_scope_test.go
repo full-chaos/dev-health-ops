@@ -142,8 +142,10 @@ func TestIngressScopeHelpersScopeTheClaimsOwnOrg(t *testing.T) {
 	if got := legacyClaims("org-2"); got != (authctx.Claims{OrgID: "org-2", Scope: pepgate.Legacy("org-2")}) {
 		t.Errorf("legacyClaims = %+v", got)
 	}
-	if got := withLegacyScope(authctx.Claims{}); got.Scope.Kind() != pepgate.KindNone {
-		t.Errorf("no org: scope kind %d, want none", got.Scope.Kind())
+	// A platform admin with no org keeps today's path (product rule 1): a Legacy scope that reads the empty org.
+	got := withLegacyScope(authctx.Claims{})
+	if org, ok := got.Scope.OrgID(); got.Scope.Kind() != pepgate.KindLegacy || !ok || org != "" {
+		t.Errorf("no org: scope kind %d org %q ok %v, want the legacy scope of the empty org", got.Scope.Kind(), org, ok)
 	}
 }
 

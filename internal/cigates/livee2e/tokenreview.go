@@ -33,6 +33,8 @@ type TokenReviewConfig struct {
 	Namespace      string
 	ServiceAccount string
 	UID            string
+	// Now is the clock of each review; nil is time.Now.
+	Now func() time.Time
 }
 
 // NewSubjectJWS returns a three-segment token with an exp claim. Its signature is not checked by anything: the fake

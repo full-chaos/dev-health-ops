@@ -110,6 +110,43 @@ func TestTokenReviewFakeAuthenticatesOnlyTheWrittenSubject(t *testing.T) {
 	}
 }
 
+// The written subject is authenticated only before its exp, as a real TokenReview refuses an expired token. The clock is
+// injected: no wall time is measured.
+func TestTokenReviewFakeRefusesTheWrittenSubjectAfterItsExp(t *testing.T) {
+	issued := time.Unix(1_800_000_000, 0).UTC()
+	subject, err := NewSubjectJWS(issued, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clock time.Time
+	cfg := testConfig(subject)
+	cfg.Now = func() time.Time { return clock }
+	h := TokenReviewHandler(cfg)
+	for _, tc := range []struct {
+		name string
+		at   time.Time
+		want bool
+	}{
+		{"before exp", issued.Add(59 * time.Minute), true},
+		{"at exp", issued.Add(time.Hour), false},
+		{"after exp", issued.Add(2 * time.Hour), false},
+	} {
+		clock = tc.at
+		rec := post(t, h, testReviewer, subject, []string{testAudience})
+		var out struct {
+			Status struct {
+				Authenticated bool `json:"authenticated"`
+			} `json:"status"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || rec.Code != http.StatusCreated {
+			t.Fatalf("%s: status %d, body %q", tc.name, rec.Code, rec.Body.String())
+		}
+		if out.Status.Authenticated != tc.want {
+			t.Errorf("FAIL: %s: authenticated = %t, want %t", tc.name, out.Status.Authenticated, tc.want)
+		}
+	}
+}
+
 // The real validator of auth-service (dev-health-go authverify) accepts the fake's answer for the written subject and refuses another token.
 func TestTokenReviewFakeSatisfiesTheRealValidator(t *testing.T) {
 	now := time.Now().UTC()

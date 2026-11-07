@@ -14,7 +14,7 @@ import (
 // policy.AdminOrg profile rows. The catalog flag must name exactly these.
 var platformAdminActions = []string{
 	"billing.manage", "integrations.read", "integrations.write", "members.invite", "members.manage",
-	"members.read", "settings.write", "teams.write",
+	"settings.write", "teams.write",
 }
 
 func flaggedActions(t *testing.T) []string {
@@ -89,14 +89,10 @@ func TestPlatformAdminCellsOverTheFlaggedActions(t *testing.T) {
 				}
 			}
 		}
-		// members.read is a member action: a member is allowed them by role, with or
-		// without platform_owner; every other flagged action is refused to a member without admin.orgs.
-		memberHolds := policycatalog.Default().Allows("member", a)
+		// A flagged action is an admin-level action: a member without admin.orgs is refused it.
 		for _, platform := range []string{"platform_owner", ""} {
 			d := e.Evaluate(req, platformAdminSnapshot(platform, "member", StatusActive))
-			if memberHolds {
-				wantOwnerShapeAllow(t, a+" "+platform+" + member (member role)", d, ReasonAllowedByRole)
-			} else if d.Allowed || d.Reason != ReasonRoleLacksAction {
+			if d.Allowed || d.Reason != ReasonRoleLacksAction {
 				t.Errorf("%s %q + member: %+v, want deny role_lacks_action", a, platform, d)
 			}
 		}

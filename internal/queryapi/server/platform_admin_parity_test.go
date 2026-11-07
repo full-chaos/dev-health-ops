@@ -33,11 +33,17 @@ type paSnap struct {
 	platformRole string
 	members      map[string]string
 	del          *authorization.Delegation
+	suspended    bool
 }
 
-func (s paSnap) PrincipalStatus() authorization.Status          { return authorization.StatusActive }
-func (s paSnap) PlatformRole() string                           { return s.platformRole }
-func (s paSnap) OrganizationStatus(string) authorization.Status { return authorization.StatusActive }
+func (s paSnap) PrincipalStatus() authorization.Status { return authorization.StatusActive }
+func (s paSnap) PlatformRole() string                  { return s.platformRole }
+func (s paSnap) OrganizationStatus(string) authorization.Status {
+	if s.suspended {
+		return authorization.StatusSuspended
+	}
+	return authorization.StatusActive
+}
 func (s paSnap) Membership(org string) (authorization.Membership, bool) {
 	role, ok := s.members[org]
 	if !ok {
@@ -160,8 +166,10 @@ func (p *paPDP) take() []string {
 var paRows = []string{"/api/v1/home", "/api/v1/flame", "/api/v1/drilldown/prs", "/api/v1/drilldown/issues"}
 
 // paHandler is the routed REST authentication (authenticateRESTRequest, the edge verifier routed by row) in front of
-// each row, behind the plane handler carrying gate. The handler past authentication is a
-// stub: it echoes the organization and the scope kind the request may serve (no ClickHouse read).
+// each row, behind the plane handler carrying gate. The handler past authentication is a stub: it echoes the
+// organization and the scope the request may serve, its organization and repository ceiling (no ClickHouse read). The
+// scope kind is left out: an enforced allow is KindOrganization where legacy is KindLegacy, and both serve every
+// repository of the organization.
 func paHandler(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.Gate) http.Handler {
 	t.Helper()
 	verifier, _ := iaVerifier(t)
@@ -182,7 +190,9 @@ func paHandler(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.Gate
 			}
 			r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 			org, has := claims.Scope.OrgID()
-			_, _ = fmt.Fprintf(w, `{"org":%q,"scope_kind":%d,"scope_org":%q,"scope_has_org":%v}`, claims.OrgID, claims.Scope.Kind(), org, has)
+			keys, _ := json.Marshal(claims.Scope.RepoKeys())
+			_, _ = fmt.Fprintf(w, `{"org":%q,"scope_org":%q,"scope_has_org":%v,"restricted":%v,"repo_keys":%s}`, claims.OrgID, org, has,
+				claims.Scope.Restricted(), keys)
 		})
 	}
 	return planeHandler(mux, gate)
@@ -206,7 +216,7 @@ func paGate(t *testing.T, mode, cells string, p *paPDP) *pdp.Gate {
 // Product rule 1 (D6773), CHAOS-13209 B3: a superuser with no membership row gets, with the analytics, metrics, git
 // and work_items cells on, the answer the same token gets with the cells off, on one real REST row per action.
 // No-org EdDSA was 503 with no PDP call (legacy 200). The org claim with no row passes the routed authenticator since
-// CHAOS-13206; the PDP must then give the legacy 200, which needs CHAOS-13240 (those subcases skip until it lands).
+// CHAOS-13206, and the PDP gives the legacy 200 since CHAOS-13240, in a suspended organization too.
 func TestPlatformAdminNoMembershipQueryAPIAnswersEqualLegacy(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
@@ -235,9 +245,6 @@ func TestPlatformAdminNoMembershipQueryAPIAnswersEqualLegacy(t *testing.T) {
 		p.register(token, label, su0)
 		for _, row := range paRows {
 			t.Run(label+" GET "+row, func(t *testing.T) {
-				if label == "EdDSA org claim, no row" {
-					t.Skip("CHAOS-13240, rule 1: enforced path answers 403 no_membership")
-				}
 				serve := func(h http.Handler) (int, string) {
 					req := httptest.NewRequest(http.MethodGet, row, nil)
 					req.Header.Set("Authorization", "Bearer "+token)
@@ -250,10 +257,14 @@ func TestPlatformAdminNoMembershipQueryAPIAnswersEqualLegacy(t *testing.T) {
 				if label == "EdDSA org claim, no row" && wantStatus != http.StatusOK {
 					t.Fatalf("legacy %d %s, want 200 (a platform admin with no membership row reads its org claim)", wantStatus, wantBody)
 				}
-				gotStatus, gotBody := serve(enforced)
-				calls := p.take()
-				if gotStatus != wantStatus || gotBody != wantBody {
-					t.Errorf("enforced %d %s (PDP %v), want the legacy %d %s", gotStatus, gotBody, calls, wantStatus, wantBody)
+				for _, suspended := range []bool{false, true} {
+					p.register(token, label, paSnap{platformRole: su0.platformRole, members: su0.members, suspended: suspended})
+					gotStatus, gotBody := serve(enforced)
+					calls := p.take()
+					if gotStatus != wantStatus || gotBody != wantBody {
+						t.Errorf("suspended org %v: enforced %d %s (PDP %v), want the legacy %d %s", suspended, gotStatus, gotBody, calls,
+							wantStatus, wantBody)
+					}
 				}
 			})
 		}

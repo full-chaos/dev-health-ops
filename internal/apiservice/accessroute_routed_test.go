@@ -308,8 +308,9 @@ func TestIssuerSetUserTokenPath(t *testing.T) {
 		}},
 		{name: "member role at an admin route", path: probeAdmin, token: minter.mint(probeMember, map[string]any{"sid": sessionid.Wire(memberSID)}), status: http.StatusForbidden},
 		{name: "org claim without a membership", path: probeAuthenticated, token: user(map[string]any{"org_id": probeTargetOrg.String()}), status: http.StatusUnauthorized},
+		// Product rule 1 (D6773): the HS256 path gave an org-less caller role "member" (go-api login, userFromClaims).
 		{name: "no org claim at an orgless route", path: probeAuthenticated, token: user(map[string]any{"org_id": nil}), status: http.StatusOK, check: func(t *testing.T, body map[string]any) {
-			if u := userWith(body); u["org_id"] != "" || u["role"] != "" || body["org"] != "" {
+			if u := userWith(body); u["org_id"] != "" || u["role"] != "member" || body["org"] != "" {
 				t.Errorf("identity %v", body)
 			}
 		}},

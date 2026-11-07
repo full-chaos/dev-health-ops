@@ -71,8 +71,13 @@ func TestValidateRouteIsNotMountedWithoutLegacyKey(t *testing.T) {
 				t.Fatalf("eddsa=%v: the validate route is mounted without a legacy key", eddsa)
 			}
 		}
-		if !strings.Contains(f.logs.String(), "auth validate route not mounted: no legacy key") {
-			t.Fatalf("eddsa=%v: no not-mounted line: %s", eddsa, f.logs)
+		// Without the access-token verifier the issuer check refuses the mount first; with it, the legacy key check.
+		line := "auth validate route not mounted: no legacy key"
+		if !eddsa {
+			line = "auth validate route not mounted: AUTH_TOKEN_ISSUER_URL is unset (no access-token verifier)"
+		}
+		if !strings.Contains(f.logs.String(), line) {
+			t.Fatalf("eddsa=%v: no not-mounted line %q: %s", eddsa, line, f.logs)
 		}
 	}
 }

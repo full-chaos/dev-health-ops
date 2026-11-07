@@ -369,8 +369,14 @@ func TestNoOutboundRowPassesWithoutAHitAndFailsOnOne(t *testing.T) {
 	if hit := run(true); hit.Void || hit.Pass || !strings.Contains(strings.Join(hit.Reasons, "\n"), "pinned NO_OUTBOUND") {
 		t.Fatalf("one hit: void %v pass %v: %v", hit.Void, hit.Pass, hit.Reasons)
 	}
-	if _, ok := NoOutboundRows["POST /api/v1/admin/integrations/pagerduty/authorize"]; !ok || len(NoOutboundRows) != 2 {
-		t.Fatalf("pinned rows %v, want rows 36 and 81 only (acp Q-A2)", NoOutboundRows)
+	var pinned []string
+	for _, row := range mustRows(t, string(DefaultRows)) {
+		if _, ok := NoOutboundRows[row.Key()]; ok {
+			pinned = append(pinned, row.ID)
+		}
+	}
+	if strings.Join(pinned, ",") != "36,42,44,45,46,81,82" || len(NoOutboundRows) != 7 {
+		t.Fatalf("pinned rows %v of %d, want 36,42,44,45,46,81,82 (acp)", pinned, len(NoOutboundRows))
 	}
 }
 
@@ -419,5 +425,103 @@ func TestEnforcedNoOutboundRowFailsOnAHitInEitherRun(t *testing.T) {
 	runHit.in.Outbound.Hits = []StubHit{{At: last.Start.Add(time.Millisecond), Service: "github", Method: "POST", Host: "api.github.com", Path: "/x"}}
 	if rep := runHit.judge(); rep.Pass || !strings.Contains(strings.Join(rep.Reasons, "\n"), "but the row is pinned NO_OUTBOUND") {
 		t.Errorf("an enforced hit: pass %v: %v", rep.Pass, rep.Reasons)
+	}
+}
+
+// A NO_OUTBOUND row is evidence only when the decision point ran: in each run some caller gets past it in every slot and
+// no caller gets two classes of answer; else the row fails (VOID), in the judge, in the enforced run and in the
+// yardstick file.
+func TestNoOutboundRowNeedsACallerPastTheDecision(t *testing.T) {
+	const route = "/api/v1/admin/integrations/pagerduty/webhook-bindings"
+	slotsWith := func(status func(caller string, k int) int) ([]Slot, []string) {
+		slots, lines := controlsOK()
+		seq := len(slots) + 1
+		for _, caller := range callerOrder {
+			for k := 1; k <= 3; k++ {
+				s := slotAt(seq, "42", caller, k)
+				s.Method, s.Route, s.Path, s.Status = "POST", route, route, status(caller, k)
+				slots = append(slots, s)
+				lines = append(lines, result(s, 500*time.Millisecond, "match", "dec_"+strings.Repeat(string(rune('a'+seq)), 24)))
+				seq++
+			}
+		}
+		return slots, lines
+	}
+	judgeIt := func(status func(string, int) int) Report {
+		slots, lines := slotsWith(status)
+		ev, _ := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+		ext := map[string]string{"C1": none, "C2": none, "42": "pagerduty"}
+		return Judge(slots, ev, nil, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond, Outbound: Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between")}})
+	}
+	legacy := func(caller string, _ int) int {
+		if caller == "member" {
+			return 403
+		}
+		return 422
+	}
+	if r := judgeIt(legacy); r.Void || !r.Pass {
+		t.Fatalf("member refused, admin and superuser 422: void %v pass %v: %v", r.Void, r.Pass, r.Reasons)
+	}
+	cases := map[string]struct {
+		status func(string, int) int
+		want   string
+	}{
+		"no caller past the decision": {func(string, int) int { return 403 }, "no caller got past the decision"},
+		"a caller with two answers": {func(caller string, k int) int {
+			if caller == "admin" && k == 2 {
+				return 403
+			}
+			return legacy(caller, k)
+		}, "one class of answer per caller"},
+	}
+	for name, c := range cases {
+		r := judgeIt(c.status)
+		if r.Pass || !strings.Contains(strings.Join(r.Reasons, "\n"), c.want) {
+			t.Errorf("judge, %s: pass %v: %v", name, r.Pass, r.Reasons)
+		}
+		for _, rv := range r.Rows {
+			if rv.Row == "42" && rv.Pass {
+				t.Errorf("judge, %s: row 42 passes in the table", name)
+			}
+		}
+	}
+	enforced := func(yardStatus, runStatus func(string, int) int) Report {
+		r := newEnfRun()
+		seq := len(r.in.Slots) + 1
+		for _, caller := range callerOrder {
+			for k := 1; k <= 3; k++ {
+				start := enfT0.Add(time.Duration(seq-1) * 3 * time.Second)
+				r.in.Slots = append(r.in.Slots, Slot{Seq: seq, Row: "42", Caller: caller, Principal: caller, Expect: "match", K: k, Method: "POST",
+					Route: route, Path: route, Start: start, End: start.Add(100 * time.Millisecond), Status: runStatus(caller, k)})
+				r.in.Yard = append(r.in.Yard, YardSlot{Row: "42", Caller: caller, K: k, Key: "POST " + route, Status: yardStatus(caller, k), Verdict: VerdictMatch})
+				seq++
+			}
+		}
+		for i, s := range r.in.Slots {
+			status := s.Status
+			if s.Row == "42" {
+				status = r.in.Yard[i].Status
+			}
+			r.in.YardOutbound = append(r.in.YardOutbound, OutboundSlot{Row: s.Row, Caller: s.Caller, K: s.K, Key: s.Key(), Status: status})
+		}
+		r.in.Namespaces["POST "+route] = "integrations"
+		r.in.Grace = 2200 * time.Millisecond
+		r.in.YardOutboundGiven = true
+		ext := map[string]string{"42": "pagerduty"}
+		for _, s := range r.in.Slots {
+			if ext[s.Row] == "" {
+				ext[s.Row] = none
+			}
+		}
+		r.in.Outbound = Outbound{Logged: true, Ext: ext, Egress: egressReads("before", "between", "after")}
+		return r.judge()
+	}
+	if rep := enforced(legacy, legacy); rep.Void || !rep.Pass {
+		t.Fatalf("enforced, legacy statuses: void %v pass %v: %v", rep.Void, rep.Pass, rep.Reasons)
+	}
+	refused := func(string, int) int { return 403 }
+	if rep := enforced(refused, refused); rep.Pass || !strings.Contains(strings.Join(rep.Reasons, "\n"), "in the yardstick no caller got past") ||
+		!strings.Contains(strings.Join(rep.Reasons, "\n"), "in the run no caller got past") {
+		t.Errorf("enforced, every caller refused in both runs: pass %v: %v", rep.Pass, rep.Reasons)
 	}
 }

@@ -137,7 +137,7 @@ func (a routeAuth) authenticate(w http.ResponseWriter, r *http.Request, orgID st
 // row of the answer carries.
 func (a routeAuth) authenticateWorkload(w http.ResponseWriter, r *http.Request, orgID, token string) (Credential, bool) {
 	ctx := r.Context()
-	subject, reason := a.workload.decide(token)
+	subject, reason := a.workload.decide(ctx, token)
 	if reason == "" {
 		countWorkloadAccepted(ctx, a.route)
 		a.logger.DebugContext(ctx, "acr internal: workload token accepted", slog.String("route", a.route))

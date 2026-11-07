@@ -52,13 +52,13 @@ type WorkloadVerifier interface {
 
 // WorkloadAuth verifies the acr-api workload token, the one credential the
 // internal acr routes accept.
-// Subject is the one workload principal (prn_) the routes allow; the token has
-// no scope claim, so this equality is the per-route action binding. A nil
-// WorkloadAuth, a nil Verifier or an empty Subject refuses every workload
-// token as not_configured.
+// Source names the one workload principal (prn_) the routes allow, read from the
+// workload registry; the token has no scope claim, so this equality is the
+// per-route action binding. A nil WorkloadAuth, a nil Verifier or a nil Source
+// refuses every workload token as not_configured.
 type WorkloadAuth struct {
 	Verifier WorkloadVerifier
-	Subject  string
+	Source   SubjectSource
 	Now      func() time.Time
 }
 
@@ -129,8 +129,8 @@ func isWorkloadToken(token string) bool {
 
 // decide verifies token and returns the workload subject and the refusal
 // reason (empty reason = accepted). The subject is set only on accept.
-func (w *WorkloadAuth) decide(token string) (subject, reason string) {
-	if w == nil || w.Verifier == nil || w.Subject == "" {
+func (w *WorkloadAuth) decide(ctx context.Context, token string) (subject, reason string) {
+	if w == nil || w.Verifier == nil || w.Source == nil {
 		return "", ReasonNotConfigured
 	}
 	now := time.Now
@@ -144,7 +144,15 @@ func (w *WorkloadAuth) decide(token string) (subject, reason string) {
 	if err != nil {
 		return "", workloadReason(err)
 	}
-	if claims.Subject != w.Subject {
+	want, err := w.Source.Subject(ctx)
+	switch {
+	case errors.Is(err, ErrSubjectNotConfigured):
+		return "", ReasonNotConfigured
+	case err != nil:
+		return "", ReasonUnavailable
+	case want == "":
+		return "", ReasonNotConfigured
+	case claims.Subject != want:
 		return "", ReasonPrincipal
 	}
 	return claims.Subject, ""

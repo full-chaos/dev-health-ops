@@ -1,6 +1,0 @@
-{
-  "ent: bad org claim": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
-  "ent: token names another org": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
-  "ent: token org without membership": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
-  "inv list: bad org claim": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}"
-}

@@ -386,10 +386,6 @@ func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, nam
 	if s.JIT == nil {
 		return uuid.Nil, s.refuse(ctx, p, ErrNotOrgMember)
 	}
-	// An asserted email is the org's IdP's word: only a domain the row lists can make an account.
-	if len(p.AllowedDomains) == 0 {
-		return uuid.Nil, s.provisioningOff(ctx, p)
-	}
 	var legacyName *string
 	if fullName != "" {
 		legacyName = &fullName

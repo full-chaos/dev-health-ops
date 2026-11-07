@@ -110,7 +110,8 @@ type Outbound struct {
 	Hits   []StubHit
 	Ext    map[string]string
 	Egress []EgressRead
-	Seed   SeedLog
+	// Seed is the stub's seed-mode log (acp ADDENDUM-13267-2 Q-B1): no line of it may fall in the drive window.
+	Seed SeedLog
 }
 
 // RowExt maps each row id of rows to its ext.
@@ -165,6 +166,7 @@ func checkOutbound(slots []Slot, ob Outbound, grace time.Duration, egressWant []
 	}
 	if len(external) > 0 {
 		out.voids = append(out.voids, checkEgress(ob.Egress, egressWant)...)
+		out.voids = append(out.voids, checkSeedLog(slots, ob.Seed, grace)...)
 	}
 	if !ob.Logged {
 		if len(external) > 0 {

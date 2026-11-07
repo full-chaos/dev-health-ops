@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // StubHosts are the outside hosts the venue pins to the stub (cmd/venue-extstub Hosts).
@@ -12,7 +13,10 @@ var StubHosts = []string{"api.github.com", "api.pagerduty.com", "api.stripe.com"
 
 // egressKeys are the keys of an egress record, each exactly once: the read's place (before, between, after), and the
 // facts the venue reads from the running go-api (ADDENDUM-13267-1 P1-P4).
-var egressKeys = []string{"when", "network_internal", "networks", "default_route", "public_tcp", "public_dns", "stub_tcp", "hosts_pinned", "image"}
+// The stub_* keys are the stub's own status file (cmd/venue-extstub -status): its mode, its answer-table digest and its
+// start time; the run needs the frozen run mode in every read and one stub process across the reads.
+var egressKeys = []string{"when", "network_internal", "networks", "default_route", "public_tcp", "public_dns", "stub_tcp", "hosts_pinned", "image",
+	"stub_mode", "stub_config", "stub_started"}
 
 var imageDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
@@ -58,7 +62,7 @@ func checkEgress(reads []EgressRead, want []string) []string {
 	hosts := slices.Clone(StubHosts)
 	slices.Sort(hosts)
 	expect := map[string]string{"network_internal": "true", "default_route": "none", "public_tcp": "refused", "public_dns": "fail", "stub_tcp": "ok",
-		"hosts_pinned": strings.Join(hosts, ",")}
+		"hosts_pinned": strings.Join(hosts, ","), "stub_mode": "run"}
 	for i, r := range reads {
 		if r.Err != nil {
 			voids = append(voids, fmt.Sprintf("egress record %s is unreadable: %v", r.Name, r.Err))
@@ -78,8 +82,11 @@ func checkEgress(reads []EgressRead, want []string) []string {
 		if !imageDigest.MatchString(r.Fields["image"]) {
 			voids = append(voids, fmt.Sprintf("egress record %s: image %q is not a sha256 digest", r.Name, r.Fields["image"]))
 		}
+		if !imageDigest.MatchString(r.Fields["stub_config"]) {
+			voids = append(voids, fmt.Sprintf("egress record %s: stub_config %q is not a sha256 digest", r.Name, r.Fields["stub_config"]))
+		}
 		if i > 0 && reads[0].Err == nil {
-			for _, key := range []string{"image", "networks"} {
+			for _, key := range []string{"image", "networks", "stub_config", "stub_started"} {
 				if r.Fields[key] != reads[0].Fields[key] {
 					voids = append(voids, fmt.Sprintf("egress record %s: %s %s differs from %s's %s", r.Name, key, r.Fields[key], reads[0].Name, reads[0].Fields[key]))
 				}
@@ -89,7 +96,27 @@ func checkEgress(reads []EgressRead, want []string) []string {
 	return voids
 }
 
-// SeedLog: skeleton.
+// checkSeedLog voids a run when the stub's seed-mode log was not given while an external row ran, or when one of its
+// lines falls inside the drive window [first sent start - skew, last sent end + grace]: a seed call during a run.
+func checkSeedLog(slots []Slot, seed SeedLog, grace time.Duration) []string {
+	if !seed.Given {
+		return []string{"external rows were sent but the stub's seed-mode log was not given (-seed-log; an empty file is a log)"}
+	}
+	if seed.Err != nil {
+		return []string{fmt.Sprintf("the seed-mode log is unreadable: %v", seed.Err)}
+	}
+	first, last := driveSpan(slots)
+	var voids []string
+	for _, hit := range seed.Hits {
+		if !hit.At.Before(first.Add(-windowSkew)) && !hit.At.After(last.Add(grace)) {
+			voids = append(voids, fmt.Sprintf("a seed-mode stub line at %s (%s %s %s%s) lies inside the drive window: seeding ran during the run",
+				hit.At.Format(time.RFC3339Nano), hit.Service, hit.Method, hit.Host, hit.Path))
+		}
+	}
+	return voids
+}
+
+// SeedLog is the stub's seed-mode log as the judge got it.
 type SeedLog struct {
 	Given bool
 	Hits  []StubHit

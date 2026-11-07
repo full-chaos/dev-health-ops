@@ -238,6 +238,20 @@ func readEgress(paths ...string) []shadowvenue.EgressRead {
 	return out
 }
 
+// readSeedLog reads the stub's seed-mode log; "" is a log not given. An unreadable or malformed one is kept as its
+// error: the judge voids on it.
+func readSeedLog(path string) shadowvenue.SeedLog {
+	if path == "" {
+		return shadowvenue.SeedLog{}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return shadowvenue.SeedLog{Given: true, Err: errors.New("unreadable")}
+	}
+	hits, err := shadowvenue.ParseStubLog(raw)
+	return shadowvenue.SeedLog{Given: true, Hits: hits, Err: err}
+}
+
 // readRows reads a row table; "" is the embedded one.
 func readRows(path string) ([]shadowvenue.Row, error) {
 	raw := shadowvenue.DefaultRows
@@ -317,6 +331,7 @@ func judge(args []string, stdout, stderr io.Writer) int {
 	outboundOut := fs.String("outbound-out", "", "per-slot outside-call counts file to create, 0600 (the yardstick of a later enforced run)")
 	egressBefore := fs.String("egress-before", "", "egress record read before the yardstick run")
 	egressBetween := fs.String("egress-between", "", "egress record read after the yardstick run, before the enforced run")
+	seedLog := fs.String("seed-log", "", "the stub's seed-mode log (required when an external row was sent; an empty file is a log)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -386,6 +401,7 @@ func judge(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	outbound.Egress = readEgress(*egressBefore, *egressBetween)
+	outbound.Seed = readSeedLog(*seedLog)
 	report := shadowvenue.Judge(slots, ev, rulings, shadowvenue.JudgeOptions{K: *k, Grace: *grace, NoOrg: noOrg, Outbound: outbound})
 	file, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -482,6 +498,7 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 	egressBefore := fs.String("egress-before", "", "egress record read before the yardstick run")
 	egressBetween := fs.String("egress-between", "", "egress record read between the two runs")
 	egressAfter := fs.String("egress-after", "", "egress record read after this run")
+	seedLog := fs.String("seed-log", "", "the stub's seed-mode log (required when an external row was sent; an empty file is a log)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -538,6 +555,7 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	outbound.Egress = readEgress(*egressBefore, *egressBetween, *egressAfter)
+	outbound.Seed = readSeedLog(*seedLog)
 	var yardOut []shadowvenue.OutboundSlot
 	if *yardOutbound != "" {
 		raw, err := os.ReadFile(*yardOutbound)

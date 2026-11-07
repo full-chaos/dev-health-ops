@@ -56,6 +56,7 @@ func TestSeedModeAnswersOnlyTheSeedProbe(t *testing.T) {
 	for _, c := range []struct{ host, method, target string }{
 		{"api.pagerduty.com", "GET", "/services"},
 		{"api.pagerduty.com", "GET", "/services?limit=2"},
+		{"api.pagerduty.com", "GET", "/users?limit=1"},
 		{"api.pagerduty.com", "POST", "/services?limit=1"},
 		{"identity.pagerduty.com", "GET", "/services?limit=1"},
 		{"api.stripe.com", "GET", "/v1/products"},

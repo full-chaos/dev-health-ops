@@ -114,6 +114,23 @@ VALUES ($1, $2, 'not-a-hash', true, true, false, 0, now(), now())`, user, email)
 	if err != nil {
 		t.Fatal(err)
 	}
+	paths := []string{"/api/v1/admin/impersonate/status", "/api/v1/auth/me", "/api/v1/admin/settings/general", "/api/v1/admin/teams"}
+	for _, c := range []struct{ name, org string }{
+		{"A removed member", removedFrom.String()},
+		{"A suspended org", suspended.String()},
+		{"B-unknown org", uuid.NewString()},
+		{"B-notUUID claim", "not-a-uuid"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rule1WiredCase(t, c.org, legacy, routed, signer, issuer, user, email, paths)
+		})
+	}
+}
+
+// rule1WiredCase serves one org claim through the legacy listener and each routed one.
+func rule1WiredCase(t *testing.T, org string, legacy http.Handler, routed map[string]http.Handler, signer *edgetoken.Signer,
+	issuer *edtokens.Issuer, user uuid.UUID, email string, paths []string) {
+	t.Helper()
 	serve := func(handler http.Handler, path, token, header string) (int, string) {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request.Header.Set("Authorization", "Bearer "+token)
@@ -124,35 +141,27 @@ VALUES ($1, $2, 'not-a-hash', true, true, false, 0, now(), now())`, user, email)
 		handler.ServeHTTP(recorder, request)
 		return recorder.Code, recorder.Body.String()
 	}
+	hs256, err := signer.Access(edgetoken.AccessClaims{UserID: user.String(), Email: email, OrgID: org, Role: "member"}, time.Now(), uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eddsa, err := issuer.Mint(edtokens.Claims{UserID: user, OrgID: org})
+	if err != nil {
+		t.Fatal(err)
+	}
 	notUUIDRefused := []string{}
-	paths := []string{"/api/v1/admin/impersonate/status", "/api/v1/auth/me", "/api/v1/admin/settings/general", "/api/v1/admin/teams"}
-	for _, c := range []struct{ name, org string }{
-		{"A removed member", removedFrom.String()},
-		{"A suspended org", suspended.String()},
-		{"B-unknown org", uuid.NewString()},
-		{"B-notUUID claim", "not-a-uuid"},
-	} {
-		hs256, err := signer.Access(edgetoken.AccessClaims{UserID: user.String(), Email: email, OrgID: c.org, Role: "member"}, time.Now(), uuid.NewString())
-		if err != nil {
-			t.Fatal(err)
-		}
-		eddsa, err := issuer.Mint(edtokens.Claims{UserID: user, OrgID: c.org})
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, path := range paths {
-			for _, header := range []string{"", c.org} {
-				wantStatus, wantBody := serve(legacy, path, hs256, header)
-				for name, handler := range routed {
-					gotStatus, gotBody := serve(handler, path, eddsa, header)
-					t.Logf("%s %s X-Org-Id=%q: legacy %d %.160s | %s %d %.160s", c.name, path, header, wantStatus, wantBody, name, gotStatus, gotBody)
-					if c.org == "not-a-uuid" && gotStatus == http.StatusUnauthorized && wantStatus != http.StatusUnauthorized {
-						notUUIDRefused = append(notUUIDRefused, name+" "+path)
-						continue
-					}
-					if gotStatus != wantStatus || gotBody != wantBody {
-						t.Errorf("%s %s X-Org-Id=%q: %s %d %s, legacy %d %s", c.name, path, header, name, gotStatus, gotBody, wantStatus, wantBody)
-					}
+	for _, path := range paths {
+		for _, header := range []string{"", org} {
+			wantStatus, wantBody := serve(legacy, path, hs256, header)
+			for name, handler := range routed {
+				gotStatus, gotBody := serve(handler, path, eddsa, header)
+				t.Logf("%s X-Org-Id=%q: legacy %d %.160s | %s %d %.160s", path, header, wantStatus, wantBody, name, gotStatus, gotBody)
+				if org == "not-a-uuid" && gotStatus == http.StatusUnauthorized && wantStatus != http.StatusUnauthorized {
+					notUUIDRefused = append(notUUIDRefused, name+" "+path)
+					continue
+				}
+				if gotStatus != wantStatus || gotBody != wantBody {
+					t.Errorf("%s X-Org-Id=%q: %s %d %s, legacy %d %s", path, header, name, gotStatus, gotBody, wantStatus, wantBody)
 				}
 			}
 		}

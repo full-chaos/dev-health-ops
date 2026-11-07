@@ -218,13 +218,15 @@ func TestJudgeWithNoTableComparesHitsToTheRouteService(t *testing.T) {
 // refused as they are read.
 func TestParseEgressStrictForms(t *testing.T) {
 	good := egressText("before")
-	for name, text := range map[string]string{
-		"blank-first duplicate": "stub_tcp=\n" + good,
-		"value-first duplicate": good + "stub_tcp=ok\n",
-		"empty value":           strings.Replace(good, "stub_tcp=ok", "stub_tcp=", 1),
+	for _, c := range []struct{ name, text string }{
+		{"blank-first_duplicate", "stub_tcp=\n" + good},
+		{"value-first_duplicate", good + "stub_tcp=ok\n"},
+		{"empty_value", strings.Replace(good, "stub_tcp=ok", "stub_tcp=", 1)},
 	} {
-		if read := ParseEgress("before.txt", []byte(text)); read.Err == nil {
-			t.Errorf("%s accepted", name)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			if read := ParseEgress("before.txt", []byte(c.text)); read.Err == nil {
+				t.Errorf("%s accepted", c.name)
+			}
+		})
 	}
 }

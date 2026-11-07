@@ -20,11 +20,11 @@ var quotedLiteral = regexp.MustCompile(`'([a-z_]+)'`)
 
 // checkExpression is the parenthesised expression after "CONSTRAINT <name> CHECK" in the last place sql defines it.
 func checkExpression(sql, name string) (string, bool) {
-	at := strings.LastIndex(sql, "CONSTRAINT "+name+" CHECK")
-	if at < 0 {
+	found := regexp.MustCompile(`CONSTRAINT\s+`+regexp.QuoteMeta(name)+`\s+CHECK`).FindAllStringIndex(sql, -1)
+	if len(found) == 0 {
 		return "", false
 	}
-	rest := sql[at+len("CONSTRAINT "+name+" CHECK"):]
+	rest := sql[found[len(found)-1][1]:]
 	open := strings.Index(rest, "(")
 	if open < 0 {
 		return "", false

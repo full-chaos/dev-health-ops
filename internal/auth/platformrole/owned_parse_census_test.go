@@ -24,6 +24,7 @@ var ownedParseCallers = []string{
 	"internal/auth/platformrole/platformrole.go",
 	"internal/auth/usersbackfill/command.go",
 	"internal/auth/usersbackfill/platformrole_command.go",
+	"internal/auth/usersbackfill/users_create.go",
 	"internal/mintcli/edgetoken/main.go",
 	"internal/queryapi/server/query_route.go",
 	"internal/rivermigrate/api_posture.go",

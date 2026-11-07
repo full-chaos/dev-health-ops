@@ -86,6 +86,9 @@ func (h handlers) verify(w http.ResponseWriter, r *http.Request) {
 	if h.refuseWhileUsersOwned(w) {
 		return
 	}
+	if h.Mail.RefuseUnconfigured(w) {
+		return
+	}
 	token, _ := r.Context().Value(verifyInputKey{}).(string)
 	ctx := r.Context()
 	tx, err := h.Pool.Begin(ctx)
@@ -129,6 +132,9 @@ func (h handlers) verify(w http.ResponseWriter, r *http.Request) {
 // off the request, so no failure is visible to the caller.
 func (h handlers) resendVerification(w http.ResponseWriter, r *http.Request) {
 	if h.refuseWhileUsersOwned(w) {
+		return
+	}
+	if h.Mail.RefuseUnconfigured(w) {
 		return
 	}
 	email, _ := r.Context().Value(emailInputKey{}).(string)
@@ -202,6 +208,9 @@ func (h handlers) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	if h.refuseWhileUsersOwned(w) {
 		return
 	}
+	if h.Mail.RefuseUnconfigured(w) {
+		return
+	}
 	email, _ := r.Context().Value(emailInputKey{}).(string)
 	ctx := r.Context()
 	generic := verifyEmailResponse("If the account exists, a password reset email has been sent", false)
@@ -241,6 +250,9 @@ func (h handlers) issueResetLink(ctx context.Context, r *http.Request, user *use
 // the password goes through the shared password policy before redemption.
 func (h handlers) resetPassword(w http.ResponseWriter, r *http.Request) {
 	if h.refuseWhileUsersOwned(w) {
+		return
+	}
+	if h.Mail.RefuseUnconfigured(w) {
 		return
 	}
 	r, ok := validateResetPasswordPolicy(w, r)

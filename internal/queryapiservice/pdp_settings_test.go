@@ -4,14 +4,16 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
+	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 )
 
-// The PDP gate reads its settings through the declared-settings reader, which answers only for a declared name: an
-// undeclared one would read as unset and keep the gate off whatever the deployment sets.
+// The PDP gate reads its settings, the 5.17 cell list included, through the declared-settings reader, which answers
+// only for a declared name: an undeclared one would read as unset and keep the gate off whatever the deployment sets.
 func TestThePDPSettingsAreDeclared(t *testing.T) {
-	names := []string{pdp.EnvMode, pdp.EnvAuthProxyURL, workloadinput.EnvSubjectFile, workloadinput.EnvBootstrapFile, workloadinput.EnvIssuer}
+	names := []string{pdp.EnvMode, pdp.EnvAuthProxyURL, workloadinput.EnvSubjectFile, workloadinput.EnvBootstrapFile, workloadinput.EnvIssuer,
+		authzenforce.QueryAPI.Env()}
 	lookup := func(name string) (string, bool) {
 		for _, n := range names {
 			if n == name {

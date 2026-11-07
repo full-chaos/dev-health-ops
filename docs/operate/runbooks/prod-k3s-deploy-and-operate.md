@@ -11,14 +11,12 @@ lifecycle: active
 
 Prod (10.0.0.151) runs as a single-host k3s cluster. The deploy umbrella (`values.prod.yaml`) manages the application tier; the data tier (ClickHouse, PostgreSQL, Valkey, Traefik, cloudflared) remains as a compose stack serving as rollback reserve.
 
-Cutover executed 2026-09-11 21:30Z (CHAOS-5590). Records on bigboy: `/var/lib/oci-cache/lane-scratch/_records/prod-k8s/`; devhealth workspace: `.remember/_records/prod-k8s/`.
-
 ## Restore procedure (ClickHouse + PostgreSQL)
 
 ### Prerequisites
 - Backup dump with schema and data.
 - Encryption keys available if the dump is encrypted.
-- **Dump must include VIEW objects, not tables only** (Trap #174).
+- **Dump must include VIEW objects, not tables only**.
 
 ### Procedure
 
@@ -43,7 +41,7 @@ Cutover executed 2026-09-11 21:30Z (CHAOS-5590). Records on bigboy: `/var/lib/oc
    ```sql
    ANALYZE river.river_job;
    ```
-   This prevents subsequent queue queries from full-table scans under a large backlog. Related: CHAOS-5615.
+   This prevents subsequent queue queries from full-table scans under a large backlog.
 
 ### Symptom recognition
 
@@ -53,7 +51,7 @@ Cutover executed 2026-09-11 21:30Z (CHAOS-5590). Records on bigboy: `/var/lib/oc
 
 ## Secrets loading on Kubernetes
 
-### kubectl quote-stripping behavior (Trap #168)
+### kubectl quote-stripping behavior
 
 `kubectl create secret --from-env-file` **does not strip quotes** the way `docker compose` does. A `.env` file with:
 ```
@@ -80,7 +78,7 @@ kubectl create secret generic <secret-name> --from-env-file=<cleaned.env> --dry-
 
 ## Safe rollouts on k3s
 
-### Batch size rule (Trap #172)
+### Batch size rule
 
 **Never roll all Deployments at once.** On a 4-core node:
 - Rolling 12 Deployments simultaneously with `maxUnavailable: 0` doubles the pod count.
@@ -89,7 +87,7 @@ kubectl create secret generic <secret-name> --from-env-file=<cleaned.env> --dry-
 
 **Rule: batch rollouts ≤2 at a time. Wait for ready before the next batch.**
 
-### HPA and manual scaling (Trap #167)
+### HPA and manual scaling
 
 **Never scale an HPA-managed Deployment to zero** to quiesce it. The HPA cannot lift it back:
 - `helm upgrade` will not restore it because the chart omits `replicas` for HPA-managed workloads.
@@ -97,11 +95,11 @@ kubectl create secret generic <secret-name> --from-env-file=<cleaned.env> --dry-
 
 Alternative: scale the HPA's `minReplicas` instead, or scale a non-HPA workload.
 
-### CPU limit sizing (Trap #171)
+### CPU limit sizing
 
 **Size CPU limits by the workload's longest request, not idle usage.**
 
-The Python billing edge (removed from the chart in CHAOS-6903; the go-api billing-edge listener serves the billing host now) throttled at 250m (chart default) while `uvicorn` was up but `/health` missed the 1s probe timeout:
+The Python billing edge (the go-api billing-edge listener serves the billing host now) throttled at 250m (chart default) while `uvicorn` was up but `/health` missed the 1s probe timeout:
 - Process killed with exit 137 (out of memory, actually throttled).
 - Crash loop until limit raised to 1 CPU.
 - Actual usage: 13m (5% of 250m).
@@ -110,7 +108,7 @@ The Python billing edge (removed from the chart in CHAOS-6903; the go-api billin
 
 ## Go-heavy queue after restore
 
-### Queue telemetry timeout under large backlog (CHAOS-5615)
+### Queue telemetry timeout under large backlog
 
 A large backlog left behind by a restore saturates the operator's telemetry gate:
 - River's `queued_contract_versions` telemetry seq-scans the queue table and misses the hardcoded 2s `defaultQueueTelemetryTimeout`.
@@ -118,7 +116,7 @@ A large backlog left behind by a restore saturates the operator's telemetry gate
 
 **Temporary workaround (values.prod.yaml)**: `extraArgs: [--health-check-timeout=10s]` on the heavy worker group only. This raises the timeout but is not a permanent fix.
 
-**Permanent fix tracked in CHAOS-5615**: expose the timeout as a tuning knob.
+**Permanent fix**: expose the timeout as a tuning knob.
 
 ### Stream runners starting during a dependency outage
 
@@ -134,9 +132,9 @@ Live production config: `values.prod.yaml` sha `69714296` (or later per release 
 Carries:
 - `global.imagePullSecrets: ghcr-pull` (authenticate image pulls).
 - ClickHouse 6Gi PVC.
-- API request 512Mi, CPU-only HPA (no memory target, Trap #166).
+- API request 512Mi, CPU-only HPA (no memory target).
 - Web 256Mi request, 1 CPU limit.
-- No Python billing edge: the go-api billing-edge listener serves the billing host (CHAOS-6903; the sizing lesson of Trap #171 above stands for any workload).
+- No Python billing edge: the go-api billing-edge listener serves the billing host (the CPU limit sizing lesson above stands for any workload).
 - Three stream-runner groups via `runtimeProfile`.
 
 Ingress: www, api, billing through Traefik to Cloudflare.
@@ -145,21 +143,13 @@ Ingress: www, api, billing through Traefik to Cloudflare.
 
 **Application tier**: `cutover-replay.sh rollback` (starts compose app services).
 
-**Cloudflare repoint**: chris repoints `:80` (compose) or `:30080` (k3s).
+**Cloudflare repoint**: the operator repoints `:80` (compose) or `:30080` (k3s).
 
 **Data tier**: compose stack remains UP as reserve. **Never `down`, never remove volumes.**
 
-See CHAOS-5590 for rollback sequence and verify before attempting.
-
-## Related tickets
-
-- **CHAOS-5615**: permanent knob for queue health-check timeout + runbook.
-- **CHAOS-5614**: stream-runner bootstrap nil-nil fix.
-- **CHAOS-5609**: ClickHouse password rotation (deferred post-cutover).
-- **CHAOS-5604**: Chart/pooler convergence, CPU limit exposure.
+Verify the rollback sequence before attempting it.
 
 ## See also
 
 - [Query-api bootstrap](query-api-bootstrap.md) — first-time deploy of the Go query API.
-- [Operator commands](operator-commands.md) — workerctl one-off Pod pattern (Trap #169).
-- [Prod cutover 2026-09-11 lessons](../prod-cutover-2026-09-11-lessons/index.md) — index of all related changes.
+- [Operator commands](operator-commands.md) — workerctl one-off Pod pattern.

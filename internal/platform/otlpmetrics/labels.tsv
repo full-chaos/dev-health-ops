@@ -42,6 +42,7 @@ devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiserv
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
+devhealth_auth_legacy_logout_accepted_total	class,service	code: internal/auth/accessverify/logout.go
 devhealth_auth_refresh_token_accepted_total	class,service	code: internal/auth/accessverify/refresh.go
 dev_health_api_acr_workload_subject_config_invalid		code: internal/apiservice/accessverify.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
@@ -69,6 +70,9 @@ devhealth_auth_push_projection_parked_rows		code: internal/auth/pushprojection/r
 devhealth_auth_outbox_delivered_total		code: internal/audit/publisher.go
 devhealth_auth_outbox_delivery_failures_total	reason	code: internal/audit/publisher.go
 devhealth_auth_outbox_oldest_pending_age_seconds		code: internal/audit/outboxloop.go
+devhealth_auth_repository_identity_projection_final_rows		code: internal/auth/repoidentityprojection/reader.go
+devhealth_auth_repository_identity_projection_lag		code: internal/auth/repoidentityprojection/reader.go
+devhealth_auth_repository_identity_projection_parked_rows		code: internal/auth/repoidentityprojection/reader.go
 devhealth_auth_revision_feed_events_total	disposition	code: internal/auth/revisionfeed/consumer.go
 devhealth_auth_revision_feed_resync_total	cause	code: internal/auth/revisionfeed/consumer.go
 devhealth_auth_revision_feed_subscription_up		code: internal/auth/revisionfeed/subscriber.go
@@ -83,6 +87,14 @@ dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/dai
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_ic_finalize_refused_empty_org_total		code: internal/jobs/metrics/daily/icfinalize/executor.go
 devhealth_integration_credential_decrypt_failed_total	provider	code: internal/api/credentials/metrics.go
+devhealth_investment_llm_categorization_outcomes_total	model,prompt_kind,prompt_version,provider,status	code: internal/jobruntime/telemetry_investment_llm.go
+devhealth_investment_llm_output_chars	model,prompt_kind,prompt_version,provider,stage	code: internal/jobruntime/telemetry_investment_llm.go
+devhealth_investment_llm_request_duration_seconds	model,prompt_kind,prompt_version,provider,stage	code: internal/jobruntime/telemetry_investment_llm.go
+devhealth_investment_llm_request_errors_total	error_family,model,prompt_kind,prompt_version,provider,stage	code: internal/jobruntime/telemetry_investment_llm.go
+devhealth_investment_llm_requests_total	model,outcome,prompt_kind,prompt_version,provider,stage	code: internal/jobruntime/telemetry_investment_llm.go
+devhealth_investment_llm_tokens_total	direction,model,prompt_kind,prompt_version,provider,stage	code: internal/jobruntime/telemetry_investment_llm.go
+devhealth_investment_llm_validation_failures_total	error_family,model,prompt_kind,prompt_version,provider,stage	code: internal/jobruntime/telemetry_investment_llm.go
+devhealth_investment_llm_validation_total	model,prompt_kind,prompt_version,provider,result,stage	code: internal/jobruntime/telemetry_investment_llm.go
 devhealth_llmorgsettings_decrypt_failure_total		code: internal/llmorgsettings/telemetry.go
 devhealth_llmorgsettings_key_validation_failed_total		code: internal/llmorgsettings/telemetry.go
 dev_health_metric_labels_dropped_total	instrument,label	the allowlist drop counter: instrument and label name only, never a value
@@ -243,6 +255,7 @@ dev_health_post_sync_fanout_total	outcome	code: internal/jobruntime/telemetry.go
 dev_health_post_sync_touched_days_total	event	code: internal/jobruntime/telemetry.go
 dev_health_provider_all_artifacts_unreadable_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_artifact_skipped_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
+dev_health_provider_non_report_members_skipped_total	class,dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_budget_denied_total	provider	code: internal/providerfoundation/budget.go
 dev_health_provider_budget_release_errors_total	provider	code: internal/providerfoundation/budget.go
 dev_health_provider_budget_underestimate_total	dataset,dimension,provider	code: internal/providerfoundation/budget.go

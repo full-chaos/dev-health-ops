@@ -25,7 +25,6 @@ import (
 
 	"github.com/full-chaos/dev-health-go/workloadtoken"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
@@ -39,7 +38,7 @@ const (
 // pendingInviteFor seeds a pending invite of email to org and returns its token.
 func pendingInviteFor(t *testing.T, ctx context.Context, st stack, org, email string) string {
 	t.Helper()
-	token, tokenHash := signedtoken.Build(uuid.New(), authmail.Config{}.Secret())
+	token, tokenHash := signedtoken.Build(uuid.New(), testLinkSecret)
 	if _, err := st.pool.Exec(ctx, `INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by_id, status, expires_at, created_at, updated_at)
 		VALUES (gen_random_uuid(), $1::uuid, $2, 'member', $3, NULL, 'pending', now() + interval '1 day', now(), now())`, org, email, tokenHash); err != nil {
 		t.Fatalf("seed invite: %v", err)

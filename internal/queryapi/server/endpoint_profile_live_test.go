@@ -257,11 +257,10 @@ func (o *liveObs) impersonationPolicy(rebinds bool) {
 
 func edgeSession(t *testing.T, o *liveObs, q liveReq, rebindHeader bool, sessionFailureStatus int) {
 	t.Helper()
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: true, tokenVersion: 5})
 	run := func(cell string, shape func(*accessStore)) (*behaviourStack, liveAnswer) {
 		stack := liveStack(t, shape)
 		q2 := q
-		q2.bearer = token
+		q2.bearer = stack.user
 		answer := stack.live(q2)
 		_ = cell
 		return stack, answer
@@ -284,6 +283,9 @@ func edgeSession(t *testing.T, o *liveObs, q liveReq, rebindHeader bool, session
 		s.errSession = fmt.Errorf("session store timeout")
 	})
 	o.wantStatus("session read fails (fail closed)", a, sessionFailureStatus)
+	if sessionFailureStatus == http.StatusServiceUnavailable && strings.TrimSpace(a.body) != restUnavailable {
+		o.fail("session read fails (fail closed): body %q, want %q", trim(a.body), restUnavailable)
+	}
 	o.wantNoRun("session read fails (fail closed)", stack)
 }
 
@@ -291,6 +293,7 @@ type liveREST struct {
 	handler  http.Handler
 	envelope string
 	user     string
+	orgless  string
 }
 
 func newLiveREST(t *testing.T, pattern string, shape func(*accessStore)) *liveREST {
@@ -321,6 +324,7 @@ func newLiveREST(t *testing.T, pattern string, shape func(*accessStore)) *liveRE
 		handler:  mux,
 		envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}),
 		user:     minter.mint(ecUser, nil, nil),
+		orgless:  minter.mint(ecUser, map[string]any{"org_id": nil}, nil),
 	}
 }
 
@@ -373,19 +377,20 @@ func driveREST(t *testing.T, row liveRow) *liveObs {
 	o.textHas("resource_resolver", "organization_from_credential")
 	disclosureKnown := row.str("disclosure_behavior") != "unknown"
 
-	orgless := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), role: "admin", tokenVersion: 5})
-	got := fixture(nil).do(row.method, path, orgless, nil)
-	o.wantStatus("edge token with no organization", got, http.StatusForbidden)
+	got := f.do(row.method, path, f.orgless, nil)
+	o.wantStatus("user token with no organization", got, http.StatusForbidden)
 	if !strings.Contains(got.body, "Organization context required") {
-		o.fail("edge token with no organization: body %q lacks the 403 text", trim(got.body))
+		o.fail("user token with no organization: body %q lacks the 403 text", trim(got.body))
 	}
 	if disclosureKnown {
 		o.textHas("disclosure_behavior", "403 Organization context required", "superuser, who passes")
 	}
-	o.wantStatus("superuser with no organization", fixture(asSuperuser).do(row.method, path, orgless, nil), http.StatusOK)
-	o.wantStatus("users store unavailable", fixture(func(s *accessStore) {
+	super := fixture(asSuperuser)
+	o.wantStatus("superuser with no organization", super.do(row.method, path, super.orgless, nil), http.StatusOK)
+	down := fixture(func(s *accessStore) {
 		s.errUserState = fmt.Errorf("down: %w", policy.ErrUnavailable)
-	}).do(row.method, path, edgeBearer(t, ecOrg.String()), nil), http.StatusServiceUnavailable)
+	})
+	o.wantStatus("users store unavailable", down.do(row.method, path, down.user, nil), http.StatusServiceUnavailable)
 	broken := fixture(func(s *accessStore) { s.errUserState = fmt.Errorf("syntax error") })
 	o.wantStatus("users store error", broken.do(row.method, path, broken.user, nil), http.StatusInternalServerError)
 	if disclosureKnown {
@@ -413,10 +418,11 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 		stack := liveStack(t, nil)
 		o.wantStatus(listener+": no credential", stack.live(q), http.StatusUnauthorized)
 		o.wantStatus(listener+": unparseable bearer", stack.live(with(func(c *liveReq) { c.bearer = "not.a.token" })), http.StatusUnauthorized)
-		for name, bearer := range map[string]string{"envelope": stack.envelope, "edge token": stack.edge, "user token": stack.user} {
+		o.wantStatus(listener+": edge token (retired HS256 class)", stack.live(with(func(c *liveReq) { c.bearer = stack.edge })), http.StatusUnauthorized)
+		for name, bearer := range map[string]string{"envelope": stack.envelope, "user token": stack.user} {
 			cell := listener + ": " + name
 			stack = liveStack(t, nil)
-			bearer = map[string]string{"envelope": stack.envelope, "edge token": stack.edge, "user token": stack.user}[name]
+			bearer = map[string]string{"envelope": stack.envelope, "user token": stack.user}[name]
 			a := stack.live(with(func(c *liveReq) {
 				c.bearer = bearer
 				c.headers = map[string]string{"X-Org-Id": liveOtherOrg.String()}
@@ -427,7 +433,7 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 		stack = liveStack(t, nil)
 		if row.route != "/query/proof-write" {
 			o.wantStatus(listener+": unregistered document", stack.live(with(func(c *liveReq) {
-				c.bearer = stack.edge
+				c.bearer = stack.user
 				c.body = documentBody("query Unregistered { nothing }")
 			})), http.StatusNotFound)
 		}
@@ -569,7 +575,7 @@ func driveGraphQL(t *testing.T, row liveRow) *liveObs {
 			{"X-Org-Id of an organization the caller is a member of", func(s *accessStore) { s.members[[2]uuid.UUID{ecUser, liveOtherOrg}] = true }, liveOtherOrg.String(), http.StatusOK, liveOtherOrg.String()},
 			{"superuser X-Org-Id of another organization", asSuperuser, liveOtherOrg.String(), http.StatusOK, liveOtherOrg.String()},
 		} {
-			for name, bearer := range map[string]func(*behaviourStack) string{"edge token": func(s *behaviourStack) string { return s.edge }, "user token": func(s *behaviourStack) string { return s.user }} {
+			for name, bearer := range map[string]func(*behaviourStack) string{"user token": func(s *behaviourStack) string { return s.user }} {
 				stack = liveStack(t, cell.shape)
 				headers := map[string]string{}
 				if cell.header != "" {
@@ -585,12 +591,18 @@ func driveGraphQL(t *testing.T, row liveRow) *liveObs {
 			}
 		}
 		stack = liveStack(t, nil)
-		a = stack.live(request("query Unregistered { nothing }", nil, stack.edge))
+		o.wantStatus(listener+": edge token (retired HS256 class)", stack.live(request(iaDocument, nil, stack.edge)), http.StatusUnauthorized)
+		o.wantNoRun(listener+": edge token (retired HS256 class)", stack)
+		stack = liveStack(t, nil)
+		a = stack.live(request("query Unregistered { nothing }", nil, stack.user))
 		o.wantStatus(listener+": unregistered document", a, http.StatusNotFound)
 		if !strings.Contains(a.body, "UNREGISTERED_DOCUMENT") {
 			o.fail("unregistered document: body %q lacks UNREGISTERED_DOCUMENT", trim(a.body))
 		}
-		edgeSession(t, o, request(iaDocument, nil, ""), true, http.StatusInternalServerError)
+		edgeSession(t, o, request(iaDocument, nil, ""), true, http.StatusServiceUnavailable)
+		broken := liveStack(t, func(s *accessStore) { s.errUserState = fmt.Errorf("syntax error") })
+		o.wantStatus(listener+": user token, users store error", broken.live(request(iaDocument, nil, broken.user)), http.StatusInternalServerError)
+		o.wantNoRun(listener+": user token, users store error", broken)
 		down := liveStackKeyDown(t)
 		cell := listener + ": user token, token key source unreadable"
 		o.wantStatus(cell, down.live(request(iaDocument, nil, down.user)), http.StatusServiceUnavailable)
@@ -830,7 +842,7 @@ func TestLiveImpersonationCellsOnTheEdgeCarrier(t *testing.T) {
 		failure int
 	}{
 		"query":   {liveReq{listener: "internal", method: http.MethodPost, path: "/query", body: document}, false, http.StatusUnauthorized},
-		"graphql": {liveReq{listener: "query", method: http.MethodPost, path: "/graphql", body: document}, true, http.StatusInternalServerError},
+		"graphql": {liveReq{listener: "query", method: http.MethodPost, path: "/graphql", body: document}, true, http.StatusServiceUnavailable},
 	}
 	cells := []string{
 		"live superuser with an active session",

@@ -164,13 +164,13 @@ at auth-service and answers `200` with `status` `stopped`; with no open session
 it answers `400` "No active impersonation session" as before. Stop needs the
 administrator's own session: the delegated bearer is refused on every
 `/api/v1/admin` route. go-api refuses an impersonation caller fail-closed on
-PDP-enforced rows (outcome `impersonation_refused`, CHAOS-12814); the stop
+PDP-enforced rows (outcome `impersonation_refused`); the stop
 route is exempt and is decided by the PDP with the administrator's own bearer.
 With the web change below live, the Superadmin UI is refused in every tab while
 a delegated token is live.
 
 Do not turn the switch on before the web change that swaps the browser session
-to the delegated token at start and restores it at stop (CHAOS-12913) is live.
+to the delegated token at start and restores it at stop is live.
 
 ## Metric
 

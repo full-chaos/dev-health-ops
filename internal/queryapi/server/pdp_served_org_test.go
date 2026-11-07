@@ -24,7 +24,7 @@ func TestRESTPDPJudgesTheServedOrganization(t *testing.T) {
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			srv := pdptest.New(t)
-			g := newGatedREST(t, pdp.ModeEnforce, srv.URL, true)
+			g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, true)
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/home", nil)
 			req.Header.Set("Authorization", "Bearer "+g.userToken())
 			mutate(req)

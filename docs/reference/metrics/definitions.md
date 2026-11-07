@@ -48,7 +48,7 @@ silently mapped to a different measure.
 | `cyclomatic_per_kloc` | cyclomatic complexity per KLOC | Average the latest daily repository density | `repo_complexity_daily` |
 | `compounding_risk_score` | score from 0 to 1 | Mean of the latest persisted scoped scores | `compounding_risk_daily` |
 
-The daily job no longer writes `investment_metrics_daily` (CHAOS-9264): the daily completion source is `work_item_completion_daily`, which has no investment area, and the canonical theme distribution is stored in `work_unit_investments`. The `investment_allocation_pct` source above is the table as the Ask Dev registry names it; the table was dropped by ClickHouse migration 120 (CHAOS-9302).
+The daily job no longer writes `investment_metrics_daily`: the daily completion source is `work_item_completion_daily`, which has no investment area, and the canonical theme distribution is stored in `work_unit_investments`. The `investment_allocation_pct` source above is the table as the Ask Dev registry names it; the table was dropped by ClickHouse migration 120.
 
 State today: the Ask Dev service (acr) still reads the deprecated `repo_metrics_daily.change_failure_rate` column, so its answer is not yet this definition; moving it to `repo_change_failure_daily` is ticket 9018. Query-api (Home, `/explain`, operating review, report) already follows this definition.
 
@@ -164,7 +164,7 @@ shows the rate also gives the state: `/api/v1/explain` in `rate_state` (beside
 means that nothing was counted for the window: the days were not computed, or
 no repository of the view had a deployment or an incident.
 
-What the rate stands on (CHAOS-9630). `/explain` serves the basis in
+What the rate stands on. `/explain` serves the basis in
 `evidence_basis`. The GraphQL `home` deltas and `operatingReview` metrics serve
 `changeFailureEvidence` (type `ChangeFailureEvidence`): `basis` (`status`,
 `incident` or `both`; null when there is no rate), `deployments` (D),
@@ -200,7 +200,7 @@ deployment and no incident.
 the change failure rate. It still holds the revert ratio (reverted / merged
 pull requests, with a forced denominator of 1, so `0` when nothing merged),
 with its old type, so that an older release keeps reading what it read before.
-Do not read it for change failure rate. CHAOS-9017 removes it.
+Do not read it for change failure rate. It is planned for removal.
 
 ### Revert rate
 
@@ -222,7 +222,7 @@ failure rate.
 **DEPRECATED: `dora_metrics_daily` rows with `metric_name =
 change_failure_rate`.** They hold the same deployment-status ratio under its
 old name, written before the rename or by an older release. They are kept as
-they are. CHAOS-9017 renames or removes them.
+they are. They are planned for rename or removal.
 
 ## Pull request rework ratio
 
@@ -440,7 +440,7 @@ run started with a repository list computes only those repositories and never
 certifies the day. Runs created before the column existed are classed by their generation: only
 the scheduled fan-out counts. Older post-sync, manual and external-recompute
 runs stay unmarked, because the post-sync site passed the triggering sync's
-repository ids until 2026-08-25 (CHAOS-4263) and nothing stored says which kind
+repository ids until 2026-08-25 and nothing stored says which kind
 an old row is; their days read unknown, never a false succeeded.
 
 The table is append-only and has two writers of `succeeded`: the function that

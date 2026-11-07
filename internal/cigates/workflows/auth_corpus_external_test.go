@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -290,13 +291,13 @@ func TestAuthCorpusOverrideTrustsTheGatewayOfItsNetwork(t *testing.T) {
 	if len(config) != 1 || config[0].Subnet == "" || config[0].Gateway == "" {
 		t.Fatalf("the override does not pin the default network's subnet and gateway: %+v", config)
 	}
-	want := "TRUSTED_PROXIES=" + config[0].Gateway
+	// CHAOS-13107: go-api trusts the auth network's gateway too (TestAuthCorpusOverrideTrustsEveryGatewayGoAPIJoins).
 	for _, entry := range override.Services.GoAPI.Environment {
-		if entry == want {
+		if list, ok := strings.CutPrefix(entry, "TRUSTED_PROXIES="); ok && slices.Contains(strings.Split(list, ","), config[0].Gateway) {
 			return
 		}
 	}
-	t.Errorf("go-api's environment lacks %s: %v", want, override.Services.GoAPI.Environment)
+	t.Errorf("go-api's TRUSTED_PROXIES lacks the default network's gateway %s: %v", config[0].Gateway, override.Services.GoAPI.Environment)
 }
 
 // ci/auth_corpus_set_env.sh recreates go-api, and a recreated container gets a new ephemeral host port: the base URL
@@ -325,10 +326,11 @@ func TestAuthCorpusGoAPIPortsSurviveARecreate(t *testing.T) {
 	}
 }
 
-// On leg acp go-api also joins the auth network, and a request from the runner may reach it through that network's
-// gateway instead of the default network's. The acp override pins the auth network's subnet too and go-api trusts
-// both gateways, or the audit rows record the gateway instead of the forwarded client IP.
-func TestAuthCorpusAcpOverrideTrustsEveryGatewayItJoins(t *testing.T) {
+// go-api also joins the auth network, and a request from the runner may reach it through that network's gateway instead
+// of the default network's. The override pins the auth network's subnet too and go-api trusts both gateways, or the
+// audit rows record the gateway instead of the forwarded client IP. CHAOS-13107: on both legs (compose.yml forwards
+// local login on leg go-api too), so the main override holds it.
+func TestAuthCorpusOverrideTrustsEveryGatewayGoAPIJoins(t *testing.T) {
 	gateway := func(file, network string) string {
 		var override struct {
 			Networks map[string]struct {
@@ -350,24 +352,24 @@ func TestAuthCorpusAcpOverrideTrustsEveryGatewayItJoins(t *testing.T) {
 		return config[0].Gateway
 	}
 	defaultGateway := gateway("auth_corpus_external.override.yml", "default")
-	authGateway := gateway("auth_corpus_external.acp.override.yml", "auth_plane")
-	var acp struct {
+	authGateway := gateway("auth_corpus_external.override.yml", "auth_plane")
+	var main struct {
 		Services struct {
 			GoAPI struct {
 				Environment []string `yaml:"environment"`
 			} `yaml:"go-api"`
 		} `yaml:"services"`
 	}
-	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.acp.override.yml")), &acp); err != nil {
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.override.yml")), &main); err != nil {
 		t.Fatal(err)
 	}
 	want := "TRUSTED_PROXIES=" + defaultGateway + "," + authGateway
-	for _, entry := range acp.Services.GoAPI.Environment {
+	for _, entry := range main.Services.GoAPI.Environment {
 		if entry == want {
 			return
 		}
 	}
-	t.Errorf("the acp override's go-api environment lacks %q: %v", want, acp.Services.GoAPI.Environment)
+	t.Errorf("the override's go-api environment lacks %q: %v", want, main.Services.GoAPI.Environment)
 }
 
 // go-api mails to the corpus mail sink, a service of the project, by its service name. host.docker.internal
@@ -402,8 +404,9 @@ func TestAuthCorpusOverrideMailsToTheSinkService(t *testing.T) {
 }
 
 // auth-service trusts X-Forwarded-For from go-api's one pinned address on auth_plane, not from the network: the
-// override's trusted-proxy value is that address as a /32, and no other service on the network holds it.
-func TestAuthCorpusAcpOverrideTrustsOnlyGoAPIsPinnedAddress(t *testing.T) {
+// override's trusted-proxy value is that address as a /32, and no other service on the network holds it. CHAOS-13107:
+// the main override's, for both legs.
+func TestAuthCorpusOverrideTrustsOnlyGoAPIsPinnedAddress(t *testing.T) {
 	type override struct {
 		Services map[string]struct {
 			Networks    any      `yaml:"networks"`
@@ -426,7 +429,7 @@ func TestAuthCorpusAcpOverrideTrustsOnlyGoAPIsPinnedAddress(t *testing.T) {
 		if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", file)), &parsed); err != nil {
 			t.Fatal(err)
 		}
-		if file == "auth_corpus_external.acp.override.yml" {
+		if file == "auth_corpus_external.override.yml" {
 			acp = parsed
 		}
 		for name, service := range parsed.Services {
@@ -457,14 +460,14 @@ func TestAuthCorpusAcpOverrideTrustsOnlyGoAPIsPinnedAddress(t *testing.T) {
 	}
 }
 
-// The set_env recreate of auth-service needs the variable in its environment.
-func TestAuthCorpusAcpOverridePassesTheAutoOrgVariableToAuthService(t *testing.T) {
+// The set_env recreate of auth-service needs the variable in its environment (CHAOS-13107: on both legs).
+func TestAuthCorpusOverridePassesTheAutoOrgVariableToAuthService(t *testing.T) {
 	var override struct {
 		Services map[string]struct {
 			Environment []string `yaml:"environment"`
 		} `yaml:"services"`
 	}
-	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.acp.override.yml")), &override); err != nil {
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.override.yml")), &override); err != nil {
 		t.Fatal(err)
 	}
 	for _, entry := range override.Services["auth-service"].Environment {

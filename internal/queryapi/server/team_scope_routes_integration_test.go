@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 const teamRoutesOrg = "teamroutes-org"
@@ -49,7 +50,7 @@ func serveTeamRoutes(t *testing.T, handler http.HandlerFunc, method, target, bod
 		reader = strings.NewReader("")
 	}
 	req := httptest.NewRequest(method, target, reader)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: teamRoutesOrg}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: teamRoutesOrg, Scope: pepgate.Legacy(teamRoutesOrg)}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {

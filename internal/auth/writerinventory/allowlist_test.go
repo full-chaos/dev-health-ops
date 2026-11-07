@@ -79,7 +79,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "DELETE"},
 	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "INSERT"},
 	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "UPDATE"},
-	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.resource_grants", Verb: "UPDATE"},
+	// CHAOS-13057 (PLAN-13034 a56ac6f7, acp GO): the grant id fill moved out of PGSink.Apply into one function that the backfill
+	// and the repository identity reader share; each caller runs it inside its own audit.Commit.
+	{File: "internal/auth/repoidentity/repoidentity.go", Func: "FillGrantRepoIDs", Table: "auth.resource_grants", Verb: "UPDATE"},
 	{File: "internal/auth/grant/store.go", Func: "Store.Create", Table: "auth.resource_grants", Verb: "INSERT"},
 	{File: "internal/auth/grant/store.go", Func: "Store.Update", Table: "auth.resource_grants", Verb: "UPDATE"},
 	{File: "internal/auth/grantend/grantend.go", Func: "Plan.Apply", Table: "auth.resource_grants", Verb: "UPDATE"},
@@ -108,6 +110,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Issue", Table: "auth.link_credentials", Verb: "DELETE"},
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Issue", Table: "auth.link_credentials", Verb: "INSERT"},
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Redeem", Table: "auth.link_credentials", Verb: "UPDATE"},
+	// acp 11-07 ruling, CHAOS-13196: `dho auth users-create` provisions a verified local user through ProvisionCLIUser.
+	{File: "internal/auth/identity/cliuser.go", Func: "Store.ProvisionCLIUser", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/identity/cliuser.go", Func: "Store.ProvisionCLIUser", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.SetEmailVerifiedWith", Table: "auth.users", Verb: "UPDATE"},
@@ -225,6 +230,15 @@ var Allowlist = []Entry{
 	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.park", Table: "auth.projection_retry", Verb: "UPSERT"},
 	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.readMark", Table: "auth.projection_cursor", Verb: "INSERT"},
 	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.release", Table: "auth.projection_retry", Verb: "DELETE"},
+	// CHAOS-13057 (PLAN-13034 a56ac6f7, acp GO): the repository identity reader moves a repository_identities row to an event's
+	// revision (the UPDATE first, the INSERT only for a repository with no row), and keeps its own cursor and retry rows on
+	// stream repository_identity, each inside audit.Commit.
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.advance", Table: "auth.projection_cursor", Verb: "UPDATE"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.apply", Table: "auth.repository_identities", Verb: "UPDATE"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.apply", Table: "auth.repository_identities", Verb: "UPSERT"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.park", Table: "auth.projection_retry", Verb: "UPSERT"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.readMark", Table: "auth.projection_cursor", Verb: "INSERT"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.release", Table: "auth.projection_retry", Verb: "DELETE"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.IssueKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "UPDATE"},
@@ -299,6 +313,6 @@ var Allowlist = []Entry{
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.users", Verb: "INSERT"},
-	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "Venue.WriteAuthSessions", Table: "auth.principals", Verb: "INSERT"}, // test support: venue seed for the api's real session check
-	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "Venue.WriteAuthSessions", Table: "auth.sessions", Verb: "INSERT"},   // test support: venue seed for the api's real session check
+	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "writeSessions", Table: "auth.principals", Verb: "INSERT"}, // test support: venue seed for the api's real session check
+	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "writeSessions", Table: "auth.sessions", Verb: "INSERT"},   // test support: venue seed for the api's real session check
 }

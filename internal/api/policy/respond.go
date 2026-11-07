@@ -106,6 +106,14 @@ func ErrorDetail(message string) *pyjson.Object {
 	return out
 }
 
+// WriteConfigMissing answers 503 {"detail":{"message","reason_code":"config_missing"}} for a flow whose
+// setting is unset. It names the variable and never carries a value.
+func WriteConfigMissing(w http.ResponseWriter, variable string) {
+	detail := ErrorDetail(variable + " is not set")
+	detail.Set("reason_code", "config_missing")
+	WriteDetail(w, http.StatusServiceUnavailable, detail, nil)
+}
+
 // UnhandledErrorHeader marks a response as the Python api's answer to an
 // unhandled exception. Starlette's ServerErrorMiddleware, outside every
 // other middleware, builds that response with only its own headers; the

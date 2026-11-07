@@ -14,6 +14,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // emptyRowsFlameClient answers every ClickHouse call with zero rows --
@@ -72,7 +73,7 @@ func TestNewFlameWorkHandlerRequiresAuthContext(t *testing.T) {
 func TestNewFlameWorkHandlerRequiresEntityTypeAndEntityID(t *testing.T) {
 	handler := newFlameWorkHandler(emptyRowsFlameClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -96,7 +97,7 @@ func TestNewFlameWorkHandlerRequiresEntityTypeAndEntityID(t *testing.T) {
 func TestNewFlameWorkHandlerMissingEntityTypeOnly(t *testing.T) {
 	handler := newFlameWorkHandler(emptyRowsFlameClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_id=abc", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -123,7 +124,7 @@ func TestNewFlameWorkHandlerMissingEntityTypeOnly(t *testing.T) {
 func TestNewFlameWorkHandlerValidationRunsBeforeComparativeParamCheck(t *testing.T) {
 	handler := newFlameWorkHandler(emptyRowsFlameClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_id=abc&compare_to=1", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -138,7 +139,7 @@ func TestNewFlameWorkHandlerValidationRunsBeforeComparativeParamCheck(t *testing
 func TestNewFlameWorkHandlerComparativeParamRejected(t *testing.T) {
 	handler := newFlameWorkHandler(emptyRowsFlameClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_type=issue&entity_id=abc&rank=1", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -154,7 +155,7 @@ func TestNewFlameWorkHandlerComparativeParamRejected(t *testing.T) {
 func TestNewFlameWorkHandlerUnknownEntityTypeIs404(t *testing.T) {
 	handler := newFlameWorkHandler(emptyRowsFlameClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_type=bogus&entity_id=abc", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -170,7 +171,7 @@ func TestNewFlameWorkHandlerUnknownEntityTypeIs404(t *testing.T) {
 func TestNewFlameWorkHandlerInvalidRepoPrefixIs400(t *testing.T) {
 	handler := newFlameWorkHandler(emptyRowsFlameClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_type=pr&entity_id=not-prefixed", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -186,7 +187,7 @@ func TestNewFlameWorkHandlerInvalidRepoPrefixIs400(t *testing.T) {
 func TestNewFlameWorkHandlerIssueNotFoundIs404(t *testing.T) {
 	handler := newFlameWorkHandler(emptyRowsFlameClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_type=issue&entity_id=missing", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -292,7 +293,7 @@ func (*oneIssueFlameScanner) Close() error { return nil }
 func TestNewFlameWorkHandlerSuccessIsAResponseModelBody(t *testing.T) {
 	handler := newFlameWorkHandler(oneIssueFlameClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_type=issue&entity_id=ISSUE-1", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {

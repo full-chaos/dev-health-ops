@@ -32,12 +32,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 // Product rule 1 (chris, D6773): a platform admin needs no org membership row, and with no org every token class
 // gets the answer the legacy path gives. rule1NoOrgGolden is what main (0bf51eb9) answers on each REST handler for a
 // superuser with no org, recorded there by this test over rule1Client: status, body and a digest of every statement
-// with its bindings.
+// with its bindings. The days of the default report window are digested by name (rule1WindowDays), not by date.
 const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"items\":[]}",
 "digest":"884760750f97cf60",
 "statements":1,
@@ -75,7 +76,7 @@ const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"it
 "statements":6,
 "status":200},
 "edge token routed | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
-"digest":"4a41f4fd2e5d84be",
+"digest":"6bac17bc7476708d",
 "statements":4,
 "status":200},
 "edge token routed | investment_sunburst":{"body":"[]",
@@ -159,7 +160,7 @@ const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"it
 "statements":6,
 "status":200},
 "edge token | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
-"digest":"4a41f4fd2e5d84be",
+"digest":"6bac17bc7476708d",
 "statements":4,
 "status":200},
 "edge token | investment_sunburst":{"body":"[]",
@@ -243,7 +244,7 @@ const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"it
 "statements":6,
 "status":200},
 "envelope | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
-"digest":"4a41f4fd2e5d84be",
+"digest":"6bac17bc7476708d",
 "statements":4,
 "status":200},
 "envelope | investment_sunburst":{"body":"[]",
@@ -327,7 +328,7 @@ const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"it
 "statements":6,
 "status":200},
 "user access token routed | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
-"digest":"4a41f4fd2e5d84be",
+"digest":"6bac17bc7476708d",
 "statements":4,
 "status":200},
 "user access token routed | investment_sunburst":{"body":"[]",
@@ -411,7 +412,7 @@ const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"it
 "statements":6,
 "status":200},
 "user access token routed, PDP shadow, cell off | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
-"digest":"4a41f4fd2e5d84be",
+"digest":"6bac17bc7476708d",
 "statements":4,
 "status":200},
 "user access token routed, PDP shadow, cell off | investment_sunburst":{"body":"[]",
@@ -678,6 +679,7 @@ func rule1Serve(t *testing.T, route rule1Route, class rule1Class) rule1Answer {
 	request := httptest.NewRequest(route.method, target, strings.NewReader(route.body))
 	request.Header.Set("Authorization", "Bearer "+class.bearer(t, m, f))
 	recorder := httptest.NewRecorder()
+	served := time.Now().UTC()
 	if class.mode == "" {
 		f.handler.ServeHTTP(recorder, request)
 	} else {
@@ -688,14 +690,40 @@ func rule1Serve(t *testing.T, route rule1Route, class rule1Class) rule1Answer {
 	body, _ := io.ReadAll(recorder.Result().Body)
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	// Handlers run some reads concurrently: the digest is over the sorted statement blocks.
-	blocks := make([]string, 0, len(client.statements))
-	for i, statement := range client.statements {
+	return rule1Answer{Status: recorder.Code, Body: strings.TrimSpace(string(body)), Statements: len(client.statements),
+		Digest: rule1Digest(client.statements, client.bindings, rule1WindowDays(served, time.Now().UTC()))}
+}
+
+// rule1WindowDays names the days of the default report window (no filters.time: timewindow.Compute over 14 days) as
+// of each clock, so a digest holds no wall-clock day. Only those exact days are renamed: a route that binds any other
+// day still moves the digest.
+func rule1WindowDays(clocks ...time.Time) map[string]string {
+	days := map[string]string{}
+	for _, clock := range clocks {
+		window, err := timewindow.Compute(14, 14, nil, nil, clock)
+		if err != nil {
+			panic(err)
+		}
+		days[window.StartDay.Format(time.DateOnly)] = "<window_start>"
+		days[window.EndDay.Format(time.DateOnly)] = "<window_end>"
+	}
+	return days
+}
+
+// rule1Digest is the digest of every statement with its bindings: time values and the named days are digested by
+// name. Handlers run some reads concurrently: the digest is over the sorted statement blocks.
+func rule1Digest(statements []string, bindings [][]dhclickhouse.Binding, days map[string]string) string {
+	blocks := make([]string, 0, len(statements))
+	for i, statement := range statements {
 		var b strings.Builder
 		fmt.Fprintf(&b, "%s\n", statement)
-		for _, binding := range client.bindings[i] {
+		for _, binding := range bindings[i] {
 			if _, isTime := binding.Value.(time.Time); isTime {
 				fmt.Fprintf(&b, "  %s=<time>\n", binding.Name)
+				continue
+			}
+			if day, isString := binding.Value.(string); isString && days[day] != "" {
+				fmt.Fprintf(&b, "  %s=%s\n", binding.Name, days[day])
 				continue
 			}
 			fmt.Fprintf(&b, "  %s=%v\n", binding.Name, binding.Value)
@@ -707,8 +735,35 @@ func rule1Serve(t *testing.T, route rule1Route, class rule1Class) rule1Answer {
 	for _, block := range blocks {
 		_, _ = io.WriteString(digest, block)
 	}
-	return rule1Answer{Status: recorder.Code, Body: strings.TrimSpace(string(body)), Statements: len(client.statements),
-		Digest: hex.EncodeToString(digest.Sum(nil))[:16]}
+	return hex.EncodeToString(digest.Sum(nil))[:16]
+}
+
+// The digest of a statement bound with the default window is the same on every day, and a window one day off is not
+// renamed.
+func TestRule1DigestHoldsNoWallClockDay(t *testing.T) {
+	statements := []string{"SELECT 1"}
+	bound := func(clock time.Time) [][]dhclickhouse.Binding {
+		window, err := timewindow.Compute(14, 14, nil, nil, clock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return [][]dhclickhouse.Binding{{{Name: "start_date", Value: window.StartDay.Format(time.DateOnly)},
+			{Name: "end_date", Value: window.EndDay.Format(time.DateOnly)}}}
+	}
+	recorded := time.Date(2026, 11, 6, 21, 13, 0, 0, time.UTC)
+	want := rule1Digest(statements, bound(recorded), rule1WindowDays(recorded))
+	for _, shift := range []int{1, 2, 366} {
+		clock := recorded.AddDate(0, 0, shift)
+		if got := rule1Digest(statements, bound(clock), rule1WindowDays(clock)); got != want {
+			t.Errorf("+%d days: digest %s, want %s", shift, got, want)
+		}
+		if raw := rule1Digest(statements, bound(clock), nil); raw == rule1Digest(statements, bound(recorded), nil) {
+			t.Errorf("+%d days: the raw dates digest the same, so this cell cannot see a day", shift)
+		}
+		if off := rule1Digest(statements, bound(clock.AddDate(0, 0, -1)), rule1WindowDays(clock)); off == want {
+			t.Errorf("+%d days: a window one day off digests as the default window", shift)
+		}
+	}
 }
 
 func TestRule1PlatformAdminWithNoOrgGetsMainsRESTAnswers(t *testing.T) {

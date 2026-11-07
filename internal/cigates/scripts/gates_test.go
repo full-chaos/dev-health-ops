@@ -127,6 +127,44 @@ func TestAuthGovulncheckExceptions(t *testing.T) {
 	}
 }
 
+func TestAuthGovulncheckPerFinding(t *testing.T) {
+	const hdr = `{"config":{}}` + "\n"
+	finding := func(mod, ver, fixed string) string {
+		f := ""
+		if fixed != "" {
+			f = `"fixed_version":"` + fixed + `",`
+		}
+		return `{"finding":{"osv":"GO-9",` + f + `"trace":[{"module":"` + mod + `","version":"` + ver + `","function":"F"}]}}` + "\n"
+	}
+	row := []cigates.VulnException{{OSV: "GO-9", Module: "m/saml", Version: "v0.5.1", Ticket: "CHAOS-1", Reason: "dark"}}
+	exact := finding("m/saml", "v0.5.1", "")
+	const warn = "WARN excepted GO-9 m/saml@v0.5.1 (CHAOS-1)"
+	const both = "auth govulncheck: 1 reachable\nauth govulncheck: 1 excepted\n"
+	cases := []struct {
+		name, in, stdout string
+		stderr           []string
+	}{
+		{"wrong module then exact match", hdr + finding("m/other", "v0.5.1", "") + exact, both, []string{warn, "reachable GO-9 m/other@v0.5.1"}},
+		{"exact match then wrong module", hdr + exact + finding("m/other", "v0.5.1", ""), both, []string{warn, "reachable GO-9 m/other@v0.5.1"}},
+		{"wrong version then exact match", hdr + finding("m/saml", "v0.5.2", "") + exact, both, []string{warn, "reachable GO-9 m/saml@v0.5.2"}},
+		{"exact match then wrong version", hdr + exact + finding("m/saml", "v0.5.2", ""), both, []string{warn, "reachable GO-9 m/saml@v0.5.2"}},
+		{"exact no fix then exact with fix", hdr + exact + finding("m/saml", "v0.5.1", "v0.5.2"), both, []string{warn, "the exception (CHAOS-1) ends now"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			rc := cigates.AuthGovulncheck(strings.NewReader(c.in), row, &out, &errb)
+			ok := rc == 1 && out.String() == c.stdout
+			for _, s := range c.stderr {
+				ok = ok && strings.Contains(errb.String(), s)
+			}
+			if !ok {
+				t.Fatalf("rc=%d out=%q err=%q", rc, out.String(), errb.String())
+			}
+		})
+	}
+}
+
 func TestReadVulnExceptions(t *testing.T) {
 	good := "# c\n\nGO-9\tm/saml\tv0.5.1\tCHAOS-1\tdark\n"
 	rows, err := cigates.ReadVulnExceptions(strings.NewReader(good))

@@ -9,15 +9,23 @@ import (
 	"time"
 )
 
-// StubHosts are the outside hosts the venue pins to the stub (cmd/venue-extstub Hosts).
-var StubHosts = []string{"api.github.com", "api.pagerduty.com", "api.stripe.com", "github.com", "identity.pagerduty.com"}
+// StubHosts is the frozen list of the outside hosts the venue pins to the stub: the five it serves (cmd/venue-extstub
+// Hosts) and every other code-constant host go-api can dial (UnservedHosts there; ADDENDUM-13267-3 section 2, acp Q-C1).
+// The egress record's hosts_pinned must equal it.
+var StubHosts = []string{
+	"accounts.google.com", "api.anthropic.com", "api.atlassian.com", "api.eu.pagerduty.com", "api.github.com", "api.linear.app",
+	"api.openai.com", "api.pagerduty.com", "api.resend.com", "api.stripe.com", "api.typesafe.ai", "app.launchdarkly.com",
+	"connect.stripe.com", "files.stripe.com", "generativelanguage.googleapis.com", "github.com", "gitlab.com",
+	"identity.pagerduty.com", "meter-events.stripe.com", "oauth2.googleapis.com", "www.googleapis.com",
+}
 
 // egressKeys are the keys of an egress record, each exactly once: the read's place (before, between, after), and the
 // facts the venue reads from the running go-api (ADDENDUM-13267-1 P1-P4).
-// The stub_* keys are the stub's own status file (cmd/venue-extstub -status): its mode, its answer-table digest and its
+// dynamic_hosts=unset states that GITHUB_URL/GITLAB_URL, the credential base URLs, OIDC/SAML URLs and the BYO LLM
+// base_url are unset for org E and the T pool (acp Q-C1 C hosts). The stub_* keys are the stub's own status file (cmd/venue-extstub -status): its mode, its answer-table digest and its
 // start time; the run needs the frozen run mode in every read and one stub process across the reads.
 var egressKeys = []string{"when", "network_internal", "networks", "default_route", "public_tcp", "public_dns", "stub_tcp", "hosts_pinned", "image",
-	"stub_mode", "stub_config", "stub_started", "goapi_ip", "run_id"}
+	"stub_mode", "stub_config", "stub_started", "goapi_ip", "run_id", "dynamic_hosts"}
 
 // noRun is the run_id of the read after the last drive, which precedes no drive.
 const noRun = "none"
@@ -72,7 +80,7 @@ func checkEgress(reads []EgressRead, want []string) []string {
 	hosts := slices.Clone(StubHosts)
 	slices.Sort(hosts)
 	expect := map[string]string{"network_internal": "true", "default_route": "none", "public_tcp": "refused", "public_dns": "fail", "stub_tcp": "ok",
-		"hosts_pinned": strings.Join(hosts, ","), "stub_mode": "run"}
+		"hosts_pinned": strings.Join(hosts, ","), "stub_mode": "run", "dynamic_hosts": "unset"}
 	for i, r := range reads {
 		if r.Err != nil {
 			voids = append(voids, fmt.Sprintf("egress record %s is unreadable: %v", r.Name, r.Err))

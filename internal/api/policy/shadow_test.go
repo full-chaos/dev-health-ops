@@ -387,17 +387,19 @@ func TestShadowSkipsAreCountedAndAskNothing(t *testing.T) {
 	}
 }
 
-// The shadow mirrors enforcement for a caller with a live go-api impersonation row: never asked, counted
+// The shadow mirrors enforcement for a caller with a live go-api impersonation row: never asked; a read the legacy
+// check admits is counted skipped (enforcement keeps its legacy answer), a platform wrap's read and a write are counted
 // impersonation_refused, also on a high-risk row with its switch off.
 func TestShadowAnImpersonatingAdminIsCountedRefusedAndAskedNothing(t *testing.T) {
 	for _, cell := range []struct {
 		name, method, path string
 		who                persona
 		mutate             func(*ShadowConfig)
+		want               string
 	}{
-		{"organization row", "GET", "/api/v1/admin/teams", personaAdmin, nil},
-		{"platform row", "GET", "/api/v1/admin/orgs", personaSuperuser, nil},
-		{"high-risk row with the second switch off", "POST", "/api/v1/admin/teams", personaAdmin, func(c *ShadowConfig) { c.HighRisk = false }},
+		{"organization row read", "GET", "/api/v1/admin/teams", personaAdmin, nil, "skipped"},
+		{"platform row", "GET", "/api/v1/admin/orgs", personaSuperuser, nil, "impersonation_refused"},
+		{"high-risk row with the second switch off", "POST", "/api/v1/admin/teams", personaAdmin, func(c *ShadowConfig) { c.HighRisk = false }, "impersonation_refused"},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			rec := recordShadow(t)
@@ -405,8 +407,8 @@ func TestShadowAnImpersonatingAdminIsCountedRefusedAndAskedNothing(t *testing.T)
 			sh, _ := newShadowFor(t, pdp.client(t), cell.mutate)
 			shadowRequest(shadowHandler(t, personaStore(cell.who), userClaims(nil), sh, impersonating), cell.method, cell.path)
 			sh.wg.Wait()
-			if _, results := rec.snapshot(); !slices.Equal(results, []string{"impersonation_refused"}) {
-				t.Errorf("results %v, want [impersonation_refused]", results)
+			if _, results := rec.snapshot(); !slices.Equal(results, []string{cell.want}) {
+				t.Errorf("results %v, want [%s]", results, cell.want)
 			}
 			if n := len(pdp.calls()); n != 0 {
 				t.Errorf("%d PDP calls, want 0", n)

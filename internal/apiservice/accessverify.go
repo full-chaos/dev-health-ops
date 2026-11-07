@@ -95,7 +95,7 @@ func newACRWorkloadSubjectRecorder(meter metric.Meter) func(context.Context, boo
 // routes: the access-token issuer and keys, audience dev-health-api only (a
 // token for any other audience is refused), leeway 0. No issuer or no
 // AUTH_ACR_WORKLOAD_SUBJECT means no workload path (nil): the routes then
-// refuse every workload token as not_configured and svc_acr_ is unchanged.
+// refuse every workload token as not_configured, so they serve no bearer.
 func buildACRWorkload(lookup func(string) (string, bool), keys authverify.KeySource, logger *slog.Logger) (*acr.WorkloadAuth, error) {
 	if logger == nil {
 		logger = slog.Default()

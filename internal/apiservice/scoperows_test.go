@@ -12,7 +12,8 @@ import (
 // TestScopeRowsReadTheValidatorsClassField: the scope's access flag is the
 // validator's row (accepts user_access_token or legacy HS256) for every go-api
 // row, the webhook rows are exactly the signature-only routes, and the domain
-// rows are the fcpush and svc_acr rows.
+// rows are the fcpush rows (the internal acr rows accept the workload token
+// only, no prefixed domain credential).
 func TestScopeRowsReadTheValidatorsClassField(t *testing.T) {
 	scopeRows, err := parseScopeRows(authv1.GoAPIEndpointProfiles)
 	if err != nil {
@@ -49,11 +50,11 @@ func TestScopeRowsReadTheValidatorsClassField(t *testing.T) {
 	}
 	slices.Sort(domain)
 	for _, profile := range domain {
-		if !strings.Contains(profile, " /api/v1/external-ingest/") && !strings.Contains(profile, " /api/v1/internal/acr/") {
-			t.Errorf("domain row %s is neither an external-ingest nor an internal acr row", profile)
+		if !strings.Contains(profile, " /api/v1/external-ingest/") {
+			t.Errorf("domain row %s is not an external-ingest row", profile)
 		}
 	}
-	if len(domain) != 9 {
-		t.Errorf("domain rows %v, want the 5 fcpush and 4 svc_acr rows", domain)
+	if len(domain) != 5 {
+		t.Errorf("domain rows %v, want the 5 fcpush rows", domain)
 	}
 }

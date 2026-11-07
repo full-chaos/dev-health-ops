@@ -1,20 +1,21 @@
 package workflows_test
 
 import (
+	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 )
 
-// CHAOS-13107: the real HS256 fallback of the local go-api. go-api mints its own HS256 session pair whenever its
-// session issuer is nil (apiservice.Deps.SessionIssuer: "nil mints them in go-api"), and sessionIssuer returns nil
-// unless AuthProxyConfig.Enabled(AuthSessions): AUTH_PROXY_SESSIONS on AND AUTH_PROXY_URL set. This cell reads
-// go-api's compose environment through the same parser go-api starts with, so a compose that leaves either one out
-// is refused here. With the flag on, go-api builds its session_compat client from AUTH_SESSION_ISSUE_TOKEN (acp
-// ruling (b): local compose presents the svc_authsess_ credential, not the workload token); a token sessionissue.New
-// refuses would stop go-api at start, and a token with no auth-session-issuer row would make every sign-in answer
-// 503, so the seed one-shot must hash the same value.
+// The local go-api never mints its own HS256 sessions and never signs in with a service credential. go-api mints its
+// own session pair whenever its session issuer is nil (apiservice.Deps.SessionIssuer: "nil mints them in go-api"),
+// and sessionIssuer returns nil unless AuthProxyConfig.Enabled(AuthSessions): AUTH_PROXY_SESSIONS on AND
+// AUTH_PROXY_URL set. This cell reads go-api's compose environment through the same parser go-api starts with, so a
+// compose that leaves either one out is refused here. With the flag on, go-api presents its workload token on the
+// session issue route (AUTH_SESSION_ISSUE_CREDENTIAL=workload): compose writes the bootstrap credential file with the
+// auth-workload-bootstrap one-shot and the principal id auth-service accepts with auth-workload-subject, on every `up`
+// and with no manual step. A svc_authsess_ credential (AUTH_SESSION_ISSUE_TOKEN and the one-shot that seeded its row)
+// is not part of compose.
 func TestComposeGoAPIDoesNotMintItsOwnHS256Sessions(t *testing.T) {
 	c := readComposeFile(t, "compose.yml")
 	goAPI, ok := c.Services["go-api"]
@@ -37,24 +38,24 @@ func TestComposeGoAPIDoesNotMintItsOwnHS256Sessions(t *testing.T) {
 		t.Fatalf("go-api's compose environment leaves sessions in go-api (AUTH_PROXY_SESSIONS %q, AUTH_PROXY_URL %q): its session issuer is nil and it mints HS256 session pairs itself",
 			env[apiservice.AuthProxyFlagEnv(apiservice.AuthSessions)], env[apiservice.EnvAuthProxyURL])
 	}
-	if sel := env[apiservice.EnvAuthSessionIssueCredential]; sel != "" && sel != "session_compat" {
-		t.Errorf("go-api %s resolves to %q: local compose presents session_compat (acp ruling (b)), so it must be blank or session_compat",
-			apiservice.EnvAuthSessionIssueCredential, sel)
+	if got := env[apiservice.EnvAuthSessionIssueCredential]; got != "workload" {
+		t.Errorf("go-api %s resolves to %q: local compose presents go-api's workload token, so it must be workload", apiservice.EnvAuthSessionIssueCredential, got)
 	}
-	token := env[sessionissue.EnvToken]
-	if _, err := sessionissue.New(cfg.Upstream, token, 0); err != nil {
-		t.Errorf("go-api's session issue client is refused (%v): go-api does not start", err)
+	for _, name := range []string{apiservice.EnvAuthWorkloadBootstrapFile, apiservice.EnvAuthWorkloadIssuer} {
+		if strings.TrimSpace(env[name]) == "" {
+			t.Errorf("go-api has no %s: the workload credential needs it and go-api refuses to start without it", name)
+		}
 	}
-
-	seed, ok := c.Services["auth-session-issue-seed"]
-	if !ok {
-		t.Fatal("compose.yml has no service auth-session-issue-seed: no auth-session-issuer row holds go-api's token, and auth-service refuses every session issue")
+	if _, set := env["AUTH_SESSION_ISSUE_TOKEN"]; set {
+		t.Error("go-api's compose environment sets AUTH_SESSION_ISSUE_TOKEN: a svc_authsess_ credential is no longer how it signs in")
 	}
-	seedToken, _ := envString(t, seed, sessionissue.EnvToken)
-	if raw, _ := envString(t, goAPI, sessionissue.EnvToken); raw != seedToken {
-		t.Errorf("go-api %s is %q, the seed one-shot hashes %q: the two must be the same compose value", sessionissue.EnvToken, raw, seedToken)
+	if _, ok := c.Services["auth-session-issue-seed"]; ok {
+		t.Error("compose.yml still has auth-session-issue-seed: it writes the row of a svc_authsess_ credential nothing presents")
 	}
-	if !runsWherever(seed.Profiles, goAPI.Profiles) {
-		t.Errorf("auth-session-issue-seed profiles = %v: it must start in every profile go-api starts in", seed.Profiles)
+	if c.Services["go-api"].DependsOn["auth-workload-bootstrap"].Condition != "service_completed_successfully" {
+		t.Error("go-api does not wait for auth-workload-bootstrap: it would start without its credential file")
+	}
+	if c.Services["auth-service"].DependsOn["auth-workload-subject"].Condition != "service_completed_successfully" {
+		t.Error("auth-service does not wait for auth-workload-subject: it would start without the principal id it accepts")
 	}
 }

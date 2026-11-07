@@ -39,9 +39,9 @@ services:
       # (auth-service sign-up is gated until D3).
       AUTH_PROXY_URL: http://auth-service:8095
       AUTH_PROXY_SESSIONS: "true"
-      # workload: go-api presents its workload token on the session issue route (ci/lib/auth_workload_session_issue.sh sets
-      # it). Empty is session_compat, and go-api then refuses to start: the proof mints no session issue service credential.
-      AUTH_SESSION_ISSUE_CREDENTIAL: ${AUTH_SESSION_ISSUE_CREDENTIAL:-}
+      # workload: go-api presents its workload token on the session issue route (compose.yml sets it; ci/lib/auth_workload_session_issue.sh
+      # exports the same value). Empty is session_compat, and go-api then refuses to start: the proof mints no session issue service credential.
+      AUTH_SESSION_ISSUE_CREDENTIAL: ${AUTH_SESSION_ISSUE_CREDENTIAL:-workload}
       AUTH_PROXY_LOCAL_LOGIN: "true"
       AUTH_PROXY_CREDENTIALS: "false"
       AUTH_PROXY_SOCIAL: "false"

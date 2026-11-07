@@ -21,7 +21,7 @@ Use this guide for a source checkout. Production configuration, secrets, sizing,
 
 ## Prerequisites
 
-- Python 3.14. The project declares `requires-python = ">=3.14"`; older interpreters are not tested (CHAOS-3419).
+- Python 3.14. The project declares `requires-python = ">=3.14"`; older interpreters are not tested.
 - Docker with Compose.
 - Git.
 - A supported Node.js release only when the change touches JavaScript tooling, Wrangler, or a related frontend repository.
@@ -192,10 +192,7 @@ Review generated files, migration output, fixtures, and local configuration deli
 
 ## Working in parallel with other agents
 
-The Compose stack described above is shared by every agent on the machine, so
-migrations, rebuilds and database writes contend. To get a private full stack
-instead — your own Postgres, ClickHouse, FalkorDB, workers and API in a
-dedicated Kubernetes namespace, seeded from `backups/` — see
-[Lane isolation on a kiac cluster](../development/lane-isolation-kiac.md). That
-page also lists which standing Compose-stack rules stop applying once your lane
-is cluster-isolated.
+The Compose stack described above is shared by everything on the machine, so
+migrations, rebuilds and database writes contend. For a private full stack in a
+dedicated Kubernetes namespace, see
+[Integration suite targets](../development/integration-suite-targets.md).

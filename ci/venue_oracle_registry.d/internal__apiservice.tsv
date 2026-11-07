@@ -1,3 +1,4 @@
+internal/apiservice	TestAdminMemberListAnswersAsLegacyVenueOracle	run
 internal/apiservice	TestExternalIngestPayloadHashVenueOracle	run
 internal/apiservice	TestExternalIngestVenueOracle	run
 internal/apiservice	TestVenueOracleCredentialAdmin	run

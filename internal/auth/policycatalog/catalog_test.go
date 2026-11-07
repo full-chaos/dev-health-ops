@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	actionsSHA = "f8fdfb7c71f7f00460f27d630dbcf063617f363facee4d7fcb2222d3ba0bcef7"
+	actionsSHA = "469a8a104fa62cec3e5102a960c17e12b7da4e22f92eebf3467bc56663d94061"
 	rolesSHA   = "f65308dd26eebe161d69febcebcc09b34cb5166fc6f3621bae6a4c7cb7aa0afb"
 )
 
@@ -694,7 +694,7 @@ func TestLoadReadsPlatformAdminOnlyOnAnOrganizationAction(t *testing.T) {
 	}
 }
 
-func TestThePlatformAdminActionsAreTheEightOrganizationActionsOfTheAdminGuard(t *testing.T) {
+func TestThePlatformAdminActionsAreTheSevenOrganizationActionsOfTheAdminGuard(t *testing.T) {
 	var got []string
 	for _, a := range Default().Actions() {
 		if a.PlatformAdmin {
@@ -703,7 +703,7 @@ func TestThePlatformAdminActionsAreTheEightOrganizationActionsOfTheAdminGuard(t 
 	}
 	sort.Strings(got)
 	want := []string{"billing.manage", "integrations.read", "integrations.write", "members.invite", "members.manage",
-		"members.read", "settings.write", "teams.write"}
+		"settings.write", "teams.write"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("platform_admin actions %v, want %v", got, want)
 	}

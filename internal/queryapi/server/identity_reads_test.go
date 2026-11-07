@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
@@ -175,7 +176,7 @@ func TestGraphQLEdgeConsumersShareOneAnswerWhenTheRowChanges(t *testing.T) {
 	if recorder.Code != http.StatusOK || len(*seen) != 1 {
 		t.Fatalf("%d ran=%v, want 200 and one run", recorder.Code, *seen)
 	}
-	want := authctx.Claims{OrgID: irOtherOrg.String(), Role: "", IsSuperuser: true}
+	want := authctx.Claims{OrgID: irOtherOrg.String(), Role: "", IsSuperuser: true, Scope: pepgate.Legacy(irOtherOrg.String())}
 	if (*seen)[0] != want || !strings.Contains(store.reads(), irUser()) {
 		t.Fatalf("resolvers ran as %+v after reads %q; want %+v from one read of the users row", (*seen)[0], store.reads(), want)
 	}

@@ -141,7 +141,8 @@ func (p *allowPDP) asked() []string {
 	return append([]string(nil), p.orgs...)
 }
 
-// seamHandler mounts pattern behind the real guard and enforcer (billing switched on). The route body is the real
+// seamHandler mounts pattern behind the real guard and enforcer (billing switched on; a nil decider is no enforcer,
+// the legacy guard). The route body is the real
 // billing org resolution of that route (invoiceOrg for the invoice rows, resolveOrg for the subscription rows) over a
 // querier whose membership read says the caller is a member; it answers the organization it would serve. The full
 // route bodies need a Postgres pool, which a unit test has none of.
@@ -158,13 +159,15 @@ func seamHandler(t *testing.T, pattern string, level policy.Authz, invoices, sup
 	if err != nil {
 		t.Fatal(err)
 	}
-	enforcer, err := policy.NewEnforcer(policy.EnforceConfig{Decider: decider, Rows: rows, Switch: authzenforce.Parse(authzenforce.GoAPI, "billing"),
-		Timeout: time.Second, Logger: quiet()})
-	if err != nil {
-		t.Fatal(err)
-	}
 	guard := policy.NewGuard(auth, quiet())
-	guard.SetEnforcer(enforcer)
+	if decider != nil {
+		enforcer, err := policy.NewEnforcer(policy.EnforceConfig{Decider: decider, Rows: rows, Switch: authzenforce.Parse(authzenforce.GoAPI, "billing"),
+			Timeout: time.Second, Logger: quiet()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		guard.SetEnforcer(enforcer)
+	}
 	h := handlers{logger: quiet()}
 	resolve := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		param := seamOrgParam(r)
@@ -206,10 +209,10 @@ func seamOrgParam(r *http.Request) *uuid.UUID {
 	return &id
 }
 
-// With billing enforced, a caller whose token org is A and who is a member of B asks a billing org_id row for B. On
-// main the PDP is asked about A, allows, and the route's own org resolution serves B; the seam must refuse it with a
-// 403 before any PDP call. The same org is served; a superuser asking for B is refused too.
-func TestBillingOrgIDQueryRowsServeOnlyTheJudgedOrg(t *testing.T) {
+// With billing enforced, a caller whose token org is A asks a billing org_id row for B: a member of B, and a superuser.
+// The request keeps the legacy answer (the guard, then the route's own org resolution) with no PDP call (product rule
+// 1, D6773): the PDP judges one organization and the route serves another. org_id=A is judged on A and served A.
+func TestBillingOrgIDQueryRowsKeepTheLegacyAnswerForAnotherOrg(t *testing.T) {
 	cases := []struct {
 		pattern  string
 		level    policy.Authz
@@ -229,6 +232,13 @@ func TestBillingOrgIDQueryRowsServeOnlyTheJudgedOrg(t *testing.T) {
 		t.Run(tc.pattern, func(t *testing.T) {
 			method, route, _ := strings.Cut(tc.pattern, " ")
 			path := strings.ReplaceAll(route, "{invoice_id}", uuid.NewString())
+			serve := func(superuser bool, org uuid.UUID, decider pep.Decider) (int, string) {
+				req := httptest.NewRequest(method, path+"?org_id="+org.String(), nil)
+				req.Header.Set("Authorization", "Bearer "+seamBearer)
+				rec := httptest.NewRecorder()
+				seamHandler(t, tc.pattern, tc.level, tc.invoices, superuser, decider).ServeHTTP(rec, req)
+				return rec.Code, strings.TrimSpace(rec.Body.String())
+			}
 			do := func(superuser bool, org uuid.UUID) (int, string, []string) {
 				pdp := newAllowPDP(t)
 				client, err := pep.New(pep.Config{BaseURL: pdp.srv.URL, AllowPlainHTTP: true, HTTPClient: pdp.srv.Client(),
@@ -236,21 +246,19 @@ func TestBillingOrgIDQueryRowsServeOnlyTheJudgedOrg(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				req := httptest.NewRequest(method, path+"?org_id="+org.String(), nil)
-				req.Header.Set("Authorization", "Bearer "+seamBearer)
-				rec := httptest.NewRecorder()
-				seamHandler(t, tc.pattern, tc.level, tc.invoices, superuser, client).ServeHTTP(rec, req)
-				return rec.Code, strings.TrimSpace(rec.Body.String()), pdp.asked()
+				status, body := serve(superuser, org, client)
+				return status, body, pdp.asked()
 			}
-			if status, body, asked := do(false, seamOrgB); status != http.StatusForbidden || len(asked) != 0 {
-				t.Errorf("member of B, token A, org_id=B: %d %s, PDP asked %v, want 403 and no PDP call", status, body, asked)
+			for _, superuser := range []bool{false, true} {
+				wantStatus, wantBody := serve(superuser, seamOrgB, nil)
+				if status, body, asked := do(superuser, seamOrgB); status != wantStatus || body != wantBody || len(asked) != 0 {
+					t.Errorf("superuser %v, token A, org_id=B: %d %s, PDP asked %v, want the legacy %d %s and no PDP call", superuser, status, body,
+						asked, wantStatus, wantBody)
+				}
 			}
 			if status, body, asked := do(false, seamOrgA); status != http.StatusOK || body != `{"served":"`+seamOrgA.String()+`"}` ||
 				len(asked) != 1 || asked[0] != seamOrgA.String() {
 				t.Errorf("token A, org_id=A: %d %s, PDP asked %v, want 200 serving A and one question on A", status, body, asked)
-			}
-			if status, body, asked := do(true, seamOrgB); status != http.StatusForbidden || len(asked) != 0 {
-				t.Errorf("superuser, token A, org_id=B: %d %s, PDP asked %v, want 403 and no PDP call", status, body, asked)
 			}
 		})
 	}

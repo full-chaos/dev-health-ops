@@ -212,9 +212,10 @@ func (p *subjectProbe) handler() *routeswitch.Mux {
 	return mux
 }
 
-// C13: /graphql puts the caller's bearer and its class on the context after authentication; /query (the envelope
-// path) puts none there. The routed edge token is a user access token (the HS256 class is retired), so its subject is
-// the user token class with no skip reason; the shadow only observes (graph.OperationShadow.InterceptOperation).
+// C13: /graphql puts the caller's bearer and its class on the context after authentication; /query does the same for
+// its bearer (CHAOS-12659 G6), here the envelope, which the shadow never asks about. The routed edge token is a user
+// access token (the HS256 class is retired), so its subject is the user token class with no skip reason; the shadow
+// only observes (graph.OperationShadow.InterceptOperation).
 func TestGraphQLShadowSubjectReachesTheOperation(t *testing.T) {
 	store := &fakeEdgeStore{
 		states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
@@ -250,8 +251,11 @@ func TestGraphQLShadowSubjectReachesTheOperation(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+envelope)
 	recorder = httptest.NewRecorder()
 	query.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || len(probe.subjects) != 1 || probe.found[0] {
-		t.Fatalf("/query: %d, subjects %+v found %v, want a run with no subject", recorder.Code, probe.subjects, probe.found)
+	if recorder.Code != http.StatusOK || len(probe.subjects) != 1 || !probe.found[0] {
+		t.Fatalf("/query: %d, subjects %+v found %v, want a run with the envelope's subject", recorder.Code, probe.subjects, probe.found)
+	}
+	if got := probe.subjects[0]; got.Bearer != envelope || got.UserAccessToken || got.SkipReason != policy.ShadowReasonEnvelope {
+		t.Fatalf("/query subject: class fields %+v, want the envelope as envelope and not a user token", got)
 	}
 }
 

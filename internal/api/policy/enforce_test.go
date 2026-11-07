@@ -626,7 +626,7 @@ func collectSum(t *testing.T, reader *sdkmetric.ManualReader, name, label string
 	return description, values
 }
 
-// No caller gives the unjudged counter a "delegated" reason: its closed reason set is hs256, no_org and
+// No caller gives the unjudged counter a "delegated" reason: its closed reason set is hs256, no_org, served_org and
 // impersonation (a live-row read; the live-row platform wrap is refused, not unjudged).
 func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	recordEnforce(t)
@@ -644,13 +644,13 @@ func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	if !slices.Equal(reasons, []string{"impersonation", "no_org"}) {
 		t.Errorf("unjudged reasons %v, want [impersonation no_org] (no delegated point)", reasons)
 	}
-	if want := "by route row and reason: hs256, no_org, impersonation"; !strings.HasSuffix(description, want) {
+	if want := "by route row and reason: hs256, no_org, served_org, impersonation"; !strings.HasSuffix(description, want) {
 		t.Errorf("unjudged description %q, want it to end %q", description, want)
 	}
 }
 
-// The decision counter's outcome set is closed: allow, deny, error_deny, impersonation_refused and org_mismatch, each
-// reached, and the description names exactly those.
+// The decision counter's outcome set is closed: allow, deny, error_deny and impersonation_refused, each reached, and
+// the description names exactly those. A request that serves another organization counts no outcome (it is unjudged).
 func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	previous := enforceDecisionAdd
@@ -671,11 +671,11 @@ func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	members := servedOrgCensusRow{"GET /api/v1/admin/orgs/{org_id}/members", Admin, false}
 	servedOrgServe(t, members, servedOrgSetup{who: personaAdmin, enforcer: servedOrgEnforcer(t, allow, "members")}, strangerOrg)
 	description, outcomes := collectSum(t, reader, enforceDecisionMetric, "outcome")
-	want := []string{"allow", "deny", "error_deny", "impersonation_refused", "org_mismatch"}
+	want := []string{"allow", "deny", "error_deny", "impersonation_refused"}
 	if !slices.Equal(outcomes, want) {
 		t.Errorf("outcomes %v, want %v", outcomes, want)
 	}
-	if suffix := "outcome: allow, deny, error_deny, impersonation_refused, org_mismatch"; !strings.HasSuffix(description, suffix) {
+	if suffix := "outcome: allow, deny, error_deny, impersonation_refused"; !strings.HasSuffix(description, suffix) {
 		t.Errorf("decision description %q, want it to end %q", description, suffix)
 	}
 }

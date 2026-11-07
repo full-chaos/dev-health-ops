@@ -24,8 +24,18 @@
       "layer": "pdp"
     },
     {
+      "file": "allow-platform-admin-no-membership-reads-analytics.json",
+      "id": "allow-platform-admin-no-membership-reads-analytics",
+      "layer": "pdp"
+    },
+    {
       "file": "allow-platform-admin-no-membership-reads-org-integrations.json",
       "id": "allow-platform-admin-no-membership-reads-org-integrations",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-suspended-org-reads-org-integrations.json",
+      "id": "allow-platform-admin-suspended-org-reads-org-integrations",
       "layer": "pdp"
     },
     {

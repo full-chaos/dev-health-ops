@@ -390,9 +390,20 @@ func noStateRead(s *accessStore) {
 // stackStateCells runs userStateCells on a listener stack: q with the stack's user token.
 func stackStateCells(t *testing.T, o *liveObs, label string, q liveReq) {
 	t.Helper()
+	stackStateCellsAs(t, o, label, q, nil)
+}
+
+// stackStateCellsAs is stackStateCells over a store base shapes first.
+func stackStateCellsAs(t *testing.T, o *liveObs, label string, q liveReq, base func(*accessStore)) {
+	t.Helper()
 	for _, cell := range userStateCells {
 		var store *accessStore
-		stack := liveStack(t, func(s *accessStore) { store = s })
+		stack := liveStack(t, func(s *accessStore) {
+			if base != nil {
+				base(s)
+			}
+			store = s
+		})
 		q2 := q
 		q2.bearer = stack.user
 		o.wantStatus(label+"user token, first request ("+cell.name+")", stack.live(q2), http.StatusOK)
@@ -769,10 +780,13 @@ func driveBuildInfo(t *testing.T, row liveRow) *liveObs {
 		q.bearer = iaEnvelopeExpiredAt(t, stack.priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}, time.Now().Add(-time.Minute))
 		o.wantStatus(listener+": envelope past its exp", stack.live(q), http.StatusUnauthorized)
 		buildInfoUserTokenCells(t, o, listener, q, first.body)
+		stackStateCellsAs(t, o, listener+": platform admin, ", q, asSuperuser)
 	}
 	o.textHas("resource_resolver", "none:")
 	o.impersonationPolicy(false)
-	o.textHas("current_state_cache_behavior", "none: no state read", "nothing is cached")
+	o.textHas("current_state_cache_behavior", "none: per-request read", "nothing is cached between requests",
+		"the effective-principal envelope reads no state")
+	o.textHas("disclosure_behavior", "not a platform admin (admin.orgs)", "active impersonation session", "delegated")
 	o.statusText()
 	return o
 }

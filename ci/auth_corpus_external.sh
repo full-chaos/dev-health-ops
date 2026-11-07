@@ -123,6 +123,7 @@ fi
     printf 'export AUTH_CORPUS_OPERATOR_PORT=%s\n' "${OPERATOR_PORT}"
     printf 'export AUTH_CORPUS_STUB_DIR=%q\n' "${STUB_DIR}"
     printf 'export JWT_SECRET_KEY=%q\n' "${JWT_KEY}"
+    printf 'export LINK_TOKEN_SECRET=%q\n' "${JWT_KEY}"
     printf 'export EMAIL_PROVIDER=%q\n' "smtp"
     printf 'export EMAIL_FROM_ADDRESS=%q\n' "Dev Health <auth@example.test>"
     if [ "${LEG}" = "acp" ]; then
@@ -252,6 +253,11 @@ up_service() {
 
 # compose.yml's migrate service refuses a database that already holds objects but no alembic_version table, and
 # auth-migrate creates the auth schema: leg acp starts go-api (and with it migrate) first and auth-service after it.
+# CHAOS-13126: go-api verifies the venue's EdDSA tokens with its issuer's key set (authverify's JWKS client dials
+# <issuer>/.well-known/), so go-api and auth-service run with the issuer compose's auth-issuer serves (compose.yml's
+# AUTH_TOKEN_ISSUER_URL default), set before the first up. The workload lib keeps a caller value; its own default
+# names a host nothing serves.
+export AUTH_TOKEN_ISSUER_URL="https://auth.dev-health.internal:8443"
 printf 'step 1: up --build --wait go-api (project %s)\n' "${PROJECT}"
 up_service go-api
 if [ "${LEG}" = "acp" ]; then

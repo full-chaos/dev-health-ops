@@ -222,6 +222,7 @@ internal/cigates/docstools	dc_helpers_test.go
 internal/cigates/docstools	dc_links.go
 internal/cigates/docstools	dc_paths_test.go
 internal/cigates/docstools	dc_pub.go
+internal/cigates/docstools	dc_pub_exclude_test.go
 internal/cigates/docstools	dc_pub_helpers_test.go
 internal/cigates/docstools	dc_pub_py.go
 internal/cigates/docstools	dc_pub_test.go
@@ -339,6 +340,7 @@ internal/cigates/workflows	workflows_go_queue_cancel_children_test.go
 internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
+internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
 internal/deploymentcontract	manifest.go
 internal/egressguard	egressguard_test.go
@@ -442,6 +444,7 @@ internal/jobs/report	report_test.go
 internal/jobs/report	runtime_integration_test.go
 internal/jobs/workgraph/operationaledges	incidents_golden_integration_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go
+internal/llmorgsettings	keyreaders_census_test.go
 internal/llmorgsettings	relation_test.go
 internal/loadharness	pdp_profiles_test.go
 internal/loadharness	profiles_test.go
@@ -517,6 +520,7 @@ internal/queryapi/drilldown	golden_test.go
 internal/queryapi/explain	golden_test.go
 internal/queryapi/flame	golden_test.go
 internal/queryapi/graph	field_action_map_test.go
+internal/queryapi/graph	field_precheck_parity_test.go
 internal/queryapi/graph	root_class_census_test.go
 internal/queryapi/graph/model	sdl_nullability_gate_test.go
 internal/queryapi/heatmap	identity.go
@@ -530,6 +534,7 @@ internal/queryapi/opportunities	response_test.go
 internal/queryapi/people	golden_test.go
 internal/queryapi/people	identity.go
 internal/queryapi/pepgate	census_test.go
+internal/queryapi/pepgate	legacy_site_census_test.go
 internal/queryapi/principal	verifier.go
 internal/queryapi/quadrant	golden_test.go
 internal/queryapi/quadrant	identity.go
@@ -553,6 +558,7 @@ internal/queryapi/server	endpoint_profile_same_line_test.go
 internal/queryapi/server	explain_422_test.go
 internal/queryapi/server	graphql_edge_go_only_operations_test.go
 internal/queryapi/server	graphql_edge_venue_oracle_integration_test.go
+internal/queryapi/server	graphql_shadow_test.go
 internal/queryapi/server	home_coverage_oracle_capture_integration_test.go
 internal/queryapi/server	home_coverage_oracle_policy_guard_integration_test.go
 internal/queryapi/server	internal_auth_test.go
@@ -583,6 +589,7 @@ internal/queryapi/server	rate_coverage_documents_integration_test.go
 internal/queryapi/server	registered_document_field_gate_test.go
 internal/queryapi/server	registered_forecast_documents_test.go
 internal/queryapi/server	reports_write_proof_venue_oracle_integration_test.go
+internal/queryapi/server	rest_allowlist_census_test.go
 internal/queryapi/server	rest_error_response_test.go
 internal/queryapi/server	rest_routes_test.go
 internal/queryapi/server	rest_scope_census_test.go

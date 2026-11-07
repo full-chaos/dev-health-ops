@@ -243,9 +243,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// comment). Cipher is the same FernetDecryptor
 			// (SETTINGS_ENCRYPTION_KEY) every other stored-secret decrypt
 			// in this process already uses. StateSecret is
-			// SSO_STATE_SECRET, else JWT_SECRET_KEY (statePurposeSecrets);
+			// SSO_STATE_SECRET only (statePurposeSecrets);
 			// HKDF derives one key per protocol from it (state.go).
-			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, StateSecretFallback: deps.SSOStateSecretFallback, Signer: deps.Signer, Inner: proxy.inner,
+			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, Signer: deps.Signer, Inner: proxy.inner,
 			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
@@ -525,17 +525,19 @@ func configureWith(
 	}
 	deps.Invites = inviteConfig(cfg, logger, envsecrets.ProcessLookup)
 	deps.GitHubApp = GitHubAppConfig(envsecrets.ProcessLookup)
-	deps.SSOStateSecret, deps.SSOStateSecretFallback, deps.GitHubStateSigner = statePurposeSecrets(cfg)
+	deps.SSOStateSecret, deps.GitHubStateSigner = statePurposeSecrets(cfg)
+	if deps.SSOStateSecret == "" {
+		logger.Warn("config_missing: SSO_STATE_SECRET is not set; the OIDC, SAML and OAuth sign-in routes answer 503")
+	}
+	if deps.GitHubStateSigner.Secret == "" {
+		logger.Warn("config_missing: GITHUB_APP_STATE_SECRET is not set; the GitHub App install routes answer 503")
+	}
 	refreshAccepted, err := accessverify.NewRefreshCounter(otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"), goAPIAccessService)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_refresh_counter", "api_refresh_counter_invalid", err)
 	}
 	session.SetRefreshAccepted(refreshAccepted)
-	if err := startLegacyLinkCounter(); err != nil {
-		closeComponents(depComponents)
-		return nil, dependencyFailure(ctx, logger, "api_legacy_link_counter", "api_legacy_link_counter_invalid", err)
-	}
 	deps.RegisterLimit, err = registerLimit(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)

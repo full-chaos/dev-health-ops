@@ -1087,6 +1087,36 @@ groups:
             stopped reporting is not the same as a fresh table).
 
   # ---------------------------------------------------------------------------
+  # Issue-PR fallback invariant (work-graph pre-step issue_pr_fallback_invariant).
+  # The counters are unlabeled and are added on every build, 0 included, so a
+  # breach is an increase. The organization is named by the WARN log line only.
+  # Created in SigNoz by hand as a builder threshold rule (PromQL does not
+  # evaluate there): docs/operate/observe/dashboards-and-alerts.md.
+  # ---------------------------------------------------------------------------
+  - name: issue_pr_fallback_invariant
+    interval: 1m
+    rules:
+      - alert: IssuePRFallbackInvariantBreached
+        expr: |
+          sum(increase(workgraph_issue_pr_fallback_beside_native_rows_total[24h])) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "work_graph_issue_pr holds fallback rows the native-first rule forbids"
+          description: |
+            A work-graph build found about {{ $value | humanize }} explicit_text or
+            heuristic rows beside a native link, or with a pull request as the
+            issue side, in the last day. A link writer regressed; the check
+            reports and repairs nothing. Next: the WARN log line "issue-pr
+            fallback invariant breached" (organization_id and the counts), the
+            per-side counters
+            workgraph_issue_pr_fallback_beside_native_pull_request_rows_total,
+            workgraph_issue_pr_fallback_beside_native_issue_rows_total and
+            workgraph_issue_pr_fallback_pull_request_issue_side_rows_total, and
+            the pre-step issue_pr_fallback_invariant.
+
+  # ---------------------------------------------------------------------------
   # Push credential projection (CHAOS-10897). The reconcile compares the push
   # projection with the credential domain; drift and run series come from the
   # worker probe (off until PUSH_RECONCILE_PROBE is on), the parked and final

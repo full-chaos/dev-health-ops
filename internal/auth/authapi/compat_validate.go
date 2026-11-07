@@ -179,8 +179,8 @@ func (v validateRouted) Validate(ctx context.Context, service, profile, bearer s
 
 // withValidateRoute mounts the validate route when rows holds its row: an
 // auth-service row that accepts the user access token (the retired HS256
-// class is on no row). Without it it logs one line naming the route and mounts
-// nothing.
+// class is on no row). Without the row, or without the legacy key, it logs
+// one line naming the route and mounts nothing.
 func (h compatHandlers) withValidateRoute(routes []httpapi.Route, rows []byte) ([]httpapi.Route, error) {
 	if h.Validate == nil {
 		return routes, nil
@@ -194,6 +194,11 @@ func (h compatHandlers) withValidateRoute(routes []httpapi.Route, rows []byte) (
 	}
 	if rowsAcceptFor(rows, []string{PatternCompatValidate}, []string{accessverify.ClassUser}) != nil {
 		h.rec.logger.Info("auth validate route not mounted: no endpoint-profile row", "route", PatternCompatValidate)
+		return routes, nil
+	}
+	// go-api's decision verifies the HS256 token first (policy.NewAuthenticator needs its verifier).
+	if h.Issuer.verifier == nil {
+		h.rec.logger.Info("auth validate route not mounted: no legacy key", "route", PatternCompatValidate)
 		return routes, nil
 	}
 	auth, err := newValidateAuth(h.CompatDeps)

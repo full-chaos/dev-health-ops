@@ -240,6 +240,9 @@ type stack struct {
 	specs  map[string]map[string]any
 }
 
+// testLinkSecret is the link secret of every stack whose mail configuration sets none.
+const testLinkSecret = "test-link-secret-0123456789abcdef"
+
 func startStack(t *testing.T, ctx context.Context) stack {
 	t.Helper()
 	return startStackWithMail(t, ctx, authmail.Config{})
@@ -283,6 +286,9 @@ func startStackRouted(t *testing.T, ctx context.Context, mail authmail.Config, i
 	routePool func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string) *pgxpool.Pool, provision authprovision.Provisioner,
 	access *edtokens.Issuer) stack {
 	t.Helper()
+	if mail.LinkSecret == "" {
+		mail.LinkSecret = testLinkSecret
+	}
 	pg, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)

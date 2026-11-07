@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -50,6 +51,7 @@ case "$*" in
     printf '%s %s %s\n' "${AUTH_SESSION_SUCCESSOR_KEY:-}" "${AUTH_LOGIN_LOCKOUT_KEY:-}" "${AUTH_JWT_SECRET_KEY:+jwt}" >> "` + record + `.keys"
     for arg in "$@"; do last="$arg"; done
     printf '%s bootstrap=%s subject=%s credential=%s token=%s\n' "$last" "${AUTH_WORKLOAD_BOOTSTRAP:-}" "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}" "${AUTH_SESSION_ISSUE_CREDENTIAL:-}" "${AUTH_SESSION_ISSUE_TOKEN:+set}" >> "` + record + `.workload"
+    printf '%s %s\n' "$last" "${AUTH_TOKEN_ISSUER_URL:-unset}" >> "` + record + `.upissuer"
     if [ -n "$FAKE_BLOCK_UP" ]; then exec sleep "$FAKE_BLOCK_UP"; fi
     if [ -n "$FAKE_FAIL_UP" ]; then exit 1; fi ;;
   *" logs "*" auth-service"*)
@@ -478,6 +480,44 @@ func TestAuthCorpusAcpLegSignsInWithTheWorkloadTokenAndGrantsBeforeTheSessionsFl
 	}
 	if !goAPISessions {
 		t.Errorf("go-api never started with AUTH_SESSION_ISSUE_CREDENTIAL=workload:\n%s", raw)
+	}
+}
+
+// CHAOS-13126: go-api verifies the venue's EdDSA tokens with its issuer's key set (authverify's JWKS client dials
+// <issuer>/.well-known/openid-configuration and jwks.json), so leg acp starts go-api and auth-service with the issuer
+// compose's auth-issuer serves (compose.yml's AUTH_TOKEN_ISSUER_URL default), not the workload lib's default, which
+// no host serves: there every venue token answered 503.
+func TestAuthCorpusAcpLegUsesTheIssuerAuthIssuerServes(t *testing.T) {
+	compose, err := os.ReadFile(filepath.Join(authProofRoot(t), "compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := regexp.MustCompile(`AUTH_ACCESS_TOKEN_ISSUER: \$\{AUTH_TOKEN_ISSUER_URL:-(https://[^}]+)\}`).FindSubmatch(compose)
+	if served == nil {
+		t.Fatal("compose.yml names no AUTH_TOKEN_ISSUER_URL default for go-api's AUTH_ACCESS_TOKEN_ISSUER")
+	}
+	issuer := string(served[1])
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
+	if err != nil {
+		t.Fatalf("leg acp failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(fake.record + ".upissuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ups := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		service, got, _ := strings.Cut(line, " ")
+		if service != "go-api" && service != "auth-service" {
+			continue
+		}
+		ups[service]++
+		if got != issuer {
+			t.Errorf("%s started with AUTH_TOKEN_ISSUER_URL=%q, want the issuer auth-issuer serves %q", service, got, issuer)
+		}
+	}
+	if ups["go-api"] == 0 || ups["auth-service"] == 0 {
+		t.Fatalf("want go-api and auth-service started at least once each, got %v:\n%s", ups, raw)
 	}
 }
 

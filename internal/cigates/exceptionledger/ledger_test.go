@@ -45,7 +45,7 @@ func TestTheRealTreeMatchesTheLedger(t *testing.T) {
 			exact++
 		}
 	}
-	if len(rows) < 25 || len(sites) < 11 || exact < 5 || len(sites) == exact {
+	if len(rows) < 23 || len(sites) < 12 || exact < 5 || len(sites) == exact {
 		t.Fatalf("vacuous census: %d rows, %d sites (%d exact); the scan or the ledger lost its rows", len(rows), len(sites), exact)
 	}
 }

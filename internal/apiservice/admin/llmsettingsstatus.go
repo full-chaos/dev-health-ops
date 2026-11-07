@@ -107,11 +107,7 @@ func (h *handlers) evaluateOrgLLMStatus(ctx context.Context, orgID string) (orgL
 		return orgLLMStatusEvaluation{Configured: true, ReasonCode: llmStatusReasonUnknownProvider, ProviderName: providerName}, nil
 	}
 
-	apiKeyRow, err := settingByKeyOn(ctx, h.store.Pool, orgID, llmCategory, "api_key")
-	if err != nil {
-		return orgLLMStatusEvaluation{}, err
-	}
-	apiKeyValue, err := h.settingValue(apiKeyRow)
+	key, err := h.scopeKey(ctx, h.store.Pool, orgID, "", false, true)
 	if err != nil {
 		return orgLLMStatusEvaluation{}, err
 	}
@@ -123,7 +119,7 @@ func (h *handlers) evaluateOrgLLMStatus(ctx context.Context, orgID string) (orgL
 	if err != nil {
 		return orgLLMStatusEvaluation{}, err
 	}
-	apiKey := strOrEmpty(apiKeyValue)
+	apiKey := key.Served()
 	baseURL := strOrEmpty(baseURLValue)
 	hash := baseURLHash(baseURL)
 

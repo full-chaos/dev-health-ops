@@ -33,7 +33,7 @@ The action map joins each route and GraphQL field to a catalog action from the [
 | query-api GraphQL | A valid credential, then `OperationOrgGuard` for the `orgId` argument. | No |
 | auth-service | The credential class and scope of the route. | No |
 
-The rows are held to source by Go tests. The profile rows are checked against the served routes. The GraphQL map is checked against the served schema and against handler source (`internal/queryapi/graph/field_action_map_test.go`). Nothing in the serving path reads the rows, so a runtime change does not fail a row. CHAOS-11042 plans a check that drives each route and field through the real handler. The query-api and GraphQL actions are held to two Go tables (`internal/queryapi/server/route_actions.go`, `internal/queryapi/graph/field_actions.go`) and to a parity cell that compares each action's catalog role grants with what today's guard admits.
+The rows are held to source by Go tests. The profile rows are checked against the served routes. The GraphQL map is checked against the served schema and against handler source (`internal/queryapi/graph/field_action_map_test.go`). Nothing in the serving path reads the rows, so a runtime change does not fail a row. A planned check drives each route and field through the real handler. The query-api and GraphQL actions are held to two Go tables (`internal/queryapi/server/route_actions.go`, `internal/queryapi/graph/field_actions.go`) and to a parity cell that compares each action's catalog role grants with what today's guard admits.
 
 !!! warning "Do not read a mapped action as an allow"
     The `billing.read` routes are at the `Authenticated` level today, so any valid token passes the route level. The catalog gives `billing.read` to every organization role, so the two agree here. For other routes the level and the catalog can differ, and the row says so in its `gaps`. Read the route level to know what is enforced.
@@ -182,7 +182,7 @@ Each gap entry says "this leaf does not extend the vocabulary": the profile leaf
 
 ## query-api
 
-45 rows: 37 protected and 8 public. Every protected row names a catalog action; the public rows name none. Each action is the one whose catalog role grants allow exactly what today's guard allows (parity, CHAOS-12657): every organization role holds `analytics.read`, `metrics.read`, `work_items.read`, `git.read` and `org.read`, and today's guard reads the caller's organization and no role. query-api enforces none of these actions yet; the rows state a mapping for a later decision request, not a check. query-api has no single authorization chokepoint, so per-resolver checks are not profiled.
+45 rows: 37 protected and 8 public. Every protected row names a catalog action; the public rows name none. Each action is the one whose catalog role grants allow exactly what today's guard allows (parity): every organization role holds `analytics.read`, `metrics.read`, `work_items.read`, `git.read` and `org.read`, and today's guard reads the caller's organization and no role. query-api enforces none of these actions yet; the rows state a mapping for a later decision request, not a check. query-api has no single authorization chokepoint, so per-resolver checks are not profiled.
 
 The six dispatcher rows (`/graphql`, `/query` on the query and internal listeners and on the mcp listener, `/query/proof`, `/query/run-operation`) carry the minimum action the legacy guard requires at the route, `analytics.read`; the action of each root field, in the GraphQL field map below, decides per operation. `/buildinfo` is `org.read` (legacy admits any verified credential) and `/query/proof-write` is `analytics.read` (legacy requires an allowlisted organization and no role).
 
@@ -293,11 +293,11 @@ Source for this section: the `disclosure_behavior` and `gaps` members of `contra
 
 ## Planned, not built
 
-| Item | Ticket |
+| Item | Status |
 | --- | --- |
-| Check each query-api route and GraphQL field against live behaviour. | CHAOS-11042 |
-| Narrow, widen or split any query-api action away from today's guard (the deliberate change candidates above). | decided later, on its own |
-| Explicit platform actions for the superuser-only handlers. Not in the catalog on `main`. | CHAOS-11847 |
-| Replace the route levels with decisions from the policy decision point. | CHAOS-10841 |
+| Check each query-api route and GraphQL field against live behaviour. | Planned |
+| Narrow, widen or split any query-api action away from today's guard (the deliberate change candidates above). | Decided later, on its own |
+| Explicit platform actions for the superuser-only handlers. Not in the catalog on `main`. | Planned |
+| Replace the route levels with decisions from the policy decision point. | Planned |
 
 The rows in this page are as on `main`. A pending catalog change will change the action and gap text of the affected rows.

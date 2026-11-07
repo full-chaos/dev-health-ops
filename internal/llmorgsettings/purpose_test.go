@@ -129,7 +129,7 @@ func TestSourceKeys(t *testing.T) {
 		"provider", "a", "api_key", "k", "purpose:investigate:provider", "b", "purpose:investigate:api_key", "k2")
 	check("other purpose's override", Fields, PurposeInvestigate, "purpose:explain:provider", "b")
 	check("no purpose", Fields, "", "purpose:explain:provider", "b")
-	check("inherits default key", append(PurposeKeys(PurposeInvestigate), "provider", "api_key"), PurposeInvestigate,
+	check("inherits default key", append(PurposeKeys(PurposeInvestigate), "provider", "base_url", "api_key"), PurposeInvestigate,
 		"provider", "A", "api_key", "k", "purpose:investigate:provider", "a")
 	check("different provider does not inherit", PurposeKeys(PurposeInvestigate), PurposeInvestigate,
 		"provider", "a", "api_key", "k", "purpose:investigate:provider", "b")

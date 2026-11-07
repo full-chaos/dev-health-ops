@@ -10,7 +10,8 @@
 // the judged runs) and needs a log whose name holds ".seed."; run mode refuses such a log name, so the two logs never
 // mix. -status names the mode, the answer-table digest and the start time for the venue's egress records.
 //
-// Exit: 2 usage or start failure; otherwise it serves until SIGINT or SIGTERM.
+// Exit: 2 usage or start failure; 1 the hit log did not close cleanly (lines may be lost, so the run that reads it is
+// void); otherwise 0 when it stops on SIGINT or SIGTERM.
 package main
 
 import (
@@ -33,7 +34,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
-const exitUsage = 2
+const (
+	exitUsage   = 2
+	exitLogLost = 1
+)
+
+// openLogFile opens the hit log (openLog); a test replaces it.
+var openLogFile = openLog
 
 func main() {
 	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
@@ -78,12 +85,17 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "venue-extstub: %v\n", err)
 		return exitUsage
 	}
-	file, err := openLog(*logPath)
+	file, err := openLogFile(*logPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "venue-extstub: -log %s: %v\n", *logPath, errors.Unwrap(err))
 		return exitUsage
 	}
-	defer file.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = file.Close()
+		}
+	}()
 	log := &hitLog{w: file, now: time.Now}
 	httpsLn, err := net.Listen("tcp", *httpsAddr)
 	if err != nil {
@@ -121,5 +133,10 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdown)
+	closed = true
+	if err := file.Close(); err != nil {
+		fmt.Fprintf(stderr, "venue-extstub: the hit log %s did not close: %v; its lines may be lost\n", *logPath, err)
+		return exitLogLost
+	}
 	return 0
 }

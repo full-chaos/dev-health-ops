@@ -105,7 +105,7 @@ func answerIn(mode, service, method, host, path, query string) answer {
 		if method == http.MethodGet && host == seedHost && path == seedPath && query == seedQuery {
 			return answer{http.StatusOK, seedBody}
 		}
-		return answer{http.StatusForbidden, `{"message":"venue stub: seed mode answers only the seed probe"}`}
+		return answer{http.StatusForbidden, bodySeedRefused}
 	}
 	return answerFor(service, method, path)
 }
@@ -117,17 +117,31 @@ func answerIn(mode, service, method, host, path, query string) answer {
 func answerFor(service, method, path string) answer {
 	switch service {
 	case "stripe":
-		if method == http.MethodGet && (path == "/v1/products" || path == "/v1/prices") {
-			return answer{http.StatusOK, `{"object":"list","data":[],"has_more":false,"url":"` + path + `"}`}
+		switch {
+		case method == http.MethodGet && path == "/v1/products":
+			return answer{http.StatusOK, bodyProducts}
+		case method == http.MethodGet && path == "/v1/prices":
+			return answer{http.StatusOK, bodyPrices}
 		}
-		return answer{http.StatusBadRequest, `{"error":{"type":"invalid_request_error","message":"venue stub: refused"}}`}
+		return answer{http.StatusBadRequest, bodyStripeRefused}
 	case "pagerduty":
-		return answer{http.StatusUnauthorized, `{"error":{"message":"venue stub: credential refused","code":2006}}`}
+		return answer{http.StatusUnauthorized, bodyPagerDutyRefused}
 	case "github":
-		return answer{http.StatusUnauthorized, `{"message":"venue stub: credential refused"}`}
+		return answer{http.StatusUnauthorized, bodyGitHubRefused}
 	}
-	return answer{http.StatusMisdirectedRequest, `{"message":"venue stub: host not served"}`}
+	return answer{http.StatusMisdirectedRequest, bodyNotServed}
 }
+
+// The frozen answer bodies: constants only, so no request byte can reach a response.
+const (
+	bodyProducts         = `{"object":"list","data":[],"has_more":false,"url":"/v1/products"}`
+	bodyPrices           = `{"object":"list","data":[],"has_more":false,"url":"/v1/prices"}`
+	bodyStripeRefused    = `{"error":{"type":"invalid_request_error","message":"venue stub: refused"}}`
+	bodyPagerDutyRefused = `{"error":{"message":"venue stub: credential refused","code":2006}}`
+	bodyGitHubRefused    = `{"message":"venue stub: credential refused"}`
+	bodyNotServed        = `{"message":"venue stub: host not served"}`
+	bodySeedRefused      = `{"message":"venue stub: seed mode answers only the seed probe"}`
+)
 
 // serviceOf is the service of a request host (port and case dropped).
 func serviceOf(hostport string) (string, string) {
@@ -154,7 +168,7 @@ func handler(log *hitLog, mode string) http.Handler {
 		a := answerIn(mode, service, r.Method, host, r.URL.Path, r.URL.RawQuery)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(a.status)
-		_, _ = fmt.Fprint(w, a.body)
+		_, _ = w.Write([]byte(a.body))
 	})
 }
 

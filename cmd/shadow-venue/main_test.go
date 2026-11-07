@@ -20,7 +20,7 @@ func principalsFile(t *testing.T) string {
 	b.WriteString("org\tA\t-\t11111111-1111-4111-8111-111111111111\tA\t-\t-\n")
 	b.WriteString("org\tB\t-\t22222222-2222-4222-8222-222222222222\tB\t-\t-\n")
 	b.WriteString("org\tC\t-\t33333333-3333-4333-8333-333333333333\tC\t-\t-\n")
-	for i, p := range []string{"member-A\tA\tmember", "admin-A\tA\towner", "superuser\t-\tplatform_admin", "owner-C\tC\towner"} {
+	for i, p := range []string{"member-A\tA\tmember", "admin-A\tA\towner", "drift-S\tA\tplatform_admin", "superuser\t-\tplatform_admin", "owner-C\tC\towner"} {
 		f := strings.Split(p, "\t")
 		pw := filepath.Join(dir, f[0]+".pw")
 		if err := os.WriteFile(pw, []byte("fake\n"), 0o600); err != nil {
@@ -48,7 +48,7 @@ func TestRunExitCodes(t *testing.T) {
 	if code := run(context.Background(), []string{"plan", "-principals", principals, "-destructive"}, &out, &errOut); code != exitOK {
 		t.Fatalf("plan: %d %s", code, errOut.String())
 	}
-	if !strings.HasPrefix(out.String(), "1\tC1\tsuperuser\tsuperuser\tk=1\tGET /api/v1/admin/orgs/22222222-2222-4222-8222-222222222222/members") {
+	if !strings.HasPrefix(out.String(), "1\tC1\tsuperuser\tdrift-S\tk=1\tGET /api/v1/admin/teams") {
 		t.Fatalf("plan does not start with control C1: %.200s", out.String())
 	}
 	last := strings.Split(strings.TrimSpace(out.String()), "\n")

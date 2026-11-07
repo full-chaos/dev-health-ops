@@ -107,7 +107,7 @@ func (e *Enforcer) askPlatform(ctx context.Context, bearer, action string) (held
 		e.logger.WarnContext(ctx, "api enforcement: no verdict for a platform question, the handler refuses", slog.String("action", action))
 		return false, false
 	}
-	if decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), pep.Request{}, false) {
+	if decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), pep.Request{}, false, false) {
 		e.logger.WarnContext(ctx, "api enforcement: a platform allow carries an obligation, no verdict", slog.String("action", action))
 		return false, false
 	}

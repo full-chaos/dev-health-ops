@@ -42,8 +42,8 @@ func TestParseUnjudgedDeltaCountsOnlyNoOrgByRouteAndRefusesADecreasingCounter(t 
 	if _, err := ParseUnjudgedDelta(scrape(), after); err != nil {
 		t.Errorf("an empty before scrape: %v", err)
 	}
-	if _, err := ParseUnjudgedDelta([]byte("not a scrape\n"), after); err == nil {
-		t.Error("a before scrape with no unjudged metric block (no HELP line) was accepted")
+	if d, err := ParseUnjudgedDelta([]byte("dev_health_runtime_uptime_seconds 5\n"), after); err != nil || d[k] != 7 {
+		t.Errorf("a before scrape with no unjudged series is a scrape of zero (the counter is created at its first increment): %v %v", d, err)
 	}
 }
 

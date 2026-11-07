@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -76,7 +75,7 @@ var (
 // has no built-in GOROOT, so it is taken from the environment or from `go env GOROOT`.
 type censusImporter struct {
 	errs    *[]string
-	standIn map[string]bool
+	standIn map[*types.Package]bool
 }
 
 func (ci censusImporter) Import(path string) (*types.Package, error) {
@@ -98,10 +97,14 @@ func (ci censusImporter) Import(path string) (*types.Package, error) {
 		}
 		return pkg, err
 	}
-	pkg := types.NewPackage(path, filepath.Base(path))
+	name := filepath.Base(path)
+	if len(name) > 1 && name[0] == 'v' && strings.Trim(name[1:], "0123456789") == "" {
+		name = filepath.Base(filepath.Dir(path))
+	}
+	pkg := types.NewPackage(path, name)
 	pkg.MarkComplete()
 	if ci.standIn != nil {
-		ci.standIn[filepath.Base(path)] = true
+		ci.standIn[pkg] = true
 	}
 	return pkg, nil
 }
@@ -222,52 +225,97 @@ func (c *censusCtx) tainted(e ast.Expr, vars map[string]bool) bool {
 }
 
 // censusTypeCheck type-checks the files as package "p". It returns every package the importer could not load and
-// every type error that is not an undefined member of a package the census gives an empty stand-in for.
+// every type error except two kinds that follow from an empty stand-in package, both decided by the identity of
+// the objects involved and never by the message text: an undefined member selected from a stand-in package, and
+// an undefined member selected from a struct that embeds a field of a stand-in (or, because of it, invalid) type.
+// An undefined member of a package that did load is an error.
 func censusTypeCheck(fset *token.FileSet, list []*ast.File) (*types.Info, []string) {
 	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
-	var importErrs, tcErrs []string
-	stand := map[string]bool{}
-	for _, f := range list {
-		for _, im := range f.Imports {
-			path, _ := strconv.Unquote(im.Path.Value)
-			first, _, _ := strings.Cut(path, "/")
-			if !strings.Contains(first, ".") || strings.HasSuffix(path, "/internal/auth/httpapi") {
-				continue
-			}
-			name := filepath.Base(path)
-			if parent := filepath.Base(filepath.Dir(path)); len(name) > 1 && name[0] == 'v' && strings.Trim(name[1:], "0123456789") == "" {
-				name = parent
-			}
-			if im.Name != nil {
-				name = im.Name.Name
-			}
-			stand[name] = true
-		}
-	}
+	var importErrs []string
+	stand := map[*types.Package]bool{}
+	var raw []types.Error
 	conf := types.Config{
 		Importer:    censusImporter{errs: &importErrs, standIn: stand},
 		FakeImportC: true,
 		Error: func(err error) {
-			msg := err.Error()
 			if te, ok := err.(types.Error); ok {
-				msg = fmt.Sprintf("%s: %s", fset.Position(te.Pos), te.Msg)
-				if rest, ok := strings.CutPrefix(te.Msg, "undefined: "); ok {
-					if pkg, _, _ := strings.Cut(rest, "."); stand[pkg] {
-						return
-					}
-				}
-				if strings.Contains(te.Msg, " undefined (type ") && strings.Contains(te.Msg, " has no field or method ") {
-					return // a member promoted from a stand-in package's embedded type
-				}
-				if strings.Contains(te.Msg, "declared and not used") || strings.Contains(te.Msg, "imported and not used") {
-					return
-				}
+				raw = append(raw, te)
 			}
-			tcErrs = append(tcErrs, msg)
 		},
 	}
 	conf.Check("p", fset, list, info)
+	sels := map[token.Pos]*ast.SelectorExpr{}
+	for _, f := range list {
+		ast.Inspect(f, func(n ast.Node) bool {
+			if se, ok := n.(*ast.SelectorExpr); ok {
+				sels[se.Sel.Pos()] = se
+			}
+			return true
+		})
+	}
+	var tcErrs []string
+	for _, te := range raw {
+		if te.Soft {
+			continue
+		}
+		if se := sels[te.Pos]; se != nil && standInMember(info, stand, se) {
+			continue
+		}
+		tcErrs = append(tcErrs, fmt.Sprintf("%s: %s", fset.Position(te.Pos), te.Msg))
+	}
 	return info, append(importErrs, tcErrs...)
+}
+
+func standInMember(info *types.Info, stand map[*types.Package]bool, se *ast.SelectorExpr) bool {
+	if x, ok := se.X.(*ast.Ident); ok {
+		if pn, ok := info.Uses[x].(*types.PkgName); ok {
+			return stand[pn.Imported()]
+		}
+	}
+	t := info.TypeOf(se.X)
+	for {
+		ptr, ok := t.(*types.Pointer)
+		if !ok {
+			break
+		}
+		t = ptr.Elem()
+	}
+	if t == nil {
+		return false
+	}
+	return embedsStandIn(t, stand, 0)
+}
+
+// embedsStandIn: a struct field or interface element that is embedded (directly or through named types) comes from
+// a stand-in package or has an invalid type.
+func embedsStandIn(t types.Type, stand map[*types.Package]bool, depth int) bool {
+	if depth > 6 || t == nil {
+		return false
+	}
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	if b, ok := t.(*types.Basic); ok {
+		return b.Kind() == types.Invalid
+	}
+	if n, ok := t.(*types.Named); ok && n.Obj().Pkg() != nil && stand[n.Obj().Pkg()] {
+		return true
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			if f := u.Field(i); f.Embedded() && embedsStandIn(f.Type(), stand, depth+1) {
+				return true
+			}
+		}
+	case *types.Interface:
+		for i := 0; i < u.NumEmbeddeds(); i++ {
+			if embedsStandIn(u.EmbeddedType(i), stand, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // requestIDReads parses the files and returns the raw request id reads that sit inside a log call's arguments
@@ -521,8 +569,11 @@ func a(r R, l L) { l.Set("request_id", envelopeRequestID(r)) }`, "p.go#a#1", 0, 
 		"forward to a same-name func in another package": {`func a(r R) { _ = other.WithRequestID(nil, envelopeRequestID(r)) }`, "p.go#a#1", 0, 1},
 		"forward to a local func named like a listed one": {`func WithRequestID(c context.Context, id string) { log.Print(id) }
 func a(r R) { WithRequestID(nil, envelopeRequestID(r)) }`, "p.go#a#1", 0, 1},
-		"forward to http.Header Set and Add": {`func a(r R) { r.Header.Set("X-Request-Id", envelopeRequestID(r)); r.Header.Add("X", envelopeRequestID(r)) }`, "p.go#a#1,p.go#a#2", 0, 0},
-		"second read in a function":          {`func a(r R) { _ = envelopeRequestID(r); _ = envelopeRequestID(r) }`, "p.go#a#1,p.go#a#2", 0, 0},
+		"forward to http.Header Set and Add":                       {`func a(r R) { r.Header.Set("X-Request-Id", envelopeRequestID(r)); r.Header.Add("X", envelopeRequestID(r)) }`, "p.go#a#1,p.go#a#2", 0, 0},
+		"raw id to a function of a stand-in package":               {`func a(r R) { other.Do(envelopeRequestID(r)) }`, "p.go#a#1", 0, 1},
+		"raw id to a stand-in logger method named like a sink":     {`func a(r R) { var l other.Logger; l.Info("x", envelopeRequestID(r)) }`, "", 1, 0},
+		"raw id to a stand-in logger method not named like a sink": {`func a(r R) { var l other.Logger; l.Emit(envelopeRequestID(r)) }`, "p.go#a#1", 0, 1},
+		"second read in a function":                                {`func a(r R) { _ = envelopeRequestID(r); _ = envelopeRequestID(r) }`, "p.go#a#1,p.go#a#2", 0, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			logUses, other, forwards, _ := requestIDReads(t, map[string]string{"p.go": pre + tc.body}, requestIDForwardAllowed)
@@ -693,9 +744,15 @@ func TestCensusImporterRecordsAPackageItCannotLoad(t *testing.T) {
 
 func TestCensusTypeCheckFailsLoudOnUnresolvedImportsAndTypeErrors(t *testing.T) {
 	for name, tc := range map[string]struct{ src, want string }{
-		"unresolvable standard import": {"package p\nimport \"nosuchstdpkg/inner\"\nvar _ = inner.X\n", "nosuchstdpkg/inner"},
-		"type error":                   {"package p\nvar x int = \"s\"\n", "cannot use"},
-		"anchors resolve":              {"package p\nimport (\"net/http\"; \"example.com/other\")\nfunc a(w http.ResponseWriter) { w.Header().Set(\"a\", \"b\"); other.F() }\n", ""},
+		"unresolvable standard import":                             {"package p\nimport \"nosuchstdpkg/inner\"\nvar _ = inner.X\n", "nosuchstdpkg/inner"},
+		"type error":                                               {"package p\nvar x int = \"s\"\n", "cannot use"},
+		"undefined member of a loaded std package":                 {"package p\nimport \"net/http\"\nvar _ = http.NoSuchFunc\n", "NoSuchFunc"},
+		"undefined member of a loaded httpapi":                     {"package p\nimport \"github.com/full-chaos/dev-health-ops/internal/auth/httpapi\"\nvar _ = httpapi.NoSuchFunc\n", "NoSuchFunc"},
+		"undefined method on a loaded std type":                    {"package p\nimport \"net/http\"\nfunc a(h http.Header) { h.NoSuch() }\n", "NoSuch"},
+		"undefined member of a stand-in is filtered":               {"package p\nimport \"example.com/other\"\nvar _ = other.Anything\n", ""},
+		"promoted member of an embedded stand-in type is filtered": {"package p\nimport \"example.com/other\"\ntype S struct{ other.T }\nfunc a(s S) { s.Missing() }\n", ""},
+		"undefined method on a plain struct is an error":           {"package p\ntype S struct{ x int }\nfunc a(s S) { s.Missing() }\n", "Missing"},
+		"anchors resolve":                                          {"package p\nimport (\"net/http\"; \"example.com/other\")\nfunc a(w http.ResponseWriter) { w.Header().Set(\"a\", \"b\"); other.F() }\n", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fset := token.NewFileSet()

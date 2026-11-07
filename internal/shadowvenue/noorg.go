@@ -27,8 +27,10 @@ type UnjudgedDelta map[string]int
 func (d UnjudgedDelta) Delta(key string) (int, bool) { n, ok := d[key]; return n, ok }
 
 // ParseUnjudgedDelta reads two scrapes and returns, per route that has a no_org series in either, the increase. A scrape
-// that does not declare the metric (no # HELP line) is no evidence, and a series that went down means the process
-// restarted between the scrapes: both are refused.
+// that has no series of the metric has none: the counter is created at its first increment, so a go-api that never
+// counted an unjudged request has no block (a body that is no go-api scrape is refused by the caller through the
+// enforcement gauge and the uptime it must carry). A series that went down means the process restarted between the
+// scrapes and is refused.
 func ParseUnjudgedDelta(before, after []byte) (UnjudgedDelta, error) {
 	all, err := ParseUnjudgedReasons(before, after)
 	if err != nil {
@@ -72,16 +74,11 @@ func ParseUnjudgedReasons(before, after []byte) (map[string]map[string]int, erro
 }
 
 func unjudgedSeries(scrape []byte) (map[string]map[string]int, error) {
-	declared := false
 	out := map[string]map[string]int{}
 	scanner := bufio.NewScanner(bytes.NewReader(scrape))
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "# HELP "+unjudgedMetric+" ") {
-			declared = true
-			continue
-		}
 		if !strings.HasPrefix(line, unjudgedMetric+"{") {
 			continue
 		}
@@ -116,9 +113,6 @@ func unjudgedSeries(scrape []byte) (map[string]map[string]int, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
-	}
-	if !declared {
-		return nil, fmt.Errorf("no %s block: the scrape is not a go-api /metrics body", unjudgedMetric)
 	}
 	return out, nil
 }

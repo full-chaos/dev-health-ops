@@ -57,7 +57,8 @@ type EnforcedInput struct {
 
 // liveEnforcement is what one /metrics scrape of the running go-api says: the namespaces whose enforcement gauge is 1,
 // whether the enforcement config was invalid, the build version and the process uptime. ok is false when the scrape
-// carries no enforcement gauge or no uptime.
+// carries no enforcement gauge or no uptime, or does not end with its newline (a cut or failed scrape): only a scrape
+// that is ok may stand for an absent counter family as zero.
 type liveEnforcement struct {
 	enabled       map[string]bool
 	configInvalid bool
@@ -92,7 +93,7 @@ func readLive(scrape []byte) liveEnforcement {
 			}
 		}
 	}
-	out.ok = sawGauge && sawUptime
+	out.ok = sawGauge && sawUptime && strings.HasSuffix(string(scrape), "\n")
 	return out
 }
 

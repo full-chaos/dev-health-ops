@@ -84,6 +84,72 @@ func newEnfRun() *enfRun {
 
 func (r *enfRun) judge() Report { return JudgeEnforced(r.in) }
 
+// A go-api that has not yet counted an unjudged request has no series of the counter in the before scrape: the delta is
+// the whole after series, and the run is judged, not voided.
+func TestEnforcedAcceptsABeforeScrapeWithNoUnjudgedSeries(t *testing.T) {
+	r := newEnfRun()
+	r.in.MetricsBefore = live(allEnforced, 1000, "f50883b", "0")
+	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "3"), unjudged(seamKey, "served_org", "3"))
+	if report := r.judge(); report.Void || !report.Pass {
+		t.Fatalf("void %v pass %v: %v", report.Void, report.Pass, report.Reasons)
+	}
+}
+
+// The absent unjudged family counts as zero only in a scrape proven complete: the same scrape holds the uptime and the
+// enforcement gauge of every namespace a row needs, and ends with its newline.
+func TestEnforcedAbsentUnjudgedFamilyIsZeroOnlyInACompleteScrape(t *testing.T) {
+	complete := func(uptime int) []byte { return live(allEnforced, uptime, "f50883b", "0") }
+	cases := map[string]struct {
+		plant func(*enfRun)
+		void  bool
+		want  string
+	}{
+		"absent before, present after: the delta is the after series": {func(r *enfRun) {
+			r.in.MetricsBefore = complete(1000)
+		}, false, VerdictSkippedNoOrg},
+		"absent in both: no_org evidence is zero, the skip fails": {func(r *enfRun) {
+			r.in.MetricsBefore = complete(1000)
+			r.in.MetricsAfter = complete(1100)
+		}, false, VerdictUnevidencedNoOrg},
+		"absent family and no uptime gauge in the before scrape": {func(r *enfRun) {
+			r.in.MetricsBefore = []byte(strings.Join(strings.Split(string(complete(1000)), "\n")[:len(allEnforced)+3], "\n") + "\n")
+		}, true, "read back"},
+		"truncated before scrape": {func(r *enfRun) {
+			r.in.MetricsBefore = complete(1000)[:len(complete(1000))-12]
+		}, true, "read back"},
+		"before scrape cut inside a later line after every needed gauge": {func(r *enfRun) {
+			r.in.MetricsBefore = append(complete(1000), []byte(`devhealth_api_auth_proxy_requests_total{route="GET /a`)...)
+		}, true, "read back"},
+		"truncated after scrape": {func(r *enfRun) {
+			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"))[:200]
+		}, true, "read back"},
+		"after scrape misses the gauge of one needed namespace": {func(r *enfRun) {
+			r.in.MetricsAfter = []byte(strings.ReplaceAll(string(live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"))), `dev_health_authz_enforcement_enabled{namespace="billing",service="go-api"} 1`+"\n", ""))
+		}, true, "billing"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			run := newEnfRun()
+			run.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "3"), unjudged(seamKey, "served_org", "3"))
+			c.plant(run)
+			report := run.judge()
+			text := strings.ToLower(strings.Join(report.Reasons, "\n"))
+			if c.void {
+				if !report.Void || report.Exit() != 3 || !strings.Contains(text, strings.ToLower(c.want)) {
+					t.Fatalf("want void with %q: void %v exit %d %v", c.want, report.Void, report.Exit(), report.Reasons)
+				}
+				return
+			}
+			if report.Void || report.VerdictCounts()[c.want] == 0 {
+				t.Fatalf("want a judged run with %s: void %v counts %v %v", c.want, report.Void, report.VerdictCounts(), report.Reasons)
+			}
+			if c.want == VerdictUnevidencedNoOrg && report.Pass {
+				t.Fatal("a skip with no counter evidence passed")
+			}
+		})
+	}
+}
+
 func TestEnforcedPassesWhenEveryCellEqualsTheYardstickAndTheEvidenceHolds(t *testing.T) {
 	r := newEnfRun().judge()
 	if r.Void || !r.Pass || r.Exit() != 0 {

@@ -60,6 +60,9 @@ const (
 	// envSessionReaders names the roles (comma-separated) of the services that
 	// end an access token when its session is revoked: go-api and query-api.
 	envSessionReaders = "AUTH_SESSION_READER_ROLES"
+	// envWorkloadReaders names the session reader roles (comma-separated) that also read the workload registry row of
+	// the acr-api workload: go-api's role. Unset, no role holds the read and go-api's internal acr routes answer 503.
+	envWorkloadReaders = "AUTH_WORKLOAD_READER_ROLES"
 	// envProjectionReaders names the roles (comma-separated) that read the acr rows of the credential projection:
 	// the worker login that runs the acr reconcile.
 	envProjectionReaders = "AUTH_PROJECTION_READER_ROLES"
@@ -245,6 +248,11 @@ func execute(
 		fmt.Fprintf(stderr, "configuration error: %v\n", err)
 		return 1
 	}
+	workloadReaders, err := roleList(lookup, envWorkloadReaders)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
 
 	pushWriter := valueOr(lookup, envPushWriter, "")
 	pushCallers, err := roleList(lookup, envPushCallers)
@@ -282,6 +290,7 @@ func execute(
 			Schema:                   schema,
 			RuntimeRole:              runtimeRole,
 			SessionReaderRoles:       readers,
+			WorkloadReaderRoles:      workloadReaders,
 			ProjectionReaderRoles:    projectionReaders,
 			Logger:                   logger,
 			PushLifecycleWriterRole:  pushWriter,
@@ -306,6 +315,7 @@ func execute(
 		Schema:                   schema,
 		RuntimeRole:              runtimeRole,
 		SessionReaderRoles:       readers,
+		WorkloadReaderRoles:      workloadReaders,
 		ProjectionReaderRoles:    projectionReaders,
 		Logger:                   logger,
 		PushLifecycleWriterRole:  pushWriter,

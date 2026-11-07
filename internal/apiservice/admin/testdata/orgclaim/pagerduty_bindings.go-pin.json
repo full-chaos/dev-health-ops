@@ -1,5 +1,0 @@
-{
-  "create bad org claim is the gate's 403": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
-  "get bad org claim is a 400": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
-  "revoke: bad org claim is a 400": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}"
-}

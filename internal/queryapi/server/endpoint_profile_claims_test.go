@@ -156,6 +156,10 @@ var rowClaims = map[string]map[string]rowClaim{
 		}},
 	},
 	"mcp": {
+		"impersonation_policy": {value: "not_applicable_non_main_app", proofs: []claimProof{
+			{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"http.StatusForbidden, mcpReasonElevatedClaim"}},
+			{file: "endpoint_profile_live_test.go", decl: "driveMCP", needles: []string{"mcpHeaders(mcpTestOrg, \"member\", \"false\", \"true\")", "reason != mcpReasonElevatedClaim", "\"not_applicable_non_main_app\""}},
+		}},
 		"current_state_cache_behavior": {value: "none: no state read: the internal identity headers state the identity on every request; nothing is read or cached", proofs: []claimProof{
 			{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"internalidentity.FromHeader(r.Header)"}},
 			{file: "endpoint_profile_live_test.go", decl: "driveMCP", needles: []string{"\"a valid identity again after a refused one\""}},

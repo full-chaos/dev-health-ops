@@ -894,9 +894,13 @@ func driveMCP(t *testing.T, row liveRow) *liveObs {
 	o.textHas("resource_resolver", "internal identity headers", "a bearer token is refused")
 	cell("a valid identity again after a refused one", post(l, validMCPHeaders(), body), http.StatusOK)
 	o.textHas("current_state_cache_behavior", "none: no state read", "nothing is read or cached")
-	o.unknownIsDeclared("impersonation_policy")
-	if got := row.str("impersonation_policy"); got != "unknown" {
-		o.fail("impersonation_policy is %q: no live cell observes an MCP row's impersonation effect (a claim of it is refused 403)", got)
+	impersonating := mcpDo(l.mcp, http.MethodPost, mcpHeaders(mcpTestOrg, "member", "false", "true"), body)
+	o.see(impersonating.Code)
+	if reason, _ := mcpReason(t, impersonating); impersonating.Code != http.StatusForbidden || reason != mcpReasonElevatedClaim {
+		o.fail("an identity claiming impersonation: status %d reason %q, want 403 %s", impersonating.Code, reason, mcpReasonElevatedClaim)
+	}
+	if got := row.str("impersonation_policy"); got != "not_applicable_non_main_app" {
+		o.fail("impersonation_policy is %q: the MCP caller class refuses every impersonation claim (403 %s), so no override reaches it", got, mcpReasonElevatedClaim)
 	}
 	o.statusText()
 	return o
@@ -1032,13 +1036,19 @@ func TestLiveRowGuardFiresOnPlantedRows(t *testing.T) {
 		row.raw["impersonation_policy"] = "exempt_no_org_context"
 		mustDefect(t, "exempt", driveRow(t, row), row.id, "impersonation_policy")
 	})
+	t.Run("R4d an MCP row whose impersonation policy is not the refused-claim value", func(t *testing.T) {
+		row := liveRowByID(t, "POST /query [dev-health-query-api @mcp]")
+		row.raw["impersonation_policy"] = "subject_to_impersonation_override"
+		mustDefect(t, "mcp", driveRow(t, row), row.id, "refuses every impersonation claim")
+	})
 	t.Run("R4b an override policy on a route that never reads the organization", func(t *testing.T) {
 		row := liveRowByID(t, buildinfo)
 		row.raw["impersonation_policy"] = "subject_to_impersonation_override"
 		mustDefect(t, "override", driveRow(t, row), row.id, "impersonation_policy")
 	})
 	t.Run("R4c an unknown field that lost its gap", func(t *testing.T) {
-		row := liveRowByID(t, "POST /query [dev-health-query-api @mcp]")
+		row := liveRowByID(t, rest)
+		row.raw["disclosure_behavior"] = "unknown"
 		row.raw["gaps"] = []any{}
 		mustDefect(t, "gap", driveRow(t, row), row.id, "no declared gap")
 	})

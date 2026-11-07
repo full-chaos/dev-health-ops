@@ -1662,12 +1662,11 @@
       "gaps": [
         "The MCP caller-class listener accepts only the internal identity headers (no bearer of any class); the closed credential vocabulary has no class for them, so accepted_credential_classes is empty by declaration, not omission.",
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-13173; no consumer may treat it as allow",
         "dispatcher: the action is the minimum the legacy guard requires at this route; the action of each root field decides per operation (graphql-field-actions.json). Deliberate change candidate: the MCP caller class refuses an identity with the admin, owner or operator role or a superuser or impersonation claim (mcpAuthenticate in mcp_route.go), while the catalog grants analytics.read to admin and owner; the row does not narrow that here"
       ],
       "graphql_field_name": null,
       "id": "POST /query [dev-health-query-api @mcp]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "not_applicable_non_main_app",
       "method": "POST",
       "primary_validator": {
         "anchor": {

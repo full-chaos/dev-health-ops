@@ -96,7 +96,7 @@ func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup,
 	mountQueryRouteSets(getenv, publicMux, internalMux, mcpMux, queryRouteHandlers{
 		Query:        query,
 		Registry:     newRegistryHandler("digest", map[string]string{"probe": digestHex(iaDocument)}),
-		BuildInfo:    newBuildInfoHandler(verifier),
+		BuildInfo:    newBuildInfoHandler(verifier, auth, store),
 		Proof:        query,
 		ProofWrite:   query,
 		RunOperation: query,
@@ -306,7 +306,11 @@ func TestEndpointProfileRowsMatchServedBehaviour(t *testing.T) {
 				}
 				var accepted []string
 				for carrier, class := range map[string]string{"envelope": classEnvelope, "edge": classEdgeToken, "user": classUserToken} {
-					if code := stack.do(listener, method, path, carrier); code != http.StatusUnauthorized && served(code) {
+					on := stack
+					if carrier == "user" && platformAdminOnly[method+" "+path] {
+						on = liveStack(t, asSuperuser)
+					}
+					if code := on.do(listener, method, path, carrier); code != http.StatusUnauthorized && served(code) {
 						accepted = append(accepted, class)
 					}
 				}

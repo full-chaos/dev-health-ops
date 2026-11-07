@@ -1428,14 +1428,22 @@
     },
     {
       "accepted_credential_classes": [
-        "effective_principal_envelope"
+        "effective_principal_envelope",
+        "user_access_token"
       ],
+      "access_token_validation": {
+        "legacy_hs256": false
+      },
       "action": "org.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "none: no state read: the effective-principal envelope's signature and exp are checked; its claims are not read and nothing is cached",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); any verified credential receives the same process build identity",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership, and the impersonation session, are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked; its claims are not read",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest), and for a user access token whose live users row is not a platform admin (admin.orgs), that has an active impersonation session or that is delegated (authenticateBuildInfo); any accepted credential receives the same process build identity",
       "gaps": [
-        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified. /buildinfo does not accept the edge access token.",
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified. /buildinfo does not accept the HS256 edge access token.",
         "buildinfo: the legacy guard admits any verified credential and reads no organization, so the action is the least one every organization role holds. Deliberate change candidate: admin.telemetry (platform administrators only)"
       ],
       "graphql_field_name": null,
@@ -1448,7 +1456,7 @@
           "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
-        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
+        "description": "authenticateBuildInfo: the internal identity headers or the envelope through authenticateInternalRequest (which picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify), or, with AUTH_ACCESS_TOKEN_ISSUER set, a user access token (EdDSA, typ at+jwt, audience dev-health-api) read by /query's edge carrier (the profile-routed validator and the live users-row check) and served only to a platform admin acting as itself; an HS256 edge access token is refused."
       },
       "public_rationale": null,
       "resource_resolver": "none: the response is the process's build identity; the credential's organization is not read",
@@ -1464,7 +1472,7 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope) or EdDSA at+jwt JWT (user access token of a platform admin)"
       }
     },
     {
@@ -1726,7 +1734,7 @@
       "service": "dev-health-query-api",
       "source": {
         "file": "internal/queryapi/server/buildinfo_route.go",
-        "line": 245
+        "line": 272
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -1776,7 +1784,7 @@
       "service": "dev-health-query-api",
       "source": {
         "file": "internal/queryapi/server/buildinfo_route.go",
-        "line": 273
+        "line": 300
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",

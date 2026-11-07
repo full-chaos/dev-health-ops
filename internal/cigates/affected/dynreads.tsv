@@ -18,6 +18,11 @@ cmd/registrydump	main.go
 cmd/shadow-venue	main.go
 cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
+cmd/venue-extstub	cert.go
+cmd/venue-extstub	main.go
+cmd/venue-extstub	seed_test.go
+cmd/venue-extstub	stub.go
+cmd/venue-extstub	stub_test.go
 deploy/helm/dev-health	auth_phase_test.go
 deploy/helm/dev-health	auth_sso_settings_test.go
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go
@@ -617,6 +622,7 @@ internal/reconcilerservice	readiness_timeout_test.go
 internal/rivermigrate	deploy_wiring_test.go
 internal/scheduler/sync	venue_golden_address_test.go
 internal/shadowvenue	drive.go
+internal/shadowvenue	requestsites_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go
 internal/storage/postgres	openers_test.go

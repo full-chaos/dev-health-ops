@@ -79,6 +79,7 @@ func newEnfRun() *enfRun {
 		MetricsBefore: live(allEnforced, 1000, "f50883b", "0", unjudged(noOrgKey, "no_org", "5"), unjudged(seamKey, "served_org", "2")),
 		MetricsAfter:  live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5")),
 	}
+	r.in.Outbound = Outbound{Rows: tableOf(r.slots, nil)}
 	return r
 }
 

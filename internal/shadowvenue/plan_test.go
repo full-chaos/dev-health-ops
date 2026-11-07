@@ -148,9 +148,17 @@ func TestPlanHoldsThePoolToTheFrozenIDs(t *testing.T) {
 		}
 		return f
 	}
+	// Without T3 in the frozen ids, T3 is a plain org of the file: only the pool rule under test can refuse.
+	var noT3 []string
+	for _, line := range strings.Split(ids, "\n") {
+		if !strings.Contains(line, "-T3\t") && !strings.HasPrefix(line, "org\tT3\t") {
+			noT3 = append(noT3, line)
+		}
+	}
+	frozenNoT3 := refreeze(strings.Join(noT3, "\n"))
 	cases := map[string]PlanOptions{
-		"two orgs for k=3":      opts([]string{"T1", "T2"}, frozen),
-		"a pool org twice":      opts([]string{"T1", "T1", "T2"}, frozen),
+		"two orgs for k=3":      opts([]string{"T1", "T2"}, frozenNoT3),
+		"a pool org twice":      opts([]string{"T1", "T1", "T2"}, frozenNoT3),
 		"pool org not in file":  opts([]string{"T1", "T2", "T9"}, frozen),
 		"seeded org pooled":     opts([]string{"T1", "T2", "A"}, frozen),
 		"no frozen ids":         opts(testPool, ThrowawayIDs{}),
@@ -247,7 +255,8 @@ func TestPlanOnlyRows(t *testing.T) {
 		"C2\tGET\t/api/v1/admin/teams\tA\tno\t-\tmember-A\tmismatch\t/api/v1/admin/teams\t-\n"+
 		"58\tGET\t/api/v1/admin/teams\tA\tno\t-\t-\tmatch\t/api/v1/admin/teams\t-\n"+
 		"22\tPOST\t/api/v1/billing/plans/pull-stripe\tA\tno\tstripe\t-\tmatch\t/api/v1/billing/plans/pull-stripe\t-\n"+
-		"13\tDELETE\t/api/v1/admin/orgs/{org_id}\tT\tyes\t-\t-\tmatch\t/api/v1/admin/orgs/{org}\t-\n")
+		"13\tDELETE\t/api/v1/admin/orgs/{org_id}\tT\tyes\t-\t-\tmatch\t/api/v1/admin/orgs/{org}\t-\n"+
+		"10\tPOST\t/api/v1/admin/impersonate/stop\tT\tyes\t-\t-\tmatch\t/api/v1/admin/impersonate/stop\t-\n")
 	o := PlanOptions{Throwaway: "T", Pool: testPool, Frozen: frozen, AllowExternal: []string{"stripe"}, K: 3, Destructive: true, OnlyRows: []string{"22", "13"}}
 	plan, err := MakePlan(rows, venue, o)
 	if err != nil {
@@ -257,7 +266,7 @@ func TestPlanOnlyRows(t *testing.T) {
 	for _, s := range plan.Slots {
 		seen[s.Row]++
 	}
-	if seen["58"] != 0 || seen["C2"] != 3 || seen["22"] != 9 || seen["13"] != 9 {
+	if seen["58"] != 0 || seen["10"] != 0 || seen["C2"] != 3 || seen["22"] != 9 || seen["13"] != 9 {
 		t.Fatalf("slots per row %v", seen)
 	}
 	for name, ids := range map[string][]string{"unknown": {"22", "99"}, "control": {"C2"}, "twice": {"22", "22"}} {

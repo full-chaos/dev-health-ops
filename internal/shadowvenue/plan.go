@@ -292,9 +292,6 @@ func (v Venue) checkPool(o PlanOptions) error {
 	if len(o.Pool) != o.K {
 		return fmt.Errorf("plan: the throwaway pool has %d orgs, want one per k (%d)", len(o.Pool), o.K)
 	}
-	if len(o.Frozen.ids) == 0 {
-		return errors.New("plan: destructive rows need the frozen throwaway ids (-throwaway-ids)")
-	}
 	pool := map[string]bool{}
 	for _, label := range o.Pool {
 		id, ok := v.Orgs[label]
@@ -304,7 +301,7 @@ func (v Venue) checkPool(o PlanOptions) error {
 		case pool[label]:
 			return fmt.Errorf("plan: pool org %s twice", label)
 		case !o.Frozen.ids[id]:
-			return fmt.Errorf("plan: pool org %s (%s) is not in the frozen throwaway ids", label, id)
+			return fmt.Errorf("plan: pool org %s (%s) is not in the frozen throwaway ids (-throwaway-ids)", label, id)
 		}
 		pool[label] = true
 	}

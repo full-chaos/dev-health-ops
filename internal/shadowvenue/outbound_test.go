@@ -115,6 +115,13 @@ func TestJudgeOutboundEachPlantedDefectIsRed(t *testing.T) {
 		if r.Void != c.void || r.Pass || !strings.Contains(joined, c.want) {
 			t.Errorf("%s: void %v pass %v exit %d, reasons:\n%s", name, r.Void, r.Pass, r.Exit(), joined)
 		}
+		if strings.HasPrefix(name, "no allowed caller") {
+			for _, rv := range r.Rows {
+				if rv.Row == "27" && (rv.Pass || !strings.Contains(strings.Join(rv.Notes, ";"), "reached the stub")) {
+					t.Errorf("%s: row 27 in the table: pass %v notes %v", name, rv.Pass, rv.Notes)
+				}
+			}
+		}
 	}
 }
 

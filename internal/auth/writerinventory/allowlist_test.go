@@ -110,6 +110,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Issue", Table: "auth.link_credentials", Verb: "DELETE"},
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Issue", Table: "auth.link_credentials", Verb: "INSERT"},
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Redeem", Table: "auth.link_credentials", Verb: "UPDATE"},
+	// acp 11-07 ruling, CHAOS-13196: `dho auth users-create` provisions a verified local user through ProvisionCLIUser.
+	{File: "internal/auth/identity/cliuser.go", Func: "Store.ProvisionCLIUser", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/identity/cliuser.go", Func: "Store.ProvisionCLIUser", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.SetEmailVerifiedWith", Table: "auth.users", Verb: "UPDATE"},

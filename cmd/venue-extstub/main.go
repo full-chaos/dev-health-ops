@@ -43,6 +43,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	logPath := fs.String("log", "", "hit log to create (must not exist), mode 0600")
 	httpsAddr := fs.String("https", ":8443", "HTTPS listen address")
 	smtpAddr := fs.String("smtp", ":2525", "SMTP listen address")
+	_ = fs.String("mode", modeRun, "skeleton")
+	_ = fs.String("status", "", "skeleton")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -78,7 +80,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "venue-extstub: -smtp: %v\n", err)
 		return exitUsage
 	}
-	srv := &http.Server{Handler: handler(log), ReadHeaderTimeout: 10 * time.Second,
+	srv := &http.Server{Handler: handler(log, modeRun), ReadHeaderTimeout: 10 * time.Second,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12}}
 	go func() { _ = srv.ServeTLS(httpsLn, "", "") }()
 	go func() { _ = serveSMTP(smtpLn, log) }()

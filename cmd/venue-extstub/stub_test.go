@@ -49,7 +49,7 @@ func hits(t *testing.T, raw string) []map[string]any {
 // reach the log, whatever they hold.
 func TestStubLogsEveryRequestWithoutHeaderBodyOrQuery(t *testing.T) {
 	var buf bytes.Buffer
-	h := handler(fixedLog(&buf))
+	h := handler(fixedLog(&buf), modeRun)
 	for _, host := range []string{"api.stripe.com", "API.PagerDuty.com:443", "identity.pagerduty.com", "github.com", "api.github.com", "evil.example"} {
 		req := httptest.NewRequest(http.MethodPost, "https://"+host+"/v1/things/x?token=query-secret", strings.NewReader(`{"api_token":"body-secret"}`))
 		req.Host = host
@@ -81,7 +81,7 @@ func TestStubLogsEveryRequestWithoutHeaderBodyOrQuery(t *testing.T) {
 // host 421. The same request gets the same answer every time.
 func TestStubAnswersFromTheFrozenTable(t *testing.T) {
 	var buf bytes.Buffer
-	h := handler(fixedLog(&buf))
+	h := handler(fixedLog(&buf), modeRun)
 	cases := []struct {
 		host, method, path string
 		status             int
@@ -116,7 +116,7 @@ func (failWriter) Write([]byte) (int, error) { return 0, os.ErrClosed }
 
 // A hit that cannot be logged is answered 500, never as a served call.
 func TestStubAnswers500WhenTheHitCannotBeLogged(t *testing.T) {
-	h := handler(&hitLog{w: failWriter{}, now: time.Now})
+	h := handler(&hitLog{w: failWriter{}, now: time.Now}, modeRun)
 	req := httptest.NewRequest(http.MethodGet, "https://api.stripe.com/v1/products", nil)
 	req.Host = "api.stripe.com"
 	rec := httptest.NewRecorder()
@@ -267,6 +267,7 @@ func TestRunServesTLSWithTheVenueCA(t *testing.T) {
 	dir := t.TempDir()
 	certPath, keyPath, pool := testCA(t, dir, 0o600)
 	logPath := filepath.Join(dir, "hits.jsonl")
+	statusPath := filepath.Join(dir, "status.txt")
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -277,7 +278,7 @@ func TestRunServesTLSWithTheVenueCA(t *testing.T) {
 	done := make(chan int)
 	var stderr bytes.Buffer
 	go func() {
-		done <- run(ctx, []string{"-ca-cert", certPath, "-ca-key", keyPath, "-log", logPath, "-https", httpsAddr, "-smtp", "127.0.0.1:0"}, &stderr)
+		done <- run(ctx, []string{"-ca-cert", certPath, "-ca-key", keyPath, "-log", logPath, "-status", statusPath, "-https", httpsAddr, "-smtp", "127.0.0.1:0"}, &stderr)
 	}()
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "api.stripe.com"}}
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
@@ -309,7 +310,7 @@ func TestRunServesTLSWithTheVenueCA(t *testing.T) {
 	}
 	again, stop := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stop()
-	if code := run(again, []string{"-ca-cert", certPath, "-ca-key", keyPath, "-log", logPath, "-https", "127.0.0.1:0", "-smtp", "127.0.0.1:0"}, &stderr); code != exitUsage {
+	if code := run(again, []string{"-ca-cert", certPath, "-ca-key", keyPath, "-log", logPath, "-status", filepath.Join(dir, "status2.txt"), "-https", "127.0.0.1:0", "-smtp", "127.0.0.1:0"}, &stderr); code != exitUsage {
 		t.Fatalf("an existing log file: exit %d", code)
 	}
 }

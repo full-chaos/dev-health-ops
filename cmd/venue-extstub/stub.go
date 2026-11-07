@@ -102,7 +102,7 @@ func serviceOf(hostport string) (string, string) {
 
 // handler logs each request, then answers it. A request whose hit cannot be logged is answered 500: an outside call
 // the judge cannot see must not look like a served one.
-func handler(log *hitLog) http.Handler {
+func handler(log *hitLog, mode string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 1<<20))
 		service, host := serviceOf(r.Host)
@@ -116,3 +116,11 @@ func handler(log *hitLog) http.Handler {
 		_, _ = fmt.Fprint(w, a.body)
 	})
 }
+
+const (
+	modeRun  = "run"
+	modeSeed = "seed"
+)
+
+// configDigest: skeleton.
+func configDigest(mode string) string { return "" }

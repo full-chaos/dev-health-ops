@@ -317,6 +317,8 @@ func TestJudgeOutboundEgressEachPlantedDefectIsVoid(t *testing.T) {
 		"image differs":        bad("image", "sha256:"+strings.Repeat("2", 64)),
 		"network differs":      bad("networks", "venue-other"),
 		"two networks":         bad("networks", "venue-int,bridge"),
+		"networks empty": {ParseEgress("before.txt", []byte(strings.Replace(egressText("before"), "networks=venue-int", "networks=", 1))),
+			ParseEgress("between.txt", []byte(strings.Replace(egressText("between"), "networks=venue-int", "networks=", 1)))},
 	}
 	for name, reads := range cases {
 		r := judgeOutboundEgress(t, slots, lines, hits, true, reads)

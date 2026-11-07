@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/constant"
 	"go/importer"
 	"go/parser"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -68,14 +70,29 @@ var (
 
 // censusImporter type-checks the standard library and the httpapi package from source and gives every other
 // import an empty package, so a constant that names another package's header name resolves by its value while
-// the rest of the module need not compile here.
-type censusImporter struct{}
+// the rest of the module need not compile here. A package it cannot load is recorded in errs: the census stops
+// with that error instead of reading an unresolved name as "not a request id". With -trimpath the test binary
+// has no built-in GOROOT, so it is taken from the environment or from `go env GOROOT`.
+type censusImporter struct{ errs *[]string }
 
-func (censusImporter) Import(path string) (*types.Package, error) {
-	censusImporterOnce.Do(func() { censusSourceImp = importer.ForCompiler(token.NewFileSet(), "source", nil) })
+func (ci censusImporter) Import(path string) (*types.Package, error) {
+	censusImporterOnce.Do(func() {
+		if build.Default.GOROOT == "" {
+			if r := os.Getenv("GOROOT"); r != "" {
+				build.Default.GOROOT = r
+			} else if out, err := exec.Command("go", "env", "GOROOT").Output(); err == nil {
+				build.Default.GOROOT = strings.TrimSpace(string(out))
+			}
+		}
+		censusSourceImp = importer.ForCompiler(token.NewFileSet(), "source", nil)
+	})
 	first, _, _ := strings.Cut(path, "/")
 	if !strings.Contains(first, ".") || strings.HasSuffix(path, "/internal/auth/httpapi") {
-		return censusSourceImp.Import(path)
+		pkg, err := censusSourceImp.Import(path)
+		if err != nil {
+			*ci.errs = append(*ci.errs, fmt.Sprintf("%s: %v", path, err))
+		}
+		return pkg, err
 	}
 	pkg := types.NewPackage(path, filepath.Base(path))
 	pkg.MarkComplete()
@@ -220,8 +237,12 @@ func requestIDReads(t *testing.T, files map[string]string, allowed map[string]st
 		list = append(list, f)
 	}
 	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
-	conf := types.Config{Importer: censusImporter{}, Error: func(error) {}, FakeImportC: true}
+	var importErrs []string
+	conf := types.Config{Importer: censusImporter{errs: &importErrs}, Error: func(error) {}, FakeImportC: true}
 	conf.Check("p", fset, list, info)
+	if len(importErrs) > 0 {
+		t.Fatalf("the census cannot load a package it type-checks from source (GOROOT=%q): %s", build.Default.GOROOT, strings.Join(importErrs, "; "))
+	}
 	c := &censusCtx{info: info, t: t, fset: fset}
 	for name, f := range parsed {
 		for _, decl := range f.Decls {
@@ -577,5 +598,15 @@ func TestPDPRefusalLogsOneLineForARequestIDWithLineBreaks(t *testing.T) {
 		if !strings.Contains(line, "the PDP refused the request") || strings.ContainsAny(line, "\r\n") || strings.Contains(line, "forged") {
 			t.Errorf("id %q: log output %q is not one line of the site without the id", id, out.String())
 		}
+	}
+}
+
+func TestCensusImporterRecordsAPackageItCannotLoad(t *testing.T) {
+	var errs []string
+	if _, err := (censusImporter{errs: &errs}).Import("nosuchstdpkg/inner"); err == nil || len(errs) != 1 {
+		t.Fatalf("Import(nosuchstdpkg/inner) = %v, recorded %v; want an error and one record", err, errs)
+	}
+	if pkg, err := (censusImporter{errs: &errs}).Import("example.com/other"); err != nil || pkg == nil || len(errs) != 1 {
+		t.Fatalf("module package: %v %v, recorded %v; want an empty package and no new record", pkg, err, errs)
 	}
 }

@@ -382,7 +382,7 @@ func judgeOutboundEnforced(report *Report, in EnforcedInput) outboundCheck {
 				reached++
 			}
 		}
-		if (allowed == 0 || reached == 0) && !slices.Contains(check.noReach, row) {
+		if reached == 0 {
 			check.noReach = append(check.noReach, row)
 			check.fails = append(check.fails, fmt.Sprintf("FAIL: row %s VOID: in the yardstick %d allowed slots, %d reached the stub; the row is no evidence", row, allowed, reached))
 		}
@@ -394,7 +394,7 @@ func judgeOutboundEnforced(report *Report, in EnforcedInput) outboundCheck {
 		}
 		sv.Outbound = check.hits[sv.Seq]
 		y, found := yard[cell{sv.Row, sv.Caller, sv.K}]
-		if sv.Expect != expectMismatch && sv.Pass() && (!found || y.Hits != sv.Outbound) {
+		if sv.Pass() && (!found || y.Hits != sv.Outbound) {
 			sv.Verdict = VerdictOutboundDiffers
 		}
 	}

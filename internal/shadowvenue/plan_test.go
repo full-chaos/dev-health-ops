@@ -398,3 +398,22 @@ func TestParseThrowawayIDsAndHolds(t *testing.T) {
 		t.Fatal("no frozen ids passed")
 	}
 }
+
+// {owner} names the one owner of the slot's org; an org with two owners, or none, refuses the row.
+func TestPlanOwnerPlaceholderNeedsOneOwner(t *testing.T) {
+	_, frozen, raw, ids := testPoolVenue(t)
+	pw := filepath.Join(t.TempDir(), "second.pw")
+	if err := os.WriteFile(pw, []byte("fake\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const second = "e2b00000-0000-4000-8000-0000000002bb"
+	twoOwners, err := ParsePrincipals([]byte(raw + "principal\towner2-T2\to2@example.test\t" + second + "\tT2\towner\t" + pw + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen, _ = ParseThrowawayIDs([]byte(ids + "user\towner2-T2\t" + second + "\n"))
+	rows := mustRows(t, testRowsHeader+"9\tPOST\t/api/v1/admin/impersonate\tT\tyes\t-\t-\tmatch\t/api/v1/admin/impersonate\t{\"user_id\":\"{owner}\"}\n")
+	if _, err := MakePlan(rows, twoOwners, PlanOptions{Throwaway: "T", Pool: testPool, Frozen: frozen, K: 3, Destructive: true}); err == nil || !strings.Contains(err.Error(), "2 owner") {
+		t.Fatalf("a pool org with two owners: %v", err)
+	}
+}

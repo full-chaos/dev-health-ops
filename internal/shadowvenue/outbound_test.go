@@ -232,6 +232,10 @@ func TestEnforcedOutboundParity(t *testing.T) {
 		}, false, VerdictOutboundDiffers},
 		"no yardstick outbound file": {func(r *enfRun) { r.in.YardOutboundGiven, r.in.YardOutbound = false, nil }, true, "yardstick's outbound file"},
 		"no stub log":                {func(r *enfRun) { r.in.Outbound.Logged, r.in.Outbound.Hits = false, nil }, true, "without a stub log"},
+		"a failing slot keeps its own verdict": {func(r *enfRun) {
+			r.in.Slots[len(r.in.Slots)-6].Status = 500
+			r.in.Outbound.Hits = r.in.Outbound.Hits[1:]
+		}, false, VerdictStatusDiffers},
 		"the yardstick never reached the stub": {func(r *enfRun) {
 			for i := range r.in.YardOutbound {
 				r.in.YardOutbound[i].Hits = 0

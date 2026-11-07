@@ -168,7 +168,7 @@ func checkOutbound(slots []Slot, ob Outbound, grace time.Duration) outboundCheck
 				reached++
 			}
 		}
-		if allowed == 0 || reached == 0 {
+		if reached == 0 {
 			out.noReach = append(out.noReach, row)
 			out.fails = append(out.fails, fmt.Sprintf("FAIL: row %s VOID: %d allowed slots, %d reached the %s stub; the row is no evidence", row, allowed, reached, ob.Ext[row]))
 		}

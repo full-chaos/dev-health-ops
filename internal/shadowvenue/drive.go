@@ -137,7 +137,7 @@ func (d *Driver) Drive(ctx context.Context, plan Plan, tokens map[string]string,
 		if !slot.Gap() && tokens[slot.Principal] == "" {
 			return fmt.Errorf("drive: principal %s of row %s has no token", slot.Principal, slot.Row)
 		}
-		if slot.Destructive && !slot.Gap() {
+		if slot.Destructive {
 			if err := d.Frozen.Holds(slot.Path, slot.Body); err != nil {
 				return fmt.Errorf("drive: destructive slot %d row %s refused before any request: %w", slot.Seq, slot.Row, err)
 			}

@@ -463,7 +463,7 @@ func throwawayOnly(row Row, throwaway string) error {
 			return fmt.Errorf("plan: destructive row %s holds a literal UUID; only {org}, {owner} and {missing} may name an id in the throwaway pool", row.ID)
 		}
 		for _, m := range placeholder.FindAllStringSubmatch(text, -1) {
-			if m[2] != "" || (m[1] != "org" && m[1] != "owner" && m[1] != "missing") {
+			if !slices.Contains([]string{"{org}", "{owner}", "{missing}"}, m[0]) {
 				return fmt.Errorf("plan: destructive row %s names %s; only {org}, {owner} and {missing} may name an id in the throwaway pool", row.ID, m[0])
 			}
 		}

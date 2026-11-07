@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/shadowvenue"
 )
 
 func principalsFile(t *testing.T) string {
@@ -246,5 +248,25 @@ func TestDriveRefusesAVenueIPWithoutItsEgressRecord(t *testing.T) {
 	}
 	if _, err := os.Stat(slots); !os.IsNotExist(err) {
 		t.Fatal("drive made its slots file before it refused the base")
+	}
+}
+
+// A -rows table that drops a row's external class is refused by plan and drive before any request.
+func TestPlanRefusesARowTableThatReclassifiesARow(t *testing.T) {
+	var lines []string
+	for _, line := range strings.Split(string(shadowvenue.DefaultRows), "\n") {
+		if f := strings.Split(line, "\t"); len(f) == 10 && f[0] == "22" {
+			f[5] = "-"
+			line = strings.Join(f, "\t")
+		}
+		lines = append(lines, line)
+	}
+	path := filepath.Join(t.TempDir(), "rows.tsv")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"plan", "-principals", principalsFile(t), "-rows", path}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "class") {
+		t.Fatalf("plan with row 22 reclassified: code %d, stderr %q", code, errOut.String())
 	}
 }

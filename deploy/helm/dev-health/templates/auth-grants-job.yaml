@@ -76,7 +76,12 @@ spec:
             - name: AUTH_PROJECTION_READER_ROLES
               value: {{ join "," . | quote }}
             {{- end }}
-            {{- with $m.workloadReaderRoles }}
+            {{- /* auth-migrate refuses a workload reader that is not a session reader of the same run: this Job passes only sessionReaderRoles as session readers (auth-migrate-job.yaml holds the union with sessionReaders), so it passes only the workload readers among them. */}}
+            {{- $workloadReaders := list }}
+            {{- range $m.workloadReaderRoles }}
+            {{- if has . (default (list) $m.sessionReaderRoles) }}{{- $workloadReaders = append $workloadReaders . }}{{- end }}
+            {{- end }}
+            {{- with $workloadReaders }}
             - name: AUTH_WORKLOAD_READER_ROLES
               value: {{ join "," . | quote }}
             {{- end }}

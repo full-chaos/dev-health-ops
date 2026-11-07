@@ -280,3 +280,68 @@ func TestPlanRefusesARowTableThatReclassifiesARow(t *testing.T) {
 		}
 	}
 }
+
+// tableWith writes the embedded table with one row's column col set to value and returns its path.
+func tableWith(t *testing.T, id string, col int, value string) string {
+	t.Helper()
+	var lines []string
+	for _, line := range strings.Split(string(shadowvenue.DefaultRows), "\n") {
+		if f := strings.Split(line, "\t"); len(f) == 10 && f[0] == id {
+			f[col] = value
+			line = strings.Join(f, "\t")
+		}
+		lines = append(lines, line)
+	}
+	path := filepath.Join(t.TempDir(), "rows.tsv")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The CLI forms: plan refuses C1 moved onto the org-delete route; judge and judge-enforced void (exit 3, a class line)
+// on a -rows table with row 13's destructive flag dropped.
+func TestCLIHoldsEveryRowToItsPinnedClass(t *testing.T) {
+	var lines []string
+	for _, line := range strings.Split(string(shadowvenue.DefaultRows), "\n") {
+		if f := strings.Split(line, "\t"); len(f) == 10 && f[0] == "C1" {
+			f[1], f[2], f[8] = "DELETE", "/api/v1/admin/orgs/{org_id}", "/api/v1/admin/orgs/{org}"
+			line = strings.Join(f, "\t")
+		}
+		lines = append(lines, line)
+	}
+	moved := filepath.Join(t.TempDir(), "rows.tsv")
+	if err := os.WriteFile(moved, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"plan", "-principals", principalsFile(t), "-rows", moved}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "row C1") {
+		t.Fatalf("plan with C1 on the org delete: code %d, stderr %q", code, errOut.String())
+	}
+	dir := t.TempDir()
+	write := func(name, text string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	slots := write("slots.tsv", "seq\trow\tcaller\tprincipal\tcross_org\texpect\tk\tmethod\troute\tpath\tt_start\tt_end\tstatus\tnote\n"+
+		"1\tC1\tsuperuser\tdrift-S\tfalse\tmismatch\t1\tGET\t/api/v1/admin/teams\t/api/v1/admin/teams\t2026-11-07T12:00:00Z\t2026-11-07T12:00:00.1Z\t200\t-\n")
+	log := write("go-api.log", "{}\n")
+	mismatch := tableWith(t, "13", 4, "no")
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"judge", "-slots", slots, "-log", log, "-rows", mismatch, "-out", filepath.Join(dir, "t1.tsv"), "-k", "1"}, &out, &errOut); code != 3 || !strings.Contains(out.String(), "row 13:") {
+		t.Fatalf("judge with row 13 destructive=no: code %d, stdout %q, stderr %q", code, out.String(), errOut.String())
+	}
+	yard := write("yard.tsv", "seq\trow\tcaller\tk\tkey\tstatus\tverdict\n1\tC1\tsuperuser\t1\tGET /api/v1/admin/teams\t200\tMISMATCH\n")
+	d := write("d.txt", strings.Repeat("a", 64)+"\n")
+	m := write("m.prom", "# none\n")
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"judge-enforced", "-slots", slots, "-yardstick", yard, "-yardstick-digest", d, "-yardstick-digest-after", d,
+		"-digest-before", d, "-digest-after", d, "-metrics-before", m, "-metrics-after", m, "-rows", mismatch, "-out", filepath.Join(dir, "t2.tsv"), "-k", "1"}, &out, &errOut); code != 3 || !strings.Contains(out.String(), "row 13:") {
+		t.Fatalf("judge-enforced with row 13 destructive=no: code %d, stdout %q, stderr %q", code, out.String(), errOut.String())
+	}
+}

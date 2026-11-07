@@ -24,38 +24,61 @@
 # Exit: 0 GREEN, 1 RED or INCOMPLETE, 3 NONE (no executed run in --limit runs),
 # 2 usage / could not read the API. --summary prints the same as markdown.
 #
+# GENERIC MODE (CHAOS-13243): --workflow FILE --witness 'prefix;prefix' reads another workflow the same way.
+# A run is classified from its JOB conclusions: the witness job-name prefixes must each match jobs and all
+# matched jobs must have executed (success or failure). A cancelled run is ignored. A run with any other
+# non-success conclusion is an executed RED run. A success run whose witness jobs were skipped (go-quality
+# test and race legs, CHAOS-11408) is skipped; one with only some executed is partial = INCOMPLETE. Neither closes.
+#
 # LAST_VENUE_RUN_GH overrides the `gh` command (the tooling test feeds fixtures).
 set -euo pipefail
 
-branch=main limit=30 repo="${GITHUB_REPOSITORY:-full-chaos/dev-health-ops}" summary=0
+workflow="venue-oracles.yml" witness="" branch=main limit=30 repo="${GITHUB_REPOSITORY:-full-chaos/dev-health-ops}" summary=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --branch) branch="${2:?--branch needs a value}"; shift 2 ;;
     --limit) limit="${2:?--limit needs a value}"; shift 2 ;;
     --repo) repo="${2:?--repo needs a value}"; shift 2 ;;
     --summary) summary=1; shift ;;
+    --workflow) workflow="${2:?--workflow needs a value}"; shift 2 ;;
+    --witness) witness="${2:?--witness needs a value}"; shift 2 ;;
     *) printf 'usage: ci/last-venue-run.sh [--branch main] [--limit N] [--repo OWNER/REPO] [--summary]\n' >&2; exit 2 ;;
   esac
 done
 case "${limit}" in ""|*[!0-9]*) printf 'last-venue-run: --limit must be a number\n' >&2; exit 2 ;; esac
+case "${workflow}" in *[!A-Za-z0-9._-]*) printf 'last-venue-run: --workflow must be a file name\n' >&2; exit 2 ;; esac
 command -v jq >/dev/null 2>&1 || { printf 'last-venue-run: jq is required\n' >&2; exit 2; }
 GH="${LAST_VENUE_RUN_GH:-gh}"
 
 api() { ${GH} api "$1"; }
 
-runs_json="$(api "repos/${repo}/actions/workflows/venue-oracles.yml/runs?branch=${branch}&event=push&status=completed&per_page=${limit}")" \
+runs_json="$(api "repos/${repo}/actions/workflows/${workflow}/runs?branch=${branch}&event=push&status=completed&per_page=${limit}")" \
   || { printf 'last-venue-run: could not list the venue-oracles runs\n' >&2; exit 2; }
 
 verdict="NONE" last_id="-" last_sha="-" last_conclusion="-" skipped_since=0 found=0
 lines=""
 while IFS=$'\t' read -r id sha conclusion; do
   [ -n "${id}" ] || continue
+  if [ -n "${witness}" ]; then
+    if [ "${conclusion}" = "cancelled" ]; then continue; fi
+    if [ "${conclusion}" != "success" ]; then
+      total=1 ran=1 ok=0
+    else
+      jobs_json="$(api "repos/${repo}/actions/runs/${id}/jobs?per_page=100")" \
+        || { printf 'last-venue-run: could not read the jobs of run %s\n' "${id}" >&2; exit 2; }
+      read -r total ran ok < <(printf '%s' "${jobs_json}" | jq -r --arg w "${witness}" '
+        ($w | split(";")) as $w | .jobs as $j
+        | [$w[] as $p | [$j[] | select(.name | startswith($p)) | .conclusion]] as $m
+        | "\($m | length) \($m | map(select(length > 0 and all(.[]; . == "success" or . == "failure"))) | length) \($m | map(select(length > 0 and all(.[]; . == "success"))) | length)"')
+    fi
+  else
   jobs_json="$(api "repos/${repo}/actions/runs/${id}/jobs?per_page=100")" \
     || { printf 'last-venue-run: could not read the jobs of run %s\n' "${id}" >&2; exit 2; }
   read -r total ran ok < <(printf '%s' "${jobs_json}" | jq -r '
     [.jobs[] | select(.name | startswith("venue-oracles"))
        | (.steps // [] | map(select(.name | startswith("Run this shard"))) | .[0].conclusion // "absent")] as $c
     | "\($c | length) \($c | map(select(. == "success" or . == "failure")) | length) \($c | map(select(. == "success")) | length)"')
+  fi
   if [ "${total}" -eq 0 ]; then class="none"
   elif [ "${ran}" -eq "${total}" ]; then class="executed"
   elif [ "${ran}" -eq 0 ]; then class="skipped"

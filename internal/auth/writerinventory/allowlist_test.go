@@ -313,6 +313,6 @@ var Allowlist = []Entry{
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.users", Verb: "INSERT"},
-	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "Venue.WriteAuthSessions", Table: "auth.principals", Verb: "INSERT"}, // test support: venue seed for the api's real session check
-	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "Venue.WriteAuthSessions", Table: "auth.sessions", Verb: "INSERT"},   // test support: venue seed for the api's real session check
+	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "writeSessions", Table: "auth.principals", Verb: "INSERT"}, // test support: venue seed for the api's real session check
+	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "writeSessions", Table: "auth.sessions", Verb: "INSERT"},   // test support: venue seed for the api's real session check
 }

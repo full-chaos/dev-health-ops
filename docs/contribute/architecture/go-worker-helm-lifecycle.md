@@ -36,7 +36,7 @@ configuring workers, read
 | Hook weight | Job | Applies |
 | --- | --- | --- |
 | `0` | `…-migrate` | Alembic (application schema) and the ClickHouse migrator |
-| `5` | `…-provision-roles` | the three runtime logins, via `dho migrate roles` on the pinned operator image (CHAOS-6951; no psql, no Python image); also the KEDA read-only role when a `goWorkers` group has `autoscaling.enabled: true` (SELECT on `river_job` and on `public.sync_run_units`, the latter granted by `dho migrate roles` only, CHAOS-6946) |
+| `5` | `…-provision-roles` | the three runtime logins, via `dho migrate roles` on the pinned operator image (no psql, no Python image); also the KEDA read-only role when a `goWorkers` group has `autoscaling.enabled: true` (SELECT on `river_job` and on `public.sync_run_units`, the latter granted by `dho migrate roles` only) |
 | `10` | `…-river-migrate` | the pinned River schema and the full runtime grant posture, then re-checks it |
 
 The order is not interchangeable. Role provisioning grants against tables that
@@ -112,7 +112,7 @@ Every step in this chain runs raw DDL, so all of them must reach PostgreSQL
 Provisioning connects by parts when the Secret supplies them
 (`POSTGRES_HOST`, `POSTGRES_USER`, `POSTGRES_DB`, with `PGPASSWORD` out of band),
 which Compose's `go-river-provision` also did before it moved to `dho migrate roles`
-(CHAOS-6904, component-form `DEV_HEALTH_MIGRATION_PG_*`). Parts avoid the question of
+(component-form `DEV_HEALTH_MIGRATION_PG_*`). Parts avoid the question of
 which URL dialect a configured value is written in. When only a DSN exists, it is
 selected in the same order the migrate Job uses and its scheme is normalised —
 `postgresql+asyncpg://` is a SQLAlchemy URL that libpq cannot consume. With
@@ -135,7 +135,7 @@ design:
 
 - Role provisioning (`dho migrate roles`, formerly `provision_river_roles.sql`) is bootstrap-only. The only `REVOKE`s left are
   `TEMPORARY` on the database and `CREATE` on schema `public`; the per-table
-  whitelist that once caused an incident is gone (CHAOS-4261).
+  whitelist that once caused an incident is gone.
 - `applyRuntimeGrants` runs unconditionally after the migrator, before the
   applied-versions list is even built. "0 pending migrations" still re-applies
   the full declared posture.
@@ -146,7 +146,7 @@ table), then 119 again — no revoke at any point.
 ## Production's settings
 
 `dho migrate upgrade` applies production's heads: the PostgreSQL schema with the
-Celery-to-River route-table cutover (revision 0066) applied, and the ClickHouse
+Celery-to-River route-table migration (revision 0066) applied, and the ClickHouse
 schema under operational ordering contract 2. It refuses, naming the value, any
 `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER` other than `1` and any
 `OPERATIONAL_ORDERING_CONTRACT` other than `2`. The chart sets both on the
@@ -155,12 +155,12 @@ weight-0 Job (`migrations.hook.celeryRiverCutover`,
 values; a database built under other settings must be re-created from the
 head.
 
-`migrations.hook.classDecisionLiveSchemaDigest` (CHAOS-8744) has no default.
+`migrations.hook.classDecisionLiveSchemaDigest` has no default.
 When it is set, the chart passes it to the weight-0 Job as the env
 `DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`; when it is empty, the Job has no such
 env. The chart refuses a value that is not `sha256:<64 hex>`.
 
-`migrations.hook.clickhouseCloud` (CHAOS-10754) is off by default and changes
+`migrations.hook.clickhouseCloud` is off by default and changes
 nothing while off. When `enabled` is true, the weight-0 Job takes its
 ClickHouse login from the operator-created Secret named by `secretName`
 (keys `hostKey`, `userKey`, `passwordKey`) instead of the shared Secret's

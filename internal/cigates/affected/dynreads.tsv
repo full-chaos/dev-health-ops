@@ -71,6 +71,7 @@ internal/auth/contracts	authorization_goldens_test.go
 internal/auth/contracts	authorization_schema_test.go
 internal/auth/contracts	contracts.go
 internal/auth/contracts	credential_anchor_lines_test.go
+internal/auth/contracts	credential_class_retired_test.go
 internal/auth/contracts	credential_class_workload_validators_test.go
 internal/auth/contracts	credential_columns_test.go
 internal/auth/contracts	credential_goldens_test.go
@@ -340,6 +341,7 @@ internal/cigates/workflows	workflows_go_queue_cancel_children_test.go
 internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
+internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
 internal/deploymentcontract	manifest.go
 internal/egressguard	egressguard_test.go

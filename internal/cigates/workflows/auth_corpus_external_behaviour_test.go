@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,6 +18,12 @@ import (
 // Behaviour of ci/auth_corpus_external.sh and ci/auth_corpus_set_env.sh against a fake docker: it records every
 // call, answers the few queries the scripts make, and blocks on `up` when asked. No docker runs.
 
+// fakeSigningPEM is what the fake docker's `cp` of auth-service's signing key writes: a marker no output may show.
+const fakeSigningPEM = "FAKE-SIGNING-KEY-MARKER-7f3e9c21"
+
+// noSessionsRefusal is the corpus script's refusal of a leg whose go-api does not forward sessions (CHAOS-13154).
+const noSessionsRefusal = "sessions are not forwarded"
+
 type fakeDocker struct {
 	dir, record string
 }
@@ -28,6 +35,10 @@ func newFakeDocker(t *testing.T) fakeDocker {
 	docker := `#!/bin/sh
 printf '%s\n' "$*" >> "` + record + `"
 case "$*" in
+  *" cp auth-service:"*)
+    # docker compose cp writes the key file itself, with the container file's mode.
+    for arg in "$@"; do last="$arg"; done
+    printf '%s\n' "$FAKE_SIGNING_PEM" > "$last" && chmod 0400 "$last" ;;
   *users-backfill*)
     if [ -n "$FAKE_FAIL_BACKFILL" ]; then exit 1; fi ;;
   *" down "*)
@@ -40,13 +51,14 @@ case "$*" in
     printf '%s %s %s\n' "${AUTH_SESSION_SUCCESSOR_KEY:-}" "${AUTH_LOGIN_LOCKOUT_KEY:-}" "${AUTH_JWT_SECRET_KEY:+jwt}" >> "` + record + `.keys"
     for arg in "$@"; do last="$arg"; done
     printf '%s bootstrap=%s subject=%s credential=%s token=%s\n' "$last" "${AUTH_WORKLOAD_BOOTSTRAP:-}" "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}" "${AUTH_SESSION_ISSUE_CREDENTIAL:-}" "${AUTH_SESSION_ISSUE_TOKEN:+set}" >> "` + record + `.workload"
+    printf '%s %s\n' "$last" "${AUTH_TOKEN_ISSUER_URL:-unset}" >> "` + record + `.upissuer"
     if [ -n "$FAKE_BLOCK_UP" ]; then exec sleep "$FAKE_BLOCK_UP"; fi
     if [ -n "$FAKE_FAIL_UP" ]; then exit 1; fi ;;
   *" logs "*" auth-service"*)
     if [ -z "${FAKE_AUTH_LOGS+x}" ]; then echo 'level=INFO msg="listener bound"'; else printf '%s\n' "$FAKE_AUTH_LOGS"; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
   *" config --format json"*)
-    if [ -n "${FAKE_COMPOSE_CONFIG:-}" ]; then printf '%s\n' "$FAKE_COMPOSE_CONFIG"; else echo '{"services":{"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example"}}}}'; fi ;;
+    if [ -n "${FAKE_COMPOSE_CONFIG:-}" ]; then printf '%s\n' "$FAKE_COMPOSE_CONFIG"; else echo '{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_PROXY_SOCIAL":"true"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}'; fi ;;
   *" ps -q go-api"*) echo cid-go-api ;;
   *"exec -T postgres psql"*"-At -f -"*) echo prn_AAAAAAAAAAAAAAAAAAAAAA ;;
   *"inspect --format"*)
@@ -68,7 +80,10 @@ case "$1" in
       *) printf 'SMTPADMIN %s\n' "$DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN" >> "` + record + `"
          printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_FORWARDED-unset}" >> "` + record + `.forwarded"
          printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER-unset}" >> "` + record + `.issuer"
-         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_USERS_OWNED-unset}" >> "` + record + `.usersowned" ;;
+         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_USERS_OWNED-unset}" >> "` + record + `.usersowned"
+         key="${DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_FILE-unset}"
+         printf '%s %s %s %s\n' "$key" "${DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_ID-unset}" "$(stat -c %a "$key" 2>/dev/null)" "$(stat -c %a "$(dirname "$key")" 2>/dev/null)" >> "` + record + `.signing"
+         if [ -f "$key" ]; then cat "$key" >> "` + record + `.signingcontent"; fi ;;
     esac
     case "$*" in
       *" -c "*)
@@ -116,7 +131,7 @@ func (f fakeDocker) calls(t *testing.T) string {
 
 func (f fakeDocker) env(extra ...string) []string {
 	return append([]string{"PATH=" + f.dir + ":" + os.Getenv("PATH"), "HOME=" + f.dir,
-		"FAKE_RECORD=" + f.record, "FAKE_TEST_PID_FILE=" + f.record + ".testpid"}, extra...)
+		"FAKE_RECORD=" + f.record, "FAKE_TEST_PID_FILE=" + f.record + ".testpid", "FAKE_SIGNING_PEM=" + fakeSigningPEM}, extra...)
 }
 
 func TestAuthCorpusExternalCleansUpWhenTerminated(t *testing.T) {
@@ -465,6 +480,44 @@ func TestAuthCorpusAcpLegSignsInWithTheWorkloadTokenAndGrantsBeforeTheSessionsFl
 	}
 	if !goAPISessions {
 		t.Errorf("go-api never started with AUTH_SESSION_ISSUE_CREDENTIAL=workload:\n%s", raw)
+	}
+}
+
+// CHAOS-13126: go-api verifies the venue's EdDSA tokens with its issuer's key set (authverify's JWKS client dials
+// <issuer>/.well-known/openid-configuration and jwks.json), so leg acp starts go-api and auth-service with the issuer
+// compose's auth-issuer serves (compose.yml's AUTH_TOKEN_ISSUER_URL default), not the workload lib's default, which
+// no host serves: there every venue token answered 503.
+func TestAuthCorpusAcpLegUsesTheIssuerAuthIssuerServes(t *testing.T) {
+	compose, err := os.ReadFile(filepath.Join(authProofRoot(t), "compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := regexp.MustCompile(`AUTH_ACCESS_TOKEN_ISSUER: \$\{AUTH_TOKEN_ISSUER_URL:-(https://[^}]+)\}`).FindSubmatch(compose)
+	if served == nil {
+		t.Fatal("compose.yml names no AUTH_TOKEN_ISSUER_URL default for go-api's AUTH_ACCESS_TOKEN_ISSUER")
+	}
+	issuer := string(served[1])
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
+	if err != nil {
+		t.Fatalf("leg acp failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(fake.record + ".upissuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ups := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		service, got, _ := strings.Cut(line, " ")
+		if service != "go-api" && service != "auth-service" {
+			continue
+		}
+		ups[service]++
+		if got != issuer {
+			t.Errorf("%s started with AUTH_TOKEN_ISSUER_URL=%q, want the issuer auth-issuer serves %q", service, got, issuer)
+		}
+	}
+	if ups["go-api"] == 0 || ups["auth-service"] == 0 {
+		t.Fatalf("want go-api and auth-service started at least once each, got %v:\n%s", ups, raw)
 	}
 }
 
@@ -1346,7 +1399,7 @@ func TestAuthCorpusRefusedForceSocialLeavesNoTemporaryDirectory(t *testing.T) {
 // are the script's too: an aggregate without sessions, and OIDC or SAML (no corpus rows), fail the leg by name.
 func TestAuthCorpusGoAPILegForwardsSessionsWhenComposeRoutesThem(t *testing.T) {
 	env := func(pairs string) string {
-		return `{"services":{"go-api":{"environment":{` + pairs + `}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example"}}}}`
+		return `{"services":{"go-api":{"environment":{` + pairs + `}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}`
 	}
 	const prodSet = `"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_PROXY_SOCIAL":"true"`
 	for _, tc := range []struct {
@@ -1357,9 +1410,11 @@ func TestAuthCorpusGoAPILegForwardsSessionsWhenComposeRoutesThem(t *testing.T) {
 		{"sessions only", env(`"AUTH_PROXY_SESSIONS":"true"`), "sessions", ""},
 		{"sessions and local login", env(`"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"false"`), "sessions,local_login", ""},
 		{"social without credentials", env(`"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_SOCIAL":"true"`), "sessions,social", ""},
-		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false"}}}}`, "", ""},
-		{"sessions unset", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":null}}}}`, "", ""},
-		{"no environment", `{"services":{"go-api":{}}}`, "", ""},
+		// CHAOS-13154: go-api trusts auth-service's tokens only, so a leg without sessions forwarded (go-api's local login
+		// mints the retired HS256 class) is refused before the corpus runs.
+		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false"}}}}`, "", noSessionsRefusal},
+		{"sessions unset", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":null}}}}`, "", noSessionsRefusal},
+		{"no environment", `{"services":{"go-api":{}}}`, "", noSessionsRefusal},
 		{"local login without sessions", env(`"AUTH_PROXY_LOCAL_LOGIN":"true"`), "", "AUTH_PROXY_LOCAL_LOGIN=true without AUTH_PROXY_SESSIONS"},
 		{"OIDC on", env(prodSet + `,"AUTH_PROXY_OIDC":"true"`), "", "AUTH_PROXY_OIDC=true"},
 		{"SAML on", env(prodSet + `,"AUTH_PROXY_SAML":"true"`), "", "AUTH_PROXY_SAML=true"},
@@ -1409,7 +1464,7 @@ func TestAuthCorpusGoAPILegForwardsSessionsWhenComposeRoutesThem(t *testing.T) {
 func TestAuthCorpusGoAPILegRunsTheOwnedHandOffWhenComposeOwnsUsers(t *testing.T) {
 	const prodSet = `"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_PROXY_SOCIAL":"true"`
 	env := func(pairs string) string {
-		return `{"services":{"go-api":{"environment":{` + pairs + `}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example"}}}}`
+		return `{"services":{"go-api":{"environment":{` + pairs + `}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}`
 	}
 	t.Run("owned", func(t *testing.T) {
 		fake := newFakeDocker(t)
@@ -1462,16 +1517,17 @@ func TestAuthCorpusGoAPILegRunsTheOwnedHandOffWhenComposeOwnsUsers(t *testing.T)
 
 // CHAOS-13107: with sessions forwarded the corpus checks each answer's session_access_token against auth-service's issuer
 // (authrows.SessionAccessTokenErr): the script hands it the issuer as compose renders it, and refuses a leg that names none.
-// Without sessions the corpus is handed no issuer.
+// CHAOS-13154: a leg without sessions forwarded is refused before the corpus runs (the venue mints under that issuer).
 func TestAuthCorpusHandsTheCorpusAuthServicesIssuerWhenSessionsAreForwarded(t *testing.T) {
 	const issuer = "https://auth.corpus.example"
 	for _, tc := range []struct {
 		name, config, want string
-		refused            bool
+		refusal            string
 	}{
-		{"sessions on", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `"}}}}`, issuer, false},
-		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `"}}}}`, "unset", false},
-		{"sessions on, no issuer", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}},"auth-service":{"environment":{}}}}`, "", true},
+		{"sessions on", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}`, issuer, ""},
+		// CHAOS-13154: without sessions forwarded the leg is refused before the corpus runs (noSessionsRefusal).
+		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `"}}}}`, "", noSessionsRefusal},
+		{"sessions on, no issuer", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}},"auth-service":{"environment":{}}}}`, "", "auth-service names no AUTH_TOKEN_ISSUER_URL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newFakeDocker(t)
@@ -1481,8 +1537,8 @@ func TestAuthCorpusHandsTheCorpusAuthServicesIssuerWhenSessionsAreForwarded(t *t
 			cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
 			cmd.Env = fake.env("FAKE_COMPOSE_CONFIG=" + tc.config)
 			out, err := cmd.CombinedOutput()
-			if tc.refused {
-				if err == nil || !strings.Contains(string(out), "auth-service names no AUTH_TOKEN_ISSUER_URL") {
+			if tc.refusal != "" {
+				if err == nil || !strings.Contains(string(out), tc.refusal) {
 					t.Fatalf("want the refusal by name, got err=%v:\n%s", err, out)
 				}
 				if _, statErr := os.Stat(fake.record + ".issuer"); statErr == nil {
@@ -1499,6 +1555,56 @@ func TestAuthCorpusHandsTheCorpusAuthServicesIssuerWhenSessionsAreForwarded(t *t
 			}
 			if got := strings.TrimSpace(string(raw)); got != tc.want {
 				t.Errorf("leg go-api hands the corpus DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// CHAOS-13154: the venue mints its seed tokens under auth-service's signing key. The script copies the key out of
+// auth-service into a mode 0600 file of a mode 0700 directory in the run's private directory, hands the test only its
+// path and auth-service's key id, never shows the key, and removes the file on exit.
+func TestAuthCorpusVenueSigningKeyIsAPrivateFileOfTheRun(t *testing.T) {
+	acp := []string{"AUTH_CORPUS_USERS_UNOWNED=1",
+		"FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login,/api/v1/auth/social-login",
+		"FAKE_METRICS=" + metric("sessions") + "\n" + metric("local_login")}
+	for leg, extra := range map[string][]string{"go-api": nil, "acp": acp} {
+		t.Run(leg, func(t *testing.T) {
+			fake := newFakeDocker(t)
+			fake.withCurl(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), leg)
+			cmd.Env = fake.env(extra...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("leg %s failed: %v\n%s", leg, err, out)
+			}
+			raw, err := os.ReadFile(fake.record + ".signing")
+			if err != nil {
+				t.Fatalf("the corpus test never ran: %v\n%s", err, out)
+			}
+			fields := strings.Fields(strings.TrimSpace(string(raw)))
+			if len(fields) != 4 || fields[1] != "auth-signing-corpus" || fields[2] != "600" || fields[3] != "700" ||
+				filepath.Base(fields[0]) != "signing.pem" {
+				t.Fatalf("the test was handed %q, want <dir>/signing.pem, key id auth-signing-corpus, file 600, dir 700", raw)
+			}
+			if content, _ := os.ReadFile(fake.record + ".signingcontent"); strings.TrimSpace(string(content)) != fakeSigningPEM {
+				t.Errorf("the key file the test read holds %q, want auth-service's key", content)
+			}
+			if _, statErr := os.Stat(fields[0]); !os.IsNotExist(statErr) {
+				t.Errorf("the key file %s is left after the run: %v", fields[0], statErr)
+			}
+			if _, statErr := os.Stat(filepath.Dir(fields[0])); !os.IsNotExist(statErr) {
+				t.Errorf("the key directory is left after the run: %v", statErr)
+			}
+			calls := fake.calls(t)
+			if !strings.Contains(calls, " cp auth-service:/run/auth/signing/envelope-private-key.pem "+fields[0]) {
+				t.Errorf("the key was not copied from auth-service's key file to the handed path; calls:\n%s", calls)
+			}
+			for name, text := range map[string]string{"output": string(out), "docker calls": calls} {
+				if strings.Contains(text, fakeSigningPEM) {
+					t.Errorf("the key appears in the %s", name)
+				}
 			}
 		})
 	}

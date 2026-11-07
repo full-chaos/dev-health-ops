@@ -123,10 +123,13 @@ func TestEnforcedEachPlantedDefectIsRed(t *testing.T) {
 		}, true, "build"},
 		"uptime went down (restart between the scrapes)": {func(r *enfRun) {
 			r.in.MetricsAfter = live(allEnforced, 40, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"))
-		}, true, "restarted"},
+		}, true, "went from"},
+		"uptime went down by a few seconds (counters reset)": {func(r *enfRun) {
+			r.in.MetricsAfter = live(allEnforced, 997, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"))
+		}, true, "went from"},
 		"uptime grew less than the drive (restart in the run)": {func(r *enfRun) {
 			r.in.MetricsAfter = live(allEnforced, 1020, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"))
-		}, true, "restarted"},
+		}, true, "grew"},
 		"yardstick digest none":           {func(r *enfRun) { r.in.YardDigest = "" }, true, "missing"},
 		"yardstick digest differs":        {func(r *enfRun) { r.in.YardDigest = strings.Repeat("c", 64) }, true, "differs"},
 		"yardstick after digest differs":  {func(r *enfRun) { r.in.YardDigestAfter = strings.Repeat("d", 64) }, true, "differs"},

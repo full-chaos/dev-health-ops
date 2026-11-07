@@ -98,7 +98,7 @@ C2	GET	/api/v1/admin/orgs/{org_id}/members	A	no	-	member-A	mismatch	/api/v1/admi
 87	POST	/api/v1/admin/sync-configs/batch	A	no	-	-	match	/api/v1/admin/sync-configs/batch	{}
 88	POST	/api/v1/admin/sync-configs/{config_id}/backfill	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}/backfill	{}
 89	POST	/api/v1/admin/sync-configs/{config_id}/trigger	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}/trigger	{}
-90	POST	/api/v1/admin/teams/{team_id}	A	no	-	-	match	/api/v1/admin/teams/{missing}	{}
+90	POST	/api/v1/admin/teams/{team_id}	A	no	-	-	match	/api/v1/admin/teams/import	{}
 91	POST	/api/v1/admin/teams/{team_id}/approve-changes	A	no	-	-	match	/api/v1/admin/teams/{missing}/approve-changes	{}
 92	POST	/api/v1/admin/teams/{team_id}/confirm-inferred-members	A	no	-	-	match	/api/v1/admin/teams/{missing}/confirm-inferred-members	{}
 93	POST	/api/v1/admin/teams/{team_id}/confirm-members	A	no	-	-	match	/api/v1/admin/teams/{missing}/confirm-members	{}

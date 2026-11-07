@@ -1,19 +1,19 @@
 ---
 page_id: con-auth-control-plane-threat-model
-summary: The Wave 0 Auth Control Plane threat model is maintained privately as a Linear document under the fix-first disclosure policy. This page is a stub; sections publish here in full, past tense, once the fix they describe has merged. Two are published now — telemetry (CHAOS-4722) and legacy ingest (CHAOS-4720).
+summary: The Auth Control Plane threat model is maintained privately as a Linear document under the fix-first disclosure policy. This page is a stub; sections publish here in full, past tense, once the fix they describe has merged. Two are published now — telemetry and legacy ingest.
 content_type: architecture
 owner: engineering
 source_of_truth:
-  - Linear document "Auth Control Plane threat model (Wave 0)", project Auth Control Plane (full analysis; private)
-  - src/dev_health_ops/api/telemetry/router.py (071c27890 closed CHAOS-4722; removed with the Python api)
-  - src/dev_health_ops/api/ingest/auth.py (512c4e77b closed CHAOS-4720; removed with the Python api)
+  - Linear document "Auth Control Plane threat model", project Auth Control Plane (full analysis; private)
+  - src/dev_health_ops/api/telemetry/router.py (removed with the Python api)
+  - src/dev_health_ops/api/ingest/auth.py (removed with the Python api)
 applicability: current
 lifecycle: active
 ---
 
-# Auth Control Plane: Wave 0 threat model
+# Auth Control Plane: threat model
 
-The Wave 0 threat model is dense with anchored analysis of weaknesses in the
+The threat model is dense with anchored analysis of weaknesses in the
 running product. Under the fix-first disclosure policy, a description of a
 currently-unfixed weakness does not land in a public repository until the fix
 that closes it is merged. The full document is therefore maintained privately
@@ -29,7 +29,7 @@ truth for everything not yet published here.
     until their fixes land; this page does not summarize, count, or otherwise
     characterize what remains held.
 
-## Telemetry: unauthenticated org-scoped and instance-wide disclosure (CHAOS-4722)
+## Telemetry: unauthenticated org-scoped and instance-wide disclosure
 
 **Fixed in `071c27890`, "Verify org identity server-side on telemetry
 routes."**
@@ -65,13 +65,13 @@ gated to a platform-role (superuser) principal, evaluated against the
 real superuser's JWT claim, which stays true while that superuser is
 impersonating a (necessarily non-superuser) target, so the fix now consults
 the active impersonation context and derives identity from the impersonation
-target when a session is impersonating — the same pattern CHAOS-2303 already
+target when a session is impersonating — the same pattern already
 established for GraphQL platform-admin checks. A new counter
 (`record_telemetry_org_id_rejected`) makes rejections observable.
 
-## Legacy ingest: fail-open when auth env vars were unset (CHAOS-4720)
+## Legacy ingest: fail-open when auth env vars were unset
 
-**Retired (CHAOS-11813):** the six legacy `/api/v1/ingest/*` routes are gone
+**Retired:** the six legacy `/api/v1/ingest/*` routes are gone
 from go-api (each answers 404) and their settings are unread, so this path,
 and the cross-tenant write its organization-less key allowed, no longer
 exists.
@@ -108,6 +108,4 @@ observable in production.
   — the ops inventory rows and how they were discovered.
 * [Auth Control Plane ADRs](auth-control-plane-adrs.md) — the eleven Proposed
   ADRs the threat model is an input to.
-* [Auth Control Plane decision sheet](auth-control-plane-decision-sheet.md) —
-  one-pass ratification: recommendation, alternatives, and risk per ADR.
-* [Auth Control Plane architecture and Wave 1 documentation](auth-control-plane-architecture.md) — what was built from these decisions, with a page for each Wave 1 surface.
+* [Auth Control Plane architecture and documentation](auth-control-plane-architecture.md) — what was built from these decisions, with a page for each surface.

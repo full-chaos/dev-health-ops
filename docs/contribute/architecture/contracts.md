@@ -51,7 +51,7 @@ that are absent from the same answer, a `complete` answer cannot carry a stale
 or unavailable required source, and a stream has exactly one terminal answer
 or error immediately followed by `done`.
 
-Wave 3.1 (CHAOS-3294) adds a parallel `dev_answer.v2` contract chain --
+The v2 flow adds a parallel `dev_answer.v2` contract chain --
 server-owned intent, per-mention resolution, investigation planning, a
 canonical answer frame, and an optional presentation narrative -- alongside
 the unmodified v1 contracts described above. The deprecated

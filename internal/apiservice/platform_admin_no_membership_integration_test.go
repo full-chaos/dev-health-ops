@@ -85,7 +85,9 @@ func ruleOneServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, issuer *edt
 
 // Product rule 1 (D6773): through the wired handlers on Postgres and ClickHouse, a platform admin whose token
 // names an org it holds no membership row in gets, with a user access token, the HS256 path's answer byte for
-// byte. A user without the platform action and without the membership keeps the routed refusal.
+// byte. A user without the platform action and without the membership keeps the routed refusal. CHAOS-13126
+// retired the HS256 class on every routed row: the HS256 path's answer is still read on the HS256-only listener
+// (issuer unset, the legacy path), and on the routed listener the HS256 token is the generic 401.
 func TestProductRule1PlatformAdminWithoutMembershipWiredHandlers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -163,8 +165,8 @@ VALUES ($1, $2, 'rule-one', 'github', '[]'::json, '{}'::json, true, now(), now()
 		if wantStatus != http.StatusOK || gotStatus != wantStatus || gotBody != wantBody {
 			t.Errorf("%s platform admin without membership: user access token %d %s, HS256 %d %s", path, gotStatus, gotBody, wantStatus, wantBody)
 		}
-		if status, body := serve(routed, path, hs256(super, "rule-one-super@example.com")); status != wantStatus || body != wantBody {
-			t.Errorf("%s HS256 on the routed listener %d %s, HS256 alone %d %s", path, status, body, wantStatus, wantBody)
+		if status, body := serve(routed, path, hs256(super, "rule-one-super@example.com")); status != http.StatusUnauthorized || strings.TrimSpace(body) != genericRefusal {
+			t.Errorf("%s HS256 on the routed listener %d %s, want the retired-class 401 %s", path, status, body, genericRefusal)
 		}
 		if status, body := serve(routed, path, eddsa(plain)); status != http.StatusUnauthorized || !strings.Contains(body, "Invalid or expired token") {
 			t.Errorf("%s user without the platform action or the membership: %d %s, want the routed 401", path, status, body)

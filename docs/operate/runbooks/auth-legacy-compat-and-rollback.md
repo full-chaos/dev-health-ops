@@ -42,10 +42,9 @@ mints a token of the other class.
 
 go-api, query-api and auth-service pick the validator for a route from its endpoint-profile row and from the
 `alg` of the token. The row says whether the route accepts the EdDSA token (`user_access_token`) and whether
-`legacy_hs256` is true. In the contract files today, every row that accepts `user_access_token` also has
-`legacy_hs256` true: 196 go-api rows, 35 query-api rows and 6 auth-service rows. So an HS256 token that was
-minted before the flip is still accepted after it, until it expires (60 minutes at most). No client has to
-change its token handling at the moment of the flip, except the two preconditions below.
+`legacy_hs256` is true. In the contract files today, no row has `legacy_hs256` true: the class
+`ops_access_token_hs256` is `retired`, so every row refuses an HS256 token with `alg_not_allowed`. A rollback
+to HS256 acceptance is a revert of that contract change, not a setting.
 
 ## Preconditions of the eddsa flip
 

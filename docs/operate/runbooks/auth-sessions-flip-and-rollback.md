@@ -29,7 +29,7 @@ Mail settings for the users-owned stage (phase 4, `AUTH_USERS_OWNED`): before th
 
 ## States
 
-The states are `authService.phase` values (the phase table is in [the deployment page](../../contribute/architecture/auth-control-plane-deployment.md#cutover-phases)); the chart refuses the old hand-set flags.
+The states are `authService.phase` values (the phase table is in [the deployment page](../../contribute/architecture/auth-control-plane-deployment.md#rollout-phases)); the chart refuses the old hand-set flags.
 
 - **Unflipped (dark):** `authService.phase=1`. The auth service runs, no ingress path reaches it, and go-api carries no `AUTH_PROXY_*` flag. The auth service mounts two routes (the JWKS document); discovery is off; the OIDC, OAuth, SAML and social-link routes answer 404. "Routes: 0" is not the dark check; the check is ingress paths = 0 plus phase 1.
 - **Flipped (sessions):** `authService.phase=2`. The session routes (`POST /api/v1/auth/refresh` and `POST /api/v1/auth/logout`) go to auth-service. Login and social sign-in (phase 3) and the register and e-mail link routes (phase 4) stay with go-api in this roll. Each later phase is its own flip, one per roll.

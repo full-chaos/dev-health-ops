@@ -221,10 +221,13 @@ does not repeat them. The field and its rules are defined once, in
 and `$defs/accessTokenValidationRules`); `endpoint-auth-profile.v1` references
 both. The wire profile also holds the HS256 class's pins to algorithm `HS256`.
 
-Every row that accepts `ops_access_token_hs256` sets `legacy_hs256: true`:
-every Bearer route accepts the HS256 token today. The profile-routed
-validation middleware picks the HS256 verifier only on a row that opts in;
-HS256 retirement removes the opt-ins.
+No row accepts `ops_access_token_hs256`: the class is `retired` in
+`credential-classes.json`, and every Bearer row sets `legacy_hs256: false`.
+The profile-routed validation middleware picks the HS256 verifier only on a
+row that opts in, so it refuses an HS256 bearer on every row with reason
+`alg_not_allowed`. The contracts gate
+`TestNoEndpointProfileRowAcceptsARetiredClass` refuses a row that lists a
+retired class or sets `legacy_hs256: true`.
 
 ## `delegated_bearer`
 

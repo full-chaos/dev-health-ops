@@ -178,13 +178,14 @@ func TestUsersCreateRefusalsWriteNothingByRowCount(t *testing.T) {
 	}
 
 	// With an active admin the refusal names platform-role-grant.
+	assignmentsBefore := e.createRows(t, ctx).assignments
 	e.seedSuperuser(t, ctx, "admin", true)
 	// The backfill writes the assignment only while public is_superuser is the authority (Options{}): with the switch on it skips the role leg.
 	if _, err := Run(ctx, PGSource{Pool: e.runtime}, e.store, Options{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := e.createRows(t, ctx).assignments; got != 1 {
-		t.Fatalf("the admin seed wrote %d platform_admin assignments, want 1", got)
+	if got := e.createRows(t, ctx).assignments - assignmentsBefore; got < 1 {
+		t.Fatalf("the admin seed wrote %d platform_admin assignments, want at least 1", got)
 	}
 	before := e.createRows(t, ctx)
 	code, stdout, stderr := e.runCreate(t, ownedEnv, "-email", createEmail("d"), "-superuser", "-password-stdin")

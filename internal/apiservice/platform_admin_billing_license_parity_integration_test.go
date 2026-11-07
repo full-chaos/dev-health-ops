@@ -458,7 +458,8 @@ func msrOrgIDRows(org uuid.UUID) []msrRow {
 
 // C3: a superuser with no membership row whose token names active org B, on the 5 billing.read and 2 license.read
 // rows, without and with org_id=B. The EdDSA user access token is the judged class: the PDP is asked and allows (the
-// platform_admin flag); HS256 is unjudged and is the cross-check. The legacy answer is an answer past the guard.
+// platform_admin flag), and the legacy answer is an answer past the guard. HS256 is the cross-check: the retired class
+// on a routed row, refused 401 on both sides.
 func TestPlatformAdminNoMembershipBillingAndLicenseReadsEqualLegacyWired(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -473,10 +474,10 @@ func TestPlatformAdminNoMembershipBillingAndLicenseReadsEqualLegacyWired(t *test
 		for _, r := range rows {
 			t.Run(c.label+" "+r.method+" "+r.path, func(t *testing.T) {
 				legacy, enforced := rig.msrParity(t, "C3", "org B active", c, r)
-				if msrVerdict(legacy.status) != "ADMIT" {
-					t.Errorf("legacy %d %s: want an answer past the guard", legacy.status, legacy.body)
-				}
 				if c.label == ed.label {
+					if msrVerdict(legacy.status) != "ADMIT" {
+						t.Errorf("legacy %d %s: want an answer past the guard", legacy.status, legacy.body)
+					}
 					msrWantJudgedAllow(t, c.label, r, msrOrgB, enforced)
 				}
 			})
@@ -545,7 +546,7 @@ func TestPlatformAdminInAnUnknownOrDeletedOrganizationGoAPIAnswersEqualLegacy(t 
 			for _, r := range rows {
 				t.Run(c.label+" "+r.method+" "+r.path, func(t *testing.T) {
 					legacy, _ := rig.msrParity(t, "M-go", o.label, c, r)
-					if msrVerdict(legacy.status) != "ADMIT" {
+					if strings.Contains(c.label, "/EdDSA/") && msrVerdict(legacy.status) != "ADMIT" {
 						t.Errorf("legacy %d %s: want an answer past the guard", legacy.status, legacy.body)
 					}
 				})

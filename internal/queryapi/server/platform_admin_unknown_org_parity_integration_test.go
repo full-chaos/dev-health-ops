@@ -309,7 +309,7 @@ func TestPlatformAdminInAnUnknownOrDeletedOrganizationQueryAPIAnswersEqualLegacy
 					switch {
 					case control && msqVerdict(legStatus) != "REFUSE":
 						t.Errorf("control: legacy %d %s, want refused", legStatus, legBody)
-					case !control && msqVerdict(legStatus) != "ADMIT":
+					case !control && strings.Contains(c.label, "/EdDSA/") && msqVerdict(legStatus) != "ADMIT":
 						t.Errorf("legacy %d %s, want an answer past the guard", legStatus, legBody)
 					}
 				})

@@ -98,3 +98,23 @@ func TestParseRowsRefusesEachMalformedLine(t *testing.T) {
 		}
 	}
 }
+
+// The destructive rows of the embedded table are 1 (the invite writes org_invites), 6, 9, 10 and 13, each in the
+// throwaway pool label T; every other row acts in a seeded org.
+func TestDefaultRowsDestructiveRowsActInThePool(t *testing.T) {
+	var got []string
+	for _, row := range mustRows(t, string(DefaultRows)) {
+		if row.Destructive != (row.Org == "T") {
+			t.Errorf("row %s: destructive %v in org %s", row.ID, row.Destructive, row.Org)
+		}
+		if row.Destructive {
+			got = append(got, row.ID)
+			if err := throwawayOnly(row, "T"); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	if strings.Join(got, ",") != "1,6,9,10,13" {
+		t.Fatalf("destructive rows %v, want 1,6,9,10,13", got)
+	}
+}

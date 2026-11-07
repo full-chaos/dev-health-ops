@@ -32,7 +32,41 @@ func principalsFile(t *testing.T) string {
 		b.WriteString(s + "\t" + s + "\t-\t55555555-5555-4555-8555-555555555555\tA\t-\t-\n")
 	}
 	b.WriteString("setting\tgeneral/p_key\t-\t-\tA\t-\t-\n")
+	for n := 1; n <= 3; n++ {
+		label := "T" + string(rune('0'+n))
+		b.WriteString("org\t" + label + "\t-\t" + poolUUID(n, 0) + "\t" + label + "\t-\t-\n")
+		for i, role := range []string{"owner", "admin", "member"} {
+			pw := filepath.Join(dir, label+role+".pw")
+			if err := os.WriteFile(pw, []byte("fake\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			b.WriteString("principal\t" + role + "-" + label + "\t" + role + "-" + label + "@example.test\t" + poolUUID(n, i+1) + "\t" + label + "\t" + role + "\t" + pw + "\n")
+		}
+	}
 	path := filepath.Join(dir, "principals.tsv")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// poolUUID is the id of pool org n (i 0) or of its i-th principal.
+func poolUUID(n, i int) string {
+	return "e" + string(rune('0'+n)) + string(rune('0'+i)) + "00000-0000-4000-8000-000000000000"
+}
+
+// idsFile is the frozen throwaway ids of the pool T1..T3 of principalsFile.
+func idsFile(t *testing.T) string {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("kind\tlabel\tuuid\n")
+	for n := 1; n <= 3; n++ {
+		b.WriteString("org\tT" + string(rune('0'+n)) + "\t" + poolUUID(n, 0) + "\n")
+		for i := 1; i <= 3; i++ {
+			b.WriteString("user\tu\t" + poolUUID(n, i) + "\n")
+		}
+	}
+	path := filepath.Join(t.TempDir(), "ids.tsv")
 	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -45,15 +79,20 @@ func TestRunExitCodes(t *testing.T) {
 	if code := run(context.Background(), nil, &out, &errOut); code != exitUsage {
 		t.Fatalf("no step: %d", code)
 	}
-	if code := run(context.Background(), []string{"plan", "-principals", principals, "-destructive"}, &out, &errOut); code != exitOK {
+	if code := run(context.Background(), []string{"plan", "-principals", principals, "-destructive"}, &out, &errOut); code != exitUsage {
+		t.Fatalf("destructive with no pool: %d", code)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"plan", "-principals", principals, "-destructive", "-throwaway-pool", "T1,T2,T3", "-throwaway-ids", idsFile(t)}, &out, &errOut); code != exitOK {
 		t.Fatalf("plan: %d %s", code, errOut.String())
 	}
 	if !strings.HasPrefix(out.String(), "1\tC1\tsuperuser\tdrift-S\tk=1\tGET /api/v1/admin/teams") {
 		t.Fatalf("plan does not start with control C1: %.200s", out.String())
 	}
 	last := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if l := last[len(last)-1]; !strings.Contains(l, "\t13\tsuperuser\t") || !strings.Contains(l, "DELETE /api/v1/admin/orgs/33333333") {
-		t.Fatalf("the last slot is not the superuser's org C delete: %s", l)
+	if l := last[len(last)-1]; !strings.Contains(l, "\t13\tsuperuser\t") || !strings.Contains(l, "k=3\tDELETE /api/v1/admin/orgs/"+poolUUID(3, 0)) {
+		t.Fatalf("the last slot is not the superuser's delete of pool org T3: %s", l)
 	}
 	errOut.Reset()
 	slots := filepath.Join(t.TempDir(), "slots.tsv")
@@ -66,6 +105,18 @@ func TestRunExitCodes(t *testing.T) {
 	}
 	if code := run(context.Background(), []string{"plan", "-principals", principals, "-throwaway-org", "A"}, &out, &errOut); code != exitUsage {
 		t.Fatalf("throwaway org A: %d", code)
+	}
+	if code := run(context.Background(), []string{"plan", "-principals", principals, "-only-rows", "1,999"}, &out, &errOut); code != exitUsage {
+		t.Fatalf("-only-rows with an unknown id: %d", code)
+	}
+	out.Reset()
+	if code := run(context.Background(), []string{"plan", "-principals", principals, "-only-rows", "22"}, &out, &errOut); code != exitOK {
+		t.Fatalf("-only-rows 22: %d %s", code, errOut.String())
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		if row := strings.Split(line, "\t")[1]; row != "C1" && row != "C2" && row != "22" {
+			t.Fatalf("-only-rows 22 planned row %s", row)
+		}
 	}
 }
 

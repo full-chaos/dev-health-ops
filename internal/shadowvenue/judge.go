@@ -174,7 +174,8 @@ type JudgeOptions struct {
 	K     int
 	Grace time.Duration
 	// NoOrg is the enforcement counter evidence for the superuser's no-organization skips; nil gives none.
-	NoOrg NoOrgEvidence
+	NoOrg    NoOrgEvidence
+	Outbound Outbound
 }
 
 // SlotVerdict is one slot and what its evidence says.
@@ -182,6 +183,7 @@ type SlotVerdict struct {
 	Slot
 	Verdict, DecisionID, Ruling string
 	Tuple                       Tuple
+	Outbound                    int
 }
 
 // Pass reports whether the slot's evidence passes it.

@@ -111,6 +111,7 @@ type Slot struct {
 	Start, End                     time.Time
 	Status                         int
 	Note                           string
+	Destructive                    bool
 }
 
 // Gap reports whether s was not sent.
@@ -129,6 +130,9 @@ var placeholder = regexp.MustCompile(`\{([a-z_]+)(?::([A-Za-z0-9_-]+))?\}`)
 // PlanOptions: Throwaway is the org label destructive rows act in; AllowExternal the outside services a request may
 // reach; K the requests per cell; Destructive sends the destructive rows, which are gaps without it.
 type PlanOptions struct {
+	Pool          []string
+	Frozen        ThrowawayIDs
+	OnlyRows      []string
 	Throwaway     string
 	AllowExternal []string
 	K             int

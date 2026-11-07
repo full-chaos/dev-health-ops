@@ -63,9 +63,10 @@ type Driver struct {
 	Base   *url.URL
 	Client *http.Client
 	// Gap is the wait after each answer; at least MinGap.
-	Gap   time.Duration
-	Sleep func(context.Context, time.Duration) error
-	Now   func() time.Time
+	Gap    time.Duration
+	Frozen ThrowawayIDs
+	Sleep  func(context.Context, time.Duration) error
+	Now    func() time.Time
 }
 
 func (d *Driver) now() time.Time {

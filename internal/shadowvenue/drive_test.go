@@ -226,3 +226,40 @@ func TestDriveRefusesAGapShorterThanTheShadowTimeout(t *testing.T) {
 		t.Fatalf("%d requests sent before the refusal", len(api.seen))
 	}
 }
+
+// The pre-send guard: a destructive slot whose path or body holds an id that is not frozen (here org A's, or no frozen
+// ids at all) refuses the whole drive before any request, even when the plan did not come from MakePlan.
+func TestDriveRefusesADestructiveSlotOutsideTheFrozenIDsBeforeAnyRequest(t *testing.T) {
+	api := newFakeAPI(t)
+	base, _ := CheckBase(api.srv.URL)
+	_, frozen, _, _ := testPoolVenue(t)
+	tokens := map[string]string{"member-A": "a", "superuser": "s"}
+	first := Slot{Seq: 1, Row: "58", Caller: "member", Principal: "member-A", Expect: "match", K: 1, Method: "GET", Route: "/api/v1/admin/teams", Path: "/api/v1/admin/teams", Body: none}
+	del := Slot{Seq: 2, Row: "13", Caller: "superuser", Principal: "superuser", Expect: "match", K: 1, Method: "DELETE", Route: "/api/v1/admin/orgs/{org_id}", Body: none, Destructive: true}
+	for name, c := range map[string]struct {
+		path   string
+		frozen ThrowawayIDs
+	}{
+		"org A":     {"/api/v1/admin/orgs/" + testOrgA, frozen},
+		"no frozen": {"/api/v1/admin/orgs/" + poolID(1, "org"), ThrowawayIDs{}},
+	} {
+		slot := del
+		slot.Path = c.path
+		d := &Driver{Base: base, Client: api.srv.Client(), Gap: MinGap, Frozen: c.frozen, Sleep: func(context.Context, time.Duration) error { return nil }}
+		if err := d.Drive(context.Background(), Plan{Slots: []Slot{first, slot}}, tokens, io.Discard); err == nil || !strings.Contains(err.Error(), "refused before any request") {
+			t.Errorf("%s: %v", name, err)
+		}
+		if len(api.seen) != 0 {
+			t.Fatalf("%s: %d requests sent before the refusal", name, len(api.seen))
+		}
+	}
+	slot := del
+	slot.Path = "/api/v1/admin/orgs/" + poolID(1, "org")
+	d := &Driver{Base: base, Client: api.srv.Client(), Gap: MinGap, Frozen: frozen, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if err := d.Drive(context.Background(), Plan{Slots: []Slot{first, slot}}, tokens, io.Discard); err != nil {
+		t.Fatalf("a pool org delete was refused: %v", err)
+	}
+	if len(api.seen) != 2 {
+		t.Fatalf("%d requests, want 2", len(api.seen))
+	}
+}

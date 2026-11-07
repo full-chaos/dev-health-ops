@@ -46,6 +46,10 @@ type EnforcedInput struct {
 	YardDigest, YardDigestAfter, DigestBefore, DigestAfter string
 	// go-api /metrics scrapes before and after the run, for the unjudged counter.
 	MetricsBefore, MetricsAfter []byte
+	Grace                       time.Duration
+	Outbound                    Outbound
+	YardOutbound                []OutboundSlot
+	YardOutboundGiven           bool
 }
 
 // liveEnforcement is what one /metrics scrape of the running go-api says: the namespaces whose enforcement gauge is 1,

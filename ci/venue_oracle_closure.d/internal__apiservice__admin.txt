@@ -69,6 +69,7 @@ internal/auth/policycatalog
 internal/auth/publicaudit
 internal/auth/pushevent
 internal/auth/ratelimitvalkey
+internal/auth/repoidentityevent
 internal/auth/repokey
 internal/auth/requestid
 internal/auth/session
@@ -139,6 +140,7 @@ internal/pythonparity
 internal/pythonparity/emailvalidator
 internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
+internal/queryapi/pdp/pdptest
 internal/repoinventory
 internal/scheduler/sync
 internal/storage/clickhouse

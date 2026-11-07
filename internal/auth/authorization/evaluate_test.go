@@ -59,9 +59,10 @@ func platformRequest(action string) Request {
 }
 
 type rawAction struct {
-	Action       string `json:"action"`
-	Scope        string `json:"scope"`
-	ResourceKind string `json:"resource_kind"`
+	Action        string `json:"action"`
+	Scope         string `json:"scope"`
+	ResourceKind  string `json:"resource_kind"`
+	PlatformAdmin string `json:"platform_admin"`
 }
 
 type rawRole struct {
@@ -165,7 +166,9 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 	}
 }
 
-func TestEvaluate_PlatformRoleNeverSatisfiesOrgAction(t *testing.T) {
+// A platform role satisfies an organization action only through the platform_admin rule: the role holds admin.orgs
+// and the action is flagged platform_admin allowed. Every other pair keeps the membership path.
+func TestEvaluate_PlatformRoleSatisfiesOnlyFlaggedOrgActions(t *testing.T) {
 	actions, roles, _ := vocab(t)
 	e := NewEvaluator()
 	for _, r := range roles {
@@ -176,16 +179,19 @@ func TestEvaluate_PlatformRoleNeverSatisfiesOrgAction(t *testing.T) {
 			if a.Scope != "organization" || a.ResourceKind != "organization" {
 				continue
 			}
+			rule := a.PlatformAdmin == "allowed" && contains(r.Actions, "admin.orgs")
 			s := orgSnapshot("")
 			s.memberships = map[string]Membership{}
 			s.platformRole = r.Role
-			if got := e.Evaluate(orgRequest(a.Action), s); got.Allowed || got.Reason != ReasonNoMembership {
-				t.Errorf("%s on %s without membership: %+v", r.Role, a.Action, got)
+			got := e.Evaluate(orgRequest(a.Action), s)
+			if rule && (!got.Allowed || got.Reason != ReasonAllowedByPlatformAdmin) || !rule && (got.Allowed || got.Reason != ReasonNoMembership) {
+				t.Errorf("%s on %s without membership (rule %v): %+v", r.Role, a.Action, rule, got)
 			}
 			s = orgSnapshot(r.Role)
 			s.platformRole = r.Role
-			if got := e.Evaluate(orgRequest(a.Action), s); got.Allowed || got.Reason != ReasonRoleScopeMismatch {
-				t.Errorf("%s as membership role on %s: %+v", r.Role, a.Action, got)
+			got = e.Evaluate(orgRequest(a.Action), s)
+			if rule && (!got.Allowed || got.Reason != ReasonAllowedByPlatformAdmin) || !rule && (got.Allowed || got.Reason != ReasonRoleScopeMismatch) {
+				t.Errorf("%s as membership role on %s (rule %v): %+v", r.Role, a.Action, rule, got)
 			}
 		}
 	}
@@ -459,6 +465,7 @@ func TestReasonSetIsClosed(t *testing.T) {
 		"allowed_by_membership_default", "grant_read_failed", "impersonation_denied", "delegation_invalid",
 		"repository_unresolved",
 		"repository_allowlist_too_large",
+		"allowed_by_platform_admin",
 	}
 	got := AllReasons()
 	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
@@ -580,7 +587,7 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 				rows = append(rows, liveGrant(fmt.Sprintf("o/r%03d", i)))
 			}
 			return repoSnapshot("member", rows...)
-		}(), ReasonRepositoryAllowlistTooLarge, nil},
+		}(), ReasonRepositoryAllowlistTooLarge, filteredOrgEvaluator()},
 		{"role unknown", orgRequest("org.read"), orgSnapshot("guest"), ReasonRoleUnknown, nil},
 		{"role scope mismatch", orgRequest("org.read"), orgSnapshot("platform_admin"), ReasonRoleScopeMismatch, nil},
 		{"role lacks action", orgRequest("org.delete"), orgSnapshot("viewer"), ReasonRoleLacksAction, nil},
@@ -614,7 +621,8 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 		seen[c.reason] = true
 	}
 	for _, r := range AllReasons() {
-		allow := r == ReasonAllowedByRole || r == ReasonAllowedByRepositoryGrant || r == ReasonAllowedByMembershipDefault
+		allow := r == ReasonAllowedByRole || r == ReasonAllowedByRepositoryGrant || r == ReasonAllowedByMembershipDefault ||
+			r == ReasonAllowedByPlatformAdmin
 		if !allow && !seen[r] {
 			t.Errorf("deny reason %s has no revision case", r)
 		}

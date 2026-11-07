@@ -15,18 +15,18 @@ func TestTheEdDSAFlipGatesNameSwitchOrgUnderTheSessionsAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	section, ok := sectionOf(text, "## Access token class eddsa (W3 D1)")
+	section, ok := sectionOf(text, "## Access token class eddsa")
 	if !ok {
 		t.Fatal("no eddsa section in " + authSessionsFlipRunbook)
 	}
 	var gate string
 	for _, line := range strings.Split(section, "\n") {
-		if strings.HasPrefix(line, "Gate (acp):") && strings.Contains(line, "POST /api/v1/auth/switch-org") {
+		if strings.HasPrefix(line, "Gate:") && strings.Contains(line, "POST /api/v1/auth/switch-org") {
 			gate = line
 		}
 	}
 	if gate == "" {
-		t.Fatal("no Gate (acp) line names POST /api/v1/auth/switch-org")
+		t.Fatal("no Gate line names POST /api/v1/auth/switch-org")
 	}
 	for _, want := range []string{"AUTH_PROXY_SESSIONS", "before eddsa is set", "session_access_token"} {
 		if !strings.Contains(gate, want) {

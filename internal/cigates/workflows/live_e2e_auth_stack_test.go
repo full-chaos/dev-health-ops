@@ -149,28 +149,48 @@ func TestLiveE2EQueryAPIEnvIsProdsFlagSet(t *testing.T) {
 	}
 }
 
-// The web workflow runs the script by a path relative to the ops checkout. `up` changes directory into the state
-// directory before it starts auth-service through `with-env`, so that re-exec has to name the script by an absolute path.
-func TestLiveE2EAuthStackUpStartsAuthServiceWhenRunByARelativePath(t *testing.T) {
-	root := repoRoot(t)
+func liveE2EUpFakes(t *testing.T, state string) string {
+	t.Helper()
 	fake := t.TempDir()
-	write := func(path, body string) {
+	write := func(name, body string) {
 		t.Helper()
-		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(fake, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write(filepath.Join(fake, "go"), "#!/bin/sh\nwhile [ \"$1\" != -o ]; do shift; done\nprintf '#!/bin/sh\\necho started\\n' > \"$2\"\nchmod 755 \"$2\"\n")
-	write(filepath.Join(fake, "psql"), "#!/bin/sh\ncase \"$*\" in *-At*) echo 3b1e2c4d-5f60-4a71-8b92-0c1d2e3f4a5b ;; esac\n")
-	write(filepath.Join(fake, "sleep"), "#!/bin/sh\nexit 0\n")
-	state := filepath.Join(t.TempDir(), "state")
-	write(filepath.Join(fake, "curl"), "#!/bin/sh\ngrep -q '^started$' '"+state+"/logs/auth-service.log'\n")
-	write(filepath.Join(fake, "dho"), "#!/bin/sh\nexit 0\n")
+	write("go", "#!/bin/sh\nwhile [ \"$1\" != -o ]; do shift; done\nprintf '#!/bin/sh\\necho started\\nprintf %%s \"$AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT\" > \"'"+state+"'/subject\"\\n' > \"$2\"\nchmod 755 \"$2\"\n")
+	write("psql", "#!/bin/sh\ncase \"$*\" in *-At*) echo 3b1e2c4d-5f60-4a71-8b92-0c1d2e3f4a5b ;; esac\n")
+	write("sleep", "#!/bin/sh\nexit 0\n")
+	write("curl", "#!/bin/sh\ngrep -q '^started$' '"+state+"/logs/auth-service.log'\n")
+	write("dho", "#!/bin/sh\nexit 0\n")
+	return fake
+}
 
+// liveE2ENoXxdPath is a PATH of every host tool except xxd, with fakes in front.
+func liveE2ENoXxdPath(t *testing.T, fake string) string {
+	t.Helper()
+	bin := t.TempDir()
+	for _, dir := range []string{"/usr/local/bin", "/usr/bin", "/bin"} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.Name() == "xxd" {
+				continue
+			}
+			_ = os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(bin, e.Name()))
+		}
+	}
+	return fake + ":" + bin
+}
+
+func runLiveE2EUp(t *testing.T, path, fake, state string) {
+	t.Helper()
 	cmd := exec.Command("bash", "ci/live_e2e_auth_stack.sh", "up", state)
-	cmd.Dir = root
+	cmd.Dir = repoRoot(t)
 	cmd.Env = []string{
-		"PATH=" + fake + ":" + os.Getenv("PATH"),
+		"PATH=" + path,
 		"PGUSER=postgres",
 		"PGPASSWORD=placeholder-for-fake-psql",                // gitleaks:allow -- placeholder value for the fake psql, not a credential
 		"JWT_SECRET_KEY=0123456789abcdef0123456789abcdef0123", // gitleaks:allow -- placeholder value fed to the fakes, not a credential
@@ -180,7 +200,29 @@ func TestLiveE2EAuthStackUpStartsAuthServiceWhenRunByARelativePath(t *testing.T)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {
 		logged, _ := os.ReadFile(filepath.Join(state, "logs", "auth-service.log"))
-		t.Fatalf("FAIL: up by a relative path did not start auth-service: %v\n%s\nauth-service.log:\n%s", err, out.String(), logged)
+		t.Fatalf("FAIL: up did not start auth-service: %v\n%s\nauth-service.log:\n%s", err, out.String(), logged)
+	}
+}
+
+// The web workflow runs the script by a path relative to the ops checkout. `up` changes directory into the state
+// directory before it starts auth-service through `with-env`, so that re-exec has to name the script by an absolute path.
+func TestLiveE2EAuthStackUpStartsAuthServiceWhenRunByARelativePath(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	fake := liveE2EUpFakes(t, state)
+	runLiveE2EUp(t, fake+":"+os.Getenv("PATH"), fake, state)
+}
+
+// Hosted race legs have no xxd. The workload subject is the uuid of the fake psql row as prn_ and unpadded base64url.
+func TestLiveE2EAuthStackUpNeedsNoXxdAndPinsTheWorkloadSubject(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	fake := liveE2EUpFakes(t, state)
+	runLiveE2EUp(t, liveE2ENoXxdPath(t, fake), fake, state)
+	got, err := os.ReadFile(filepath.Join(state, "subject"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "prn_Ox4sTV9gSnGLkgwdLj9KWw"; string(got) != want {
+		t.Fatalf("FAIL: workload subject %q, want %q", got, want)
 	}
 	// up binds the web workload, writes the web subject and the reviewer token, and saves the auth-service environment
 	// (mode 0600) that start-auth reuses.

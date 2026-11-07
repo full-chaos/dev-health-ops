@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // A validation 422 names the field and the rule, never the submitted value.
@@ -18,7 +19,7 @@ func TestQueryAPIValidationErrorNeverEchoesTheSubmittedValue(t *testing.T) {
 		"/api/v1/home?start_date=2026-13-01",
 	} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 		rec := httptest.NewRecorder()
 		serveRoute(t, handler, rec, req)
 		body := rec.Body.String()

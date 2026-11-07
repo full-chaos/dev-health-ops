@@ -624,7 +624,7 @@ func TestEveryBearerClassAGatedRowAcceptsIsInTheBearerSet(t *testing.T) {
 func TestTheBearerClassCensusRefusesAClassMissingFromTheSet(t *testing.T) {
 	rows := authServiceRows(t)
 	registry := loadClassRegistryDocument(t)
-	for _, class := range []string{"ops_access_token_hs256", "user_access_token", "workload_token"} {
+	for _, class := range []string{"user_access_token", "workload_token"} {
 		set := map[string]bool{}
 		for name := range bearerClasses {
 			set[name] = name != class

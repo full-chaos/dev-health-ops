@@ -6,7 +6,7 @@ owner: engineering
 source_of_truth:
   - current deployment and service entry points
   - TRD: Ask Dev — constrained agent runtime, graph query layer, and web experience
-  - Amendment TRD v2 — Ask Dev Wave 3.1: Deterministic investigation, health synthesis, and safe outcomes
+  - Amendment TRD v2 — Ask Dev: Deterministic investigation, health synthesis, and safe outcomes
   - PRD v2.1: Dev Health Agent Context Runtime — Go service and MCP sidecar
 applicability: current
 lifecycle: active
@@ -14,7 +14,7 @@ lifecycle: active
 
 # Platform architecture
 
-Dev Health has a Go api, query plane and worker fleet, and a Python data platform. The boundary is deliberate: Go owns the API (`dho api`) and GraphQL (`dho query-api`), and Python owns providers, processors, and the domain behavior they serve. The Go worker fleet owns every production job route and schedule; no Celery process exists in any shipped topology (CHAOS-4026, CHAOS-7059). Go components provide versioned job contracts, River execution, health, operator controls, and migration evidence.
+Dev Health has a Go api, query plane and worker fleet, and a Python data platform. The boundary is deliberate: Go owns the API (`dho api`) and GraphQL (`dho query-api`), and Python owns providers, processors, and the domain behavior they serve. The Go worker fleet owns every production job route and schedule; no Celery process exists in any shipped topology. Go components provide versioned job contracts, River execution, health, operator controls, and migration evidence.
 {: .fc-page-lede }
 
 ## Primary request and data paths
@@ -79,7 +79,7 @@ flowchart LR
 
 In that removed design the app-wide Ask Dev window and `/dev` workspace shared one backend, conversation identity, scope, streaming run, answer contract, evidence authorization, and retention policy.
 
-Wave 3.1 makes the investigation lifecycle server-owned. Mandatory retrieval and canonical synthesis happen before optional model narration:
+The investigation lifecycle is server-owned: mandatory retrieval and canonical synthesis happen before optional model narration:
 
 ```mermaid
 flowchart LR

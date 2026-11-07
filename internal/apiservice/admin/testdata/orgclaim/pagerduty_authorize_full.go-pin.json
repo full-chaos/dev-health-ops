@@ -1,5 +1,0 @@
-{
-  "W authorize malformed org id claim is 403": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
-  "W authorize uppercase org id claim": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
-  "authorization request rows rows": "0314363a-0756-5369-9602-b35074e497451900.000000v1 | 0b5b437b-ce61-5848-ac04-af4564bbcb721900.000000v1 | 35fdcdbc-5111-51f5-aa8d-9a4acebde38a2900.000000,900.000000v1,v1 | c2ad3a3b-08d2-5463-be96-3f45d97b708913600.000000v1"
-}

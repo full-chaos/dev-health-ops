@@ -47,9 +47,9 @@ func parsePrincipalID(wire string) (uuid.UUID, bool) {
 
 // accessTokenUser is the per-request half of a verified user access token:
 // the users row (found, active), the sid (a live session of the subject),
-// and the role from the membership in the org claim (Q4); an admin.orgs
-// holder without that membership gets the HS256 path's principal. Every
-// failed read is that error, never a pass.
+// and the role from the membership in the org claim (Q4); a caller without
+// that membership gets the HS256 path's principal. Every failed read is that
+// error, never a pass.
 func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessTokenClaims) (*User, error) {
 	id, ok := parsePrincipalID(claims.Subject)
 	if !ok {
@@ -107,9 +107,12 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 }
 
 // tokenOrgRole is the user's role in the org claim: the membership's role, or,
-// for an admin.orgs holder with no membership row, the role the HS256 path
-// gives it (D6773): useTokenOrg and CheckTokenOrg in scope.go keep that
-// caller's token org. Any other caller without the row is refused.
+// for a caller with no membership row, the role the HS256 path gives a token
+// with no role claim (product rule 1, D6773). As on the HS256 path the
+// authenticator does not refuse that caller: useTokenOrg and the guard (and
+// CheckTokenOrg where a service calls it) decide the token org later, so an
+// org without the row is refused there and an org that does not exist or a
+// claim that is not a UUID goes on as on main.
 func (a *Authenticator) tokenOrgRole(ctx context.Context, user *User, orgID string) (string, error) {
 	role, member, err := a.Membership(ctx, user.UserID, orgID)
 	if err != nil {
@@ -119,10 +122,6 @@ func (a *Authenticator) tokenOrgRole(ctx context.Context, user *User, orgID stri
 	}
 	if member {
 		return role, nil
-	}
-	if !user.Holds(ActionAdminOrgs) {
-		a.logger.WarnContext(ctx, "api user access token for an org the user is not a member of", slog.String("user_id", user.UserID))
-		return "", errRejected
 	}
 	return nonMemberRole, nil
 }

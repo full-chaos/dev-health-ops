@@ -54,8 +54,8 @@ func TestJudgesFailClosedWithNoRowTable(t *testing.T) {
 	}
 }
 
-// Drive checks a plan it is handed the way MakePlan builds one: a control on an external route, and an external route
-// whose service is not allowed, refuse the whole drive before any request; a plain slot is sent.
+// Drive checks a plan it is handed the way MakePlan builds one: a route with no class, a control on an external route,
+// and an external route whose service is not allowed, refuse the whole drive before any request; a plain slot is sent.
 func TestDriveValidatesAHandBuiltPlan(t *testing.T) {
 	api := newFakeAPI(t)
 	tokens := map[string]string{"member-A": "m", "superuser": "s"}
@@ -63,6 +63,8 @@ func TestDriveValidatesAHandBuiltPlan(t *testing.T) {
 		Route: "/api/v1/billing/plans/pull-stripe", Path: "/api/v1/billing/plans/pull-stripe", Body: none}
 	control := stripe
 	control.Row, control.Expect = "C1", "mismatch"
+	unknown := stripe
+	unknown.Route, unknown.Path = "/api/v1/no-such-route", "/api/v1/no-such-route"
 	for name, c := range map[string]struct {
 		slot  Slot
 		allow []string
@@ -71,6 +73,7 @@ func TestDriveValidatesAHandBuiltPlan(t *testing.T) {
 		"a control on an external route":   {control, []string{"stripe"}, "control"},
 		"an external route not allowed":    {stripe, nil, "-allow-external stripe"},
 		"an external route, other allowed": {stripe, []string{"pagerduty"}, "-allow-external stripe"},
+		"a route with no class":            {unknown, []string{"stripe"}, "has no class in the pinned table"},
 	} {
 		d := &Driver{Base: api.srv.URL, Client: api.srv.Client(), Gap: MinGap, AllowExternal: c.allow, Sleep: func(context.Context, time.Duration) error { return nil }}
 		if err := d.Drive(context.Background(), Plan{Slots: []Slot{c.slot}}, tokens, io.Discard); err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "before any request") {

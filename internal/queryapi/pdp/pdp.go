@@ -79,6 +79,9 @@ const (
 	ResultNotConfigured = "not_configured"
 	ResultNotCarriedOut = "not_carried_out"
 	ResultNoPDP         = "no_decision_point"
+	// ResultNoOrg: an enforced row asked with no organization; the PDP cannot judge an organization action without
+	// one, so today's answer stands.
+	ResultNoOrg = "no_org"
 )
 
 // The closed local reasons of a 503 the gate makes itself on an enforced route.
@@ -373,7 +376,8 @@ func shadowRowsOf(actions map[string]string) (map[string]policy.ShadowRow, error
 // pepgate.Legacy(orgID) (today's path) and a gate built in shadow or enforce mode asks in the background, never
 // changing the answer. Enforced: a PDP deny is a *DenyError (403); no verdict, no client, or an allow whose
 // obligations query-api does not carry out is a local *DenyError (503); an allow is the scope scopeOf builds. A
-// misconfigured gate refuses every row with a local *DenyError. Every refusal carries the zero Scope.
+// misconfigured gate refuses every row with a local *DenyError. Every refusal carries the zero Scope. An enforced row
+// asked with no organization is pepgate.Legacy(""), with no PDP call.
 func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) (pepgate.Scope, error) {
 	if g == nil {
 		return pepgate.Legacy(orgID), nil
@@ -406,6 +410,11 @@ func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) (pe
 	case g.decider == nil:
 		g.count(ctx, ModeEnforce, ResultNoPDP, label)
 		return pepgate.Scope{}, &DenyError{Reason: ReasonNoDecisionPoint, Local: true}
+	case orgID == "":
+		// Only a superuser passes the verifier with no organization (principal.OrgRequiredError otherwise); its HS256
+		// token gets the same Legacy scope (product rule 1, D6773).
+		g.count(ctx, ModeEnforce, ResultNoOrg, label)
+		return pepgate.Legacy(orgID), nil
 	}
 	decision := g.decider.Decide(ctx, g.request(action, bearer, orgID))
 	switch {

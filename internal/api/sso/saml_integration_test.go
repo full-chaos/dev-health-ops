@@ -209,6 +209,31 @@ func TestSAMLInitiateRefusesALoneSurrogateRelayStateOnlyWhereItIsForwarded(t *te
 	}
 }
 
+// TestSAMLACSBadSignatureAndBadRelayStateAnswer pins the route answer of a
+// provider without IdP-initiated sign-in to a response with a bad signature
+// and a missing or unequal RelayState: 400 "SAML authentication failed", the
+// answer auth-service gives (internal/auth/identity/saml
+// TestACSBadSignatureAndBadRelayStateAnswer).
+func TestSAMLACSBadSignatureAndBadRelayStateAnswer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	idp, other := newSAMLIdP(t), newSAMLIdP(t)
+	config := fmt.Sprintf(`{"entity_id":"https://idp.test/entity","sso_url":"https://idp.test/sso","certificate":%q}`, idp.certConfigValue())
+	sealed := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true})
+	posted := other.signedSAMLResponse(t, samlResponseOpts{acsURL: samlACSOverrideFor(sealed), email: "member@allowed.example", nameID: "member@allowed.example"})
+	for name, body := range map[string]map[string]any{
+		"missing RelayState":    {"SAMLResponse": posted},
+		"mismatched RelayState": {"SAMLResponse": posted, "RelayState": "mismatched-relay-state"},
+	} {
+		status, resp := postJSON(t, st.server, "/api/v1/auth/saml/"+sealed.String()+"/acs", body)
+		if status != http.StatusBadRequest || resp["detail"] != "SAML authentication failed" || len(resp) != 1 {
+			t.Errorf("%s: status=%d body=%v, want 400 SAML authentication failed", name, status, resp)
+		}
+	}
+}
+
 // TestSSOSurrogateRefusalTableStackRows drives the saml_* and oauth_* rows of
 // ci/sso_surrogate_refusals.tsv against a real provider row: the status and
 // the error loc the table names must be what the route answers.

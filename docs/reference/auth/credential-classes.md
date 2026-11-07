@@ -51,7 +51,7 @@ shows where that happens today.
 | `sso_oidc_exchange` | optional_feature | human | |
 | `org_context_header` | active | human | |
 | `impersonation_session` | active | human | |
-| `internal_svc_acr_token` | active | service_account | |
+| `internal_svc_acr_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |
 | `internal_svc_worker_token` | **unconsumed** | service_account | mint retired; stored rows list/revoke only |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
@@ -362,8 +362,8 @@ the same code path as `svc_acr_*`
 (`internal/apiservice/admin/servicecredentials.go`), with
 its own scope set (`workers:read`, `workers:operate`,
 `internal/apiservice/admin/servicecredentials.go:36-44`). No HTTP route in ops, web, or acr was found
-that validates a `svc_worker_`-prefixed bearer token — `internal/apiservice/acr/internalauth.go:57-71`
-`extractToken` only accepts the `svc_acr_` prefix. A consumer, if any, lives in the Go
+that validates a `svc_worker_`-prefixed bearer token — the internal acr routes (`internal/apiservice/acr/internalauth.go`)
+accept only the acr-api workload token. A consumer, if any, lives in the Go
 worker binaries or `dev-health-go`, outside this repository's HTTP routes.
 
 ## Infrastructure and exchange classes
@@ -398,8 +398,8 @@ fields; it cannot write.
 ## Go api: the internal listener
 
 The Go api serves `/api/v1/internal/acr/*` behind two controls: the network,
-and a `svc_acr_` bearer check on every route (health and
-entitlements, llm-config adds its own scope). Those
+and the acr-api workload token on every route (the only bearer accepted; a
+`svc_acr_` service credential gets the uniform 401 before any credential read). Those
 routes are mounted only on the
 internal listener (`--api-internal-addr` / `DEV_HEALTH_API_INTERNAL_ADDR`,
 chart `goApi.internal.port`, default 8091), never on the public api listener,

@@ -152,7 +152,7 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			bearer, _ = BearerToken(r.Header.Get("Authorization"))
 		}
 		// With the admin cell on, the handler's platform questions go to the decision point too (HoldsPlatform).
-		platform := g.pdp.enforcer.platformDecisionsFor(bearer, user)
+		platform := g.pdp.enforcer.platformDecisionsFor(r, bearer, user)
 		if platform != nil {
 			r = r.WithContext(context.WithValue(r.Context(), platformDecisionsKey, platform))
 		}

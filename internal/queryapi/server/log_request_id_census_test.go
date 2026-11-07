@@ -24,20 +24,38 @@ import (
 
 // requestIDExemptions are the raw request id reads that reach no log call. Each one is a response value, a
 // principal request meta, or a guarded local that the log call then wraps; a new raw read needs a reason here.
-var requestIDExemptions = map[string]string{
-	"query_route.go#envelopeRequestID":                     "the one raw read of the header",
-	"rest_scope.go#restScopeOrg":                           "local is checked, then wrapped by logSafeRequestID at the log",
-	"rest_access.go#authenticateRESTRouted":                "principal.WithRequestMeta, not a log",
-	"pdp_gate.go#writePDPDenied":                           "local is checked and stripped of CR and LF before the log",
-	"explain_route.go#newExplainGetHandler":                "argument to writeExplainResponse, which wraps the id at its log",
-	"explain_route.go#newExplainPostHandler":               "argument to writeExplainResponse, which wraps the id at its log",
-	"internal_auth.go#authenticateInternalRequest":         "principal.WithRequestMeta, not a log",
-	"rest_error_response.go#authenticateRESTRequest":       "principal.WithRequestMeta, not a log",
-	"rest_error_response.go#echoRequestID":                 "response header, only for an acceptable id",
-	"rest_error_response.go#bindRequestID":                 "response header and request context, only for an acceptable id",
-	"graphql_edge_route.go#correlationID":                  "the id the edge middleware binds to the context and echoes; read as written",
-	"graphql_error_presenter.go#graphQLRequestID":          "returns the bound id to its callers; each log call wraps it",
-	"graphql_error_presenter.go#safeGraphQLErrorPresenter": "local goes to the client as an extension; each log call wraps it",
+type requestIDExemption struct {
+	reads int
+	why   string
+}
+
+// requestIDExemptions: reads is the exact number of raw reads in that function; a further read fails the cell.
+var requestIDExemptions = map[string]requestIDExemption{
+	"query_route.go#envelopeRequestID":                     {1, "the one raw read of the header"},
+	"rest_scope.go#restScopeOrg":                           {1, "local is checked, then wrapped by logSafeRequestID at the log"},
+	"rest_access.go#authenticateRESTRouted":                {2, "principal.WithRequestMeta, not a log"},
+	"pdp_gate.go#writePDPDenied":                           {1, "local is checked and stripped of CR and LF before the log"},
+	"explain_route.go#newExplainGetHandler":                {1, "argument to writeExplainResponse, which wraps the id at its log"},
+	"explain_route.go#newExplainPostHandler":               {1, "argument to writeExplainResponse, which wraps the id at its log"},
+	"internal_auth.go#authenticateInternalRequest":         {1, "principal.WithRequestMeta, not a log"},
+	"rest_error_response.go#authenticateRESTRequest":       {2, "principal.WithRequestMeta, not a log"},
+	"rest_error_response.go#echoRequestID":                 {1, "response header, only for an acceptable id"},
+	"rest_error_response.go#bindRequestID":                 {2, "response header and request context, only for an acceptable id"},
+	"graphql_edge_route.go#correlationID":                  {1, "the id the edge middleware binds to the context and echoes; read as written"},
+	"graphql_error_presenter.go#graphQLRequestID":          {2, "returns the bound id to its callers; each log call wraps it"},
+	"graphql_error_presenter.go#safeGraphQLErrorPresenter": {1, "local goes to the client as an extension; each log call wraps it"},
+}
+
+// requestIDForwardAllowed are the callees a raw request id may be passed to: none of them logs its argument.
+var requestIDForwardAllowed = map[string]string{
+	"WithRequestMeta":         "principal request meta; not a log",
+	"acceptableCorrelationID": "predicate",
+	"writeExplainResponse":    "logs its id argument through logSafeRequestID",
+	"Set":                     "response header",
+	"Add":                     "response header",
+	"len":                     "length only",
+	"WithRequestID":           "request context value",
+	"withRequestID":           "client response extension",
 }
 
 // isRequestIDName compares a header name by its canonical form: X-Request-Id and X-Request-ID are one name.
@@ -182,7 +200,7 @@ func (c *censusCtx) tainted(e ast.Expr, vars map[string]bool) bool {
 // (log) and those that do not (other), as "file:line" and "file#func" entries. A read wrapped in logSafeRequestID
 // is neither. A local assigned from a raw read (also through an index, a slice or strings.*), and a parameter named
 // requestID, count as raw where a log call uses them. A header name is a constant by its value, as go/types computes it.
-func requestIDReads(t *testing.T, files map[string]string) (logUses, other []string) {
+func requestIDReads(t *testing.T, files map[string]string) (logUses, other, forwards []string) {
 	t.Helper()
 	fset := token.NewFileSet()
 	parsed := map[string]*ast.File{}
@@ -270,6 +288,15 @@ func requestIDReads(t *testing.T, files map[string]string) (logUses, other []str
 							}
 							return false
 						}
+						if callee := censusCalleeName(n); callee != "" && !inLog && !isStringsCall(n) {
+							if _, ok := requestIDForwardAllowed[callee]; !ok {
+								for _, a := range n.Args {
+									if c.tainted(a, vars) {
+										forwards = append(forwards, fmt.Sprintf("%s:%d %s", name, fset.Position(a.Pos()).Line, callee))
+									}
+								}
+							}
+						}
 					case *ast.IndexExpr:
 						if c.isRaw(n) {
 							c.record(&logUses, &other, name, fd.Name.Name, n.Pos(), inLog)
@@ -291,7 +318,27 @@ func requestIDReads(t *testing.T, files map[string]string) (logUses, other []str
 	}
 	sort.Strings(logUses)
 	sort.Strings(other)
-	return logUses, other
+	sort.Strings(forwards)
+	return logUses, other, forwards
+}
+
+func isStringsCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	x, ok := sel.X.(*ast.Ident)
+	return ok && x.Name == "strings"
+}
+
+func censusCalleeName(call *ast.CallExpr) string {
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		return fn.Name
+	case *ast.SelectorExpr:
+		return fn.Sel.Name
+	}
+	return ""
 }
 
 func (c *censusCtx) record(logUses, other *[]string, file, fn string, pos token.Pos, inLog bool) {
@@ -327,31 +374,47 @@ var _ = slog.Info
 	for name, tc := range map[string]struct {
 		body, other string
 		logs        int
+		forwards    int
 	}{
-		"helper direct":             {`func a(r R) { log.Printf("x %s", envelopeRequestID(r)) }`, "", 1},
-		"literal Get direct":        {`func a(r R) { slog.Warn("x", slog.String("request_id", r.Header.Get("x-request-id"))) }`, "", 1},
-		"literal index direct":      {`func a(r R) { log.Print(r.Header["X-Request-Id"]) }`, "", 1},
-		"const index direct":        {`func a(r R) { log.Print(r.Header[hdr]) }`, "", 1},
-		"const Get direct":          {`func a(r R) { log.Print(r.Header.Get(hdr2)) }`, "", 1},
-		"canonical-case const Get":  {`func a(r R) { log.Print(r.Header.Get(hdr3)) }`, "", 1},
-		"const index local":         {`func a(r R) { id := r.Header[hdr]; log.Print(id) }`, "p.go#a", 1},
-		"const Get local":           {`func a(r R) { id := r.Header.Get(hdr); log.Print(id) }`, "p.go#a", 1},
-		"const index outside":       {`func a(r R) { _ = r.Header[hdr] }`, "p.go#a", 0},
-		"const Get outside":         {`func a(r R) { _ = r.Header.Get(hdr) }`, "p.go#a", 0},
-		"imported const Get direct": {`func a(h http.Header) { log.Print(h.Get(httpapi.RequestIDHeader)) }`, "", 1},
-		"imported const Get local":  {`func a(h http.Header) { id := h.Get(httpapi.RequestIDHeader); log.Print(id) }`, "p.go#a", 1},
-		"imported const outside":    {`func a(h http.Header) string { return h.Get(httpapi.RequestIDHeader) }`, "p.go#a", 0},
-		"context id local":          {`func a(ctx context.Context) { id := httpapi.RequestIDFrom(ctx); log.Print(id) }`, "p.go#a", 1},
-		"values then index":         {`func a(r R) { v := r.Header.Values(hdr); log.Print(v[0]) }`, "p.go#a", 1},
-		"strings passthrough":       {`func a(r R) { id := strings.ReplaceAll(envelopeRequestID(r), "x", "y"); log.Print(id) }`, "p.go#a", 1},
-		"param named requestID":     {`func a(requestID string) { log.Print(requestID) }`, "", 1},
-		"wrapped helper":            {`func a(r R) { log.Print(logSafeRequestID(envelopeRequestID(r))) }`, "", 0},
-		"wrapped local":             {`func a(r R) { id := envelopeRequestID(r); log.Print(logSafeRequestID(id)) }`, "p.go#a", 0},
-		"other header":              {`func a(r R) { log.Print(r.Header.Get("Accept"), r.Header["Accept"]) }`, "", 0},
-		"response header set":       {`func a(r R) { w.Header().Set("X-Request-Id", envelopeRequestID(r)) }`, "p.go#a", 0},
+		"helper direct":             {`func a(r R) { log.Printf("x %s", envelopeRequestID(r)) }`, "", 1, 0},
+		"literal Get direct":        {`func a(r R) { slog.Warn("x", slog.String("request_id", r.Header.Get("x-request-id"))) }`, "", 1, 0},
+		"literal index direct":      {`func a(r R) { log.Print(r.Header["X-Request-Id"]) }`, "", 1, 0},
+		"const index direct":        {`func a(r R) { log.Print(r.Header[hdr]) }`, "", 1, 0},
+		"const Get direct":          {`func a(r R) { log.Print(r.Header.Get(hdr2)) }`, "", 1, 0},
+		"canonical-case const Get":  {`func a(r R) { log.Print(r.Header.Get(hdr3)) }`, "", 1, 0},
+		"const index local":         {`func a(r R) { id := r.Header[hdr]; log.Print(id) }`, "p.go#a", 1, 0},
+		"const Get local":           {`func a(r R) { id := r.Header.Get(hdr); log.Print(id) }`, "p.go#a", 1, 0},
+		"const index outside":       {`func a(r R) { _ = r.Header[hdr] }`, "p.go#a", 0, 0},
+		"const Get outside":         {`func a(r R) { _ = r.Header.Get(hdr) }`, "p.go#a", 0, 0},
+		"imported const Get direct": {`func a(h http.Header) { log.Print(h.Get(httpapi.RequestIDHeader)) }`, "", 1, 0},
+		"imported const Get local":  {`func a(h http.Header) { id := h.Get(httpapi.RequestIDHeader); log.Print(id) }`, "p.go#a", 1, 0},
+		"imported const outside":    {`func a(h http.Header) string { return h.Get(httpapi.RequestIDHeader) }`, "p.go#a", 0, 0},
+		"context id local":          {`func a(ctx context.Context) { id := httpapi.RequestIDFrom(ctx); log.Print(id) }`, "p.go#a", 1, 0},
+		"values then index":         {`func a(r R) { v := r.Header.Values(hdr); log.Print(v[0]) }`, "p.go#a", 1, 0},
+		"strings passthrough":       {`func a(r R) { id := strings.ReplaceAll(envelopeRequestID(r), "x", "y"); log.Print(id) }`, "p.go#a", 1, 0},
+		"param named requestID":     {`func a(requestID string) { log.Print(requestID) }`, "", 1, 0},
+		"wrapped helper":            {`func a(r R) { log.Print(logSafeRequestID(envelopeRequestID(r))) }`, "", 0, 0},
+		"wrapped local":             {`func a(r R) { id := envelopeRequestID(r); log.Print(logSafeRequestID(id)) }`, "p.go#a", 0, 0},
+		"other header":              {`func a(r R) { log.Print(r.Header.Get("Accept"), r.Header["Accept"]) }`, "", 0, 0},
+		"response header set":       {`func a(r R) { w.Header().Set("X-Request-Id", envelopeRequestID(r)) }`, "p.go#a", 0, 0},
+		"forward to a helper that logs": {`func a(r R) { helper(envelopeRequestID(r)) }
+func helper(id string) { log.Print(id) }`, "p.go#a", 0, 1},
+		"forward literal Get": {`func a(r R) { helper(r.Header.Get("X-Request-Id")) }
+func helper(id string) { log.Print(id) }`, "p.go#a", 0, 1},
+		"forward const index via local": {`func a(r R) { id := r.Header[hdr][0]; helper(id) }
+func helper(id string) { log.Print(id) }`, "p.go#a", 0, 1},
+		"forward through strings": {`func a(r R) { helper(strings.TrimSpace(envelopeRequestID(r))) }
+func helper(id string) { log.Print(id) }`, "p.go#a", 0, 1},
+		"forward wrapped is safe": {`func a(r R) { helper(logSafeRequestID(envelopeRequestID(r))) }
+func helper(id string) { log.Print(id) }`, "", 0, 0},
+		"forward to an allowed callee": {`func a(r R) { w.Header().Set("X-Request-Id", envelopeRequestID(r)) }`, "p.go#a", 0, 0},
+		"second read in a function":    {`func a(r R) { _ = envelopeRequestID(r); _ = envelopeRequestID(r) }`, "p.go#a,p.go#a", 0, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
-			logUses, other := requestIDReads(t, map[string]string{"p.go": pre + tc.body})
+			logUses, other, forwards := requestIDReads(t, map[string]string{"p.go": pre + tc.body})
+			if len(forwards) != tc.forwards {
+				t.Errorf("forwards = %v, want %d", forwards, tc.forwards)
+			}
 			if len(logUses) != tc.logs {
 				t.Errorf("log uses = %v, want %d", logUses, tc.logs)
 			}
@@ -378,19 +441,27 @@ func TestEveryRequestIDLogUseIsLogSafe(t *testing.T) {
 		}
 		files[p] = b
 	}
-	logUses, other := requestIDReads(t, files)
+	logUses, other, forwards := requestIDReads(t, files)
 	if len(logUses) > 0 {
 		t.Errorf("raw request id reaches a log call (wrap it in logSafeRequestID):\n  %s", strings.Join(logUses, "\n  "))
 	}
-	used := map[string]bool{}
+	if len(forwards) > 0 {
+		t.Errorf("raw request id passed to a callee that may log it (wrap it in logSafeRequestID, or list the callee in requestIDForwardAllowed with a reason):\n  %s", strings.Join(forwards, "\n  "))
+	}
+	used := map[string]int{}
 	for _, o := range other {
-		used[o] = true
-		if _, ok := requestIDExemptions[o]; !ok {
-			t.Errorf("raw request id read outside a log call has no exemption: %s", o)
+		used[o]++
+	}
+	for k, n := range used {
+		ex, ok := requestIDExemptions[k]
+		if !ok {
+			t.Errorf("raw request id read outside a log call has no exemption: %s", k)
+		} else if ex.reads != n {
+			t.Errorf("raw request id reads in %s: %d, exemption allows %d", k, n, ex.reads)
 		}
 	}
 	for k := range requestIDExemptions {
-		if !used[k] {
+		if used[k] == 0 {
 			t.Errorf("stale request id exemption: %s", k)
 		}
 	}

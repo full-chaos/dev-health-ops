@@ -1,28 +1,27 @@
 ---
 page_id: con-ask-dev-v2
-summary: The Ask Dev Wave 3.1 v2 wire contracts -- intent, resolution, plan, frame, narrative, and answer-v2.
+summary: The Ask Dev v2 wire contracts -- intent, resolution, plan, frame, narrative, and answer-v2.
 content_type: architecture
 owner: engineering
 source_of_truth:
   - contracts/ask-dev/v2/examples/
   - contracts/ask-dev/v2/
-  - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
-  - Amendment PRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
+  - Amendment TRD v2 -- Ask Dev (Linear, project Ask Dev)
+  - Amendment PRD v2 -- Ask Dev (Linear, project Ask Dev)
 applicability: current
 lifecycle: deprecated
 deprecated_by: /admin/ask-dev/
 ---
 
-# Ask Dev v2 contracts (Wave 3.1)
+# Ask Dev v2 contracts
 
-CHAOS-3294 lands the contract-first foundation for the Wave 3.1 request
+These contracts are the contract-first foundation for the v2 request
 lifecycle: server-owned intent interpretation, per-mention resolution,
 investigation planning, a canonical answer frame, an optional presentation
 narrative, and a safe public outcome vocabulary. It is **contracts only** --
 schemas, Pydantic models, positive/negative fixtures, and semantic
 validators. No orchestrator, router, or `scope_service` behavior changed;
-those are separate Wave 3.1 issues (CHAOS-3292, CHAOS-3295, CHAOS-3297,
-CHAOS-3301) that consume these contracts.
+those are separate pieces that consume these contracts.
 {: .fc-page-lede }
 
 !!! warning "Deprecated: records a removed surface"
@@ -70,7 +69,7 @@ enforced rather than a convention.
 Amended stream events (`dev_stream_event.v2`) replace the v1 `scope.resolved`
 event with `resolution.updated` (a resolution ledger update -- a single
 "scope resolved" event cannot represent per-mention outcomes) and add the
-Wave 3.1 progress stages (`interpreting_question`, `resolving_subjects`,
+v2 progress stages (`interpreting_question`, `resolving_subjects`,
 `checking_project_status`, `checking_team_health`, `comparing_portfolio`,
 `checking_workload`, `checking_operational_controls`, `preparing_answer`).
 
@@ -80,7 +79,7 @@ Wave 3.1 progress stages (`interpreting_question`, `resolving_subjects`,
 value set, but v1's `EntityType`/`DirectScope` enums are **not** mutated --
 giving `TEAM` real v1 scope semantics is runtime behavior (a matching
 `DevScope` validator branch, orchestrator/`scope_service` wiring), which is
-explicitly out of scope for CHAOS-3294. The compatibility projector (below)
+explicitly out of scope for the contracts. The compatibility projector (below)
 returns a safe `feature_not_enabled` v1 `DevError` for a team-subject v2
 answer rather than mislabeling it as organization- or repository-scoped.
 
@@ -127,8 +126,7 @@ a subject that is itself `not_ready`.
 
 `DevAnswerFact.disclosures` (`FactDisclosure`, `contracts_v2/base.py`) is the
 v2-native, closed-vocabulary equivalent of v1 `DevClaimFlags`
-(`stale | uncertain | conflicting | untrusted_source`), ratified on
-CHAOS-3297 ("DevAnswerFact flags gap -- design ratified 2026-08-02"). It is
+(`stale | uncertain | conflicting | untrusted_source`), ratified as the "DevAnswerFact flags gap" design. It is
 per-fact rather than per-frame or per-evidence because that is what v1's
 flags are: `DevAnswerFrame.limitations` is per-frame prose and
 `DevEvidenceRefV2`'s inherited `DevEvidenceFlags` is per-evidence, so neither
@@ -165,7 +163,7 @@ silently dropped when embedded into a frame.
 
 ## Clarification candidates
 
-`DevAnswerFrame.clarification_candidates` (CHAOS-3325) is a typed block of
+`DevAnswerFrame.clarification_candidates` is a typed block of
 real, authorized entities for a `needs_clarification` outcome, reusing
 `dev_resolution_ledger.v1`'s own `DevResolutionCandidate` shape
 (`entity_ref` + `reason`) rather than declaring a second one: it carries
@@ -207,7 +205,7 @@ one wire-level rejection available for a malformed candidate is the closed
 to v1 in priority order: real `clarification_candidates` (reported
 `ScopeResolutionOutcome.AMBIGUOUS`, matching v1's own "ambiguous requires
 candidates" invariant), else a single candidate derived from
-`frame.subject_ref` (pre-CHAOS-3325 behavior, unchanged -- never set by the
+`frame.subject_ref` (v1 behavior, unchanged -- never set by the
 preflight ambiguity path, which commits nothing), else
 `ScopeResolutionOutcome.UNRESOLVED` with no candidates at all. That third
 case replaces what the pre-3325 projector did instead: fabricate a single
@@ -222,13 +220,13 @@ option that was never real.
 On the live preflight path this block does not yet reach a v1 client:
 `orchestrator.run` and the router's replay-reconstruction path both call
 `preflight_outcomes.project_preflight_error` for a preflight ambiguity,
-which returns the fixed `scope_ambiguous` `DevError` (CHAOS-3292's ratified
+which returns the fixed `scope_ambiguous` `DevError` (the ratified
 design) and never carries candidates, whatever the frame holds. The
 `_project_needs_clarification` path above is exercised by any *other*
 caller that runs a `needs_clarification` `dev_answer.v2` through the general
 `project_answer_v2_to_v1` projector. Actually serving the candidate block to
-a user still needs the v2 rendering surface (CHAOS-3298) and persisted
-clarification state (CHAOS-3299).
+a user still needs the v2 rendering surface and persisted
+clarification state.
 
 ## Public outcome vocabulary and the five semantic validators
 
@@ -238,7 +236,7 @@ clarification state (CHAOS-3299).
 deliberately absent -- Amendment PRD v2 reserves it for genuinely prohibited
 requests, never a normal status/health question that could not be resolved.
 
-`contracts_v2/validators.py` implements the five CHAOS-3294
+`contracts_v2/validators.py` implements the five
 acceptance-criteria semantic validators as free functions (not inline
 `@model_validator` methods), each independently disableable via
 `monkeypatch` against the *module object* -- see that module's docstring for
@@ -263,7 +261,7 @@ why the indirection matters for mutation testing:
   references must exist in the frame, and every relationship path must chain
   back to the frame's committed subject.
 
-## Post-merge hardening (adversarial review, CHAOS-3294)
+## Post-merge hardening (adversarial review)
 
 Five adversarial-review rounds ran against the merged contracts. Round 1
 reproduced six counterexamples the original five validators did not catch.
@@ -529,7 +527,7 @@ unchanged -- a variable-length tuple and a list both render as
 
 Round 2 recorded the v1 models embedded in v2 frames (`DevCoverage`,
 `DevEvidenceRef`, `DevMetricRef`, ...) as an acknowledged boundary, on the
-grounds that CHAOS-3294 is additive and does not modify v1. Review round 3
+grounds that the v2 chain is additive and does not modify v1. Review round 3
 showed that was not a boundary but a hole, because it sat *inside* the object
 graph the v2 validators had just certified:
 
@@ -789,7 +787,7 @@ hold punctuation constant across both halves so the pair isolates the value.
 `test_round5_polarity_is_only_enforced_where_it_is_decidable` pins the two
 cases that must stay accepted.
 
-**Residual (CHAOS-3297).** Everything past this is layer-6 territory: prose
+**Residual.** Everything past this is layer-6 territory: prose
 whose polarity is carried by structure rather than vocabulary ("only a
 quarter is left to do"), non-English phrasing, a proportion attached to
 something other than the completion block by grammar the contract cannot
@@ -806,7 +804,7 @@ some other subject; recommendation prose that references the right fact ID
 but paraphrases it into a different recommendation; and any claim carrying
 no number, readiness word, or name. Full narrative/frame semantic
 consistency checking is owned by the TRD v2 §11 layer-6
-narrative-consistency validator, tracked as **CHAOS-3297**.
+narrative-consistency validator.
 
 ### `subject_set_ref` never widens to organization scope
 

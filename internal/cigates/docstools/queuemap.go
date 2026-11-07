@@ -16,7 +16,7 @@ import (
 
 // gen-queue-mapping and check-queue-mapping-drift: the worker/queue table in go-worker-runtime.md is generated from
 // deploy/go-workers/deployment.json, contracts/jobs/v1/registry.json and contracts/jobs/v1/migration-state.json
-// (CHAOS-4044), plus the curated historical Celery correspondence below. Was scripts/gen_queue_mapping_docs.py and
+//, plus the curated historical Celery correspondence below. Was scripts/gen_queue_mapping_docs.py and
 // scripts/check_queue_mapping_docs_drift.py.
 
 const (
@@ -40,12 +40,12 @@ type qmEntry struct {
 	note            string
 }
 
-const qmDormant = "Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live"
+const qmDormant = "Celery dormant since 2026-08-19; Go/River live"
 const qmNative = "Go-native -- no Celery predecessor"
 const qmStreamNote = "Valkey stream consumer, not a River queue -- no -Q for this process."
 const qmLoopNote = "Control loop, not a River queue -- no -Q for this process."
 
-// qmCorrespondence is the curated historical record (CHAOS-4044): go process -> go queue -> entry.
+// qmCorrespondence is the curated historical record: go process -> go queue -> entry.
 var qmCorrespondence = map[string]map[string]qmEntry{
 	"heavy": {
 		"investment": {plane: qmNative},
@@ -68,14 +68,14 @@ var qmCorrespondence = map[string]map[string]qmEntry{
 		},
 		"retention": {
 			celeryConsumers: []string{"beat"},
-			plane:           "Go-native consolidated sweep; historical retention work was several discrete Beat-scheduled tasks (retired under CHAOS-4026, e.g. ask-dev-retention-sweep)",
+			plane:           "Go-native consolidated sweep; historical retention work was several discrete Beat-scheduled tasks (retired, e.g. ask-dev-retention-sweep)",
 		},
 		"webhooks": {celeryQueues: []string{"webhooks"}, celeryConsumers: []string{"worker"}, plane: qmDormant},
 	},
 	"sync": {
 		"sync": {
 			celeryQueues: []string{"sync"}, celeryConsumers: []string{"worker"},
-			plane: "Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live. Historically also the shared fallback queue for all providers with PROVIDER_SYNC_QUEUES_ENABLED off.",
+			plane: "Celery dormant since 2026-08-19; Go/River live. Historically also the shared fallback queue for all providers with PROVIDER_SYNC_QUEUES_ENABLED off.",
 		},
 	},
 	"sync-provider": {
@@ -87,24 +87,24 @@ var qmCorrespondence = map[string]map[string]qmEntry{
 				"sync.jira.medium", "sync.linear.medium",
 			},
 			celeryConsumers: []string{"worker", "worker-heavy"},
-			plane:           "Celery fleet-wide dormant since 2026-08-19 (CHAOS-4026); Go/River live. This queue's one kind (`sync.provider_unit`) was still `canary` per-kind for a time after the fleet-wide Celery retirement -- its own migration has since completed too (see below). Enablement is -Q topology plus the user's own sync config: CHAOS-4054 deleted the provider/dataset WORKER_*_ENABLED switch plane outright, so a shipped route is always executable and nothing hides it behind an environment flag.",
-			note:            "The per-provider cost-class split (light/medium/heavy) has no Go equivalent yet -- CHAOS-4027, parked. All cost classes collapse onto the single sync_provider queue in Go.",
+			plane:           "Celery fleet-wide dormant since 2026-08-19; Go/River live. This queue's one kind (`sync.provider_unit`) was still `canary` per-kind for a time after the fleet-wide Celery retirement -- its own migration has since completed too (see below). Enablement is -Q topology plus the user's own sync config: the route-flag removal deleted the provider/dataset WORKER_*_ENABLED switch plane outright, so a shipped route is always executable and nothing hides it behind an environment flag.",
+			note:            "The per-provider cost-class split (light/medium/heavy) has no Go equivalent yet -- parked. All cost classes collapse onto the single sync_provider queue in Go.",
 		},
 	},
 	"scheduler": {
 		"—": {celeryQueues: []string{"scheduler"}, celeryConsumers: []string{"beat"},
-			plane: "Celery Beat retired 2026-08-21 (CHAOS-4026); Go scheduler is sole production owner", note: qmLoopNote},
+			plane: "Celery Beat retired 2026-08-21; Go scheduler is sole production owner", note: qmLoopNote},
 	},
 	"reconciler": {
 		"—": {plane: qmNative, note: qmLoopNote},
 	},
 	"stream-ingest": {
 		"—": {celeryQueues: []string{"ingest"}, celeryConsumers: []string{"worker-ingest"},
-			plane: "Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live", note: qmStreamNote},
+			plane: "Celery dormant since 2026-08-19; Go stream runner live", note: qmStreamNote},
 	},
 	"stream-external": {
 		"—": {celeryQueues: []string{"external-ingest"}, celeryConsumers: []string{"worker-external-ingest"},
-			plane: "Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live", note: qmStreamNote},
+			plane: "Celery dormant since 2026-08-19; Go stream runner live", note: qmStreamNote},
 	},
 	"stream-pagerduty": {
 		"—": {plane: qmNative, note: qmStreamNote},

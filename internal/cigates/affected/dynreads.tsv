@@ -341,6 +341,7 @@ internal/cigates/workflows	workflows_go_queue_cancel_children_test.go
 internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
+internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
 internal/deploymentcontract	manifest.go
 internal/egressguard	egressguard_test.go

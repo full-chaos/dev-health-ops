@@ -269,6 +269,7 @@ const APPROVED_AUDIT_ATTRIBUTE_KEYS = [
   "credential_class",
   "credential_id",
   "decision_id",
+  "decision_internal_reason",
   "decision_reason_code",
   "jti",
   "key_id",

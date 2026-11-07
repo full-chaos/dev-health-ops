@@ -18,6 +18,10 @@ cmd/registrydump	main.go
 cmd/shadow-venue	main.go
 cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
+cmd/venue-extstub	cert.go
+cmd/venue-extstub	main.go
+cmd/venue-extstub	stub.go
+cmd/venue-extstub	stub_test.go
 deploy/helm/dev-health	auth_phase_test.go
 deploy/helm/dev-health	auth_sso_settings_test.go
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go

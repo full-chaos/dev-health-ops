@@ -12,6 +12,9 @@ cmd/loadtest	main.go	cmd/loadtest
 cmd/registrydump	main.go	cmd/registrydump
 cmd/shadow-venue	main.go	cmd/shadow-venue
 cmd/strip-agent-attribution	main.go	cmd/strip-agent-attribution
+cmd/venue-extstub	cert.go	cmd/venue-extstub
+cmd/venue-extstub	main.go	cmd/venue-extstub
+cmd/venue-extstub	stub.go	cmd/venue-extstub
 internal/api/credentials	probes.go	cmd/dho
 internal/api/credentials	probes.go	deploy/helm/dev-health
 internal/api/credentials	probes.go	internal/adminops

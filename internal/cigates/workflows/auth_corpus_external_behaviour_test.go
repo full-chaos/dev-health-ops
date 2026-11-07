@@ -634,7 +634,8 @@ func TestAuthCorpusAcpLegBackfillsUsersBeforeTheOwnedFlag(t *testing.T) {
 	if backfill < 0 || grants < backfill || restart < grants {
 		t.Fatalf("want users-backfill, then auth-grants, then the auth-service restart; got positions %d %d %d:\n%s", backfill, grants, restart, calls)
 	}
-	if strings.Contains(calls, "-e AUTH_USERS_OWNED") {
+	// The compose migrate service defaults the flag to true, so the backfill call sets it off itself.
+	if strings.Contains(calls, "-e AUTH_USERS_OWNED=true") || !strings.Contains(calls, "-e AUTH_USERS_OWNED=false migrate auth users-backfill") {
 		t.Errorf("the backfill must run with the flag off:\n%s", calls)
 	}
 

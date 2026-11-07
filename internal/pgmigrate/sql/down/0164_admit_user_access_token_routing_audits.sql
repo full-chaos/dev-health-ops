@@ -3,9 +3,12 @@
 -- go_api_routing_audits is append-only: a user_access_token row is never deleted to let the downgrade pass, so the
 -- downgrade refuses while one exists.
 DO $$
+DECLARE
+    held bigint;
 BEGIN
-    IF EXISTS (SELECT 1 FROM go_api_routing_audits WHERE credential_class = 'user_access_token') THEN
-        RAISE EXCEPTION 'go_api_routing_audits holds user_access_token rows: revision 0164 cannot be reverted';
+    SELECT count(*) INTO held FROM go_api_routing_audits WHERE credential_class = 'user_access_token';
+    IF held > 0 THEN
+        RAISE EXCEPTION 'go_api_routing_audits holds % user_access_token row(s): revision 0164 cannot be reverted', held;
     END IF;
 END
 $$;

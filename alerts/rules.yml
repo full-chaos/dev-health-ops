@@ -1337,6 +1337,58 @@ groups:
             15:34Z, heavy/metrics, real backlog to 2364 s).
 
   # ---------------------------------------------------------------------------
+  # query-api PDP gate. The gate is built by QUERY_API_PDP_MODE and decides the
+  # routes and GraphQL roots of the namespaces in QUERY_API_AUTHZ_ENFORCE and
+  # QUERY_API_HEADERS_AUTHZ_ENFORCE (internal/queryapi/pdp/pdp.go). The series
+  # are lazy: absent, not 0, until the first event, so both rules are inert
+  # while the gate is off and no cell is on. Labels read: result only; the
+  # `action` label is bounded by the catalog and stays off the group-by. The
+  # `for` is a noise window for a restart or one PDP blip, never a wait before
+  # a flip. Runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md.
+  # ---------------------------------------------------------------------------
+  - name: query_api_pdp
+    interval: 1m
+    rules:
+      - alert: QueryAPIPDPConfigInvalid
+        expr: |
+          max(dev_health_query_api_pdp_config_invalid) > 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "query-api PDP gate is misconfigured and refuses PDP-gated requests"
+          description: |
+            dev_health_query_api_pdp_config_invalid is 1 on a query-api pod for five
+            minutes. Reasons: QUERY_API_PDP_MODE is not off, shadow or enforce; a mode
+            that is on misses an input (AUTH_PROXY_URL or the workload credential);
+            or a namespace is listed in QUERY_API_AUTHZ_ENFORCE or
+            QUERY_API_HEADERS_AUTHZ_ENFORCE with no PDP client. Every request that
+            would ask the PDP gets a 503. Next: the query-api start ERROR line (it names
+            the variable, never a value), then the roll back in
+            docs/operate/runbooks/auth-pdp-outage-and-rollback.md#query-api.
+
+      - alert: QueryAPIPDPRefusing
+        expr: |
+          sum by (result) (increase(dev_health_query_api_pdp_results_total{result=~"unavailable|no_decision_point|not_carried_out|not_configured"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "query-api refuses requests with a 503 on the PDP gate: {{ $labels.result }}"
+          description: |
+            query-api answered 503 for result {{ $labels.result }} in the last fifteen
+            minutes, and kept doing so for five. unavailable: no PDP verdict (the PDP
+            is down, late or rate limits the caller) or an operation with no scope or
+            principal. no_decision_point: a namespace is on and query-api has no PDP
+            client. not_carried_out: an allow with an obligation query-api does not
+            carry out. not_configured: a bad config, or mode enforce with the cell of
+            the route off. A deny (403) is not counted here. Next: the query-api WARN
+            line "query-api: the PDP refused the request" (closed reason) and
+            docs/operate/runbooks/auth-pdp-outage-and-rollback.md#query-api.
+
+  # ---------------------------------------------------------------------------
   # In-chart Valkey (rate-limit counters, ingest streams). The series come from
   # the collector's redis receiver, which writes dotted names only
   # (redis.keys.evicted, redis.memory.used), so the rules select them by

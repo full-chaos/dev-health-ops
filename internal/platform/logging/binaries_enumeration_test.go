@@ -771,9 +771,10 @@ func rootIdent(expression ast.Expr) string {
 // its own top-level statements, either runs defer logging.InstallDefault(X)()
 // or runs restore := logging.InstallDefault(X) and later defer restore(),
 // where restore is declared once by that := and never assigned again or has
-// its address taken. X is a logging.NewJSON(...) call or a variable declared
-// once by := logging.NewJSON(...) and never assigned again, so every run of
-// the entry point logs through the JSON handler.
+// its address taken, and that := and the one defer are its only references.
+// X is a logging.NewJSON(...) call or a variable declared
+// once by := logging.NewJSON(...) and never assigned again, so every run that
+// reaches the install logs through the JSON handler.
 func installsJSON(files []*ast.File, function, loggingPath string) bool {
 	found := false
 	for _, file := range files {
@@ -798,7 +799,7 @@ func installsJSON(files []*ast.File, function, loggingPath string) bool {
 				_, isIdent := logger.(*ast.Ident)
 				return isIdent && jsonLogger(logger, decl, names, loggingPath)
 			}
-			restores := map[string]bool{}
+			restores := map[string]*ast.Ident{}
 			for _, statement := range decl.Body.List {
 				switch typed := statement.(type) {
 				case *ast.AssignStmt:
@@ -808,7 +809,7 @@ func installsJSON(files []*ast.File, function, loggingPath string) bool {
 					for index, left := range typed.Lhs {
 						ident, ok := left.(*ast.Ident)
 						if ok && ident.Name != "_" && installsLogger(typed.Rhs[index]) && boundOnce(decl, ident.Name, installsLogger) {
-							restores[ident.Name] = true
+							restores[ident.Name] = ident
 						}
 					}
 				case *ast.DeferStmt:
@@ -821,7 +822,7 @@ func installsJSON(files []*ast.File, function, loggingPath string) bool {
 							found = true
 						}
 					case *ast.Ident:
-						if restores[deferred.Name] {
+						if defined := restores[deferred.Name]; defined != nil && onlyReferences(decl, defined, deferred) {
 							found = true
 						}
 					}
@@ -830,6 +831,21 @@ func installsJSON(files []*ast.File, function, loggingPath string) bool {
 		}
 	}
 	return found
+}
+
+// onlyReferences reports whether every identifier spelled like defined in
+// function's body is defined or deferred: any other call, read, copy,
+// argument, go statement or second defer of the restore function could
+// undo the install before the run body.
+func onlyReferences(function *ast.FuncDecl, defined, deferred *ast.Ident) bool {
+	only := true
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		if ident, ok := node.(*ast.Ident); ok && ident.Name == defined.Name && ident != defined && ident != deferred {
+			only = false
+		}
+		return only
+	})
+	return only
 }
 
 // censusBaseline is the smallest source tree serviceHandlerCensus accepts:

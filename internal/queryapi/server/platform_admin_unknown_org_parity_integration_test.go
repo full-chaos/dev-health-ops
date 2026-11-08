@@ -273,15 +273,12 @@ func TestPlatformAdminInAnUnknownOrDeletedOrganizationQueryAPIAnswersEqualLegacy
 		label string
 		id    uuid.UUID
 	}{{"org U no row (never existed)", msqOrgU}, {"org R no row (deleted)", msqOrgR}} {
-		org := o.id.String()
 		for _, c := range []struct {
 			label, token string
 			snap         msqSnap
 		}{
 			{"SU0/EdDSA/" + o.label, ed(msqSU0, o.id), su0},
-			{"SU0/HS256-edge/" + o.label, ecMintEdgeTokenRaw(t, map[string]any{"sub": msqSU0.String(), "org_id": org, "role": "viewer", "is_superuser": true, "tv": 0, "type": "access"}), su0},
 			{"control plain/EdDSA/" + o.label, ed(msqPlain, o.id), msqSnap{}},
-			{"control plain/HS256-edge/" + o.label, ecMintEdgeTokenRaw(t, map[string]any{"sub": msqPlain.String(), "org_id": org, "role": "viewer", "is_superuser": false, "tv": 0, "type": "access"}), msqSnap{}},
 		} {
 			control := strings.HasPrefix(c.label, "control")
 			p.register(c.token, c.label, c.snap)

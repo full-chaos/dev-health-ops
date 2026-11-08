@@ -455,7 +455,7 @@ func writeWorkUnitExplainNotFound(w http.ResponseWriter, r *http.Request, orgID,
 		Detail: fmt.Sprintf("Work unit %s not found", workUnitID),
 	}); err != nil {
 		log.Printf("query-api: work_unit_explain: write 404 body failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), err)
+			orgID, logSafeRequestID(envelopeRequestID(r)), err)
 	}
 }
 
@@ -536,6 +536,6 @@ func writeWorkUnitExplainUnavailable(w http.ResponseWriter, r *http.Request, org
 		return
 	}
 	log.Printf("query-api: work_unit_explain: degraded to 503 Explanation unavailable: org_id=%s request_id=%s err=%v",
-		orgID, envelopeRequestID(r), err)
+		orgID, logSafeRequestID(envelopeRequestID(r)), err)
 	writeRESTError(w, r, "work_unit_explain", orgID, http.StatusServiceUnavailable, "Explanation unavailable")
 }

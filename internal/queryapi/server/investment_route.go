@@ -258,7 +258,7 @@ func investmentTimeFilterMap(rangeDays int, startDate, endDate *time.Time) map[s
 func writeInvestmentResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *investment.Response) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: investment: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }
@@ -306,7 +306,7 @@ func sunburstMeasureError(raw string) pydanticErrorDetail {
 func writeInvestmentSunburstResponse(w http.ResponseWriter, r *http.Request, orgID string, resp []investment.SunburstSlice) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: investment_sunburst: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 // signInRoute is one of the six sign-in routes that read a provider id from the path, with a body that passes its
@@ -41,7 +40,7 @@ func (route signInRoute) serve(t *testing.T, id, body string) *httptest.Response
 	t.Helper()
 	routes := Routes(Deps{
 		Pool: &pgxpool.Pool{}, Guard: policy.NewGuard(&policy.Authenticator{}, slog.New(slog.DiscardHandler)),
-		Logger: slog.New(slog.DiscardHandler), Signer: &edgetoken.Signer{}, StateSecret: "state-secret-for-tests",
+		Logger: slog.New(slog.DiscardHandler), Issuer: okIssuer{}, StateSecret: "state-secret-for-tests",
 	})
 	var handler http.Handler
 	for _, mounted := range routes {

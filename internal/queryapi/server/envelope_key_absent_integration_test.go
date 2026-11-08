@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -87,7 +88,7 @@ func TestBuildWithoutTheEnvelopeKeyMountsEveryDeclaredRoute(t *testing.T) {
 			if len(unmounted) > 0 {
 				t.Fatalf("without the envelope key these declared routes answer 404 (unmounted): %v", unmounted)
 			}
-			if plane.MCPHandler == nil || probe(plane.MCPHandler, http.MethodPost, "/query") == http.StatusNotFound {
+			if plane.MCPHandler == nil || probe(internalidentity.MCP(plane.MCPHandler), http.MethodPost, "/query") == http.StatusNotFound {
 				t.Errorf("MCP /query is not mounted without the envelope key")
 			}
 		})

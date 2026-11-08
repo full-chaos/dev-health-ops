@@ -124,6 +124,12 @@ func TestBodyKeyFileMustBeOwnerOnly(t *testing.T) {
 	if _, err := ReadBodyKey(path); err != nil {
 		t.Fatalf("a 0600 key file was refused: %v", err)
 	}
+	if err := os.WriteFile(path, []byte(strings.Repeat("ab", 16)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadBodyKey(path); err == nil {
+		t.Fatal("a valid hex key of 16 bytes was read")
+	}
 	if err := os.WriteFile(path, []byte("short\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

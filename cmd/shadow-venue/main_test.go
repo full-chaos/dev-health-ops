@@ -562,8 +562,9 @@ func TestBodydiffWithKeysListsLeafPathsOnly(t *testing.T) {
 	if code != exitFail || !strings.Contains(out.String(), "$.t") || strings.Contains(out.String(), "$.id") || strings.Contains(out.String(), "aaaaaaaaaaaa") {
 		t.Fatalf("code %d out %q", code, out.String())
 	}
-	if code := run(context.Background(), []string{"bodydiff", "-a", slotsA, "-b", slotsB, "-keys-a", keysA}, &out, &errOut); code != exitUsage {
-		t.Fatalf("one keys file only: code %d", code)
+	errOut.Reset()
+	if code := run(context.Background(), []string{"bodydiff", "-a", slotsA, "-b", slotsB, "-keys-a", keysA}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "go together") {
+		t.Fatalf("one keys file only: code %d %q", code, errOut.String())
 	}
 }
 

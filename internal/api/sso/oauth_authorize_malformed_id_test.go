@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 // oauthPairHandler is the mounted /oauth/{first}/{second} POST handler with the real OAuth handlers on. The pool is
@@ -24,7 +23,7 @@ func oauthPairHandler(t *testing.T) http.Handler {
 	t.Helper()
 	routes := Routes(Deps{
 		Pool: &pgxpool.Pool{}, Guard: policy.NewGuard(&policy.Authenticator{}, slog.New(slog.DiscardHandler)),
-		Logger: slog.New(slog.DiscardHandler), Signer: &edgetoken.Signer{}, StateSecret: "state-secret-for-tests",
+		Logger: slog.New(slog.DiscardHandler), Issuer: okIssuer{}, StateSecret: "state-secret-for-tests",
 	})
 	for _, route := range routes {
 		if route.Method == http.MethodPost && route.Pattern == "/api/v1/auth/oauth/{first}/{second}" {

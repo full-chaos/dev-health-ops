@@ -1,6 +1,9 @@
 package devhealth_test
 
 import (
+	"bytes"
+	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"testing"
@@ -225,5 +228,72 @@ func TestValkeyPolicyOffChangesNothing(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// valkeyBaseSha is the ops main commit this change started from. The gate renders NetworkPolicy objects only, so against that
+// chart: gate off is byte-equal, and gate on differs in NetworkPolicy manifests alone (no env, no checksum/config, no ConfigMap).
+const valkeyBaseSha = "5b57fe79f46531f4e25cefbd056454df218c0778"
+
+func TestValkeyGateRendersNetworkPolicyObjectsOnly(t *testing.T) {
+	ci := os.Getenv("CI") != ""
+	for _, tool := range []string{"helm", "git", "tar"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			if ci {
+				t.Fatalf("CI is set and %s is not installed", tool)
+			}
+			t.Skip(tool + " is not installed")
+		}
+	}
+	if skip, err := checkGoldenBase("../../..", valkeyBaseSha, ci); skip != "" {
+		t.Skip(skip)
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	baseDir := t.TempDir()
+	tarball, err := exec.Command("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", "../../..", "archive", valkeyBaseSha, "deploy/helm/dev-health").Output()
+	if err != nil {
+		t.Fatalf("git archive: %v", err)
+	}
+	untar := exec.Command("tar", "-x", "-C", baseDir)
+	untar.Stdin = bytes.NewReader(tarball)
+	if out, err := untar.CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v %s", err, out)
+	}
+	render := func(dir string, args []string) []string {
+		cmd := helmCommand(append([]string{"template", "a", "."}, args...)...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("render in %s: %v\n%.300s", dir, err, out)
+		}
+		return strings.Split(string(out), "\n---\n")
+	}
+	withoutPolicies := func(docs []string) string {
+		var keep []string
+		for _, d := range docs {
+			if strings.Contains(d, "\nkind: NetworkPolicy\n") {
+				continue
+			}
+			keep = append(keep, d)
+		}
+		return strings.Join(keep, "\n---\n")
+	}
+	chart := baseDir + "/deploy/helm/dev-health"
+	var gateDefault []string
+	for i := 0; i < len(valkeyProdShape); i++ {
+		if valkeyProdShape[i] == "valkey.networkPolicy.enabled=true" {
+			gateDefault = gateDefault[:len(gateDefault)-1]
+			continue
+		}
+		gateDefault = append(gateDefault, valkeyProdShape[i])
+	}
+	// (vi) gate off: the whole render is the base's.
+	if strings.Join(render(chart, gateDefault), "\n---\n") != strings.Join(render(".", gateDefault), "\n---\n") {
+		t.Error("with the gate off the render differs from the base")
+	}
+	// (vii) gate on: only NetworkPolicy manifests differ.
+	if withoutPolicies(render(chart, valkeyProdShape)) != withoutPolicies(render(".", valkeyProdShape)) {
+		t.Error("with the gate on a manifest other than a NetworkPolicy differs from the base")
 	}
 }

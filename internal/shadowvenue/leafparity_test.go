@@ -73,6 +73,14 @@ func TestLeafParityDropsTheFrozenVolatileLeavesOfTheirRowOnly(t *testing.T) {
 		}},
 		"a side line missing for an enforced slot": {frozen: "1\t$.ts\n2\t$.ts\n", void: "side file", plant: func(r *enfRun) { delete(r.in.Leaves.Enforced, r.in.Slots[6].Seq) }},
 		"a side line missing for a yardstick slot": {frozen: "1\t$.ts\n2\t$.ts\n", void: "side file", plant: func(r *enfRun) { delete(r.in.Leaves.Yard, r.in.Yard[6].Seq) }},
+		"the yardstick seq differs from the enforced seq (each run joins by its own seq)": {frozen: "1\t$.ts\n2\t$.ts\n", want: "", plant: func(r *enfRun) {
+			shifted := map[int][]Leaf{}
+			for i := range r.in.Yard {
+				shifted[r.in.Yard[i].Seq+100] = r.in.Leaves.Yard[r.in.Yard[i].Seq]
+				r.in.Yard[i].Seq += 100
+			}
+			r.in.Leaves.Yard = shifted
+		}},
 		"the old digest does not decide when the leaves are given": {frozen: "1\t$.ts\n2\t$.ts\n", want: "", plant: func(r *enfRun) {
 			for i := range r.in.Slots {
 				if !r.in.Slots[i].Gap() {

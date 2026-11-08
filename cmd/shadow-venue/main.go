@@ -861,19 +861,7 @@ func bodydiff(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if *pathsOnly {
-		lines, err := leafPathLines(sets, *keysA, *keysB)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return exitUsage
-		}
-		for _, l := range lines {
-			fmt.Fprintln(stdout, l)
-		}
-		fmt.Fprintf(stderr, "bodydiff: %d differing leaf paths\n", len(lines))
-		if len(lines) > 0 {
-			return exitFail
-		}
-		return exitOK
+		return bodydiffPaths(sets, *keysA, *keysB, stdout, stderr)
 	}
 	diffs, err := shadowvenue.BodyDiff(sets[0], sets[1])
 	if err != nil {
@@ -923,6 +911,23 @@ func bodykey(args []string, stderr io.Writer) int {
 }
 
 // leafDiff lists, per cell of the pair, the leaf paths whose HMACs differ or that one side lacks: paths only.
+// bodydiffPaths prints the differing leaf paths as row<TAB>path lines on stdout and the count on stderr.
+func bodydiffPaths(sets [2][]shadowvenue.Slot, keysA, keysB string, stdout, stderr io.Writer) int {
+	lines, err := leafPathLines(sets, keysA, keysB)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	for _, l := range lines {
+		fmt.Fprintln(stdout, l)
+	}
+	fmt.Fprintf(stderr, "bodydiff: %d differing leaf paths\n", len(lines))
+	if len(lines) > 0 {
+		return exitFail
+	}
+	return exitOK
+}
+
 // leafPathLines reads the two side files and gives the differing leaf paths of the cells as row<TAB>path lines.
 func leafPathLines(sets [2][]shadowvenue.Slot, pathA, pathB string) ([]string, error) {
 	var leaves [2]map[int][]shadowvenue.Leaf

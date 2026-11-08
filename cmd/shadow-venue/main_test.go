@@ -612,6 +612,11 @@ func TestReadLeafParityTakesThreeFilesTogetherAndAnOwnerOnlyFrozenFile(t *testin
 		if p, err := readLeafParity(args[0], args[1], args[2]); err == nil || p != nil {
 			t.Errorf("%s: accepted (%v)", name, err)
 		}
+		if strings.HasPrefix(name, "only") || name == "no enforced side" || name == "no frozen file" {
+			if _, err := readLeafParity(args[0], args[1], args[2]); !strings.Contains(err.Error(), "go together") {
+				t.Errorf("%s: %v, want the three-together refusal", name, err)
+			}
+		}
 	}
 	p, err := readLeafParity(frozen, side, side)
 	if err != nil || p == nil || len(p.Volatile.SHA12) != 12 || !p.Volatile.ByRow["1"]["$.ts"] {
@@ -629,8 +634,13 @@ func TestBodydiffPathsNeedsTheSideFiles(t *testing.T) {
 func TestLeafPathLinesAreRowTabPathAndNothingElse(t *testing.T) {
 	a := writeOwnerOnly(t, "a.tsv", sideHeaderForTest+"\n1\t$.ts\taaaaaaaaaaaa\n1\t$.id\tbbbbbbbbbbbb\n", 0o600)
 	b := writeOwnerOnly(t, "b.tsv", sideHeaderForTest+"\n5\t$.ts\tcccccccccccc\n5\t$.id\tbbbbbbbbbbbb\n", 0o600)
-	lines, err := leafPathLines([2][]shadowvenue.Slot{{{Seq: 1, Row: "7", Caller: "admin", K: 1}}, {{Seq: 5, Row: "7", Caller: "admin", K: 1}}}, a, b)
+	sets := [2][]shadowvenue.Slot{{{Seq: 1, Row: "7", Caller: "admin", K: 1}}, {{Seq: 5, Row: "7", Caller: "admin", K: 1}}}
+	lines, err := leafPathLines(sets, a, b)
 	if err != nil || len(lines) != 1 || lines[0] != "7\t$.ts" {
 		t.Fatalf("%q %v", lines, err)
+	}
+	var out, errOut bytes.Buffer
+	if code := bodydiffPaths(sets, a, b, &out, &errOut); code != exitFail || out.String() != "7\t$.ts\n" || !strings.Contains(errOut.String(), "1 differing leaf paths") {
+		t.Fatalf("stdout must be the path lines only: code %d stdout %q stderr %q", code, out.String(), errOut.String())
 	}
 }

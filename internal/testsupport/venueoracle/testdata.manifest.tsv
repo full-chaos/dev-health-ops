@@ -1,4 +1,4 @@
 # Every file under internal/testsupport/venueoracle/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-c4ec2c85e89af3404608154e52b1b73fd94a7def3552840a2fe21907af6d9988	hand-written	known_divergences.tsv
+b71eb5028a18c358aaef50d37a39e35ec3af6f718018fd19cac5c649a9d4bc08	hand-written	known_divergences.tsv

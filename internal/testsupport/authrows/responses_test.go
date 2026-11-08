@@ -182,3 +182,24 @@ func TestOrganizationChoiceIsClassifiedOnlyForAlicesTwoSignIns(t *testing.T) {
 		t.Error("a body whose access token is not alice's was rewritten")
 	}
 }
+
+// When go-api answers the sign-ins itself (local_login not forwarded), alice's organization is go-api's choice on both
+// planes: it is not rewritten, so the activity choice (B) matches and auth-service's earliest-membership choice (A)
+// is a difference.
+func TestGoAPILoginKeepsAlicesOrganization(t *testing.T) {
+	for _, step := range []string{aliceLogin1, aliceLogin2} {
+		golden := goldenBody(t, step)
+		same, _, _ := SignInBodiesLogin(step, golden, targetOf(t, golden, false), nil, false)
+		if want := TargetResponseBody(targetOf(t, golden, false), nil); same != want {
+			t.Errorf("%s: go-api's own organization choice differs:\n golden %s\n target %s", step, same, want)
+		}
+		earliest, target, _ := SignInBodiesLogin(step, golden, targetOf(t, golden, true), nil, false)
+		if earliest == target {
+			t.Errorf("%s: organization A was classified away on a go-api login leg", step)
+		}
+		forwarded, target, _ := SignInBodiesLogin(step, golden, targetOf(t, golden, true), nil, true)
+		if forwarded != target {
+			t.Errorf("%s: a forwarded login leg no longer classifies organization A", step)
+		}
+	}
+}

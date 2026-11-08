@@ -75,7 +75,7 @@ shows where that happens today.
 | `effective_principal_envelope` | active | human | |
 | `refresh_credential` | active | human | |
 | `user_access_token` | **unconsumed** | human | |
-| `internal_svc_authsess_token` | active | service_account | |
+| `internal_svc_authsess_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |
 | `link_credential` | active | human | |
 | `pagerduty_webhook_signature` | active | external_source | |
 | `workload_token` | optional_feature | workload | |
@@ -116,24 +116,23 @@ scope, `sessions:issue`, is retired: `POST /internal/v1/sessions`,
 only the go-api workload token and refuse this credential from the bearer text,
 counted in `auth.session.retired_credential_refusals{operation}`. It shares the
 `internal_service_credentials` table with `svc_acr_` and `svc_worker_`, which
-carry other prefixes, services and scopes. auth-service is its only validator
-(`servicecred.PG.CheckScope`); the verbs of `dev-hops service-credentials` mint,
-rotate and revoke it. A second scope, `memberships:write`, which no other
-service may hold, lets go-api call the internal provisioning routes
-(`/internal/v1/memberships/*`, `/internal/v1/invites/*`,
-`/internal/v1/organizations/{deprovision,reactivate,suspend}`, mounted by `AUTH_MEMBERSHIP_ROUTES`;
-`servicecred.PG.CheckScope`). The session issue route, the ten provisioning routes and
+carry other prefixes, services and scopes. No route takes it, so no validator
+accepts it; the verbs of `dev-hops service-credentials` still mint, rotate,
+list and revoke stored rows. Its second scope, `memberships:write`, is retired: no service
+may hold it, the mint refuses it, and the internal provisioning routes
+(`/internal/v1/memberships/*`, `/internal/v1/invites/*`, `/internal/v1/organizations/*`,
+`/internal/v1/service-accounts/*`, `/internal/v1/grants/*`) refuse this credential
+and take the go-api workload token only. The route and
 go-api's four compatibility routes (`/api/v1/auth/{login,refresh,logout,social-login}`)
 have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`. The
 provisioning audit rows name the actor, the request id and the calling
-credential (`credential_id` here, or `caller_principal_id` and `workload_jti`
-for the go-api workload token).
+credential (`caller_principal_id` and `workload_jti` of the go-api workload token).
 
-Four read scopes name the versioned read API (contracts only, no
-route serves them yet): `principals:read`, `organizations:read`,
-`memberships:read` and `grants:read`. A read holds its read scope and a write
-scope never satisfies one (`contracts.ReadScopeAllows`). A mint verb that issues
-them and the routes that check them come with the routes.
+Four read scopes name the versioned read API: `principals:read`,
+`organizations:read`, `memberships:read` and `grants:read`. A read scope is never
+satisfied by a write scope (`contracts.ReadScopeAllows`). No credential of this
+class holds one: the read routes (`/internal/v1/{principals,organizations,memberships,grants}/{get,list}`)
+refuse this credential and take the go-api workload token only.
 
 **`org_invite_token`.** The invite link token: `signedtoken.Build`
 over the invite id (32 lowercase hex characters, a dot, 64 lowercase hex

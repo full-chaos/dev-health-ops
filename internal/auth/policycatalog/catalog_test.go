@@ -640,7 +640,7 @@ func TestPlatformActionsAreHeldOnlyByPlatformAdmin(t *testing.T) {
 func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing.T) {
 	want := map[string]Action{
 		"acr.evidence.read":    {Scope: ScopeOrganization, ResourceKind: "repository", RiskClass: RiskLow, CacheClass: CacheResourceRevisionBound, Impersonation: ImpersonationAllowed},
-		"acr.credential.issue": {Scope: ScopeOrganization, ResourceKind: "organization", RiskClass: RiskHigh, CacheClass: CacheNone, Impersonation: ImpersonationDenied},
+		"acr.credential.issue": {Scope: ScopeOrganization, ResourceKind: "organization", RiskClass: RiskHigh, CacheClass: CacheNone, Impersonation: ImpersonationDenied, RepositoryScope: RepositoryScopeFiltered},
 	}
 	for id, w := range want {
 		a, err := Default().Action(id)
@@ -648,7 +648,8 @@ func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing
 			t.Errorf("%s: %v", id, err)
 			continue
 		}
-		if a.Scope != w.Scope || a.ResourceKind != w.ResourceKind || a.RiskClass != w.RiskClass || a.CacheClass != w.CacheClass || a.Impersonation != w.Impersonation {
+		if a.Scope != w.Scope || a.ResourceKind != w.ResourceKind || a.RiskClass != w.RiskClass || a.CacheClass != w.CacheClass || a.Impersonation != w.Impersonation ||
+			(w.RepositoryScope != "" && a.RepositoryScope != w.RepositoryScope) {
 			t.Errorf("%s = %+v, want %+v", id, a, w)
 		}
 	}

@@ -2,6 +2,7 @@ package authrows
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -454,8 +455,8 @@ func TestOwnedLegHasNoLastLoginQuirk(t *testing.T) {
 	if problems := stamped.Compare(TableUsers, strings.Join([]string{aliceGolden, piaGolden}, rowSeparator), strings.Join([]string{aliceGolden, piaGolden}, rowSeparator)); len(problems) != 0 {
 		t.Fatalf("stamped last logins on the owned leg: %v", problems)
 	}
-	if got := stamped.Covered(); strings.Contains(got, "users-last-login-not-stamped=") {
-		t.Fatalf("Covered = %q, no last-login quirk is live on the owned leg", got)
+	if got := stamped.Covered(); regexp.MustCompile(`=[1-9]`).MatchString(got) {
+		t.Fatalf("Covered = %q, a quirk covered a stamped last login on the owned leg", got)
 	}
 	never := ownedUsersLedger(t, true)
 	if problems := never.Compare(TableUsers, aliceGolden, aliceTarget); len(problems) == 0 {

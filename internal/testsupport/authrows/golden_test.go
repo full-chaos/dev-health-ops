@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -355,8 +356,8 @@ func TestOwnedLegExpectsTheGoldensUsersRowsWithNoQuirk(t *testing.T) {
 	if problems := l.Compare(TableUsers, golden[TableUsers], golden[TableUsers]); len(problems) != 0 {
 		t.Fatalf("users rows equal to the golden's: %v", problems)
 	}
-	if got := l.Covered(); strings.Contains(got, "users-last-login-not-stamped=") {
-		t.Fatalf("the last-login quirk is live on the owned leg: %q", got)
+	if got := l.Covered(); regexp.MustCompile(`=[1-9]`).MatchString(got) {
+		t.Fatalf("a quirk covered a users row equal to the golden's: %q", got)
 	}
 	// CHAOS-11502 stamps the last login on public.users while users are owned: never-stamped rows are a difference there.
 	notStamped := neverStamped(t, golden)

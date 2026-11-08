@@ -61,7 +61,6 @@ internal/queryapi/principal/edge_access.go	EdgeVerifier.VerifyRouted	1
 internal/queryapi/principal/edge_verifier.go	EdgeVerifier.Verify	1
 internal/queryapi/principal/verifier.go	enforceSuperuserDiscipline	2
 internal/queryapi/server/graphql_edge_route.go	authenticateGraphQLEdge	1
-internal/queryapi/server/internal_auth.go	authenticateInternalRequest	1
 internal/queryapi/server/internal_auth.go	checkEdgeCarrier	2
 internal/queryapi/server/internal_auth.go	liveScope	1
 internal/queryapi/server/mcp_route.go	mcpAuthenticate	1

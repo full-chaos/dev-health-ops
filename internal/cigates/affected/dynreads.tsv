@@ -5,7 +5,6 @@ cmd/auth-migrate	restorefence.go
 cmd/cigate	docs_prepare_refusals_test.go
 cmd/cigate	main.go
 cmd/cigate	main_test.go
-cmd/dev-health-migration-matrix	contract_test.go
 cmd/dev-health-migration-matrix	main.go
 cmd/dev-health-provider-fixture	main.go
 cmd/dev-health-provider-normalized-fixture	main.go
@@ -43,7 +42,6 @@ internal/apiservice	githubapp_config.go
 internal/apiservice	member_list_row_cells_test.go
 internal/apiservice/admin	routeguard_test.go
 internal/apiservice/authflowvenue	auth_flow_venue_oracle_integration_test.go
-internal/apiservice/authflowvenue	linkformat_test.go
 internal/apiservice/billingvenue	billing_refund_webhook_integration_test.go
 internal/apiservice/billingvenue	billing_webhook_venue_oracle_integration_test.go
 internal/atlassianteams	vendored_documents_test.go
@@ -67,7 +65,6 @@ internal/auth/authorization	golden_decision_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
 internal/auth/authruntime	authorize_corpus_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
-internal/auth/authruntime	fixed_credential_scan_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
 internal/auth/authruntime	query_api_accepts_integration_test.go
 internal/auth/authruntime	session_routes_integration_test.go
@@ -136,7 +133,6 @@ internal/auth/platformrole	superuser_sites_census_test.go
 internal/auth/platformrole	superuser_writes_census_test.go
 internal/auth/pushlifecycle	acr_mapping_test.go
 internal/auth/pushprojection	import_guard_test.go
-internal/auth/pushreconcile	import_guard_test.go
 internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/repoidentityprojection	reader_test.go
 internal/auth/restorefence	consumers_reader_test.go
@@ -441,7 +437,6 @@ internal/jobs/metrics/complexity/pycc	cc_parity_test.go
 internal/jobs/metrics/daily	file_hotspots_blame_ownership_integration_test.go
 internal/jobs/metrics/daily	run_marker_integration_test.go
 internal/jobs/metrics/daily	stale_team_keys_census_test.go
-internal/jobs/metrics/daily/compoundingrisk	pythonmax_callsites_test.go
 internal/jobs/metrics/numerical	capacity_forecast_test.go
 internal/jobs/metrics/numerical	dora_frozen_golden_test.go
 internal/jobs/metrics/prrework	readers_census_test.go
@@ -467,7 +462,6 @@ internal/migrationmatrix	restendpoints.go
 internal/mintcli/envelopekeys	main_test.go
 internal/mintcli/envelopekeys	verify_roundtrip_test.go
 internal/operationalordering	finalreads_test.go
-internal/ownershipwindow	ownershipwindow_test.go
 internal/pgmigrate	archive_fixture_integration_test.go
 internal/pgmigrate	archive_test.go
 internal/pgmigrate	indexbuild_test.go
@@ -613,7 +607,6 @@ internal/shadowvenue	requestsites_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go
 internal/storage/postgres	openers_test.go
-internal/storage/postgres	posture_cache_cadence_test.go
 internal/storage/postgres	posture_identity_sites_test.go
 internal/storage/postgres	provision_script_integration_test.go
 internal/storage/postgres	venue_posture_coverage_test.go

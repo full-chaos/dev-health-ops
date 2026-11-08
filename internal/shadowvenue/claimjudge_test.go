@@ -102,6 +102,7 @@ func TestStrictJudgeEachClaimDefectIsRed(t *testing.T) {
 		"claim sub is another user":                  {func(s []Slot, _ *Membership) { s[7].ClaimSub = WirePrincipal("11111111-1111-4111-8111-111111111111") }, false, VerdictMismatchCaller},
 		"the no-org superuser carries an org":        {func(s []Slot, _ *Membership) { s[9].Caller, s[9].WantOrg, s[9].ClaimOrg = "superuser", "-", testOrgA }, false, VerdictMismatchCaller},
 		"the superuser-O token has no org":           {func(s []Slot, _ *Membership) { s[9].ClaimOrg = "-" }, false, VerdictMismatchCaller},
+		"a slot whose plan wants no sub":             {func(s []Slot, _ *Membership) { s[6].WantSub = "" }, true, "claim"},
 		"a slot without a claim read-back":           {func(s []Slot, _ *Membership) { s[6].ClaimSub = "" }, true, "claim"},
 		"a slot without an expiry":                   {func(s []Slot, _ *Membership) { s[6].ClaimExp = time.Time{} }, true, "claim"},
 		"a slot without a body digest":               {func(s []Slot, _ *Membership) { s[6].BodyNormSHA = "" }, true, "body digest"},

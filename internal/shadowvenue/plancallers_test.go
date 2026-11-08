@@ -51,11 +51,13 @@ func TestPrincipalsMayRepeatAUserOnlyAmongPlatformAdmins(t *testing.T) {
 		t.Fatalf("a platform admin repeated by uuid and email refused: %v", err)
 	}
 	for name, extra := range map[string]string{
-		"a member repeated by uuid":                    "principal\tmember-B\tother@example.test\t66666666-6666-4666-8666-666666666666\tB\tmember\t" + pw + "\n",
-		"a member repeated by email":                   "principal\tmember-B\tm@example.test\t12345678-6666-4666-8666-666666666666\tB\tmember\t" + pw + "\n",
-		"a platform admin with the uuid of a member":   "principal\tsuperuser-B\ts2@example.test\t66666666-6666-4666-8666-666666666666\tB\tplatform_admin_org(no_membership)\t" + pw + "\n",
-		"a platform admin with the email of a member":  "principal\tsuperuser-B\tm@example.test\t12345678-8888-4888-8888-888888888888\tB\tplatform_admin_org(no_membership)\t" + pw + "\n",
-		"a platform admin repeated with another email": "principal\tsuperuser-B\tt@example.test\t88888888-8888-4888-8888-888888888888\tB\tplatform_admin_org(no_membership)\t" + pw + "\n",
+		"a member repeated by uuid":                            "principal\tmember-B\tother@example.test\t66666666-6666-4666-8666-666666666666\tB\tmember\t" + pw + "\n",
+		"a member repeated by email":                           "principal\tmember-B\tm@example.test\t12345678-6666-4666-8666-666666666666\tB\tmember\t" + pw + "\n",
+		"a platform admin with the uuid of a member":           "principal\tsuperuser-B\ts2@example.test\t66666666-6666-4666-8666-666666666666\tB\tplatform_admin_org(no_membership)\t" + pw + "\n",
+		"a platform admin with the email of a member":          "principal\tsuperuser-B\tm@example.test\t12345678-8888-4888-8888-888888888888\tB\tplatform_admin_org(no_membership)\t" + pw + "\n",
+		"a platform admin repeated with another email":         "principal\tsuperuser-B\tt@example.test\t88888888-8888-4888-8888-888888888888\tB\tplatform_admin_org(no_membership)\t" + pw + "\n",
+		"a member with the uuid and email of a platform admin": "principal\tmember-B\ts@example.test\t88888888-8888-4888-8888-888888888888\tB\tmember\t" + pw + "\n",
+		"a platform admin with the uuid and email of a member": "principal\tsuperuser-B\tm@example.test\t66666666-6666-4666-8666-666666666666\tB\tplatform_admin_org(no_membership)\t" + pw + "\n",
 		"a name twice": "principal\tmember-A\tx@example.test\t12345678-6666-4666-8666-666666666666\tB\tmember\t" + pw + "\n",
 		"a platform admin of the org kind with no org": "principal\tsuperuser-N\ts@example.test\t88888888-8888-4888-8888-888888888888\t-\tplatform_admin_org(no_membership)\t" + pw + "\n",
 	} {

@@ -97,3 +97,11 @@ func TestNormalizedDigestDropsTheStateOfAURLAndReadsNonJSONAsText(t *testing.T) 
 		t.Fatalf("an empty body: %+v", e)
 	}
 }
+
+func TestNormalizedDigestReplacesAFrozenIDUsedAsAKey(t *testing.T) {
+	a := DigestBody(bdKey, []byte(`{"`+bdUser1+`":{"n":1}}`), bdFrozen(t), nil)
+	c := DigestBody(bdKey, []byte(`{"`+bdUser4+`":{"n":1}}`), bdFrozen(t), nil)
+	if a.Norm != c.Norm {
+		t.Fatal("a frozen id used as a key kept its value")
+	}
+}

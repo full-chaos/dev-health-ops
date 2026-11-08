@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -108,6 +109,27 @@ func TestReadTokenFileWantsAnOwnerOnlyRegularFileHoldingAUserAccessToken(t *test
 	}
 	if _, err := ReadTokenFile(link); err == nil {
 		t.Fatal("a symlink accepted")
+	}
+	extra := filepath.Join(dir, "extra.token")
+	if err := os.WriteFile(extra, []byte(token+"\nsecond-line\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadTokenFile(extra); err == nil {
+		t.Fatal("a file with a second line after the token accepted")
+	}
+	fifo := filepath.Join(dir, "f.token")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := ReadTokenFile(fifo); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a FIFO accepted")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadTokenFile blocked on a FIFO")
 	}
 	two := filepath.Join(dir, "two.token")
 	if err := os.WriteFile(two, []byte(token+"\n"+token+"\n"), 0o600); err != nil {

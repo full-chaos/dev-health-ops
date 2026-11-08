@@ -380,6 +380,10 @@ func TestBodydiffListsTheCellsWhoseNormalizedBodyDiffers(t *testing.T) {
 	if code := run(context.Background(), []string{"bodydiff", "-a", a, "-b", b}, &out, &errOut); code != exitFail || !strings.Contains(out.String(), "row 58") || !strings.Contains(out.String(), "1 cells differ") {
 		t.Fatalf("a differing body: %d %q", code, out.String())
 	}
+	two := writeFile(t, "two.tsv", slotsHeaderV2+"\n"+slotLine(1, same, "prn_AAAAAAAAAAAAAAAAAAAAAA")+"\n"+strings.Replace(slotLine(2, same, "prn_AAAAAAAAAAAAAAAAAAAAAA"), "\t58\t", "\t59\t", 1)+"\n")
+	if code := run(context.Background(), []string{"bodydiff", "-a", a, "-b", two}, &out, &errOut); code != exitUsage {
+		t.Fatalf("files of two sizes were compared: %d", code)
+	}
 	v1 := writeFile(t, "v1.tsv", "seq\trow\n")
 	if code := run(context.Background(), []string{"bodydiff", "-a", a, "-b", v1}, &out, &errOut); code != exitUsage {
 		t.Fatalf("a v1 file: %d", code)

@@ -147,8 +147,9 @@ func TestDriveRefusesAnExpiredTokenBeforeAnyRequest(t *testing.T) {
 	venue, _ := testPrincipals(t)
 	tokens := healthyTokens(t, venue, time.Now().Add(-time.Minute))
 	d := &Driver{Base: api.srv.URL, Client: api.srv.Client(), Gap: MinGap, Sleep: func(context.Context, time.Duration) error { return nil }}
-	if err := d.Drive(context.Background(), plan, tokens, io.Discard); err == nil || api.count() != 0 {
-		t.Fatalf("an expired token was driven: %v, %d requests", err, api.count())
+	var out bytes.Buffer
+	if err := d.Drive(context.Background(), plan, tokens, &out); err == nil || api.count() != 0 || out.Len() != 0 {
+		t.Fatalf("an expired token was driven: %v, %d requests, %d bytes of slots file", err, api.count(), out.Len())
 	}
 }
 

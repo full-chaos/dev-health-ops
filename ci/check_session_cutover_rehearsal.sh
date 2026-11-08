@@ -35,6 +35,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 # shellcheck source=ci/lib/pull_base_image.sh
 source "${ROOT}/ci/lib/pull_base_image.sh"
+# shellcheck source=ci/lib/wait_pg_accepting.sh
+source "${ROOT}/ci/lib/wait_pg_accepting.sh"
 
 readonly KIND_VERSION="v0.33.0"
 readonly KIND_SHA256_AMD64="aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d"
@@ -178,6 +180,7 @@ K rollout status statefulset/"${FULL}-clickhouse" --timeout=240s
 K rollout status deploy/"${FULL}-valkey" --timeout=240s
 
 PSU() { K exec -i "${FULL}-postgresql-0" -- psql -U devhealth -d devhealth -At -v ON_ERROR_STOP=1 "$@"; }
+wait_pg_accepting "${FULL}-postgresql-0"
 printf "CREATE ROLE devhealth_api LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\nCREATE ROLE devhealth_query_api NOLOGIN;\nCREATE ROLE devhealth_auth LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n" \
   "${API_PASSWORD}" "${AUTH_PASSWORD}" | PSU -f -
 printf 'host=%s-postgresql port=5432 user=devhealth_auth password=%s dbname=devhealth sslmode=disable' "${FULL}" "'${AUTH_PASSWORD}'" \

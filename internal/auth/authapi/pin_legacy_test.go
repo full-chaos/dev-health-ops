@@ -88,65 +88,14 @@ func legacyToken(t *testing.T, f *compatFixture, org string, secret string) stri
 	return token
 }
 
-func TestCompatRefreshExchangesAGoAPIRefreshTokenForASession(t *testing.T) {
-	f := newCompatFixture(t)
-	f.sessions.legacyResult = accepted(f.record)
-	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+legacyToken(t, f, f.org.String(), testSecret)+`"}`, nil)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", response.Code, response.Body)
-	}
-	if len(f.sessions.legacy) != 1 {
-		t.Fatalf("%d legacy exchanges, want 1", len(f.sessions.legacy))
-	}
-	got := f.sessions.legacy[0]
-	if got.PrincipalID != f.principal || got.OrganizationID == nil || *got.OrganizationID != f.org || got.JTI.Reveal() != "legacy-jti-0001" {
-		t.Fatalf("exchanged %+v (jti %q), want the token's sub, org_id and jti", got, got.JTI.Reveal())
-	}
-	if len(f.projector.userCalls) != 1 || f.projector.userCalls[0] != f.principal || len(f.projector.orgCalls) != 1 || f.projector.orgCalls[0] != f.org {
-		t.Fatalf("projected users %v orgs %v, want the token's principal and organization first", f.projector.userCalls, f.projector.orgCalls)
-	}
-	body := decodeObject(t, response.Body.Bytes())
-	if body["refresh_token"] != credential() || body["token_type"] != "bearer" {
-		t.Fatalf("body %s, want the session's opaque credential", response.Body)
-	}
-	bearer, _, err := eddsaBearer(t, body["access_token"].(string))
-	if err != nil || bearer.SessionID != f.record.ID {
-		t.Fatalf("access token %+v %v, want the new session's sid", bearer, err)
-	}
-}
-
-func TestCompatRefreshOfAGoAPIRefreshTokenWithoutAnOrganization(t *testing.T) {
-	f := newCompatFixture(t)
-	record := f.record
-	record.OrganizationID = nil
-	f.sessions.legacyResult = accepted(record)
-	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+legacyToken(t, f, "", testSecret)+`"}`, nil)
-	if response.Code != http.StatusOK || len(f.sessions.legacy) != 1 || f.sessions.legacy[0].OrganizationID != nil || len(f.projector.orgCalls) != 0 {
-		t.Fatalf("status %d legacy %+v orgs %v: %s", response.Code, f.sessions.legacy, f.projector.orgCalls, response.Body)
-	}
-}
-
-func TestCompatRefreshAnswersGoAPIsRefusalsForAGoAPIRefreshToken(t *testing.T) {
-	cases := map[session.Reason]string{
-		session.ReasonRefreshUnknown:       "refresh: garbage",
-		session.ReasonRefreshExpired:       "refresh: garbage",
-		session.ReasonSessionRevoked:       "refresh: garbage",
-		session.ReasonRefreshReused:        "refresh: original outside the grace window (reuse)",
-		session.ReasonPrincipalDeactivated: "refresh: judy deactivated",
-	}
-	for reason, golden := range cases {
-		f := newCompatFixture(t)
-		f.sessions.legacyResult = session.Result{Reason: reason}
-		response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+legacyToken(t, f, f.org.String(), testSecret)+`"}`, nil)
-		expectGolden(t, response, response.Body.Bytes(), golden)
-		if len(f.sessions.revoked) != 0 {
-			t.Fatalf("%s: revoked %v; the store decides legacy revocations", reason, f.sessions.revoked)
-		}
-	}
-}
-
-func TestCompatRefreshRefusesAGoAPIRefreshTokenItCannotVerify(t *testing.T) {
+// The HS256 refresh exchange is retired: every go-api refresh JWT, one the legacy key verifies included, gets go-api's
+// answer for a refresh token that does not verify, and reaches no store or projector. Logout of a verified one still
+// answers 200 (TestCompatLogoutKeySetVerifiedLegacyTokenRevokesAndCounts).
+func TestCompatRefreshRefusesEveryGoAPIRefreshJWT(t *testing.T) {
 	for name, token := range map[string]func(*compatFixture) string{
+		"verified with the legacy key": func(f *compatFixture) string {
+			return legacyToken(t, f, f.org.String(), testSecret)
+		},
 		"another key": func(f *compatFixture) string {
 			return legacyToken(t, f, f.org.String(), "another-key-0123456789abcdef-0123456")
 		},
@@ -158,23 +107,9 @@ func TestCompatRefreshRefusesAGoAPIRefreshTokenItCannotVerify(t *testing.T) {
 		f := newCompatFixture(t)
 		response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+token(f)+`"}`, nil)
 		expectGolden(t, response, response.Body.Bytes(), "refresh: garbage")
-		if len(f.sessions.legacy) != 0 || len(f.projector.userCalls) != 0 {
-			t.Fatalf("%s: exchanged %d, projected %v; an unverified token reaches nothing", name, len(f.sessions.legacy), f.projector.userCalls)
-		}
-	}
-}
-
-func TestCompatRefreshRefusesAGoAPIRefreshTokenOfAnUnknownUserOrOrganization(t *testing.T) {
-	for name, mutate := range map[string]func(*compatFixture){
-		"user":         func(f *compatFixture) { f.projector.gone[f.principal] = true },
-		"organization": func(f *compatFixture) { delete(f.projector.orgs, f.org) },
-	} {
-		f := newCompatFixture(t)
-		mutate(f)
-		response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+legacyToken(t, f, f.org.String(), testSecret)+`"}`, nil)
-		expectGolden(t, response, response.Body.Bytes(), "refresh: garbage")
-		if len(f.sessions.legacy) != 0 {
-			t.Fatalf("%s: exchanged a token whose %s is unknown", name, name)
+		if f.sessions.exchanges != 0 || len(f.sessions.created) != 0 || len(f.projector.userCalls) != 0 || len(f.projector.orgCalls) != 0 {
+			t.Fatalf("%s: %d exchanges, %d created, projected %v %v; a go-api refresh JWT reaches nothing", name,
+				f.sessions.exchanges, len(f.sessions.created), f.projector.userCalls, f.projector.orgCalls)
 		}
 	}
 }
@@ -229,33 +164,6 @@ func TestCompatRefreshOfAPinlessSessionAnswersGoAPIsInvalidRefresh(t *testing.T)
 	f.sessions.result = session.Result{Reason: session.ReasonRevisionStale}
 	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
 	expectGolden(t, response, response.Body.Bytes(), "refresh: garbage")
-	if len(f.sessions.revoked) != 0 {
-		t.Fatalf("revoked %v, want nothing", f.sessions.revoked)
-	}
-}
-
-func TestCompatRefreshAnswersAGraceReplayOfAGoAPIRefreshToken(t *testing.T) {
-	f := newCompatFixture(t)
-	replay := accepted(f.record)
-	replay.Reason = session.ReasonGraceReplay
-	f.sessions.legacyResult = replay
-	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+legacyToken(t, f, f.org.String(), testSecret)+`"}`, nil)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", response.Code, response.Body)
-	}
-	if body := decodeObject(t, response.Body.Bytes()); body["refresh_token"] != credential() {
-		t.Fatalf("body %s, want the replayed credential", response.Body)
-	}
-}
-
-func TestCompatRefreshAnswersARetryWhenAGraceReplayCannotBeRecomputed(t *testing.T) {
-	f := newCompatFixture(t)
-	f.sessions.legacyResult = session.Result{Reason: session.ReasonDependency}
-	f.sessions.legacyErr = session.ErrGraceUnavailable
-	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+legacyToken(t, f, f.org.String(), testSecret)+`"}`, nil)
-	if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "refresh_token") {
-		t.Fatalf("status %d: %s; want the store-failure answer with no credential", response.Code, response.Body)
-	}
 	if len(f.sessions.revoked) != 0 {
 		t.Fatalf("revoked %v, want nothing", f.sessions.revoked)
 	}

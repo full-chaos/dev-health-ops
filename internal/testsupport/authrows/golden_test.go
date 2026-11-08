@@ -63,17 +63,7 @@ func acpRows(t *testing.T, golden map[string]string) map[string]string {
 	for name, rows := range golden {
 		out[name] = rows
 	}
-	var users []string
-	for _, line := range lines(golden[TableUsers]) {
-		if strings.HasPrefix(line, "alice@example.com") || strings.HasPrefix(line, "pia@example.com") {
-			if !strings.Contains(line, " 1 true true$2b$12$") {
-				t.Fatalf("the golden's users row has changed: %q", line)
-			}
-			line = strings.Replace(line, " 1 true true$2b$12$", " 1 false true$2b$12$", 1)
-		}
-		users = append(users, line)
-	}
-	out[TableUsers] = strings.Join(users, rowSeparator)
+	// auth-service stamps the last login of alice's and pia's sign-ins (CHAOS-11502): the users rows are the golden's.
 	var refresh []string
 	for _, line := range lines(golden[TableRefreshTokens]) {
 		switch line {
@@ -105,10 +95,27 @@ func acpRows(t *testing.T, golden map[string]string) map[string]string {
 	return out
 }
 
+// neverStamped is the golden's users rows with alice's and pia's sign-ins not stamped, as on a leg where auth-service
+// did not own users.
+func neverStamped(t *testing.T, golden map[string]string) string {
+	t.Helper()
+	var users []string
+	for _, line := range lines(golden[TableUsers]) {
+		if strings.HasPrefix(line, "alice@example.com") || strings.HasPrefix(line, "pia@example.com") {
+			if !strings.Contains(line, " 1 true true$2b$12$") {
+				t.Fatalf("the golden's users row has changed: %q", line)
+			}
+			line = strings.Replace(line, " 1 true true$2b$12$", " 1 false true$2b$12$", 1)
+		}
+		users = append(users, line)
+	}
+	return strings.Join(users, rowSeparator)
+}
+
 func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +127,7 @@ func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 	if dead := l.Dead(); len(dead) != 0 {
 		t.Errorf("dead quirks: %v", dead)
 	}
-	want := "login-organization-chosen-without-activity=2 audit-login-organization-chosen-without-activity=2 users-last-login-not-stamped=2"
+	want := "login-organization-chosen-without-activity=2 audit-login-organization-chosen-without-activity=2"
 	if got := l.Covered(); got != want {
 		t.Errorf("Covered = %q, want %q", got, want)
 	}
@@ -129,7 +136,7 @@ func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 func TestQuirksReportARowTheGoldenDoesNotHold(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +195,7 @@ func TestEveryProjectedTableIsAGoldenComparison(t *testing.T) {
 func TestAnOrglessSignInRowIsReported(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +296,7 @@ func TestOrganizationChoiceQuirksRewriteOnlyAlicesSignInRows(t *testing.T) {
 		}
 	}
 	acp := acpRows(t, golden)
-	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +308,7 @@ func TestOrganizationChoiceQuirksRewriteOnlyAlicesSignInRows(t *testing.T) {
 	if problems := l.Compare(TableRefreshTokens, golden[TableRefreshTokens], moreRevoked); len(problems) != 2 {
 		t.Errorf("a changed revoked count was classified: %v", problems)
 	}
-	l, err = NewLedger(forwarded(t, "sessions,local_login"), false)
+	l, err = NewLedger(forwarded(t, "sessions,local_login"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +326,7 @@ func TestChainedRewritesCoverOneTargetRowPerGoldenRow(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
 	run := func(goldenRefresh, acpRefresh string) (problems []string, covered string) {
-		l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
+		l, err := NewLedger(forwarded(t, "sessions,local_login"), true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -352,7 +359,7 @@ func TestOwnedLegExpectsTheGoldensUsersRowsWithNoQuirk(t *testing.T) {
 		t.Fatalf("the last-login quirk is live on the owned leg: %q", got)
 	}
 	// CHAOS-11502 stamps the last login on public.users while users are owned: never-stamped rows are a difference there.
-	notStamped := acpRows(t, golden)[TableUsers]
+	notStamped := neverStamped(t, golden)
 	if problems := l.Compare(TableUsers, golden[TableUsers], notStamped); len(problems) == 0 {
 		t.Fatal("never-stamped users rows passed on the owned leg")
 	}

@@ -209,7 +209,7 @@ func TestOwnershipDecidesWhichLegsAQuirkIsLiveOn(t *testing.T) {
 		owned Ownership
 		leg   bool
 		live  bool
-	}{{"", false, true}, {"", true, true}, {NotOwned, false, true}, {NotOwned, true, false}, {OwnedOnly, false, false}, {OwnedOnly, true, true}} {
+	}{{"", false, true}, {"", true, true}, {OwnedOnly, false, false}, {OwnedOnly, true, true}} {
 		table := rewriteGone(0, false)
 		table[0].Owned = c.owned
 		l, err := newLedger(forwarded(t, "local_login"), c.leg, table)
@@ -221,10 +221,12 @@ func TestOwnershipDecidesWhichLegsAQuirkIsLiveOn(t *testing.T) {
 			t.Errorf("owned %q on owned leg %v: live %v, want %v (covered %q)", c.owned, c.leg, got, c.live, l.Covered())
 		}
 	}
-	bad := rewriteGone(0, false)
-	bad[0].Owned = "sometimes"
-	if problems := CheckTable(bad); len(problems) != 1 || !strings.Contains(problems[0], "owned") {
-		t.Errorf("an unknown ownership is one problem: %v", problems)
+	for _, unknown := range []Ownership{"sometimes", "not_owned"} {
+		bad := rewriteGone(0, false)
+		bad[0].Owned = unknown
+		if problems := CheckTable(bad); len(problems) != 1 || !strings.Contains(problems[0], "owned") {
+			t.Errorf("ownership %q is one problem: %v", unknown, problems)
+		}
 	}
 }
 
@@ -270,35 +272,6 @@ func TestMissingQuirkWithNoGoldenRowToCoverIsDead(t *testing.T) {
 	dead := l.Dead()
 	if len(dead) != 1 || !strings.Contains(dead[0], "m: a live missing-row quirk covered no row") {
 		t.Fatalf("Dead = %v, want the missing-row quirk reported", dead)
-	}
-}
-
-func ownedTable() []Quirk {
-	return []Quirk{{ID: "stamp", Kind: Gap, Tracked: "CHAOS-10630", Reason: "r", Table: TableUsers, Needs: []Aggregate{LocalLogin}, Owned: NotOwned,
-		Rewrite: func(line string) (string, bool) {
-			if line == "login true" {
-				return "login false", true
-			}
-			return "", false
-		}}}
-}
-
-func TestOwnedLegFailsALastLoginFalseRow(t *testing.T) {
-	l, err := newLedger(forwarded(t, "local_login"), true, ownedTable())
-	if err != nil {
-		t.Fatal(err)
-	}
-	problems := l.Compare(TableUsers, "login true", "login false")
-	if len(problems) != 2 || !strings.Contains(problems[0], "users: unclassified difference") {
-		t.Fatalf("a never-stamped row on the owned leg must fail as unclassified: %v", problems)
-	}
-}
-
-func TestRealTableLastLoginQuirkIsNotOwnedOnly(t *testing.T) {
-	for _, q := range Quirks {
-		if q.ID == "users-last-login-not-stamped" && q.Owned != NotOwned {
-			t.Fatalf("users-last-login-not-stamped must be NotOwned, is %q", q.Owned)
-		}
 	}
 }
 
@@ -447,61 +420,25 @@ func ownedUsersLedger(t *testing.T, owned bool) *Ledger {
 	return l
 }
 
-// The owned leg keeps the seeded expired legacy verification row of uma in public.email_verification_tokens: go-api
-// replaced it on issue, auth-service issues into auth.link_credentials and never touches the public table (no reader of
-// it is reachable while users are owned; its purge is CHAOS-11506). One named extra row, exactly.
-func TestOwnedLegCoversUmasLegacyVerificationRowOnceAndNothingElse(t *testing.T) {
-	const umaLegacy = "uma@example.comtrue false 64 1440"
-	golden := goldenRows(t)[TableEmailVerificationTokens]
-	target := golden + rowSeparator + umaLegacy
-	l := ownedUsersLedger(t, true)
-	if problems := append(l.Compare(TableEmailVerificationTokens, golden, target), deadOf(l, "email-verification-legacy-row-not-purged-owned")...); len(problems) != 0 {
-		t.Fatalf("uma's legacy row on the owned leg: %v", problems)
-	}
-	if got := l.Covered(); !strings.Contains(got, "email-verification-legacy-row-not-purged-owned=1") {
-		t.Fatalf("Covered = %q", got)
-	}
-	for name, c := range map[string]struct {
-		owned  bool
-		table  string
-		target string
-	}{
-		"not owned":                   {false, TableEmailVerificationTokens, target},
-		"two such rows":               {true, TableEmailVerificationTokens, target + rowSeparator + umaLegacy},
-		"another user":                {true, TableEmailVerificationTokens, golden + rowSeparator + "zed@example.comtrue false 64 1440"},
-		"another table":               {true, TablePasswordResetTokens, goldenRows(t)[TablePasswordResetTokens] + rowSeparator + umaLegacy},
-		"a live row of the same user": {true, TableEmailVerificationTokens, golden + rowSeparator + "uma@example.comtrue true 64 1440"},
-	} {
-		l := ownedUsersLedger(t, c.owned)
-		goldenFor := golden
-		if c.table == TablePasswordResetTokens {
-			goldenFor = goldenRows(t)[TablePasswordResetTokens]
-		}
-		if problems := l.Compare(c.table, goldenFor, c.target); len(problems) == 0 {
-			t.Errorf("%s: an extra legacy row was covered", name)
-		}
-	}
-}
-
-// The verification tokens table has no projection of its own: it is open to the one owned-leg quirk of its stale row and
-// to nothing else, so the table does not widen any other check.
-func TestCheckTableOpensTheVerificationTokensTableOnlyToTheOwnedExactOneRowQuirk(t *testing.T) {
+// The reset tokens table has no projection of its own: it is open to the one owned-leg quirk of the row the switch purges
+// and to nothing else, so the table does not widen any other check.
+func TestCheckTableOpensTheResetTokensTableOnlyToTheOwnedExactOneRowPurgeQuirk(t *testing.T) {
 	entry := func(mutate func(q *Quirk)) []Quirk {
-		q := Quirk{ID: "legacy", Kind: Gap, Tracked: "CHAOS-11506", Reason: "r", Table: TableEmailVerificationTokens, Needs: []Aggregate{Credentials},
-			Owned: OwnedOnly, Max: 1, Exact: true, Extra: func(string) bool { return true }}
+		q := Quirk{ID: "purged", Kind: Deliberate, Reason: "r", Table: TablePasswordResetTokens, Needs: []Aggregate{Credentials},
+			Owned: OwnedOnly, Max: 1, Exact: true, Missing: func(string) bool { return true }}
 		mutate(&q)
 		return []Quirk{q}
 	}
 	if problems := CheckTable(entry(func(*Quirk) {})); len(problems) != 0 {
-		t.Fatalf("the owned, exact, one-row quirk: %v", problems)
+		t.Fatalf("the owned, exact, one-row missing quirk: %v", problems)
 	}
 	for name, mutate := range map[string]func(q *Quirk){
-		"not owned":             func(q *Quirk) { q.Owned = NotOwned },
-		"every leg":             func(q *Quirk) { q.Owned = "" },
-		"max 2":                 func(q *Quirk) { q.Max = 2 },
-		"not exact":             func(q *Quirk) { q.Exact = false },
-		"another table":         func(q *Quirk) { q.Table = TablePasswordResetTokens },
-		"the memberships table": func(q *Quirk) { q.Table = TableMemberships },
+		"every leg":              func(q *Quirk) { q.Owned = "" },
+		"max 2":                  func(q *Quirk) { q.Max = 2 },
+		"not exact":              func(q *Quirk) { q.Exact = false },
+		"an extra row":           func(q *Quirk) { q.Missing, q.Extra = nil, func(string) bool { return true } },
+		"the verification table": func(q *Quirk) { q.Table = TableEmailVerificationTokens },
+		"the memberships table":  func(q *Quirk) { q.Table = TableMemberships },
 	} {
 		problems := CheckTable(entry(mutate))
 		if len(problems) == 0 || !strings.Contains(strings.Join(problems, ";"), "has no projection") {
@@ -511,8 +448,8 @@ func TestCheckTableOpensTheVerificationTokensTableOnlyToTheOwnedExactOneRowQuirk
 }
 
 // CHAOS-11502 stamps public.users.last_login_at on a sign-in while users are owned: the owned leg has no last-login quirk,
-// a never-stamped row there is unclassified, and the not-owned leg keeps its own.
-func TestOwnedLegHasNoLastLoginQuirkAndTheNotOwnedLegKeepsItsOwn(t *testing.T) {
+// and a never-stamped row there is unclassified.
+func TestOwnedLegHasNoLastLoginQuirk(t *testing.T) {
 	stamped := ownedUsersLedger(t, true)
 	if problems := stamped.Compare(TableUsers, strings.Join([]string{aliceGolden, piaGolden}, rowSeparator), strings.Join([]string{aliceGolden, piaGolden}, rowSeparator)); len(problems) != 0 {
 		t.Fatalf("stamped last logins on the owned leg: %v", problems)
@@ -523,13 +460,6 @@ func TestOwnedLegHasNoLastLoginQuirkAndTheNotOwnedLegKeepsItsOwn(t *testing.T) {
 	never := ownedUsersLedger(t, true)
 	if problems := never.Compare(TableUsers, aliceGolden, aliceTarget); len(problems) == 0 {
 		t.Fatal("a never-stamped last login on the owned leg must be unclassified")
-	}
-	l := ownedUsersLedger(t, false)
-	if problems := l.Compare(TableUsers, aliceGolden, aliceTarget); len(problems) != 0 {
-		t.Fatalf("the not-owned leg's last login: %v", problems)
-	}
-	if got := l.Covered(); !strings.Contains(got, "users-last-login-not-stamped=1") {
-		t.Fatalf("Covered = %q, want the not-owned quirk", got)
 	}
 }
 

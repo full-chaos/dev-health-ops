@@ -261,10 +261,14 @@ func stopStartFixture(t *testing.T) (fake, state string, run func(verb string)) 
 			t.Fatal(err)
 		}
 	}
-	writeExec(t, filepath.Join(state, "bin", "auth-service"), "#!/bin/sh\necho \"$MARK\" >> \""+state+"/logs/starts\"\nexec sleep 60\n", 0o755)
+	// auth-service records its start, then writes its pid to auth-service.ready: the real readyz answers only after the
+	// process is up with its environment, not when its parent forked it.
+	writeExec(t, filepath.Join(state, "bin", "auth-service"), "#!/bin/sh\necho \"$MARK\" >> '"+state+"/logs/starts'\n"+
+		"echo $$ > '"+state+"/auth-service.ready'\nexec sleep 60\n", 0o755)
 	writeExec(t, filepath.Join(state, "auth-service.env"), "MARK=started-with-saved-env\n", 0o600)
-	// readyz answers while the pid of the pid file is alive.
-	writeExec(t, filepath.Join(fake, "curl"), "#!/bin/sh\nkill -0 \"$(cat '"+state+"/auth-service.pid')\" 2>/dev/null\n", 0o755)
+	// readyz answers while the pid of the pid file is alive and is the pid that wrote auth-service.ready.
+	writeExec(t, filepath.Join(fake, "curl"), "#!/bin/sh\npid=\"$(cat '"+state+"/auth-service.pid')\"\n"+
+		"[ \"$(cat '"+state+"/auth-service.ready' 2>/dev/null)\" = \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null\n", 0o755)
 	run = func(verb string) {
 		t.Helper()
 		cmd := exec.Command("bash", "ci/live_e2e_auth_stack.sh", verb, state)

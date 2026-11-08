@@ -71,6 +71,8 @@ internal/auth/authruntime	authorize_corpus_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
 internal/auth/authruntime	fixed_credential_scan_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
+internal/auth/authruntime	query_api_accepts_integration_test.go
+internal/auth/authruntime	session_routes_integration_test.go
 internal/auth/contracts	access_token_goldens_test.go
 internal/auth/contracts	audit_attribute_parity_test.go
 internal/auth/contracts	authorization_goldens_test.go
@@ -121,6 +123,7 @@ internal/auth/contracts	workload_token_goldens_test.go
 internal/auth/contracts/provisioning	vocabulary_test.go
 internal/auth/contracts/tokencorpus	corpus.go
 internal/auth/contracts/tokencorpus	service_account_test.go
+internal/auth/edgetoken	no_hs256_access_verify_census_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity	placeholder_copies_test.go

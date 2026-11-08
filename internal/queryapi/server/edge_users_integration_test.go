@@ -144,7 +144,7 @@ VALUES ($1, $2, $3, 'viewer', now(), now(), now())`, uuid.New(), edgeUsersOrg, s
 	if err != nil {
 		t.Fatalf("newEdgeUserStore on the registry pool: %v", err)
 	}
-	edge, err := principal.NewEdgeVerifier(unusedEdgeSecret(), defaultEdgeJWTIssuer, defaultEdgeJWTAudience, users)
+	edge, err := principal.NewEdgeVerifier(users)
 	if err != nil {
 		t.Fatal(err)
 	}

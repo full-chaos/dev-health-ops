@@ -7,10 +7,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 )
 
-// TestNoEdgeTokenVerifierOrSignerTakesAnACRAudience: every HS256 access-token
-// verifier and signer in ops (go-api, query-api's edge verifier, auth-service's
-// HS256 issuer and legacy verifier) is built here, so an ACR audience
-// (CHAOS-12248) is refused here: no edge token is minted or accepted with one.
+// TestNoEdgeTokenVerifierOrSignerTakesAnACRAudience: every HS256 refresh-token
+// verifier and signer in ops (go-api logout, auth-service's legacy refresh
+// verifier, the test rigs) is built here, so an ACR audience (CHAOS-12248) is
+// refused here: no legacy token is minted or accepted with one.
 func TestNoEdgeTokenVerifierOrSignerTakesAnACRAudience(t *testing.T) {
 	secret := strings.Repeat("s", MinSecretLength)
 	if _, err := New(secret, "dev-health-ops", "dev-health-api"); err != nil {

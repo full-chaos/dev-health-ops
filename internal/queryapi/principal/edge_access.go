@@ -22,7 +22,8 @@ const (
 	// AccessClassOther is every token that is neither class below: the
 	// effective-principal envelope (EdDSA, typ jwt) and anything unreadable.
 	AccessClassOther AccessClass = iota
-	// AccessClassEdge is the HS256 edge access token (ops_access_token_hs256).
+	// AccessClassEdge is the retired HS256 edge access token
+	// (ops_access_token_hs256): every row refuses it alg_not_allowed.
 	AccessClassEdge
 	// AccessClassUser is the EdDSA user access token (user_access_token,
 	// access-token.v1): alg EdDSA and typ exactly "at+jwt".
@@ -105,37 +106,22 @@ func (v *EdgeVerifier) RouteAccess(validator *accessverify.Validator, service st
 func (v *EdgeVerifier) Routed() bool { return v != nil && v.auth.Routed() }
 
 // VerifyRouted authenticates token against the row of profile ("METHOD
-// /route") through the profile-routed validator, then applies Verify's
-// membership and organization rules to either class: a token org without a
-// membership row is refused (CheckTokenOrg, the legacy edge answer), and a
-// caller with no organization is refused with OrgRequiredError unless the
-// live users row is a superuser's. An error wrapping policy.ErrUnavailable
-// decided nothing; a refusal is policy.IsRefusal. The edge outcome telemetry
-// counts the HS256 class only.
+// /route") through the profile-routed validator, then applies the membership
+// and organization rules: a token org without a membership row is refused
+// (CheckTokenOrg, the legacy edge answer), and a caller with no organization is
+// refused with OrgRequiredError unless the live users row is a superuser's. An
+// error wrapping policy.ErrUnavailable decided nothing; a refusal is
+// policy.IsRefusal.
 func (v *EdgeVerifier) VerifyRouted(ctx context.Context, profile, token string) (*EdgeClaims, error) {
-	edge := AccessClassOf(token) == AccessClassEdge
 	user, err := v.auth.Authenticate(policy.WithRouteProfile(ctx, profile), token)
 	if err != nil {
 		return nil, fmt.Errorf("principal: edge: %w", err)
 	}
 	if err := v.auth.CheckTokenOrg(ctx, user); err != nil {
-		if edge {
-			reason := ReasonUserRefused
-			if !policy.IsRefusal(err) {
-				reason = ReasonUserLookupFailed
-			}
-			v.reject(ctx, reason, nil, requestMetaFrom(ctx))
-		}
 		return nil, fmt.Errorf("principal: edge: %w", err)
 	}
 	if user.OrgID == "" && !user.IsSuperuser {
-		if edge {
-			v.reject(ctx, ReasonOrgMissing, nil, requestMetaFrom(ctx))
-		}
 		return nil, &OrgRequiredError{Caller: user.ShadowCaller(), Delegated: user.ImpersonatedBy != nil}
-	}
-	if edge {
-		recordEdgeVerifyOutcome("verified")
 	}
 	return &EdgeClaims{OrgID: user.OrgID, Caller: user.ShadowCaller(), Delegated: user.ImpersonatedBy != nil}, nil
 }

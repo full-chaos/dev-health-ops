@@ -221,76 +221,10 @@ func hashToken(jti string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-// refreshRecord is one refresh_tokens row.
-type refreshRecord struct {
-	ID           uuid.UUID
-	UserID       uuid.UUID
-	OrgID        *uuid.UUID
-	FamilyID     uuid.UUID
-	ExpiresAt    time.Time
-	RevokedAt    *time.Time
-	SuccessorJTI *string
-	IPAddress    *string
-	UserAgent    *string
-}
-
-// refreshByHash is find_by_hash (forUpdate=false) or
-// find_by_hash_for_update.
-func refreshByHash(ctx context.Context, tx pgx.Tx, jti string, forUpdate bool) (*refreshRecord, error) {
-	query := `SELECT id, user_id, org_id, family_id, expires_at, revoked_at, successor_jti, ip_address, user_agent
-FROM refresh_tokens WHERE token_hash = $1::text`
-	if forUpdate {
-		query += ` FOR UPDATE`
-	}
-	rows, err := tx.Query(ctx, query, hashToken(jti))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var found *refreshRecord
-	for rows.Next() {
-		if found != nil {
-			return nil, errMultipleRows
-		}
-		var record refreshRecord
-		if err := rows.Scan(&record.ID, &record.UserID, &record.OrgID, &record.FamilyID, &record.ExpiresAt,
-			&record.RevokedAt, &record.SuccessorJTI, &record.IPAddress, &record.UserAgent); err != nil {
-			return nil, err
-		}
-		found = &record
-	}
-	return found, rows.Err()
-}
-
-// insertRefresh is create_refresh_token (the row, not the JWT).
-func insertRefresh(ctx context.Context, tx pgx.Tx, id uuid.UUID, record refreshRecord, tokenHash string, now time.Time) error {
-	_, err := tx.Exec(ctx, `INSERT INTO refresh_tokens
-	(id, user_id, org_id, token_hash, family_id, expires_at, revoked_at, replaced_by_hash, successor_jti,
-	 ip_address, user_agent, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, $8, $9)`,
-		id, record.UserID, record.OrgID, tokenHash, record.FamilyID, record.ExpiresAt.UTC(),
-		record.IPAddress, record.UserAgent, now.UTC())
-	return err
-}
-
-// revokeFamily is revoke_family.
-func revokeFamily(ctx context.Context, tx pgx.Tx, familyID uuid.UUID, now time.Time) error {
-	_, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = $2 WHERE family_id = $1::uuid AND revoked_at IS NULL`,
-		familyID, now.UTC())
-	return err
-}
-
 // revokeToken is revoke_token.
 func revokeToken(ctx context.Context, tx pgx.Tx, jti string, now time.Time) error {
 	_, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = $2 WHERE token_hash = $1::text AND revoked_at IS NULL`,
 		hashToken(jti), now.UTC())
-	return err
-}
-
-// markRotated is rotate_token's update of the old row.
-func markRotated(ctx context.Context, tx pgx.Tx, id uuid.UUID, successorJTI string, now time.Time) error {
-	_, err := tx.Exec(ctx, `UPDATE refresh_tokens SET replaced_by_hash = $2, successor_jti = $3, revoked_at = $4 WHERE id = $1::uuid`,
-		id, hashToken(successorJTI), successorJTI, now.UTC())
 	return err
 }
 

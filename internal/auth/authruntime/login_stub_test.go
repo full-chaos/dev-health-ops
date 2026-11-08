@@ -49,7 +49,7 @@ func loginSessionRoutes(t *testing.T, cfg authconfig.Config, limits *authapi.Lim
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, nil, limits, nil)
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, &stubSigner{}, limits, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,11 +212,11 @@ func TestUnthrottledSetOfTheFullRouteSetIsExactlyTheStubs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			session, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
+			session, err := sessionRoutes(cfg, logger, pool, schema, &stubSigner{}, mustLimits(t), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
+			credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), &stubSigner{})
 			if err != nil {
 				t.Fatal(err)
 			}

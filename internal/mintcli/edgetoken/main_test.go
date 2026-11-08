@@ -3,14 +3,20 @@ package edgetoken
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -39,14 +45,20 @@ func (r fakeRow) Scan(dest ...any) error {
 
 type fakeDB struct {
 	active bool
-	args   []any
-	sql    string
+	// sessionOwner is the principal the session row belongs to (default: the proof principal).
+	sessionOwner string
+	args         []any
+	sql          string
 }
 
 func (d *fakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	if strings.Contains(sql, ".sessions") {
 		pin := int64(6)
-		return fakeRow{values: []any{uuid.MustParse(edgetokenmint.ProvePrincipalID), false, false, &pin}}
+		owner := edgetokenmint.ProvePrincipalID
+		if d.sessionOwner != "" {
+			owner = d.sessionOwner
+		}
+		return fakeRow{values: []any{uuid.MustParse(owner), false, false, &pin}}
 	}
 	d.args, d.sql = args, sql
 	// The row answers for the principal the lookup bound: the admin
@@ -68,7 +80,7 @@ func opener(db *fakeDB, opened, closed *bool) openFunc {
 }
 
 func TestRunRefusesBadFlagsWithoutOpeningTheDatabase(t *testing.T) {
-	t.Setenv(edgetokenmint.SigningKeyEnvVar, testKey)
+	useEdDSAEnv(t)
 	for name, args := range map[string][]string{
 		"no org":            {},
 		"org not a UUID":    {"-org", "70d529e0"},
@@ -92,11 +104,11 @@ func TestRunRefusesBadFlagsWithoutOpeningTheDatabase(t *testing.T) {
 }
 
 func TestRunRequiresTheSigningKeyBeforeOpeningTheDatabase(t *testing.T) {
-	t.Setenv(edgetokenmint.SigningKeyEnvVar, "")
+	t.Setenv(edgetokenmint.SigningKeyFileEnvVar, "")
 	var opened, closed bool
 	err := run(context.Background(), []string{"-org", testOrg}, &bytes.Buffer{}, io.Discard, opener(&fakeDB{active: true}, &opened, &closed))
-	if err == nil || !strings.Contains(err.Error(), edgetokenmint.SigningKeyEnvVar) {
-		t.Fatalf("err = %v, want a refusal naming %s", err, edgetokenmint.SigningKeyEnvVar)
+	if err == nil || !strings.Contains(err.Error(), "path") {
+		t.Fatalf("err = %v, want a refusal of the empty key path", err)
 	}
 	if opened {
 		t.Fatal("the database was opened without a signing key")
@@ -104,7 +116,7 @@ func TestRunRequiresTheSigningKeyBeforeOpeningTheDatabase(t *testing.T) {
 }
 
 func TestRunPrintsExactlyOneTokenForTheProvePrincipal(t *testing.T) {
-	t.Setenv(edgetokenmint.SigningKeyEnvVar, testKey)
+	useEdDSAEnv(t)
 	t.Setenv(edgetokenmint.IssuerEnvVar, "")
 	t.Setenv(edgetokenmint.AudienceEnvVar, "")
 	db := &fakeDB{active: true}
@@ -123,29 +135,24 @@ func TestRunPrintsExactlyOneTokenForTheProvePrincipal(t *testing.T) {
 	if !reflect.DeepEqual(db.args, []any{edgetokenmint.ProvePrincipalID, testOrg}) {
 		t.Fatalf("looked up %v, want the proof principal in the requested org", db.args)
 	}
-	claims := &edgetokenmint.Claims{}
-	if _, err := jwt.ParseWithClaims(strings.TrimSpace(printed), claims, func(*jwt.Token) (any, error) { return []byte(testKey), nil },
-		jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer(edgetokenmint.DefaultIssuer),
-		jwt.WithAudience(edgetokenmint.DefaultAudience), jwt.WithExpirationRequired()); err != nil {
-		t.Fatalf("the printed token does not verify: %v", err)
+	claims := payloadOf(t, strings.TrimSpace(printed))
+	if claims["sub"] != wirePrincipal(edgetokenmint.ProvePrincipalID) || claims["org_id"] != testOrg || claims["scope"] != "api:access" {
+		t.Fatalf("claims = %v", claims)
 	}
-	if claims.Subject != edgetokenmint.ProvePrincipalID || claims.OrgID != testOrg || claims.TokenVersion != 6 || claims.Role != "viewer" {
-		t.Fatalf("claims = %+v", *claims)
-	}
-	if got := claims.ExpiresAt - claims.IssuedAt; got != 120 {
+	if got := int64(claims["exp"].(float64) - claims["iat"].(float64)); got != 120 {
 		t.Fatalf("exp-iat = %d, want the -ttl of 120s", got)
 	}
 }
 
 func TestRunNeverPrintsTheKeyOrATokenWhenItRefuses(t *testing.T) {
-	t.Setenv(edgetokenmint.SigningKeyEnvVar, testKey)
+	useEdDSAEnv(t)
 	var opened, closed bool
 	var out bytes.Buffer
 	err := run(context.Background(), []string{"-org", testOrg}, &out, io.Discard, opener(&fakeDB{active: false}, &opened, &closed))
 	if !errors.Is(err, edgetokenmint.ErrPrincipalInactive) {
 		t.Fatalf("err = %v, want the inactive-principal refusal", err)
 	}
-	if strings.Contains(err.Error(), testKey) || out.Len() != 0 {
+	if out.Len() != 0 {
 		t.Fatalf("a refusal leaked: err=%v stdout=%d bytes", err, out.Len())
 	}
 	if !closed {
@@ -219,7 +226,7 @@ func TestOpenPostgresNeverEchoesTheURI(t *testing.T) {
 // -principal admin-proof mints for the org-admin proof principal, and only
 // then: the default is still the read-level proof principal.
 func TestRunMintsForTheAdminProofPrincipalOnlyWhenAsked(t *testing.T) {
-	t.Setenv(edgetokenmint.SigningKeyEnvVar, testKey)
+	useEdDSAEnv(t)
 	t.Setenv(edgetokenmint.IssuerEnvVar, "")
 	t.Setenv(edgetokenmint.AudienceEnvVar, "")
 	for name, tc := range map[string]struct {
@@ -233,7 +240,7 @@ func TestRunMintsForTheAdminProofPrincipalOnlyWhenAsked(t *testing.T) {
 		"admin, flag first": {[]string{"-principal", "admin-proof", "-org", testOrg, "-ttl", "1m"}, edgetokenmint.AdminProofPrincipalID, "admin"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			db := &fakeDB{active: true}
+			db := &fakeDB{active: true, sessionOwner: tc.wantSubject}
 			var opened, closed bool
 			var out bytes.Buffer
 			if err := run(context.Background(), tc.args, &out, io.Discard, opener(db, &opened, &closed)); err != nil {
@@ -242,13 +249,9 @@ func TestRunMintsForTheAdminProofPrincipalOnlyWhenAsked(t *testing.T) {
 			if !reflect.DeepEqual(db.args, []any{tc.wantSubject, testOrg}) {
 				t.Fatalf("looked up %v, want %s in the requested org", db.args, tc.wantSubject)
 			}
-			claims := &edgetokenmint.Claims{}
-			if _, err := jwt.ParseWithClaims(strings.TrimSpace(out.String()), claims, func(*jwt.Token) (any, error) { return []byte(testKey), nil },
-				jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()); err != nil {
-				t.Fatalf("the printed token does not verify: %v", err)
-			}
-			if claims.Subject != tc.wantSubject || claims.Role != tc.wantRole {
-				t.Fatalf("claims subject %s role %s, want %s %s", claims.Subject, claims.Role, tc.wantSubject, tc.wantRole)
+			claims := payloadOf(t, strings.TrimSpace(out.String()))
+			if claims["sub"] != wirePrincipal(tc.wantSubject) {
+				t.Fatalf("claims subject %v, want %s", claims["sub"], wirePrincipal(tc.wantSubject))
 			}
 		})
 	}
@@ -258,7 +261,7 @@ func TestRunMintsForTheAdminProofPrincipalOnlyWhenAsked(t *testing.T) {
 // the lookup also reads the auth platform roles; a malformed value refuses
 // before the database is opened.
 func TestRunReadsThePlatformRolesSwitch(t *testing.T) {
-	t.Setenv(edgetokenmint.SigningKeyEnvVar, testKey)
+	useEdDSAEnv(t)
 	for value, auth := range map[string]bool{"": false, "false": false, "true": true, " TRUE ": true} {
 		t.Setenv(rule.OwnedEnv, value)
 		db := &fakeDB{active: true}
@@ -276,4 +279,47 @@ func TestRunReadsThePlatformRolesSwitch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), rule.OwnedEnv) || opened {
 		t.Fatalf("malformed switch: err %v opened %v, want a refusal naming the switch before the database", err, opened)
 	}
+}
+
+// useEdDSAEnv gives the verb the Ed25519 key file, kid, issuer and session it mints with.
+func useEdDSAEnv(t *testing.T) {
+	t.Helper()
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "edge-token.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(edgetokenmint.SigningKeyFileEnvVar, path)
+	t.Setenv(edgetokenmint.KeyIDEnvVar, "k1")
+	t.Setenv(edgetokenmint.IssuerURLEnvVar, "https://auth.example.test")
+	t.Setenv(edgetokenmint.SessionIDEnvVar, "cccccccc-1111-4222-8333-444444444444")
+}
+
+func wirePrincipal(id string) string {
+	parsed := uuid.MustParse(id)
+	return "prn_" + base64.RawURLEncoding.EncodeToString(parsed[:])
+}
+
+func payloadOf(t *testing.T, compact string) map[string]any {
+	t.Helper()
+	parts := strings.Split(compact, ".")
+	if len(parts) != 3 {
+		t.Fatalf("not a compact JWS: %q", compact)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		t.Fatal(err)
+	}
+	return claims
 }

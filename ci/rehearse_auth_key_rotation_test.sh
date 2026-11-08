@@ -47,6 +47,10 @@ rc=0
 out="$(REHEARSAL_DIR="${T}/new2" REHEARSAL_IMAGES_ENV="${T}/nofile.env" run bash "${SCRIPT}" --stage smoke 2>&1)" || rc=$?
 if [ "${rc}" = 1 ]; then ok missing-image-file-refused; else bad "missing-image-file-refused (rc ${rc})"; fi
 
+printf 'DEV_HEALTH_GO_DHO_IMAGE=registry.invalid/d@sha256:%s\nDEV_HEALTH_GO_AUTH_SERVICE_IMAGE=registry.invalid/s@sha256:%s\n' "$(printf '1%.0s' $(seq 1 64))" "$(printf '1%.0s' $(seq 1 64))" >"${T}/previous.env"
+if ! grep -vE '^[[:space:]]*#' "${SCRIPT}" | grep -qF 'hs256_compat'; then ok script-has-no-hs256-compat-class-flip; else bad script-has-no-hs256-compat-class-flip; fi
+if grep -qF 'REHEARSAL_PREVIOUS_IMAGES_ENV' <<<"${plan}"; then ok plan-names-the-previous-images-file; else bad plan-names-the-previous-images-file; fi
+
 rc=0
 run bash -x "${SCRIPT}" --print-plan >/dev/null 2>&1 || rc=$?
 if [ "${rc}" = 2 ]; then ok xtrace-refused; else bad "xtrace-refused (rc ${rc})"; fi

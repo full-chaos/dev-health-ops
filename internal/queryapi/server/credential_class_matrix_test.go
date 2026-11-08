@@ -146,7 +146,7 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 	// the real REST authenticator over the production route table
 	// (RESTRoutes), mounted on a mux with the same patterns.
 	restVerifier, restPriv := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, queryAPIUserStore{queryAPIStoreBase: base})
+	edge, err := principal.NewEdgeVerifier(queryAPIUserStore{queryAPIStoreBase: base})
 	if err != nil {
 		t.Fatal(err)
 	}

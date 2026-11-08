@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/google/uuid"
 )
 
@@ -89,21 +88,6 @@ func expectColumns(t *testing.T, got map[string]string, want map[string]string) 
 	}
 }
 
-func internalIngest(ctx context.Context, t *testing.T, conn driver.Conn, at time.Time, entity, repoURL, items string) {
-	t.Helper()
-	handler, err := NewInternalIngestHandler(conn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler.now = func() time.Time { return at }
-	payload := fmt.Sprintf(`{"org_id":%q,"repo_url":%q,"items":%s}`, storedVersionOrg, repoURL, items)
-	if err := handler.Handle(ctx, streamrunner.Message{
-		Stream: "ingest:" + storedVersionOrg + ":" + entity, Fields: map[string]string{"payload": payload},
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func externalWrite(ctx context.Context, t *testing.T, conn driver.Conn, at time.Time, system, instance, kind string, payloads ...string) {
 	t.Helper()
 	sink, err := NewClickHouseExternalBatchSink(conn)
@@ -147,79 +131,7 @@ func TestStoredVersionsKeepEstablishedValuesAgainstRealClickHouse(t *testing.T) 
 	reviewed := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
 	commented := time.Date(2026, 6, 2, 8, 0, 0, 0, time.UTC)
 
-	const internalRepo = "https://example.test/acme/api"
-	internalRepoID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(internalRepo))
 	externalRepoID := externalRepoUUID("github", "acme/api", "acme/api")
-
-	t.Run("internal pull request keeps unstated review columns and refuses null merged_at", func(t *testing.T) {
-		establishRow(ctx, t, conn, establishPullRequest, storedVersionOrg, internalRepoID, uint32(7), "Old", "old body", "merged", "Ada",
-			created, merged, merged, uint32(4), reviewed, commented, uint32(1), uint32(3), uint32(5), establishedAt)
-		internalIngest(ctx, t, conn, firstWriteAt, "pull-requests", internalRepo,
-			`[{"number":7,"title":"New","body":null,"state":"merged","author_name":"Ada","created_at":"2026-06-01T09:00:00Z","merged_at":null,"closed_at":null,"additions":null}]`)
-		expectColumns(t, finalColumns(ctx, t, conn, "git_pull_requests", "repo_id = ? AND number = ?", prColumns, internalRepoID.String(), uint32(7)), map[string]string{
-			"title": "New", "body": "NULL", "closed_at": "NULL", "additions": "NULL",
-			"merged_at": "2026-06-03 09:00:00.000", "first_review_at": "2026-06-02 09:00:00.000", "first_comment_at": "2026-06-02 08:00:00.000",
-			"changes_requested_count": "1", "reviews_count": "3", "comments_count": "5",
-		})
-	})
-
-	t.Run("internal pull request without an earlier version writes its own values", func(t *testing.T) {
-		internalIngest(ctx, t, conn, firstWriteAt, "pull-requests", internalRepo,
-			`[{"number":8,"title":"Fresh","state":"open","author_name":"Ada","created_at":"2026-06-01T09:00:00Z","merged_at":null,"additions":null,"deletions":12}]`)
-		expectColumns(t, finalColumns(ctx, t, conn, "git_pull_requests", "repo_id = ? AND number = ?", append(prColumns, "deletions"), internalRepoID.String(), uint32(8)), map[string]string{
-			"title": "Fresh", "merged_at": "NULL", "first_review_at": "NULL", "reviews_count": "0", "additions": "NULL", "deletions": "12",
-		})
-	})
-
-	t.Run("internal pull request stated twice in one batch keeps the first merged_at", func(t *testing.T) {
-		internalIngest(ctx, t, conn, firstWriteAt, "pull-requests", internalRepo,
-			`[{"number":9,"title":"A","state":"merged","author_name":"Ada","created_at":"2026-06-01T09:00:00Z","merged_at":"2026-06-03T09:00:00Z"},`+
-				`{"number":9,"title":"B","state":"merged","author_name":"Ada","created_at":"2026-06-01T09:00:00Z","merged_at":null}]`)
-		expectColumns(t, finalColumns(ctx, t, conn, "git_pull_requests", "repo_id = ? AND number = ?", prColumns, internalRepoID.String(), uint32(9)), map[string]string{
-			"title": "B", "merged_at": "2026-06-03 09:00:00.000",
-		})
-	})
-
-	t.Run("internal deployment keeps merged_at it has no field for", func(t *testing.T) {
-		establishRow(ctx, t, conn, "INSERT INTO deployments (org_id,repo_id,deployment_id,status,environment,merged_at,pull_request_number,last_synced)",
-			storedVersionOrg, internalRepoID, "deploy-1", "success", "prod", merged, uint32(7), establishedAt)
-		internalIngest(ctx, t, conn, firstWriteAt, "deployments", internalRepo,
-			`[{"deployment_id":"deploy-1","status":"failure","environment":"prod","pull_request_number":null}]`)
-		expectColumns(t, finalColumns(ctx, t, conn, "deployments", "repo_id = ? AND deployment_id = ?", []string{"status", "merged_at", "pull_request_number"}, internalRepoID.String(), "deploy-1"), map[string]string{
-			"status": "failure", "merged_at": "2026-06-03 09:00:00.000", "pull_request_number": "NULL",
-		})
-	})
-
-	t.Run("internal deployment stores the pushed tier beside the number it was given", func(t *testing.T) {
-		internalIngest(ctx, t, conn, firstWriteAt, "deployments", internalRepo,
-			`[{"deployment_id":"deploy-tier-1","status":"success","environment":"prod","pull_request_number":12},`+
-				`{"deployment_id":"deploy-tier-2","status":"success","environment":"prod","pull_request_number":null}]`)
-		expectColumns(t, finalColumns(ctx, t, conn, "deployments", "repo_id = ? AND deployment_id = ?", []string{"pull_request_number", "pull_request_tier"}, internalRepoID.String(), "deploy-tier-1"), map[string]string{
-			"pull_request_number": "12", "pull_request_tier": "pushed",
-		})
-		expectColumns(t, finalColumns(ctx, t, conn, "deployments", "repo_id = ? AND deployment_id = ?", []string{"pull_request_number", "pull_request_tier"}, internalRepoID.String(), "deploy-tier-2"), map[string]string{
-			"pull_request_number": "NULL", "pull_request_tier": "",
-		})
-	})
-
-	t.Run("internal work item keeps columns the ingest payload has no field for", func(t *testing.T) {
-		establishRow(ctx, t, conn, "INSERT INTO work_items (org_id,repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,closed_at,labels,sprint_id,sprint_name,parent_id,epic_id,url,service_class,due_at,last_synced)",
-			storedVersionOrg, uuid.Nil, "jira:ABC-123", "jira", "Old", "bug", "done", "Done", "ABC", "10001", "TEAM", "Platform", []string{}, "", created, merged, merged, []string{},
-			"sprint-9", "Sprint 9", "jira:ABC-1", "jira:ABC-2", "", "expedite", merged, establishedAt)
-		internalIngest(ctx, t, conn, firstWriteAt, "work-items", "",
-			`[{"work_item_id":"jira:ABC-123","provider":"jira","title":"New","type":"bug","status":"done","created_at":"2026-06-01T09:00:00Z","updated_at":null}]`)
-		columns := []string{"title", "updated_at", "project_id", "native_team_key", "project_name", "closed_at", "sprint_id", "sprint_name", "parent_id", "epic_id", "service_class", "due_at"}
-		expectColumns(t, finalColumns(ctx, t, conn, "work_items", "repo_id = ? AND work_item_id = ?", columns, uuid.Nil.String(), "jira:ABC-123"), map[string]string{
-			"title": "New", "updated_at": "2026-06-03 09:00:00.000", "project_id": "10001", "native_team_key": "TEAM", "project_name": "Platform",
-			"closed_at": "2026-06-03 09:00:00.000", "sprint_id": "sprint-9", "sprint_name": "Sprint 9", "parent_id": "jira:ABC-1", "epic_id": "jira:ABC-2",
-			"service_class": "expedite", "due_at": "2026-06-03 09:00:00.000",
-		})
-		internalIngest(ctx, t, conn, secondWriteAt, "work-items", "",
-			`[{"work_item_id":"jira:ABC-123","provider":"jira","title":"New","type":"bug","status":"done","created_at":"2026-06-01T09:00:00Z","updated_at":"2026-06-05T09:00:00Z"}]`)
-		expectColumns(t, finalColumns(ctx, t, conn, "work_items", "repo_id = ? AND work_item_id = ?", columns, uuid.Nil.String(), "jira:ABC-123"), map[string]string{
-			"updated_at": "2026-06-05 09:00:00.000", "sprint_id": "sprint-9",
-		})
-	})
 
 	t.Run("external pull request keeps unstated columns and writes stated nulls", func(t *testing.T) {
 		establishRow(ctx, t, conn, establishPullRequest, storedVersionOrg, externalRepoID, uint32(7), "Old", "old body", "merged", "Ada",
@@ -304,14 +216,6 @@ func TestStoredVersionsKeepEstablishedValuesAgainstRealClickHouse(t *testing.T) 
 			`{"externalKey":"12","provider":"github","type":"issue","title":"New","status":"todo","createdAt":"2026-06-01T09:00:00Z","repositoryExternalId":"acme/api"}`)
 		expectColumns(t, finalColumns(ctx, t, conn, "work_items", "repo_id = ? AND work_item_id = ?", projectColumns, githubRepoID.String(), "gh:acme/api#12"), map[string]string{
 			"project_key": "KEY", "project_id": "acme/api", "native_team_key": "TEAM", "project_name": "Board", "story_points": "2",
-		})
-	})
-
-	t.Run("internal work item writes a stated null story_points as null", func(t *testing.T) {
-		internalIngest(ctx, t, conn, firstWriteAt, "work-items", "",
-			`[{"work_item_id":"jira:ABC-126","provider":"jira","title":"New","type":"bug","status":"done","created_at":"2026-06-01T09:00:00Z","story_points":null}]`)
-		expectColumns(t, finalColumns(ctx, t, conn, "work_items", "repo_id = ? AND work_item_id = ?", []string{"story_points", "sprint_id"}, uuid.Nil.String(), "jira:ABC-126"), map[string]string{
-			"story_points": "NULL", "sprint_id": "",
 		})
 	})
 

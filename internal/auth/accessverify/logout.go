@@ -7,11 +7,13 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-const LegacyLogoutAcceptedMetric = "devhealth_auth_legacy_logout_accepted_total"
+const (
+	LegacyLogoutAcceptedMetric = "devhealth_auth_legacy_logout_accepted_total"
+	ClassLegacyRefresh         = "ops_refresh_token"
+)
 
 // LogoutCounter counts the HS256 refresh tokens a logout route verified with the
-// legacy key, by service and credential class. The refresh counter does not see
-// them, so the HS256 removal reads this one beside it.
+// legacy key, by service and credential class: the one HS256 refresh path left.
 type LogoutCounter struct {
 	logouts metric.Int64Counter
 	service string

@@ -10,7 +10,13 @@ import (
 // The envelope key is optional. Without it (one of these unset, or a JWKS document with no usable key at start)
 // every route still mounts, the envelope class is refused like any unaccepted bearer, and /readyz has no query_jwks
 // dependency. The start decision is made once per builder from the same env, so every route agrees.
-var envelopeKeyEnv = [3]string{"GO_API_ENVELOPE_JWKS_PATH", "GO_API_ENVELOPE_ISSUER", "GO_API_ENVELOPE_AUDIENCE"}
+const (
+	envelopeJWKSPathEnv = "GO_API_ENVELOPE_JWKS_PATH"
+	envelopeIssuerEnv   = "GO_API_ENVELOPE_ISSUER"
+	envelopeAudienceEnv = "GO_API_ENVELOPE_AUDIENCE"
+)
+
+var envelopeKeyEnv = [3]string{envelopeJWKSPathEnv, envelopeIssuerEnv, envelopeAudienceEnv}
 
 const envelopeRetiredLine = "query-api: envelope class retired: no envelope key configured"
 
@@ -44,7 +50,7 @@ func loadEnvelopeKey(jwksPath, issuer, audience string) (envelopeKey, error) {
 }
 
 func envelopeKeyFromEnv(getenv getenvFunc) (envelopeKey, error) {
-	return loadEnvelopeKey(getenv(envelopeKeyEnv[0]), getenv(envelopeKeyEnv[1]), getenv(envelopeKeyEnv[2]))
+	return loadEnvelopeKey(getenv(envelopeJWKSPathEnv), getenv(envelopeIssuerEnv), getenv(envelopeAudienceEnv))
 }
 
 // envelopeVerifierFromEnv is the verifier a REST builder hands authenticateRESTRequest: nil without a key.

@@ -40,12 +40,21 @@ type qmPlane struct {
 
 func newQMPlane(t *testing.T, env map[string]string, documents ...string) *qmPlane {
 	t.Helper()
+	return newQMPlaneRouted(t, true, env, documents...)
+}
+
+// newQMPlaneRouted is newQMPlane whose authenticator routes tokens by row (routed) or does not. No row lists the HS256
+// edge token, so it reaches /query only on an authenticator that does not route.
+func newQMPlaneRouted(t *testing.T, routed bool, env map[string]string, documents ...string) *qmPlane {
+	t.Helper()
 	quietStdLog(t)
 	store := newQueryAPIUserStoreFrom(newAccessStore())
 	m := newAccessMinter(t)
 	auth := ecEdgeAuth(t, store)
-	if err := routeAuthenticator(auth, testAccess(m.keys, nil, accessTestNow).opts, true); err != nil {
-		t.Fatal(err)
+	if routed {
+		if err := routeAuthenticator(auth, testAccess(m.keys, nil, accessTestNow).opts, true); err != nil {
+			t.Fatal(err)
+		}
 	}
 	verifier, envelopeKey := iaVerifier(t)
 	getenv := getenvFunc(func(string) string { return "" })
@@ -236,11 +245,13 @@ func TestHeaderCarrierWithItsCellOnIsRefused(t *testing.T) {
 // on, and never ask.
 func TestQueryExemptClassesAreNotAsked(t *testing.T) {
 	srv := pdptest.New(t)
-	p := newQMPlane(t, qmEnv(t, srv, pdp.ModeEnforce, "analytics", ""), enforceDocAnalytics)
-	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
+	env := qmEnv(t, srv, pdp.ModeEnforce, "analytics", "")
+	p := newQMPlane(t, env, enforceDocAnalytics)
 	envelope := iaEnvelope(t, p.envelopeKey, principal.Claims{OrgID: ecOrg.String(), Role: "member"})
-	p.queryRun(t, "/query", enforceDocAnalytics, qmBearer(edge)).served(t)
 	p.queryRun(t, "/query", enforceDocAnalytics, qmBearer(envelope)).served(t)
+	unrouted := newQMPlaneRouted(t, false, env, enforceDocAnalytics)
+	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
+	unrouted.queryRun(t, "/query", enforceDocAnalytics, qmBearer(edge)).served(t)
 	if n := len(asks(srv)); n != 0 {
 		t.Fatalf("the PDP was asked %d times for an exempt credential", n)
 	}

@@ -104,7 +104,7 @@ func llmConfigHandler(source LLMConfigSource, logger *slog.Logger, workload *Wor
 			unauthorized(ctx, w, "invalid")
 			return
 		}
-		if _, reason := workload.decide(token); reason != "" {
+		if _, reason := workload.decide(ctx, token); reason != "" {
 			refuseWorkloadLLMConfig(ctx, w, logger, reason)
 			return
 		}

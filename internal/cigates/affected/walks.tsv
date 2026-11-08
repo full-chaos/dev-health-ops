@@ -2,6 +2,7 @@
 ci/tools/gotestfuncs	main.go	unexpressed	-	-
 cmd/dev-health-migration-matrix	contract_test.go	cmd/dev-health-migration-matrix	dir	*
 cmd/gqlgen-guard	main_test.go	unexpressed	-	-
+cmd/venue-extstub	stub_test.go	cmd/venue-extstub	dir	*
 deploy/helm/dev-health	auth_orgs_owned_removed_test.go	deploy/helm/dev-health/templates	dir	*
 deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed	-	-
 deploy/helm/dev-health	auth_sso_jit_test.go	deploy/helm/dev-health/templates	dir	*
@@ -440,6 +441,7 @@ internal/queryapi/server	graphql_shadow_test.go	unexpressed	-	-
 internal/queryapi/server	internal_auth_test.go	unexpressed	-	*.go
 internal/queryapi/server	internal_auth_test.go	unexpressed	-	-
 internal/queryapi/server	investment_scope_pin_wiring_test.go	unexpressed	-	-
+internal/queryapi/server	log_request_id_census_test.go	unexpressed	-	-
 internal/queryapi/server	mcp_proof_route_retired_test.go	unexpressed	-	*.go
 internal/queryapi/server	org_scope_census_test.go	unexpressed	-	-
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	*.go
@@ -457,6 +459,7 @@ internal/scheduler/fixed	readiness_timeout_test.go	internal/scheduler/fixed	dir	
 internal/scheduler/sync	venue_golden_address_test.go	internal/scheduler/sync/testdata/golden	dir	*
 internal/schedulerservice	fixed_test.go	contracts/jobs/v1	tree	*
 internal/schedulerservice	readiness_timeout_test.go	internal/schedulerservice	dir	*
+internal/shadowvenue	requestsites_test.go	unexpressed	-	-
 internal/storage/clickhouse/liverow	census_test.go	cmd	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	internal	tree	*.go
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/api	tree	*

@@ -18,7 +18,7 @@ import (
 
 func TestCheckBaseAcceptsOnlyAPlainLoopbackOrigin(t *testing.T) {
 	for _, ok := range []string{"http://127.0.0.1:8093", "http://localhost:8093", "http://[::1]:8093", "http://127.0.0.1:8093/"} {
-		if _, err := CheckBase(ok); err != nil {
+		if _, err := CheckVenueBase(ok, EgressRead{}, ""); err != nil {
 			t.Errorf("%s refused: %v", ok, err)
 		}
 	}
@@ -27,7 +27,7 @@ func TestCheckBaseAcceptsOnlyAPlainLoopbackOrigin(t *testing.T) {
 		"https://127.0.0.1:8093", "http://user:pw@127.0.0.1:8093", "http://127.0.0.1:8093/api", "127.0.0.1:8093",
 		"http://127.0.0.1.example.com:8093", "http://0.0.0.0:8093", "http://127.0.0.1:8093?x=1",
 	} {
-		if _, err := CheckBase(bad); err == nil {
+		if _, err := CheckVenueBase(bad, EgressRead{}, ""); err == nil {
 			t.Errorf("%s accepted", bad)
 		}
 	}
@@ -126,7 +126,7 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 
 func TestLoginReadsTheAccessTokenAndKeepsTheBodyOutOfItsError(t *testing.T) {
 	api := newFakeAPI(t)
-	base, err := CheckBase(api.srv.URL)
+	base, err := api.srv.URL, error(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestLoginReadsTheAccessTokenAndKeepsTheBodyOutOfItsError(t *testing.T) {
 // slots file holds no token.
 func TestDriveSendsEverySlotInOrderAndWritesTheSlotsFile(t *testing.T) {
 	api := newFakeAPI(t)
-	base, _ := CheckBase(api.srv.URL)
+	base := api.srv.URL
 	plan, err := planOf(t,
 		"58\tGET\t/api/v1/admin/teams\tA\tno\t-\t-\tmatch\t/api/v1/admin/teams\t-\n"+
 			"59\tPOST\t/api/v1/admin/teams\tA\tno\t-\t-\tmatch\t/api/v1/admin/teams\t{\"name\":\"x\"}\n"+
@@ -215,7 +215,7 @@ func TestDriveSendsEverySlotInOrderAndWritesTheSlotsFile(t *testing.T) {
 
 func TestDriveRefusesAGapShorterThanTheShadowTimeout(t *testing.T) {
 	api := newFakeAPI(t)
-	base, _ := CheckBase(api.srv.URL)
+	base := api.srv.URL
 	plan, _ := planOf(t, "58\tGET\t/api/v1/admin/teams\tA\tno\t-\t-\tmatch\t/api/v1/admin/teams\t-\n")
 	d := &Driver{Base: base, Client: api.srv.Client(), Gap: 2 * time.Second}
 	tokens := map[string]string{"member-A": "a", "admin-A": "b", "superuser": "c"}
@@ -224,5 +224,140 @@ func TestDriveRefusesAGapShorterThanTheShadowTimeout(t *testing.T) {
 	}
 	if len(api.seen) != 0 {
 		t.Fatalf("%d requests sent before the refusal", len(api.seen))
+	}
+}
+
+// The pre-send guard: a destructive slot whose path or body holds an id that is not frozen (here org A's, or no frozen
+// ids at all) refuses the whole drive before any request, even when the plan did not come from MakePlan.
+func TestDriveRefusesADestructiveSlotOutsideTheFrozenIDsBeforeAnyRequest(t *testing.T) {
+	api := newFakeAPI(t)
+	base := api.srv.URL
+	_, frozen, _, _ := testPoolVenue(t)
+	tokens := map[string]string{"member-A": "a", "superuser": "s"}
+	first := Slot{Seq: 1, Row: "58", Caller: "member", Principal: "member-A", Expect: "match", K: 1, Method: "GET", Route: "/api/v1/admin/teams", Path: "/api/v1/admin/teams", Body: none}
+	del := Slot{Seq: 2, Row: "13", Caller: "superuser", Principal: "superuser", Expect: "match", K: 1, Method: "DELETE", Route: "/api/v1/admin/orgs/{org_id}", Body: none, Destructive: true}
+	for name, c := range map[string]struct {
+		path   string
+		frozen ThrowawayIDs
+	}{
+		"org A":     {"/api/v1/admin/orgs/" + testOrgA, frozen},
+		"no frozen": {"/api/v1/admin/orgs/" + poolID(1, "org"), ThrowawayIDs{}},
+	} {
+		slot := del
+		slot.Path = c.path
+		d := &Driver{Base: base, Client: api.srv.Client(), Gap: MinGap, Frozen: c.frozen, Sleep: func(context.Context, time.Duration) error { return nil }}
+		if err := d.Drive(context.Background(), Plan{Slots: []Slot{first, slot}}, tokens, io.Discard); err == nil || !strings.Contains(err.Error(), "refused before any request") {
+			t.Errorf("%s: %v", name, err)
+		}
+		if len(api.seen) != 0 {
+			t.Fatalf("%s: %d requests sent before the refusal", name, len(api.seen))
+		}
+	}
+	slot := del
+	slot.Path = "/api/v1/admin/orgs/" + poolID(1, "org")
+	d := &Driver{Base: base, Client: api.srv.Client(), Gap: MinGap, Frozen: frozen, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if err := d.Drive(context.Background(), Plan{Slots: []Slot{first, slot}}, tokens, io.Discard); err != nil {
+		t.Fatalf("a pool org delete was refused: %v", err)
+	}
+	if len(api.seen) != 2 {
+		t.Fatalf("%d requests, want 2", len(api.seen))
+	}
+}
+
+// A non-loopback base is go-api's own venue address only: the private IP named as goapi_ip by a readable egress record
+// that shows an internal network with no default route.
+func TestCheckVenueBaseAcceptsOnlyTheRecordedGoAPIAddress(t *testing.T) {
+	good := ParseEgress("before.txt", []byte(egressText("before")))
+	if u, err := CheckVenueBase("http://"+testGoAPIIP+":8000", good, testRunID); err != nil || u.Host != testGoAPIIP+":8000" {
+		t.Fatalf("the recorded address: %v %v", u, err)
+	}
+	if _, err := CheckVenueBase("http://127.0.0.1:8093", EgressRead{}, ""); err != nil {
+		t.Fatalf("loopback with no record: %v", err)
+	}
+	set := func(key, value string) EgressRead {
+		lines := strings.Split(egressText("before"), "\n")
+		for i, l := range lines {
+			if strings.HasPrefix(l, key+"=") {
+				lines[i] = key + "=" + value
+			}
+		}
+		return ParseEgress("before.txt", []byte(strings.Join(lines, "\n")))
+	}
+	cases := map[string]struct {
+		base   string
+		record EgressRead
+	}{
+		"no record":                 {"http://" + testGoAPIIP + ":8000", EgressRead{}},
+		"unreadable record":         {"http://" + testGoAPIIP + ":8000", EgressRead{Name: "x", Err: os.ErrNotExist}},
+		"a malformed record":        {"http://" + testGoAPIIP + ":8000", ParseEgress("before.txt", []byte(egressText("before")+"goapi_ip="+testGoAPIIP+"\n"))},
+		"another private ip":        {"http://172.30.0.9:8000", good},
+		"a public ip":               {"http://8.8.8.8:8000", set("goapi_ip", "8.8.8.8")},
+		"a host name":               {"http://go-api:8000", set("goapi_ip", "go-api")},
+		"network not internal":      {"http://" + testGoAPIIP + ":8000", set("network_internal", "false")},
+		"a default route":           {"http://" + testGoAPIIP + ":8000", set("default_route", "via 172.30.0.1")},
+		"a path":                    {"http://" + testGoAPIIP + ":8000/api", good},
+		"https":                     {"https://" + testGoAPIIP + ":8000", good},
+		"a record of another drive": {"http://" + testGoAPIIP + ":8000", set("run_id", "13267-4b")},
+		"the after read":            {"http://" + testGoAPIIP + ":8000", set("run_id", "none")},
+	}
+	for name, c := range cases {
+		if _, err := CheckVenueBase(c.base, c.record, testRunID); err == nil {
+			t.Errorf("%s: %s accepted", name, c.base)
+		}
+	}
+	if _, err := CheckVenueBase("http://"+testGoAPIIP+":8000", set("run_id", "none"), "none"); err == nil {
+		t.Error("a drive named none (the after read's run) accepted")
+	}
+}
+
+// The driver itself, not only its command, refuses a base CheckVenueBase refuses: a venue IP with no record, at the
+// first request, before anything is sent.
+func TestDriverChecksItsOriginAtEveryRequest(t *testing.T) {
+	venue, _ := testPrincipals(t)
+	member, _ := venue.Principal("member-A")
+	d := &Driver{Base: "http://" + testGoAPIIP + ":8000", Client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("a request was sent")
+		return nil, nil
+	})}}
+	if _, err := d.Login(context.Background(), member, venue.Orgs["A"]); err == nil || !strings.Contains(err.Error(), "-egress") {
+		t.Fatalf("login on an unchecked venue base: %v", err)
+	}
+	slot := Slot{Seq: 1, Row: "58", Caller: "member", Principal: "member-A", Expect: "match", K: 1, Method: "GET", Route: "/api/v1/admin/teams", Path: "/api/v1/admin/teams", Body: none}
+	d.Gap, d.Sleep = MinGap, func(context.Context, time.Duration) error { return nil }
+	if err := d.Drive(context.Background(), Plan{Slots: []Slot{slot}}, map[string]string{"member-A": "tok"}, io.Discard); err == nil || !strings.Contains(err.Error(), "-egress") {
+		t.Fatalf("drive on an unchecked venue base: %v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// The pre-send guard keys on the route's pinned class, not only on the slot's own flag: a DELETE of an org that the
+// slot does not mark destructive is still held to the frozen ids, and a slot on a route with no class refuses the drive,
+// both before any request.
+func TestDriveGuardsADestructiveRouteTheSlotDoesNotMark(t *testing.T) {
+	api := newFakeAPI(t)
+	_, frozen, _, _ := testPoolVenue(t)
+	tokens := map[string]string{"superuser": "s"}
+	for name, slot := range map[string]Slot{
+		"unmarked org delete": {Seq: 1, Row: "13", Caller: "superuser", Principal: "superuser", Expect: "match", K: 1, Method: "DELETE",
+			Route: "/api/v1/admin/orgs/{org_id}", Path: "/api/v1/admin/orgs/" + testOrgA, Body: none},
+		"a route with no class": {Seq: 1, Row: "58", Caller: "superuser", Principal: "superuser", Expect: "match", K: 1, Method: "GET",
+			Route: "/api/v1/admin/nothing", Path: "/api/v1/admin/nothing", Body: none},
+	} {
+		d := &Driver{Base: api.srv.URL, Client: api.srv.Client(), Gap: MinGap, Frozen: frozen, Sleep: func(context.Context, time.Duration) error { return nil }}
+		if err := d.Drive(context.Background(), Plan{Slots: []Slot{slot}}, tokens, io.Discard); err == nil || !strings.Contains(err.Error(), "before any request") {
+			t.Errorf("%s: %v", name, err)
+		}
+		if len(api.seen) != 0 {
+			t.Fatalf("%s: %d requests sent", name, len(api.seen))
+		}
+	}
+	ok := Slot{Seq: 1, Row: "13", Caller: "superuser", Principal: "superuser", Expect: "match", K: 1, Method: "DELETE",
+		Route: "/api/v1/admin/orgs/{org_id}", Path: "/api/v1/admin/orgs/" + poolID(1, "org"), Body: none}
+	d := &Driver{Base: api.srv.URL, Client: api.srv.Client(), Gap: MinGap, Frozen: frozen, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if err := d.Drive(context.Background(), Plan{Slots: []Slot{ok}}, tokens, io.Discard); err != nil || len(api.seen) != 1 {
+		t.Fatalf("an unmarked delete of a pool org: %v, %d requests", err, len(api.seen))
 	}
 }

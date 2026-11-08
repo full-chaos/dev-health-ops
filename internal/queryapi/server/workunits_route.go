@@ -371,7 +371,7 @@ func writeWorkUnitsResponse(w http.ResponseWriter, r *http.Request, orgID string
 	}
 	if encodeErr := writeModelResponse(w, wire); encodeErr != nil {
 		log.Printf("query-api: work_units: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }

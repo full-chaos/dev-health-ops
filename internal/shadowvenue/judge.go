@@ -38,6 +38,7 @@ const (
 	VerdictKShort               = "K_SHORT"
 	VerdictLegacyDisagrees      = "CONTROL_LEGACY_DISAGREES"
 	VerdictSkippedSeam          = "SKIPPED_SEAM"
+	VerdictSkippedNoOrg         = "SKIPPED_NOORG"
 	VerdictStricter             = "MISMATCH_STRICTER"
 	VerdictWider                = "MISMATCH_WIDER"
 )
@@ -172,6 +173,10 @@ func ParseRulings(raw []byte) ([]Ruling, error) {
 type JudgeOptions struct {
 	K     int
 	Grace time.Duration
+	// NoOrg is the enforcement counter evidence for the superuser's no-organization skips; nil gives none.
+	NoOrg NoOrgEvidence
+	// Outbound is the venue stub's evidence of outside calls (checkOutbound).
+	Outbound Outbound
 }
 
 // SlotVerdict is one slot and what its evidence says.
@@ -179,12 +184,14 @@ type SlotVerdict struct {
 	Slot
 	Verdict, DecisionID, Ruling string
 	Tuple                       Tuple
+	// Outbound is the number of outside calls the venue stub saw in the slot's window.
+	Outbound int
 }
 
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced:
 		return true
 	}
 	return false
@@ -249,6 +256,13 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 		report.Void = true
 		fail("VOID: "+format, args...)
 	}
+	if o.Outbound.Rows == nil {
+		void("no row table was given (Outbound.Rows): every run is judged against its table, held to the pinned classes")
+	}
+	byRow, classErr := CheckRowClasses(o.Outbound.Rows)
+	if classErr != nil {
+		void("%v", classErr)
+	}
 	if len(ev.results) == 0 {
 		void("the log has no result line %q: wrong log, an image without the line, or the shadow is off", MsgResult)
 	}
@@ -267,10 +281,21 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 			judgeSlot(&sv, results, ev, rulings, o.Grace)
 			controlLegacyHolds(&sv)
 		}
-		if sv.Expect != expectMismatch && !sv.Pass() {
-			fail("FAIL: slot %d row %s %s %s: %s%s", slot.Seq, slot.Row, slot.Caller, slot.Key(), sv.Verdict, hint(sv))
-		}
 		report.Slots = append(report.Slots, sv)
+	}
+	relabelNoOrgSkips(report.Slots, o.NoOrg)
+	outbound := checkOutbound(slots, o.Outbound, byRow, o.Grace, []string{"before", "between"})
+	for i := range report.Slots {
+		report.Slots[i].Outbound = outbound.hits[report.Slots[i].Seq]
+	}
+	for _, reason := range outbound.voids {
+		void("%s", reason)
+	}
+	report.Reasons = append(report.Reasons, outbound.fails...)
+	for _, sv := range report.Slots {
+		if sv.Expect != expectMismatch && !sv.Pass() {
+			fail("FAIL: slot %d row %s %s %s: %s%s", sv.Seq, sv.Row, sv.Caller, sv.Key(), sv.Verdict, hint(sv))
+		}
 	}
 	if len(sent) > 0 {
 		from, to := sent[0].Start.Add(-windowSkew), sent[len(sent)-1].End.Add(o.Grace)
@@ -282,6 +307,7 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 		}
 	}
 	report.Rows = rowVerdicts(report.Slots, o.K)
+	markNoReach(report.Rows, outbound)
 	controls := 0
 	for _, rv := range report.Rows {
 		if strings.HasPrefix(rv.Row, "C") {
@@ -505,7 +531,7 @@ func rowVerdicts(slots []SlotVerdict, k int) []RowVerdict {
 func cellPasses(counts map[string]int, row string) bool {
 	for verdict := range counts {
 		switch verdict {
-		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam:
+		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced:
 		default:
 			if !(strings.HasPrefix(row, "C") && controlMismatch(verdict)) {
 				return false
@@ -550,5 +576,5 @@ func (r Report) WriteTable(w io.Writer) error {
 
 // controlMismatch: the verdicts a control slot must have, a mismatch with its tuple.
 func controlMismatch(verdict string) bool {
-	return verdict == VerdictMismatch || verdict == VerdictMismatchIntentional || verdict == VerdictMismatchRuled
+	return verdict == VerdictEnforcedDeny || verdict == VerdictMismatch || verdict == VerdictMismatchIntentional || verdict == VerdictMismatchRuled
 }

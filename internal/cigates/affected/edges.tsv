@@ -158,6 +158,8 @@ internal/cigates/workflows	providersync_shard_budget_test.go	unexpressed
 internal/cigates/workflows	race_pool_routing_test.go	unexpressed
 internal/cigates/workflows	registry_retry_test.go	unexpressed
 internal/cigates/workflows	strip_hook_test.go	unexpressed
+internal/cigates/workflows	venue_known_divergence_skips_test.go	internal/testsupport/venueoracle
+internal/cigates/workflows	venue_known_divergence_skips_test.go	unexpressed
 internal/cigates/workflows	workflows_auth_service_test.go	unexpressed
 internal/cigates/workflows	workflows_base_images_test.go	unexpressed
 internal/cigates/workflows	workflows_builder_images_test.go	unexpressed
@@ -217,6 +219,7 @@ internal/queryapi/server	graphql_server_limits_documents_integration_test.go	**/
 internal/queryapi/server	graphql_server_limits_documents_integration_test.go	unexpressed
 internal/queryapi/server	home_coverage_oracle_policy_guard_integration_test.go	unexpressed
 internal/queryapi/server	home_no_data_oracle_ledger_guard_integration_test.go	unexpressed
+internal/queryapi/server	log_request_id_census_test.go	unexpressed
 internal/queryapi/server	mcp_class_parity_venue_oracle_integration_test.go	**/cmd/registrydump
 internal/storage/clickhouse	open_proxy_test.go	unexpressed
 internal/storage/clickhouse	param_types_census_test.go	cmd/...

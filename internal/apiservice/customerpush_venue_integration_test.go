@@ -220,16 +220,15 @@ func TestVenueOracleCustomerPushReads(t *testing.T) {
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := customerPushRequests(seed, venue.Tokens)
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads.go-pin.json", SHA256: customerPushReadsPinSHA256, Ruling: customerPushReadsRuling})
-	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads-orgclaim.go-pin.json", SHA256: customerPushReadsOrgClaimPinSHA256, Ruling: orgClaimRuling})
 	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{Golden: golden, Retire: retiredCustomerPushReadsRequest, Pin: pin,
-		Retirements: []venueoracle.Retirement{
-			{Match: func(request venueoracle.Request) bool { return request.Name == "bad org claim" }, Pin: claimPin},
+		KnownDivergences: []venueoracle.KnownDivergence{
+			{Match: func(request venueoracle.Request) bool { return request.Name == "bad org claim" }, Ticket: venueoracle.NotUUIDOrgClaimGap},
 		}})
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
-	venueoracle.FinishPins(t, pin, claimPin)
+	venueoracle.FinishPins(t, pin)
 	golden.Finish(t)
 }
 
@@ -248,7 +247,3 @@ func retiredCustomerPushReadsRequest(request venueoracle.Request) bool {
 // customerPushOrglessSuperusers names no seed: the "superuser" seed (org claim orgCommunity, no membership row there)
 // keeps its recorded org claim, and its user access token gets the recorded (HS256) answer (product rule 1, D6773).
 var customerPushOrglessSuperusers []string
-
-const (
-	customerPushReadsOrgClaimPinSHA256 = "e2c439fad270d63bc213c161481f124e5ccc03e57d4d50e12cd77adb88b86e70"
-)

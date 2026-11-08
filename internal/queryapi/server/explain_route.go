@@ -172,7 +172,7 @@ func buildExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http
 // bytes, matching writeDrilldownPRsResponse's own established path.
 func writeExplainResponse(w http.ResponseWriter, orgID, requestID string, resp *explain.Response) {
 	if err := writeModelResponse(w, resp); err != nil {
-		log.Printf("query-api: explain: encode response failed: org_id=%s request_id=%s err=%v", orgID, requestID, err)
+		log.Printf("query-api: explain: encode response failed: org_id=%s request_id=%s err=%v", orgID, logSafeRequestID(requestID), err)
 		writeModelFailure(w)
 	}
 }

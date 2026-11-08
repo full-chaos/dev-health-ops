@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -15,7 +16,29 @@ import (
 // then USAGE on the schema and the column SELECTs are granted. A reader role
 // that does not exist is refused by name.
 func sessionReaderStatements(ctx context.Context, conn querier, options Options, schemaID ValidatedIdentifier) ([]string, error) {
-	return readerStatements(ctx, conn, options, schemaID, options.SessionReaderRoles, SessionReaderReads(options.PlatformRolesOwned), "session reader")
+	plain, workload := splitWorkloadReaders(options)
+	statements, err := readerStatements(ctx, conn, options, schemaID, plain, SessionReaderReadsWith(options.PlatformRolesOwned, false), "session reader")
+	if err != nil {
+		return nil, err
+	}
+	more, err := readerStatements(ctx, conn, options, schemaID, workload, SessionReaderReadsWith(options.PlatformRolesOwned, true), "session reader")
+	if err != nil {
+		return nil, err
+	}
+	return append(statements, more...), nil
+}
+
+// splitWorkloadReaders splits the session reader roles into those that hold SessionReaderReads alone and those that
+// also read the workload registry (options.WorkloadReaderRoles), each in its original order.
+func splitWorkloadReaders(options Options) (plain, workload []string) {
+	for _, role := range options.SessionReaderRoles {
+		if slices.Contains(options.WorkloadReaderRoles, role) {
+			workload = append(workload, role)
+		} else {
+			plain = append(plain, role)
+		}
+	}
+	return plain, workload
 }
 
 // presentReads keeps the reads whose table exists in the schema.
@@ -105,7 +128,16 @@ func readerStatements(ctx context.Context, conn querier, options Options, schema
 // column it cannot read, any other column or table privilege, any sequence
 // privilege, CREATE on the schema, or no USAGE.
 func sessionReaderViolations(ctx context.Context, conn *pgx.Conn, options Options) ([]Violation, error) {
-	return readerViolationsOf(ctx, conn, options, options.SessionReaderRoles, SessionReaderReads(options.PlatformRolesOwned), "session_reader")
+	plain, workload := splitWorkloadReaders(options)
+	violations, err := readerViolationsOf(ctx, conn, options, plain, SessionReaderReadsWith(options.PlatformRolesOwned, false), "session_reader")
+	if err != nil {
+		return nil, err
+	}
+	more, err := readerViolationsOf(ctx, conn, options, workload, SessionReaderReadsWith(options.PlatformRolesOwned, true), "session_reader")
+	if err != nil {
+		return nil, err
+	}
+	return append(violations, more...), nil
 }
 
 // projectionReaderViolations is the same comparison for the projection readers.

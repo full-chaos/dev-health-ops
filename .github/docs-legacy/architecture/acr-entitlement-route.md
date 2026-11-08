@@ -11,7 +11,7 @@
 
 ## Bearer check
 
-Every internal acr route (health, entitlement, org llm-config, principal access) accepts one credential: the acr-api workload token (`workload-token.v1`: EdDSA, `typ` `workload+jwt`, `aud` `dev-health-api`, issuer `AUTH_ACCESS_TOKEN_ISSUER`, `sub` equal to `AUTH_ACR_WORKLOAD_SUBJECT`). Every other bearer, a `svc_acr_` service credential included (CHAOS-11242), is refused with the uniform 401 before any credential read; no route reads `internal_service_credentials` any more. The `svc_acr_` check that ported `api/internal/acr.py` (CHAOS-9993) is gone.
+Every internal acr route (health, entitlement, org llm-config, principal access) accepts one credential: the acr-api workload token (`workload-token.v1`: EdDSA, `typ` `workload+jwt`, `aud` `dev-health-api`, issuer `AUTH_ACCESS_TOKEN_ISSUER`, `sub` equal to the principal of the workload `acr-api` in the workload registry, read from `auth.workloads` and kept for 30 s). Every other bearer, a `svc_acr_` service credential included (CHAOS-11242), is refused with the uniform 401 before any credential read; no route reads `internal_service_credentials` any more. The `svc_acr_` check that ported `api/internal/acr.py` (CHAOS-9993) is gone.
 
 Order, on health and entitlement:
 

@@ -65,7 +65,9 @@ var allowedAttributeKeys = map[string]struct{}{
 	// the resource asked about.
 	"decision_id":          {},
 	"decision_reason_code": {},
-	"resource_type":        {},
+	// decision_internal_reason is the internal Reason of a decision whose wire code hides it (platform-admin allow).
+	"decision_internal_reason": {},
+	"resource_type":            {},
 }
 
 // ValidateAttributes refuses an audit attribute map that has a key outside the
@@ -198,6 +200,8 @@ var attributeVocabulary = map[string][]string{
 		"resource_mismatch", "role_lacks_action", "role_scope_mismatch", "role_unknown", "service_account_inactive",
 		"unknown_action", "workload_action_denied", "workload_audience_denied",
 	},
+	// decision_internal_reason is the internal-only Reasons of authapi internalOnlyReasons, held equal by a test.
+	"decision_internal_reason": {"allowed_by_platform_admin"},
 	// resource_type is authorization_request.v1's resource type set.
 	"resource_type": {
 		"organization", "repository", "membership", "service_account", "grant", "credential", "session", "signing_key",

@@ -145,7 +145,7 @@ var sankeyModeValues = []string{"investment", "expense", "state", "hotspot"}
 func writeSankeyResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *sankey.Response) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: sankey: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }

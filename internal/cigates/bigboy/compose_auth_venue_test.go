@@ -422,7 +422,7 @@ func composeAuthPlatformRolesOwned(g *guard) {
 }
 
 // CHAOS-13356: every service of the venue runs with users owned, as prod's phase 4 (deploy values.prod.yaml usersOwnedStage
-// owned): auth-service owns users and sends the verify and reset mail (a console default, as ops compose.yml), go-api forwards
+// owned): auth-service owns users and sends the verify and reset mail over SMTP to the venue's mailpit service, go-api forwards
 // sessions, local login and credentials and carries the switch (it refuses it without the three), the auth one-shots keep the
 // owned grant set, and the seed tool one-off runs owned. No service sets the switch to anything but true.
 func composeAuthUsersOwned(g *guard) {
@@ -440,11 +440,22 @@ func composeAuthUsersOwned(g *guard) {
 		g.expect(str(env("go-api")[k]) == "true", "go-api %s=%q, want true: go-api refuses AUTH_USERS_OWNED without it", k, str(env("go-api")[k]))
 	}
 	auth := env("auth-service")
-	for k, want := range map[string]string{"EMAIL_PROVIDER": "console", "AUTH_MAIL_ALLOW_CONSOLE": "true", "EMAIL_FROM_ADDRESS": "noreply@example.com", "APP_BASE_URL": "http://localhost:3000"} {
-		g.expect(str(auth[k]) == want, "auth-service %s=%q, want %q: owned users need a mail setting (auth_mail_config_invalid)", k, str(auth[k]), want)
+	for k, want := range map[string]string{"EMAIL_PROVIDER": "smtp", "SMTP_HOST": "mailpit", "SMTP_PORT": "1025", "SMTP_USE_TLS": "false",
+		"AUTH_MAIL_ALLOW_CONSOLE": "true", "EMAIL_FROM_ADDRESS": "noreply@bigboy.invalid", "APP_BASE_URL": "http://localhost:3000"} {
+		g.expect(str(auth[k]) == want, "auth-service %s=%q, want %q: owned users need a mail setting, and the venue's sink is mailpit (auth_mail_config_invalid)", k, str(auth[k]), want)
 	}
-	_, hasKey := auth["EMAIL_API_KEY"]
-	g.expect(hasKey, "auth-service has no EMAIL_API_KEY pass-through: a real provider set in ops/.env has no key")
+	// The sink is the venue's own mailpit, on a network auth-service shares.
+	mailpit, ok := r.services["mailpit"]
+	g.expect(ok, "the venue has no mailpit service: auth-service's SMTP_HOST names it")
+	if ok {
+		shared := false
+		for n := range mp(mailpit["networks"]) {
+			if _, on := mp(r.services["auth-service"]["networks"])[n]; on {
+				shared = true
+			}
+		}
+		g.expect(shared, "auth-service shares no network with mailpit: its mail cannot reach the sink")
+	}
 	g.expect(str(auth["AUTH_LOGIN_LOCKOUT_KEY_FILE"]) == "/run/auth/session/login-lockout-key", "auth-service AUTH_LOGIN_LOCKOUT_KEY_FILE=%q: go-api forwards local login, and the login route mounts only with the lockout key", str(auth["AUTH_LOGIN_LOCKOUT_KEY_FILE"]))
 	_, direct := auth["AUTH_LOGIN_LOCKOUT_KEY"]
 	g.expect(!direct, "auth-service carries AUTH_LOGIN_LOCKOUT_KEY: a secret is a _FILE")
@@ -600,8 +611,12 @@ func TestComposeAuthVenuePlanted(t *testing.T) {
 			check: composeAuthUsersOwned, want: "go-api AUTH_PROXY_CREDENTIALS"},
 		{name: "go-api keeps local login", mutate: mut(composeFile, "    - AUTH_PROXY_LOCAL_LOGIN=true\n    - AUTH_PROXY_SESSIONS=true\n    - AUTH_PROXY_URL=http://auth-service:8095\n    - AUTH_SESSION_ISSUE_CREDENTIAL=workload\n", "    - AUTH_PROXY_SESSIONS=true\n    - AUTH_PROXY_URL=http://auth-service:8095\n    - AUTH_SESSION_ISSUE_CREDENTIAL=workload\n"),
 			check: composeAuthUsersOwned, want: "go-api AUTH_PROXY_LOCAL_LOGIN"},
-		{name: "auth-service without a mail provider", mutate: mut(composeFile, "      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}\n      AUTH_VALKEY_URI", "      AUTH_VALKEY_URI"),
+		{name: "auth-service without a mail provider", mutate: mut(composeFile, "      EMAIL_PROVIDER: smtp\n", ""),
 			check: composeAuthUsersOwned, want: "auth-service EMAIL_PROVIDER"},
+		{name: "auth-service mails through the console", mutate: mut(composeFile, "      EMAIL_PROVIDER: smtp\n", "      EMAIL_PROVIDER: console\n"),
+			check: composeAuthUsersOwned, want: "auth-service EMAIL_PROVIDER"},
+		{name: "auth-service mails another host", mutate: mut(composeFile, "      SMTP_HOST: mailpit\n", "      SMTP_HOST: smtp.example.com\n"),
+			check: composeAuthUsersOwned, want: "auth-service SMTP_HOST"},
 		{name: "auth-service console not allowed", mutate: mut(composeFile, "      AUTH_MAIL_ALLOW_CONSOLE: 'true'\n", ""),
 			check: composeAuthUsersOwned, want: "auth-service AUTH_MAIL_ALLOW_CONSOLE"},
 		{name: "auth-service without the lockout key", mutate: mut(composeFile, "      AUTH_LOGIN_LOCKOUT_KEY_FILE: /run/auth/session/login-lockout-key\n", ""),

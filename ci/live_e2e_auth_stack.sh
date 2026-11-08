@@ -14,6 +14,8 @@
 #   bash ci/live_e2e_auth_stack.sh start-auth STATE_DIR
 #   bash ci/live_e2e_auth_stack.sh verify-user STATE_DIR EMAIL  mark one user's e-mail verified in auth.users (the authority:
 #                                                          users are owned) and in its public.users projection
+#   bash ci/live_e2e_auth_stack.sh grant-platform-admin STATE_DIR EMAIL  test setup only: give one user an active platform_admin
+#                                                          row in auth.platform_role_assignments (written directly, as the bigboy fixture)
 # SIDE is go-api, query-api, auth-service or web. The flags are ci/live_e2e_auth_flags.tsv (the prod flag set).
 # CHAOS-13356: users are owned by auth-service, as prod (phase 4, usersOwnedStage owned): `up` copies the users the
 # caller already seeded into the auth schema with the seed tool (`dho auth users-backfill -insert-only`) before
@@ -385,6 +387,29 @@ verify_user() {
   printf 'verified %s in auth.users and public.users\n' "${email}"
 }
 
+# grant_platform_admin STATE EMAIL: test setup only. The user's platform_admin assignment is written directly into
+# auth.platform_role_assignments (no route, no audit or outbox row; the guard admits the write in a transaction that names
+# itself the audit transaction first, authschema 0006), active: an existing row of the user is made permanent again. A
+# read-back of the active rows (the platform role store's rule: not expired, the principal not disabled) must be exactly 1.
+grant_platform_admin() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" n
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "grant-platform-admin: not an e-mail address"
+  PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -qAt -c \
+    "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; \
+     INSERT INTO ${SCHEMA}.platform_role_assignments (principal_id, role_key) \
+       SELECT u.principal_id, 'platform_admin' FROM ${SCHEMA}.users u WHERE u.email_lower = lower('${email}') \
+     ON CONFLICT (principal_id, role_key) DO UPDATE SET expires_at = NULL, updated_at = now()" >/dev/null \
+    || die "grant-platform-admin: the write failed"
+  n="$(PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -At -c \
+    "SELECT count(*) FROM ${SCHEMA}.platform_role_assignments r JOIN ${SCHEMA}.users u ON u.principal_id = r.principal_id \
+       JOIN ${SCHEMA}.principals p ON p.id = r.principal_id \
+     WHERE u.email_lower = lower('${email}') AND r.role_key = 'platform_admin' AND p.disabled_at IS NULL \
+       AND (r.expires_at IS NULL OR r.expires_at > now())" | tail -n 1)"
+  [ "${n}" = 1 ] || die "grant-platform-admin: want one active platform_admin row for the user, got ${n:-none}"
+  printf 'granted platform_admin to %s in auth.platform_role_assignments\n' "${email}"
+}
+
 verb="${1:-}"
 case "${verb}" in
   up)
@@ -419,5 +444,9 @@ case "${verb}" in
     [ "$#" -eq 3 ] || die "usage: verify-user STATE_DIR EMAIL"
     verify_user "$2" "$3"
     ;;
-  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | verify-user" ;;
+  grant-platform-admin)
+    [ "$#" -eq 3 ] || die "usage: grant-platform-admin STATE_DIR EMAIL"
+    grant_platform_admin "$2" "$3"
+    ;;
+  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | verify-user | grant-platform-admin" ;;
 esac

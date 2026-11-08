@@ -101,7 +101,7 @@ func TestNoVenueSetsUsersOwnedFalse(t *testing.T) {
 	}
 	// Non-vacuity: the walk reached the venues that set the switch before CHAOS-13356.
 	for _, want := range []string{"compose.yml", "ci/auth_corpus_external.acp.override.yml", "ci/auth_webproof_compose.override.yml",
-		"ci/live_e2e_auth_stack.sh", "ci/live_e2e_auth_flags.tsv", "ci/bigboy/compose.bigboy.yml", "scripts/drill-refresh-reuse.sh"} {
+		"ci/live_e2e_auth_stack.sh", "ci/live_e2e_auth_flags.tsv", "ci/bigboy/compose.bigboy.yml"} {
 		if !seen[want] {
 			t.Errorf("FAIL: the venue walk did not read %s", want)
 		}

@@ -2607,15 +2607,17 @@ services:
       AUTH_SIGNING_KEY_ID: auth-signing-bigboy
       AUTH_TOKEN_ISSUER_URL: https://auth.bigboy.internal:8443
       # CHAOS-13356: auth-service owns users, as prod's phase 4 (go-api forwards sessions, local login and credentials), so it sends the
-      # verify and reset mail and refuses to start without a usable mail setting. The venue default is the console provider, as ops
-      # compose.yml: AUTH_MAIL_ALLOW_CONSOLE allows it and an http APP_BASE_URL; no mail is delivered. Set EMAIL_PROVIDER and its keys
-      # in ops/.env for real mail.
+      # verify and reset mail and refuses to start without a usable mail setting. The venue's mail sink is its own mailpit service
+      # (SMTP mailpit:1025 on the dev-health network, no TLS; read the mail at mail.localhost). AUTH_MAIL_ALLOW_CONSOLE is set only so
+      # the http APP_BASE_URL of the venue is accepted; the provider is smtp, not console.
       AUTH_USERS_OWNED: 'true'
       AUTH_MAIL_ALLOW_CONSOLE: 'true'
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
-      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
-      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
-      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
+      EMAIL_FROM_ADDRESS: noreply@bigboy.invalid
+      EMAIL_PROVIDER: smtp
+      SMTP_HOST: mailpit
+      SMTP_PORT: '1025'
+      SMTP_USE_TLS: 'false'
       AUTH_VALKEY_URI: redis://valkey:6379/1
       AUTH_WORKLOAD_BOOTSTRAP: 'true'
       OTEL_ENABLED: 'false'

@@ -459,6 +459,86 @@ func TestLiveE2EAssertAuditCells(t *testing.T) {
 	}
 }
 
+// liveE2ESetupVerb runs a test-setup verb of the stack script (verify-user, grant-platform-admin) against a fake psql. The fake
+// records every SQL text it gets (one per line, newlines folded) and answers by its STACK_CASE: the write answers nothing or
+// fails, the read-back answers the case's count.
+func liveE2ESetupVerb(t *testing.T, verb, email, stackCase string) (string, string, error) {
+	t.Helper()
+	fake := t.TempDir()
+	record := filepath.Join(fake, "sql.log")
+	shim := "#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\nprintf '%s\\n' \"$last\" | tr '\\n' ' ' >> '" + record + "'; echo >> '" + record + "'\n" +
+		"case \"$last\" in\n" +
+		"  *INSERT\\ INTO*) [ \"$STACK_CASE\" = write_fails ] && exit 1; exit 0 ;;\n" +
+		"esac\n" +
+		"case \"$STACK_CASE\" in\n" +
+		"  verified) echo t; echo '1 1' ;;\n  verified_none) echo t; echo '0 0' ;;\n  verified_auth_only) echo t; echo '1 0' ;;\n" +
+		"  granted) echo 1 ;;\n  granted_none|write_fails) echo 0 ;;\n  granted_two) echo 2 ;;\n  *) exit 2 ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(fake, "psql"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), verb, t.TempDir(), email)
+	cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "STACK_CASE=" + stackCase}
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+	sql, _ := os.ReadFile(record)
+	return out.String(), string(sql), err
+}
+
+// CHAOS-13356: verify-user is test setup. It writes auth.users (the authority while users are owned) through the audit
+// guard and the public.users projection in one transaction, and fails loud unless the read-back is one row of each.
+func TestLiveE2EVerifyUserCells(t *testing.T) {
+	for cell, wantOK := range map[string]bool{"verified": true, "verified_none": false, "verified_auth_only": false} {
+		t.Run(cell, func(t *testing.T) {
+			out, sql, err := liveE2ESetupVerb(t, "verify-user", "a@example.test", cell)
+			if wantOK != (err == nil) {
+				t.Fatalf("FAIL: %s: exit err %v, want ok=%v\n%s", cell, err, wantOK, out)
+			}
+			if !wantOK && !strings.Contains(out, "verify-user: want one auth.users and one public.users row") {
+				t.Errorf("FAIL: %s failed without naming the read-back:\n%s", cell, out)
+			}
+			if !strings.Contains(sql, "set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)") || !strings.Contains(sql, "UPDATE auth.users") {
+				t.Errorf("FAIL: the write is not one guarded transaction on auth.users: %q", sql)
+			}
+		})
+	}
+	if _, _, err := liveE2ESetupVerb(t, "verify-user", "not-an-address", "verified"); err == nil {
+		t.Error("FAIL: verify-user accepted a value that is not an e-mail address")
+	}
+}
+
+// CHAOS-13356: grant-platform-admin is test setup. It writes the user's platform_admin row directly into
+// auth.platform_role_assignments (the guard's audit transaction first, one psql string), then fails loud unless the read-back
+// of the user's active rows is exactly 1.
+func TestLiveE2EGrantPlatformAdminCells(t *testing.T) {
+	for cell, wantOK := range map[string]bool{"granted": true, "granted_none": false, "granted_two": false, "write_fails": false} {
+		t.Run(cell, func(t *testing.T) {
+			out, sql, err := liveE2ESetupVerb(t, "grant-platform-admin", "admin@example.test", cell)
+			if wantOK != (err == nil) {
+				t.Fatalf("FAIL: %s: exit err %v, want ok=%v\n%s", cell, err, wantOK, out)
+			}
+			if cell == "granted_none" || cell == "granted_two" {
+				if !strings.Contains(out, "grant-platform-admin: want one active platform_admin row") {
+					t.Errorf("FAIL: %s failed without naming the read-back:\n%s", cell, out)
+				}
+			}
+			lines := strings.Split(strings.TrimSpace(sql), "\n")
+			write := lines[0]
+			if !strings.Contains(write, "set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)") ||
+				!strings.Contains(write, "INSERT INTO auth.platform_role_assignments") || !strings.Contains(write, "'platform_admin'") ||
+				strings.Index(write, "set_config") > strings.Index(write, "INSERT INTO") {
+				t.Errorf("FAIL: the write is not one guarded transaction that inserts the platform_admin row: %q", write)
+			}
+			if cell != "write_fails" && (len(lines) < 2 || !strings.Contains(lines[1], "disabled_at IS NULL") || !strings.Contains(lines[1], "expires_at")) {
+				t.Errorf("FAIL: the read-back does not count active rows by the store's rule: %q", sql)
+			}
+		})
+	}
+	if _, _, err := liveE2ESetupVerb(t, "grant-platform-admin", "x' OR '1'='1", "granted"); err == nil {
+		t.Error("FAIL: grant-platform-admin accepted a value that is not an e-mail address")
+	}
+}
+
 // The PDP refuses every caller unless AUTH_AUTHORIZE_CALLER_SUBJECTS names it, and the web workload gets its token through
 // the exchange against a job-local fake of the Kubernetes API (the product trusts its issuer by configuration).
 func TestLiveE2EAuthServiceEnvLetsTheWebWorkloadCallThePDP(t *testing.T) {

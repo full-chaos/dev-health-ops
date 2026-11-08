@@ -372,13 +372,9 @@ func optionalPyStr(value pyjson.Value) string {
 // initiateOAuthByType's GET .../{provider_type}/authorize on the same
 // pattern -- "first" is this route's provider_id.
 func (h handlers) initiateOAuthAuth(w http.ResponseWriter, r *http.Request) {
-	providerID, err := pythonparity.ParseUUID(r.PathValue("first"))
-	if err != nil {
-		h.fail(w, r, "parse provider id", err)
-		return
-	}
-	rawBody, _ := policy.BodyFrom(r.Context())
 	var errs pybody.Errors
+	providerID, _ := errs.PathUUID("provider_id", r.PathValue("first"))
+	rawBody, _ := policy.BodyFrom(r.Context())
 	object, ok := errs.Object(rawBody)
 	if !ok {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)

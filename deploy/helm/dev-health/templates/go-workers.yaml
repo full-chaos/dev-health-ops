@@ -325,7 +325,7 @@ spec:
               switch) goes here; the shared ConfigMap/Secret reach all groups.
             */}}
             {{- if $group.valkey }}
-            {{- include "dev-health.valkeyClientEnv" (dict "ctx" $ "extraEnv" $group.extraEnv) | nindent 12 }}
+            {{- include "dev-health.valkeyClientEnv" (dict "ctx" $ "extraEnv" $group.extraEnv) | trim | nindent 12 }}
             {{- end }}
             {{- $chartOwned := concat (list "OPERATIONAL_ORDERING_CONTRACT" "OTEL_SERVICE_NAME" "CLICKHOUSE_URI" "POSTGRES_URI") $dsnNames ($.Values.goWorkers.secretKeys | default (list)) }}
             {{- with $group.extraEnv }}

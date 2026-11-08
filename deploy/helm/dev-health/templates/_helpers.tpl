@@ -366,7 +366,15 @@ chart's regular resources are created).
 {{- define "dev-health.configData" -}}
 {{- /* CHAOS-13346: no Valkey URL in the shared ConfigMaps. Every pod that envFroms them (heavy, ops, scheduler, reconciler, the hook Jobs) would
    carry a URL it never uses, and the Valkey NetworkPolicy peer list is derived from who carries it. The 8 real clients get their own URL
-   (web: REDIS_URL in web-deployment.yaml; go-api and the flagged worker groups: dev-health.valkeyClientEnv; auth-service: its Secret). */}}
+   (web: REDIS_URL in web-deployment.yaml; the flagged worker groups: dev-health.valkeyClientEnv; go-api: goApi.extraEnv in the values file, since the
+   chart refuses extraEnv names it renders itself; auth-service: its Secret). */}}
+{{- /* Keys whose empty placeholder is replaced by a computed value below. */}}
+{{- $derivedKeys := list "GO_API_QUERY_API_URL" }}
+{{- range $key, $value := .Values.config }}
+{{- if or $value (not (has $key $derivedKeys)) }}
+{{ $key }}: {{ $value | quote }}
+{{- end }}
+{{- end }}
 {{- /* Only when a query-api workload actually exists to forward to. With
    queryApi disabled and no operator override the key stays ABSENT rather than
    empty: go_api_cli._query_api_url and the dispatcher both read it with `or`,
@@ -1910,7 +1918,7 @@ schema and the River step then leaves that read out.
 
 {{/*
 CHAOS-13346: the one list of Valkey clients, read by the Valkey NetworkPolicy and by the per-workload URL. A client is a workload that opens
-a Valkey connection (go-api, web, auth-service, and every goWorkers group with `valkey: true`). JSON list of {component, group}; group is
+a Valkey connection (go-api, web, auth-service, and every goWorkers group with `valkey: true`). go-api's URL is set by the values file (goApi.extraEnv). JSON list of {component, group}; group is
 empty except for go-worker pods.
 */}}
 {{- define "dev-health.valkeyClients" -}}
@@ -1934,9 +1942,9 @@ CHAOS-13346: renders "true" when the in-chart Valkey has its own NetworkPolicy (
 {{- end }}
 
 {{/*
-CHAOS-13346: the VALKEY_URI env entry of a client that reads it from the chart (go-api and the flagged worker groups). Renders nothing
+CHAOS-13346: the VALKEY_URI env entry of a flagged worker group. Renders nothing
 when valkey.enabled=false or secrets.data.VALKEY_URI pins an external one (the old ConfigMap rule). Call with (dict "ctx" $ "extraEnv" <the
-workload's extraEnv list>); an extraEnv entry of the same name wins, so a values file that sets it itself never gets a duplicate.
+group's extraEnv list>); an extraEnv entry of the same name wins, so a values file that sets it itself never gets a duplicate.
 */}}
 {{- define "dev-health.valkeyClientEnv" -}}
 {{- $names := list }}

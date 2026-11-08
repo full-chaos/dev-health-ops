@@ -13,7 +13,8 @@ var valkeyURLNames = []string{"VALKEY_URI", "REDIS_URL", "AUTH_VALKEY_URI"}
 
 var valkeyProdShape = append(append(append([]string{}, authBase...), authValkey...),
 	"--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24",
-	"--set", "goApi.enabled=true", "--set", "goApi.internal.enabled=true", "--set", "queryApi.enabled=true")
+	"--set", "goApi.enabled=true", "--set", "goApi.internal.enabled=true", "--set", "queryApi.enabled=true",
+	"--set", "goApi.extraEnv[0].name=VALKEY_URI", "--set", "goApi.extraEnv[0].value=redis://x:6379/1")
 
 var valkeyClientWorkloads = []string{
 	"a-dev-health-auth-service", "a-dev-health-go-api", "a-dev-health-go-stream-external", "a-dev-health-go-stream-ingest",
@@ -215,17 +216,21 @@ func TestValkeyClientURLIsPerWorkloadNotInTheConfigMaps(t *testing.T) {
 	}
 }
 
-func TestValkeyGoAPIKeepsAnExtraEnvURLWithoutADuplicate(t *testing.T) {
-	docs, _ := valkeyRender(t, append(append([]string{}, valkeyProdShape...), "--set", "goApi.extraEnv[0].name=VALKEY_URI", "--set", "goApi.extraEnv[0].value=redis://x:6379/1")...)
-	deployment := authDoc(docs, "Deployment", "a-dev-health-go-api")
-	n := 0
-	for _, e := range aList(at(deployment, "spec", "template", "spec", "containers", 0, "env")) {
-		if at(e, "name") == "VALKEY_URI" {
-			n++
+// go-api's URL is the values file's (goApi.extraEnv); the chart renders none of its own for go-api.
+func TestValkeyGoAPIURLComesFromExtraEnvOnly(t *testing.T) {
+	var bare []string
+	for i := 0; i < len(valkeyProdShape); i++ {
+		if strings.HasPrefix(valkeyProdShape[i], "goApi.extraEnv[0]") {
+			bare = bare[:len(bare)-1]
+			continue
 		}
+		bare = append(bare, valkeyProdShape[i])
 	}
-	if n != 1 {
-		t.Errorf("go-api has %d VALKEY_URI entries, want 1", n)
+	_, workloads := valkeyRender(t, bare...)
+	for _, w := range workloads {
+		if w.name == "a-dev-health-go-api" && len(w.carries) != 0 {
+			t.Errorf("go-api carries %v without goApi.extraEnv", w.carries)
+		}
 	}
 }
 

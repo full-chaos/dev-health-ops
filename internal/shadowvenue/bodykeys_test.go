@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 )
 
 const keysBody = `{"a":[{"b":1},{"b":"SECRETVALUE-123"}],"c":{"d":true,"e":null},"id":"x"}`
@@ -39,7 +40,7 @@ func leafMap(leaves []Leaf) map[string][]string {
 
 func TestLeavesNameEachLeafByItsNormalizedPath(t *testing.T) {
 	got := leafMap(BodyLeaves(keyOf(t), []byte(keysBody)))
-	for path, n := range map[string]int{"$.a[].b": 2, "$.c.d": 1, "$.c.e": 1, "$.id": 1} {
+	for path, n := range map[string]int{"$/a[]/b": 2, "$/c/d": 1, "$/c/e": 1, "$/id": 1} {
 		if len(got[path]) != n {
 			t.Errorf("path %s has %d leaves, want %d (%v)", path, len(got[path]), n, got)
 		}
@@ -56,7 +57,7 @@ func TestLeavesNameEachLeafByItsNormalizedPath(t *testing.T) {
 
 func TestLeafHashIsAnHMACOfTheLeafUnderTheKeyNotAPlainSHA(t *testing.T) {
 	key := keyOf(t)
-	got := leafMap(BodyLeaves(key, []byte(`{"v":"abc"}`)))["$.v"]
+	got := leafMap(BodyLeaves(key, []byte(`{"v":"abc"}`)))["$/v"]
 	if len(got) != 1 {
 		t.Fatalf("%v", got)
 	}
@@ -69,7 +70,7 @@ func TestLeafHashIsAnHMACOfTheLeafUnderTheKeyNotAPlainSHA(t *testing.T) {
 	if got[0] == hex.EncodeToString(plain[:])[:12] {
 		t.Fatal("the leaf hash is a plain sha256 of the value")
 	}
-	if other := leafMap(BodyLeaves(keyOf(t), []byte(`{"v":"abc"}`)))["$.v"]; other[0] == got[0] {
+	if other := leafMap(BodyLeaves(keyOf(t), []byte(`{"v":"abc"}`)))["$/v"]; other[0] == got[0] {
 		t.Fatal("two keys gave the same leaf hash")
 	}
 }
@@ -224,7 +225,7 @@ func TestKeyDiffListsOnlyPathsThatDifferOrAreInOneSideOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	diff := KeyDiff(a[1], b[1])
-	if strings.Join(diff, ",") != "$.extra,$.t" {
+	if strings.Join(diff, ",") != "$/extra,$/t" {
 		t.Fatalf("%v", diff)
 	}
 	if same := KeyDiff(a[1], a[1]); len(same) != 0 {
@@ -247,9 +248,58 @@ func TestParseKeysFileRefusesAWrongHeaderAndAShortLine(t *testing.T) {
 
 func TestEmptyContainersAreLeavesToo(t *testing.T) {
 	got := leafMap(BodyLeaves(keyOf(t), []byte(`{"a":{},"b":[],"c":[{}]}`)))
-	for _, path := range []string{"$.a", "$.b", "$.c[]"} {
+	for _, path := range []string{"$/a", "$/b", "$/c[]"} {
 		if len(got[path]) != 1 {
 			t.Errorf("path %s has %d leaves: %v", path, len(got[path]), got)
 		}
+	}
+}
+
+// Leaf paths are injective: no two different JSON structures give the same path, and a path never holds a tab, a
+// newline or another control character, so it survives a row<TAB>path line.
+func TestLeafPathsAreInjectiveAndHoldNoControlCharacter(t *testing.T) {
+	key := bytes.Repeat([]byte{7}, 32)
+	paths := func(body string) string {
+		var out []string
+		for _, l := range BodyLeaves(key, []byte(body)) {
+			out = append(out, l.Path+"="+l.HMAC12)
+		}
+		return strings.Join(out, ",")
+	}
+	for _, pair := range [][2]string{
+		{`{"a.b":1}`, `{"a":{"b":1}}`},
+		{`{"a[]":1}`, `{"a":[1]}`},
+		{`{"a/b":1}`, `{"a":{"b":1}}`},
+		{`{"a~1b":1}`, `{"a/b":1}`},
+		{`{"a":{"":1}}`, `{"a":1}`},
+		{`{"a[":1}`, `{"a":[1]}`},
+	} {
+		if paths(pair[0]) == paths(pair[1]) {
+			t.Errorf("%s and %s give the same leaf paths", pair[0], pair[1])
+		}
+	}
+	for _, body := range []string{"{\"a\\tb\":1}", "{\"a\\nb\":1}", "{\"a\\rb\":1}", "{\"a\\u0001b\":1}", "{\"a\\u007fb\":1}"} {
+		for _, l := range BodyLeaves(key, []byte(body)) {
+			if strings.ContainsFunc(l.Path, unicode.IsControl) {
+				t.Errorf("%s: the path %q holds a control character", body, l.Path)
+			}
+			line := "1\t" + l.Path + "\n"
+			if _, err := ParseFrozenVolatile([]byte(line)); err != nil {
+				t.Errorf("%s: the path %q does not round trip through the frozen file: %v", body, l.Path, err)
+			}
+		}
+	}
+	a, b := paths("{\"a\\tb\":1}"), paths("{\"a\\nb\":1}")
+	if a == b {
+		t.Error("a tab key and a newline key give the same path")
+	}
+}
+
+func TestFrozenFileRefusesAPathWithAControlCharacter(t *testing.T) {
+	if _, err := ParseFrozenVolatile([]byte("1\t$/a\rb\n")); err == nil {
+		t.Fatal("a carriage return in a frozen path was accepted")
+	}
+	if _, err := ParseFrozenVolatile([]byte("1\t$/a\x01b\n")); err == nil {
+		t.Fatal("a control character in a frozen path was accepted")
 	}
 }

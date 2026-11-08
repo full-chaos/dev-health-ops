@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const keysHeader = "seq\tpath\thmac12"
@@ -69,8 +70,31 @@ func leafHMAC(key, value []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))[:12]
 }
 
-// BodyLeaves lists the leaves of an answer: path ($ is the root, .key for an object key as given, [] for an array
-// element), HMAC-SHA256 of the leaf's canonical JSON value under key. A body that is no JSON is one leaf, $raw.
+// escapeKey makes an object key one path segment that no other structure can produce: ~ / [ ] and every control
+// character are escaped, so a segment holds none of the characters that separate segments or end a line.
+func escapeKey(k string) string {
+	var b strings.Builder
+	for _, r := range k {
+		switch {
+		case r == '~':
+			b.WriteString("~0")
+		case r == '/':
+			b.WriteString("~1")
+		case r == '[':
+			b.WriteString("~2")
+		case r == ']':
+			b.WriteString("~3")
+		case unicode.IsControl(r):
+			fmt.Fprintf(&b, "~x%02X", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// BodyLeaves lists the leaves of an answer: path ($ is the root, /key for an object key with ~ / [ ] and control
+// characters escaped as ~0 ~1 ~2 ~3 ~xHH, [] for an array element, so two structures never share a path), HMAC-SHA256 of the leaf's canonical JSON value under key. A body that is no JSON is one leaf, $raw.
 func BodyLeaves(key, raw []byte) []Leaf {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -92,7 +116,7 @@ func BodyLeaves(key, raw []byte) []Leaf {
 			}
 			slices.Sort(keys)
 			for _, k := range keys {
-				walk(path+"."+k, x[k])
+				walk(path+"/"+escapeKey(k), x[k])
 			}
 		case []any:
 			if len(x) == 0 {

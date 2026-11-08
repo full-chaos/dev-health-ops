@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // FrozenVolatile is the frozen set of leaf paths, per row, that differ between two legacy runs of the same cell. It is read
@@ -28,7 +29,7 @@ func ParseFrozenVolatile(raw []byte) (FrozenVolatile, error) {
 	prev := ""
 	for n, line := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) != 2 || f[0] == "" || strings.ContainsAny(f[0], " #") || !strings.HasPrefix(f[1], "$") {
+		if len(f) != 2 || f[0] == "" || strings.ContainsAny(f[0], " #") || !strings.HasPrefix(f[1], "$") || strings.ContainsFunc(f[1], unicode.IsControl) {
 			return FrozenVolatile{}, fmt.Errorf("frozen volatile: line %d is not row<TAB>path", n+1)
 		}
 		if n > 0 && line <= prev {

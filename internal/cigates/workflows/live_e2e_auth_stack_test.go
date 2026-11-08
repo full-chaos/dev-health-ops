@@ -249,13 +249,11 @@ func assertUpWiredTheWebCaller(t *testing.T, state, out string) {
 	}
 }
 
-// stopStartFixture is a state dir with a saved environment, a fake auth-service and a fake readyz. run calls a verb of
+// stopStartFixture fills the state dir with a saved environment, a fake auth-service and a fake readyz. run calls a verb of
 // the script with the fakes first on PATH; down runs at cleanup.
-func stopStartFixture(t *testing.T) (fake, state string, run func(verb string)) {
+func stopStartFixture(t *testing.T, fake, state string) (run func(verb string)) {
 	t.Helper()
 	root := repoRoot(t)
-	fake = t.TempDir()
-	state = t.TempDir()
 	for _, d := range []string{"bin", "logs"} {
 		if err := os.Mkdir(filepath.Join(state, d), 0o700); err != nil {
 			t.Fatal(err)
@@ -279,7 +277,7 @@ func stopStartFixture(t *testing.T) (fake, state string, run func(verb string)) 
 		}
 	}
 	t.Cleanup(func() { run("down") })
-	return fake, state, run
+	return run
 }
 
 func writeExec(t *testing.T, path, body string, mode os.FileMode) {
@@ -297,7 +295,8 @@ func startCount(t *testing.T, state string) (int, string) {
 
 // stop-auth ends auth-service by pid (the outage cell); start-auth brings it back with the saved environment.
 func TestLiveE2EStopAndStartAuthService(t *testing.T) {
-	_, state, run := stopStartFixture(t)
+	state := t.TempDir()
+	run := stopStartFixture(t, t.TempDir(), state)
 	run("start-auth")
 	run("stop-auth")
 	run("start-auth")
@@ -315,7 +314,8 @@ func TestLiveE2EStartAuthAnswersOnlyAfterAuthServiceRecordedItsStart(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	fake, state, run := stopStartFixture(t)
+	fake, state := t.TempDir(), t.TempDir()
+	run := stopStartFixture(t, fake, state)
 	for _, f := range []string{"gate", "recorded"} {
 		if err := syscall.Mkfifo(filepath.Join(state, f), 0o600); err != nil {
 			t.Fatal(err)

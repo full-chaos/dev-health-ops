@@ -1,0 +1,98 @@
+package authrows
+
+import (
+	"strings"
+	"testing"
+)
+
+const (
+	umaLegacyVerification = "uma@example.comtrue false 64 1440"
+	judyLegacyReset       = "judy@example.comtrue false 64 60"
+	legacyResetPurgedID   = "legacy-reset-row-purged-at-switch"
+)
+
+// No leg classifies a never-stamped last login: auth-service stamps public.users.last_login_at on a sign-in while it owns
+// users, and the legs where it did not are retired.
+func TestNoLegCoversANeverStampedLastLogin(t *testing.T) {
+	for _, owned := range []bool{true, false} {
+		l := ownedUsersLedger(t, owned)
+		if problems := l.Compare(TableUsers, aliceGolden, aliceTarget); len(problems) == 0 {
+			t.Errorf("owned=%v: a never-stamped last login was covered (%q)", owned, l.Covered())
+		}
+	}
+}
+
+// The users-owned switch purges go-api's legacy link-token rows (dho auth legacy-link-purge), so uma's seeded expired
+// verification row is gone: on no leg is it an extra row a quirk covers.
+func TestNoLegCoversUmasLegacyVerificationRow(t *testing.T) {
+	golden := goldenRows(t)[TableEmailVerificationTokens]
+	for _, owned := range []bool{true, false} {
+		l := ownedUsersLedger(t, owned)
+		if problems := l.Compare(TableEmailVerificationTokens, golden, golden+rowSeparator+umaLegacyVerification); len(problems) == 0 {
+			t.Errorf("owned=%v: uma's legacy verification row was covered (%q)", owned, l.Covered())
+		}
+	}
+}
+
+// The same purge removes judy's seeded expired reset row, which the golden keeps and nothing else writes: the owned leg
+// covers that one missing row, exactly once, and the table is empty after it.
+func TestOwnedLegCoversJudysPurgedLegacyResetRowOnly(t *testing.T) {
+	golden := goldenRows(t)[TablePasswordResetTokens]
+	if golden != judyLegacyReset {
+		t.Fatalf("the golden's reset rows have changed: %q", golden)
+	}
+	l := ownedUsersLedger(t, true)
+	if problems := append(l.Compare(TablePasswordResetTokens, golden, ""), deadOf(l, legacyResetPurgedID)...); len(problems) != 0 {
+		t.Fatalf("judy's purged reset row on the owned leg: %v", problems)
+	}
+	if got := l.Covered(); !strings.Contains(got, legacyResetPurgedID+"=1") {
+		t.Fatalf("Covered = %q", got)
+	}
+	for name, c := range map[string]struct {
+		owned          bool
+		table, golden  string
+		target         string
+		deadIsAProblem bool
+	}{
+		"not owned":                 {false, TablePasswordResetTokens, golden, "", false},
+		"judy's row kept":           {true, TablePasswordResetTokens, golden, golden, true},
+		"another user's row gone":   {true, TablePasswordResetTokens, golden + rowSeparator + "zed@example.comtrue false 64 60", golden, false},
+		"a live row of judy's gone": {true, TablePasswordResetTokens, "judy@example.comtrue true 64 60", "", false},
+		"the verification table":    {true, TableEmailVerificationTokens, goldenRows(t)[TableEmailVerificationTokens] + rowSeparator + judyLegacyReset, goldenRows(t)[TableEmailVerificationTokens], false},
+	} {
+		l := ownedUsersLedger(t, c.owned)
+		problems := l.Compare(c.table, c.golden, c.target)
+		if c.deadIsAProblem {
+			problems = append(problems, deadOf(l, legacyResetPurgedID)...)
+		}
+		if len(problems) == 0 {
+			t.Errorf("%s: passed (covered %q)", name, l.Covered())
+		}
+	}
+}
+
+// An empty target stays a failure unless a live missing-row quirk covered every golden row.
+func TestAnEmptyTargetFailsUnlessEveryGoldenRowIsCovered(t *testing.T) {
+	l := ownedUsersLedger(t, true)
+	if problems := l.Compare(TableUsers, aliceGolden, ""); len(problems) == 0 {
+		t.Error("an empty users target passed")
+	}
+	l = ownedUsersLedger(t, true)
+	if problems := l.Compare(TablePasswordResetTokens, "", ""); len(problems) == 0 || !strings.Contains(problems[0], "rows are empty") {
+		t.Errorf("an empty golden must fail as empty: %v", problems)
+	}
+	l = ownedUsersLedger(t, true)
+	if problems := l.Compare(TablePasswordResetTokens, judyLegacyReset+rowSeparator+judyLegacyReset, ""); len(problems) == 0 {
+		t.Error("two purged rows where the quirk covers one passed")
+	}
+}
+
+// No quirk names a ticket that is Done: the two gaps of the pre-owned users path are gone from the table.
+func TestRetiredUsersPathQuirksAreGone(t *testing.T) {
+	for _, q := range Quirks {
+		switch q.ID {
+		case "users-last-login-not-stamped", "email-verification-legacy-row-not-purged-owned":
+			t.Errorf("quirk %s is still in the table", q.ID)
+		}
+	}
+}

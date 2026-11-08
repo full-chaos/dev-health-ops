@@ -146,6 +146,10 @@ func workgraphBuildPreSteps(
 	if staleDependencyCleanupStepErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
+	stalePRTargetCommitIssueCleanupStep, stalePRTargetCommitIssueCleanupStepErr := newStalePRTargetCommitIssueEdgesCleanupPreStep(connection)
+	if stalePRTargetCommitIssueCleanupStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
 	loader, loaderErr := issueprlinks.NewLoader(connection)
 	if loaderErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
@@ -269,7 +273,7 @@ func workgraphBuildPreSteps(
 	}
 
 	steps := []workgraph.NativePreStep{
-		staleDependencyCleanupStep,
+		staleDependencyCleanupStep, stalePRTargetCommitIssueCleanupStep,
 		step, issuePRFallbackRetractionStep, issuePREdgesFastPathStep, issuePREdgesTextParseStep, issueCommitStep, issuePREdgesHeuristicStep,
 		issuePRFallbackInvariantStep,
 		prCommitLinksStep, prCommitEdgesStep, commitFileEdgesStep, flagGuardsStep, operationalIncidentStep, edgeStep,
@@ -371,7 +375,7 @@ func buildPostStepOrder() []string {
 // "7"/"8") rather than for any dependency reason.
 func buildPreStepOrder() []string {
 	return []string{
-		"stale_pr_dependency_issue_edges_cleanup",
+		"stale_pr_dependency_issue_edges_cleanup", "stale_pr_target_commit_issue_edges_cleanup",
 		"issue_pr_links",
 		"issue_pr_fallback_retraction",
 		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_commit_edges", "issue_pr_edges_heuristic",

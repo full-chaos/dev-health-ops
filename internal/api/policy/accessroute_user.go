@@ -28,8 +28,12 @@ type AccessUserStore interface {
 const principalPrefix = "prn_"
 
 // nonMemberRole is the role of a caller with no membership row in the token
-// org: the HS256 token's role when it states none (userFromClaims).
+// org: the legacy answer for a token that stated no role.
 const nonMemberRole = "member"
+
+// orgLessRole is the role of a caller whose token names no org: the HS256
+// path's, as go-api's login minted it (internal/api/session/tokens.go).
+const orgLessRole = "member"
 
 // parsePrincipalID reverses the session.v1 principal id form: "prn_" and the
 // unpadded base64url of the 16 id bytes. The principal id is the users id.
@@ -89,13 +93,13 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 		a.logger.WarnContext(ctx, "api user access token without a session", slog.String("user_id", id.String()))
 		return nil, errRejected
 	}
-	sessionID, err := a.checkSession(ctx, map[string]any{"sid": claims.SessionID}, id, row.State.TokenVersion)
+	sessionID, err := a.checkSession(ctx, claims.SessionID, id, row.State.TokenVersion)
 	if err != nil {
 		return nil, err
 	}
 	user := &User{UserID: id.String(), ID: id, Email: row.Email, Username: row.Username, FullName: row.FullName,
 		IsSuperuser: row.State.IsSuperuser, Platform: row.State.Platform, TokenVersion: int(row.State.TokenVersion), accessToken: true, SessionID: sessionID,
-		ImpersonatedBy: impersonatedBy}
+		ImpersonatedBy: impersonatedBy, Role: orgLessRole}
 	if claims.OrgID != nil && *claims.OrgID != "" {
 		role, err := a.tokenOrgRole(ctx, user, *claims.OrgID)
 		if err != nil {

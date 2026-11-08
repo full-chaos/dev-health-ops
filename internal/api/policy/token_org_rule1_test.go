@@ -46,29 +46,21 @@ func rule1Chain(auth *Authenticator, level Authz) http.Handler {
 	return auth.ReadOnce(scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), level, echo)))))
 }
 
-// rule1Answers serves the same caller and org claim through the legacy HS256
-// path (role claim role) and through the routed user access token path.
-func rule1Answers(t *testing.T, c rule1Case, role string, level Authz, header string) (legacy, routedAnswer response) {
+// rule1Routed serves the caller's routed user access token for the org claim (the HS256 class is retired here; the
+// legacy answers below are the literals main's executed HS256 side held this cell to).
+func rule1Routed(t *testing.T, c rule1Case, level Authz, header string) response {
 	t.Helper()
-	headers := func(bearer string) map[string]string {
-		h := map[string]string{"Authorization": "Bearer " + bearer}
-		if header != "" {
-			h["X-Org-Id"] = header
-		}
-		return h
-	}
-	legacyStore := rule1Store(c)
-	legacy = serve(rule1Chain(authenticator(t, legacyStore), level), http.MethodGet, "/x", headers(sign(t, claims(func(m jwt.MapClaims) {
-		m["org_id"], m["role"] = c.org, role
-	}))))
 	routedStore := rule1Store(c)
 	auth := routed(t, routedStore, &fakeValidator{result: userClaims(func(a *AccessTokenClaims) {
 		org := c.org
 		a.OrgID = &org
 	})})
 	signing, _ := jwt.NewWithClaims(jwt.SigningMethodEdDSA, jwt.MapClaims{}).SigningString()
-	routedAnswer = serve(rule1Chain(auth, level), http.MethodGet, "/x", headers(signing+".sig"))
-	return legacy, routedAnswer
+	h := map[string]string{"Authorization": "Bearer " + signing + ".sig"}
+	if header != "" {
+		h["X-Org-Id"] = header
+	}
+	return serve(rule1Chain(auth, level), http.MethodGet, "/x", h)
 }
 
 // Product rule 1 (D6773), CHAOS-13227: a plain user (no admin.orgs) whose
@@ -76,7 +68,7 @@ func rule1Answers(t *testing.T, c rule1Case, role string, level Authz, header st
 // the legacy HS256 path gives for the same caller and claim, on every guard
 // level, with and without an X-Org-Id that names the claim. The HS256 token
 // claims role member, the role a user access token (no role claim) carries.
-// The legacy answer is executed here and also held to its literal. The fake
+// The legacy answer is the literal main's executed HS256 side held this cell to. The fake
 // validator stands in for the verifier: the access-token.v1 verifier refuses
 // a B-notUUID claim before this step (CHAOS-13262).
 func TestRule1RoutedTokenOrgAnswerIsTheLegacyAnswer_CHAOS13227(t *testing.T) {
@@ -85,24 +77,20 @@ func TestRule1RoutedTokenOrgAnswerIsTheLegacyAnswer_CHAOS13227(t *testing.T) {
 		for _, level := range []Authz{Authenticated, Admin, AdminOrg} {
 			for _, header := range []string{"", c.org} {
 				t.Run(c.name+"/"+level.String()+"/header="+header, func(t *testing.T) {
-					legacy, got := rule1Answers(t, c, "member", level, header)
-					t.Logf("legacy=%d %.80q routed=%d %.80q", legacy.status, legacy.body, got.status, got.body)
+					got := rule1Routed(t, c, level, header)
 					switch {
 					case c.org == removedOrg:
-						if legacy.status != http.StatusForbidden || legacy.body != denied {
-							t.Fatalf("legacy %d %q, want the X-Org-Id refusal", legacy.status, legacy.body)
+						if got.status != http.StatusForbidden || got.body != denied {
+							t.Fatalf("routed %d %q, legacy: the X-Org-Id refusal", got.status, got.body)
 						}
 					case level == Authenticated:
-						if legacy.status != http.StatusOK || !strings.HasPrefix(legacy.body, "org="+c.org+" ") {
-							t.Fatalf("legacy %d %q, want 200 in the claimed org", legacy.status, legacy.body)
+						if got.status != http.StatusOK || !strings.HasPrefix(got.body, "org="+c.org+" ") {
+							t.Fatalf("routed %d %q, legacy: 200 in the claimed org", got.status, got.body)
 						}
 					default:
-						if legacy.status != http.StatusForbidden || legacy.body != `{"detail":"Admin access required"}` {
-							t.Fatalf("legacy %d %q, want 403 Admin access required", legacy.status, legacy.body)
+						if got.status != http.StatusForbidden || got.body != `{"detail":"Admin access required"}` {
+							t.Fatalf("routed %d %q, legacy: 403 Admin access required", got.status, got.body)
 						}
-					}
-					if got.status != legacy.status || got.body != legacy.body {
-						t.Fatalf("routed %d %q, legacy %d %q", got.status, got.body, legacy.status, legacy.body)
 					}
 				})
 			}
@@ -119,11 +107,8 @@ func TestRule1DeletedOrgAdminClaimDivergence_CHAOS13261(t *testing.T) {
 	diverged := []string{}
 	for _, c := range rule1Cases[1:] {
 		for _, level := range []Authz{Admin, AdminOrg} {
-			legacy, got := rule1Answers(t, c, "admin", level, "")
-			t.Logf("%s %s: routed=%d legacy=%d (role claim)", c.name, level, got.status, legacy.status)
-			if legacy.status != http.StatusOK {
-				t.Fatalf("%s %s: legacy %d %q, want 200 (role claim admin)", c.name, level, legacy.status, legacy.body)
-			}
+			// Legacy (HS256, role claim admin): 200, the literal main's executed HS256 side held this cell to.
+			got := rule1Routed(t, c, level, "")
 			switch got.status {
 			case http.StatusOK:
 			case http.StatusForbidden:

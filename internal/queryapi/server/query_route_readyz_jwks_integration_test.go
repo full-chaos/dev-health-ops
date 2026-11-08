@@ -72,7 +72,7 @@ func TestBuildQueryRoute_FailsFastOnMissingJWKS(t *testing.T) {
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	_, _, _, buildErr := buildQueryRoute(os.Getenv, cfg)
+	_, _, _, buildErr := buildQueryRoute(withIssuer, cfg)
 	if buildErr == nil {
 		t.Fatal("buildQueryRoute succeeded against a JWKS path that does not exist on disk -- CHAOS-4708's defect: this instance would have mounted /query, answered /readyz with 'ready', and 401'd every authenticated request")
 	}
@@ -115,7 +115,7 @@ func TestBuildQueryRoute_FailsFastOnMalformedJWKS(t *testing.T) {
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	_, _, _, buildErr := buildQueryRoute(os.Getenv, cfg)
+	_, _, _, buildErr := buildQueryRoute(withIssuer, cfg)
 	if buildErr == nil {
 		t.Fatal("buildQueryRoute succeeded against a malformed (non-JSON) JWKS document -- CHAOS-4708's defect")
 	}
@@ -180,7 +180,7 @@ func TestReadyz_JWKSValidAtStartup_ThenDeletedAfterStartup_Returns503(t *testing
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	handlers, _, cleanup, buildErr := buildQueryRoute(os.Getenv, cfg)
+	handlers, _, cleanup, buildErr := buildQueryRoute(withIssuer, cfg)
 	if buildErr != nil {
 		t.Fatalf("buildQueryRoute: %v", buildErr)
 	}
@@ -252,7 +252,7 @@ func TestReadyz_JWKSValidAtStartup_ThenOverwrittenMalformedAfterStartup_Returns5
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	handlers, _, cleanup, buildErr := buildQueryRoute(os.Getenv, cfg)
+	handlers, _, cleanup, buildErr := buildQueryRoute(withIssuer, cfg)
 	if buildErr != nil {
 		t.Fatalf("buildQueryRoute: %v", buildErr)
 	}

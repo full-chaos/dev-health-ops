@@ -19,7 +19,7 @@ func TestEdgeStoresReadSessionsInTheConfiguredAuthSchema(t *testing.T) {
 	}
 	defer pool.Close()
 	for value, want := range map[string]string{"": "auth", "acp": "acp"} {
-		settings := edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret, policy.EnvAuthSchema: value})
+		settings := edgeSettings(map[string]string{accessTokenIssuerEnvVar: accessTestIssuer, policy.EnvAuthSchema: value})
 		store, err := newEdgeUserStore(settings, pool)
 		if err != nil {
 			t.Fatalf("newEdgeUserStore(%q): %v", value, err)
@@ -35,7 +35,7 @@ func TestEdgeStoresReadSessionsInTheConfiguredAuthSchema(t *testing.T) {
 			t.Errorf("buildQueryEdgeAuthenticatorFromEnv(%q) store = %#v, want AuthSchema %q", value, queryStore, want)
 		}
 	}
-	bad := edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret, policy.EnvAuthSchema: "Bad-Name"})
+	bad := edgeSettings(map[string]string{accessTokenIssuerEnvVar: accessTestIssuer, policy.EnvAuthSchema: "Bad-Name"})
 	if _, err := newEdgeUserStore(bad, pool); err == nil {
 		t.Error("newEdgeUserStore accepted an unusable AUTH_DATABASE_SCHEMA")
 	}

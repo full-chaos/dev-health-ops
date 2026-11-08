@@ -171,7 +171,7 @@ func dhoAPIServes(t *testing.T) func(string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -174,9 +174,9 @@ func TestTheWorkloadBootstrapSubjectLoadsAloneOrWithKubernetes(t *testing.T) {
 	}
 
 	noIssuer := baseEnv()
+	delete(noIssuer, EnvTokenIssuerURL)
 	noIssuer[EnvWorkloadBootstrap] = "true"
-	if _, err = Load(Spec{LookupEnv: lookupFrom(noIssuer)}); err == nil ||
-		!strings.Contains(err.Error(), EnvWorkloadBootstrap) || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
+	if _, err = Load(Spec{LookupEnv: lookupFrom(noIssuer)}); err == nil || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
 		t.Fatalf("bootstrap without the token issuer: %v", err)
 	}
 
@@ -225,9 +225,9 @@ func TestTheServiceAccountKeySubjectIsOffByDefaultAndLoadsAlone(t *testing.T) {
 	}
 
 	noIssuer := baseEnv()
+	delete(noIssuer, EnvTokenIssuerURL)
 	noIssuer[EnvServiceAccountExchange] = "true"
-	if _, err = Load(Spec{LookupEnv: lookupFrom(noIssuer)}); err == nil ||
-		!strings.Contains(err.Error(), EnvServiceAccountExchange) || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
+	if _, err = Load(Spec{LookupEnv: lookupFrom(noIssuer)}); err == nil || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
 		t.Fatalf("the key subject without the token issuer: %v", err)
 	}
 

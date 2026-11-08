@@ -7,32 +7,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 // callOrgWrite sends body to a real orgRoutes() mount behind the real guard and scope; anonymous drops the bearer,
 // session gives the superuser an active impersonation session.
 func callOrgWrite(t *testing.T, anonymous, session bool, tc orgWriteCase, body string) (int, string, bool) {
 	t.Helper()
-	const key = "route-order-test-signing-key-32-bytes!!!!"
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, impersonatingStore{active: session}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth, bearer := routedAuth(t, impersonatingStore{active: session})
 	scope := policy.NewScope(auth, logger)
 	touched := new(bool)
 	h := &handlers{store: pgStore{Pool: touchedDB{touched}}, guard: policy.NewGuard(auth, logger), logger: logger}
@@ -40,15 +24,11 @@ func callOrgWrite(t *testing.T, anonymous, session bool, tc orgWriteCase, body s
 	for _, route := range h.orgRoutes() {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
-	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(mux))))
+	server := httptest.NewServer(profiled(t, h.orgRoutes(), scope.Principal(scope.OrgScope(scope.Impersonation(mux)))))
 	defer server.Close()
 	req, _ := http.NewRequest(tc.method, server.URL+tc.path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if !anonymous {
-		bearer, err := signer.Access(edgetoken.AccessClaims{UserID: uuid.NewString(), Email: "root@example.test", IsSuperuser: true}, time.Now(), uuid.NewString())
-		if err != nil {
-			t.Fatal(err)
-		}
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	resp, err := http.DefaultClient.Do(req)

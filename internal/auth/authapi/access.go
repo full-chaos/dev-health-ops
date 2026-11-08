@@ -21,6 +21,7 @@ import (
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
@@ -47,13 +48,11 @@ func AuthServiceAccessRows() ([]accessverify.Row, error) {
 func parseAccessRows(raw []byte) ([]accessverify.Row, error) {
 	var document struct {
 		Rows []struct {
-			Service               string   `json:"service"`
-			Method                string   `json:"method"`
-			Route                 string   `json:"route"`
-			AcceptedClasses       []string `json:"accepted_credential_classes"`
-			AccessTokenValidation *struct {
-				LegacyHS256 bool `json:"legacy_hs256"`
-			} `json:"access_token_validation"`
+			Service               string    `json:"service"`
+			Method                string    `json:"method"`
+			Route                 string    `json:"route"`
+			AcceptedClasses       []string  `json:"accepted_credential_classes"`
+			AccessTokenValidation *struct{} `json:"access_token_validation"`
 		} `json:"rows"`
 	}
 	if err := json.Unmarshal(raw, &document); err != nil {
@@ -77,7 +76,6 @@ func parseAccessRows(raw []byte) ([]accessverify.Row, error) {
 			Service:     AccessService,
 			Profile:     profile,
 			AcceptsUser: slices.Contains(entry.AcceptedClasses, accessverify.ClassUser),
-			LegacyHS256: entry.AccessTokenValidation.LegacyHS256,
 		})
 	}
 	if len(rows) == 0 {
@@ -113,7 +111,7 @@ func (p publishedKeys) PublicKey(kid string) (ed25519.PublicKey, bool) {
 
 // AccessCheck validates the bearer of a session route by the route's
 // endpoint-profile row: an EdDSA user access token (audience auth-service)
-// where the row accepts it, the HS256 compatibility token where the row opts in.
+// where the row accepts it. An HS256 token is refused (its class is retired).
 type AccessCheck struct {
 	validator *accessverify.Validator
 	eddsa     accessverify.EdDSAVerifier
@@ -126,8 +124,6 @@ type AccessCheckConfig struct {
 	IssuerURL string
 	// Keys is the key set the JWKS publishes (*token.Signer).
 	Keys KeySetSource
-	// Legacy verifies the HS256 compatibility token.
-	Legacy *Issuer
 	// Rows is the row table; nil reads the auth-service inventory.
 	Rows   []accessverify.Row
 	Meter  metric.Meter
@@ -135,16 +131,10 @@ type AccessCheckConfig struct {
 	Now    func() time.Time
 }
 
-type legacyOutcomeKey struct{}
-
-// legacyOutcome carries the auth-outcome reason of a refused HS256 token out
-// of the validator, which reports every refusal as one error.
-type legacyOutcome struct{ reason string }
-
 // NewAccessCheck builds the check over cfg.
 func NewAccessCheck(cfg AccessCheckConfig) (*AccessCheck, error) {
-	if cfg.Keys == nil || cfg.Legacy == nil {
-		return nil, errors.New("authapi: the access check needs a key set and the legacy verifier")
+	if cfg.Keys == nil {
+		return nil, errors.New("authapi: the access check needs a key set")
 	}
 	rows := cfg.Rows
 	if rows == nil {
@@ -165,20 +155,9 @@ func NewAccessCheck(cfg AccessCheckConfig) (*AccessCheck, error) {
 	if err != nil {
 		return nil, err
 	}
-	legacy := cfg.Legacy
 	validator, err := accessverify.New(accessverify.Config{
 		Rows:  rows,
 		EdDSA: verifier,
-		Legacy: func(ctx context.Context, tok string) (any, error) {
-			bearer, reason, err := legacy.Verify(tok)
-			if out, ok := ctx.Value(legacyOutcomeKey{}).(*legacyOutcome); ok {
-				out.reason = reason
-			}
-			if err != nil {
-				return nil, err
-			}
-			return bearer, nil
-		},
 		Meter: meter, Logger: cfg.Logger, Now: now,
 	})
 	if err != nil {
@@ -187,38 +166,50 @@ func NewAccessCheck(cfg AccessCheckConfig) (*AccessCheck, error) {
 	return &AccessCheck{validator: validator, eddsa: verifier, now: now}, nil
 }
 
-// WithAccessCheck makes the Issuer's Verify path for the session routes go
-// through check. Without one the routes verify the HS256 token only.
+// WithAccessCheck makes the bearer routes' check go through check. Without
+// one the bearer routes are not mounted (mountBearerRoutes).
 func (i *Issuer) WithAccessCheck(check *AccessCheck) *Issuer {
 	i.access = check
 	return i
 }
 
+// mountBearerRoutes drops from routes the group's bearer routes ("METHOD
+// /path") when issuer holds no access check to verify a user bearer with, and
+// logs one line naming AUTH_TOKEN_ISSUER_URL, the group and its routes.
+func mountBearerRoutes(issuer *Issuer, logger *slog.Logger, group string, routes []httpapi.Route, bearer ...string) []httpapi.Route {
+	if issuer.access != nil {
+		return routes
+	}
+	logger.Info("auth bearer routes not mounted: AUTH_TOKEN_ISSUER_URL is unset (no access-token verifier)", "group", group, "routes", bearer)
+	return slices.DeleteFunc(routes, func(route httpapi.Route) bool {
+		return slices.Contains(bearer, route.Method+" "+route.Pattern)
+	})
+}
+
+// withSessionBearerRoutes is the session route set: refresh, then current,
+// revoke and revoke-all only when the issuer holds the check.
+func withSessionBearerRoutes(deps Deps, routes []httpapi.Route) []httpapi.Route {
+	return mountBearerRoutes(deps.Issuer, deps.Logger, "sessions", routes,
+		"GET "+PatternCurrent, "POST "+PatternRevoke, "POST "+PatternRevokeAll)
+}
+
 // bearer verifies token for the route profile (the mux pattern, "METHOD /path").
 func (i *Issuer) bearer(ctx context.Context, profile, token string) (Bearer, string, error) {
 	if i.access == nil {
-		return i.Verify(token)
+		return Bearer{}, reasonDependency, fmt.Errorf("%w: no access check", errAccessUnavailable)
 	}
 	return i.access.bearer(ctx, profile, token)
 }
 
 func (c *AccessCheck) bearer(ctx context.Context, profile, token string) (Bearer, string, error) {
-	outcome := &legacyOutcome{}
-	result, err := c.validator.Validate(context.WithValue(ctx, legacyOutcomeKey{}, outcome), AccessService, profile, token)
+	result, err := c.validator.Validate(ctx, AccessService, profile, token)
 	switch {
 	case errors.Is(err, accessverify.ErrUnavailable):
 		return Bearer{}, reasonDependency, fmt.Errorf("%w: %w", errAccessUnavailable, err)
-	case err != nil && outcome.reason != "":
-		return Bearer{}, outcome.reason, err
 	case err != nil:
 		return Bearer{}, c.refusalReason(token), err
 	}
-	switch result.Class {
-	case accessverify.ClassLegacy:
-		if bearer, ok := result.Legacy.(Bearer); ok {
-			return bearer, "", nil
-		}
-	case accessverify.ClassUser:
+	if result.Class == accessverify.ClassUser {
 		return userBearer(result.Claims)
 	}
 	return Bearer{}, reasonMalformed, errBearerShape

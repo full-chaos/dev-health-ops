@@ -591,6 +591,8 @@ func FetchBuildIdentity(ctx context.Context, client *LegClient, buildInfoURL str
 	// client is a LegClient: redirects are REFUSED and no proxy is used,
 	// because /registry and /buildinfo are direct endpoints and anything
 	// else means reading something nobody validated.
+	// A read that does not succeed leaves no accepted value behind from an earlier one.
+	credential.forgetAccepted()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, buildInfoURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("goapiproof: build buildinfo request: %w", err)

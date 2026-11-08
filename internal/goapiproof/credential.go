@@ -367,6 +367,14 @@ func (c *Credential) accept(value string) {
 	c.state.accepted = value
 }
 
+// forgetAccepted clears the accepted value. Safe on a nil Credential, which Apply then refuses.
+func (c *Credential) forgetAccepted() {
+	if c == nil || c.state == nil {
+		return
+	}
+	c.accept("")
+}
+
 // isEmptyCredential reports whether a header value carries no actual
 // credential.
 //

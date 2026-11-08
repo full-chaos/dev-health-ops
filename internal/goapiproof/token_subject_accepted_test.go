@@ -3,11 +3,13 @@ package goapiproof
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -89,5 +91,50 @@ func TestTokenSubjectRefusesATokenBuildinfoDidNotAccept(t *testing.T) {
 				t.Fatal("the refusal carries the credential")
 			}
 		})
+	}
+}
+
+// A later /buildinfo read that fails clears the accepted value: the subject of an earlier accepted read is not carried
+// past a read the verifier refused, or a read that never reached it.
+func TestTokenSubjectRefusesAfterALaterBuildinfoReadFailed(t *testing.T) {
+	for name, fail := range map[string]func(t *testing.T, path string, refuse *atomic.Bool){
+		"a 401":                      func(_ *testing.T, _ string, refuse *atomic.Bool) { refuse.Store(true) },
+		"the token file is unusable": func(t *testing.T, path string, _ *atomic.Bool) { writeFile(t, path, "not-a-token") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "access-token")
+			writeAcceptedTestToken(t, path, "prn_admin_a")
+			var refuse atomic.Bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if refuse.Load() {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				_, _ = w.Write([]byte(`{"commit":"b18e56fa79cfe20ce0f75df148144b832d92be36","modified":false}`))
+			}))
+			t.Cleanup(server.Close)
+			credential := UserAccessTokenFileCredential("platform-admin user access token", "routing access token", path)
+			if _, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL, credential); err != nil {
+				t.Fatalf("first FetchBuildIdentity: %v", err)
+			}
+			if got, err := credential.TokenSubject(context.Background()); err != nil || got != "prn_admin_a" {
+				t.Fatalf("TokenSubject after the accepted read = (%q, %v), want prn_admin_a", got, err)
+			}
+			fail(t, path, &refuse)
+			if _, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL, credential); err == nil {
+				t.Fatal("the second FetchBuildIdentity accepted the read")
+			}
+			got, err := credential.TokenSubject(context.Background())
+			if !errors.Is(err, ErrTokenSubjectNotAccepted) {
+				t.Fatalf("TokenSubject after a failed read = (%q, %v), want ErrTokenSubjectNotAccepted", got, err)
+			}
+		})
+	}
+}
+
+func writeFile(t *testing.T, path, value string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

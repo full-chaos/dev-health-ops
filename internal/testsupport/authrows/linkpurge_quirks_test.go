@@ -71,19 +71,33 @@ func TestOwnedLegCoversJudysPurgedLegacyResetRowOnly(t *testing.T) {
 	}
 }
 
-// An empty target stays a failure unless a live missing-row quirk covered every golden row.
-func TestAnEmptyTargetFailsUnlessEveryGoldenRowIsCovered(t *testing.T) {
-	l := ownedUsersLedger(t, true)
-	if problems := l.Compare(TableUsers, aliceGolden, ""); len(problems) == 0 {
-		t.Error("an empty users target passed")
+// An empty target with an expected row that no live missing-row quirk covers fails: the empty-target rule does not hide
+// a lost row.
+func TestAnEmptyTargetWithAnUncoveredExpectedRowFails(t *testing.T) {
+	for name, golden := range map[string]string{
+		"a users row":                    aliceGolden,
+		"a second purged row past Max 1": judyLegacyReset + rowSeparator + judyLegacyReset,
+		"another user's reset row":       "zed@example.comtrue false 64 60",
+	} {
+		table := TablePasswordResetTokens
+		if name == "a users row" {
+			table = TableUsers
+		}
+		l := ownedUsersLedger(t, true)
+		if problems := l.Compare(table, golden, ""); len(problems) == 0 {
+			t.Errorf("%s: an empty target passed (covered %q)", name, l.Covered())
+		}
 	}
-	l = ownedUsersLedger(t, true)
-	if problems := l.Compare(TablePasswordResetTokens, "", ""); len(problems) == 0 || !strings.Contains(problems[0], "rows are empty") {
-		t.Errorf("an empty golden must fail as empty: %v", problems)
-	}
-	l = ownedUsersLedger(t, true)
-	if problems := l.Compare(TablePasswordResetTokens, judyLegacyReset+rowSeparator+judyLegacyReset, ""); len(problems) == 0 {
-		t.Error("two purged rows where the quirk covers one passed")
+}
+
+// An empty target with an empty expected set fails as empty on every leg: it is never a pass.
+func TestAnEmptyTargetWithAnEmptyExpectedSetFails(t *testing.T) {
+	for _, owned := range []bool{true, false} {
+		l := ownedUsersLedger(t, owned)
+		problems := l.Compare(TablePasswordResetTokens, "", "")
+		if len(problems) != 1 || !strings.Contains(problems[0], "rows are empty") {
+			t.Errorf("owned=%v: problems %v, want the one rows-are-empty problem", owned, problems)
+		}
 	}
 }
 

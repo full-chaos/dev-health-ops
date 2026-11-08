@@ -231,8 +231,19 @@ authService:
   #    harness shows no mismatch and the decision point holds a per-caller limit. Needs go-api to reach auth-service
   #    (phase 2 or higher) and the workload credential inputs go-api's startup names. Rollback: remove the name from
   #    the list and roll go-api; no policy data changes. goApi.extraEnv cannot set the variable.
+  #    query-api has three keys, all unset by default (an unset key renders nothing, so a current install renders as before):
+  #    queryApiPdpMode (off, shadow or enforce) renders QUERY_API_PDP_MODE; queryApi lists the namespaces (analytics, metrics,
+  #    git, work_items, integrations, reports, org) whose REST routes and GraphQL root fields the decision point decides,
+  #    rendered as QUERY_API_AUTHZ_ENFORCE; queryApiHeaders lists the namespaces decided for the X-DH-Internal-* header carrier,
+  #    rendered as QUERY_API_HEADERS_AUTHZ_ENFORCE. A list needs queryApiPdpMode shadow or enforce (the binary answers 503 for a
+  #    listed namespace without a client). The decision point's client inputs (AUTH_PROXY_URL, the workload credential) still come
+  #    from queryApi.extraEnv; a mode on with a missing input never fails the start, and every PDP-gated request answers 503.
+  #    queryApi.extraEnv cannot set the three variables.
   enforce:
     goApi: []
+    queryApiPdpMode: ""
+    queryApi: []
+    queryApiHeaders: []
   # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a
   #    known account to the provider's organization and create a new account. true needs users owned (authService.phase 4
   #    with usersOwnedStage=owned): below it go-api's own sign-in join still writes, and two writers would race.

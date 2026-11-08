@@ -23,6 +23,7 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
@@ -339,21 +340,23 @@ func TestRESTShadowObserveSeam(t *testing.T) {
 }
 
 // 2h and the acp condition: EVERY legacy-allow request on a mapped route is observed, whatever the credential class.
-// A user token asks the PDP (match); the HS256 edge token routed or not and the envelope are counted skipped; the
-// #5679 exempt counter is unchanged.
+// A user token asks the PDP (match); the unrouted HS256 edge token and the envelope are counted skipped; the
+// #5679 exempt counter is unchanged. Routed, the HS256 edge token is the retired class: 401 alg_not_allowed, so
+// there is no legacy allow to observe.
 func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 	skippedHS256 := map[string]int64{shadowResultsMetric + "|reason=hs256,result=skipped": 1}
 	skippedEnvelope := map[string]int64{shadowResultsMetric + "|reason=envelope,result=skipped": 1}
 	matched := map[string]int64{shadowResultsMetric + "|reason=none,result=match": 1}
 	for name, routed := range map[string]bool{"routed": true, "unrouted": false} {
 		for class, tc := range map[string]struct {
-			token func(*gatedREST, *testing.T) string
-			want  map[string]int64
-			calls int
+			token         func(*gatedREST, *testing.T) string
+			want          map[string]int64
+			calls         int
+			routedRefused bool
 		}{
-			"user token": {func(g *gatedREST, _ *testing.T) string { return g.userToken() }, matched, 1},
-			"edge token": {func(g *gatedREST, t *testing.T) string { return g.edgeToken(t) }, skippedHS256, 0},
-			"envelope":   {func(g *gatedREST, _ *testing.T) string { return g.f.envelope }, skippedEnvelope, 0},
+			"user token": {func(g *gatedREST, _ *testing.T) string { return g.userToken() }, matched, 1, false},
+			"edge token": {func(g *gatedREST, t *testing.T) string { return g.edgeToken(t) }, skippedHS256, 0, true},
+			"envelope":   {func(g *gatedREST, _ *testing.T) string { return g.f.envelope }, skippedEnvelope, 0, false},
 		} {
 			if class == "user token" && !routed {
 				continue
@@ -374,6 +377,21 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 					Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 				g := &gatedREST{handler: planeHandler(f.handler.(*http.ServeMux), gate), reader: reader, gate: gate, f: f, minter: m}
 				before := shadowCounters(t)
+				if routed && tc.routedRefused {
+					if got, _ := g.get(tc.token(g, t)); got != (answer{http.StatusUnauthorized, restRefusal}) {
+						t.Fatalf("answer %+v, want 401 refusal", got)
+					}
+					if d := settleQuiet(t, before); len(d) != 0 {
+						t.Fatalf("5.12 counters %v, want none for a refused token", d)
+					}
+					if got := f.reader.counts(t)[accessverify.RefusedMetric+"|profile=GET /api/v1/home,reason=alg_not_allowed,service=dev-health-query-api"]; got != 1 {
+						t.Fatalf("the routed HS256 refusal is not counted alg_not_allowed: %d", got)
+					}
+					if n := len(srv.Requests()); n != 0 {
+						t.Fatalf("PDP asked %d times for a refused token", n)
+					}
+					return
+				}
 				if got, _ := g.get(tc.token(g, t)); got.Status != http.StatusOK {
 					t.Fatalf("status %d, want 200", got.Status)
 				}
@@ -441,10 +459,10 @@ func TestRESTShadowInFlightFullIsDropped(t *testing.T) {
 	}
 }
 
-// 2k: AUTH_SHADOW_PDP_SAMPLE=50 asks for 50 of 100 requests.
+// 2k: AUTH_SHADOW_PDP_SAMPLE=50 asks for 50 of 100 requests. The in-flight cap is 100 so a slow PDP drops none.
 func TestRESTShadowSampleKnob(t *testing.T) {
 	srv := pdptest.New(t)
-	g, _ := newShadowREST(t, pepOf(t, srv.URL), map[string]string{policy.EnvShadowPDPSample: "50"})
+	g, _ := newShadowREST(t, pepOf(t, srv.URL), map[string]string{policy.EnvShadowPDPSample: "50", policy.EnvShadowPDPInFlight: "100"})
 	before := shadowCounters(t)
 	for i := 0; i < 100; i++ {
 		if got, _ := g.get(g.userToken()); got != gatedOK {
@@ -562,7 +580,7 @@ func TestRESTShadowLabelCensus(t *testing.T) {
 // 5.12 counters.
 func TestRESTEnforceUnchangedByTheShadowSwitch(t *testing.T) {
 	srv := pdptest.New(t)
-	g := newGatedREST(t, pdp.ModeEnforce, srv.URL, true)
+	g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, true)
 	before := shadowCounters(t)
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedOK {
 		t.Fatalf("allow: %+v", got)

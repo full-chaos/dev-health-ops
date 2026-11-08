@@ -2,8 +2,11 @@ package venueoracle
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -199,5 +202,52 @@ func TestFinishPinsPassesOnlyWhenEveryPinPasses(t *testing.T) {
 	}
 	if err := finishPins([]*GoPin{good, unchecked}); err == nil || !strings.Contains(err.Error(), "never checked") {
 		t.Fatalf("finishPins with an unchecked pin = %v, want its error", err)
+	}
+}
+
+// A known divergence names its ticket; the first that matches a request wins, and a request none names is compared.
+// Its subtest fails once the answers agree, so the entry is removed.
+func TestDiffKnownDivergencePicksTheTicketAndFailsOnceTheAnswersAgree(t *testing.T) {
+	named := func(names ...string) func(Request) bool {
+		return func(r Request) bool { return slices.Contains(names, r.Name) }
+	}
+	options := DiffOptions{KnownDivergences: []KnownDivergence{{Match: named("a", "b"), Ticket: "CHAOS-1: first"}, {Match: named("b", "c"), Ticket: "CHAOS-2: second"}}}
+	for name, want := range map[string]string{"a": "CHAOS-1: first", "b": "CHAOS-1: first", "c": "CHAOS-2: second", "d": ""} {
+		if got, known := options.knownDivergence(Request{Name: name}); got != want || known != (want != "") {
+			t.Errorf("%s: ticket %q %v, want %q", name, got, known, want)
+		}
+	}
+	if err := knownDivergenceErr("a", "CHAOS-1: first", false); err != nil {
+		t.Errorf("a divergent answer: %v, want a skip", err)
+	}
+	if err := knownDivergenceErr("a", "CHAOS-1: first", true); err == nil || !strings.Contains(err.Error(), "remove the known divergence (CHAOS-1: first)") {
+		t.Errorf("an agreeing answer: %v, want the failure naming the ticket", err)
+	}
+	for _, ticket := range []string{"", "no id", "chaos-1: lower", "CHAOS-1: two\nlines"} {
+		if knownDivergenceTicket.MatchString(ticket) && !strings.ContainsAny(ticket, "\n\r") {
+			t.Errorf("ticket %q accepted", ticket)
+		}
+	}
+}
+
+// Diff skips a known divergence whose Go answer differs, names it in the receipt and compares every other request.
+func TestDiffSkipsADivergentKnownDivergence(t *testing.T) {
+	goPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/gap" {
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer goPlane.Close()
+	requests := []Request{{Name: "gap", Method: "GET", Path: "/gap"}, {Name: "same", Method: "GET", Path: "/same"}}
+	answer := func(status int) Response {
+		return Response{Status: status, Headers: map[string]string{"content-type": "application/json", "content-length": "2"}, Body: `{}`}
+	}
+	receipt := Diff(t, goPlane.URL, requests, []Response{answer(200), answer(200)}, DiffOptions{
+		KnownDivergences: []KnownDivergence{{Match: func(r Request) bool { return r.Name == "gap" }, Ticket: "CHAOS-1: gap"}},
+	})
+	if !strings.Contains(receipt, "python=200 go=401 SKIP (CHAOS-1: gap)") || !strings.Contains(receipt, "python=200 go=200 SAME") {
+		t.Fatalf("receipt:\n%s", receipt)
 	}
 }

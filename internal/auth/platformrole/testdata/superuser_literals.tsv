@@ -35,6 +35,7 @@ internal/auth/edgetoken/signer.go	Signer.AccessUntil	1	claim key
 internal/auth/restorefence/specs.go	-	4	restore fence of the public legacy column (a narrowing; it decides no platform power)
 internal/auth/usersbackfill/platformrole_command.go	platformRoleOwnedGate	1	message text
 internal/auth/usersbackfill/source.go	pageUsers	1	read: the users backfill source (public is the source by design)
+internal/auth/usersbackfill/users_create.go	runUsersCreate	1	message text
 internal/edgetokenmint/edgetokenmint.go	-	1	read: lookupSQL, used only through lookupSQLFor
 internal/edgetokenmint/edgetokenmint.go	lookupSQLFor	1	read: the switched minter statement (the rule only while owned)
 internal/platform/config/queryapi_options.go	-	1	help text

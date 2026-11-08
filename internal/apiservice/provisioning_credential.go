@@ -15,8 +15,9 @@ const (
 	// EnvAuthProvisioningCredential names it: unset, empty or credentialWorkload. The session credential is retired
 	// on the provisioning routes, so credentialSessionCompat (or any other value) is a start-up error.
 	EnvAuthProvisioningCredential = "AUTH_PROVISIONING_CREDENTIAL"
-	// EnvAuthSessionIssueCredential selects the credential of go-api's session issue client, the same two values; unset
-	// is credentialSessionCompat.
+	// EnvAuthSessionIssueCredential names the credential of go-api's session issue client: unset, empty or
+	// credentialWorkload. The session credential is retired on the session issue routes, so credentialSessionCompat
+	// (or any other value) is a start-up error.
 	EnvAuthSessionIssueCredential = "AUTH_SESSION_ISSUE_CREDENTIAL"
 	// The workload inputs, read by workloadinput.NewClient.
 	EnvAuthWorkloadSubjectFile   = workloadinput.EnvSubjectFile
@@ -35,7 +36,8 @@ type provisioningCredential struct {
 	workload *workloadtoken.Client
 }
 
-// sessionCredential is the session issue client's credential choice, made once at start-up, as provisioningCredential.
+// sessionCredential is the session issue client's credential, made once at start-up: the workload token, set whenever
+// AUTH_PROXY_SESSIONS is on. The zero value (the switch off) builds no client.
 type sessionCredential struct {
 	workload *workloadtoken.Client
 }
@@ -43,22 +45,9 @@ type sessionCredential struct {
 // workloadAsk is one switch that is on and one selector that chose the workload credential.
 type workloadAsk = workloadinput.Ask
 
-// selectsWorkload reads selector when flag is on: false for unset, empty and session_compat, true for workload, and a
-// start-up error naming the selector for any other value. The value is compared as it is: a padded or whitespace-only
-// value is not one of the three.
-func selectsWorkload(lookup func(string) (string, bool), flag, selector string) (bool, error) {
-	value, _ := lookup(selector)
-	switch value {
-	case "", credentialSessionCompat:
-		return false, nil
-	case credentialWorkload:
-		return true, nil
-	}
-	return false, fmt.Errorf("%s is on: %s must be %s or %s", flag, selector, credentialWorkload, credentialSessionCompat)
-}
-
 // newCredentials takes the workload credential whenever AUTH_PROXY_ORG_PROVISIONING is on (AUTH_PROVISIONING_CREDENTIAL,
-// when set, must say workload) and reads AUTH_SESSION_ISSUE_CREDENTIAL when AUTH_PROXY_SESSIONS is on. When either asks for workload ONE workloadtoken.Client
+// when set, must say workload) and whenever AUTH_PROXY_SESSIONS is on (AUTH_SESSION_ISSUE_CREDENTIAL, when set, must
+// say workload). When either asks for workload ONE workloadtoken.Client
 // is built from the shared inputs and both clients share it. A selected workload credential with a missing or invalid
 // input is a start-up error naming it; there is no fallback to the session credential here or per request.
 func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (provisioningCredential, sessionCredential, error) {
@@ -75,14 +64,13 @@ func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (pr
 	}
 	if cfg.Enabled(AuthSessions) {
 		sessionsFlag := AuthProxyFlagEnv(AuthSessions)
-		ok, err := selectsWorkload(lookup, sessionsFlag, EnvAuthSessionIssueCredential)
-		if err != nil {
-			return provisioningCredential{}, sessionCredential{}, err
+		// The value is compared as it is: a padded or whitespace-only value is not one of the two.
+		if value, _ := lookup(EnvAuthSessionIssueCredential); value != "" && value != credentialWorkload {
+			return provisioningCredential{}, sessionCredential{}, fmt.Errorf("%s is on: %s must be %s (the %s credential is retired on the session issue routes)",
+				sessionsFlag, EnvAuthSessionIssueCredential, credentialWorkload, credentialSessionCompat)
 		}
-		if ok {
-			sessionAsks = true
-			asks = append(asks, workloadAsk{Flag: sessionsFlag, Selector: EnvAuthSessionIssueCredential})
-		}
+		sessionAsks = true
+		asks = append(asks, workloadAsk{Flag: sessionsFlag, Selector: EnvAuthSessionIssueCredential})
 	}
 	if len(asks) == 0 {
 		return provisioningCredential{}, sessionCredential{}, nil

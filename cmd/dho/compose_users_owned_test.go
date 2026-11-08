@@ -16,7 +16,7 @@ func TestComposeUsersOwnedDefaultsOnForEveryReader(t *testing.T) {
 	if err := yaml.Unmarshal(readCompose(t, "compose.yml"), &file); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"go-api", "auth-service", "auth-migrate", "auth-grants", "auth-fence-init", "auth-workload-seed", "auth-workload-bootstrap"} {
+	for _, name := range []string{"go-api", "migrate", "auth-service", "auth-migrate", "auth-grants", "auth-fence-init", "auth-workload-seed", "auth-workload-bootstrap"} {
 		got, ok := file.Services[name].Environment["AUTH_USERS_OWNED"]
 		if !ok {
 			t.Errorf("%s: AUTH_USERS_OWNED is not passed through", name)

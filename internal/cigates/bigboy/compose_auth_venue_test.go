@@ -107,11 +107,8 @@ func composeAuthGoAPIVerifier(g *guard) {
 	api := off.services["go-api"]
 	env := mp(api["environment"])
 	g.expect(str(env["AUTH_ACCESS_TOKEN_ISSUER"]) == composeAuthIssuer, "go-api AUTH_ACCESS_TOKEN_ISSUER=%q, want %q", str(env["AUTH_ACCESS_TOKEN_ISSUER"]), composeAuthIssuer)
-	g.expect(str(env["AUTH_ACR_WORKLOAD_SUBJECT"]) == "", "go-api AUTH_ACR_WORKLOAD_SUBJECT renders %q with nothing set, want empty (the seed makes the id)", str(env["AUTH_ACR_WORKLOAD_SUBJECT"]))
-	const subject = "prn_AAAAAAAAAAAAAAAAAAAAAA"
-	on := composeMust(g, composeIn{opsEnv: "AUTH_ACR_WORKLOAD_SUBJECT=" + subject + "\n"})
-	got := str(mp(on.services["go-api"]["environment"])["AUTH_ACR_WORKLOAD_SUBJECT"])
-	g.expect(got == subject, "go-api AUTH_ACR_WORKLOAD_SUBJECT renders %q from ops/.env, want %q", got, subject)
+	_, pinned := env["AUTH_ACR_WORKLOAD_SUBJECT"]
+	g.expect(!pinned, "go-api sets AUTH_ACR_WORKLOAD_SUBJECT: the acr-api principal comes from the workload registry, the pin is retired")
 	g.expect(str(env["SSL_CERT_DIR"]) == composeAuthIssuerCA, "go-api SSL_CERT_DIR=%q, want %s", str(env["SSL_CERT_DIR"]), composeAuthIssuerCA)
 	_, file := env["SSL_CERT_FILE"]
 	g.expect(!file, "go-api sets SSL_CERT_FILE: it would replace the image's CA file for every outbound call")
@@ -330,8 +327,8 @@ func composeAuthEddsaWiring(g *guard) {
 		"go-api":       {"AUTH_PROXY_SESSIONS": "true", "AUTH_PROXY_URL": "http://auth-service:8095", "AUTH_SESSION_ISSUE_CREDENTIAL": "workload", "AUTH_WORKLOAD_BOOTSTRAP_FILE": "/run/workload/api.bootstrap", "AUTH_WORKLOAD_ISSUER": composeAuthIssuer},
 		"query-api":    {"AUTH_PROXY_SESSIONS": "true", "SSL_CERT_DIR": composeAuthIssuerCA},
 		"web":          {"AUTH_ACCESS_TOKEN_CLASS": "eddsa", "NODE_EXTRA_CA_CERTS": composeAuthIssuerCA + "/issuer.pem"},
-		"auth-migrate": {"AUTH_SESSION_READER_ROLES": "devhealth_api,devhealth_query_api"},
-		"auth-grants":  {"AUTH_SESSION_READER_ROLES": "devhealth_api,devhealth_query_api"},
+		"auth-migrate": {"AUTH_SESSION_READER_ROLES": "devhealth_api,devhealth_query_api", "AUTH_WORKLOAD_READER_ROLES": "devhealth_api"},
+		"auth-grants":  {"AUTH_SESSION_READER_ROLES": "devhealth_api,devhealth_query_api", "AUTH_WORKLOAD_READER_ROLES": "devhealth_api"},
 	}
 	for svc, kv := range want {
 		for k, v := range kv {
@@ -344,6 +341,8 @@ func composeAuthEddsaWiring(g *guard) {
 		}
 		_, has := env(n)["AUTH_SESSION_READER_ROLES"]
 		g.expect(!has, "%s sets AUTH_SESSION_READER_ROLES: only auth-migrate and auth-grants grant the session read", n)
+		_, hasWorkload := env(n)["AUTH_WORKLOAD_READER_ROLES"]
+		g.expect(!hasWorkload, "%s sets AUTH_WORKLOAD_READER_ROLES: only auth-migrate and auth-grants grant the registry read", n)
 	}
 	for _, c := range []struct{ svc, key string }{{"auth-service", "AUTH_SESSION_SUCCESSOR_KEY"}, {"go-api", "AUTH_SESSION_ISSUE_TOKEN"}, {"web", "SSL_CERT_FILE"}, {"query-api", "SSL_CERT_FILE"}} {
 		_, has := env(c.svc)[c.key]
@@ -422,7 +421,7 @@ func composeAuthReadme(g *guard) {
 	if end := strings.Index(section[3:], "\n## "); end >= 0 {
 		section = section[:end+3]
 	}
-	for _, want := range []string{"run --rm acr-workload-bootstrap", "AUTH_ACR_WORKLOAD_SUBJECT", "openssl req", "/ca/issuer.pem", "/key/issuer.key", "expires_at"} {
+	for _, want := range []string{"run --rm acr-workload-bootstrap", "AUTH_WORKLOAD_READER_ROLES", "openssl req", "/ca/issuer.pem", "/key/issuer.key", "expires_at"} {
 		g.expect(strings.Contains(section, want), "README auth venue section lacks %q", want)
 	}
 	for _, m := range composeReadmeCmdRe.FindAllStringSubmatch(section, -1) {
@@ -470,8 +469,8 @@ func TestComposeAuthVenuePlanted(t *testing.T) {
 			check: composeAuthNetworks, want: "network auth_plane has members"},
 		{name: "go-api replaces the CA file", mutate: mut(composeFile, "    - SSL_CERT_DIR=/run/auth-issuer-ca\n", "    - SSL_CERT_FILE=/run/auth-issuer-ca/issuer.pem\n"),
 			check: composeAuthGoAPIVerifier, want: "SSL_CERT"},
-		{name: "go-api subject defaulted", mutate: mut(composeFile, "    - AUTH_ACR_WORKLOAD_SUBJECT=${AUTH_ACR_WORKLOAD_SUBJECT:-}\n", "    - AUTH_ACR_WORKLOAD_SUBJECT=${AUTH_ACR_WORKLOAD_SUBJECT:-prn_BBBBBBBBBBBBBBBBBBBBBB}\n"),
-			check: composeAuthGoAPIVerifier, want: "with nothing set"},
+		{name: "go-api pins the acr subject again", mutate: mut(composeFile, "    - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443\n", "    - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443\n    - AUTH_ACR_WORKLOAD_SUBJECT=prn_BBBBBBBBBBBBBBBBBBBBBB\n"),
+			check: composeAuthGoAPIVerifier, want: "the pin is retired"},
 		{name: "go-api mounts the whole tls dir", mutate: mut(composeFile, "      source: ${BIGBOY_AUTH_ISSUER_TLS_DIR:-/var/lib/oci-cache/mcp-venue/auth-issuer-tls}/ca\n", "      source: ${BIGBOY_AUTH_ISSUER_TLS_DIR:-/var/lib/oci-cache/mcp-venue/auth-issuer-tls}\n"),
 			check: composeAuthGoAPIVerifier, want: "one bind of <tls dir>/ca"},
 		{name: "go-api ca dir created when missing", mutate: mut(composeFile, "      target: /run/auth-issuer-ca\n      read_only: true\n      bind:\n        create_host_path: false\n", "      target: /run/auth-issuer-ca\n      read_only: true\n"),
@@ -517,7 +516,7 @@ func TestComposeAuthVenuePlanted(t *testing.T) {
 			check: composeAuthEddsaWiring, want: "query-api SSL_CERT_DIR"},
 		{name: "web without the CA file", mutate: mut(composeFile, "    - NODE_EXTRA_CA_CERTS=/run/auth-issuer-ca/issuer.pem\n", ""),
 			check: composeAuthEddsaWiring, want: "web NODE_EXTRA_CA_CERTS"},
-		{name: "auth-grants without the session readers", mutate: mut(composeFile, "      <<: *auth-migration-env\n      AUTH_SESSION_READER_ROLES: devhealth_api,devhealth_query_api\n    image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'\n    networks:\n      auth_plane: null\n    profiles: [auth]\n    read_only: true\n    restart: 'no'\n    security_opt: [no-new-privileges:true]\n    tmpfs: [/tmp]\n    user: 65532:65532\n  auth-fence-init:", "      <<: *auth-migration-env\n    image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'\n    networks:\n      auth_plane: null\n    profiles: [auth]\n    read_only: true\n    restart: 'no'\n    security_opt: [no-new-privileges:true]\n    tmpfs: [/tmp]\n    user: 65532:65532\n  auth-fence-init:"),
+		{name: "auth-grants without the session readers", mutate: mut(composeFile, "      <<: *auth-migration-env\n      AUTH_SESSION_READER_ROLES: devhealth_api,devhealth_query_api\n      AUTH_WORKLOAD_READER_ROLES: devhealth_api\n    image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'\n    networks:\n      auth_plane: null\n    profiles: [auth]\n    read_only: true\n    restart: 'no'\n    security_opt: [no-new-privileges:true]\n    tmpfs: [/tmp]\n    user: 65532:65532\n  auth-fence-init:", "      <<: *auth-migration-env\n    image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'\n    networks:\n      auth_plane: null\n    profiles: [auth]\n    read_only: true\n    restart: 'no'\n    security_opt: [no-new-privileges:true]\n    tmpfs: [/tmp]\n    user: 65532:65532\n  auth-fence-init:"),
 			check: composeAuthEddsaWiring, want: "auth-grants AUTH_SESSION_READER_ROLES"},
 		{name: "successor key world readable", mutate: mut(composeFile, "chmod 0600 \"$$f\"", "chmod 0644 \"$$f\""),
 			check: composeAuthEddsaWiring, want: "chmod 0600"},

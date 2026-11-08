@@ -563,6 +563,13 @@ authService:
     sessionReaders:
       goApi: ""
       queryApi: ""
+    # -- The session reader roles that also read the workload registry row of the acr-api workload
+    #    (AUTH_WORKLOAD_READER_ROLES): go-api's API_DATABASE_ROLE, so its internal acr routes resolve the
+    #    acr principal from the registry. Each must also be a session reader (sessionReaders or
+    #    sessionReaderRoles); query-api's login must never be listed. Empty grants the read to nobody and
+    #    go-api's internal acr routes answer 503. Set it before the auth-grants step of the go-api release
+    #    that reads the registry.
+    workloadReaderRoles: []
     # -- Acknowledges ONE deliberate narrowing of the runtime role's grants: the
     #    16-hex digest a refused auth-migrate run prints. Rendered as
     #    `-ack-grant-narrowing=<digest>` into the auth-migrate Job and the

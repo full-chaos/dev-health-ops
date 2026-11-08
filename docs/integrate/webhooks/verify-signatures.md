@@ -54,6 +54,6 @@ A ping with an invalid signature, wrong subscription identity, inactive binding,
 
 ## Rotation
 
-Create and verify a replacement secret or binding before revoking the old one. During a controlled overlap, accept only the explicitly active rotation set. After cutover, old secrets and inactive bindings must fail authentication even when a queued or replayed event arrives later.
+Create and verify a replacement secret or binding before revoking the old one. During a controlled overlap, accept only the explicitly active rotation set. After the overlap, old secrets and inactive bindings must fail authentication even when a queued or replayed event arrives later.
 
 Continue with [Handle retries and replay](retries-and-replay.md).

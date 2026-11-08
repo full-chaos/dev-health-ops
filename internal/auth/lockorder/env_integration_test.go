@@ -77,10 +77,13 @@ type env struct {
 	authServerOne *httptest.Server
 	runtimeOne    *pgxpool.Pool
 	issueOne      *sessionissue.Client
-	signer        *edgetoken.Signer
-	linkSecret    string
-	inviteKey     string
-	root          string
+	// issuePlane is go-api's workload principal and its token key: the session
+	// issue route takes only the go-api workload token.
+	issuePlane *issuePlane
+	signer     *edgetoken.Signer
+	linkSecret string
+	inviteKey  string
+	root       string
 	// webhookKey signs the Stripe deliveries of the billing cells.
 	webhookKey string
 	goLog      *syncBuffer

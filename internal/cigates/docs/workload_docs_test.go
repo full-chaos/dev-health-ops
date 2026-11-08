@@ -640,10 +640,11 @@ func workloadAssertionKeyGuard(d docTree) []string {
 
 const composeFile = "compose.yml"
 
-var composeOneShots = []string{"auth-workload-volume", "auth-workload-seed", "auth-workload-bootstrap"}
+var composeOneShots = []string{"auth-workload-volume", "auth-workload-seed", "auth-workload-bootstrap", "auth-workload-subject"}
 
-// workloadComposeGuard pins the Compose one-shot text of the bootstrap runbook to compose.yml: the three service names,
-// the profile, the seed and create commands, the volume and its mount path, and the read-only mount of go-api.
+// workloadComposeGuard pins the Compose one-shot text of the bootstrap runbook to compose.yml: the four service names,
+// that none has a profile (every up runs them), the seed, create and subject commands, the volumes and their mount
+// paths, and the read-only mounts of go-api and auth-service.
 func workloadComposeGuard(d docTree) []string {
 	var out []string
 	page, ok := readOrNote(&out, d, workloadBootstrapPage)
@@ -672,12 +673,11 @@ func workloadComposeGuard(d docTree) []string {
 		if !inTable {
 			out = append(out, "Compose one-shots: no table row for the service "+name)
 		}
-		profiles := asList(svc["profiles"])
-		if len(profiles) != 1 || asString(profiles[0]) != "auth" {
-			out = append(out, composeFile+": "+name+" is not in the profile auth alone")
+		if len(asList(svc["profiles"])) != 0 {
+			out = append(out, composeFile+": "+name+" has a profile: go-api and auth-service depend on the one-shots, so every up runs them")
 		}
 	}
-	for _, name := range []string{"auth-workload-seed", "auth-workload-bootstrap"} {
+	for _, name := range []string{"auth-workload-seed", "auth-workload-bootstrap", "auth-workload-subject"} {
 		var words []string
 		for _, w := range asList(asMap(services[name])["command"]) {
 			words = append(words, asString(w))
@@ -686,7 +686,7 @@ func workloadComposeGuard(d docTree) []string {
 			mustContain(&out, "Compose one-shots", section, strings.Join(words, " "))
 		}
 	}
-	mustContain(&out, "Compose one-shots", section, "docker compose --profile auth run --rm auth-workload-bootstrap")
+	mustContain(&out, "Compose one-shots", section, "Every `up` runs them")
 	mustContain(&out, "Compose one-shots", section, "workload_bootstrap")
 	var api map[string]any
 	if svc := asMap(services["go-api"]); svc != nil {
@@ -705,6 +705,22 @@ func workloadComposeGuard(d docTree) []string {
 		}
 	}
 	mustContain(&out, "Compose one-shots", section, "read-only")
+	var subject map[string]any
+	if svc := asMap(services["auth-service"]); svc != nil {
+		for _, v := range asList(svc["volumes"]) {
+			if m := asMap(v); asString(m["source"]) == "workload_subject" {
+				subject = m
+			}
+		}
+	}
+	if subject == nil {
+		out = append(out, composeFile+": auth-service does not mount workload_subject")
+	} else {
+		mustContain(&out, "Compose one-shots", section, asString(subject["target"]))
+		if subject["read_only"] != true {
+			out = append(out, composeFile+": the auth-service mount of workload_subject is not read-only")
+		}
+	}
 	return out
 }
 

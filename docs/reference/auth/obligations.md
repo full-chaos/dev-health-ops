@@ -22,7 +22,7 @@ An authorization decision answers one question: may this principal perform this 
 {: .fc-page-lede }
 
 !!! warning "No consumer enforces an obligation yet"
-    `POST /v1/authorize` and `POST /v1/authorize:batch` are served by the auth-service (`contracts/auth/v1/openapi/auth-v1.openapi.json`; CHAOS-10841). Every allow of an organization or repository action carries `tenant_scope` and, for an action that reads repository-bound data, `repository_scope` or `repository_allowlist` (CHAOS-12851). A delegated (impersonation) allow also carries `minimum_assurance`. The redaction rules are empty, so no allow carries `redaction` yet. No service enforces an obligation yet. See [Status](#status).
+    `POST /v1/authorize` and `POST /v1/authorize:batch` are served by the auth-service (`contracts/auth/v1/openapi/auth-v1.openapi.json`). Every allow of an organization or repository action carries `tenant_scope` and, for an action that reads repository-bound data, `repository_scope` or `repository_allowlist`. A delegated (impersonation) allow also carries `minimum_assurance`. The redaction rules are empty, so no allow carries `redaction` yet. No service enforces an obligation yet. See [Status](#status).
 
 ## Request
 
@@ -81,7 +81,7 @@ The allowlist is the same rule as a repository decision: a key is in it exactly 
 
 ### Redaction classes
 
-The class set is closed and lives in `contracts/auth/v1/vocabulary/redaction-classes.v1.json`. The file also holds the (role, action) rules that say which role gets which class on which action. It equals the schema enum, and a test holds both equal. The rules ship empty: no policy is set until a ruling names rows.
+The class set is closed and lives in `contracts/auth/v1/vocabulary/redaction-classes.v1.json`. The file also holds the (role, action) rules that say which role gets which class on which action. It equals the schema enum, and a test holds both equal. The rules ship empty: no policy is set until a decision names rows.
 
 | Class | Covers |
 | --- | --- |
@@ -112,12 +112,12 @@ A decision point failure is an `error.v1` document (503). It is a different sche
 | Part | State |
 | --- | --- |
 | Wire schemas and Go parser | On `main`. |
-| `POST /v1/authorize` and `POST /v1/authorize:batch` | On `main` (CHAOS-10841). The decision document carries the `obligations` a decision holds. A decision whose obligations are outside the contract (a deny or platform allow with obligations, an organization allow without its tenant scope, a repeated, malformed or `*` key, more than 256 keys, a `repository_scope` other than `organization` or one beside an allowlist, an unregistered class, an unknown assurance level, a tenant scope other than the question's organization) is not served: the call answers 503. |
-| Actor chain, delegation limits and obligations in the decision point | Rules in the core (CHAOS-10839). The route reads the delegated row, the delegating session and the actor in one transaction and sets `tenant_scope`, `minimum_assurance` and `repository_allowlist` on the allow of a delegated session (CHAOS-12438, CHAOS-12798). The policy that sets `tenant_scope`, `repository_allowlist` and `repository_scope` on every allow: CHAOS-12851 (see [Allow rule of the decision point](#allow-rule-of-the-decision-point)). The redaction rules ship empty (CHAOS-12656). The PEP client reads `repository_scope` and the reason `repository_allowlist_too_large` from dev-health-go v0.44.0 (CHAOS-12853). The owner-exemption audit event is written by a follow-up change; until then the exemption is a log line. |
-| Decision clients | On `main`: the Go client `pep` (CHAOS-10844) and the web TypeScript client (CHAOS-10846). See [decision clients](decision-clients.md). |
-| Policy enforcement points that read obligations | Planned. web: CHAOS-10883 (server actions use single decisions). |
-| `step_up` and `minimum_assurance` enforcement | Planned, CHAOS-10839. No MFA factor exists. The decision sheet (`docs/contribute/architecture/auth-control-plane-decision-sheet.md`) records the decision that the vocabulary and enforcement path ship before a factor does, and that the high-risk list is denied during impersonation until step-up exists. |
-| Entitlement-derived obligation | Planned, CHAOS-10862 (billing and licensing enforcement point). The entitlement adapter of CHAOS-10837 is on `main` as a library that no decision calls ([entitlement boundary](entitlement-boundary.md)). ADR text (`docs/contribute/architecture/auth-control-plane-adrs.md`) allows a decision to carry one. The decision schema defines no entitlement obligation, so adding one is a schema change. |
+| `POST /v1/authorize` and `POST /v1/authorize:batch` | On `main`. The decision document carries the `obligations` a decision holds. A decision whose obligations are outside the contract (a deny or platform allow with obligations, an organization allow without its tenant scope, a repeated, malformed or `*` key, more than 256 keys, a `repository_scope` other than `organization` or one beside an allowlist, an unregistered class, an unknown assurance level, a tenant scope other than the question's organization) is not served: the call answers 503. |
+| Actor chain, delegation limits and obligations in the decision point | Rules in the core. The route reads the delegated row, the delegating session and the actor in one transaction and sets `tenant_scope`, `minimum_assurance` and `repository_allowlist` on the allow of a delegated session. The policy that sets `tenant_scope`, `repository_allowlist` and `repository_scope` on every allow: see [Allow rule of the decision point](#allow-rule-of-the-decision-point). The redaction rules ship empty. The PEP client reads `repository_scope` and the reason `repository_allowlist_too_large` from dev-health-go v0.44.0. The owner-exemption audit event is written by a follow-up change; until then the exemption is a log line. |
+| Decision clients | On `main`: the Go client `pep` and the web TypeScript client. See [decision clients](decision-clients.md). |
+| Policy enforcement points that read obligations | Planned. web: server actions use single decisions. |
+| `step_up` and `minimum_assurance` enforcement | Planned. go-api (on a read) and query-api carry out `minimum_assurance` `aal1` only: every session they accept is `aal1`; a higher or unknown level stays no verdict. No MFA factor exists. The vocabulary and enforcement path ship before a factor does, and the high-risk list is denied during impersonation until step-up exists. |
+| Entitlement-derived obligation | Planned (billing and licensing enforcement point). The entitlement adapter is on `main` as a library that no decision calls ([entitlement boundary](entitlement-boundary.md)). ADR text (`docs/contribute/architecture/auth-control-plane-adrs.md`) allows a decision to carry one. The decision schema defines no entitlement obligation, so adding one is a schema change. |
 | Tenant scope as the go-api and query-api rule | Today the organization comes from `OrgScope` and `OperationOrgGuard`. See [authentication and authorization](authn-authz.md). |
 
 Until a policy enforcement point reads them, treat every obligation in this page as a contract that a consumer must meet, not as enforced behaviour.

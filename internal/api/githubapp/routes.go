@@ -124,6 +124,10 @@ func (h handlers) installURL(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if h.Signer.Secret == "" {
+		policy.WriteConfigMissing(w, "GITHUB_APP_STATE_SECRET")
+		return
+	}
 	if h.Config.Slug == "" {
 		detail(w, http.StatusBadRequest, "GITHUB_APP_SLUG is not configured")
 		return
@@ -173,6 +177,10 @@ func (h handlers) installCallback(w http.ResponseWriter, r *http.Request) {
 	request, problems := parseCallbackBody(body)
 	if len(problems) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems), nil)
+		return
+	}
+	if h.Signer.Secret == "" {
+		policy.WriteConfigMissing(w, "GITHUB_APP_STATE_SECRET")
 		return
 	}
 	ctx := r.Context()

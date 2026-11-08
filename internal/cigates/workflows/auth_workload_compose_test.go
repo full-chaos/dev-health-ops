@@ -76,14 +76,15 @@ func volumeMount(entry any) (source, target string, readOnly bool) {
 	return
 }
 
-const workloadVolumeCommand = `[ "$$(stat -c %u:%a /run/workload)" = 65532:700 ] || { chmod 0700 /run/workload && chown 65532:65532 /run/workload; }`
+const workloadVolumeCommand = `for d in /run/workload /run/workload-subject; do [ "$$(stat -c %u:%a $$d)" = 65532:700 ] || { chmod 0700 $$d && chown 65532:65532 $$d; }; done`
 
 func TestComposeWorkloadBootstrapOneShots(t *testing.T) {
 	c := readComposeFile(t, "compose.yml")
 	want := map[string][]string{
 		"auth-workload-volume":    nil,
 		"auth-workload-seed":      {"workloads", "seed", "-apply"},
-		"auth-workload-bootstrap": {"workloads", "bootstrap-create", "-workload", "api", "-out", "/run/workload/api.bootstrap", "-apply"},
+		"auth-workload-bootstrap": {"workloads", "bootstrap-create", "-workload", "api", "-out", "/run/workload/api.bootstrap", "-if-absent", "-apply"},
+		"auth-workload-subject":   {"workloads", "subject", "-workload", "api", "-out", "/run/workload-subject/api.subject", "-apply"},
 	}
 	for name, command := range want {
 		svc, ok := c.Services[name]
@@ -91,8 +92,8 @@ func TestComposeWorkloadBootstrapOneShots(t *testing.T) {
 			t.Errorf("compose.yml has no service %s", name)
 			continue
 		}
-		if !reflect.DeepEqual(svc.Profiles, []string{"auth"}) {
-			t.Errorf("%s profiles = %v, want [auth]: it must not start with the default stack", name, svc.Profiles)
+		if len(svc.Profiles) != 0 {
+			t.Errorf("%s profiles = %v, want none: go-api and auth-service depend on the one-shots, and compose refuses a dependency in an inactive profile", name, svc.Profiles)
 		}
 		if !svc.ReadOnly || !reflect.DeepEqual(svc.CapDrop, []string{"ALL"}) || !reflect.DeepEqual(svc.SecurityOpt, []string{"no-new-privileges:true"}) {
 			t.Errorf("%s is not hardened (read_only %v, cap_drop %v, security_opt %v)", name, svc.ReadOnly, svc.CapDrop, svc.SecurityOpt)
@@ -101,7 +102,7 @@ func TestComposeWorkloadBootstrapOneShots(t *testing.T) {
 			t.Errorf("%s command = %v, want %v: the credential goes to a file, never argv", name, svc.Command, command)
 		}
 		for key := range svc.Environment {
-			if regexp.MustCompile(`(?i)bootstrap|secret|token|password`).MatchString(key) && name != "auth-workload-seed" && name != "auth-workload-bootstrap" {
+			if regexp.MustCompile(`(?i)bootstrap|secret|token|password`).MatchString(key) && name != "auth-workload-seed" && name != "auth-workload-bootstrap" && name != "auth-workload-subject" {
 				t.Errorf("%s env %s looks like a credential", name, key)
 			}
 		}
@@ -113,7 +114,7 @@ func TestComposeWorkloadBootstrapOneShots(t *testing.T) {
 	if got := strings.Join(vol.Command, " "); got != workloadVolumeCommand {
 		t.Errorf("auth-workload-volume command = %q, want %q: the directory must be 0700 and owned by uid 65532, and a second run must change nothing", got, workloadVolumeCommand)
 	}
-	for _, name := range []string{"auth-workload-seed", "auth-workload-bootstrap"} {
+	for _, name := range []string{"auth-workload-seed", "auth-workload-bootstrap", "auth-workload-subject"} {
 		if user := c.Services[name].User; user != "65532:65532" {
 			t.Errorf("%s runs as %q, want 65532:65532", name, user)
 		}
@@ -131,27 +132,49 @@ func TestComposeWorkloadBootstrapOneShots(t *testing.T) {
 	if got, want := deps("auth-workload-bootstrap"), map[string]string{"auth-workload-volume": "service_completed_successfully", "auth-workload-seed": "service_completed_successfully"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("auth-workload-bootstrap depends_on = %v, want %v", got, want)
 	}
-	if _, ok := c.Volumes["workload_bootstrap"]; !ok {
-		t.Error("compose.yml declares no volume workload_bootstrap")
+	if got, want := deps("auth-workload-subject"), deps("auth-workload-bootstrap"); !reflect.DeepEqual(got, want) {
+		t.Errorf("auth-workload-subject depends_on = %v, want %v", got, want)
 	}
-	for _, name := range []string{"auth-workload-volume", "auth-workload-bootstrap"} {
-		found := false
+	for _, v := range []string{"workload_bootstrap", "workload_subject"} {
+		if _, ok := c.Volumes[v]; !ok {
+			t.Errorf("compose.yml declares no volume %s", v)
+		}
+	}
+	mounted := map[string][]string{
+		"auth-workload-volume":    {"workload_bootstrap:/run/workload", "workload_subject:/run/workload-subject"},
+		"auth-workload-bootstrap": {"workload_bootstrap:/run/workload"},
+		"auth-workload-subject":   {"workload_subject:/run/workload-subject"},
+	}
+	for name, want := range mounted {
+		var got []string
 		for _, e := range c.Services[name].Volumes {
-			if s, ok := e.(string); ok && s == "workload_bootstrap:/run/workload" {
-				found = true
+			if s, ok := e.(string); ok {
+				got = append(got, s)
 			}
 		}
-		if !found {
-			t.Errorf("%s does not mount workload_bootstrap at /run/workload", name)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s volumes = %v, want %v", name, got, want)
 		}
 	}
-	// The one-shots are never a dependency of a running service: a later `up` would run bootstrap-create again.
+	// Every `up` runs the one-shots again, so each must be safe to run again: bootstrap-create skips a live workload
+	// (-if-absent) and the subject file is replaced with the same id. Only go-api and auth-service depend on them.
+	allowed := map[string]string{"auth-workload-bootstrap": "go-api", "auth-workload-subject": "auth-service", "auth-workload-volume": "", "auth-workload-seed": ""}
 	for name, svc := range c.Services {
 		for dep := range svc.DependsOn {
-			if strings.HasPrefix(dep, "auth-workload-") && name != "auth-workload-bootstrap" && name != "auth-workload-seed" {
-				t.Errorf("%s depends on %s: a later up would run it again, and bootstrap-create refuses a workload with a live credential", name, dep)
+			if !strings.HasPrefix(dep, "auth-workload-") {
+				continue
 			}
+			if owner, ok := allowed[dep]; ok && (owner == name || strings.HasPrefix(name, "auth-workload-")) {
+				continue
+			}
+			t.Errorf("%s depends on %s: only go-api (bootstrap) and auth-service (subject) may", name, dep)
 		}
+	}
+	if c.Services["go-api"].DependsOn["auth-workload-bootstrap"].Condition != "service_completed_successfully" {
+		t.Error("go-api does not wait for auth-workload-bootstrap to complete: it would start without its credential file")
+	}
+	if c.Services["auth-service"].DependsOn["auth-workload-subject"].Condition != "service_completed_successfully" {
+		t.Error("auth-service does not wait for auth-workload-subject to complete: it would start without its session issue subject")
 	}
 }
 
@@ -198,10 +221,45 @@ func TestComposeWorkloadBootstrapMounts(t *testing.T) {
 	if issuerGo != issuer || issuerAuth != issuer {
 		t.Errorf("issuer: go-api %q, auth-service %q; both must read %s: a token carries the issuer it was signed under", issuerGo, issuerAuth, issuer)
 	}
-	// go-api selectors stay out of compose.yml: unset is the default (session_compat for the session issue route; the provisioning clients take workload).
-	for _, name := range []string{"AUTH_SESSION_ISSUE_CREDENTIAL", "AUTH_PROVISIONING_CREDENTIAL"} {
-		if v, ok := envString(t, c.Services["go-api"], name); ok && v != "${"+name+":-}" {
-			t.Errorf("go-api %s = %q, want blank by default", name, v)
+	// go-api presents its workload token on the session issue call; the provisioning selector stays unset.
+	if v, _ := envString(t, c.Services["go-api"], "AUTH_SESSION_ISSUE_CREDENTIAL"); v != "workload" {
+		t.Errorf("go-api AUTH_SESSION_ISSUE_CREDENTIAL = %q, want workload", v)
+	}
+	if v, ok := envString(t, c.Services["go-api"], "AUTH_PROVISIONING_CREDENTIAL"); ok && v != "${AUTH_PROVISIONING_CREDENTIAL:-}" {
+		t.Errorf("go-api AUTH_PROVISIONING_CREDENTIAL = %q, want blank by default", v)
+	}
+	// auth-service reads the principal id from the file the subject one-shot writes, read-only, and never also from a value.
+	svc := c.Services["auth-service"]
+	if _, both := envString(t, svc, "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"); both {
+		t.Error("auth-service sets AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT beside its _FILE form: the two are mutually exclusive")
+	}
+	subjectFile, _ := envString(t, svc, "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT_FILE")
+	subjectCmd := c.Services["auth-workload-subject"].Command
+	subjectOut := ""
+	for i, a := range subjectCmd {
+		if a == "-out" && i+1 < len(subjectCmd) {
+			subjectOut = subjectCmd[i+1]
+		}
+	}
+	subjectMounts := 0
+	for _, e := range svc.Volumes {
+		source, tgt, ro := volumeMount(e)
+		if source != "workload_subject" {
+			continue
+		}
+		subjectMounts++
+		if !ro || path.Dir(subjectFile) != tgt {
+			t.Errorf("auth-service mounts workload_subject at %q (read_only %v), reads %q", tgt, ro, subjectFile)
+		}
+	}
+	if subjectMounts != 1 || subjectFile == "" || subjectFile != subjectOut {
+		t.Errorf("auth-service reads %q from %d mount(s) of workload_subject, the one-shot writes %q", subjectFile, subjectMounts, subjectOut)
+	}
+	for _, name := range []string{"go-api", "query-api"} {
+		for _, e := range c.Services[name].Volumes {
+			if source, _, _ := volumeMount(e); source == "workload_subject" {
+				t.Errorf("%s mounts workload_subject: only auth-service reads the subject", name)
+			}
 		}
 	}
 }
@@ -228,17 +286,26 @@ func authServiceLoad(t *testing.T, set map[string]string) error {
 			env[k] = expandDefaults(s, set)
 		}
 	}
+	// The one-shot writes the subject file on the first `up`: stand in for it with a file of the same form.
+	if _, ok := env["AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT_FILE"]; ok {
+		file := filepath.Join(t.TempDir(), "api.subject")
+		if err := os.WriteFile(file, []byte("prn_AAAAAAAAAAAAAAAAAAAAAA"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env["AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT_FILE"] = file
+	}
 	_, err := authconfig.Load(authconfig.Spec{LookupEnv: func(name string) (string, bool) { v, ok := env[name]; return v, ok }})
 	return err
 }
 
-// With nothing set auth-service's compose environment loads and the bootstrap switch is off. CHAOS-13107: the issuer
-// has a compose default now (the eddsa class needs one), so the switch on loads with the default issuer and with an
-// operator's issuer; a blank issuer is no longer a compose value (${VAR:-default} turns blank into the default).
-func TestComposeWorkloadBootstrapIsOffByDefault(t *testing.T) {
+// With nothing set auth-service's compose environment loads and the bootstrap switch is on: go-api signs in with its
+// workload token. The issuer has a compose default (the eddsa class needs one), so the switch loads with the default
+// issuer and with an operator's issuer; a blank issuer is no longer a compose value (${VAR:-default} turns blank into
+// the default).
+func TestComposeWorkloadBootstrapIsOnByDefault(t *testing.T) {
 	c := readComposeFile(t, "compose.yml")
-	if v, _ := envString(t, c.Services["auth-service"], "AUTH_WORKLOAD_BOOTSTRAP"); expandDefaults(v, nil) != "false" {
-		t.Errorf("auth-service AUTH_WORKLOAD_BOOTSTRAP resolves to %q by default, want false", expandDefaults(v, nil))
+	if v, _ := envString(t, c.Services["auth-service"], "AUTH_WORKLOAD_BOOTSTRAP"); expandDefaults(v, nil) != "true" {
+		t.Errorf("auth-service AUTH_WORKLOAD_BOOTSTRAP resolves to %q by default, want true", expandDefaults(v, nil))
 	}
 	if err := authServiceLoad(t, nil); err != nil {
 		t.Fatalf("auth-service's default compose environment is refused: %v", err)
@@ -254,7 +321,7 @@ func TestComposeWorkloadBootstrapIsOffByDefault(t *testing.T) {
 // The proof override keeps only the proof; the wiring lives in compose.yml.
 func TestWorkloadOverrideKeepsOnlyTheProof(t *testing.T) {
 	o := readComposeFile(t, "ci/auth_session_issue_workload.override.yml")
-	for _, name := range []string{"auth-workload-volume", "auth-workload-seed", "auth-workload-bootstrap"} {
+	for _, name := range []string{"auth-workload-volume", "auth-workload-seed", "auth-workload-bootstrap", "auth-workload-subject"} {
 		if _, ok := o.Services[name]; ok {
 			t.Errorf("the override still defines %s, which compose.yml owns", name)
 		}

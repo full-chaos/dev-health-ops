@@ -205,18 +205,33 @@ A value is added only with the pull request of the producer that emits it. `erro
 
 From `contracts/auth/v1/README.md`:
 
-- Version 1: the closed action and role catalogs (CHAOS-10637).
-- Version 2: every action gets a `risk_class` and a `cache_class` (CHAOS-10641).
-- Version 3: `billing.read`, `billing.manage` and `license.read` (CHAOS-11272). They are held as the billing and licensing routes allow today. They are catalog-only: `/auth/me` does not serve them until a web-reviewed change does.
-- Version 4: `acr.context.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`), `members.update` (organization, high, `none`) and `authz.decide` (platform, high, `none`) (CHAOS-10774). The resource-kind set gains `repository`. The cached-action exemption list is gone.
-- Version 5: the role `platform_owner` (platform scope, no action) (CHAOS-12294). No action changed, so no decision changes.
-- Version 6: every action gets a required `impersonation` member (`denied` or `allowed`), and the action `admin.impersonate` (CHAOS-10987).
-- Version 8: `acr.context.read` is `allowed` under a delegated session (CHAOS-12401). No role changed, so no decision changes.
-- Version 9: `viewer`, `member`, `admin` and `owner` hold `acr.context.read`, as they hold `git.read` (CHAOS-12347). `platform_admin` and `platform_owner` do not. No action row changed.
-- Version 10: `credentials.project` (platform, high, `none`, `denied`), the action the acr-api workload row lists for the acr credential events route. No role holds it, so no decision changes (CHAOS-11196).
-- Version 11: `acr.evidence.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`) and `acr.credential.issue` (organization, organization, high, `none`) (CHAOS-12660). No role holds either, so the decision core denies both to every role until a roles change grants them.
-- Version 12: `reports.write` (organization scope, organization resource kind, high risk, `none`, impersonation `denied`), held by `viewer`, `member`, `admin` and `owner` (CHAOS-12657). It covers the five saved-report GraphQL writes. Those writes check only the caller's organization today, never a role (`requireMutationOrg`, `internal/queryapi/graph/reports_mutations.go`), so every organization role holds it. It is catalog-only: `/auth/me` does not serve it. Narrowing it to a smaller role set is a separate decision.
-- Version 13: an optional `repository_scope` member on an action (`filtered` or `none`, absent is `none`) (CHAOS-12851). `filtered` on `acr.context.read`, `acr.evidence.read`, `analytics.read`, `analytics.export`, `metrics.read`, `work_items.read` and `git.read`: an allow of these carries the repositories the principal may read, as the `repository_scope` (`organization`) or the `repository_allowlist` obligation (see [obligations](obligations.md)). A census requires the member on every action whose id ends in `.read` or `.export` and on every repository-kind action. No role changed.
+- Version 1: the closed action and role catalogs.
+- Version 2: every action gets a `risk_class` and a `cache_class`.
+- Version 3: `billing.read`, `billing.manage` and `license.read`. They are held as the billing and licensing routes allow today. They are catalog-only: `/auth/me` does not serve them until a web-reviewed change does.
+- Version 4: `acr.context.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`), `members.update` (organization, high, `none`) and `authz.decide` (platform, high, `none`). The resource-kind set gains `repository`. The cached-action exemption list is gone.
+- Version 5: the role `platform_owner` (platform scope, no action). No action changed, so no decision changes.
+- Version 6: every action gets a required `impersonation` member (`denied` or `allowed`), and the action `admin.impersonate`.
+- Version 8: `acr.context.read` is `allowed` under a delegated session. No role changed, so no decision changes.
+- Version 9: `viewer`, `member`, `admin` and `owner` hold `acr.context.read`, as they hold `git.read`. `platform_admin` and `platform_owner` do not. No action row changed.
+- Version 10: `credentials.project` (platform, high, `none`, `denied`), the action the acr-api workload row lists for the acr credential events route. No role holds it, so no decision changes.
+- Version 11: `acr.evidence.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`) and `acr.credential.issue` (organization, organization, high, `none`). No role holds either, so the decision core denies both to every role until a roles change grants them.
+- Version 12: `reports.write` (organization scope, organization resource kind, high risk, `none`, impersonation `denied`), held by `viewer`, `member`, `admin` and `owner`. It covers the five saved-report GraphQL writes. Those writes check only the caller's organization today, never a role (`requireMutationOrg`, `internal/queryapi/graph/reports_mutations.go`), so every organization role holds it. It is catalog-only: `/auth/me` does not serve it. Narrowing it to a smaller role set is a separate decision.
+- Version 13: an optional `repository_scope` member on an action (`filtered` or `none`, absent is `none`). `filtered` on `acr.context.read`, `acr.evidence.read`, `analytics.read`, `analytics.export`, `metrics.read`, `work_items.read` and `git.read` (the last five were set back to `none` in version 14): an allow of these carries the repositories the principal may read, as the `repository_scope` (`organization`) or the `repository_allowlist` obligation (see [obligations](obligations.md)). A census requires the member on every action whose id ends in `.read` or `.export` and on every repository-kind action. No role changed.
+- Version 14: `repository_scope` is `none` on `analytics.read`, `analytics.export`, `metrics.read`, `work_items.read` and `git.read`. Product rule 2: no role-based redaction of metrics data in an organization. Every active member reads all metrics data of the organization, and a repository grant never narrows these five reads: an allow of them carries the tenant scope alone. `acr.context.read` and `acr.evidence.read` stay `filtered`: repository grants scope ACR only. No role changed.
+- Version 15: `platform_admin: allowed` on `analytics.read`, `metrics.read`, `git.read`, `work_items.read` and `reports.write`. Product rule 1: a platform admin with no membership row gets the legacy answer, and the legacy query-api path admits a superuser to these reads and to the saved-report writes in any organization. The flagged allow also holds in a suspended organization (see below). No role changed.
+
+## Platform admin on organization actions
+
+An organization action can carry `platform_admin: allowed` (absent is `denied`). A principal whose platform role holds `admin.orgs` is then allowed the action in any active or suspended organization, also with no membership row. The allow has the owner's obligations: the tenant scope only. The internal reason is `allowed_by_platform_admin`, and the wire code is `allowed_by_role` (see [reason codes](reason-codes.md)).
+
+The order matters. For a holder on a flagged action, the platform-admin rule comes before the organization status check when the organization is suspended, because the legacy paths give a superuser the same answer in a suspended organization as in an active one. A removed or unknown organization is still denied with `organization_inactive`. A member without `admin.orgs` in a suspended organization is still denied with `organization_inactive`.
+
+The flag is on two sets of actions:
+
+- The organization actions of the go-api `policy.Admin` and `policy.AdminOrg` rows, which admit an `admin.orgs` holder before they read the membership: `billing.manage`, `integrations.read`, `integrations.write`, `members.invite`, `members.manage`, `settings.write` and `teams.write`.
+- The query-api actions whose legacy path admits a superuser in any organization: `analytics.read`, `metrics.read`, `git.read`, `work_items.read` and `reports.write`. `analytics.export` is not flagged.
+
+A test in `internal/auth/contracts` holds the flag equal to those two sets. It also fails when a profile row outside them asks a flagged action, or when a flagged action is `repository_scope: filtered` or has a redaction rule.
 
 ## Platform actions
 

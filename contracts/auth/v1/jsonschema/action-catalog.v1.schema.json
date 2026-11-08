@@ -79,6 +79,13 @@
               "none"
             ],
             "description": "filtered: an allow of this action carries the repositories the principal may read as an obligation (repository_allowlist), because the action reads repository-bound data. none: it does not. Optional; an absent member is none. A census requires the member on every action whose id ends in .read or .export and on every repository-kind action, so a new such action makes an explicit choice."
+          },
+          "platform_admin": {
+            "enum": [
+              "allowed",
+              "denied"
+            ],
+            "description": "allowed: a principal whose platform role holds admin.orgs is allowed this organization action in any active or suspended organization, with the obligations of an owner and no membership read (the legacy rule). Only an organization-scope, organization-kind action may carry allowed. Optional; an absent member is denied."
           }
         },
         "allOf": [
@@ -97,6 +104,28 @@
               "properties": {
                 "cache_class": {
                   "const": "none"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "platform_admin": {
+                  "const": "allowed"
+                }
+              },
+              "required": [
+                "platform_admin"
+              ]
+            },
+            "then": {
+              "properties": {
+                "scope": {
+                  "const": "organization"
+                },
+                "resource_kind": {
+                  "const": "organization"
                 }
               }
             }

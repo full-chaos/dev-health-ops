@@ -107,15 +107,16 @@ type readinessBYOConfig struct {
 	model    string
 	apiKey   secrets.Hidden
 	baseURL  string
+	// staleKey is the stored key when it was written for an earlier provider:
+	// never served, still checked against the base url.
+	staleKey secrets.Hidden
 }
 
 func (h *handlers) loadReadinessBYOConfig(ctx context.Context, orgID string) (readinessBYOConfig, error) {
 	var cfg readinessBYOConfig
-	var apiKey string
 	for key, dest := range map[string]*string{
 		"provider": &cfg.provider,
 		"model":    &cfg.model,
-		"api_key":  &apiKey,
 		"base_url": &cfg.baseURL,
 	} {
 		row, err := settingByKeyOn(ctx, h.store.Pool, orgID, llmCategory, key)
@@ -128,14 +129,17 @@ func (h *handlers) loadReadinessBYOConfig(ctx context.Context, orgID string) (re
 		}
 		*dest = strOrEmpty(value)
 	}
-	cfg.apiKey = secrets.NewHidden(apiKey)
-	return cfg, nil
+	key, err := h.scopeKey(ctx, h.store.Pool, orgID, "", false, true)
+	if err != nil {
+		return readinessBYOConfig{}, err
+	}
+	return cfg.bindDefaultKey(key), nil
 }
 
 // readinessURLValid vets the saved base url against the saved key and the SSRF
 // guard before any prober (OpenAI or Anthropic) sees it.
 func (h *handlers) readinessURLValid(ctx context.Context, cfg readinessBYOConfig) (bool, error) {
-	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, cfg.apiKey.Reveal())
+	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, cfg.apiKey.Reveal(), cfg.staleKey.Reveal())
 	return valid, err
 }
 

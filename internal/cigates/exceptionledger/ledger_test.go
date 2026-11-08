@@ -34,7 +34,16 @@ func TestTheRealTreeMatchesTheLedger(t *testing.T) {
 	for _, defect := range defects {
 		t.Error(defect)
 	}
+	// Check refuses a one-sided loss (a site with no row, a row with no site), and a removed exception takes its row
+	// with it, so the counts shrink by design. What Check cannot see is a census that is empty on both sides; the
+	// bound is the ledger's own data lines and a non-empty scan of both site kinds, never a fixed count.
 	rows, _ := exceptionledger.ParseLedger(ledger)
+	dataLines := 0
+	for _, line := range strings.Split(string(ledger), "\n") {
+		if strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "#") {
+			dataLines++
+		}
+	}
 	sites, err := exceptionledger.Discover(root)
 	if err != nil {
 		t.Fatal(err)
@@ -45,8 +54,8 @@ func TestTheRealTreeMatchesTheLedger(t *testing.T) {
 			exact++
 		}
 	}
-	if len(rows) < 25 || len(sites) < 12 || exact < 7 || len(sites) == exact {
-		t.Fatalf("vacuous census: %d rows, %d sites (%d exact); the scan or the ledger lost its rows", len(rows), len(sites), exact)
+	if len(rows) == 0 || len(rows) != dataLines || exact == 0 || len(sites) == exact {
+		t.Fatalf("vacuous census: %d rows of %d ledger data lines, %d sites (%d exact); the scan or the ledger lost its rows", len(rows), dataLines, len(sites), exact)
 	}
 }
 

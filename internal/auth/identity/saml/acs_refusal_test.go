@@ -146,12 +146,18 @@ func postACS(t *testing.T, store *lookupStore, members *memberSet, jit saml.Memb
 
 func postACSAuto(t *testing.T, store *lookupStore, members *memberSet, jit saml.MembershipJIT, autoProvision bool) acsRun {
 	t.Helper()
+	return postACSRow(t, store, members, jit, func(p *saml.Provider) { p.AutoProvision = autoProvision })
+}
+
+func postACSRow(t *testing.T, store *lookupStore, members *memberSet, jit saml.MembershipJIT, row func(*saml.Provider)) acsRun {
+	t.Helper()
 	idp := newTestIdP(t)
 	p := saml.Provider{
 		ID: uuid.New(), OrgID: uuid.New(), Protocol: "saml", Status: "active",
-		AllowIdPInitiated: true, AutoProvision: autoProvision, AllowedDomains: []string{"example.com"},
+		AllowIdPInitiated: true, AutoProvision: true, AllowedDomains: []string{"example.com"},
 		Config: saml.Config{EntityID: idp.entityID, Certificate: encodeCert(idp)},
 	}
+	row(&p)
 	sessions := &sessionsSpy{}
 	var logs bytes.Buffer
 	svc := &saml.Service{

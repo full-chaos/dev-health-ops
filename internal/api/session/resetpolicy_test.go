@@ -1,6 +1,7 @@
 package session
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,7 +27,7 @@ func resetRequest(t *testing.T, password string) *http.Request {
 // token redemption would panic.
 func TestResetPasswordRefusesElevenCharactersBeforeRedeeming(t *testing.T) {
 	rec := httptest.NewRecorder()
-	handlers{}.resetPassword(rec, resetRequest(t, "Aa1-xyzabcd"))
+	handlers{Deps: Deps{Mail: authmail.Config{LinkSecret: testLinkSecret}}}.resetPassword(rec, resetRequest(t, "Aa1-xyzabcd"))
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422; body %s", rec.Code, rec.Body)
 	}

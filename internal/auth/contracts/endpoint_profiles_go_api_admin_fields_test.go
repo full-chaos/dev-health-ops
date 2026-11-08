@@ -649,34 +649,37 @@ func TestInternalOrgScopedRowWithOtherIDFormIsStillInternal(t *testing.T) {
 	}
 }
 
-func TestInternalACRRowsNameBothCredentialPaths(t *testing.T) {
+// The internal acr rows accept the acr-api workload token only: no row lists
+// internal_svc_acr_token or describes a svc_acr_ store read.
+func TestInternalACRRowsNameTheWorkloadTokenOnly(t *testing.T) {
 	for id, row := range rowsByID(t, internalACRCacheIDs) {
 		cache, _ := row["current_state_cache_behavior"].(string)
-		for _, want := range []string{
-			cachePrefix,
-			"svc_acr_ credential: store read every request, no cache",
-			"workload token: signature verify only, no store read",
-		} {
+		for _, want := range []string{cachePrefix, "workload token: signature verify only, no store read"} {
 			if !strings.Contains(cache, want) {
 				t.Errorf("%s: cache text lacks %q: %q", id, want, cache)
 			}
 		}
+		if strings.Contains(cache, "svc_acr_") {
+			t.Errorf("%s: cache text still names a svc_acr_ read: %q", id, cache)
+		}
 		if strings.HasPrefix(cache, noReadPrefix) {
 			t.Errorf("%s: cache text still says no authorization read: %q", id, cache)
+		}
+		classes, _ := row["accepted_credential_classes"].([]any)
+		if len(classes) != 1 || classes[0] != "workload_token" {
+			t.Errorf("%s: accepted_credential_classes = %v, want [workload_token]", id, classes)
 		}
 	}
 	llm := rowsByID(t, internalOrgScopedIDs[1:])[internalOrgScopedIDs[1]]
 	validator, _ := llm["primary_validator"].(map[string]any)
 	text, _ := validator["description"].(string)
-	for _, banned := range []string{"routeAuth", "keyed", "limiter"} {
+	for _, banned := range []string{"routeAuth", "keyed", "limiter", "llm_config:read"} {
 		if strings.Contains(text, banned) {
 			t.Errorf("the llm-config validator text names %q: %q", banned, text)
 		}
 	}
-	for _, want := range []string{"llmConfigHandler", "llm_config:read"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("the llm-config validator text lacks %q: %q", want, text)
-		}
+	if !strings.Contains(text, "llmConfigHandler") {
+		t.Errorf("the llm-config validator text lacks llmConfigHandler: %q", text)
 	}
 }
 

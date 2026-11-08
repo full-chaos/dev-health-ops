@@ -1,0 +1,60 @@
+{
+  "expect": {
+    "allowed": true,
+    "cache_class": "",
+    "expires_in_seconds": null,
+    "obligations": {
+      "tenant_scope": "org-a"
+    },
+    "policy_revision": 15,
+    "reason": "allowed_by_role",
+    "wire_reason_code": "allowed_by_role"
+  },
+  "id": "org-wide-grant-role-lacks-the-action-reads-org-wide",
+  "layer": "pdp",
+  "request": {
+    "action": "analytics.export",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "acme/v",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "acme/m",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "member"
+      }
+    ],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "member",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "the grant rows and their roles play no part: the read is org-wide."
+}

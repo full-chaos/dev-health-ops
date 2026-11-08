@@ -168,22 +168,14 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 }
 
 // sessionIssuer is the client of auth-service's session issue route when
-// auth-service owns sessions, built from AUTH_SESSION_ISSUE_TOKEN, or from the
-// workload token of cred when AUTH_SESSION_ISSUE_CREDENTIAL selects it; nil
-// when go-api owns them. Sessions on without a usable credential is a start-up
+// auth-service owns sessions, built from the workload token of cred; nil when
+// go-api owns them. Sessions on without a usable credential is a start-up
 // error: every sign-in would answer 503.
-func sessionIssuer(cfg AuthProxyConfig, lookup func(string) (string, bool), cred sessionCredential) (sessionissue.Issuer, error) {
+func sessionIssuer(cfg AuthProxyConfig, cred sessionCredential) (sessionissue.Issuer, error) {
 	if !cfg.Enabled(AuthSessions) {
 		return nil, nil
 	}
-	var client *sessionissue.Client
-	var err error
-	if cred.workload != nil {
-		client, err = sessionissue.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
-	} else {
-		token, _ := lookup(sessionissue.EnvToken)
-		client, err = sessionissue.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
-	}
+	client, err := sessionissue.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s is on: %w", AuthProxyFlagEnv(AuthSessions), err)
 	}

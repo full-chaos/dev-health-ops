@@ -3,11 +3,11 @@
 // GET /api/v1/internal/acr/entitlements/{org_id} and the org llm-config
 // route. All are reachable only inside the cluster network (deploy/helm/dev-health's
 // TestInternalACRRoutesStayOffThePublicIngress pins that no Ingress routes to
-// the Go api) and every one also checks a svc_acr_ bearer. Health and
-// entitlements port api/internal/acr.py (CHAOS-9993): 100/minute per client
-// address (429), the credential looked up by token hash (401 unknown or
-// inactive, 403 without entitlements:read), and on the entitlement route
-// last_used_at plus one internal_service_credential_audits row per outcome.
+// the Go api) and every one also checks the acr-api workload token, the only
+// credential they accept: any other bearer, a svc_acr_ service credential
+// included, is 401 before any credential read. Health and entitlements share
+// a 100/minute per client address budget (429), and the entitlement route
+// writes one internal_service_credential_audits row per outcome.
 // CHAOS-7181: apiservice mounts these routes on the internal listener only
 // (apiservice.InternalRoutes); the public api listener has none. The
 // agent_context_runtime entitlement decision (ask_dev OR the legacy grant since
@@ -41,18 +41,16 @@ import (
 type Deps struct {
 	Store  EntitlementStore
 	Logger *slog.Logger
-	// LLMConfig and Credentials serve the llm-config route. Either nil makes
-	// that route answer 503; it never serves unauthenticated.
-	LLMConfig   LLMConfigSource
-	Credentials CredentialVerifier
-	// Auth and Limiter guard the health and entitlement routes with the
-	// svc_acr_ bearer check (api/internal/acr.py). A nil Auth makes them
-	// answer 503; they never serve unauthenticated. A nil Limiter does not
-	// rate limit.
+	// LLMConfig serves the llm-config route. Nil makes that route answer
+	// 503; it never serves unauthenticated.
+	LLMConfig LLMConfigSource
+	// Auth (the audit store) and Limiter guard the health and entitlement
+	// routes. A nil Auth makes them answer 503; they never serve
+	// unauthenticated. A nil Limiter does not rate limit.
 	Auth    CredentialStore
 	Limiter *httpapi.KeyedLimiter
-	// Workload, when set, lets every route also accept the acr-api workload
-	// token. Nil refuses every workload token as not_configured.
+	// Workload verifies the acr-api workload token, the one credential every
+	// route accepts. Nil refuses every workload token as not_configured.
 	Workload *WorkloadAuth
 	// Access and AccessLimiter serve the principal access read: a nil Access
 	// answers 503, a nil AccessLimiter does not rate limit.
@@ -61,7 +59,7 @@ type Deps struct {
 }
 
 // Routes is the acr area's route set. Every path is internal and checks its
-// own svc_acr_ bearer (routeAuth), so none carries the public Credentials/
+// own workload bearer (routeAuth), so none carries the public Credentials/
 // Authz/Tenant/Feature/Audit middleware.
 func Routes(deps Deps) []httpapi.Route {
 	logger := deps.Logger
@@ -83,7 +81,7 @@ func Routes(deps Deps) []httpapi.Route {
 		},
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/orgs/{org_id}/llm-config",
-			Handler: llmConfigHandler(deps.Credentials, deps.LLMConfig, logger, deps.Workload),
+			Handler: llmConfigHandler(deps.LLMConfig, logger, deps.Workload),
 		},
 		principalAccessRoute(deps, deps.Access, deps.AccessLimiter, logger),
 	}
@@ -156,13 +154,13 @@ func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Log
 		// Python commits it before returning; an audit that cannot be
 		// written is 503, never an unaudited answer.
 		finish := func(outcome string, write func(), extra ...slog.Attr) {
-			if !auth.audit(ctx, cred.ID, cred.PrincipalID, orgID, outcome) {
+			if !auth.audit(ctx, cred.PrincipalID, orgID, outcome) {
 				auth.unavailable(w, r, "audit_failed")
 				return
 			}
 			countInternal(ctx, routeEntitlement, outcome)
 			logger.LogAttrs(ctx, slog.LevelInfo, "acr entitlement lookup: answered", append([]slog.Attr{
-				slog.String("org_id", orgID), slog.String("credential_id", cred.ID), slog.String("outcome", outcome)}, extra...)...)
+				slog.String("org_id", orgID), slog.String("outcome", outcome)}, extra...)...)
 			write()
 		}
 		if store == nil {

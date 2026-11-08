@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // AuthSchema is the auth-owned schema WriteAuthSessions creates on the Go copy: the api's default
@@ -49,7 +50,14 @@ func (v *Venue) WriteAuthSessions(t *testing.T, ctx context.Context) {
 	if v.TokenIssuer == nil {
 		return
 	}
-	for _, session := range v.TokenIssuer.Sessions() {
+	writeSessions(t, ctx, admin, v.TokenIssuer)
+}
+
+// writeSessions writes one principal and one live auth-service session row per session issuer minted, pinned at
+// the token's token_version, on admin's database (its auth schema already applied).
+func writeSessions(t *testing.T, ctx context.Context, admin *pgxpool.Pool, issuer *edtokens.Issuer) {
+	t.Helper()
+	for _, session := range issuer.Sessions() {
 		if _, err := admin.Exec(ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'user') ON CONFLICT (id) DO NOTHING`, session.Principal); err != nil {
 			t.Fatalf("venue: principal %s: %v", session.Principal, err)
 		}

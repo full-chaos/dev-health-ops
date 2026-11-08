@@ -2250,6 +2250,13 @@ func (c *fileCtx) call(x *ast.CallExpr, name string, sc *scope, at func(ast.Node
 			if p.kind == kConst {
 				p = c.resolve(p.value)
 			}
+			if p.kind == kName {
+				// a bare entry name is read in the directory the code runs in: a file of the listed directory only when
+				// that is the directory it was listed from
+				if cwd := c.resolve("."); cwd.kind == kRepo && cwd.value == p.value {
+					p = pathInfo{kind: kWalk, value: p.value, depth: depthDir}
+				}
+			}
 			switch p.kind {
 			case kRepo:
 				add(Read{Kind: ReadPath, Line: line, Path: p.value, Literal: what})

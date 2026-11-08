@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "df1ad046e82988a16574a35fb91f7a63caf6bd6d0f27b60eba675b3729bf3b54"
-	rolesSHA   = "e3356d86831a4f95f4029f493bc59a6c3fb549500b661e5e4b83804d50ade03d"
+	actionsSHA = "9bea80ad38fd05f1a6199e8501a548a3446ce18580673d15808d567806fc9e36"
+	rolesSHA   = "ff421e32be43a67dab4c882c7696447fd749719c955f293574c688588f8d47d7"
 )
 
 func repoRoot(t *testing.T) string {
@@ -654,14 +654,21 @@ func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing
 	}
 }
 
-// No role holds the two new actions until a roles change grants them.
-func TestNoRoleHoldsAcrEvidenceReadOrCredentialIssue(t *testing.T) {
+// D6849 (legacy parity): every organization role reads ACR evidence and issues an ACR credential, as
+// any org session may today (rule 2 for the evidence read). No platform role holds either action.
+func TestEveryOrganizationRoleHoldsAcrEvidenceReadAndCredentialIssue(t *testing.T) {
 	c := Default()
+	org := map[string]bool{"viewer": true, "member": true, "admin": true, "owner": true}
 	for _, r := range c.Roles() {
 		for _, id := range []string{"acr.evidence.read", "acr.credential.issue"} {
-			if c.Allows(r.ID, id) {
-				t.Errorf("role %s holds %s", r.ID, id)
+			if got, want := c.Allows(r.ID, id), org[r.ID]; got != want {
+				t.Errorf("role %s holds %s = %v, want %v", r.ID, id, got, want)
 			}
+		}
+	}
+	for id := range org {
+		if _, err := c.Role(id); err != nil {
+			t.Errorf("organization role %s is missing: %v", id, err)
 		}
 	}
 }

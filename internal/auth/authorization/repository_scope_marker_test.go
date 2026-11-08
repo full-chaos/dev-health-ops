@@ -39,3 +39,17 @@ func TestRepositoryAllowCarriesTheOrganizationScopeWhenOrgWideInFact(t *testing.
 		}
 	}
 }
+
+// A delegated (impersonation) repository allow covers the asked repository only: the org-wide marker of the
+// subject's own allow never reaches the delegated session (one key, no repository_scope).
+func TestDelegatedRepositoryAllowCarriesOnlyTheAskedKey(t *testing.T) {
+	e := NewEvaluator()
+	for _, action := range []string{"acr.context.read", "acr.evidence.read"} {
+		req := Request{Action: action, ResourceKind: "repository", OrganizationID: testOrg, ResourceKey: "acme/api"}
+		d := e.Evaluate(req, delegated("viewer", []string{action}, ""))
+		if !d.Allowed || d.Obligations == nil || d.Obligations.RepositoryScope != "" || !d.Obligations.RepositoryRestricted ||
+			!reflect.DeepEqual(d.Obligations.RepositoryAllowlist, []string{"acme/api"}) {
+			t.Errorf("%s delegated viewer (membership default): %+v %+v, want the one key and no repository_scope", action, d, d.Obligations)
+		}
+	}
+}

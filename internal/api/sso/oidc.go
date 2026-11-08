@@ -286,11 +286,7 @@ func decryptProviderSecret(cipher credentials.Cipher, raw *string, key string) s
 
 // initiateOIDCAuth is POST /oidc/{provider_id}/authorize.
 func (h handlers) initiateOIDCAuth(w http.ResponseWriter, r *http.Request) {
-	providerID, err := pythonparity.ParseUUID(r.PathValue("provider_id"))
-	if err != nil {
-		h.fail(w, r, "parse provider id", err)
-		return
-	}
+	providerID, parseErr := pythonparity.ParseUUID(r.PathValue("provider_id"))
 	rawBody, _ := policy.BodyFrom(r.Context())
 	var errs pybody.Errors
 	object, ok := errs.Object(rawBody)
@@ -308,7 +304,7 @@ func (h handlers) initiateOIDCAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	row, err := scanProvider(h.Pool.QueryRow(ctx, `SELECT `+providerColumns+` FROM sso_providers WHERE id = $1::uuid`, providerID))
+	row, err := scanProvider(h.providerByID(ctx, providerColumns, providerID, parseErr))
 	if errorsIsNoRows(err) {
 		policy.WriteDetail(w, http.StatusNotFound, "SSO provider not found", nil)
 		return
@@ -401,11 +397,7 @@ func (h handlers) initiateOIDCAuth(w http.ResponseWriter, r *http.Request) {
 
 // oidcCallback is POST /oidc/{provider_id}/callback.
 func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
-	providerID, err := pythonparity.ParseUUID(r.PathValue("provider_id"))
-	if err != nil {
-		h.fail(w, r, "parse provider id", err)
-		return
-	}
+	providerID, parseErr := pythonparity.ParseUUID(r.PathValue("provider_id"))
 	body, _ := policy.BodyFrom(r.Context())
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
@@ -421,7 +413,7 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	row, err := scanOIDCProvider(h.Pool.QueryRow(ctx, `SELECT `+oidcProviderColumns+` FROM sso_providers WHERE id = $1::uuid`, providerID))
+	row, err := scanOIDCProvider(h.providerByID(ctx, oidcProviderColumns, providerID, parseErr))
 	if errorsIsNoRows(err) {
 		policy.WriteDetail(w, http.StatusNotFound, "SSO provider not found", nil)
 		return

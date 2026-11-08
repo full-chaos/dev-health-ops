@@ -466,11 +466,7 @@ func (h handlers) buildOAuthAuthorization(w http.ResponseWriter, row *providerRo
 // oauthCallback is POST /oauth/{provider_id}/callback -- "first" is this
 // route's provider_id, same naming note as initiateOAuthAuth above.
 func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
-	providerID, err := pythonparity.ParseUUID(r.PathValue("first"))
-	if err != nil {
-		h.fail(w, r, "parse provider id", err)
-		return
-	}
+	providerID, parseErr := pythonparity.ParseUUID(r.PathValue("first"))
 	body, _ := policy.BodyFrom(r.Context())
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
@@ -485,7 +481,7 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	row, err := scanOIDCProvider(h.Pool.QueryRow(ctx, `SELECT `+oidcProviderColumns+` FROM sso_providers WHERE id = $1::uuid`, providerID))
+	row, err := scanOIDCProvider(h.providerByID(ctx, oidcProviderColumns, providerID, parseErr))
 	if errorsIsNoRows(err) {
 		policy.WriteDetail(w, http.StatusNotFound, "OAuth provider not found", nil)
 		return

@@ -872,7 +872,6 @@ internal/testsupport/venueoracle	golden.go	internal/api/integrationsadmin/syncve
 internal/testsupport/venueoracle	golden.go	internal/api/licensing
 internal/testsupport/venueoracle	golden.go	internal/api/licensing/processlicense
 internal/testsupport/venueoracle	golden.go	internal/api/orgs
-internal/testsupport/venueoracle	golden.go	internal/api/policy
 internal/testsupport/venueoracle	golden.go	internal/api/pybody
 internal/testsupport/venueoracle	golden.go	internal/api/pyjson
 internal/testsupport/venueoracle	golden.go	internal/api/pytime
@@ -976,6 +975,7 @@ internal/testsupport/venueoracle	golden_walk.go	internal/apiservice/metricsvenue
 internal/testsupport/venueoracle	golden_walk.go	internal/apiservice/ownershipvenue
 internal/testsupport/venueoracle	golden_walk.go	internal/apiservice/ssovenue
 internal/testsupport/venueoracle	golden_walk.go	internal/atlassianteams
+internal/testsupport/venueoracle	golden_walk.go	internal/auth/edgetoken
 internal/testsupport/venueoracle	golden_walk.go	internal/auth/identity/local
 internal/testsupport/venueoracle	golden_walk.go	internal/auth/signedtoken
 internal/testsupport/venueoracle	golden_walk.go	internal/auth/usersbackfill

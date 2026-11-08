@@ -181,5 +181,36 @@ done
 # The after-retire cells judge the token of the login that b signed after the retire, not an older one.
 if awk '/^check s1-b-signs-after-retire / {s=NR} /^check s1-go-api-accepts-b-after-retire / {g=NR} /^check s1-query-api-serves-b-after-retire / {q=NR} END {exit !(s && g > s && q > s)}' "${SCRIPT}"; then ok after-retire-cells-follow-the-b-login; else bad after-retire-cells-follow-the-b-login; fi
 
+# A rollback to the previous image after F2b gives EdDSA under the active kid (good in S3, a in smoke), not HS256. rollback_cells
+# prints the name of every cell the given script text fails; the planted copy below must fail all of them.
+# shellcheck disable=SC2016
+rollback_cells() {
+  local f="$1" cell
+  for cell in 's3-new-token-is-eddsa alg_is "${L_ACCESS}" EdDSA' \
+    's3-new-token-signed-by-${good} kid_is "${L_ACCESS}" "${good}"' \
+    's3-go-api-accepts-the-eddsa-token me_accepts "${L_ACCESS}"' \
+    's3-compromised-kid-token-refused me_refuses "${COMPROMISED_ACCESS}"' \
+    's3-revoked-session-still-refused verdict_is "${R_CODE}" refused' \
+    'smoke-roll-token-is-eddsa alg_is "${L_ACCESS}" EdDSA' \
+    'smoke-roll-token-signed-by-a kid_is "${L_ACCESS}" a' \
+    'smoke-roll-go-api-accepts-eddsa me_accepts "${L_ACCESS}"'; do
+    if ! grep -qxF -e "  check ${cell}" -e "  check \"${cell%% *}\" ${cell#* }" "${f}"; then echo "${cell%% *}"; fi
+  done
+  if ! grep -qE '^  check "s3-\$\{bad\}-jwks-absent|^  check "s3-jwks-has-no-\$\{bad\}" jwks_lacks "\$\{bad\}"$' "${f}"; then echo s3-jwks-lacks-the-compromised-kid; fi
+  if grep -vE '^[[:space:]]*#' "${f}" | grep -qi 'hs256'; then echo no-hs256-expectation-left; fi
+}
+missing="$(rollback_cells "${SCRIPT}")"
+# shellcheck disable=SC2016
+for name in s3-new-token-is-eddsa 's3-new-token-signed-by-${good}' s3-go-api-accepts-the-eddsa-token s3-compromised-kid-token-refused \
+  s3-revoked-session-still-refused smoke-roll-token-is-eddsa smoke-roll-token-signed-by-a smoke-roll-go-api-accepts-eddsa \
+  s3-jwks-lacks-the-compromised-kid no-hs256-expectation-left; do
+  if ! grep -qxF -- "${name}" <<<"${missing}"; then ok "rollback-pins-${name}"; else bad "rollback-pins-${name}"; fi
+done
+if grep -qF 'EdDSA' <<<"${plan}" && grep -qF 'S3 rollback' <<<"${plan}" && ! grep -i 'hs256' <<<"${plan}" >/dev/null; then ok plan-help-text-says-eddsa-not-hs256; else bad plan-help-text-says-eddsa-not-hs256; fi
+# shellcheck disable=SC2016
+sed -e 's/alg_is "${L_ACCESS}" EdDSA/alg_is "${L_ACCESS}" HS256/' -e 's/^  check s3-go-api-accepts-the-eddsa-token/  check s3-go-api-accepts-the-hs256-token/' "${SCRIPT}" >"${T}/planted.sh"
+planted="$(rollback_cells "${T}/planted.sh")"
+if grep -qxF s3-new-token-is-eddsa <<<"${planted}" && grep -qxF smoke-roll-token-is-eddsa <<<"${planted}" && grep -qxF s3-go-api-accepts-the-eddsa-token <<<"${planted}"; then ok planted-hs256-expectation-fails-the-cells; else bad planted-hs256-expectation-fails-the-cells; fi
+
 if [ ! -s "${FAKE_LOG}" ]; then ok no-docker-call-before-the-checks; else bad no-docker-call-before-the-checks; fi
 exit "${failed}"

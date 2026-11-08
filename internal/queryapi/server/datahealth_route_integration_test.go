@@ -63,7 +63,7 @@ func TestDataHealthRoute_OperatorGateThroughTheSignedEnvelope(t *testing.T) {
 	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
 
 	post := func(bearer string) (int, string) {
-		rec := postGraphQLWithVariables(t, handler, registeredConnectorsDataHealthDocument, bearer, map[string]any{"teamId": "ALL"})
+		rec := postGraphQLWithVariables(t, handler, registeredConnectorsDataHealthDocument, bearerCarrier(bearer), map[string]any{"teamId": "ALL"})
 		return rec.Code, rec.Body.String()
 	}
 	valid := time.Now().Add(time.Hour)

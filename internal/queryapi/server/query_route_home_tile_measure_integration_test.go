@@ -44,7 +44,7 @@ func (c *statementRecordingHomeCH) readsIssueSize() bool {
 // is still read in COUNT.
 func TestHomeInvestmentTileIsIssueSizeOnlyForADocumentThatAsksForItsCoverage(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestHomeInvestmentTileIsIssueSizeOnlyForADocumentThatAsksForItsCoverage(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 
 	for name, tc := range map[string]struct {
 		document  string

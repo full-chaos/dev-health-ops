@@ -26,7 +26,7 @@ const catalogRuleOlderSchemaDigest = "sha256:an-older-schema-digest"
 
 func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 	// Only hotspots requests reach this handler's resolver (its ClickHouse double answers hotspots).
 	handler, proof, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
 	runOperation := markClassGated(handler) // what buildQueryRoute mounts at /query/run-operation
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 	securityAlertsVariables := map[string]any{"orgId": "org-1"}
 	classRow := func(schemaDigest, root, mode string) {
 		t.Helper()

@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
@@ -45,7 +44,7 @@ func TestSavedReportRoutes_ThroughTheSignedEnvelope(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), savedReportsPostgresDDL); err != nil {
 		t.Fatal(err)
 	}
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,8 +53,8 @@ func TestSavedReportRoutes_ThroughTheSignedEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	token := func(org string) string {
-		return signDataHealthEnvelope(t, priv, principal.Claims{OrgID: org, Role: "member"}, time.Now().Add(time.Hour))
+	token := func(org string) func(*http.Request) {
+		return iaHeaders(org, "member", false, false)
 	}
 	run := func(doc, org string, vars map[string]any) (int, map[string]any) {
 		rec := postGraphQLWithVariables(t, handler, doc, token(org), vars)
@@ -307,7 +306,7 @@ func TestSavedReportRoutes_ThroughTheSignedEnvelope(t *testing.T) {
 	})
 
 	t.Run("no envelope is refused before any read", func(t *testing.T) {
-		rec := postGraphQLWithVariables(t, handler, registeredSavedReportsDocument, "", map[string]any{"orgId": "org-1", "limit": 50, "offset": 0})
+		rec := postGraphQLWithVariables(t, handler, registeredSavedReportsDocument, nil, map[string]any{"orgId": "org-1", "limit": 50, "offset": 0})
 		if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), "Weekly") {
 			t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
 		}

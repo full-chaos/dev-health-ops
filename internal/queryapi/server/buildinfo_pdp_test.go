@@ -38,7 +38,7 @@ func TestBuildInfoNeverAsksThePDP(t *testing.T) {
 		cfg.Decider = client
 		gate := pdp.New(cfg)
 		mux := http.NewServeMux()
-		mux.HandleFunc("/buildinfo", newBuildInfoHandler(verifier))
+		mux.HandleFunc("/buildinfo", newBuildInfoHandler(verifier, nil, nil))
 		req := httptest.NewRequest(http.MethodGet, "/buildinfo", nil)
 		req.Header.Set("Authorization", "Bearer "+envelope)
 		rec := httptest.NewRecorder()

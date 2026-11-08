@@ -160,6 +160,7 @@ Bring-up, in this order (every command names its services; `-p dev-health ... --
 7. Once: `--profile auth run --rm go-api-workload-bootstrap` (runs `go-api-workload-volume` first), then read the principal of the workload `api` as in step 6
    (`WHERE name = 'api'`) and write it to `ops/.env` as `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_...`. Recreate auth-service (`--profile auth up -d --no-deps --no-build auth-service`).
 8. Recreate go-api (`up -d --no-deps --no-build go-api`; it needs the api bootstrap file from step 7 to start), query-api and web, then acr-api (`--profile acr up -d --no-deps --no-build acr-api`).
+9. Platform roles (CHAOS-13282): auth-service has `AUTH_PLATFORM_ROLES_OWNED=true` in `compose.bigboy.yml` (the prod form: the PDP reads the role from `auth.platform_role_assignments`, not `users.is_superuser`), so a plain `up` keeps it. go-api stays not owned (the drift-S controls need legacy to read the flag), and `AUTH_USERS_OWNED` stays `false` (the venue has no mail settings: `auth_mail_config_invalid`). Before the first start with the setting on, run `BIGBOY_DRIFT_S_ID=<uuid> BIGBOY_ADMIN_AUTH_HDR=<0600 header file> ci/bigboy/bigboy-platform-admin-fixture.sh`: it runs `dho auth users-backfill` with the drift-S `is_superuser` flag off, puts the flag back, and reads back that the active platform_admin set is the flagged superusers other than drift-S and that `users-reconcile -platform-roles-gate` shows only the drift-S `platform_role_diff`. It is idempotent.
 
 ## Go-only stack (CHAOS-8361)
 

@@ -767,11 +767,13 @@ func rootIdent(expression ast.Expr) string {
 	}
 }
 
-// installsJSON reports whether the top-level function named function runs
-// defer logging.InstallDefault(logger)() as one of its own top-level
-// statements, where logger is declared once by := logging.NewJSON(...) and
-// never assigned again, so every run of the entry point logs through the
-// JSON handler.
+// installsJSON reports whether the top-level function named function, in
+// its own top-level statements, either runs defer logging.InstallDefault(X)()
+// or runs restore := logging.InstallDefault(X) and later defer restore(),
+// where restore is declared once by that := and never assigned again or has
+// its address taken. X is a logging.NewJSON(...) call or a variable declared
+// once by := logging.NewJSON(...) and never assigned again, so every run of
+// the entry point logs through the JSON handler.
 func installsJSON(files []*ast.File, function, loggingPath string) bool {
 	found := false
 	for _, file := range files {
@@ -781,17 +783,48 @@ func installsJSON(files []*ast.File, function, loggingPath string) bool {
 			if !ok || decl.Name.Name != function || decl.Recv != nil || decl.Body == nil {
 				continue
 			}
+			installsLogger := func(expression ast.Expr) bool {
+				if !isImportedCall(expression, names, loggingPath, "InstallDefault") {
+					return false
+				}
+				install := expression.(*ast.CallExpr)
+				if len(install.Args) != 1 || install.Ellipsis.IsValid() {
+					return false
+				}
+				logger := install.Args[0]
+				if isImportedCall(logger, names, loggingPath, "NewJSON") {
+					return true
+				}
+				_, isIdent := logger.(*ast.Ident)
+				return isIdent && jsonLogger(logger, decl, names, loggingPath)
+			}
+			restores := map[string]bool{}
 			for _, statement := range decl.Body.List {
-				deferred, ok := statement.(*ast.DeferStmt)
-				if !ok {
-					continue
-				}
-				inner, ok := deferred.Call.Fun.(*ast.CallExpr)
-				if !ok || len(inner.Args) != 1 || !isImportedCall(inner, names, loggingPath, "InstallDefault") {
-					continue
-				}
-				if _, isIdent := inner.Args[0].(*ast.Ident); isIdent && jsonLogger(inner.Args[0], decl, names, loggingPath) {
-					found = true
+				switch typed := statement.(type) {
+				case *ast.AssignStmt:
+					if typed.Tok != token.DEFINE || len(typed.Lhs) != len(typed.Rhs) {
+						continue
+					}
+					for index, left := range typed.Lhs {
+						ident, ok := left.(*ast.Ident)
+						if ok && ident.Name != "_" && installsLogger(typed.Rhs[index]) && boundOnce(decl, ident.Name, installsLogger) {
+							restores[ident.Name] = true
+						}
+					}
+				case *ast.DeferStmt:
+					if len(typed.Call.Args) != 0 || typed.Call.Ellipsis.IsValid() {
+						continue
+					}
+					switch deferred := typed.Call.Fun.(type) {
+					case *ast.CallExpr:
+						if installsLogger(deferred) {
+							found = true
+						}
+					case *ast.Ident:
+						if restores[deferred.Name] {
+							found = true
+						}
+					}
 				}
 			}
 		}

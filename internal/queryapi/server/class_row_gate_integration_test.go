@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -60,7 +59,7 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	runOperation := markClassGated(handler) // what buildQueryRoute mounts at /query/run-operation
 	hotspots := mcpclass.Operation("hotspots")
 

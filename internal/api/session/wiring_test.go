@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -9,10 +10,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
@@ -22,13 +25,9 @@ func completeDeps(t *testing.T) Deps {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner("wiring-test-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth := &policy.Authenticator{}
 	return Deps{Pool: &pgxpool.Pool{}, Guard: policy.NewGuard(auth, slog.New(slog.DiscardHandler)), Auth: auth,
-		Verifier: verifier, Signer: signer}
+		Verifier: verifier, Issuer: stubIssuer{}}
 }
 
 // Routes mounts all seventeen routes only when every one of its five
@@ -43,7 +42,6 @@ func TestRoutesNeedEveryRequiredDependency(t *testing.T) {
 		"Guard":    func(d *Deps) { d.Guard = nil },
 		"Auth":     func(d *Deps) { d.Auth = nil },
 		"Verifier": func(d *Deps) { d.Verifier = nil },
-		"Signer":   func(d *Deps) { d.Signer = nil },
 	} {
 		deps := completeDeps(t)
 		drop(&deps)
@@ -162,4 +160,12 @@ func TestSocialLoginAnswersAnUnverifiedGitHubAccountWithTheFixedRefusal(t *testi
 	if want := `{"detail":{"message":"The provider has not verified this email address"}}`; w.Code != http.StatusForbidden || w.Body.String() != want {
 		t.Errorf("%d %s", w.Code, w.Body.String())
 	}
+}
+
+// stubIssuer stands in for auth-service's issue route when a stack names no issuer: it hands out an opaque pair and
+// writes nothing, so a route that needs a session still answers.
+type stubIssuer struct{}
+
+func (stubIssuer) Issue(context.Context, *http.Request, sessionissue.Request) (sessionissue.Pair, error) {
+	return sessionissue.Pair{Access: "stub-access-" + uuid.NewString(), Refresh: "stub-refresh-" + uuid.NewString(), ExpiresIn: 3600}, nil
 }

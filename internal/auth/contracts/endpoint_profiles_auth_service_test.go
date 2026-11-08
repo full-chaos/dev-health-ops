@@ -77,10 +77,10 @@ func TestAuthServiceEndpointProfilesValidateAndUseTheClosedVocabularies(t *testi
 	}
 }
 
-// The refresh route takes the go-api refresh JWT and the opaque refresh
-// credential in one body field; the row lists both and the selector gate
-// proves them apart by shape.
-func TestTheRefreshRowListsBothBodyCarriedClasses(t *testing.T) {
+// The refresh route takes only the opaque refresh credential: the HS256 refresh
+// exchange is retired, so a go-api refresh JWT is refused like garbage and the
+// row needs no class disambiguator.
+func TestTheRefreshRowAcceptsTheOpaqueCredentialOnly(t *testing.T) {
 	found := false
 	for _, row := range authServiceRows(t) {
 		if id, _ := row["id"].(string); !strings.HasPrefix(id, "POST /api/v1/auth/refresh ") {
@@ -91,12 +91,11 @@ func TestTheRefreshRowListsBothBodyCarriedClasses(t *testing.T) {
 		for _, class := range row["accepted_credential_classes"].([]any) {
 			classes = append(classes, class.(string))
 		}
-		if !slices.Equal(classes, []string{"ops_refresh_token", "refresh_credential"}) {
-			t.Errorf("refresh row accepts %v, want ops_refresh_token and refresh_credential", classes)
+		if !slices.Equal(classes, []string{"refresh_credential"}) {
+			t.Errorf("refresh row accepts %v, want refresh_credential only", classes)
 		}
-		want := map[string]any{"kind": "body_field", "name": "refresh_token"}
-		if selector, _ := row["class_disambiguator"].(map[string]any); selector["kind"] != want["kind"] || selector["name"] != want["name"] {
-			t.Errorf("refresh row class_disambiguator %v, want %v", row["class_disambiguator"], want)
+		if selector, present := row["class_disambiguator"]; present {
+			t.Errorf("refresh row keeps class_disambiguator %v; one class needs none", selector)
 		}
 		if gaps, _ := row["gaps"].([]any); len(gaps) != 0 {
 			t.Errorf("refresh row still declares gaps: %v", gaps)

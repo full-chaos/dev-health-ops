@@ -28,12 +28,8 @@ func classConfig(t *testing.T, class string) authconfig.Config {
 
 func classConfigWith(t *testing.T, class string, extra map[string]string) authconfig.Config {
 	t.Helper()
-	// Under eddsa AUTH_JWT_AUDIENCE is the API token's audience (the session-route token is minted beside it); the
-	// hs256_compat tests keep a non-default audience to prove that class reads it.
-	audience := "auth-service"
-	if class == authconfig.AccessClassEdDSA {
-		audience = "dev-health-api"
-	}
+	// Under eddsa AUTH_JWT_AUDIENCE is the API token's audience (the session-route token is minted beside it).
+	audience := "dev-health-api"
 	env := map[string]string{
 		authconfig.EnvDatabaseURI:         "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile:      "/nonexistent",
@@ -60,14 +56,6 @@ func TestTheConfiguredAccessTokenClassPicksTheIssuer(t *testing.T) {
 	grant := authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()}
 
 	stub := &stubSigner{}
-	hs, err := newAccessIssuer(classConfig(t, "hs256_compat"), stub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if token, err := hs.AccessContext(context.Background(), grant); err != nil || token == "" || stub.calls != 0 {
-		t.Fatalf("hs256_compat: err %v, %d key-set signer calls", err, stub.calls)
-	}
-
 	ed, err := newAccessIssuer(classConfig(t, "eddsa"), stub)
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +67,7 @@ func TestTheConfiguredAccessTokenClassPicksTheIssuer(t *testing.T) {
 	if _, err := newAccessIssuer(classConfig(t, "eddsa"), nil); err == nil {
 		t.Fatal("an eddsa issuer was built without a signer")
 	}
-	cfg := classConfig(t, "hs256_compat")
+	cfg := classConfig(t, "eddsa")
 	cfg.Session.AccessClass = "both"
 	if _, err := newAccessIssuer(cfg, stub); err == nil {
 		t.Fatal("an unknown class built an issuer")

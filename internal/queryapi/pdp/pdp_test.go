@@ -365,11 +365,11 @@ func TestPDPEnforceUnknownRowFailsClosed(t *testing.T) {
 	}
 }
 
-// The exempt list is the HS256 class alone: the effective-principal envelope is retired. An accepted HS256 caller counts
-// in every mode; the envelope class and a user token never count.
-func TestPDPExemptListIsHS256Only(t *testing.T) {
-	if !slices.Equal(ExemptClasses, []string{"ops_access_token_hs256"}) {
-		t.Fatalf("exempt list %v", ExemptClasses)
+// The exempt list is empty: the retired HS256 class, the retired envelope class and a user token never count, in
+// any mode.
+func TestPDPExemptListIsEmpty(t *testing.T) {
+	if len(ExemptClasses) != 0 {
+		t.Fatalf("exempt list %v, want none", ExemptClasses)
 	}
 	for _, mode := range []string{ModeOff, ModeShadow, ModeEnforce, "banana"} {
 		t.Run(mode, func(t *testing.T) {
@@ -379,12 +379,11 @@ func TestPDPExemptListIsHS256Only(t *testing.T) {
 				cfg.Decider = pepClient(t, pdptest.New(t).URL)
 			}
 			g := New(cfg)
-			g.CountExempt(context.Background(), ClassHS256, testProfile)
+			g.CountExempt(context.Background(), "ops_access_token_hs256", testProfile)
 			g.CountExempt(context.Background(), "effective_principal_envelope", "POST /api/v1/drilldown/prs")
 			g.CountExempt(context.Background(), "user_access_token", testProfile)
-			want := map[string]int64{"action=analytics.read,class=ops_access_token_hs256": 1}
-			if got := m.points(t, exemptMetric); !mapsEqual(got, want) {
-				t.Fatalf("exempt %v, want %v", got, want)
+			if got := m.points(t, exemptMetric); len(got) != 0 {
+				t.Fatalf("exempt %v, want no count", got)
 			}
 		})
 	}
@@ -410,7 +409,7 @@ func TestPDPLabelsAreClosed(t *testing.T) {
 	g := New(cfg)
 	for _, profile := range []string{testProfile, "GET /api/v1/flame", "GET /x/" + testOrg} {
 		_, _ = g.Authorize(context.Background(), profile, testBearer, testOrg)
-		g.CountExempt(context.Background(), ClassHS256, profile)
+		g.CountExempt(context.Background(), "effective_principal_envelope", profile)
 	}
 	actions := []string{"analytics.read", "metrics.read", "work_items.read", "git.read", "org.read", "unknown"}
 	closed := map[string][]string{

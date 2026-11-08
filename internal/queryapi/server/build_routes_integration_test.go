@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,7 +17,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
@@ -47,11 +50,15 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 		defer closeCancel()
 		_ = pg.Close(closeCtx)
 	})
-	// The authenticated method probe below presents the HS256 edge token of a seeded member: with no
-	// AUTH_ACCESS_TOKEN_ISSUER the edge verifier does not route by row, so an undeclared method reaches the
-	// handler's own method check. The envelope is a retired class.
+	// The authenticated method probe below presents a seeded member's user access token, verified as production
+	// verifies it: AUTH_ACCESS_TOKEN_ISSUER names an in-test TLS issuer, and the token's session is a live
+	// auth.sessions row. A declared method has its row and reaches the handler; an undeclared one has no row and is
+	// refused before it. The HS256 token and the envelope are retired classes.
 	pgschema.ApplyURI(ctx, t, pg.URI)
 	member := seedBuildRoutesMember(ctx, t, pg.URI)
+	issuer := startEdgeIssuer(t)
+	bearer := issuer.tokens.MustMint(t, edtokens.Claims{UserID: member, OrgID: edgeUsersOrg})
+	seedBuildRoutesSessions(ctx, t, pg.URI, issuer.tokens)
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -62,9 +69,9 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 		"GO_API_ENVELOPE_JWKS_PATH":    writeTestJWKS(t, pub),
 		"GO_API_ENVELOPE_ISSUER":       itTestIssuer,
 		"GO_API_ENVELOPE_AUDIENCE":     itTestAudience,
+		accessTokenIssuerEnvVar:        issuer.url,
 		"DEV_HEALTH_ENV":               "ci",
 		"GO_API_PROOF_ROUTE_ENABLED":   "true",
-		edgeJWTSecretEnvVar:            edgeTestSecret,
 	}
 	// Every route switch the source names, on.
 	for _, name := range switchNames(t) {
@@ -112,14 +119,11 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 	if len(unmounted) > 0 {
 		t.Fatalf("with every dependency and every switch present these declared routes answer 404 (unmounted): %v", unmounted)
 	}
-	// CHAOS-8307: the REAL plane mounts exactly the table's (method, pattern) pairs. An
-	// authenticated request is refused with the method refusal (405) for every method a
-	// pattern does not declare and is not for every method it declares. This is the row
-	// set the unit test cannot build (the two explain builders open a write ClickHouse
-	// connection at construction), so it covers all 24 patterns on the real plane.
-	claims := validTestEdgeClaims(edgeUsersOrg)
-	claims["sub"], claims["tv"] = member.String(), 0
-	bearer := signTestEdgeToken(t, claims)
+	// CHAOS-8307: the REAL plane mounts exactly the table's (method, pattern) pairs. A
+	// member's user access token is refused (401: no row, or the handler's 405) for every
+	// method a pattern does not declare and is not for every method it declares. This is
+	// the row set the unit test cannot build (the two explain builders open a write
+	// ClickHouse connection at construction), so it covers all 24 patterns on the real plane.
 	declared := map[string]map[string]bool{}
 	for _, route := range RESTRoutes() {
 		if declared[route.Pattern] == nil {
@@ -133,11 +137,11 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 			request.Header.Set("Authorization", "Bearer "+bearer)
 			recorder := httptest.NewRecorder()
 			plane.Handler.ServeHTTP(recorder, request)
-			switch refused := recorder.Code == http.StatusMethodNotAllowed; {
+			switch refused := recorder.Code == http.StatusMethodNotAllowed || recorder.Code == http.StatusUnauthorized; {
 			case methods[method] && (refused || recorder.Code == http.StatusNotFound):
 				t.Errorf("%s %s: declared in the table, the real plane answers %d", method, pattern, recorder.Code)
 			case !methods[method] && !refused:
-				t.Errorf("%s %s: not declared in the table, the real plane answers %d (not 405)", method, pattern, recorder.Code)
+				t.Errorf("%s %s: not declared in the table, the real plane answers %d (not 401 or 405)", method, pattern, recorder.Code)
 			}
 		}
 	}
@@ -153,6 +157,33 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 	// credential-less POST is the edge's 401, never the mux's 404.
 	if got := probe(plane.Handler, http.MethodPost, graphQLEdgePath); got != http.StatusUnauthorized {
 		t.Errorf("POST %s on the PUBLIC handler answered %d, want 401 (mounted, refusing the missing credential)", graphQLEdgePath, got)
+	}
+}
+
+// seedBuildRoutesSessions applies the auth schema on uri and writes one principal and one live auth-service session
+// row per session issuer minted, pinned at the token's token_version, as the api reads a user access token's sid.
+func seedBuildRoutesSessions(ctx context.Context, t *testing.T, uri string, issuer *edtokens.Issuer) {
+	t.Helper()
+	admin, err := pgxpool.New(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	if _, err := admin.Exec(ctx, "CREATE ROLE build_routes_auth NOLOGIN"); err != nil {
+		t.Fatalf("auth runtime role: %v", err)
+	}
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: "build_routes_auth"}); err != nil {
+		t.Fatalf("auth schema: %v", err)
+	}
+	for _, session := range issuer.Sessions() {
+		if _, err := admin.Exec(ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'user') ON CONFLICT (id) DO NOTHING`, session.Principal); err != nil {
+			t.Fatalf("principal: %v", err)
+		}
+		hash := sha256.Sum256([]byte("build-routes-session:" + session.ID.String()))
+		if _, err := admin.Exec(ctx, `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, legacy_token_version)
+VALUES ($1, $2, $3, $4, $5)`, session.ID, session.Principal, hash[:], session.ExpiresAt, session.TokenVersion); err != nil {
+			t.Fatalf("session: %v", err)
+		}
 	}
 }
 

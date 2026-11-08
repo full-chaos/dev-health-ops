@@ -3,8 +3,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,18 +17,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pinrig"
 )
 
 const edgeUsersOrg = "22222222-2222-2222-2222-222222222222"
 
-// CHAOS-6290 through the real Build: with the /query route configured (real ClickHouse and
-// the real migrated Postgres schema) and the edge secret set, an edge access token is
-// checked against the live users row THROUGH the /query route's registry pool. An inactive
-// user is refused, an active one at the matching token_version is not, and a token_version
-// bump refuses the older token. Build handing the edge routes no pool instead of
-// handlers.RegistryPool either refuses to start (secret set) or cannot read this row.
+// CHAOS-6290: a user access token on a REST route is checked against the live users row read
+// through the /query route's registry pool (real ClickHouse, the real migrated Postgres schema,
+// real auth-service sessions). The real Build starts with the issuer set. The user cells run the
+// edge verifier as buildEdgeVerifierFromEnv builds it (newEdgeUserStore on the registry pool,
+// routeEdgeVerifier) with the test key source in place of the issuer's JWKS, and EdDSA tokens of
+// real sessions. Each refusal asserts its own reason line; the staleness check is the session's
+// token_version pin.
 func TestBuildChecksEdgeTokensAgainstTheUsersRowThroughTheQueryPool(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -52,7 +59,7 @@ func TestBuildChecksEdgeTokensAgainstTheUsersRowThroughTheQueryPool(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer seed.Close()
+	t.Cleanup(seed.Close) // after the pin rig's role cleanup, which runs on this pool
 	addUser := func(active bool, tokenVersion int) uuid.UUID {
 		id := uuid.New()
 		if _, err := seed.Exec(ctx, `INSERT INTO users
@@ -63,7 +70,8 @@ VALUES ($1, $2, 'local', $3, false, false, $4, now(), now())`,
 		}
 		return id
 	}
-	activeUser, inactiveUser, bumpedUser := addUser(true, 0), addUser(false, 0), addUser(true, 2)
+	// inactiveUser is deactivated after it signs in (a session needs an active user).
+	activeUser, inactiveUser, bumpedUser := addUser(true, 0), addUser(true, 0), addUser(true, 2)
 	// The token's org, active, with a membership row for each seeded user: the edge
 	// refuses a token whose org the user is not a member of (CheckTokenOrg).
 	if _, err := seed.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
@@ -89,57 +97,108 @@ VALUES ($1, $2, $3, 'viewer', now(), now(), now())`, uuid.New(), edgeUsersOrg, i
 		"GO_API_ENVELOPE_ISSUER":       itTestIssuer,
 		"GO_API_ENVELOPE_AUDIENCE":     itTestAudience,
 		"DEV_HEALTH_ENV":               "ci",
+		accessTokenIssuerEnvVar:        accessTestIssuer,
 		edgeJWTSecretEnvVar:            edgeTestSecret,
 	}
 	for _, name := range switchNames(t) {
 		settings[name] = "true"
 	}
-	plane, err := Build(func(name string) string { return settings[name] })
+	getenv := func(name string) string { return settings[name] }
+	plane, err := Build(getenv)
 	if err != nil {
-		t.Fatalf("Build with the edge secret and every dependency present: %v", err)
+		t.Fatalf("Build with the issuer and every dependency present: %v", err)
 	}
 	defer plane.Close()
 
-	// serve answers the status and body of GET /api/v1/people with an edge token for user.
-	serve := func(user uuid.UUID, tokenVersion int) (int, string) {
-		claims := validTestEdgeClaims(edgeUsersOrg)
-		claims["sub"] = user.String()
-		claims["tv"] = tokenVersion
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/people?q=a", nil)
-		req.Header.Set("Authorization", "Bearer "+signTestEdgeToken(t, claims))
+	// Real auth-service sessions, each pinned at its user's token_version when signed in.
+	rig := pinrig.NewPinRig(t, ctx, seed, pg)
+	sessionOf := map[uuid.UUID]uuid.UUID{}
+	for _, id := range []uuid.UUID{activeUser, inactiveUser, bumpedUser, nonMember} {
+		sessionOf[id] = rig.SignIn(t, ctx, id)
+	}
+	staleUser, goneUser := addUser(true, 0), addUser(true, 0)
+	if _, err := seed.Exec(ctx, `INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'viewer', now(), now(), now())`, uuid.New(), edgeUsersOrg, staleUser); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+	sessionOf[staleUser], sessionOf[goneUser] = rig.SignIn(t, ctx, staleUser), rig.SignIn(t, ctx, goneUser)
+	for _, change := range []struct {
+		sql string
+		id  uuid.UUID
+	}{
+		{`UPDATE users SET is_active = false WHERE id = $1`, inactiveUser},
+		{`UPDATE users SET token_version = 2 WHERE id = $1`, staleUser},
+		{`DELETE FROM users WHERE id = $1`, goneUser},
+	} {
+		if _, err := seed.Exec(ctx, change.sql, change.id); err != nil {
+			t.Fatalf("%s: %v", change.sql, err)
+		}
+	}
+
+	registry, err := pgxpool.New(ctx, pg.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	users, err := newEdgeUserStore(getenv, registry)
+	if err != nil {
+		t.Fatalf("newEdgeUserStore on the registry pool: %v", err)
+	}
+	edge, err := principal.NewEdgeVerifier(users)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newAccessMinter(t)
+	if err := routeEdgeVerifier(edge, testAccess(m.keys, nil, accessTestNow).opts); err != nil {
+		t.Fatal(err)
+	}
+	envelope, _ := iaVerifier(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/home", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := authenticateRESTRequest(w, r, envelope, edge, "home"); ok {
+			_, _ = w.Write([]byte("served"))
+		}
+	})
+
+	// serve answers the status, the body and the WARN lines of GET /api/v1/home with a user
+	// access token of user's session in the seeded org.
+	serve := func(user uuid.UUID) (int, string, string) {
+		var logged bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		defer slog.SetDefault(previous)
+		token := m.mint(user, map[string]any{"sid": sessionid.Wire(sessionOf[user]), "org_id": edgeUsersOrg}, nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/home", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
 		rec := httptest.NewRecorder()
-		plane.Handler.ServeHTTP(rec, req)
-		return rec.Code, rec.Body.String()
+		mux.ServeHTTP(rec, req)
+		return rec.Code, strings.TrimSpace(rec.Body.String()), logged.String()
 	}
-	status := func(user uuid.UUID, tokenVersion int) int {
-		code, _ := serve(user, tokenVersion)
-		return code
+	for _, c := range []struct {
+		name   string
+		user   uuid.UUID
+		reason string
+	}{
+		{"inactive user", inactiveUser, "api user access token valid but user not found or deactivated"},
+		{"user with no row", goneUser, "api user access token valid but user not found or deactivated"},
+		{"session pinned before a token_version bump", staleUser, "api access denied: session predates the token_version"},
+		{"active user with no membership in the token's org", nonMember, "api access token for an org the user is not a member of"},
+	} {
+		code, body, logged := serve(c.user)
+		if code != http.StatusUnauthorized || body != restRefusal || strings.Count(logged, "level=WARN") != 1 ||
+			!strings.Contains(logged, fmt.Sprintf("msg=%q", c.reason)) {
+			t.Errorf("%s: %d %q, WARN %q, want 401 %s and the one reason %q", c.name, code, body, logged, restRefusal, c.reason)
+		}
 	}
-	// served: the token passed the users check and reached the route's own work (which may
-	// itself answer a data error on this empty ClickHouse), so it is neither a credential
-	// refusal (401) nor the users lookup failing (500, or the auth layer's 503).
-	served := func(user uuid.UUID, tokenVersion int) (bool, int, string) {
-		code, body := serve(user, tokenVersion)
-		ok := code != http.StatusUnauthorized && code != http.StatusInternalServerError &&
-			!strings.Contains(body, "Database temporarily unavailable")
-		return ok, code, body
-	}
-	if got := status(inactiveUser, 0); got != http.StatusUnauthorized {
-		t.Errorf("inactive user's token: status %d, want 401", got)
-	}
-	if got := status(uuid.New(), 0); got != http.StatusUnauthorized {
-		t.Errorf("token of a user with no row: status %d, want 401", got)
-	}
-	if got := status(bumpedUser, 0); got != http.StatusUnauthorized {
-		t.Errorf("stale token_version: status %d, want 401", got)
-	}
-	if got := status(nonMember, 0); got != http.StatusUnauthorized {
-		t.Errorf("active user with no membership in the token's org: status %d, want 401", got)
-	}
-	if ok, code, body := served(activeUser, 0); !ok {
-		t.Errorf("active user's token: status %d body %q, want it to pass the users check and reach the route", code, body)
-	}
-	if ok, code, body := served(bumpedUser, 2); !ok {
-		t.Errorf("active user at the bumped token_version: status %d body %q, want it to pass the users check", code, body)
+	for _, c := range []struct {
+		name string
+		user uuid.UUID
+	}{
+		{"active user", activeUser},
+		{"active user at a bumped token_version, session pinned at it", bumpedUser},
+	} {
+		if code, body, logged := serve(c.user); code != http.StatusOK || body != "served" || logged != "" {
+			t.Errorf("%s: %d %q, WARN %q, want it served with no refusal", c.name, code, body, logged)
+		}
 	}
 }

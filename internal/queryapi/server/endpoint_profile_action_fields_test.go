@@ -394,11 +394,11 @@ func TestRowGuardGoesRedOnTheVerifierPlants(t *testing.T) {
 			return text
 		}
 	}
-	forbidden := swapped("rest_error_response.go", `http.StatusForbidden, "Organization context required"`, `http.StatusUnauthorized, "Organization context required"`)
+	forbidden := swapped("rest_access.go", `http.StatusForbidden, "Organization context required"`, `http.StatusUnauthorized, "Organization context required"`)
 	if joined := strings.Join(checkRowFields(rows, cat, RouteActionTable(), rowClaims, forbidden), "\n"); !strings.Contains(joined, "Organization context required") {
-		t.Errorf("a 403 changed to 401 in authenticateRESTRequest stayed green")
+		t.Errorf("a 403 changed to 401 in authenticateRESTRouted stayed green")
 	}
-	commented := swapped("rest_error_response.go", `policy.WriteAuthFailure(`, `/* policy.WriteAuthFailure( */ nothing(`)
+	commented := swapped("rest_access.go", `policy.WriteAuthFailure(`, `/* policy.WriteAuthFailure( */ nothing(`)
 	if joined := strings.Join(checkRowFields(rows, cat, RouteActionTable(), rowClaims, commented), "\n"); !strings.Contains(joined, "WriteAuthFailure") {
 		t.Errorf("a needle moved into a comment stayed green")
 	}
@@ -444,7 +444,7 @@ var allOrgRoles = []string{"admin", "member", "owner", "viewer"}
 
 var legacyGuards = map[string]legacyGuard{
 	"rest-org": {orgRoles: allOrgRoles, proofs: []claimProof{
-		{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return legacyClaims(claims.OrgID), true"}},
+		{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"return authctx.Claims{OrgID: claims.OrgID, Scope: scope}, true"}},
 	}},
 	"internal-org": {orgRoles: allOrgRoles, proofs: []claimProof{
 		{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"return withLegacyScope(claims), true"}},

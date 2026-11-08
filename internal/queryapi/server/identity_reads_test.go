@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,11 +33,14 @@ import (
 // countingIdentityStore is policy.Store over base that counts every read per
 // fact. userStates, when set, answers the users row in turn (the last one
 // repeats), so the row can change between two reads of one request.
+// failMemberAt, when set, fails that membership read (1 = the first).
 type countingIdentityStore struct {
-	base       *fakeEdgeStore
-	userStates []policy.UserState
-	mu         sync.Mutex
-	counts     map[string]int
+	base         *fakeEdgeStore
+	userStates   []policy.UserState
+	failMemberAt int
+	mu           sync.Mutex
+	counts       map[string]int
+	memberReads  int
 }
 
 func newCountingIdentityStore(base *fakeEdgeStore) *countingIdentityStore {
@@ -60,6 +65,13 @@ func (s *countingIdentityStore) UserState(ctx context.Context, id uuid.UUID) (po
 
 func (s *countingIdentityStore) Membership(ctx context.Context, userID, orgID uuid.UUID) (string, bool, error) {
 	s.count("member " + userID.String() + " " + orgID.String())
+	s.mu.Lock()
+	s.memberReads++
+	fail := s.failMemberAt != 0 && s.memberReads == s.failMemberAt
+	s.mu.Unlock()
+	if fail {
+		return "", false, errors.New("membership read failed")
+	}
 	return s.base.Membership(ctx, userID, orgID)
 }
 
@@ -97,9 +109,15 @@ func irFacts(facts ...string) string {
 
 func irUser() string                { return "user " + ecUser.String() + "=1" }
 func irSession() string             { return "session " + ecUser.String() + "=1" }
-func irMember(org uuid.UUID) string { return "member " + ecUser.String() + " " + org.String() + "=1" }
+func irMember(org uuid.UUID) string { return irMemberReads(org, 1) }
+
+// irMemberReads is n reads of one membership row. /query has no ReadOnce: the
+// routed check and the carrier each read the token org's row.
+func irMemberReads(org uuid.UUID, n int) string {
+	return "member " + ecUser.String() + " " + org.String() + "=" + strconv.Itoa(n)
+}
 func irToken(t *testing.T, super bool) string {
-	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: super, tokenVersion: 5})
+	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 }
 
 func TestGraphQLEdgeReadsEachIdentityFactOncePerRequest(t *testing.T) {
@@ -114,12 +132,12 @@ func TestGraphQLEdgeReadsEachIdentityFactOncePerRequest(t *testing.T) {
 		want     string
 	}{
 		"member":                             {plain, nil, false, "", irFacts(irUser(), irMember(ecOrg))},
-		"member naming an org it belongs to": {plain, nil, false, irOtherOrg.String(), irFacts(irUser(), irMember(irOtherOrg))},
+		"member naming an org it belongs to": {plain, nil, false, irOtherOrg.String(), irFacts(irUser(), irMember(ecOrg), irMember(irOtherOrg))},
 		"member naming its own org spelled another way": {plain, nil, false, strings.ReplaceAll(ecOrg.String(), "-", ""), irFacts(irUser(), irMember(ecOrg))},
 		"superuser":                              {super, nil, true, "", irFacts(irUser(), irSession(), irMember(ecOrg))},
-		"superuser naming another org":           {super, nil, true, irOtherOrg.String(), irFacts(irUser(), irSession(), irMember(irOtherOrg))},
-		"impersonating superuser":                {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, true, "", irFacts(irUser(), irSession())},
-		"superuser row, token without the claim": {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, false, "", irFacts(irUser(), irMember(ecOrg))},
+		"superuser naming another org":           {super, nil, true, irOtherOrg.String(), irFacts(irUser(), irSession(), irMember(ecOrg), irMember(irOtherOrg))},
+		"impersonating superuser":                {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, true, "", irFacts(irUser(), irSession(), irMember(ecOrg))},
+		"superuser row, token without the claim": {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, false, "", irFacts(irUser(), irSession(), irMember(ecOrg))},
 	} {
 		store := newCountingIdentityStore(&fakeEdgeStore{
 			states:   map[uuid.UUID]policy.UserState{ecUser: tc.state},
@@ -189,9 +207,7 @@ func TestQueryReadsEachIdentityFactOncePerRequest(t *testing.T) {
 		carrier  func(*http.Request)
 		want     string
 	}{
-		"edge token, member":                  {plain, nil, irBearer(irToken(t, false)), irFacts(irUser(), irMember(ecOrg))},
-		"edge token, superuser":               {super, nil, irBearer(irToken(t, true)), irFacts(irUser(), irSession(), irMember(ecOrg))},
-		"edge token, impersonating superuser": {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, irBearer(irToken(t, true)), irFacts(irUser(), irSession())},
+		"edge token, impersonating superuser": {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, irBearer(irToken(t, true)), irFacts(irUser(), irSession(), irMember(ecOrg))},
 		"internal headers":                    {plain, nil, iaHeaders(ecOrg.String(), "admin", false, false), ""},
 	} {
 		store := newCountingIdentityStore(&fakeEdgeStore{
@@ -207,6 +223,51 @@ func TestQueryReadsEachIdentityFactOncePerRequest(t *testing.T) {
 		}
 		if got := store.reads(); got != tc.want {
 			t.Errorf("%s: reads %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// TestQueryReadsTheTokenOrgMembershipTwiceAndBothFailClosed: /query has no
+// ReadOnce, so an edge token's own org membership row is read twice per
+// request, once by the routed check (accessroute_user.go) and once by the
+// carrier (checkEdgeCarrier); either read failing refuses the request.
+func TestQueryReadsTheTokenOrgMembershipTwiceAndBothFailClosed(t *testing.T) {
+	plain := policy.UserState{IsActive: true, TokenVersion: 5}
+	super := policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
+	verifier, _ := iaVerifier(t)
+	var logged strings.Builder
+	previous := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	for name, tc := range map[string]struct {
+		state policy.UserState
+		want  string
+	}{
+		"edge token, member":    {plain, irFacts(irUser(), irMemberReads(ecOrg, 2))},
+		"edge token, superuser": {super, irFacts(irUser(), irSession(), irMemberReads(ecOrg, 2))},
+	} {
+		for failAt := 0; failAt <= 2; failAt++ {
+			logged.Reset()
+			store := newCountingIdentityStore(&fakeEdgeStore{
+				states:  map[uuid.UUID]policy.UserState{ecUser: tc.state},
+				found:   map[uuid.UUID]bool{ecUser: true},
+				members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
+			})
+			store.failMemberAt = failAt
+			handler, seen := iaDispatchWithEdge(t, verifier, ecEdgeAuth(t, store), store)
+			code := iaPost(t, handler, irBearer(irToken(t, false)))
+			if failAt == 0 {
+				if code != http.StatusOK || len(*seen) != 1 {
+					t.Errorf("%s: %d ran=%v, want 200 and one run", name, code, *seen)
+				} else if got := store.reads(); got != tc.want {
+					t.Errorf("%s: reads %q, want %q", name, got, tc.want)
+				}
+				continue
+			}
+			reason := map[int]string{1: "reason=edge_rejected", 2: "reason=edge_membership_lookup_failed"}[failAt]
+			if code != http.StatusUnauthorized || len(*seen) != 0 || !strings.Contains(logged.String(), reason) {
+				t.Errorf("%s: membership read %d failing: %d ran=%v logged %q, want 401, nothing run and %s", name, failAt, code, *seen, logged.String(), reason)
+			}
 		}
 	}
 }

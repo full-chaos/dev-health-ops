@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -36,32 +35,21 @@ type fixture struct {
 	priv   ed25519.PrivateKey
 	reader *sdkmetric.ManualReader
 	v      *Validator
-	legacy *fakeLegacy
 	logs   *bytes.Buffer
 }
 
-type fakeLegacy struct {
-	calls int
-	err   error
-}
-
-func (f *fakeLegacy) verify(context.Context, string) (any, error) {
-	f.calls++
-	return "principal", f.err
-}
-
-func newFixture(t *testing.T, withEdDSA, withLegacy bool) *fixture {
+func newFixture(t *testing.T, withEdDSA bool) *fixture {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fixture{t: t, pub: pub, priv: priv, reader: sdkmetric.NewManualReader(), legacy: &fakeLegacy{}, logs: &bytes.Buffer{}}
+	f := &fixture{t: t, pub: pub, priv: priv, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{}}
 	cfg := Config{
 		Rows: []Row{
 			{Service: svc, Profile: userRoute, AcceptsUser: true},
-			{Service: svc, Profile: legacyRte, LegacyHS256: true},
-			{Service: svc, Profile: bothRoute, AcceptsUser: true, LegacyHS256: true},
+			{Service: svc, Profile: legacyRte},
+			{Service: svc, Profile: bothRoute, AcceptsUser: true},
 		},
 		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test"),
 		Logger: slog.New(slog.NewTextHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
@@ -75,9 +63,6 @@ func newFixture(t *testing.T, withEdDSA, withLegacy bool) *fixture {
 			t.Fatal(err)
 		}
 		cfg.EdDSA = verifier
-	}
-	if withLegacy {
-		cfg.Legacy = f.legacy.verify
 	}
 	f.v, err = New(cfg)
 	if err != nil {
@@ -152,7 +137,7 @@ func refKey(profile, reason string) string {
 }
 
 func TestValidate_EdDSAOnUserRow_Accepts(t *testing.T) {
-	f := newFixture(t, true, true)
+	f := newFixture(t, true)
 	res, err := f.v.Validate(context.Background(), svc, userRoute, f.eddsa(goodHeader(), goodClaims()))
 	if err != nil || res.Class != ClassUser || res.Claims == nil || res.Claims.Subject != "prn_abc" {
 		t.Fatalf("res=%+v err=%v", res, err)
@@ -162,72 +147,49 @@ func TestValidate_EdDSAOnUserRow_Accepts(t *testing.T) {
 	}
 }
 
-func TestValidate_HS256OnOptInRow_Accepts_LegacyClass(t *testing.T) {
-	f := newFixture(t, true, true)
-	res, err := f.v.Validate(context.Background(), svc, legacyRte, hs256Token())
-	if err != nil || res.Class != ClassLegacy || f.legacy.calls != 1 {
-		t.Fatalf("res=%+v err=%v calls=%d", res, err, f.legacy.calls)
-	}
-	if got := f.counters()[accKey(legacyRte, ClassLegacy)]; got != 1 {
-		t.Fatalf("accepted counter = %d", got)
-	}
-}
-
-func TestValidate_HS256OnNonOptInRow_Is401NoLegacyCall(t *testing.T) {
-	f := newFixture(t, true, true)
-	_, err := f.v.Validate(context.Background(), svc, userRoute, hs256Token())
-	if !errors.Is(err, ErrRefused) || f.legacy.calls != 0 {
-		t.Fatalf("err=%v legacy calls=%d", err, f.legacy.calls)
+func TestValidate_HS256_RefusedOnEveryRow(t *testing.T) {
+	f := newFixture(t, true)
+	for _, profile := range []string{userRoute, legacyRte, bothRoute} {
+		res, err := f.v.Validate(context.Background(), svc, profile, hs256Token())
+		if !errors.Is(err, ErrRefused) || res != nil {
+			t.Fatalf("%s: res=%+v err=%v", profile, res, err)
+		}
 	}
 	c := f.counters()
-	if c[refKey(userRoute, ReasonAlgNotAllowed)] != 1 || c[accKey(userRoute, ClassLegacy)] != 0 {
-		t.Fatalf("counters %v", c)
+	for _, profile := range []string{userRoute, legacyRte, bothRoute} {
+		if c[refKey(profile, ReasonAlgNotAllowed)] != 1 {
+			t.Fatalf("%s: counters %v", profile, c)
+		}
+	}
+	for k, v := range c {
+		if strings.HasPrefix(k, AcceptedMetric+"|") && v != 0 {
+			t.Fatalf("accepted series %s = %d", k, v)
+		}
 	}
 }
 
-func TestValidate_HS256HeaderNeverSelectsLegacyWhenRowClosed(t *testing.T) {
-	f := newFixture(t, true, true)
+func TestValidate_HS256HeaderIsRefusedWhateverItsOtherFields(t *testing.T) {
+	f := newFixture(t, true)
 	for _, header := range []string{`{"alg":"HS256","typ":"at+jwt","kid":"kid-1"}`, `{"alg":"HS256"}`} {
 		if _, err := f.v.Validate(context.Background(), svc, userRoute, tokenWithAlg(header)); !errors.Is(err, ErrRefused) {
 			t.Fatalf("%s: err=%v", header, err)
 		}
 	}
-	if f.legacy.calls != 0 {
-		t.Fatalf("legacy called %d times", f.legacy.calls)
+	if f.counters()[refKey(userRoute, ReasonAlgNotAllowed)] != 2 {
+		t.Fatalf("counters %v", f.counters())
 	}
 }
 
-func TestValidate_EdDSAOnLegacyOnlyRow_Refused(t *testing.T) {
-	f := newFixture(t, true, true)
+func TestValidate_EdDSAOnRowWithoutUserClass_Refused(t *testing.T) {
+	f := newFixture(t, true)
 	_, err := f.v.Validate(context.Background(), svc, legacyRte, f.eddsa(goodHeader(), goodClaims()))
 	if !errors.Is(err, ErrRefused) || f.counters()[refKey(legacyRte, ReasonAlgNotAllowed)] != 1 {
 		t.Fatalf("err=%v counters=%v", err, f.counters())
 	}
 }
 
-func TestValidate_NoFallbackAcrossValidators(t *testing.T) {
-	f := newFixture(t, true, true)
-	f.legacy.err = errors.New("bad hs256")
-	if _, err := f.v.Validate(context.Background(), svc, bothRoute, hs256Token()); !errors.Is(err, ErrRefused) {
-		t.Fatalf("legacy failure: %v", err)
-	}
-	c := f.counters()
-	if c[refKey(bothRoute, ReasonLegacy)] != 1 || c[accKey(bothRoute, ClassUser)] != 0 {
-		t.Fatalf("counters %v", c)
-	}
-	f.legacy.calls = 0
-	bad := goodHeader()
-	bad["kid"] = "other"
-	if _, err := f.v.Validate(context.Background(), svc, bothRoute, f.eddsa(bad, goodClaims())); !errors.Is(err, ErrRefused) {
-		t.Fatalf("eddsa failure: %v", err)
-	}
-	if f.legacy.calls != 0 {
-		t.Fatal("EdDSA failure fell back to the legacy validator")
-	}
-}
-
 func TestValidate_AlgTable(t *testing.T) {
-	f := newFixture(t, true, true)
+	f := newFixture(t, true)
 	cases := map[string]struct {
 		header string
 		reason string
@@ -258,13 +220,10 @@ func TestValidate_AlgTable(t *testing.T) {
 			t.Fatalf("%q: err=%v", raw, err)
 		}
 	}
-	if f.legacy.calls != 0 {
-		t.Fatal("legacy validator ran for a refused alg")
-	}
 }
 
 func TestValidate_VerifierReasonsMapToClosedSet(t *testing.T) {
-	f := newFixture(t, true, true)
+	f := newFixture(t, true)
 	badKid := goodHeader()
 	badKid["kid"] = "nope"
 	expired := goodClaims()
@@ -294,7 +253,7 @@ func TestValidate_VerifierReasonsMapToClosedSet(t *testing.T) {
 }
 
 func TestValidate_ZeroRowAndUnknownProfile_Refused(t *testing.T) {
-	f := newFixture(t, true, true)
+	f := newFixture(t, true)
 	for _, probe := range [][2]string{{"", ""}, {svc, ""}, {svc, "GET /api/v1/things/42"}, {"other-svc", userRoute}} {
 		if _, err := f.v.Validate(context.Background(), probe[0], probe[1], f.eddsa(goodHeader(), goodClaims())); !errors.Is(err, ErrRefused) {
 			t.Fatalf("%v: err=%v", probe, err)
@@ -312,22 +271,22 @@ func TestValidate_ZeroRowAndUnknownProfile_Refused(t *testing.T) {
 }
 
 func TestValidate_NilVerifier_FailsClosed(t *testing.T) {
-	f := newFixture(t, false, false)
+	f := newFixture(t, false)
 	if _, err := f.v.Validate(context.Background(), svc, bothRoute, f.eddsa(goodHeader(), goodClaims())); !errors.Is(err, ErrRefused) {
 		t.Fatalf("eddsa: %v", err)
 	}
 	if _, err := f.v.Validate(context.Background(), svc, bothRoute, hs256Token()); !errors.Is(err, ErrRefused) {
 		t.Fatalf("hs256: %v", err)
 	}
-	if f.counters()[refKey(bothRoute, ReasonNotConfigured)] != 2 {
+	if c := f.counters(); c[refKey(bothRoute, ReasonNotConfigured)] != 1 || c[refKey(bothRoute, ReasonAlgNotAllowed)] != 1 {
 		t.Fatalf("counters %v", f.counters())
 	}
 }
 
 func TestCounter_PreRegisteredAtZero(t *testing.T) {
-	f := newFixture(t, true, true)
+	f := newFixture(t, true)
 	c := f.counters()
-	want := []string{accKey(userRoute, ClassUser), accKey(legacyRte, ClassLegacy), accKey(bothRoute, ClassUser), accKey(bothRoute, ClassLegacy)}
+	want := []string{accKey(userRoute, ClassUser), accKey(bothRoute, ClassUser)}
 	for _, reason := range Reasons {
 		for _, p := range []string{userRoute, legacyRte, bothRoute} {
 			want = append(want, refKey(p, reason))
@@ -338,7 +297,12 @@ func TestCounter_PreRegisteredAtZero(t *testing.T) {
 			t.Fatalf("series %s missing or non-zero (%d, %v)", k, v, ok)
 		}
 	}
-	if _, ok := c[accKey(userRoute, ClassLegacy)]; ok {
+	for _, p := range []string{userRoute, legacyRte, bothRoute} {
+		if _, ok := c[accKey(p, ClassLegacy)]; ok {
+			t.Fatalf("%s: the retired HS256 class was pre-registered", p)
+		}
+	}
+	if _, ok := c[accKey(legacyRte, ClassUser)]; ok {
 		t.Fatal("a class the row does not accept was pre-registered")
 	}
 	want = append(want, RefusedMetric+"|profile=unknown,reason="+ReasonNoProfile+",service=unknown")
@@ -348,14 +312,14 @@ func TestCounter_PreRegisteredAtZero(t *testing.T) {
 }
 
 func TestCounter_OneRowPerOutcome(t *testing.T) {
-	f := newFixture(t, true, true)
+	f := newFixture(t, true)
 	ctx := context.Background()
 	_, _ = f.v.Validate(ctx, svc, userRoute, f.eddsa(goodHeader(), goodClaims()))
 	_, _ = f.v.Validate(ctx, svc, legacyRte, hs256Token())
 	_, _ = f.v.Validate(ctx, svc, userRoute, hs256Token())
 	before := len(f.counters())
 	c := f.counters()
-	if c[accKey(userRoute, ClassUser)] != 1 || c[accKey(legacyRte, ClassLegacy)] != 1 || c[refKey(userRoute, ReasonAlgNotAllowed)] != 1 {
+	if c[accKey(userRoute, ClassUser)] != 1 || c[refKey(legacyRte, ReasonAlgNotAllowed)] != 1 || c[refKey(userRoute, ReasonAlgNotAllowed)] != 1 {
 		t.Fatalf("counters %v", c)
 	}
 	var sum int64
@@ -368,7 +332,7 @@ func TestCounter_OneRowPerOutcome(t *testing.T) {
 }
 
 func TestLogs_NeverContainToken(t *testing.T) {
-	f := newFixture(t, true, true)
+	f := newFixture(t, true)
 	token := f.eddsa(goodHeader(), goodClaims())
 	token = token[:len(token)-4] + "AAAA"
 	_, _ = f.v.Validate(context.Background(), svc, userRoute, token)
@@ -384,21 +348,8 @@ func TestLogs_NeverContainToken(t *testing.T) {
 	}
 }
 
-func TestValidate_LegacyUnavailableIsNotARefusal(t *testing.T) {
-	f := newFixture(t, true, true)
-	f.legacy.err = fmt.Errorf("%w: store down", ErrUnavailable)
-	_, err := f.v.Validate(context.Background(), svc, legacyRte, hs256Token())
-	if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrRefused) {
-		t.Fatalf("err=%v", err)
-	}
-	c := f.counters()
-	if c[refKey(legacyRte, ReasonUnavailable)] != 1 || c[refKey(legacyRte, ReasonLegacy)] != 0 {
-		t.Fatalf("counters %v", c)
-	}
-}
-
 func TestCounter_NoProfileSeriesPreRegisteredAtZero(t *testing.T) {
-	f := newFixture(t, true, true)
+	f := newFixture(t, true)
 	key := RefusedMetric + "|profile=unknown,reason=" + ReasonNoProfile + ",service=unknown"
 	if v, ok := f.counters()[key]; !ok || v != 0 {
 		t.Fatalf("series missing or non-zero: %d %v", v, ok)

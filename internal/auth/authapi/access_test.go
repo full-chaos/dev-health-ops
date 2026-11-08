@@ -44,7 +44,6 @@ func newAccessFixtureWith(t *testing.T, rows []accessverify.Row, keys func(*toke
 	t.Helper()
 	signer, dir, _ := fileSigner(t)
 	issuer := newEdDSAIssuer(t, signer, AccessTokenAudience)
-	f := newFixtureWith(t, issuer)
 	if rows == nil {
 		var err error
 		if rows, err = AuthServiceAccessRows(); err != nil {
@@ -56,11 +55,11 @@ func newAccessFixtureWith(t *testing.T, rows []accessverify.Row, keys func(*toke
 		source = keys(signer)
 	}
 	reader, provider := accessMeter()
-	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: source, Legacy: issuer, Rows: rows, Meter: provider.Meter("test")})
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: source, Rows: rows, Meter: provider.Meter("test")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuer.WithAccessCheck(check)
+	f := newFixtureWith(t, issuer.WithAccessCheck(check))
 	return &accessFixture{fixture: f, signer: signer, dir: dir, reader: reader, check: check}
 }
 
@@ -168,8 +167,8 @@ func TestEveryAuthServiceBearerRowAcceptsTheUserTokenOnly(t *testing.T) {
 	// The OAuth consent decision takes the user access token only (acp addendum
 	// 9943be06 on CHAOS-12251 condition 6): no legacy opt-in.
 	userOnly := "POST " + PatternOAuthAuthorize
-	if row, ok := byProfile[userOnly]; !ok || !row.AcceptsUser || row.LegacyHS256 {
-		t.Errorf("row %q = %+v (found %v), want accepts_user and no legacy_hs256", userOnly, row, ok)
+	if row, ok := byProfile[userOnly]; !ok || !row.AcceptsUser {
+		t.Errorf("row %q = %+v (found %v), want accepts_user", userOnly, row, ok)
 	}
 	delete(byProfile, userOnly)
 	if len(byProfile) != len(want) {
@@ -177,8 +176,8 @@ func TestEveryAuthServiceBearerRowAcceptsTheUserTokenOnly(t *testing.T) {
 	}
 	for _, profile := range want {
 		row, ok := byProfile[profile]
-		if !ok || !row.AcceptsUser || row.LegacyHS256 {
-			t.Errorf("row %q = %+v (found %v), want accepts_user and no legacy_hs256 (ops_access_token_hs256 is retired)", profile, row, ok)
+		if !ok || !row.AcceptsUser {
+			t.Errorf("row %q = %+v (found %v), want accepts_user", profile, row, ok)
 		}
 	}
 }
@@ -247,47 +246,6 @@ func (failingKeys) KeySet(context.Context) (token.KeySet, error) {
 	return token.KeySet{}, errors.New("custody unreadable")
 }
 
-func TestTheLegacyHS256TokenIsAcceptedOnlyOnARowThatOptsIn(t *testing.T) {
-	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, optIn := range []bool{true, false} {
-		rows := []accessverify.Row{{Service: AccessService, Profile: "GET /v1/sessions/current", AcceptsUser: true, LegacyHS256: optIn}}
-		a := newAccessFixtureWith(t, rows, nil)
-		compact, err := hs.Access(a.grant())
-		if err != nil {
-			t.Fatal(err)
-		}
-		r := a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + compact})
-		if optIn && r.Code != http.StatusOK {
-			t.Errorf("legacy_hs256 true: status %d, body %s", r.Code, r.Body)
-		}
-		if !optIn {
-			expectError(t, r, http.StatusUnauthorized, "malformed")
-			if got := a.counter(accessverify.RefusedMetric, map[string]string{"profile": "GET /v1/sessions/current", "reason": accessverify.ReasonAlgNotAllowed}); got != 1 {
-				t.Errorf("refused alg_not_allowed = %d, want 1", got)
-			}
-		}
-	}
-}
-
-// On a row that opts in, the HS256 path keeps its own refusal reason. No
-// inventory row opts in any more (ops_access_token_hs256 is retired), so the row
-// is planted; the inventory's refusal is TestEveryHS256TokenIsRefusedOnTheSessionRows.
-func TestALegacyTokenKeepsItsOwnRefusalReason(t *testing.T) {
-	a := newAccessFixtureWith(t, []accessverify.Row{{Service: AccessService, Profile: "GET /v1/sessions/current", AcceptsUser: true, LegacyHS256: true}}, nil)
-	hs, err := NewIssuer(strings.Repeat("z", 40), testIssuer, contracts.PlatformAPIAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compact, err := hs.Access(a.grant())
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + compact}), http.StatusUnauthorized, "bad_signature")
-}
-
 func TestARevokedSessionRefusesItsEdDSAToken(t *testing.T) {
 	a := newAccessFixture(t)
 	now := time.Now()
@@ -346,12 +304,38 @@ func TestASingleSessionLogoutRefusesThatSidOnly(t *testing.T) {
 	}
 }
 
-func TestAnIssuerWithoutAnAccessCheckRefusesTheEdDSATokenAsBefore(t *testing.T) {
+// Without an access check (no AUTH_TOKEN_ISSUER_URL, or a signer with no key
+// set) the bearer session routes are not mounted, with exactly one line naming
+// the variable and the routes; refresh stays mounted. With the check they mount
+// and no such line is written.
+func TestTheBearerSessionRoutesMountOnlyWithAnAccessCheck(t *testing.T) {
+	const line = "auth bearer routes not mounted: AUTH_TOKEN_ISSUER_URL is unset"
 	signer, _, _ := fileSigner(t)
-	issuer := newEdDSAIssuer(t, signer, AccessTokenAudience)
-	f := newFixtureWith(t, issuer)
-	r := f.do(http.MethodGet, "/v1/sessions/current", "", f.bearer(f.grant()))
-	expectError(t, r, http.StatusUnauthorized, "bad_signature")
+	f := newFixtureWith(t, newEdDSAIssuer(t, signer, AccessTokenAudience))
+	for _, route := range [][2]string{{http.MethodGet, PatternCurrent}, {http.MethodPost, PatternRevoke}, {http.MethodPost, PatternRevokeAll}} {
+		if r := f.do(route[0], route[1], "", f.bearer(f.grant())); r.Code != http.StatusNotFound {
+			t.Errorf("no access check: %s %s = %d, want 404 (not mounted)", route[0], route[1], r.Code)
+		}
+	}
+	if r := f.do(http.MethodPost, PatternRefresh, "", nil); r.Code == http.StatusNotFound {
+		t.Errorf("no access check: refresh is not mounted")
+	}
+	logs := f.logs.String()
+	if strings.Count(logs, line) != 1 {
+		t.Errorf("no access check: %d not-mounted lines, want 1: %s", strings.Count(logs, line), logs)
+	}
+	for _, route := range []string{PatternCurrent, PatternRevoke, PatternRevokeAll} {
+		if !strings.Contains(logs, route) {
+			t.Errorf("the not-mounted line names no %s: %s", route, logs)
+		}
+	}
+	a := newAccessFixture(t)
+	if r := a.do(http.MethodGet, PatternCurrent, "", a.bearer(a.grant())); r.Code != http.StatusOK {
+		t.Errorf("with the access check: current = %d, want 200", r.Code)
+	}
+	if got := strings.Count(a.logs.String(), line); got != 0 {
+		t.Errorf("with the access check: %d not-mounted lines, want 0", got)
+	}
 }
 
 func TestTheValidatorSeesNoRouteOutsideItsRows(t *testing.T) {
@@ -386,10 +370,11 @@ func TestUserBearerRefusesAnEmptyOrInvalidSidMalformed(t *testing.T) {
 	}
 }
 
-// A session-route caller holding the dev-health-api EdDSA token is refused with
-// the audience reason on a user_access_token row, and the HS256 token is
-// refused too: ops_access_token_hs256 is retired, no row opts in.
-func TestEveryHS256TokenIsRefusedOnTheSessionRows(t *testing.T) {
+// Every session row takes the user access token only, and a caller holding
+// the dev-health-api EdDSA token is refused with the audience reason. The
+// retired HS256 class is the plane's one generic-401 cell
+// (authruntime TestHS256WebTokenIsRefusedOnEveryAccessRowWithAnIssuerURL).
+func TestEverySessionRowTakesTheAuthServiceUserTokenOnly(t *testing.T) {
 	a := newAccessFixture(t)
 	rows, err := AuthServiceAccessRows()
 	if err != nil {
@@ -399,26 +384,13 @@ func TestEveryHS256TokenIsRefusedOnTheSessionRows(t *testing.T) {
 		if row.Profile == "POST "+PatternOAuthAuthorize {
 			continue // the user access token only, pinned by TestDecideTakesTheUserAccessTokenOnly
 		}
-		if !row.AcceptsUser || row.LegacyHS256 {
-			t.Fatalf("row %s: accepts_user=%v legacy_hs256=%v", row.Profile, row.AcceptsUser, row.LegacyHS256)
+		if !row.AcceptsUser {
+			t.Fatalf("row %s: accepts_user=%v", row.Profile, row.AcceptsUser)
 		}
 	}
 	api := a.claims()
 	api.Aud, api.Scope = "dev-health-api", "api:access"
 	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", a.signClaims(api)), http.StatusUnauthorized, "audience")
-
-	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compact, err := hs.Access(a.grant())
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + compact}), http.StatusUnauthorized, "malformed")
-	if got := a.counter(accessverify.RefusedMetric, map[string]string{"profile": "GET /v1/sessions/current", "reason": accessverify.ReasonAlgNotAllowed}); got != 1 {
-		t.Errorf("refused alg_not_allowed = %d, want 1", got)
-	}
 }
 
 func TestSocialLinkAndUnlinkAcceptTheAuthServiceEdDSAToken(t *testing.T) {
@@ -512,27 +484,5 @@ func TestChangePasswordWithAnEdDSABearerReturnsAnEdDSATokenOfTheNewSession(t *te
 	}
 	if got := kids.kids[newID]; len(got) != 1 || got[0] != "k1" {
 		t.Fatalf("kids recorded for the new session = %v, want [k1]", got)
-	}
-}
-
-// Under the eddsa class the issuer's audience is the session route audience, and
-// go-api's HS256 token carries go-api's own audience: on a row that opts in (a
-// planted row: no inventory row opts in since ops_access_token_hs256 is retired)
-// a live HS256 token works, and a token of any other audience is refused.
-func TestUnderTheEdDSAClassTheLegacyTokenKeepsGoAPIsAudience(t *testing.T) {
-	a := newAccessFixtureWith(t, []accessverify.Row{{Service: AccessService, Profile: "GET /v1/sessions/current", AcceptsUser: true, LegacyHS256: true}}, nil)
-	for audience, want := range map[string]int{contracts.PlatformAPIAudience: http.StatusOK, "query-api": http.StatusUnauthorized, AccessTokenAudience: http.StatusUnauthorized} {
-		hs, err := NewIssuer(testSecret, testIssuer, audience)
-		if err != nil {
-			t.Fatal(err)
-		}
-		compact, err := hs.Access(a.grant())
-		if err != nil {
-			t.Fatal(err)
-		}
-		r := a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + compact})
-		if r.Code != want {
-			t.Errorf("HS256 token of audience %q: status %d, want %d; body %s", audience, r.Code, want, r.Body)
-		}
 	}
 }

@@ -38,7 +38,7 @@ func newGatedREST(t *testing.T, mode, cellList, base string, routed bool) *gated
 	if !routed {
 		setup = nil
 	}
-	f := newRESTFixture(t, newAccessStore(), setup, true)
+	f := newRESTFixture(t, newAccessStore(), setup)
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -58,7 +58,7 @@ func newGatedREST(t *testing.T, mode, cellList, base string, routed bool) *gated
 func (g *gatedREST) userToken() string { return g.minter.mint(ecUser, nil, nil) }
 
 func (g *gatedREST) edgeToken(t *testing.T) string {
-	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	return ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 }
 
 func (g *gatedREST) do(method, bearer string) answer {
@@ -192,37 +192,29 @@ func TestRESTPDPMisconfiguredIs503(t *testing.T) {
 	}
 }
 
-// The exempt caller (the HS256 edge token, unrouted) bypasses the PDP even in enforce with a PDP that denies everything,
-// and is counted with its class. Routed, the edge token is the retired HS256 class: refused 401 before the gate, and not
-// counted. The envelope is a retired class on both: refused 401 before the gate, and never counted.
-func TestRESTPDPExemptCallersBypassAndCount(t *testing.T) {
+// No caller is exempt: the HS256 edge token and the envelope, the classes the exempt list held, are retired. Routed and
+// unrouted, in enforce with a PDP that denies everything, each is refused 401 before the gate, never asks the PDP and is
+// never counted as exempt.
+func TestRESTPDPHasNoExemptCaller(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Deny("role_lacks_action")
 	for name, routed := range map[string]bool{"routed": true, "unrouted": false} {
 		t.Run(name, func(t *testing.T) {
 			g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, routed)
-			edge := g.do(http.MethodGet, g.edgeToken(t))
-			if routed && edge.Status != http.StatusUnauthorized {
-				t.Fatalf("routed edge token: got %+v, want 401", edge)
-			}
-			if !routed && edge != gatedOK {
-				t.Fatalf("edge token: got %+v, want %+v", edge, gatedOK)
+			if edge := g.do(http.MethodGet, g.edgeToken(t)); edge.Status != http.StatusUnauthorized {
+				t.Fatalf("edge token (retired HS256 class): got %+v, want 401", edge)
 			}
 			if got := g.do(http.MethodGet, g.f.envelope); got != (answer{http.StatusUnauthorized, restRefusal}) {
 				t.Fatalf("envelope (a retired class): got %+v, want 401 %s", got, restRefusal)
 			}
 			got := g.counter(t, "dev_health_query_api_pdp_exempt_total")
-			wantEdge, wantLen := 1, 1
-			if routed {
-				wantEdge, wantLen = 0, 0
-			}
-			if len(got) != wantLen || got["action=analytics.read,class=ops_access_token_hs256"] != int64(wantEdge) {
-				t.Fatalf("exempt %v, want the edge token %d time(s) and no envelope", got, wantEdge)
+			if len(got) != 0 {
+				t.Fatalf("exempt %v, want no count", got)
 			}
 		})
 	}
 	if n := len(srv.Requests()); n != 0 {
-		t.Fatalf("an exempt caller asked the PDP %d times", n)
+		t.Fatalf("a retired class asked the PDP %d times", n)
 	}
 }
 

@@ -5,7 +5,6 @@ package server
 import (
 	"crypto/ed25519"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +26,7 @@ func TestProductTelemetryRoute_GatesThroughTheInternalIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 
 	input := map[string]any{"startDate": "2026-01-01", "endDate": "2026-01-08"}
 	platform := func(carrier func(*http.Request)) (int, string) {

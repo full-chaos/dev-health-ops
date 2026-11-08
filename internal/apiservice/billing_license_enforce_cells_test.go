@@ -26,7 +26,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
@@ -216,13 +215,9 @@ type cellRig struct {
 func newCellRig(t *testing.T, enforced string, decider pep.Decider, unconfigured bool) *cellRig {
 	t.Helper()
 	minter := newEdDSAMinter(t)
-	hs, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	store := newProbeStore()
 	store.sessions[cellAdminSID] = policy.SessionRow{PrincipalID: probeAdminUser, LegacyTokenVersion: i64ptr(0)}
-	auth, err := policy.NewAuthenticator(hs, store, quietLogger())
+	auth, err := policy.NewAuthenticator(store, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +225,7 @@ func newCellRig(t *testing.T, enforced string, decider pep.Decider, unconfigured
 	if err != nil {
 		t.Fatal(err)
 	}
-	validator, err := accessverify.New(accessverify.Config{Rows: realRows(t), EdDSA: eddsa, Legacy: legacyVerifier(auth.AuthenticateLegacy),
+	validator, err := accessverify.New(accessverify.Config{Rows: realRows(t), EdDSA: eddsa,
 		Meter: sdkmetric.NewMeterProvider().Meter("test"), Logger: quietLogger(), Now: func() time.Time { return probeNow }})
 	if err != nil {
 		t.Fatal(err)
@@ -508,25 +503,6 @@ func TestBillingClassARowsRefuseWithNoDecisionPoint(t *testing.T) {
 		if status != http.StatusServiceUnavailable || !strings.Contains(body, `"reason_code":"authz_enforce_no_decision_point"`) {
 			t.Errorf("%s: %d %s, want 503 authz_enforce_no_decision_point", key, status, body)
 		}
-	}
-}
-
-// Class A with its namespace on: a legacy HS256 caller is not judged; its answer is the switch-off answer and the
-// PDP is never asked.
-func TestBillingClassARowsKeepTheLegacyAnswerForAnHS256Caller(t *testing.T) {
-	hs256 := bearer(probeHS256(t, probeKey, map[string]any{"sub": probeUser.String(), "org_id": probeOrg.String(), "role": "admin", "tv": 3}))
-	off := newCellRig(t, "", nil, false)
-	pdp := newBillingCellPDP(t, "deny")
-	on := newCellRig(t, cellAllNamespaces, pdp.client(t), false)
-	for _, key := range classAKeys() {
-		offStatus, offBody, _ := off.serve(key, hs256)
-		onStatus, onBody, _ := on.serve(key, hs256)
-		if onStatus != offStatus || onBody != offBody {
-			t.Errorf("%s: on %d %s, off %d %s; want the same answer", key, onStatus, onBody, offStatus, offBody)
-		}
-	}
-	if n := len(pdp.calls()); n != 0 {
-		t.Errorf("%d PDP calls for an HS256 caller, want 0", n)
 	}
 }
 

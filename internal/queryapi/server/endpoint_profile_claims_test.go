@@ -13,28 +13,27 @@ type rowClaim struct {
 }
 
 var restResolverClaim = rowClaim{value: "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization", proofs: []claimProof{
-	{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return legacyClaims(claims.OrgID), true"}, anyOf: []string{}},
+	{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"return authctx.Claims{OrgID: claims.OrgID, Scope: scope}, true"}, anyOf: []string{}},
 }}
 
 var restDisclosureClaim = rowClaim{value: "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)", proofs: []claimProof{
-	{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure(", "authenticateRESTRouted("}, anyOf: []string{}},
+	{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "authenticateRESTRouted("}, anyOf: []string{}},
 	{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure("}, anyOf: []string{}},
 	{file: "rest_error_response.go", decl: "writeRESTUnauthorized", needles: []string{"http.StatusUnauthorized"}, anyOf: []string{}},
 	{file: "../../api/policy/principal.go", decl: "WriteAuthFailure", needles: []string{"http.StatusServiceUnavailable", "WriteInternal(w)"}, anyOf: []string{}},
-	{file: "edge_users_test.go", decl: "TestOrglessEdgeTokenNeverReachesAPlantedRoute", needles: []string{"\"orgless superuser\""}, anyOf: []string{}},
-	{file: "rest_access_test.go", decl: "TestQueryAPIRESTOrgMissingIs403ForNonSuperuser", needles: []string{"\"user token\"", "http.StatusForbidden"}, anyOf: []string{}},
+	{file: "rest_access_test.go", decl: "TestQueryAPIRESTOrgMissingIs403ForNonSuperuser", needles: []string{"\"user token\"", "http.StatusForbidden", "superuser %s with no org"}, anyOf: []string{}},
 }}
 
 var restValidatorClaim = rowClaim{value: "authenticateRESTRequest: bearer user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set); an HS256 edge access token is refused (alg_not_allowed); any other bearer, the retired effective-principal envelope included, is refused as an unaccepted class; a missing or failing credential answers 401; a valid user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure.", proofs: []claimProof{
-	{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure(", "authenticateRESTRouted("}, anyOf: []string{}},
+	{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "authenticateRESTRouted("}, anyOf: []string{}},
 	{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"edgeVerifier.VerifyRouted(ctx, routeProfile(r), token)", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure("}, anyOf: []string{}},
 	{file: "../principal/edge_access.go", decl: "AccessClassOf", needles: []string{"header.Typ == UserAccessTokenTyp"}, anyOf: []string{}},
-	{file: "../../auth/accessverify/accessverify.go", decl: "Validator.Validate", needles: []string{"if !row.LegacyHS256 {", "return nil, v.refuse(ctx, row.Service, row.Profile, ReasonAlgNotAllowed)"}, anyOf: []string{}},
+	{file: "../../auth/accessverify/accessverify.go", decl: "Validator.Validate", needles: []string{"default:\n\t\treturn nil, v.refuse(ctx, row.Service, row.Profile, ReasonAlgNotAllowed)"}, anyOf: []string{}},
 	{file: "access_verify.go", decl: "accessFromEnv", needles: []string{"accessTokenIssuer(getenv)"}, anyOf: []string{}},
 	{file: "rest_error_response.go", decl: "writeRESTUnauthorized", needles: []string{"http.StatusUnauthorized"}, anyOf: []string{}},
 	{file: "../../api/policy/principal.go", decl: "WriteAuthFailure", needles: []string{"http.StatusServiceUnavailable", "WriteInternal(w)"}, anyOf: []string{}},
-	{file: "edge_users_test.go", decl: "TestOrglessEdgeTokenNeverReachesAPlantedRoute", needles: []string{"\"orgless superuser\""}, anyOf: []string{}},
 	{file: "rest_access_test.go", decl: "TestQueryAPIRESTUserTokenPath", needles: []string{"\"revoked session\"", "\"not a member of the org\""}, anyOf: []string{}},
+	{file: "rest_access_test.go", decl: "TestQueryAPIRESTOrgMissingIs403ForNonSuperuser", needles: []string{"http.StatusForbidden", "superuser %s with no org"}, anyOf: []string{}},
 }}
 
 var stateCellsProof = claimProof{file: "endpoint_profile_live_test.go", decl: "userStateCells", needles: []string{"\"users row deactivated after the first request\"", "\"session revoked after the first request\"", "\"token version moved after the first request\"", "\"membership removed after the first request\"", "http.StatusUnauthorized"}}
@@ -56,7 +55,6 @@ var restCacheClaim = rowClaim{value: "none: per-request read: a user access toke
 var restImpersonationClaim = rowClaim{value: "subject_to_impersonation_override", proofs: []claimProof{
 	{file: "endpoint_profile_live_test.go", decl: "restImpersonationCells", needles: []string{"\"act\"", "liveTargetOrg", "o.impersonationPolicy(true)"}},
 	{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"return authctx.Claims{OrgID: claims.OrgID, Scope: scope}, true"}},
-	{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return legacyClaims(claims.OrgID), true"}},
 }}
 
 var restIDDisclosureClaim = rowClaim{value: restDisclosureClaim.value + "; 404 for a path id with no row in the caller's organization, the same answer as an id that exists nowhere (the read binds the credential's organization)", proofs: append(append([]claimProof(nil), restDisclosureClaim.proofs...),

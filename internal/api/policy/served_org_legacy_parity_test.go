@@ -40,26 +40,6 @@ func TestServedOrgOtherOrganizationKeepsTheLegacyAnswer(t *testing.T) {
 	}
 }
 
-// The same rule for a legacy HS256 admin token of org A: another organization keeps the legacy answer.
-func TestServedOrgOtherOrganizationKeepsTheLegacyAnswerForHS256(t *testing.T) {
-	for _, row := range servedOrgCensus {
-		t.Run(row.pattern, func(t *testing.T) {
-			pdp := newTestPDP(t, allowAll)
-			legacy := servedOrgServeHS256(t, row, nil, strangerOrg)
-			got := servedOrgServeHS256(t, row, servedOrgEnforcer(t, pdp, servedOrgNamespace(t, row.pattern)), strangerOrg)
-			if got.status != legacy.status || got.body != legacy.body {
-				t.Errorf("HS256, another org: %d %q, want the legacy %d %q", got.status, got.body, legacy.status, legacy.body)
-			}
-			if legacy.status != http.StatusOK {
-				t.Errorf("HS256, another org, legacy guard: %d %q, want 200 (the stub handler)", legacy.status, legacy.body)
-			}
-			if n := len(pdp.calls()); n != 0 {
-				t.Errorf("HS256: %d PDP calls, want 0", n)
-			}
-		})
-	}
-}
-
 // D1 is not WIDER (acp Q3): a viewer of A who is an admin of B, with token A, asks an Admin row that serves B. The
 // legacy guard refuses the viewer at policy.Admin on the token org (guard.go:178); judging B alone would admit them.
 // Both paths answer 403 with the legacy body, and no decision point call is made.

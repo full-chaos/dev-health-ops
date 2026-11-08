@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -56,7 +55,7 @@ func TestDataHealthRoute_OperatorGateThroughTheInternalIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 
 	post := func(carrier func(*http.Request)) (int, string) {
 		rec := postGraphQLWithVariables(t, handler, registeredConnectorsDataHealthDocument, carrier, map[string]any{"teamId": "ALL"})

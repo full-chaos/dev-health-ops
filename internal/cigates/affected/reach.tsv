@@ -117,7 +117,9 @@ internal/auth/contracts	contracts.go	internal/api/webhookintake
 internal/auth/contracts	contracts.go	internal/apiservice
 internal/auth/contracts	contracts.go	internal/apiservice/acr
 internal/auth/contracts	contracts.go	internal/apiservice/admin
+internal/auth/contracts	contracts.go	internal/apiservice/authflowvenue
 internal/auth/contracts	contracts.go	internal/apiservice/customerpush
+internal/auth/contracts	contracts.go	internal/apiservice/ssovenue
 internal/auth/contracts	contracts.go	internal/audit
 internal/auth/contracts	contracts.go	internal/auth/acrmint
 internal/auth/contracts	contracts.go	internal/auth/acrreconcile
@@ -206,6 +208,8 @@ internal/auth/keystore	open_unix.go	internal/api/externalingest
 internal/auth/keystore	open_unix.go	internal/api/webhookintake
 internal/auth/keystore	open_unix.go	internal/apiservice
 internal/auth/keystore	open_unix.go	internal/apiservice/acr
+internal/auth/keystore	open_unix.go	internal/apiservice/authflowvenue
+internal/auth/keystore	open_unix.go	internal/apiservice/ssovenue
 internal/auth/keystore	open_unix.go	internal/auth/acrmint
 internal/auth/keystore	open_unix.go	internal/auth/authapi
 internal/auth/keystore	open_unix.go	internal/auth/authruntime
@@ -361,6 +365,7 @@ internal/envelopemint	custody_unix.go	internal/goapicli/restprove
 internal/envelopemint	custody_unix.go	internal/goapiproof
 internal/envelopemint	custody_unix.go	internal/mintcli/edgetoken
 internal/envelopemint	custody_unix.go	internal/mintcli/envelope
+internal/envelopemint	custody_unix.go	internal/queryapi/server
 internal/envelopemint	custody_unix.go	internal/testsupport/issuerstub
 internal/envelopemint	keygen.go	cmd/auth-service
 internal/envelopemint	keygen.go	cmd/cigate
@@ -816,6 +821,7 @@ internal/testsupport/goldenscan	tree.go	internal/cigates/gitleaksignore
 internal/testsupport/goldenscan	tree.go	internal/testsupport/goldenscan/treegate
 internal/testsupport/goldenscan	tree.go	internal/testsupport/recordedfiles/manifest
 internal/testsupport/idpstub/cmd/idpstub	main.go	internal/testsupport/idpstub/cmd/idpstub
+internal/testsupport/issuerstub	issuerstub.go	internal/queryapi/server
 internal/testsupport/issuerstub	issuerstub.go	internal/testsupport/issuerstub
 internal/testsupport/issuerstub	issuerstub.go	internal/testsupport/issuerstub/cmd/issuerstub
 internal/testsupport/oraclecompare	oraclecompare.go	internal/jobs/investment/categorize/decision
@@ -876,7 +882,6 @@ internal/testsupport/venueoracle	golden.go	internal/api/integrationsadmin/syncve
 internal/testsupport/venueoracle	golden.go	internal/api/licensing
 internal/testsupport/venueoracle	golden.go	internal/api/licensing/processlicense
 internal/testsupport/venueoracle	golden.go	internal/api/orgs
-internal/testsupport/venueoracle	golden.go	internal/api/policy
 internal/testsupport/venueoracle	golden.go	internal/api/pybody
 internal/testsupport/venueoracle	golden.go	internal/api/pyjson
 internal/testsupport/venueoracle	golden.go	internal/api/pytime
@@ -903,7 +908,6 @@ internal/testsupport/venueoracle	golden.go	internal/auth/signedtoken
 internal/testsupport/venueoracle	golden.go	internal/backfillrun
 internal/testsupport/venueoracle	golden.go	internal/chmigrate
 internal/testsupport/venueoracle	golden.go	internal/cli
-internal/testsupport/venueoracle	golden.go	internal/edgetokenmint
 internal/testsupport/venueoracle	golden.go	internal/externalrecompute
 internal/testsupport/venueoracle	golden.go	internal/fixturescli
 internal/testsupport/venueoracle	golden.go	internal/fixturesgen
@@ -981,6 +985,7 @@ internal/testsupport/venueoracle	golden_walk.go	internal/apiservice/metricsvenue
 internal/testsupport/venueoracle	golden_walk.go	internal/apiservice/ownershipvenue
 internal/testsupport/venueoracle	golden_walk.go	internal/apiservice/ssovenue
 internal/testsupport/venueoracle	golden_walk.go	internal/atlassianteams
+internal/testsupport/venueoracle	golden_walk.go	internal/auth/edgetoken
 internal/testsupport/venueoracle	golden_walk.go	internal/auth/identity/local
 internal/testsupport/venueoracle	golden_walk.go	internal/auth/signedtoken
 internal/testsupport/venueoracle	golden_walk.go	internal/auth/usersbackfill
@@ -1041,6 +1046,7 @@ internal/testsupport/venueoracle	gopin.go	internal/apiservice/admin
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/authflowvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/billingvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/metricsvenue
+internal/testsupport/venueoracle	gopin.go	internal/apiservice/ssovenue
 internal/testsupport/venueoracle	gopin.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	opened.go	internal/admincli
 internal/testsupport/venueoracle	opened.go	internal/adminops

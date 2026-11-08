@@ -43,17 +43,13 @@ func TestNewSignerRefusesEveryKeyMaterialCaseNewRefuses(t *testing.T) {
 	}
 }
 
-// A Signer with no key mints nothing: Access, Refresh and RefreshUntil all return an error and an empty token, never a token signed with an empty
+// A Signer with no key mints nothing: Refresh and RefreshUntil both return an error and an empty token, never a token signed with an empty
 // HMAC key. A Signer with a key mints a token the matching Verifier accepts (the control: the refusal is about the key, not about minting).
 func TestSignerRefusesToMintWithAnEmptyKey(t *testing.T) {
 	now := time.Now()
-	access := AccessClaims{UserID: "u", Email: "e@example.test", OrgID: "o", Role: "member"}
 	refresh := RefreshClaims{UserID: "u", OrgID: "o", FamilyID: "f"}
 	for _, secret := range [][]byte{nil, {}} {
 		empty := &Signer{secret: secret, issuer: "i", audience: "a"}
-		if token, err := empty.Access(access, now, "jti"); err == nil || token != "" {
-			t.Errorf("Access with an empty key = (%q, %v), want an error and no token", token, err)
-		}
 		if token, err := empty.Refresh(refresh, now, "jti"); err == nil || token != "" {
 			t.Errorf("Refresh with an empty key = (%q, %v), want an error and no token", token, err)
 		}
@@ -67,15 +63,15 @@ func TestSignerRefusesToMintWithAnEmptyKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := signer.Access(access, now, "jti")
+	token, err := signer.Refresh(refresh, now, "jti")
 	if err != nil || token == "" {
-		t.Fatalf("Access with a key = (%q, %v), want a token", token, err)
+		t.Fatalf("Refresh with a key = (%q, %v), want a token", token, err)
 	}
 	verifier, err := New(key, "i", "a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := verifier.Verify(token); err != nil {
+	if _, err := verifier.VerifyRefresh(token); err != nil {
 		t.Fatalf("the token of a keyed signer is refused by the matching verifier: %v", err)
 	}
 }

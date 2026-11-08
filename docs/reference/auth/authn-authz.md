@@ -104,7 +104,7 @@ go-api and query-api take a bearer access token. Four access-token shapes exist.
 
 Sources: `class_disambiguator` and `access_token_validation` in `endpoint-profiles.go-api.json`; the validator text of `endpoint-profiles.query-api.json`; `internal/queryapi/server/rest_error_response.go` (`authenticateRESTRequest`).
 
-After the signature check, go-api reads the live `users` row and refuses the token when the user is missing, is not active, or has a `token_version` that differs from the claim. It then checks the session (`internal/api/policy/principal.go`, `CheckClaims`). A store failure is never treated as a pass.
+After the signature check, go-api reads the live `users` row and refuses the token when the user is missing or is not active. It then checks the session the `sid` claim names: the session must exist, belong to the user, not be revoked, and be pinned at the user's current `token_version` (`internal/api/policy/accessroute_user.go`, `internal/api/policy/session.go`). A store failure is never treated as a pass.
 
 Token audiences and the classes that may carry them are in `contracts/auth/v1/vocabulary/audiences.json`:
 

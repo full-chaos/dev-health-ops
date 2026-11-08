@@ -81,7 +81,7 @@ func identityResolutionHarness(t *testing.T, store policy.Store) (http.Handler, 
 	byDigest := map[string]string{digestHex(irBusFactorDocument): "busFactor", digestHex(irDataHealthDocument): "dataHealth"}
 	auth := ecEdgeAuth(t, store)
 	pipeline := newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, auth, store, "", nil)
-	return internalidentity.Public(graphQLEdgeChain(pipeline, graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes})), clickHouse
+	return internalidentity.Public(onPattern("/graphql", graphQLEdgeChain(pipeline, graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes}))), clickHouse
 }
 
 func irGraphQL(t *testing.T, handler http.Handler, token, orgHeader, document string, variables map[string]any) *httptest.ResponseRecorder {
@@ -124,7 +124,7 @@ func irCaptureIdentityLog(t *testing.T) *bytes.Buffer {
 // caller does not belong to is the scope's 403 and nothing runs. The store is
 // read once per fact, and the resolvers read no identity state at all.
 func TestGraphQLEdgeResolvesOneIdentityPerRequest(t *testing.T) {
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	stranger := uuid.MustParse("66666666-6666-4666-8666-666666666666")
 	for name, tc := range map[string]struct {
 		header   string
@@ -134,8 +134,8 @@ func TestGraphQLEdgeResolvesOneIdentityPerRequest(t *testing.T) {
 		reads    string
 	}{
 		"no X-Org-Id: the token's org, the membership role there": {"", ecOrg, "member", false, irFacts(irUser(), irMember(ecOrg))},
-		"X-Org-Id B: B, the role held in B":                       {irOtherOrg.String(), irOtherOrg, "admin", true, irFacts(irUser(), irMember(irOtherOrg))},
-		"X-Org-Id B spelled without hyphens: still B":             {strings.ReplaceAll(irOtherOrg.String(), "-", ""), irOtherOrg, "admin", true, irFacts(irUser(), irMember(irOtherOrg))},
+		"X-Org-Id B: B, the role held in B":                       {irOtherOrg.String(), irOtherOrg, "admin", true, irFacts(irUser(), irMember(ecOrg), irMember(irOtherOrg))},
+		"X-Org-Id B spelled without hyphens: still B":             {strings.ReplaceAll(irOtherOrg.String(), "-", ""), irOtherOrg, "admin", true, irFacts(irUser(), irMember(ecOrg), irMember(irOtherOrg))},
 	} {
 		store := newCountingIdentityStore(&fakeEdgeStore{
 			states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}},
@@ -259,7 +259,7 @@ func TestQueryEdgeCarrierStatesTheMembershipRole(t *testing.T) {
 		roles:   map[[2]uuid.UUID]string{{ecUser, ecOrg}: "viewer"},
 	}
 	handler, seen := iaDispatchWithEdge(t, nil, ecEdgeAuth(t, store), store)
-	rec := ecPost(handler, ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5}))
+	rec := ecPost(handler, ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5}))
 	if rec.Code != http.StatusOK || len(*seen) != 1 || (*seen)[0].Role != "viewer" || (*seen)[0].OrgID != ecOrg.String() {
 		t.Fatalf("got %d claims=%+v, want role viewer (the membership's) in the token's org", rec.Code, *seen)
 	}
@@ -271,7 +271,7 @@ func TestQueryEdgeCarrierStatesTheMembershipRole(t *testing.T) {
 // only the org is served; and a superuser acting in an org they are not a
 // member of holds the empty role and passes that gate by IsSuperuser alone.
 func TestAnEmptyRoleIsNoPrivilege(t *testing.T) {
-	plain := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5})
+	plain := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	for name, tc := range map[string]struct {
 		state    policy.UserState
 		token    string
@@ -311,7 +311,7 @@ func TestAnEmptyRoleIsNoPrivilege(t *testing.T) {
 // runs, no default role is used, and the log line names the grant that is
 // missing.
 func TestAMissingGrantRefusesAndIsNamed(t *testing.T) {
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	logged := irCaptureIdentityLog(t)
 	for grant, withhold := range map[string]func(*fakeEdgeStore, error){
 		"memberships (user_id, org_id, role)":                func(store *fakeEdgeStore, err error) { store.errIsMember = err },

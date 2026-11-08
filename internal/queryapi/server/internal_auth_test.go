@@ -99,7 +99,24 @@ func iaDispatchWithEdge(t *testing.T, verifier *principal.Verifier, edgeAuth *po
 		w.WriteHeader(http.StatusOK)
 	}))
 	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, edgeAuth, edgeStore, "", nil)
-	return handler, seen
+	return onQueryPattern(handler), seen
+}
+
+// onQueryPattern sets the pattern server.go's mux gives /query (the route profile "POST /query") on a request
+// a test hands the handler directly.
+func onQueryPattern(handler http.HandlerFunc) http.HandlerFunc {
+	return onPattern("/query", handler).ServeHTTP
+}
+
+// onPattern sets pattern, the one server.go's mux matches for the route, on a request a test hands handler
+// directly, so the route profile is the served route's.
+func onPattern(pattern string, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Pattern == "" {
+			r.Pattern = pattern
+		}
+		handler.ServeHTTP(w, r)
+	})
 }
 
 func iaPost(t *testing.T, handler http.HandlerFunc, mutate func(*http.Request)) int {
@@ -248,11 +265,11 @@ func TestBuildInfoTakesTheHeaderCarrierAndRefusesTheEnvelopeAndBoth(t *testing.T
 func TestBrowserReachableRESTAuthIgnoresTheInternalHeaders(t *testing.T) {
 	verifier, _ := iaVerifier(t)
 	m := newAccessMinter(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(newAccessStore()))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(newAccessStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, testAccess(m.keys, nil, accessTestNow).opts, false); err != nil {
+	if err := routeEdgeVerifier(edge, testAccess(m.keys, nil, accessTestNow).opts); err != nil {
 		t.Fatal(err)
 	}
 	call := func(mutate func(*http.Request)) (int, authctx.Claims) {
@@ -411,7 +428,7 @@ func TestIdentityHeadersAreHonouredOnlyOnTheInternalListener(t *testing.T) {
 	m := newAccessMinter(t)
 	store := newQueryAPIUserStoreFrom(newAccessStore())
 	auth := ecEdgeAuth(t, store)
-	if err := routeAuthenticator(auth, testAccess(m.keys, nil, accessTestNow).opts, true); err != nil {
+	if err := routeAuthenticator(auth, testAccess(m.keys, nil, accessTestNow).opts); err != nil {
 		t.Fatal(err)
 	}
 	dispatch, seen := iaDispatchWithEdge(t, verifier, auth, store)

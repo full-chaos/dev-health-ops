@@ -38,7 +38,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -81,7 +81,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -124,7 +124,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -167,7 +167,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -210,7 +210,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -253,7 +253,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -296,7 +296,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -339,7 +339,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -382,7 +382,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -425,7 +425,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -468,7 +468,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -511,7 +511,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -554,7 +554,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -597,7 +597,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -640,7 +640,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -683,7 +683,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -742,7 +742,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -785,7 +785,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -828,7 +828,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -871,7 +871,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -914,7 +914,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -957,7 +957,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -1000,7 +1000,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -1043,7 +1043,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -1086,7 +1086,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -1129,7 +1129,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -1172,7 +1172,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -1215,7 +1215,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -1258,7 +1258,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 245,
+          "line": 208,
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
@@ -1302,7 +1302,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 44,
+          "line": 43,
           "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
@@ -1483,7 +1483,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 44,
+          "line": 43,
           "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
@@ -1562,7 +1562,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 44,
+          "line": 43,
           "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
@@ -1607,7 +1607,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 44,
+          "line": 43,
           "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
@@ -1652,7 +1652,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 44,
+          "line": 43,
           "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },

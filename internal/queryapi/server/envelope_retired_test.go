@@ -56,7 +56,7 @@ func TestQueryAPIRESTRefusesTheEnvelope(t *testing.T) {
 func TestQueryAPIInternalCarrierRefusesTheEnvelope(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
-	stack := newAccessStack(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+	stack := newAccessStack(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	for _, target := range []struct{ listener, method, path string }{
 		{"query", http.MethodPost, "/query"},
 		{"internal", http.MethodPost, "/query"},
@@ -154,11 +154,11 @@ func roleRun(t *testing.T, m *accessMinter, route seamRoute, c roleCase, gate *p
 	store := newAccessStore()
 	c.store(store)
 	verifier, _ := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(store))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(store))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, testAccess(m.keys, nil, accessTestNow).opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, testAccess(m.keys, nil, accessTestNow).opts); err != nil {
 		t.Fatal(err)
 	}
 	s := &seamStack{t: t, route: route, mux: http.NewServeMux(), client: &teamScopeReachClient{}, user: c.token(m)}
@@ -211,7 +211,7 @@ func TestUserAccessTokenRolesKeepTheLegacyAnswer(t *testing.T) {
 		t.Run(c.name+"/query", func(t *testing.T) {
 			store := newAccessStore()
 			c.store(store)
-			stack := newAccessStack(t, store, testAccess(m.keys, nil, accessTestNow), true)
+			stack := newAccessStack(t, store, testAccess(m.keys, nil, accessTestNow))
 			got := stack.send("query", http.MethodPost, "/query", "", c.token(m))
 			if got.Status != c.query {
 				t.Fatalf("/query: got %+v, want status %d", got, c.query)

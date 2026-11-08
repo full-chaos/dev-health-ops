@@ -70,7 +70,7 @@ func assertLogoutDone(t *testing.T, response *httptest.ResponseRecorder) {
 
 func TestCompatLogoutKeySetVerifiedLegacyTokenRevokesAndCounts(t *testing.T) {
 	f := newCompatFixture(t)
-	logouts, refreshes := installLogoutCounter(t), installRefreshCounter(t)
+	logouts := installLogoutCounter(t)
 	response := f.do(http.MethodPost, PatternCompatLogout, logoutBody(legacyToken(t, f, f.org.String(), testSecret)), nil)
 	assertLogoutDone(t, response)
 	if len(f.sessions.revokedLegacy) != 1 || f.sessions.revokedLegacy[0].PrincipalID != f.principal {
@@ -78,9 +78,6 @@ func TestCompatLogoutKeySetVerifiedLegacyTokenRevokesAndCounts(t *testing.T) {
 	}
 	if got := legacyLogoutTotal(t, logouts); got != 1 {
 		t.Fatalf("logout counter %d, want 1", got)
-	}
-	if got := legacyRefreshTotal(t, refreshes); got != 0 {
-		t.Fatalf("refresh counter %d, want 0", got)
 	}
 }
 
@@ -119,24 +116,6 @@ func TestCompatLogoutWithoutLegacyKeyStillRevokesAnOpaqueCredential(t *testing.T
 	assertLogoutDone(t, response)
 	if len(f.sessions.byCredential) != 1 || f.sessions.byCredential[0] != "opaque-credential" {
 		t.Fatalf("revoked credentials %v, want the opaque one", f.sessions.byCredential)
-	}
-}
-
-func TestCompatRefreshWithoutLegacyKeyRefusesAndExchangesNothing(t *testing.T) {
-	f := newCompatFixture(t)
-	refreshes := installRefreshCounter(t)
-	f.sessions.legacyResult = accepted(f.record)
-	token := legacyToken(t, f, f.org.String(), testSecret)
-	dropLegacyKey(f)
-	response := f.do(http.MethodPost, PatternCompatRefresh, logoutBody(token), nil)
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("status %d: %s, want 401", response.Code, response.Body)
-	}
-	if len(f.sessions.legacy) != 0 {
-		t.Fatalf("exchanged %v from a token no key verified", f.sessions.legacy)
-	}
-	if got := legacyRefreshTotal(t, refreshes); got != 0 {
-		t.Fatalf("refresh counter %d, want 0", got)
 	}
 }
 

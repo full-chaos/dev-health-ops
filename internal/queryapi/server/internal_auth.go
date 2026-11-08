@@ -20,9 +20,8 @@ import (
 //   - the internal identity headers (the in-cluster caller states the
 //     identity; no token), or
 //   - (CHAOS-6263 PR (a), /query only: edgeAuth non-nil) the caller's own
-//     bearer through the edge carrier: the user access token once auth
-//     routes by row, or the HS256 edge access token, picked by the token's
-//     own JWT header, as authenticateRESTRequest picks it.
+//     user access token through the routed edge carrier (edgeCarrierToken;
+//     the carrier refuses a retired HS256 token alg_not_allowed).
 //
 // Any other bearer, the retired effective-principal envelope included, is
 // an unaccepted class: the bare 401 an invalid bearer always got.
@@ -40,7 +39,7 @@ import (
 //
 // verifier is not read: the envelope class is retired. edgeAuth/edgeStore
 // are nil for /buildinfo (this credential is /query-only, per D2898/D2905)
-// and for a pod with no GO_API_EDGE_JWT_SECRET configured.
+// and for a pod with no AUTH_ACCESS_TOKEN_ISSUER configured.
 func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, bool) {
 	if refuseAmbiguousCarrier(w, r) {
 		return authctx.Claims{}, false

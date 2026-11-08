@@ -220,7 +220,9 @@ func (p *subjectProbe) handler() *routeswitch.Mux {
 }
 
 // C13: /graphql puts the caller's bearer and its class on the context after authentication; /query does the same for
-// its bearer (CHAOS-12659 G6). The retired envelope never reaches the operation: /query refuses it before any run.
+// its bearer (CHAOS-12659 G6). The routed edge token is a user access token (the HS256 class is retired), so its
+// subject is the user token class with no skip reason; the shadow only observes (graph.OperationShadow.InterceptOperation).
+// The retired envelope never reaches the operation: /query refuses it before any run.
 func TestGraphQLShadowSubjectReachesTheOperation(t *testing.T) {
 	store := &fakeEdgeStore{
 		states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
@@ -233,9 +235,9 @@ func TestGraphQLShadowSubjectReachesTheOperation(t *testing.T) {
 	mux := probe.handler()
 	auth := ecEdgeAuth(t, store)
 	byDigest := map[string]string{digestHex(iaDocument): "probe"}
-	edge := internalidentity.Public(graphQLEdgeChain(newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, auth, store, "", nil),
-		graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes}))
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5})
+	edge := internalidentity.Public(onPattern("/graphql", withRouteProfile(graphQLEdgeChain(newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, auth, store, "", nil),
+		graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes}))))
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query": `+jsonQuote(t, iaDocument)+`}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+token)
@@ -244,8 +246,8 @@ func TestGraphQLShadowSubjectReachesTheOperation(t *testing.T) {
 	if recorder.Code != http.StatusOK || len(probe.subjects) != 1 || !probe.found[0] {
 		t.Fatalf("/graphql: %d, subjects %+v found %v", recorder.Code, probe.subjects, probe.found)
 	}
-	if got := probe.subjects[0]; got.Bearer != token || got.UserAccessToken || got.SkipReason != policy.ShadowReasonHS256 {
-		t.Fatalf("/graphql subject: class fields %+v, want the edge token as hs256 and not a user token", got)
+	if got := probe.subjects[0]; got.Bearer != token || !got.UserAccessToken || got.SkipReason != policy.ShadowReasonNone {
+		t.Fatalf("/graphql subject: class fields %+v, want the edge token as a user access token with no skip reason", got)
 	}
 
 	probe = &subjectProbe{}

@@ -701,38 +701,29 @@ func TestDelegationCascadeUnderAnOrganizationVerbIsBusy(t *testing.T) {
 	}
 }
 
-// An attempt that queued its audit row and then got ErrBusy leaves no row for
-// the retry: one delegation_ended, not two (rulings A1).
+// An attempt that queued its audit row and then got ErrBusy from a later step
+// of the verb leaves no row for the retry: one delegation_ended, not two
+// (rulings A1).
 func TestDelegationRetryAfterBusyWritesOneEndedRow(t *testing.T) {
 	ctx := testContext(t)
 	d := newDelegationEnv(t, ctx)
 	c := d.fixture(t, ctx)
 	row := d.start(t, ctx, c)
-	if _, err := d.admin.Exec(ctx, `INSERT INTO public.refresh_tokens (id, user_id, org_id, token_hash, family_id, expires_at, created_at)
-		VALUES (gen_random_uuid(), $1, $2, 'delegation-busy', gen_random_uuid(), now() + interval '1 hour', now())`, c.target, c.org); err != nil {
-		t.Fatal(err)
-	}
-	holder, err := d.admin.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = holder.Rollback(ctx) }()
-	if _, err := holder.Exec(ctx, `SELECT 1 FROM public.refresh_tokens WHERE token_hash = 'delegation-busy' FOR UPDATE`); err != nil {
-		t.Fatal(err)
-	}
-	end := func() error {
+	end := func(laterStepBusy bool) error {
 		return d.inCommit(ctx, func(ctx context.Context, tx audit.TxOps) error {
-			_, err := d.owned.EndOrgInTx(ctx, tx, c.target, c.org)
-			return err
+			if _, err := d.owned.EndOrgInTx(ctx, tx, c.target, c.org); err != nil {
+				return err
+			}
+			if laterStepBusy {
+				return ErrBusy
+			}
+			return nil
 		})
 	}
-	if err := end(); !errors.Is(err, ErrBusy) {
+	if err := end(true); !errors.Is(err, ErrBusy) {
 		t.Fatalf("attempt 1 = %v, want ErrBusy", err)
 	}
-	if err := holder.Rollback(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := end(); err != nil {
+	if err := end(false); err != nil {
 		t.Fatalf("attempt 2: %v", err)
 	}
 	d.wantEnded(t, ctx, row, c)

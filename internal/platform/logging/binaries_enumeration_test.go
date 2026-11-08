@@ -121,7 +121,7 @@ func loadCmdPackages(t *testing.T) (map[string]listedPackage, map[string][]*ast.
 
 // linkedSourceFiles names the files of listed that are parsed for the scans.
 func linkedSourceFiles(listed listedPackage) []string {
-	return listed.GoFiles
+	return append(append([]string{}, listed.GoFiles...), listed.CgoFiles...)
 }
 
 // TestEveryBinaryLogsThroughTheRedactingHandler proves by enumeration that
@@ -356,16 +356,25 @@ var deployedServices = []string{
 }
 
 // TestEveryServiceInstallsTheJSONHandler proves by static scan (go list -deps
-// of ./cmd/..., then the AST of every non-test file the binaries link) that
-// each deployed service reaches logging.InstallDefault(logging.NewJSON(...)),
-// and that no linked production package installs another default handler or
-// writes the standard log package raw.
+// of ./cmd/..., then the AST of every non-test Go and Cgo file the binaries
+// link) that each deployed service reaches
+// logging.InstallDefault(logging.NewJSON(...)), and that no linked production
+// package installs another default handler or writes the standard log package
+// raw.
+//
+// It resolves imports by path and refuses what it cannot follow without a
+// type checker: a dot import of log, log/slog, logging or shell; one of the
+// census functions used other than as the function of a call; a logger or
+// writer variable that is not declared once by := and left alone. The one
+// installed logger that is not logging.NewJSON is the value-redaction
+// wrapper around slog.Default().Handler(), which keeps the installed handler.
 //
 // Limits: it reads source, it does not run the binaries; a handler type
 // written by hand and passed to slog.New is not seen (only the slog
-// constructors and setters are); an identifier passed to InstallDefault is
-// traced one assignment deep inside the two service entry points only; code
-// a binary does not link is not scanned.
+// constructors and setters are); a function that is handed the logger and
+// writes through the pointer is not seen; the default the value-redaction
+// wrapper keeps is not proven to be the JSON handler; reflect, unsafe and
+// linkname are not seen; code a binary does not link is not scanned.
 func TestEveryServiceInstallsTheJSONHandler(t *testing.T) {
 	t.Parallel()
 	packages, parsed, fileSet := loadCmdPackages(t)
@@ -374,6 +383,17 @@ func TestEveryServiceInstallsTheJSONHandler(t *testing.T) {
 	}
 	for _, finding := range serviceHandlerCensus(fileSet, parsed) {
 		t.Error(finding)
+	}
+}
+
+// censusFunctions are the functions the census follows. A reference to one
+// that is not the function of a call (a function value) is refused.
+func censusFunctions(loggingPath, shellPath string) map[string]map[string]bool {
+	return map[string]map[string]bool{
+		"log/slog":  {"SetDefault": true, "NewTextHandler": true, "NewJSONHandler": true},
+		"log":       {"SetOutput": true},
+		loggingPath: {"InstallDefault": true, "NewJSON": true},
+		shellPath:   {"Execute": true, "Main": true},
 	}
 }
 
@@ -387,6 +407,38 @@ func serviceHandlerCensus(fileSet *token.FileSet, parsed map[string][]*ast.File)
 	}
 	loggingPath := modulePath + "/internal/platform/logging"
 	shellPath := modulePath + "/internal/platform/shell"
+	followed := censusFunctions(loggingPath, shellPath)
+
+	for _, files := range parsed {
+		for _, file := range files {
+			names := importNames(file)
+			for _, spec := range file.Imports {
+				path, _ := strconv.Unquote(spec.Path.Value)
+				if spec.Name != nil && spec.Name.Name == "." && followed[path] != nil {
+					report("%s: dot import of %s hides the calls the census follows", fileSet.Position(spec.Pos()), path)
+				}
+			}
+			called := map[*ast.SelectorExpr]bool{}
+			ast.Inspect(file, func(node ast.Node) bool {
+				if call, ok := node.(*ast.CallExpr); ok {
+					if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
+						called[selector] = true
+					}
+				}
+				return true
+			})
+			ast.Inspect(file, func(node ast.Node) bool {
+				selector, ok := node.(*ast.SelectorExpr)
+				if !ok || called[selector] {
+					return true
+				}
+				if path, function, ok := importedSelector(selector, names); ok && followed[path][function] {
+					report("%s: %s is used as a value, not called", fileSet.Position(selector.Pos()), render(selector))
+				}
+				return true
+			})
+		}
+	}
 
 	callers := map[string]bool{}
 	for path, files := range parsed {
@@ -413,7 +465,7 @@ func serviceHandlerCensus(fileSet *token.FileSet, parsed map[string][]*ast.File)
 
 	for _, entry := range []string{shellPath, modulePath + "/internal/auth/authruntime"} {
 		if !installsJSON(parsed[entry], "Execute", loggingPath) {
-			report("func %s does not install a logger built by logging.NewJSON through a top-level defer logging.InstallDefault", "Execute")
+			report("%s: func Execute does not install a logger built by logging.NewJSON through a top-level defer logging.InstallDefault", entry)
 		}
 	}
 	if !funcCalls(parsed[modulePath+"/cmd/auth-service"], "main", modulePath+"/internal/auth/authruntime", "Main") {
@@ -427,84 +479,299 @@ func serviceHandlerCensus(fileSet *token.FileSet, parsed map[string][]*ast.File)
 		if path == loggingPath {
 			continue
 		}
+		discardTypes := discardWriterTypes(files)
 		for _, file := range files {
 			names := importNames(file)
-			calls(file, func(callPath, function string, call *ast.CallExpr) {
-				where := fileSet.Position(call.Pos())
-				switch {
-				case callPath == "log/slog" && function == "NewTextHandler", callPath == "log/slog" && function == "NewJSONHandler":
-					if !discardsOutput(call) {
-						report("%s: %s builds a slog handler on a real writer", where, render(call))
+			for _, declaration := range file.Decls {
+				function, _ := declaration.(*ast.FuncDecl)
+				ast.Inspect(declaration, func(node ast.Node) bool {
+					call, ok := node.(*ast.CallExpr)
+					if !ok {
+						return true
 					}
-				case callPath == "log" && function == "SetOutput":
-					if !discardsOutput(call) {
-						report("%s: %s points the standard log package at a raw writer", where, render(call))
+					selector, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return true
 					}
-				case callPath == "log/slog" && function == "SetDefault":
-					report("%s: %s installs a default handler outside logging.InstallDefault", where, render(call))
-				case callPath == loggingPath && function == "InstallDefault":
-					if len(call.Args) != 1 || !jsonInstallArgument(call.Args[0], names, loggingPath, true) {
-						report("%s: %s does not install logging.NewJSON", where, render(call))
+					callPath, name, ok := importedSelector(selector, names)
+					if !ok {
+						return true
 					}
-				}
-			})
+					where := fileSet.Position(call.Pos())
+					switch {
+					case callPath == "log/slog" && (name == "NewTextHandler" || name == "NewJSONHandler"):
+						if len(call.Args) == 0 || !discardsOutput(call.Args[0], function, names, discardTypes) {
+							report("%s: %s builds a slog handler on a real writer", where, render(call))
+						}
+					case callPath == "log" && name == "SetOutput":
+						if len(call.Args) == 0 || !discardsOutput(call.Args[0], function, names, discardTypes) {
+							report("%s: %s points the standard log package at a raw writer", where, render(call))
+						}
+					case callPath == "log/slog" && name == "SetDefault":
+						report("%s: %s installs a default handler outside logging.InstallDefault", where, render(call))
+					case callPath == loggingPath && name == "InstallDefault":
+						if len(call.Args) != 1 || !jsonLogger(call.Args[0], function, names, loggingPath) {
+							report("%s: %s does not install logging.NewJSON", where, render(call))
+						}
+					}
+					return true
+				})
+			}
 		}
 	}
 	return findings
 }
 
-// discardsOutput reports whether the call's writer (first argument) is
-// io.Discard or the package's own discard{}: it prints nothing.
-func discardsOutput(call *ast.CallExpr) bool {
-	if len(call.Args) == 0 {
+// importedSelector resolves selector to the import path and name it refers
+// to when its left side is an import name (not a local that shadows one).
+func importedSelector(selector *ast.SelectorExpr, names map[string]string) (string, string, bool) {
+	ident, ok := selector.X.(*ast.Ident)
+	if !ok || ident.Obj != nil || ident.Name == "." || ident.Name == "_" {
+		return "", "", false
+	}
+	path, imported := names[ident.Name]
+	return path, selector.Sel.Name, imported
+}
+
+// isImportedCall reports whether expression is a call of path.name.
+func isImportedCall(expression ast.Expr, names map[string]string, path, name string) bool {
+	call, ok := expression.(*ast.CallExpr)
+	if !ok {
 		return false
 	}
-	switch render(call.Args[0]) {
-	case "io.Discard", "discard{}":
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	callPath, function, ok := importedSelector(selector, names)
+	return ok && callPath == path && function == name
+}
+
+// wrapsInstalledDefault reports whether expression is exactly
+// slog.New(logging.WithValueRedaction(slog.Default().Handler(), <any>)): it
+// adds redaction to the handler already installed and changes nothing else.
+func wrapsInstalledDefault(expression ast.Expr, names map[string]string, loggingPath string) bool {
+	if !isImportedCall(expression, names, "log/slog", "New") {
+		return false
+	}
+	logger := expression.(*ast.CallExpr)
+	if len(logger.Args) != 1 || logger.Ellipsis.IsValid() || !isImportedCall(logger.Args[0], names, loggingPath, "WithValueRedaction") {
+		return false
+	}
+	wrapper := logger.Args[0].(*ast.CallExpr)
+	if len(wrapper.Args) != 2 || wrapper.Ellipsis.IsValid() {
+		return false
+	}
+	handler, ok := wrapper.Args[0].(*ast.CallExpr)
+	if !ok || len(handler.Args) != 0 {
+		return false
+	}
+	method, ok := handler.Fun.(*ast.SelectorExpr)
+	if !ok || method.Sel.Name != "Handler" || !isImportedCall(method.X, names, "log/slog", "Default") {
+		return false
+	}
+	return len(method.X.(*ast.CallExpr).Args) == 0
+}
+
+// isIODiscard reports whether expression is io.Discard.
+func isIODiscard(expression ast.Expr, names map[string]string) bool {
+	selector, ok := expression.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	path, name, ok := importedSelector(selector, names)
+	return ok && path == "io" && name == "Discard"
+}
+
+// jsonLogger reports whether argument, passed to logging.InstallDefault
+// inside function (nil at package level), is a logging.NewJSON(...) call,
+// the value-redaction wrapper around the installed default, or a variable
+// that function declares once by := logging.NewJSON(...) and never assigns
+// or takes the address of again.
+func jsonLogger(argument ast.Expr, function *ast.FuncDecl, names map[string]string, loggingPath string) bool {
+	isNewJSON := func(expression ast.Expr) bool {
+		return isImportedCall(expression, names, loggingPath, "NewJSON")
+	}
+	if isNewJSON(argument) || wrapsInstalledDefault(argument, names, loggingPath) {
 		return true
 	}
-	return false
+	ident, ok := argument.(*ast.Ident)
+	return ok && function != nil && boundOnce(function, ident.Name, isNewJSON)
 }
 
-// jsonInstallArgument reports whether argument is logging.NewJSON(...), the
-// value-redaction wrapper around the installed default
-// (slog.New(logging.WithValueRedaction(...))), or, when identOK, a variable.
-func jsonInstallArgument(argument ast.Expr, names map[string]string, loggingPath string, identOK bool) bool {
-	switch typed := argument.(type) {
-	case *ast.Ident:
-		return identOK
-	case *ast.CallExpr:
-		selector, ok := typed.Fun.(*ast.SelectorExpr)
-		if !ok {
+// discardsOutput reports whether writer, inside function (nil at package
+// level), drops every write: io.Discard, a discard{} literal of the
+// package's own drop-everything type, or a variable function declares once
+// by := io.Discard and never assigns or takes the address of again.
+func discardsOutput(writer ast.Expr, function *ast.FuncDecl, names map[string]string, discardTypes map[*ast.TypeSpec]bool) bool {
+	if isIODiscard(writer, names) {
+		return true
+	}
+	switch typed := writer.(type) {
+	case *ast.CompositeLit:
+		ident, ok := typed.Type.(*ast.Ident)
+		if !ok || ident.Name != "discard" || len(typed.Elts) != 0 || len(discardTypes) == 0 {
 			return false
 		}
-		ident, ok := selector.X.(*ast.Ident)
-		if !ok {
-			return false
-		}
-		switch {
-		case names[ident.Name] == loggingPath && selector.Sel.Name == "NewJSON":
+		if ident.Obj == nil {
 			return true
-		case names[ident.Name] == "log/slog" && selector.Sel.Name == "New" && len(typed.Args) == 1:
-			inner, ok := typed.Args[0].(*ast.CallExpr)
-			if !ok {
-				return false
-			}
-			innerSelector, ok := inner.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return false
-			}
-			innerIdent, ok := innerSelector.X.(*ast.Ident)
-			return ok && names[innerIdent.Name] == loggingPath && innerSelector.Sel.Name == "WithValueRedaction"
 		}
+		spec, ok := ident.Obj.Decl.(*ast.TypeSpec)
+		return ok && discardTypes[spec]
+	case *ast.Ident:
+		return function != nil && boundOnce(function, typed.Name, func(expression ast.Expr) bool {
+			return isIODiscard(expression, names)
+		})
 	}
 	return false
 }
 
-// installsJSON reports whether the top-level function named function
-// declares logger := logging.NewJSON(...) and later runs
+// discardWriterTypes finds the package-level type discard struct{} whose
+// Write method is exactly `return len(p), nil`.
+func discardWriterTypes(files []*ast.File) map[*ast.TypeSpec]bool {
+	var spec *ast.TypeSpec
+	dropsWrites := false
+	for _, file := range files {
+		for _, declaration := range file.Decls {
+			switch typed := declaration.(type) {
+			case *ast.GenDecl:
+				for _, candidate := range typed.Specs {
+					if typeSpec, ok := candidate.(*ast.TypeSpec); ok && typeSpec.Name.Name == "discard" && typeSpec.Assign == 0 {
+						if structType, ok := typeSpec.Type.(*ast.StructType); ok && len(structType.Fields.List) == 0 {
+							spec = typeSpec
+						}
+					}
+				}
+			case *ast.FuncDecl:
+				if typed.Name.Name == "Write" && typed.Recv != nil && len(typed.Recv.List) == 1 && typed.Body != nil {
+					if receiver, ok := typed.Recv.List[0].Type.(*ast.Ident); ok && receiver.Name == "discard" {
+						dropsWrites = writeDropsEverything(typed)
+					}
+				}
+			}
+		}
+	}
+	if spec == nil || !dropsWrites {
+		return nil
+	}
+	return map[*ast.TypeSpec]bool{spec: true}
+}
+
+// writeDropsEverything reports whether method is
+// Write(p []byte) (int, error) { return len(p), nil }.
+func writeDropsEverything(method *ast.FuncDecl) bool {
+	params := method.Type.Params.List
+	if len(params) != 1 || len(params[0].Names) != 1 || len(method.Body.List) != 1 {
+		return false
+	}
+	parameter := params[0].Names[0].Name
+	ret, ok := method.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 2 {
+		return false
+	}
+	length, ok := ret.Results[0].(*ast.CallExpr)
+	if !ok || len(length.Args) != 1 {
+		return false
+	}
+	lenIdent, ok := length.Fun.(*ast.Ident)
+	argument, argOK := length.Args[0].(*ast.Ident)
+	nilIdent, nilOK := ret.Results[1].(*ast.Ident)
+	return ok && lenIdent.Name == "len" && lenIdent.Obj == nil &&
+		argOK && argument.Name == parameter &&
+		nilOK && nilIdent.Name == "nil" && nilIdent.Obj == nil
+}
+
+// boundOnce reports whether name, anywhere in function (its receiver,
+// parameters, results and body, closures included), is declared exactly
+// once, by name := <expression accepted by value>, and is never assigned
+// again in any form, declared again, or has its address taken.
+func boundOnce(function *ast.FuncDecl, name string, value func(ast.Expr) bool) bool {
+	definitions := 0
+	other := false
+	fields := func(list *ast.FieldList) {
+		if list == nil {
+			return
+		}
+		for _, field := range list.List {
+			for _, ident := range field.Names {
+				if ident.Name == name {
+					other = true
+				}
+			}
+		}
+	}
+	fields(function.Recv)
+	ast.Inspect(function, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.FuncType:
+			fields(typed.TypeParams)
+			fields(typed.Params)
+			fields(typed.Results)
+		case *ast.AssignStmt:
+			for index, left := range typed.Lhs {
+				if rootIdent(left) != name {
+					continue
+				}
+				if _, bare := left.(*ast.Ident); bare && typed.Tok == token.DEFINE && len(typed.Lhs) == len(typed.Rhs) && value(typed.Rhs[index]) {
+					definitions++
+				} else {
+					other = true
+				}
+			}
+		case *ast.ValueSpec:
+			for _, ident := range typed.Names {
+				if ident.Name == name {
+					other = true
+				}
+			}
+		case *ast.RangeStmt:
+			if rootIdent(typed.Key) == name || rootIdent(typed.Value) == name {
+				other = true
+			}
+		case *ast.IncDecStmt:
+			if rootIdent(typed.X) == name {
+				other = true
+			}
+		case *ast.UnaryExpr:
+			if typed.Op == token.AND && rootIdent(typed.X) == name {
+				other = true
+			}
+		}
+		return true
+	})
+	return definitions == 1 && !other
+}
+
+// rootIdent names the variable an assignable expression writes into: x for
+// x, *x, x.f, x[i], (x).
+func rootIdent(expression ast.Expr) string {
+	for {
+		switch typed := expression.(type) {
+		case *ast.Ident:
+			return typed.Name
+		case *ast.ParenExpr:
+			expression = typed.X
+		case *ast.StarExpr:
+			expression = typed.X
+		case *ast.SelectorExpr:
+			expression = typed.X
+		case *ast.IndexExpr:
+			expression = typed.X
+		case *ast.IndexListExpr:
+			expression = typed.X
+		case *ast.SliceExpr:
+			expression = typed.X
+		default:
+			return ""
+		}
+	}
+}
+
+// installsJSON reports whether the top-level function named function runs
 // defer logging.InstallDefault(logger)() as one of its own top-level
-// statements, so every run of the entry point logs through the JSON handler.
+// statements, where logger is declared once by := logging.NewJSON(...) and
+// never assigned again, so every run of the entry point logs through the
+// JSON handler.
 func installsJSON(files []*ast.File, function, loggingPath string) bool {
 	found := false
 	for _, file := range files {
@@ -514,23 +781,16 @@ func installsJSON(files []*ast.File, function, loggingPath string) bool {
 			if !ok || decl.Name.Name != function || decl.Recv != nil || decl.Body == nil {
 				continue
 			}
-			jsonVariables := map[string]bool{}
 			for _, statement := range decl.Body.List {
-				if assign, ok := statement.(*ast.AssignStmt); ok && len(assign.Lhs) == 1 && len(assign.Rhs) == 1 {
-					if name, ok := assign.Lhs[0].(*ast.Ident); ok && jsonInstallArgument(assign.Rhs[0], names, loggingPath, false) {
-						jsonVariables[name.Name] = true
-					}
-				}
 				deferred, ok := statement.(*ast.DeferStmt)
 				if !ok {
 					continue
 				}
-				outer := deferred.Call
-				inner, ok := outer.Fun.(*ast.CallExpr)
-				if !ok || len(inner.Args) != 1 || !topLevelCall(inner, names, loggingPath, "InstallDefault") {
+				inner, ok := deferred.Call.Fun.(*ast.CallExpr)
+				if !ok || len(inner.Args) != 1 || !isImportedCall(inner, names, loggingPath, "InstallDefault") {
 					continue
 				}
-				if variable, ok := inner.Args[0].(*ast.Ident); ok && jsonVariables[variable.Name] {
+				if _, isIdent := inner.Args[0].(*ast.Ident); isIdent && jsonLogger(inner.Args[0], decl, names, loggingPath) {
 					found = true
 				}
 			}

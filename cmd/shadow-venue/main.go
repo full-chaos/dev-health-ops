@@ -4,8 +4,10 @@
 //	shadow-venue plan  -principals <tsv> [-rows <tsv>] [-profiles <json>] [-only-rows 1,22] [-k 3] [-allow-external a,b]
 //	                   [-destructive -throwaway-pool T1,T2,T3 -throwaway-ids <tsv>] [-throwaway-org T] [-states <tsv, 0600>]
 //	shadow-venue drive -base http://127.0.0.1:8093 -principals <tsv> -out <slots.tsv> [plan flags] [-gap 2.5s] [-token-file name=path ...]
+//	                   [-bodykeys-key <0600 key> -bodykeys-out <new side file>]
 //	shadow-venue mint  -base http://127.0.0.1:8093 -principals <tsv> -names a,b -out-dir <0700 dir> [-egress <txt> -run-id <id>]
-//	shadow-venue bodydiff -a <slots> -b <slots>
+//	shadow-venue bodykey -out <new 0600 key file>
+//	shadow-venue bodydiff -a <slots> -b <slots> [-keys-a <side> -keys-b <side>]
 //	shadow-venue judge -slots <slots.tsv> -log <go-api log> -out <table.tsv> [-k 3] [-grace 2.2s] [-rulings <tsv>]
 //	                   [-rows <tsv>] [-stub-log <jsonl>] [-outbound-out <tsv>] [-egress-before <txt> -egress-between <txt>]
 //	                   [-membership-before <tsv> -membership-after <tsv>]
@@ -50,7 +52,7 @@ func main() {
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: shadow-venue plan|drive|mint|judge|judge-enforced|bodydiff [flags]")
+		fmt.Fprintln(stderr, "usage: shadow-venue plan|drive|mint|judge|judge-enforced|bodykey|bodydiff [flags]")
 		return exitUsage
 	}
 	switch args[0] {
@@ -62,6 +64,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return judgeEnforced(args[1:], stdout, stderr)
 	case "mint":
 		return mint(ctx, args[1:], stdout, stderr)
+	case "bodykey":
+		return bodykey(args[1:], stderr)
 	case "bodydiff":
 		return bodydiff(args[1:], stdout, stderr)
 	}
@@ -104,6 +108,8 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 	runID := fs.String("run-id", "", "this drive's run id; the -egress record must name it as run_id (drive)")
 	out := fs.String("out", "", "slots file to create, 0600 (drive)")
 	gap := fs.Duration("gap", 2500*time.Millisecond, "wait after each answer (drive)")
+	keyPath := fs.String("bodykeys-key", "", "owner-only key file for the per-leaf HMACs of the answers; with -bodykeys-out (drive)")
+	keysOut := fs.String("bodykeys-out", "", "new side file of per-leaf HMACs (path and 12 hex per leaf, no value) (drive)")
 	loginOnly := fs.Bool("login-only", false, "sign each principal of the plan in and stop: no row request is sent, no slots file is written (drive)")
 	destructive := fs.Bool("destructive", false, "send the destructive rows (last, throwaway org only); without it they are gaps")
 	files := tokenFiles{}
@@ -152,12 +158,33 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 	if *loginOnly {
 		return loginPrincipals(ctx, &shadowvenue.Driver{Base: *base, Egress: record, RunID: *runID, Client: newClient()}, plan, venue, stdout, stderr)
 	}
+	if (*keyPath == "") != (*keysOut == "") {
+		fmt.Fprintln(stderr, "drive: -bodykeys-key and -bodykeys-out go together")
+		return exitUsage
+	}
+	var bodyKey []byte
+	if *keyPath != "" {
+		var err error
+		if bodyKey, err = shadowvenue.ReadBodyKey(*keyPath); err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+	}
 	file, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		fmt.Fprintf(stderr, "drive: -out %s: %v\n", *out, errors.Unwrap(err))
 		return exitUsage
 	}
 	driver := &shadowvenue.Driver{Base: *base, AllowExternal: list(*allow), Egress: record, RunID: *runID, Client: newClient(), Gap: *gap, Frozen: frozen}
+	if *keysOut != "" {
+		side, err := shadowvenue.CreateKeysFile(*keysOut)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return finish(file, exitUsage, stderr)
+		}
+		defer side.Close()
+		driver.BodyKey, driver.KeysOut = bodyKey, side
+	}
 	tokens := map[string]string{}
 	inPlan := map[string]bool{}
 	for _, s := range plan.Slots {
@@ -751,7 +778,13 @@ func bodydiff(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	a := fs.String("a", "", "first slots file")
 	b := fs.String("b", "", "second slots file")
+	keysA := fs.String("keys-a", "", "side file of the first drive (with -keys-b: name the differing leaf paths)")
+	keysB := fs.String("keys-b", "", "side file of the second drive")
 	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if (*keysA == "") != (*keysB == "") {
+		fmt.Fprintln(stderr, "bodydiff: -keys-a and -keys-b go together")
 		return exitUsage
 	}
 	var sets [2][]shadowvenue.Slot
@@ -775,8 +808,74 @@ func bodydiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, d)
 	}
 	fmt.Fprintf(stdout, "bodydiff: %d cells differ\n", len(diffs))
-	if len(diffs) > 0 {
+	leafDiffs := 0
+	if *keysA != "" {
+		lines, err := leafDiff(sets, *keysA, *keysB)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+		for _, l := range lines {
+			fmt.Fprintln(stdout, l)
+		}
+		leafDiffs = len(lines)
+		fmt.Fprintf(stdout, "bodydiff: %d cells with differing leaves\n", leafDiffs)
+	}
+	if len(diffs) > 0 || leafDiffs > 0 {
 		return exitFail
 	}
 	return exitOK
+}
+
+// bodykey writes a new random per-window key for the per-leaf HMACs; it prints no key.
+func bodykey(args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("bodykey", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	out := fs.String("out", "", "new key file, 0600")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if *out == "" {
+		fmt.Fprintln(stderr, "bodykey: -out is required")
+		return exitUsage
+	}
+	if err := shadowvenue.NewBodyKey(*out); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	return exitOK
+}
+
+// leafDiff lists, per cell of the pair, the leaf paths whose HMACs differ or that one side lacks: paths only.
+func leafDiff(sets [2][]shadowvenue.Slot, pathA, pathB string) ([]string, error) {
+	var leaves [2]map[int][]shadowvenue.Leaf
+	for i, path := range []string{pathA, pathB} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("bodydiff: %v", errors.Unwrap(err))
+		}
+		if leaves[i], err = shadowvenue.ParseKeysFile(raw); err != nil {
+			return nil, err
+		}
+	}
+	type cell struct {
+		row, caller string
+		k           int
+	}
+	seqB := map[cell]shadowvenue.Slot{}
+	for _, s := range sets[1] {
+		seqB[cell{s.Row, s.Caller, s.K}] = s
+	}
+	var lines []string
+	for _, sa := range sets[0] {
+		sb, ok := seqB[cell{sa.Row, sa.Caller, sa.K}]
+		if !ok || sa.Gap() {
+			continue
+		}
+		if paths := shadowvenue.KeyDiff(leaves[0][sa.Seq], leaves[1][sb.Seq]); len(paths) > 0 {
+			lines = append(lines, fmt.Sprintf("row %s\t%s\tk=%d\t%s\tleaves: %s", sa.Row, sa.Caller, sa.K, sa.Key(), strings.Join(paths, ",")))
+		}
+	}
+	slices.Sort(lines)
+	return lines, nil
 }

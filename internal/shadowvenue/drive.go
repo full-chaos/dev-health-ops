@@ -90,6 +90,9 @@ type Driver struct {
 	Frozen ThrowawayIDs
 	Sleep  func(context.Context, time.Duration) error
 	Now    func() time.Time
+	// BodyKey and KeysOut write the side file of per-leaf HMACs of each answer; both or neither.
+	BodyKey []byte
+	KeysOut io.Writer
 }
 
 // origin is the checked origin of a request.
@@ -194,6 +197,14 @@ func (d *Driver) Drive(ctx context.Context, plan Plan, tokens map[string]string,
 			}
 		}
 	}
+	if (d.KeysOut != nil) != (d.BodyKey != nil) {
+		return errors.New("drive: the side file and its key go together")
+	}
+	if d.KeysOut != nil {
+		if _, err := io.WriteString(d.KeysOut, keysHeader+"\n"); err != nil {
+			return err
+		}
+	}
 	if _, err := io.WriteString(w, slotsHeader+"\n"); err != nil {
 		return err
 	}
@@ -252,6 +263,13 @@ func (d *Driver) send(ctx context.Context, slot *Slot, token string) error {
 	}
 	digest := DigestBody(slot.Key(), raw, d.Frozen, PinnedVolatile)
 	slot.BodyLen, slot.BodySHA, slot.BodyNormSHA = digest.Len, digest.SHA, digest.Norm
+	if d.KeysOut != nil {
+		for _, leaf := range BodyLeaves(d.BodyKey, raw) {
+			if _, err := io.WriteString(d.KeysOut, strconv.Itoa(slot.Seq)+"\t"+leaf.Path+"\t"+leaf.HMAC12+"\n"); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

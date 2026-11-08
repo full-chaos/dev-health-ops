@@ -10,6 +10,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -495,5 +496,84 @@ func TestBothJudgingCommandsSetStrict(t *testing.T) {
 	})
 	if !found["JudgeOptions"] || !found["EnforcedInput"] {
 		t.Fatalf("Strict: true is not set on both: %v", found)
+	}
+}
+
+func TestBodykeyWritesAnOwnerOnlyKeyAndNeverOverwrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "key")
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"bodykey", "-out", path}, &out, &errOut); code != exitOK {
+		t.Fatalf("code %d %q", code, errOut.String())
+	}
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(out.String(), strings.TrimSpace(string(raw))) {
+		t.Fatal("the key was printed")
+	}
+	if code := run(context.Background(), []string{"bodykey", "-out", path}, &out, &errOut); code != exitUsage {
+		t.Fatalf("an existing key file: code %d", code)
+	}
+	if code := run(context.Background(), []string{"bodykey"}, &out, &errOut); code != exitUsage {
+		t.Fatalf("no -out: code %d", code)
+	}
+}
+
+func TestDriveTakesTheSideFileAndItsKeyTogetherAndOwnerOnly(t *testing.T) {
+	principals := principalsFile(t)
+	dir := t.TempDir()
+	good := filepath.Join(dir, "key")
+	open := filepath.Join(dir, "open")
+	if err := os.WriteFile(open, []byte(strings.Repeat("ab", 32)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := run(context.Background(), []string{"bodykey", "-out", good}, io.Discard, io.Discard); code != exitOK {
+		t.Fatal("bodykey")
+	}
+	existing := filepath.Join(dir, "side")
+	if err := os.WriteFile(existing, []byte("keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"drive", "-base", "http://127.0.0.1:1", "-principals", principals, "-k", "1", "-out"}
+	for name, extra := range map[string][]string{
+		"key without side file": {"-bodykeys-key", good},
+		"side file without key": {"-bodykeys-out", filepath.Join(dir, "s1")},
+		"an open key":           {"-bodykeys-key", open, "-bodykeys-out", filepath.Join(dir, "s2")},
+		"an existing side file": {"-bodykeys-key", good, "-bodykeys-out", existing},
+	} {
+		var out, errOut bytes.Buffer
+		args := append(append(append([]string{}, base...), filepath.Join(t.TempDir(), "slots.tsv")), extra...)
+		if code := run(context.Background(), args, &out, &errOut); code != exitUsage {
+			t.Errorf("%s: code %d stderr %q", name, code, errOut.String())
+		}
+	}
+	if kept, _ := os.ReadFile(existing); string(kept) != "keep\n" {
+		t.Fatal("an existing side file was overwritten")
+	}
+}
+
+func TestBodydiffWithKeysListsLeafPathsOnly(t *testing.T) {
+	same := strings.Repeat("cd", 32)
+	other := strings.Repeat("ef", 32)
+	slotsA := writeFile(t, "a.tsv", slotsHeaderV2+"\n"+slotLine(1, same, "prn_AAAAAAAAAAAAAAAAAAAAAA")+"\n")
+	slotsB := writeFile(t, "b.tsv", slotsHeaderV2+"\n"+slotLine(1, other, "prn_AAAAAAAAAAAAAAAAAAAAAA")+"\n")
+	keysA := writeFile(t, "ka.tsv", "seq\tpath\thmac12\n1\t$.t\taaaaaaaaaaaa\n1\t$.id\t111111111111\n")
+	keysB := writeFile(t, "kb.tsv", "seq\tpath\thmac12\n1\t$.t\tbbbbbbbbbbbb\n1\t$.id\t111111111111\n")
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"bodydiff", "-a", slotsA, "-b", slotsB, "-keys-a", keysA, "-keys-b", keysB}, &out, &errOut)
+	if code != exitFail || !strings.Contains(out.String(), "$.t") || strings.Contains(out.String(), "$.id") || strings.Contains(out.String(), "aaaaaaaaaaaa") {
+		t.Fatalf("code %d out %q", code, out.String())
+	}
+	if code := run(context.Background(), []string{"bodydiff", "-a", slotsA, "-b", slotsB, "-keys-a", keysA}, &out, &errOut); code != exitUsage {
+		t.Fatalf("one keys file only: code %d", code)
+	}
+}
+
+func TestBodydiffWithKeysFailsOnADifferingLeafEvenWhenTheNormalizedDigestsAreEqual(t *testing.T) {
+	same := strings.Repeat("cd", 32)
+	slots := writeFile(t, "s.tsv", slotsHeaderV2+"\n"+slotLine(1, same, "prn_AAAAAAAAAAAAAAAAAAAAAA")+"\n")
+	keysA := writeFile(t, "ka.tsv", "seq\tpath\thmac12\n1\t$.t\taaaaaaaaaaaa\n")
+	keysB := writeFile(t, "kb.tsv", "seq\tpath\thmac12\n1\t$.t\tbbbbbbbbbbbb\n")
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"bodydiff", "-a", slots, "-b", slots, "-keys-a", keysA, "-keys-b", keysB}, &out, &errOut); code != exitFail || !strings.Contains(out.String(), "$.t") {
+		t.Fatalf("code %d out %q", code, out.String())
 	}
 }

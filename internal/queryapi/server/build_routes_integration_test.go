@@ -58,7 +58,7 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 	member := seedBuildRoutesMember(ctx, t, pg.URI)
 	issuer := startEdgeIssuer(t)
 	bearer := issuer.tokens.MustMint(t, edtokens.Claims{UserID: member, OrgID: edgeUsersOrg})
-	seedBuildRoutesSessions(ctx, t, pg.URI, issuer.tokens)
+	seedBuildRoutesSessions(ctx, t, pg, issuer.tokens)
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -160,19 +160,37 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 	}
 }
 
-// seedBuildRoutesSessions applies the auth schema on uri and writes one principal and one live auth-service session
-// row per session issuer minted, pinned at the token's token_version, as the api reads a user access token's sid.
-func seedBuildRoutesSessions(ctx context.Context, t *testing.T, uri string, issuer *edtokens.Issuer) {
+// seedBuildRoutesSessions applies the auth schema on pg and writes one principal and one live auth-service session
+// row per session issuer minted, pinned at the token's token_version, as the api reads a user access token's sid. The
+// auth runtime role is named per call (the server is shared) and dropped when the test ends.
+func seedBuildRoutesSessions(ctx context.Context, t *testing.T, pg *containers.Instance, issuer *edtokens.Issuer) {
 	t.Helper()
-	admin, err := pgxpool.New(ctx, uri)
+	admin, err := pgxpool.New(ctx, pg.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer admin.Close()
-	if _, err := admin.Exec(ctx, "CREATE ROLE build_routes_auth NOLOGIN"); err != nil {
+	name, err := containers.RoleName("build_routes_auth", pg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := authschema.NewValidatedIdentifier(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, "CREATE ROLE "+authschema.Quote(role)+" NOLOGIN"); err != nil {
 		t.Fatalf("auth runtime role: %v", err)
 	}
-	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: "build_routes_auth"}); err != nil {
+	t.Cleanup(func() {
+		drop, err := pgxpool.New(context.Background(), pg.URI)
+		if err != nil {
+			t.Logf("drop auth runtime role: %v", err)
+			return
+		}
+		defer drop.Close()
+		containers.DropRole(drop, name, t.Logf)
+	})
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: name}); err != nil {
 		t.Fatalf("auth schema: %v", err)
 	}
 	for _, session := range issuer.Sessions() {

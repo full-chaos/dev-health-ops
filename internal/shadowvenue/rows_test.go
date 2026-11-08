@@ -33,8 +33,8 @@ func TestDefaultRowsEqualTheContractShadowRows(t *testing.T) {
 			plain++
 		}
 	}
-	if controls != 2 || plain != 99 {
-		t.Fatalf("controls=%d rows=%d, want 2 and 99", controls, plain)
+	if controls != 2 || plain != 95 {
+		t.Fatalf("controls=%d rows=%d, want 2 and 95", controls, plain)
 	}
 }
 

@@ -200,40 +200,43 @@ func TestServiceAccountKeyRoutesMounted(t *testing.T) {
 // Rule 1: a superuser with no membership in any organization gets 200 on all
 // four routes; go-api passes its own id as the actor and reads no database.
 func TestServiceAccountKeyRoutesSuperuserWithoutMembership(t *testing.T) {
-	keys := &fakeKeys{}
-	server, bearer, _, touched, caller := mountedKeyRoutes(t, saKeyStore{superuser: true}, keys)
 	for _, route := range saKeyRoutes {
-		code, body, _ := sendKeyRoute(t, server, bearer, route)
-		if code != http.StatusOK {
-			t.Fatalf("%s: status %d %s, want 200", route.name, code, body)
-		}
-	}
-	want := []string{
-		"list " + saKeyAccount + " " + caller.String(),
-		"issue " + saKeyAccount + " " + caller.String() + " 3600",
-		"rotate " + saKeyAccount + " " + caller.String() + " 600 -",
-		"revoke " + saKeyCredID + " " + caller.String() + " compromised",
-	}
-	if got := keys.taken(); strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("auth calls\n got %q\nwant %q", got, want)
-	}
-	if *touched {
-		t.Fatal("a key route read the go-api database")
+		t.Run(route.name, func(t *testing.T) {
+			keys := &fakeKeys{}
+			server, bearer, _, touched, caller := mountedKeyRoutes(t, saKeyStore{superuser: true}, keys)
+			if code, body, _ := sendKeyRoute(t, server, bearer, route); code != http.StatusOK {
+				t.Fatalf("status %d %s, want 200", code, body)
+			}
+			want := map[string]string{
+				"list":   "list " + saKeyAccount + " " + caller.String(),
+				"issue":  "issue " + saKeyAccount + " " + caller.String() + " 3600",
+				"rotate": "rotate " + saKeyAccount + " " + caller.String() + " 600 -",
+				"revoke": "revoke " + saKeyCredID + " " + caller.String() + " compromised",
+			}[route.name]
+			if got := keys.taken(); len(got) != 1 || got[0] != want {
+				t.Fatalf("auth calls %q, want [%q]", got, want)
+			}
+			if *touched {
+				t.Fatal("a key route read the go-api database")
+			}
+		})
 	}
 }
 
 // An org admin who is no superuser is refused at go-api: 403, and no call
 // reaches auth-service.
 func TestServiceAccountKeyRoutesPlatformOnly(t *testing.T) {
-	keys := &fakeKeys{}
-	server, bearer, _, _, _ := mountedKeyRoutes(t, saKeyStore{admin: true}, keys)
 	for _, route := range saKeyRoutes {
-		if code, body, _ := sendKeyRoute(t, server, bearer, route); code != http.StatusForbidden {
-			t.Fatalf("%s: status %d %s, want 403", route.name, code, body)
-		}
-	}
-	if got := keys.taken(); len(got) != 0 {
-		t.Fatalf("an org admin's request reached auth-service: %q", got)
+		t.Run(route.name, func(t *testing.T) {
+			keys := &fakeKeys{}
+			server, bearer, _, _, _ := mountedKeyRoutes(t, saKeyStore{admin: true}, keys)
+			if code, body, _ := sendKeyRoute(t, server, bearer, route); code != http.StatusForbidden {
+				t.Fatalf("status %d %s, want 403", code, body)
+			}
+			if got := keys.taken(); len(got) != 0 {
+				t.Fatalf("an org admin's request reached auth-service: %q", got)
+			}
+		})
 	}
 }
 

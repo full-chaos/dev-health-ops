@@ -776,7 +776,7 @@ func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
 
 	path := f.proofAccessTokenFile
 	if path == "" {
-		path = strings.TrimSpace(os.Getenv(proofAccessTokenFileEnvVar))
+		path = strings.TrimSpace(secrets.GetenvNamed(proofAccessTokenFileEnvVar))
 	}
 	if path == "" {
 		return nil, nil, fmt.Errorf("%s (or %s) is required: the path of a 0600 file holding a platform admin's user access token, the credential /buildinfo and /query/proof read", proofAccessTokenFileFlag, proofAccessTokenFileEnvVar)

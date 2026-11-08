@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -84,5 +85,23 @@ func TestValueIsRedactedByFormattingLoggingAndJSON(t *testing.T) {
 	}
 	if logged.Kind() != slog.KindString || !strings.Contains(combined, redacted) {
 		t.Fatalf("expected redaction marker, got %s", combined)
+	}
+}
+
+func TestResolveEmptyFileErrorIsErrEmptyValue(t *testing.T) {
+	for name, body := range map[string]string{"zero bytes": "", "LF": "\n", "CR": "\r", "CRLF": "\r\n"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "secret")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, set, err := Resolve("TEST_EMPTY", mapLookup(map[string]string{"TEST_EMPTY_FILE": path}))
+			if set || !errors.Is(err, ErrEmptyValue) {
+				t.Fatalf("Resolve() set=%v err=%v; want errors.Is ErrEmptyValue", set, err)
+			}
+			if got, want := err.Error(), "TEST_EMPTY_FILE contains an empty value"; got != want {
+				t.Fatalf("Resolve() error text = %q; want %q", got, want)
+			}
+		})
 	}
 }

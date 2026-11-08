@@ -72,7 +72,7 @@ shows where that happens today.
 | `org_invite_token` | active | human | |
 | `license_key` | active | infrastructure | |
 | `infrastructure_deployment_credentials` | active | infrastructure | |
-| `effective_principal_envelope` | active | human | |
+| `effective_principal_envelope` | retired | human | no endpoint-profile row accepts it; query-api refuses it on every route |
 | `refresh_credential` | active | human | |
 | `user_access_token` | **unconsumed** | human | |
 | `internal_svc_authsess_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |

@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 // oldParserSet is the query-api REST pattern set the retired source parse
@@ -150,9 +149,13 @@ func TestNoAPIV1RegistrationOutsideTheTable(t *testing.T) {
 // restTestEnv switches every route on and gives each builder the settings it needs to
 // construct (nothing is dialled by construction: the read client and the pools connect
 // on first use).
-func restTestEnv(t *testing.T) (getenv getenvFunc, bearer string) {
+// restTestEnv configures every REST route with its switch on, and returns an accepted bearer and the users store it is
+// checked against: the HS256 edge token on the edge verifier that does not route by row (no AUTH_ACCESS_TOKEN_ISSUER),
+// the one bearer an undeclared method can carry past authentication to the handler's own method check. The envelope
+// is a retired class.
+func restTestEnv(t *testing.T) (getenv getenvFunc, bearer string, users edgeUserStore) {
 	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +176,7 @@ func restTestEnv(t *testing.T) (getenv getenvFunc, bearer string) {
 		"GO_API_ENVELOPE_JWKS_PATH":    jwksPath,
 		"GO_API_ENVELOPE_ISSUER":       iaIssuer,
 		"GO_API_ENVELOPE_AUDIENCE":     iaAudience,
+		edgeJWTSecretEnvVar:            ecSecret,
 	}
 	for _, name := range []string{
 		"GO_API_DRILLDOWN_ISSUES_ENABLED", "GO_API_DRILLDOWN_PRS_ENABLED", "GO_API_EXPLAIN_ENABLED", "GO_API_FILTER_OPTIONS_ENABLED",
@@ -185,7 +189,8 @@ func restTestEnv(t *testing.T) (getenv getenvFunc, bearer string) {
 	} {
 		env[name] = "true"
 	}
-	return func(name string) string { return env[name] }, iaEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "admin"})
+	bearer = ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
+	return func(name string) string { return env[name] }, bearer, ecMemberStore()
 }
 
 // needsLiveWriteConnection names the builders that open a second, WRITE ClickHouse
@@ -208,9 +213,9 @@ var allMethods = []string{
 // every other method. A handler that serves a method the row does not declare, or
 // refuses one it declares, fails here.
 func TestEachMountServesExactlyTheMethodsItDeclares(t *testing.T) {
-	getenv, bearer := restTestEnv(t)
+	getenv, bearer, users := restTestEnv(t)
 	for _, group := range restGroups {
-		handlers, cleanup, ok, err := group.Build(getenv, nil)
+		handlers, cleanup, ok, err := group.Build(getenv, users)
 		if needsLiveWriteConnection[group.Builder] {
 			if err == nil && ok {
 				t.Errorf("%s builds without a live ClickHouse: drop it from needsLiveWriteConnection", group.Builder)

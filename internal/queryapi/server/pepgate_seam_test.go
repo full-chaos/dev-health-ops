@@ -334,32 +334,11 @@ func TestSeamRESTCellOffIsTodaysPath(t *testing.T) {
 	}
 }
 
-// P14: the exempt class (envelope) never asks, with every cell on and a PDP that denies: today's read, the Legacy
-// scope, one exempt count. The routed HS256 edge token, the other exempt class on main f496ee5d, is retired
-// (CHAOS-13126); its caller on the user access token is checked below against main's read.
+// P14: the exempt classes of main f496ee5d are retired: the routed HS256 edge token (CHAOS-13126) and the
+// effective-principal envelope (TestSeamRESTEnvelopeIsTheRetiredClass). The caller of the routed HS256 edge token on
+// its user access token is checked below against main's read.
 func TestSeamRESTExemptCallersStayOnTodaysPath(t *testing.T) {
 	for _, route := range seamRoutes() {
-		t.Run(route.name, func(t *testing.T) {
-			envelope := func(s *seamStack) string { return s.envelope }
-			legacyEnvelope := legacyRun(t, route, envelope)
-			decider := seamDenier(t)
-			gate, reader := seamGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
-			s := newSeamStack(t, route)
-			got := s.run(gate, envelope(s))
-			if !got.same(legacyEnvelope) {
-				t.Fatalf("envelope differs from today's path:\n got %d %q\nwant %d %q", got.status, got.body, legacyEnvelope.status, legacyEnvelope.body)
-			}
-			if len(s.seen) != 1 || s.seen[0].Scope != pepgate.Legacy(ecOrg.String()) {
-				t.Fatalf("envelope: handler saw %+v, want Scope Legacy", s.seen)
-			}
-			if decider.calls.Load() != 0 {
-				t.Fatalf("an exempt caller asked the PDP %d times", decider.calls.Load())
-			}
-			counts := (&gatedREST{reader: reader}).counter(t, "dev_health_query_api_pdp_exempt_total")
-			if counts["action="+route.action+",class=effective_principal_envelope"] != 1 {
-				t.Fatalf("exempt counts %v, want one envelope", counts)
-			}
-		})
 		// The caller of the routed HS256 edge token on main f496ee5d (exempt: today's read, 0 PDP calls) now comes on
 		// its user access token, which the PDP judges: with the real Evaluator over the catalog for a member or an
 		// admin of the org (as production policy answers), the enforced run is main's read, after one PDP call.

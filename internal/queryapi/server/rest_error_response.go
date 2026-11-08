@@ -232,20 +232,16 @@ func jwtHeaderAlg(token string) (string, bool) {
 // attach to the request context, matching every REST route's existing
 // entryHandler shape.
 //
-// A real user's browser never carries the effective-principal envelope
-// -- it carries the edge access token services/auth.py mints (HS256,
-// JWT_SECRET_KEY), which ingress path-splitting forwards to this binary
-// unchanged. edgeVerifier is that token's verifier; it is nil whenever
-// the pod has not been given the edge credential's key material yet (see
-// this repo's edge verifier env-var contract), in which case every
-// bearer token, whatever its shape, goes through the envelope verifier
-// alone. When edgeVerifier is non-nil, a token whose own JWT header names
-// alg=HS256 is routed to it instead of the envelope verifier (see
-// jwtHeaderAlg); every other token -- including a genuine EdDSA envelope
-// -- is verified exactly as before, unaffected by edgeVerifier's
-// presence. Either verifier's failure answers the identical
-// "Invalid or expired token" body: get_current_user never distinguishes
-// WHY a token was rejected, only THAT it was.
+// The accepted bearers are the user access token, judged by the route's
+// row (authenticateRESTRouted), and, on a pod whose edge verifier is not
+// routed, the HS256 edge access token (a JWT header naming alg=HS256, see
+// jwtHeaderAlg). edgeVerifier is nil when the pod has no edge credential;
+// then no bearer is accepted. Every other bearer, the retired
+// effective-principal envelope included, is an unaccepted class: it gets
+// the "Invalid or expired token" body a token that fails verification
+// gets, because get_current_user never distinguishes WHY a token was
+// rejected, only THAT it was. verifier is not read: the envelope class is
+// retired and no route verifies it any more.
 func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier, edgeVerifier *principal.EdgeVerifier, component string) (authctx.Claims, bool) {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
@@ -294,15 +290,8 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 		}
 	}
 
-	verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-	claims, err := verifier.Verify(verifyCtx, token)
-	if err != nil {
-		writeRESTUnauthorized(w, r, component, "Invalid or expired token")
-		return authctx.Claims{}, false
-	}
-	pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassEnvelope, routeProfile(r))
-	observeRESTShadow(r, token, claims.OrgID, policy.ShadowCallerMember, claims.ImpersonationActive || (claims.ImpersonatedBy != nil && *claims.ImpersonatedBy != ""), true)
-	return legacyClaims(claims.OrgID), true
+	writeRESTUnauthorized(w, r, component, "Invalid or expired token")
+	return authctx.Claims{}, false
 }
 
 // echoRequestID puts the caller's X-Request-Id on the response so an operator

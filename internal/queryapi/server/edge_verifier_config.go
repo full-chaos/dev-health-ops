@@ -18,8 +18,8 @@ import (
 // already reads.
 //
 //   - GO_API_EDGE_JWT_SECRET (REQUIRED to enable edge-token acceptance;
-//     absent means every REST route keeps accepting the envelope alone --
-//     see buildEdgeVerifierFromEnv's own doc comment): the SAME shared
+//     absent, with no AUTH_ACCESS_TOKEN_ISSUER, means a REST route accepts
+//     no bearer -- see buildEdgeVerifierFromEnv's own doc comment): the SAME shared
 //     secret Python's JWT_SECRET_KEY names (services/auth.py's
 //     _get_jwt_secret) -- by secretKeyRef, never inline, at the SAME
 //     Secret key ("JWT_SECRET_KEY") the chart already defines for
@@ -53,12 +53,8 @@ const (
 // Unlike the envelope verifier's jwksPath/issuer/audience trio (already
 // required for a route to mount at all, per each route's own
 // loadXRouteConfig), the edge trio is OPTIONAL: a route whose pod lacks
-// GO_API_EDGE_JWT_SECRET keeps mounting and keeps accepting the envelope
-// alone, rather than refusing to start. This is deliberate -- an existing
-// deployment predates the chart change that will set this variable (a
-// deploy-side follow-up), and these routes must not regress THAT
-// deployment's envelope-only traffic while the chart change is still
-// pending.
+// GO_API_EDGE_JWT_SECRET and AUTH_ACCESS_TOKEN_ISSUER keeps mounting, rather
+// than refusing to start, and accepts no bearer (the envelope is retired).
 //
 // A non-nil, misconfigured secret (present but under 32 characters) IS a
 // hard error: unlike "not configured at all", that is an operator typo

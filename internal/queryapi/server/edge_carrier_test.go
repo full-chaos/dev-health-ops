@@ -24,7 +24,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 const (
@@ -424,16 +423,16 @@ func TestEdgeCarrier_PlatformWideOrgSkipsMembershipCheck(t *testing.T) {
 	}
 }
 
-// TestEdgeCarrier_ClaimsMatchTheEnvelopeCarrierForTheSameIdentity is D2905's
-// differential requirement: for the SAME logical identity, the envelope
-// path (principal.Verifier) and the edge path (policy.Authenticator) must
+// TestEdgeCarrier_ClaimsMatchTheHeaderCarrierForTheSameIdentity is D2905's
+// differential requirement, against the carrier left beside the edge path
+// once the envelope class was retired: for the SAME logical identity, the
+// internal identity headers and the edge path (policy.Authenticator) must
 // produce byte-identical authctx.Claims.
-func TestEdgeCarrier_ClaimsMatchTheEnvelopeCarrierForTheSameIdentity(t *testing.T) {
-	verifier, priv := iaVerifier(t)
-	envelopeHandler, envelopeSeen := iaDispatch(t, verifier)
-	envelopeToken := iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin", IsSuperuser: true, IsSuperuserVerified: true, ImpersonationActive: false})
-	if code := iaPost(t, envelopeHandler, func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+envelopeToken) }); code != http.StatusOK {
-		t.Fatalf("envelope carrier: %d", code)
+func TestEdgeCarrier_ClaimsMatchTheHeaderCarrierForTheSameIdentity(t *testing.T) {
+	verifier, _ := iaVerifier(t)
+	headerHandler, headerSeen := iaDispatch(t, verifier)
+	if code := iaPost(t, headerHandler, iaHeaders(ecOrg.String(), "admin", true, false)); code != http.StatusOK {
+		t.Fatalf("header carrier: %d", code)
 	}
 
 	store := &fakeEdgeStore{
@@ -448,11 +447,11 @@ func TestEdgeCarrier_ClaimsMatchTheEnvelopeCarrierForTheSameIdentity(t *testing.
 		t.Fatalf("edge carrier: %d, body=%s", rec.Code, rec.Body.String())
 	}
 
-	if len(*envelopeSeen) != 1 || len(*edgeSeen) != 1 {
-		t.Fatalf("expected exactly one resolver run per carrier: envelope=%+v edge=%+v", *envelopeSeen, *edgeSeen)
+	if len(*headerSeen) != 1 || len(*edgeSeen) != 1 {
+		t.Fatalf("expected exactly one resolver run per carrier: headers=%+v edge=%+v", *headerSeen, *edgeSeen)
 	}
-	if (*envelopeSeen)[0] != (*edgeSeen)[0] {
-		t.Fatalf("claims disagree between carriers: envelope=%+v edge=%+v", (*envelopeSeen)[0], (*edgeSeen)[0])
+	if (*headerSeen)[0] != (*edgeSeen)[0] {
+		t.Fatalf("claims disagree between carriers: headers=%+v edge=%+v", (*headerSeen)[0], (*edgeSeen)[0])
 	}
 }
 

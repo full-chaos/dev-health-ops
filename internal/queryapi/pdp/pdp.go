@@ -51,10 +51,8 @@ const (
 	// ClientService names query-api to the PDP; it confers nothing.
 	ClientService = "dev-health-query-api"
 
-	// The credential classes that stay on today's authorization path, never asking the PDP, until HS256 retires
-	// (ticket 10457) and the envelope retires (W11).
-	ClassHS256    = "ops_access_token_hs256"
-	ClassEnvelope = "effective_principal_envelope"
+	// ClassHS256 stays on today's authorization path, never asking the PDP, until HS256 retires (ticket 10457).
+	ClassHS256 = "ops_access_token_hs256"
 
 	callTimeout    = 2 * time.Second
 	unknownAction  = "unknown"
@@ -69,7 +67,7 @@ const (
 )
 
 // ExemptClasses is the explicit exempt list.
-var ExemptClasses = []string{ClassHS256, ClassEnvelope}
+var ExemptClasses = []string{ClassHS256}
 
 // Results are the closed values of the result label.
 const (

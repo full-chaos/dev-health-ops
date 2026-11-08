@@ -13,7 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 var enabledSwitch = regexp.MustCompile(`"(GO_API_[A-Z_]+_ENABLED)"`)
@@ -43,7 +47,12 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 		defer closeCancel()
 		_ = pg.Close(closeCtx)
 	})
-	pub, priv, err := ed25519.GenerateKey(nil)
+	// The authenticated method probe below presents the HS256 edge token of a seeded member: with no
+	// AUTH_ACCESS_TOKEN_ISSUER the edge verifier does not route by row, so an undeclared method reaches the
+	// handler's own method check. The envelope is a retired class.
+	pgschema.ApplyURI(ctx, t, pg.URI)
+	member := seedBuildRoutesMember(ctx, t, pg.URI)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +64,7 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 		"GO_API_ENVELOPE_AUDIENCE":     itTestAudience,
 		"DEV_HEALTH_ENV":               "ci",
 		"GO_API_PROOF_ROUTE_ENABLED":   "true",
-		edgeJWTSecretEnvVar:            "build-routes-edge-secret-32-bytes-long!!",
+		edgeJWTSecretEnvVar:            edgeTestSecret,
 	}
 	// Every route switch the source names, on.
 	for _, name := range switchNames(t) {
@@ -108,7 +117,9 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 	// pattern does not declare and is not for every method it declares. This is the row
 	// set the unit test cannot build (the two explain builders open a write ClickHouse
 	// connection at construction), so it covers all 24 patterns on the real plane.
-	bearer := signTestEnvelope(t, priv, "org-1")
+	claims := validTestEdgeClaims(edgeUsersOrg)
+	claims["sub"], claims["tv"] = member.String(), 0
+	bearer := signTestEdgeToken(t, claims)
 	declared := map[string]map[string]bool{}
 	for _, route := range RESTRoutes() {
 		if declared[route.Pattern] == nil {
@@ -175,4 +186,29 @@ func switchNames(t *testing.T) []string {
 		t.Fatalf("found only %d route switches in the source: %v", len(names), names)
 	}
 	return names
+}
+
+// seedBuildRoutesMember seeds an active user with a membership in edgeUsersOrg, the organization of the probe's token.
+func seedBuildRoutesMember(ctx context.Context, t *testing.T, uri string) uuid.UUID {
+	t.Helper()
+	seed, err := pgxpool.New(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
+	id := uuid.New()
+	if _, err := seed.Exec(ctx, `INSERT INTO users
+	(id, email, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, 'local', true, false, false, 0, now(), now())`, id, id.String()+"@example.test"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := seed.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+VALUES ($1, 'build-routes', 'Build routes', 'community', 'stripe', true, now(), now())`, edgeUsersOrg); err != nil {
+		t.Fatalf("seed org: %v", err)
+	}
+	if _, err := seed.Exec(ctx, `INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), edgeUsersOrg, id); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+	return id
 }

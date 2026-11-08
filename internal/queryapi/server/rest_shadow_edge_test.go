@@ -19,10 +19,11 @@ import (
 )
 
 // CHAOS-13073 r1 (acp ruling D6714 / 13106 option D): a delegated token is counted impersonation_refused before any skip
-// class, on the routed and the unrouted path, with or without an organization, for HS256, the EdDSA user access token
-// and the EdDSA envelope the PDP cannot judge. A non-delegated HS256 token is skipped/hs256, and an org-required
-// refusal is observed on both paths. Routed (issuer set) an HS256 token is the retired class: 401 alg_not_allowed
-// before any shadow observation, delegated or not. Every other cell keeps its legacy answer.
+// class, on the routed and the unrouted path, with or without an organization, for HS256 and the EdDSA user access
+// token. A non-delegated HS256 token is skipped/hs256, and an org-required refusal is observed on both paths. Routed
+// (issuer set) an HS256 token is the retired class: 401 alg_not_allowed before any shadow observation, delegated or not.
+// The effective-principal envelope is a retired class on both paths: the 401 of an unaccepted bearer and no shadow
+// observation, delegated or not. Every other cell keeps its legacy answer.
 func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 	forbidden := answer{http.StatusForbidden, `{"detail":"Organization context required"}`}
 	served := answer{http.StatusOK, fmt.Sprintf(`{"org":%q}`, ecOrg.String())}
@@ -38,7 +39,6 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 		status    answer
 		want      string
 	}
-	envelopeOrgless := answer{http.StatusOK, `{"org":""}`}
 	algRefused := answer{http.StatusUnauthorized, restRefusal}
 	var cells []cell
 	for _, routed := range []bool{true, false} {
@@ -51,8 +51,8 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 			cell{path + " hs256 org delegated", routed, "hs256", true, true, hsServed, hsRefused},
 			cell{path + " hs256 orgless delegated", routed, "hs256", false, true, hsForbidden, hsRefused},
 			cell{path + " hs256 orgless not delegated", routed, "hs256", false, false, hsForbidden, hsSkipped},
-			cell{path + " envelope org delegated", routed, "envelope", true, true, served, refused},
-			cell{path + " envelope orgless delegated", routed, "envelope", false, true, envelopeOrgless, refused},
+			cell{path + " envelope org delegated", routed, "envelope", true, true, algRefused, ""},
+			cell{path + " envelope orgless delegated", routed, "envelope", false, true, algRefused, ""},
 		)
 	}
 	cells = append(cells,

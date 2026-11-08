@@ -76,7 +76,6 @@ query-api:
 | Class | Rows |
 | --- | --- |
 | `user_access_token` | 35 |
-| `effective_principal_envelope` | 34 |
 
 auth-service:
 
@@ -101,7 +100,7 @@ go-api and query-api take a bearer access token. Four access-token shapes exist.
 | Legacy edge token | `ops_access_token_hs256` | `alg` HS256 | none: the class is `retired`, every row refuses it (`alg_not_allowed`) |
 | User access token | `user_access_token` | `alg` EdDSA, `typ` `at+jwt`, audience `dev-health-api` | go-api (196 rows), query-api only when `AUTH_ACCESS_TOKEN_ISSUER` is set, auth-service lists the class on 6 session, identity and change-password rows, but the validator text of those rows describes an HS256 token only |
 | Workload token | `workload_token` | `typ` `workload+jwt` | go-api (4 rows), auth-service internal routes |
-| Effective principal envelope | `effective_principal_envelope` | `alg` EdDSA | query-api |
+| Effective principal envelope | `effective_principal_envelope` | `alg` EdDSA | none: the class is `retired`, query-api refuses it on every route as an unaccepted bearer |
 
 Sources: `class_disambiguator` and `access_token_validation` in `endpoint-profiles.go-api.json`; the validator text of `endpoint-profiles.query-api.json`; `internal/queryapi/server/rest_error_response.go` (`authenticateRESTRequest`).
 

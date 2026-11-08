@@ -19,13 +19,13 @@ import (
 //
 //   - the internal identity headers (the in-cluster caller states the
 //     identity; no token), or
-//   - the effective-principal envelope bearer (the migration carrier, until
-//     the Python edge stops minting it), or
-//   - (CHAOS-6263 PR (a), /query only: edgeAuth non-nil) the user's own
-//     edge access token -- the SAME HS256 bearer authenticateRESTRequest
-//     already accepts on every REST route, disambiguated from the
-//     envelope by the token's own JWT `alg` header, exactly as that
-//     function does.
+//   - (CHAOS-6263 PR (a), /query only: edgeAuth non-nil) the caller's own
+//     bearer through the edge carrier: the user access token once auth
+//     routes by row, or the HS256 edge access token, picked by the token's
+//     own JWT header, as authenticateRESTRequest picks it.
+//
+// Any other bearer, the retired effective-principal envelope included, is
+// an unaccepted class: the bare 401 an invalid bearer always got.
 //
 // A request carrying both the header carrier and ANY Authorization value
 // is refused, never resolved by preferring one: two carriers can name two
@@ -38,9 +38,9 @@ import (
 // reaches: a browser could set the identity headers itself. Those routes
 // keep authenticateRESTRequest.
 //
-// verifier may be nil only where a test exercises the no-carrier refusal.
-// edgeAuth/edgeStore are nil for /buildinfo (this credential is /query-only,
-// per D2898/D2905) and for a pod with no GO_API_EDGE_JWT_SECRET configured.
+// verifier is not read: the envelope class is retired. edgeAuth/edgeStore
+// are nil for /buildinfo (this credential is /query-only, per D2898/D2905)
+// and for a pod with no GO_API_EDGE_JWT_SECRET configured.
 func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, bool) {
 	if refuseAmbiguousCarrier(w, r) {
 		return authctx.Claims{}, false
@@ -75,17 +75,9 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 		}
 	}
 
-	verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-	claims, err := verifier.Verify(verifyCtx, token)
-	if err != nil {
-		// principal.Verify logs and counts its own rejection reason; the
-		// internal-path outcome is counted here so the carrier series is whole.
-		internalidentity.RecordOutcome("envelope", "invalid")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return authctx.Claims{}, false
-	}
-	internalidentity.RecordOutcome("envelope", "accepted")
-	return withLegacyScope(authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}), true
+	internalidentity.RecordOutcome("envelope", "invalid")
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+	return authctx.Claims{}, false
 }
 
 // authenticateEdgeCarrier is /query's edge-access-token path (CHAOS-6263

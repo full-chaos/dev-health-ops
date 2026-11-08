@@ -17,7 +17,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -183,7 +182,7 @@ func TestQueryReadsEachIdentityFactOncePerRequest(t *testing.T) {
 	session := &policy.Impersonation{AdminUserID: ecUser, TargetUserID: ecTarget, TargetOrgID: irTargetOrg, TargetRole: "viewer"}
 	plain := policy.UserState{IsActive: true, TokenVersion: 5}
 	super := policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
-	verifier, priv := iaVerifier(t)
+	verifier, _ := iaVerifier(t)
 	for name, tc := range map[string]struct {
 		state    policy.UserState
 		sessions map[uuid.UUID]*policy.Impersonation
@@ -193,7 +192,6 @@ func TestQueryReadsEachIdentityFactOncePerRequest(t *testing.T) {
 		"edge token, member":                  {plain, nil, irBearer(irToken(t, false)), irFacts(irUser(), irMember(ecOrg))},
 		"edge token, superuser":               {super, nil, irBearer(irToken(t, true)), irFacts(irUser(), irSession(), irMember(ecOrg))},
 		"edge token, impersonating superuser": {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, irBearer(irToken(t, true)), irFacts(irUser(), irSession())},
-		"envelope":                            {plain, nil, irBearer(iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"})), ""},
 		"internal headers":                    {plain, nil, iaHeaders(ecOrg.String(), "admin", false, false), ""},
 	} {
 		store := newCountingIdentityStore(&fakeEdgeStore{

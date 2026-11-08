@@ -144,6 +144,14 @@ func TestQueryAPIIssuerUnsetAnswersAreMainsAnswers(t *testing.T) {
 		t.Fatalf("%d answers, golden has %d", len(got), len(want))
 	}
 	for _, key := range keys {
+		if strings.HasSuffix(key, " envelope") {
+			// The effective-principal envelope is a retired class: on every path it answers as the garbage bearer does,
+			// where main served it (200) on REST and /query.
+			if garbage := strings.TrimSuffix(key, "envelope") + "garbage"; got[key] != got[garbage] {
+				t.Errorf("%s: got %+v, want the garbage bearer's %+v", key, got[key], got[garbage])
+			}
+			continue
+		}
 		if got[key] != want[key] {
 			t.Errorf("%s: got %+v, main answered %+v", key, got[key], want[key])
 		}

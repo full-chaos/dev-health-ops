@@ -35,6 +35,13 @@ var platformAdminLegacyGoAPIActions = map[string]string{
 	"license.read": "apiservice TestPlatformAdminNoMembershipBillingAndLicenseReadsEqualLegacyWired, the 2 license.read rows",
 }
 
+// platformAdminLegacyWebActions maps each web action whose legacy route admits a platform admin with no membership
+// row in the organization of its session to its executed legacy cell (dev-health-web, run against a real ops stack).
+var platformAdminLegacyWebActions = map[string]string{
+	"acr.credential.issue": "web 440ac151 tests/acr-legacy/legacy-cells.proof.ts:447 device approval and :457 consent approve " +
+		"(platform admin, no membership row), recording run legacy-cells-4: 200 approved, record f8aff1566d30",
+}
+
 var adminGuardValidators = []string{"policy.Admin:", "policy.AdminOrg:"}
 
 var platformAdminProfiles = []string{"go-api", "query-api", "auth-service"}
@@ -134,6 +141,12 @@ func TestPlatformAdminFlagIsExactlyTheAdminGuardOrganizationActions(t *testing.T
 	for a := range platformAdminLegacyGoAPIActions {
 		if !organization[a] {
 			t.Errorf("listed go-api action %s is not an organization action", a)
+		}
+		want[a] = true
+	}
+	for a := range platformAdminLegacyWebActions {
+		if !organization[a] {
+			t.Errorf("listed web action %s is not an organization action", a)
 		}
 		want[a] = true
 	}

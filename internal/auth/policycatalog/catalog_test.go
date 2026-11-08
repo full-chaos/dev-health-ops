@@ -673,6 +673,28 @@ func TestEveryOrganizationRoleHoldsAcrEvidenceReadAndCredentialIssue(t *testing.
 	}
 }
 
+// Product rule 1 and the executed legacy cells: a platform admin with no membership row approves a device and
+// gives consent in the organization of its session, so acr.credential.issue carries the platform-admin flag.
+func TestAcrCredentialIssueAllowsAPlatformAdminWithNoMembership(t *testing.T) {
+	a, err := Default().Action("acr.credential.issue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.PlatformAdmin {
+		t.Fatalf("acr.credential.issue PlatformAdmin = false, want true")
+	}
+}
+
+// Legacy refuses the ACR repository reads to a platform admin with no membership row in its token's
+// organization, so no repository action carries the flag.
+func TestNoRepositoryActionCarriesThePlatformAdminFlag(t *testing.T) {
+	for _, a := range Default().Actions() {
+		if a.ResourceKind == "repository" && a.PlatformAdmin {
+			t.Errorf("repository action %s carries platform_admin allowed", a.ID)
+		}
+	}
+}
+
 func TestLoadReadsPlatformAdminOnlyOnAnOrganizationAction(t *testing.T) {
 	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
 	load := func(scope, kind, member string) (*Catalog, error) {
@@ -709,7 +731,7 @@ func TestThePlatformAdminActionsAreTheAdminGuardAndTheLegacyQueryAPIAndBillingAc
 		}
 	}
 	sort.Strings(got)
-	want := []string{"analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read",
+	want := []string{"acr.credential.issue", "analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read",
 		"integrations.write", "license.read", "members.invite", "members.manage", "metrics.read", "reports.write",
 		"settings.write", "teams.write", "work_items.read"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {

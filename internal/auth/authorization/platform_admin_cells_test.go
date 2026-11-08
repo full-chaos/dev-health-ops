@@ -15,7 +15,7 @@ import (
 // the go-api billing and license reads whose legacy handlers admit an admin.billing holder before any membership read.
 // The catalog flag must name exactly these.
 var platformAdminActions = []string{
-	"analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read", "integrations.write",
+	"acr.credential.issue", "analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read", "integrations.write",
 	"license.read", "members.invite", "members.manage", "metrics.read", "reports.write", "settings.write",
 	"teams.write", "work_items.read",
 }

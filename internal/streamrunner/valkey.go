@@ -26,9 +26,9 @@ func NewValkeyTransport(client valkeygo.Client) (*ValkeyTransport, error) {
 }
 
 // NewSharedValkeyTransport creates a transport whose client is owned by a
-// process-level lifecycle component. The ingest profile runs independent
-// internal-ingest and product-telemetry loops over one bounded client; neither
-// loop may close that shared client while its sibling is still draining.
+// process-level lifecycle component. Every loop of a stream-runner profile runs
+// over one bounded client, so no loop may close that shared client while a
+// sibling loop is still draining.
 func NewSharedValkeyTransport(client valkeygo.Client) (*ValkeyTransport, error) {
 	return newValkeyTransport(client, false)
 }

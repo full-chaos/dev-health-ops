@@ -23,12 +23,22 @@ type Principal struct {
 	Name, Email, UUID, Org, Role, PasswordFile string
 }
 
+// superuserOrgRole is the role prefix of a platform superuser whose sign-in names an org it has no membership in when
+// the run begins: the principal of the superuser-O cell.
+const superuserOrgRole = "platform_admin_org"
+
+// IsSuperuserOrg reports whether p is a superuser-O principal.
+func (p Principal) IsSuperuserOrg() bool { return strings.HasPrefix(p.Role, superuserOrgRole) }
+
 // Caller is the shadow caller kind the legacy guard gives p (policy.ShadowCaller).
 func (p Principal) Caller() string {
 	return policy.ShadowCaller(strings.HasPrefix(p.Role, "platform_admin"), p.Role)
 }
 
 type seed struct{ Name, UUID, Org string }
+
+// superuserOKind is the principals-file kind that lists a superuser-O uuid; only a listed uuid may carry the role.
+const superuserOKind = "superuser_o"
 
 // Venue is the principals file: the proof orgs by label, the principals, and the seed rows by kind.
 type Venue struct {
@@ -55,6 +65,8 @@ func ParsePrincipals(raw []byte) (Venue, error) {
 		return Venue{}, fmt.Errorf("principals: the first line is not %q", principalsHeader)
 	}
 	names := map[string]bool{}
+	listedSO := map[string]bool{}
+	byUUID, byEmail := map[string]Principal{}, map[string]Principal{}
 	for n, line := range lines[1:] {
 		f := strings.Split(line, "\t")
 		if len(f) != 7 {
@@ -82,7 +94,19 @@ func ParsePrincipals(raw []byte) (Venue, error) {
 			if !filepath.IsAbs(pw) || !isUUID(id) || email == none {
 				return Venue{}, fmt.Errorf("principals: line %d: principal %s needs an email, a uuid and an absolute password file", n+2, name)
 			}
+			if p.IsSuperuserOrg() && org == none {
+				return Venue{}, fmt.Errorf("principals: line %d: superuser-O principal %s needs an org", n+2, name)
+			}
+			if err := checkRepeat(n+2, p, byUUID, byEmail); err != nil {
+				return Venue{}, err
+			}
+			byUUID[p.UUID], byEmail[p.Email] = p, p
 			v.Principals = append(v.Principals, p)
+		case superuserOKind:
+			if !isUUID(id) {
+				return Venue{}, fmt.Errorf("principals: line %d: %s needs a uuid", n+2, superuserOKind)
+			}
+			listedSO[strings.ToLower(id)] = true
 		default:
 			if _, dup := v.seeds[kind]; !dup {
 				v.seeds[kind] = seed{Name: name, UUID: strings.ToLower(id), Org: org}
@@ -90,6 +114,9 @@ func ParsePrincipals(raw []byte) (Venue, error) {
 		}
 	}
 	for _, p := range v.Principals {
+		if p.IsSuperuserOrg() && !listedSO[p.UUID] {
+			return Venue{}, fmt.Errorf("principals: superuser-O principal %s has uuid %s, which no %s line lists: not listed, so no exemption", p.Name, p.UUID, superuserOKind)
+		}
 		if _, ok := v.Orgs[p.Org]; !ok && p.Org != none {
 			return Venue{}, fmt.Errorf("principals: principal %s names org %q, which the file does not list", p.Name, p.Org)
 		}
@@ -98,6 +125,21 @@ func ParsePrincipals(raw []byte) (Venue, error) {
 		}
 	}
 	return v, nil
+}
+
+// checkRepeat refuses a principal whose uuid or email another principal has, unless both are platform admins and the
+// uuid and the email are the pair the first one has: one platform admin signs in to several orgs under several names.
+func checkRepeat(line int, p Principal, byUUID, byEmail map[string]Principal) error {
+	platform := func(q Principal) bool { return strings.HasPrefix(q.Role, "platform_admin") }
+	for _, other := range []Principal{byUUID[p.UUID], byEmail[p.Email]} {
+		if other.Name == "" {
+			continue
+		}
+		if !platform(p) || !platform(other) || other.UUID != p.UUID || other.Email != p.Email {
+			return fmt.Errorf("principals: line %d: principal %s repeats the uuid or email of %s; only platform admins may share a user, with the same uuid and email", line, p.Name, other.Name)
+		}
+	}
+	return nil
 }
 
 // Slot is one request of a run, and after the run its timing and HTTP status. A gap slot (Note "gap: ...") is a cell
@@ -114,6 +156,13 @@ type Slot struct {
 	// Destructive marks a slot of a destructive row; the driver holds it to the frozen throwaway ids before it sends.
 	// The slots file does not carry it.
 	Destructive bool
+	// WantSub and WantOrg are the sub and org claim the plan expects the slot's token to carry (WantOrg "-" = none); the
+	// Claim fields are what the token carried, read back locally when the drive began. Body digests (never the body) are
+	// of the answer.
+	WantSub, WantOrg, ClaimSub, ClaimOrg string
+	ClaimExp                             time.Time
+	BodyLen                              int
+	BodySHA, BodyNormSHA                 string
 }
 
 // Gap reports whether s was not sent.
@@ -198,6 +247,9 @@ func MakePlan(rows []Row, v Venue, o PlanOptions) (Plan, error) {
 	var plan Plan
 	add := func(s Slot) {
 		s.Seq = len(plan.Slots) + 1
+		if p, ok := v.Principal(s.Principal); ok {
+			s.WantSub, s.WantOrg = WirePrincipal(p.UUID), v.orgClaim(p.Org)
+		}
 		plan.Slots = append(plan.Slots, s)
 	}
 	extGap := func(row Row) string {
@@ -324,6 +376,9 @@ func (v Venue) checkPool(o PlanOptions) error {
 		}
 	}
 	for _, p := range v.Principals {
+		if p.IsSuperuserOrg() {
+			continue
+		}
 		switch {
 		case pool[p.Org] && !o.Frozen.ids[p.UUID]:
 			return fmt.Errorf("plan: principal %s of pool org %s is not in the frozen throwaway ids", p.Name, p.Org)
@@ -351,7 +406,7 @@ func (v Venue) cells(row Row, org string, borrow bool) []cell {
 		var same, other *Principal
 		for i := range v.Principals {
 			p := &v.Principals[i]
-			if p.Caller() != kind {
+			if p.Caller() != kind || p.IsSuperuserOrg() {
 				continue
 			}
 			if kind == policy.ShadowCallerSuperuser || p.Org == org {
@@ -371,7 +426,21 @@ func (v Venue) cells(row Row, org string, borrow bool) []cell {
 			out = append(out, cell{caller: kind, principal: none, gap: "gap: no " + kind + " principal for org " + org})
 		}
 	}
+	for i := range v.Principals {
+		if p := &v.Principals[i]; p.IsSuperuserOrg() && p.Org == org {
+			out = append(out, cell{caller: CallerSuperuserOrg, principal: p.Name})
+			break
+		}
+	}
 	return out
+}
+
+// orgClaim is the org claim a principal's token must carry: the id of its org label, "-" for none.
+func (v Venue) orgClaim(label string) string {
+	if label == none {
+		return none
+	}
+	return v.Orgs[label]
 }
 
 // resolveRow resolves row's path and body in org and holds them to the route and to JSON.

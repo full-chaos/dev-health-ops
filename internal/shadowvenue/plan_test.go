@@ -37,7 +37,8 @@ func testPrincipals(t *testing.T) (Venue, string) {
 		"principal\towner-C\tc@example.test\t" + testOwner + "\tC\towner\t" + pw("owner-c") + "\n" +
 		"team\tp-team\t-\t" + testTeam + "\tA\t-\t-\n" +
 		"setting\tgeneral/p_key\t-\t-\tA\t-\t-\n" +
-		"source\tMISSING: no credential\t-\t-\tA\t-\t-\n"
+		"source\tMISSING: no credential\t-\t-\tA\t-\t-\n" +
+		"superuser_o\tsuperuser-O\t-\t88888888-8888-4888-8888-888888888888\t-\t-\t-\n"
 	venue, err := ParsePrincipals([]byte(raw))
 	if err != nil {
 		t.Fatal(err)

@@ -3,7 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -326,8 +333,8 @@ func TestCLIHoldsEveryRowToItsPinnedClass(t *testing.T) {
 		}
 		return p
 	}
-	slots := write("slots.tsv", "seq\trow\tcaller\tprincipal\tcross_org\texpect\tk\tmethod\troute\tpath\tt_start\tt_end\tstatus\tnote\n"+
-		"1\tC1\tsuperuser\tdrift-S\tfalse\tmismatch\t1\tGET\t/api/v1/admin/teams\t/api/v1/admin/teams\t2026-11-07T12:00:00Z\t2026-11-07T12:00:00.1Z\t200\t-\n")
+	slots := write("slots.tsv", slotsHeaderV2+"\n"+
+		"1\tC1\tsuperuser\tdrift-S\tfalse\tmismatch\t1\tGET\t/api/v1/admin/teams\t/api/v1/admin/teams\t2026-11-07T12:00:00Z\t2026-11-07T12:00:00.1Z\t200\t-\t-\t-\t-\t-\t-\t-\t-\t-\n")
 	log := write("go-api.log", "{}\n")
 	mismatch := tableWith(t, "13", 4, "no")
 	out.Reset()
@@ -335,7 +342,7 @@ func TestCLIHoldsEveryRowToItsPinnedClass(t *testing.T) {
 	if code := run(context.Background(), []string{"judge", "-slots", slots, "-log", log, "-rows", mismatch, "-out", filepath.Join(dir, "t1.tsv"), "-k", "1"}, &out, &errOut); code != 3 || !strings.Contains(out.String(), "row 13:") {
 		t.Fatalf("judge with row 13 destructive=no: code %d, stdout %q, stderr %q", code, out.String(), errOut.String())
 	}
-	yard := write("yard.tsv", "seq\trow\tcaller\tk\tkey\tstatus\tverdict\n1\tC1\tsuperuser\t1\tGET /api/v1/admin/teams\t200\tMISMATCH\n")
+	yard := write("yard.tsv", "seq\trow\tcaller\tk\tkey\tstatus\tbody_norm_sha\tverdict\n1\tC1\tsuperuser\t1\tGET /api/v1/admin/teams\t200\t-\tMISMATCH\n")
 	d := write("d.txt", strings.Repeat("a", 64)+"\n")
 	m := write("m.prom", "# none\n")
 	out.Reset()
@@ -343,5 +350,295 @@ func TestCLIHoldsEveryRowToItsPinnedClass(t *testing.T) {
 	if code := run(context.Background(), []string{"judge-enforced", "-slots", slots, "-yardstick", yard, "-yardstick-digest", d, "-yardstick-digest-after", d,
 		"-digest-before", d, "-digest-after", d, "-metrics-before", m, "-metrics-after", m, "-rows", mismatch, "-out", filepath.Join(dir, "t2.tsv"), "-k", "1"}, &out, &errOut); code != 3 || !strings.Contains(out.String(), "row 13:") {
 		t.Fatalf("judge-enforced with row 13 destructive=no: code %d, stdout %q, stderr %q", code, out.String(), errOut.String())
+	}
+}
+
+const slotsHeaderV2 = "seq\trow\tcaller\tprincipal\tcross_org\texpect\tk\tmethod\troute\tpath\tt_start\tt_end\tstatus\tnote\twant_sub\twant_org\tclaim_sub\tclaim_org\tclaim_exp\tbody_len\tbody_sha\tbody_norm_sha"
+
+func slotLine(seq int, norm, claimSub string) string {
+	const sha = "ab"
+	hex := strings.Repeat(sha, 32)
+	return strings.Join([]string{fmt.Sprint(seq), "58", "member", "member-A", "false", "match", "1", "GET", "/api/v1/admin/teams", "/api/v1/admin/teams",
+		"2026-11-08T12:00:00Z", "2026-11-08T12:00:01Z", "200", "-", "prn_AAAAAAAAAAAAAAAAAAAAAA", "-", claimSub, "-", "2030-01-01T00:00:00Z", "2", hex, norm}, "\t")
+}
+
+func writeFile(t *testing.T, name, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestBodydiffListsTheCellsWhoseNormalizedBodyDiffers(t *testing.T) {
+	same := strings.Repeat("cd", 32)
+	other := strings.Repeat("ef", 32)
+	a := writeFile(t, "a.tsv", slotsHeaderV2+"\n"+slotLine(1, same, "prn_AAAAAAAAAAAAAAAAAAAAAA")+"\n")
+	b := writeFile(t, "b.tsv", slotsHeaderV2+"\n"+slotLine(1, other, "prn_AAAAAAAAAAAAAAAAAAAAAA")+"\n")
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"bodydiff", "-a", a, "-b", a}, &out, &errOut); code != exitOK || !strings.Contains(out.String(), "0 cells differ") {
+		t.Fatalf("equal files: %d %q %q", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	if code := run(context.Background(), []string{"bodydiff", "-a", a, "-b", b}, &out, &errOut); code != exitFail || !strings.Contains(out.String(), "row 58") || !strings.Contains(out.String(), "1 cells differ") {
+		t.Fatalf("a differing body: %d %q", code, out.String())
+	}
+	two := writeFile(t, "two.tsv", slotsHeaderV2+"\n"+slotLine(1, same, "prn_AAAAAAAAAAAAAAAAAAAAAA")+"\n"+strings.Replace(slotLine(2, same, "prn_AAAAAAAAAAAAAAAAAAAAAA"), "\t58\t", "\t59\t", 1)+"\n")
+	if code := run(context.Background(), []string{"bodydiff", "-a", a, "-b", two}, &out, &errOut); code != exitUsage {
+		t.Fatalf("files of two sizes were compared: %d", code)
+	}
+	v1 := writeFile(t, "v1.tsv", "seq\trow\n")
+	if code := run(context.Background(), []string{"bodydiff", "-a", a, "-b", v1}, &out, &errOut); code != exitUsage {
+		t.Fatalf("a v1 file: %d", code)
+	}
+}
+
+func TestJudgeIsStrictAndVoidsASlotsFileWithNoClaimReadBack(t *testing.T) {
+	dir := t.TempDir()
+	slots := filepath.Join(dir, "slots.tsv")
+	line := slotLine(1, strings.Repeat("cd", 32), "-")
+	if err := os.WriteFile(slots, []byte(slotsHeaderV2+"\n"+line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(dir, "go-api.log")
+	if err := os.WriteFile(log, []byte(`{"time":"2026-11-08T12:00:00.5Z","msg":"api shadow pdp: result","route":"GET /api/v1/admin/teams","caller":"member","result":"match","decision_id":"dec_x"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"judge", "-slots", slots, "-log", log, "-out", filepath.Join(dir, "t.tsv"), "-k", "1"}, &out, &errOut)
+	if code != 3 || !strings.Contains(out.String(), "claim read-back") {
+		t.Fatalf("a slots file with no claim read-back: code %d out %q err %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestDriveRefusesATokenFileThatNoSlotUsesOrThatIsOpen(t *testing.T) {
+	principals := principalsFile(t)
+	dir := t.TempDir()
+	open := filepath.Join(dir, "open.token")
+	if err := os.WriteFile(open, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, arg := range map[string]string{"an unknown principal": "ghost=" + open, "an open file": "member-A=" + open, "no path": "member-A", "an empty name": "=" + open} {
+		var out, errOut bytes.Buffer
+		code := run(context.Background(), []string{"drive", "-base", "http://127.0.0.1:1", "-principals", principals, "-k", "1", "-out", filepath.Join(t.TempDir(), "s.tsv"), "-token-file", arg}, &out, &errOut)
+		if code != exitUsage {
+			t.Errorf("%s: code %d stderr %q", name, code, errOut.String())
+		}
+	}
+	var out, errOut bytes.Buffer
+	args := []string{"drive", "-base", "http://127.0.0.1:1", "-principals", principals, "-k", "1", "-out", filepath.Join(t.TempDir(), "s.tsv"), "-token-file", "member-A=" + open, "-token-file", "member-A=" + open}
+	if code := run(context.Background(), args, &out, &errOut); code != exitUsage {
+		t.Errorf("a name twice: code %d", code)
+	}
+}
+
+func TestMintStepWritesTokenFilesAndPrintsNoToken(t *testing.T) {
+	const user, orgA = "44444440-4444-4444-8444-444444444444", "11111111-1111-4111-8111-111111111111"
+	token := func(org string) string {
+		enc := base64.RawURLEncoding
+		raw, _ := hex.DecodeString(strings.ReplaceAll(user, "-", ""))
+		header := enc.EncodeToString([]byte(`{"alg":"EdDSA","typ":"at+jwt"}`))
+		payload := enc.EncodeToString([]byte(`{"sub":"prn_` + enc.EncodeToString(raw) + `","org_id":"` + org + `","exp":1893456000}`))
+		return header + "." + payload + "." + enc.EncodeToString([]byte("sig"))
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"access_token":"` + token(orgA) + `"}`))
+	}))
+	defer srv.Close()
+	outDir := filepath.Join(t.TempDir(), "tok")
+	if err := os.Mkdir(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"mint", "-base", srv.URL, "-principals", principalsFile(t), "-names", "member-A", "-out-dir", outDir}, &out, &errOut)
+	if code != exitOK {
+		t.Fatalf("code %d stderr %q", code, errOut.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(outDir, "member-A.token"))
+	if err != nil || strings.Contains(out.String()+errOut.String(), strings.TrimSpace(string(raw))) {
+		t.Fatalf("the token file is missing or its token was printed: %v", err)
+	}
+	if !strings.HasPrefix(out.String(), "member-A\tprn_") {
+		t.Fatalf("mint line %q", out.String())
+	}
+}
+
+// Both judging commands set Strict on the options they build: a run without claim read-back and body digests is never
+// judged. The pin reads the source, so a command that drops the field fails here.
+func TestBothJudgingCommandsSetStrict(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		sel, ok := lit.Type.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "JudgeOptions" && sel.Sel.Name != "EnforcedInput") {
+			return true
+		}
+		for _, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Strict" {
+					if val, ok := kv.Value.(*ast.Ident); ok && val.Name == "true" {
+						found[sel.Sel.Name] = true
+					}
+				}
+			}
+		}
+		return true
+	})
+	if !found["JudgeOptions"] || !found["EnforcedInput"] {
+		t.Fatalf("Strict: true is not set on both: %v", found)
+	}
+}
+
+func TestBodykeyWritesAnOwnerOnlyKeyAndNeverOverwrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "key")
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"bodykey", "-out", path}, &out, &errOut); code != exitOK {
+		t.Fatalf("code %d %q", code, errOut.String())
+	}
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(out.String(), strings.TrimSpace(string(raw))) {
+		t.Fatal("the key was printed")
+	}
+	if code := run(context.Background(), []string{"bodykey", "-out", path}, &out, &errOut); code != exitUsage {
+		t.Fatalf("an existing key file: code %d", code)
+	}
+	if code := run(context.Background(), []string{"bodykey"}, &out, &errOut); code != exitUsage {
+		t.Fatalf("no -out: code %d", code)
+	}
+}
+
+func TestDriveTakesTheSideFileAndItsKeyTogetherAndOwnerOnly(t *testing.T) {
+	principals := principalsFile(t)
+	dir := t.TempDir()
+	good := filepath.Join(dir, "key")
+	open := filepath.Join(dir, "open")
+	if err := os.WriteFile(open, []byte(strings.Repeat("ab", 32)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := run(context.Background(), []string{"bodykey", "-out", good}, io.Discard, io.Discard); code != exitOK {
+		t.Fatal("bodykey")
+	}
+	existing := filepath.Join(dir, "side")
+	if err := os.WriteFile(existing, []byte("keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"drive", "-base", "http://127.0.0.1:1", "-principals", principals, "-k", "1", "-out"}
+	for name, extra := range map[string][]string{
+		"key without side file": {"-bodykeys-key", good},
+		"side file without key": {"-bodykeys-out", filepath.Join(dir, "s1")},
+		"an open key":           {"-bodykeys-key", open, "-bodykeys-out", filepath.Join(dir, "s2")},
+		"an existing side file": {"-bodykeys-key", good, "-bodykeys-out", existing},
+	} {
+		var out, errOut bytes.Buffer
+		args := append(append(append([]string{}, base...), filepath.Join(t.TempDir(), "slots.tsv")), extra...)
+		if code := run(context.Background(), args, &out, &errOut); code != exitUsage {
+			t.Errorf("%s: code %d stderr %q", name, code, errOut.String())
+		}
+	}
+	if kept, _ := os.ReadFile(existing); string(kept) != "keep\n" {
+		t.Fatal("an existing side file was overwritten")
+	}
+}
+
+func TestBodydiffWithKeysListsLeafPathsOnly(t *testing.T) {
+	same := strings.Repeat("cd", 32)
+	other := strings.Repeat("ef", 32)
+	slotsA := writeFile(t, "a.tsv", slotsHeaderV2+"\n"+slotLine(1, same, "prn_AAAAAAAAAAAAAAAAAAAAAA")+"\n")
+	slotsB := writeFile(t, "b.tsv", slotsHeaderV2+"\n"+slotLine(1, other, "prn_AAAAAAAAAAAAAAAAAAAAAA")+"\n")
+	keysA := writeFile(t, "ka.tsv", "seq\tpath\thmac12\n1\t$.t\taaaaaaaaaaaa\n1\t$.id\t111111111111\n")
+	keysB := writeFile(t, "kb.tsv", "seq\tpath\thmac12\n1\t$.t\tbbbbbbbbbbbb\n1\t$.id\t111111111111\n")
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"bodydiff", "-a", slotsA, "-b", slotsB, "-keys-a", keysA, "-keys-b", keysB}, &out, &errOut)
+	if code != exitFail || !strings.Contains(out.String(), "$.t") || strings.Contains(out.String(), "$.id") || strings.Contains(out.String(), "aaaaaaaaaaaa") {
+		t.Fatalf("code %d out %q", code, out.String())
+	}
+	errOut.Reset()
+	if code := run(context.Background(), []string{"bodydiff", "-a", slotsA, "-b", slotsB, "-keys-a", keysA}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "go together") {
+		t.Fatalf("one keys file only: code %d %q", code, errOut.String())
+	}
+}
+
+func TestBodydiffWithKeysFailsOnADifferingLeafEvenWhenTheNormalizedDigestsAreEqual(t *testing.T) {
+	same := strings.Repeat("cd", 32)
+	slots := writeFile(t, "s.tsv", slotsHeaderV2+"\n"+slotLine(1, same, "prn_AAAAAAAAAAAAAAAAAAAAAA")+"\n")
+	keysA := writeFile(t, "ka.tsv", "seq\tpath\thmac12\n1\t$.t\taaaaaaaaaaaa\n")
+	keysB := writeFile(t, "kb.tsv", "seq\tpath\thmac12\n1\t$.t\tbbbbbbbbbbbb\n")
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"bodydiff", "-a", slots, "-b", slots, "-keys-a", keysA, "-keys-b", keysB}, &out, &errOut); code != exitFail || !strings.Contains(out.String(), "$.t") {
+		t.Fatalf("code %d out %q", code, out.String())
+	}
+}
+
+const sideHeaderForTest = "seq\tpath\thmac12"
+
+func writeOwnerOnly(t *testing.T, name, content string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestReadLeafParityTakesThreeFilesTogetherAndAnOwnerOnlyFrozenFile(t *testing.T) {
+	side := writeOwnerOnly(t, "side.tsv", sideHeaderForTest+"\n1\t$.a\taaaaaaaaaaaa\n", 0o600)
+	frozen := writeOwnerOnly(t, "frozen.tsv", "1\t$.ts\n", 0o600)
+	if p, err := readLeafParity("", "", ""); p != nil || err != nil {
+		t.Fatalf("no flags: %v %v", p, err)
+	}
+	for name, args := range map[string][3]string{
+		"only the frozen file":       {frozen, "", ""},
+		"only the yardstick side":    {"", side, ""},
+		"no enforced side":           {frozen, side, ""},
+		"no frozen file":             {"", side, side},
+		"a frozen file mode 0644":    {writeOwnerOnly(t, "f.tsv", "1\t$.ts\n", 0o644), side, side},
+		"a frozen file with a junk":  {writeOwnerOnly(t, "g.tsv", "1\t$.ts\n# note\n", 0o600), side, side},
+		"a frozen file not a file":   {t.TempDir(), side, side},
+		"a side file that is absent": {frozen, side, filepath.Join(t.TempDir(), "none")},
+	} {
+		if p, err := readLeafParity(args[0], args[1], args[2]); err == nil || p != nil {
+			t.Errorf("%s: accepted (%v)", name, err)
+		}
+		if strings.HasPrefix(name, "only") || name == "no enforced side" || name == "no frozen file" {
+			if _, err := readLeafParity(args[0], args[1], args[2]); !strings.Contains(err.Error(), "go together") {
+				t.Errorf("%s: %v, want the three-together refusal", name, err)
+			}
+		}
+	}
+	p, err := readLeafParity(frozen, side, side)
+	if err != nil || p == nil || len(p.Volatile.SHA12) != 12 || !p.Volatile.ByRow["1"]["$.ts"] {
+		t.Fatalf("a good set: %+v %v", p, err)
+	}
+}
+
+func TestBodydiffPathsNeedsTheSideFiles(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"bodydiff", "-a", "x", "-b", "y", "-paths"}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "-paths needs") {
+		t.Fatalf("code %d stderr %q", code, errOut.String())
+	}
+}
+
+func TestLeafPathLinesAreRowTabPathAndNothingElse(t *testing.T) {
+	a := writeOwnerOnly(t, "a.tsv", sideHeaderForTest+"\n1\t$.ts\taaaaaaaaaaaa\n1\t$.id\tbbbbbbbbbbbb\n", 0o600)
+	b := writeOwnerOnly(t, "b.tsv", sideHeaderForTest+"\n5\t$.ts\tcccccccccccc\n5\t$.id\tbbbbbbbbbbbb\n", 0o600)
+	sets := [2][]shadowvenue.Slot{{{Seq: 1, Row: "7", Caller: "admin", K: 1}}, {{Seq: 5, Row: "7", Caller: "admin", K: 1}}}
+	lines, err := leafPathLines(sets, a, b)
+	if err != nil || len(lines) != 1 || lines[0] != "7\t$.ts" {
+		t.Fatalf("%q %v", lines, err)
+	}
+	var out, errOut bytes.Buffer
+	if code := bodydiffPaths(sets, a, b, &out, &errOut); code != exitFail || out.String() != "7\t$.ts\n" || !strings.Contains(errOut.String(), "1 differing leaf paths") {
+		t.Fatalf("stdout must be the path lines only: code %d stdout %q stderr %q", code, out.String(), errOut.String())
 	}
 }

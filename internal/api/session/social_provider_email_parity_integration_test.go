@@ -138,8 +138,9 @@ func TestSocialLoginParityTableOnARealDatabase(t *testing.T) {
 				if name == "google" {
 					subject = "g" + subject
 				}
+				var user uuid.UUID
 				if linked {
-					user := uuid.New()
+					user = uuid.New()
 					if _, err := pool.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, auth_provider_id, is_active,
 is_verified, is_superuser, token_version, created_at, updated_at) VALUES ($1, $2, NULL, $3, $4, true, true, false, 0, now(), now())`,
 						user, fmt.Sprintf("linked-%d@example.com", n), name, subject); err != nil {
@@ -152,6 +153,8 @@ is_verified, is_superuser, token_version, created_at, updated_at) VALUES ($1, $2
 				deps.Pool = pool
 				deps.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 				deps.Getenv = func(string) string { return "set" }
+				issuer := &fakeIssuer{}
+				deps.Issuer = issuer
 				deps.OAuth = &oauthprovider.Client{HTTP: server.Client(), Endpoints: oauthprovider.Endpoints{
 					GitHubUser: server.URL + "/github/user", GitHubEmails: server.URL + "/github/emails",
 					GitLabBase: server.URL + "/gitlab", GoogleUser: server.URL + "/google/userinfo"}}
@@ -185,10 +188,22 @@ is_verified, is_superuser, token_version, created_at, updated_at) VALUES ($1, $2
 							users, count("users"), tokens, count("refresh_tokens"), want)
 					}
 				case linked:
-					// The pair comes from auth-service's issue route: go-api writes no refresh_tokens row.
-					if w.Code != http.StatusOK || count("refresh_tokens") != tokens || count("users") != users {
-						t.Fatalf("linked: %d with body keys %v, refresh tokens %d -> %d; want the sign-in and no go-api refresh row", w.Code,
-							bodyKeys(w.Body.Bytes()), tokens, count("refresh_tokens"))
+					// The sign-in is the pair auth-service's issue route answered for the linked user: one issue call
+					// naming that user, the pair in the body, and no go-api refresh_tokens row.
+					if w.Code != http.StatusOK || len(issuer.requests) != 1 || issuer.requests[0].PrincipalID != user {
+						t.Fatalf("linked: %d with body keys %v, %d issue call(s) %+v; want the issued sign-in of %s", w.Code,
+							bodyKeys(w.Body.Bytes()), len(issuer.requests), issuer.requests, user)
+					}
+					var pair struct {
+						Access  string `json:"access_token"`
+						Refresh string `json:"refresh_token"`
+					}
+					if err := json.Unmarshal(w.Body.Bytes(), &pair); err != nil || pair.Access != "issued.access.token" || pair.Refresh != "dhr1_issued" {
+						t.Fatalf("linked: body %s does not carry the issued pair (%v)", w.Body, err)
+					}
+					if count("refresh_tokens") != tokens || count("users") != users {
+						t.Fatalf("linked: refresh tokens %d -> %d, users %d -> %d; want no go-api row", tokens, count("refresh_tokens"),
+							users, count("users"))
 					}
 				}
 			}

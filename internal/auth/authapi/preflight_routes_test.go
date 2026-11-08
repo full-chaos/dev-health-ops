@@ -201,15 +201,12 @@ func TestSocialLoginRefusesBeforeTheExchangeWhenSignerUnavailable(t *testing.T) 
 }
 
 // credOnEdDSA serves the credential routes over an EdDSA issuer. The bearer
-// is the HS256 access token the EdDSA issuer still verifies.
+// is the EdDSA session-route token of the access check's own key set.
 func credOnEdDSA(t *testing.T, signer AccessSigner) (*credFixture, map[string]string) {
 	t.Helper()
-	c := newCredFixtureOn(t, httpapi.NewMemoryCounters(nil), newFixtureWith(t, newEdDSAIssuer(t, signer, testAudience)))
-	hs, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, err := hs.Access(c.grant())
+	issuer, minter := withSessionBearer(t, newEdDSAIssuer(t, signer, testAudience))
+	c := newCredFixtureOn(t, httpapi.NewMemoryCounters(nil), newFixtureWith(t, issuer))
+	token, err := minter.Access(c.grant())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,12 +355,9 @@ func TestAMintFailureAnswers503OnlyWhenTheSignerCannotSign(t *testing.T) {
 			return f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"tok"}`, nil)
 		},
 		"change password": func(t *testing.T, issuer *Issuer) *httptest.ResponseRecorder {
+			issuer, minter := withSessionBearer(t, issuer)
 			c := newCredFixtureOn(t, httpapi.NewMemoryCounters(nil), newFixtureWith(t, issuer))
-			hs, err := NewIssuer(testSecret, testIssuer, testAudience)
-			if err != nil {
-				t.Fatal(err)
-			}
-			token, err := hs.Access(c.grant())
+			token, err := minter.Access(c.grant())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -440,12 +434,9 @@ func TestOneCheckPerWindowAcrossTheRoutes(t *testing.T) {
 	f.sessions.result = accepted(f.record)
 	f.issuer = issuer
 	f.buildCompat()
+	issuer, minter := withSessionBearer(t, issuer)
 	c := newCredFixtureOn(t, httpapi.NewMemoryCounters(nil), newFixtureWith(t, issuer))
-	hs, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bearer, err := hs.Access(c.grant())
+	bearer, err := minter.Access(c.grant())
 	if err != nil {
 		t.Fatal(err)
 	}

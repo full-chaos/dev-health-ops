@@ -10,9 +10,9 @@ import (
 func TestQueryAPIRESTEdgeTokenRefusedAfterMembershipRemoved(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
-	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	edge := ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	// Routed (issuer set) the edge token is the retired HS256 class: refused alg_not_allowed whatever the membership.
-	routedRefusal := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true).do(http.MethodGet, edge)
+	routedRefusal := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow)).do(http.MethodGet, edge)
 	if routedRefusal.Status != http.StatusUnauthorized || routedRefusal.Body != restRefusal {
 		t.Fatalf("routed member: got %+v, want 401 %s", routedRefusal, restRefusal)
 	}
@@ -27,7 +27,7 @@ func TestQueryAPIRESTEdgeTokenRefusedAfterMembershipRemoved(t *testing.T) {
 				if routed {
 					setup = testAccess(m.keys, nil, accessTestNow)
 				}
-				return newRESTFixture(t, store, setup, true)
+				return newRESTFixture(t, store, setup)
 			}
 			if got := mk(nil).do(http.MethodGet, edge); got.Status != http.StatusOK {
 				t.Fatalf("member: got %+v, want 200", got)

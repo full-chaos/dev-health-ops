@@ -38,7 +38,6 @@ internal/api/teamsidentity	deleted_at_writer_census_test.go
 internal/api/teamsidentity	team_id_writer_census_test.go
 internal/apiservice	accessroute_probe_test.go
 internal/apiservice	accessroute_routed_test.go
-internal/apiservice	accessroute_unset_test.go
 internal/apiservice	endpoint_profile_rows_test.go
 internal/apiservice	endpoint_profile_scan_test.go
 internal/apiservice	githubapp_config.go

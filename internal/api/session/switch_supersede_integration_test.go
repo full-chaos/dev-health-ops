@@ -15,8 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
-	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pinrig"
 )
 
@@ -43,6 +42,12 @@ func (f *switchIssueRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = io.WriteString(w, `{"access_token":"issued.by.auth","refresh_token":"dhr1_issued_by_auth","token_type":"bearer","expires_in":3600}`)
+}
+
+func (f *switchIssueRoute) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.bodies)
 }
 
 func (f *switchIssueRoute) last(t *testing.T) map[string]any {
@@ -76,8 +81,8 @@ func switchOrgAs(t *testing.T, ctx context.Context, st stack, token string) (int
 // With auth-service owning sessions, switch-org asks the issue route to
 // supersede the caller's own session (CHAOS-12085): a token whose sid names a
 // live session sends that session as predecessor_session_id; a token without
-// sid sends none; and an issue refused because the predecessor ended first is
-// a 401, never the 503 of an unavailable auth-service.
+// sid is refused before the switch; and an issue refused because the
+// predecessor ended first is a 401, never the 503 of an unavailable auth-service.
 func TestSwitchOrgSupersedesTheCallersSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -90,12 +95,7 @@ func TestSwitchOrgSupersedesTheCallersSession(t *testing.T) {
 	orgA := st.specs["alice"]["org_id"].(string)
 	alice := uuid.MustParse(changeAlice)
 	sid := rig.SignIn(t, ctx, alice)
-	wire := sessionid.Wire(sid)
-	withSID, err := st.signer.Access(edgetoken.AccessClaims{UserID: changeAlice, Email: "alice@example.com", OrgID: orgA, Role: "owner", SessionID: &wire},
-		time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	withSID := st.access.MustMint(t, edtokens.Claims{UserID: alice, OrgID: orgA, SessionID: &sid})
 
 	status, body := switchOrgAs(t, ctx, st, withSID)
 	if status != http.StatusOK {
@@ -105,12 +105,15 @@ func TestSwitchOrgSupersedesTheCallersSession(t *testing.T) {
 		t.Fatalf("predecessor_session_id %v, want the caller's session %s", got, sid)
 	}
 
-	status, body = switchOrgAs(t, ctx, st, changeToken(t, st, changeAlice, "alice@example.com", orgA, "owner", 0))
-	if status != http.StatusOK {
-		t.Fatalf("switch with a go-api token: %d %s", status, body)
+	// A routed user access token always names its session: a token without sid is refused at the token
+	// contract, before the switch, and the issue route is not called.
+	calls := route.calls()
+	status, body = switchOrgAs(t, ctx, st, st.access.MustMint(t, edtokens.Claims{UserID: alice, OrgID: orgA, NoSession: true}))
+	if status != http.StatusUnauthorized || !strings.Contains(body, "Invalid or expired token") {
+		t.Fatalf("switch with a token without sid: %d %s, want the 401 token refusal", status, body)
 	}
-	if _, present := route.last(t)["predecessor_session_id"]; present {
-		t.Fatalf("a token without sid sent a predecessor: %v", route.last(t))
+	if got := route.calls(); got != calls {
+		t.Fatalf("a token without sid reached the issue route: %d calls, want %d", got, calls)
 	}
 
 	route.mu.Lock()

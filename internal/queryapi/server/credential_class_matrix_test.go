@@ -138,7 +138,7 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 	minter := newAccessMinter(t)
 	base := matrixStoreBase{accessStore: newAccessStore(), counts: counts}
 	setup := testAccess(matrixKeySource{inner: minter.keys, counts: counts}, nil, accessTestNow)
-	stack := newAccessStackOn(t, queryAPIUserStore{queryAPIStoreBase: base}, setup, true)
+	stack := newAccessStackOn(t, queryAPIUserStore{queryAPIStoreBase: base}, setup)
 	stack.user = minter.mint(ecUser, nil, nil)
 
 	// The REST routes' builders need ClickHouse, a registry and JWKS (their
@@ -150,7 +150,7 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	restMux := http.NewServeMux()

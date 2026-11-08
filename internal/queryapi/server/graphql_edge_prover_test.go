@@ -40,7 +40,7 @@ func TestProverGoEdgeModeProvesTheRealGraphQLEdge(t *testing.T) {
 	}))
 	auth := ecEdgeAuth(t, store)
 	pipeline := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(document): "featureFlags"}, verifier, auth, store, "", nil)
-	edge := httptest.NewServer(internalidentity.Public(graphQLEdgeChain(pipeline, graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes})))
+	edge := httptest.NewServer(internalidentity.Public(onPattern("/graphql", graphQLEdgeChain(pipeline, graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes}))))
 	t.Cleanup(edge.Close)
 
 	artifacts, err := goapiproof.NewArtifactStore(t.TempDir())
@@ -51,7 +51,7 @@ func TestProverGoEdgeModeProvesTheRealGraphQLEdge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "viewer", tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	newRunner := func(goEdge bool) *goapiproof.Runner {
 		return &goapiproof.Runner{
 			Client:    goapiproof.NewLegClient(0),

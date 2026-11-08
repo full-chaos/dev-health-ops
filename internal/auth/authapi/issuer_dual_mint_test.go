@@ -21,17 +21,16 @@ func newDualMintFixture(t *testing.T) *accessFixture {
 	t.Helper()
 	signer, dir, _ := fileSigner(t)
 	issuer := newEdDSAIssuer(t, signer, contracts.PlatformAPIAudience)
-	f := newFixtureWith(t, issuer)
 	rows, err := AuthServiceAccessRows()
 	if err != nil {
 		t.Fatal(err)
 	}
 	reader, provider := accessMeter()
-	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer, Legacy: issuer, Rows: rows, Meter: provider.Meter("test")})
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer, Rows: rows, Meter: provider.Meter("test")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuer.WithAccessCheck(check)
+	f := newFixtureWith(t, issuer.WithAccessCheck(check))
 	return &accessFixture{fixture: f, signer: signer, dir: dir, reader: reader, check: check}
 }
 
@@ -134,7 +133,7 @@ func TestRefreshRouteAnswersTheSurfaceOfItsClass(t *testing.T) {
 		return response.Body.Bytes()
 	}
 
-	hs := newFixture(t)
+	hs := newHS256Fixture(t)
 	v1, err := contracts.ParseRefreshResponse(repoRoot(t), refresh(hs))
 	if err != nil || v1.SchemaVersion != contracts.RefreshResponseSurface || v1.SessionAccessToken.Reveal() != "" {
 		t.Fatalf("hs256_compat answer: %v", err)

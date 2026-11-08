@@ -2,6 +2,8 @@ package policy
 
 import (
 	"context"
+	"crypto/ed25519"
+	"errors"
 	"io"
 	"maps"
 	"net/http"
@@ -10,10 +12,13 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/full-chaos/dev-health-go/authverify"
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/full-chaos/dev-health-go/pep/pepfake"
 	"github.com/golang-jwt/jwt/v5"
+	"go.opentelemetry.io/otel/metric/noop"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
@@ -345,25 +350,76 @@ func equalToMain(t *testing.T, got, main response) {
 	}
 }
 
-// With the admin cell on, a caller the decision point cannot judge (a legacy HS256 token) keeps main's answer for its
-// platform questions, with no question asked (as on an enforced row: the legacy answer stands).
-func TestAnHS256CallerKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
+// CHAOS-13126: ops_access_token_hs256 is retired. With the admin cell on, an HS256 token on routed go-api (the production
+// access validator: alg_not_allowed) is the generic 401 before any platform question, superuser or not.
+func TestAnHS256TokenIsTheRetiredClassWithTheAdminCellOn(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eddsa, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: "https://issuer.test", Audience: "dev-health-api", Keys: authverify.StaticKeys{"k": pub}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator, err := accessverify.New(accessverify.Config{
+		Rows:  []accessverify.Row{{Service: "dev-health-ops-api", Profile: "POST /api/v1/telemetry/report", AcceptsUser: true}},
+		EdDSA: eddsa, Meter: noop.NewMeterProvider().Meter("test"), Logger: quiet(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, superuser := range []bool{true, false} {
+		decider := &countingDecider{inner: platformAdminFake(t)}
+		store := newStore()
+		store.users[userID] = UserState{IsActive: true, IsSuperuser: superuser}
+		auth, err := NewAuthenticator(fixtureStore{Store: store}, quiet())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := auth.RouteAccess(refusalOnlyValidator{validator}, "dev-health-ops-api"); err != nil {
+			t.Fatal(err)
+		}
+		guard := NewGuard(auth, quiet())
+		guard.SetEnforcer(seamEnforcer(t, decider, productionGoAPIRows(t), "admin"))
+		got := serve(seamMux(guard), http.MethodPost, "/api/v1/telemetry/report", bearer(t, func(m jwt.MapClaims) { m["is_superuser"] = superuser }))
+		singles, batches := decider.counts()
+		if got.status != http.StatusUnauthorized || !strings.Contains(got.body, "Invalid or expired token") || singles+batches != 0 {
+			t.Fatalf("superuser %v: %d %q after %d questions, want the generic 401 and none", superuser, got.status, got.body, singles+batches)
+		}
+	}
+}
+
+// refusalOnlyValidator is the production access validator for a token it refuses; an admitted token fails the cell.
+type refusalOnlyValidator struct{ v *accessverify.Validator }
+
+func (r refusalOnlyValidator) Validate(ctx context.Context, service, profile, bearer string) (*RoutedResult, error) {
+	if _, err := r.v.Validate(ctx, service, profile, bearer); err != nil {
+		return nil, err
+	}
+	return nil, errors.New("refusalOnlyValidator: the validator admitted a token this cell expects refused")
+}
+
+// Product rule 1: the caller of #5819's HS256 cell on its user access token. With the decision point knowing the
+// caller as production state builds it (a users-row superuser is platform_admin with AUTH_PLATFORM_ROLES_OWNED off,
+// prod's value: decisionstate.go, authapi/users.go, policy/store.go), the admin cell answers main's platform answer:
+// true for the superuser, false for a member.
+func TestAUserTokenCallerKeepsMainsPlatformAnswerWithTheAdminCellOn(t *testing.T) {
 	for _, superuser := range []bool{true, false} {
 		serveWith := func(cell string) (response, int) {
-			decider := &countingDecider{inner: platformAdminFake(t)}
-			store := newStore()
-			store.users[userID] = UserState{IsActive: true, IsSuperuser: superuser}
-			guard := NewGuard(authenticator(t, store), quiet())
-			guard.SetEnforcer(seamEnforcer(t, decider, productionGoAPIRows(t), cell))
-			got := serve(seamMux(guard), http.MethodPost, "/api/v1/telemetry/report", bearer(t, func(m jwt.MapClaims) { m["is_superuser"] = superuser }))
+			inner := newDenyingFake(t)
+			if superuser {
+				inner = platformAdminFake(t).(denyingFake)
+			}
+			decider := &countingDecider{inner: inner}
+			got := seamServe(seamHandler(t, legacyStore(superuser, "member"), userClaims(nil), seamEnforcer(t, decider, productionGoAPIRows(t), cell)), http.MethodPost, "/api/v1/telemetry/report")
 			singles, batches := decider.counts()
 			return got, singles + batches
 		}
 		got, asked := serveWith("admin")
 		main, _ := serveWith("teams")
 		equalToMain(t, got, main)
-		if asked != 0 {
-			t.Fatalf("superuser %v: %d questions, want none", superuser, asked)
+		if want := "platform=" + strconv.FormatBool(superuser); got.status != http.StatusOK || got.body != want || asked == 0 {
+			t.Fatalf("superuser %v: %d %q after %d questions, want 200 %q and the PDP asked", superuser, got.status, got.body, asked, want)
 		}
 	}
 }

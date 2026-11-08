@@ -256,7 +256,7 @@ VALUES ('` + msrInvoice + `', '` + msrOrgB.String() + `', 'in_msr_b', 'cus_msr_b
 		if err != nil {
 			t.Fatal(err)
 		}
-		auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
+		auth, err := policy.NewAuthenticator(store, quietLogger())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -270,7 +270,7 @@ VALUES ('` + msrInvoice + `', '` + msrOrgB.String() + `', 'in_msr_b', 'cus_msr_b
 			t.Fatal(err)
 		}
 		validator, err := accessverify.New(accessverify.Config{
-			Rows: realRows(t), EdDSA: eddsa, Legacy: legacyVerifier(auth.AuthenticateLegacy),
+			Rows: realRows(t), EdDSA: eddsa,
 			Meter: sdkmetric.NewMeterProvider().Meter("test"), Logger: quietLogger(), Now: func() time.Time { return probeNow },
 		})
 		if err != nil {

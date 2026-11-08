@@ -112,11 +112,12 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, probeSigner(cfg), mustLimits(t), nil)
+	signer := keySigner(t)
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, signer, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), nil)
+	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), signer)
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}
@@ -557,9 +558,10 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) 
 func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
 	served := servedAuthRoutesWithIssuer(t, "")
 	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
-	// The workload-token exchange and the OAuth authorization server need the issuer too, so their rows are stale as
-	// well, and so do the session issue routes, which take only the go-api workload token.
-	wantStale := []string{"GET /.well-known/oauth-authorization-server/oauth@api", "GET /.well-known/openid-configuration@api", "GET /oauth/.well-known/jwks.json@api", "GET /oauth/.well-known/openid-configuration@api", "GET /oauth/authorize@api", "HEAD /.well-known/openid-configuration@api", "POST /internal/v1/sessions/delegated/end@api", "POST /internal/v1/sessions/delegated@api", "POST /internal/v1/sessions/state@api", "POST /internal/v1/sessions@api", "POST /internal/v1/token/exchange@api", "POST /oauth/authorize@api"}
+	// The workload-token exchange and the OAuth authorization server need the issuer too, so their rows are stale as well,
+	// and so are the bearer routes (without the issuer there is no access check to verify a user bearer with) and the
+	// session issue routes, which take only the go-api workload token.
+	wantStale := []string{"DELETE /v1/identities/social/{id}@api", "GET /.well-known/oauth-authorization-server/oauth@api", "GET /.well-known/openid-configuration@api", "GET /oauth/.well-known/jwks.json@api", "GET /oauth/.well-known/openid-configuration@api", "GET /oauth/authorize@api", "GET /v1/sessions/current@api", "HEAD /.well-known/openid-configuration@api", "POST /api/v1/auth/change-password@api", "POST /api/v1/auth/switch-org@api", "POST /api/v1/auth/validate@api", "POST /internal/v1/sessions/delegated/end@api", "POST /internal/v1/sessions/delegated@api", "POST /internal/v1/sessions/state@api", "POST /internal/v1/sessions@api", "POST /internal/v1/token/exchange@api", "POST /oauth/authorize@api", "POST /v1/identities/social@api", "POST /v1/sessions/revoke-all@api", "POST /v1/sessions/revoke@api"}
 	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
 		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)
 	}

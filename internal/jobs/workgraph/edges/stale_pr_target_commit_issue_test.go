@@ -36,10 +36,13 @@ func TestPlanStalePRTargetCommitIssueTombstonesRetiresOnlyPRShapedTargets(t *tes
 		EdgeID: "pr-source", SourceType: NodeTypePR, SourceID: "r#pr1", EdgeType: EdgeTypeImplements,
 		TargetType: NodeTypeIssue, TargetID: "ghpr:o/r#1", LastSynced: stored,
 	}
+	commitToPR := commitIssueEdge("c9", EdgeTypeReferences, "ghpr:o/r#12", stored)
+	commitToPR.TargetType = NodeTypePR
+	issueToPR := issueEdge("ghpr:o/r#13", EdgeTypeRelates, "ghpr:o/r#14", stored)
 	deleted := liveVersion(commitIssueEdge("c8", EdgeTypeReferences, "ghpr:o/r#11", stored))
 	deleted.IsDeleted = true
 
-	entries := []EdgeVersion{liveVersion(ghpr), liveVersion(ghprClose), liveVersion(gitlabMR), liveVersion(otherSource), deleted}
+	entries := []EdgeVersion{liveVersion(ghpr), liveVersion(ghprClose), liveVersion(gitlabMR), liveVersion(otherSource), liveVersion(commitToPR), liveVersion(issueToPR), deleted}
 	for _, row := range keep {
 		entries = append(entries, liveVersion(row))
 	}

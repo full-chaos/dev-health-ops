@@ -1,6 +1,7 @@
 package authconfig
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -85,7 +86,7 @@ func provisioning(lookup secrets.LookupEnv, session SessionTokens) (Provisioning
 // other resolver error stands: an unreadable file, a key set twice.
 func resolveOptionalSecret(key string, lookup secrets.LookupEnv) (secrets.Value, bool, error) {
 	value, set, err := secrets.ResolveSecret(key, lookup)
-	if err != nil && err.Error() == fmt.Sprintf("%s_FILE contains an empty value", key) {
+	if errors.Is(err, secrets.ErrEmptyValue) {
 		return secrets.Value{}, false, nil
 	}
 	return value, set, err

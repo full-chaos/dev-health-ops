@@ -101,3 +101,38 @@ func TestQueryAPIReadinessRefusesAThirdSessionRead(t *testing.T) {
 		}
 	}
 }
+
+// The widened read is accepted in the auth schema the deployment names, not a fixed one.
+func TestQueryAPIReadinessAcceptsTheWidenedSessionReadInItsSchema(t *testing.T) {
+	t.Parallel()
+	for _, owned := range []bool{false, true} {
+		read := QueryAPISessionReadFor("tenant_auth", owned)
+		if got := diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &read, withBase(t, grantsOfTables("tenant_auth", widenedSessionTables(owned)))); got != "" {
+			t.Errorf("owned=%v: the widened set in tenant_auth is refused: %q", owned, got)
+		}
+		other := QueryAPISessionReadFor("auth", owned)
+		if got := diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &other, withBase(t, grantsOfTables("tenant_auth", widenedSessionTables(owned)))); got == "" {
+			t.Errorf("owned=%v: the widened set in tenant_auth is accepted for schema auth", owned)
+		}
+	}
+}
+
+// A refusal names the difference against the old read and against the widened read;
+// a difference outside the session read is named once.
+func TestQueryAPIReadinessNamesTheDifferenceAgainstBothSessionReads(t *testing.T) {
+	t.Parallel()
+	read := QueryAPISessionReadFor("auth", false)
+	partial := append(sessionGrantsFor(read), roleacl.Grant{Class: "column", Object: "auth.sessions.created_at", Privilege: "SELECT"})
+	got := diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &read, withBase(t, partial))
+	want := "holds SELECT on column auth.sessions.created_at, which is outside the manifest" +
+		"; against the widened session read: lacks SELECT on column auth.sessions.web_session_id" +
+		"; expected the old session read or the widened session read"
+	if got != want {
+		t.Errorf("partial widen: %q, want %q", got, want)
+	}
+	outside := append(sessionGrantsFor(read), roleacl.Grant{Class: "relation", Object: "public.audit_log", Privilege: "SELECT"})
+	got = diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &read, withBase(t, outside))
+	if want := "holds SELECT on relation public.audit_log, which is outside the manifest"; got != want {
+		t.Errorf("a grant outside the session read: %q, want %q", got, want)
+	}
+}

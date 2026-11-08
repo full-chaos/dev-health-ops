@@ -103,8 +103,8 @@ that is not its own (see
 
 ## Addendum: `svc_worker_*` — mint-only scaffolding, unwired to any HTTP transport
 
-`svc_worker_*` can be
-minted/rotated/revoked via CLI, and it **does** have a real,
+`svc_worker_*` could be
+minted/rotated/revoked via CLI (those verbs are gone), and it **did** have a real,
 DB-backed validator — `internal/joboperator/auth.go` (ops repo Go tree, not the versioned `dev-health-go` dependency): the token-shape regex at line 54
 (`^svc_worker_[A-Za-z0-9_-]{32,256}$`) and `Authenticator.Authenticate`
 (lines ~119-160) hash-match against `public.internal_service_credentials`

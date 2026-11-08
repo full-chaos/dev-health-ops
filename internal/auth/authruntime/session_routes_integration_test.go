@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -60,7 +61,7 @@ type routesEnv struct {
 	front    *httptest.Server
 	client   *http.Client
 	root     string
-	// edge is query-api's REST access check over this stack (queryAPIVerifier); nil without an issuer URL.
+	// edge is query-api's REST access check over this stack (queryAPIVerifier); nil without an issuer URL or a readable key.
 	edge *principal.EdgeVerifier
 	logs *safeBuffer
 	// components are what configure built, for a test that stops them itself.
@@ -234,7 +235,7 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 		t.Fatal(err)
 	}
 	var edge *principal.EdgeVerifier
-	if cfg.TokenIssuerURL != "" {
+	if _, err := os.Stat(cfg.SigningKeyPath); cfg.TokenIssuerURL != "" && err == nil {
 		edge = queryAPIVerifier(t, cfg, policy.PGStore{Pool: admin, AuthSchema: "auth"})
 	}
 	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front, edge: edge,
@@ -383,8 +384,9 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 		t.Fatalf("org_id = %q, want %s", claims.OrgID, org)
 	}
 	payload := decodePayload(t, rotated.AccessToken.Reveal())
-	for key, want := range map[string]any{"sub": user.String(), "role": "owner", "tv": float64(2), "is_superuser": false,
-		"username": "routes-" + user.String()[:8], "full_name": "Routes User", "sid": rotated.SessionID, "type": "access"} {
+	// access-token.v1: the role, names and token_version come from the live rows (the verifier above), not claims.
+	for key, want := range map[string]any{"sub": session.WirePrincipalID(user), "principal_type": "human", "sid": rotated.SessionID,
+		"org_id": org.String(), "aud": "dev-health-api", "scope": "api:access"} {
 		if payload[key] != want {
 			t.Errorf("claim %s = %v, want %v", key, payload[key], want)
 		}

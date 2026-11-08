@@ -26,6 +26,9 @@ type drillAttemptOutcome struct {
 // the measured gap, and a drill that does not reproduce it fails rather than passing silently. Messages name the secret
 // label and the reason, never a value.
 func checkAttempts(expect string, fenced bool, tries []drillAttemptOutcome) error {
+	if err := validExpect(expect); err != nil {
+		return err
+	}
 	if len(tries) != 2 || tries[0].Name != drillAttemptRevokedName || tries[1].Name != drillAttemptDisabledName {
 		return fmt.Errorf("the attempts are not exactly [%s, %s]: %d recorded", drillAttemptRevokedName, drillAttemptDisabledName, len(tries))
 	}

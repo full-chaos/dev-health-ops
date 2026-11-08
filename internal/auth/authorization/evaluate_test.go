@@ -742,7 +742,7 @@ func TestEvaluate_AcrEvidenceReadAndCredentialIssueAllowEveryOrganizationRole(t 
 		if got := e.Evaluate(evidence, repoSnapshot(r.Role)); !got.Allowed {
 			t.Errorf("role %s on acr.evidence.read: %+v, want allow", r.Role, got)
 		}
-		if got := e.Evaluate(issue, orgSnapshot(r.Role)); !got.Allowed || got.Reason != ReasonAllowedByRole {
+		if got := e.Evaluate(issue, repoSnapshot(r.Role)); !got.Allowed || got.Reason != ReasonAllowedByRole {
 			t.Errorf("role %s on acr.credential.issue: %+v, want allowed_by_role", r.Role, got)
 		}
 	}

@@ -45,6 +45,10 @@ func platformAdminSnapshot(platformRole, memberRole string, org Status) fakeSnap
 	return s
 }
 
+// filteredFlaggedAction is the one flagged action that is repository_scope filtered (device approval and consent take
+// their repository scopes from it); its cells are in credential_issue_scope_test.go.
+const filteredFlaggedAction = "acr.credential.issue"
+
 func wantOwnerShapeAllow(t *testing.T, name string, d Decision, why Reason) {
 	t.Helper()
 	want := &Obligations{TenantScope: testOrg}
@@ -77,6 +81,9 @@ func TestPlatformAdminCellsOverTheFlaggedActions(t *testing.T) {
 	e := NewEvaluator()
 	injected := newEvaluator(catalogWithOrgsOnlyRole(t))
 	for _, a := range flaggedActions(t) {
+		if a == filteredFlaggedAction {
+			continue // its allow also carries the repository scope: TestAcrCredentialIssue* cells
+		}
 		req := orgRequest(a)
 		wantOwnerShapeAllow(t, a+" owner", e.Evaluate(req, platformAdminSnapshot("", "owner", StatusActive)), ReasonAllowedByRole)
 		wantOwnerShapeAllow(t, a+" platform_admin + member",
@@ -151,6 +158,9 @@ func TestPlatformAdminGetsNoUnflaggedOrganizationAction(t *testing.T) {
 func TestPlatformAdminSuspendedOrganizationAllowsAHolderOnly(t *testing.T) {
 	e := NewEvaluator()
 	for _, a := range flaggedActions(t) {
+		if a == filteredFlaggedAction {
+			continue // its allow also carries the repository scope: TestAcrCredentialIssue* cells
+		}
 		req := orgRequest(a)
 		wantOwnerShapeAllow(t, a+" active org, no membership row",
 			e.Evaluate(req, platformAdminSnapshot("platform_admin", "", StatusActive)), ReasonAllowedByPlatformAdmin)
@@ -186,6 +196,9 @@ func TestPlatformAdminSuspendedOrganizationAllowsAHolderOnly(t *testing.T) {
 func TestPlatformAdminUnknownOrganizationAllowsAHolderOnly(t *testing.T) {
 	e := NewEvaluator()
 	for _, a := range flaggedActions(t) {
+		if a == filteredFlaggedAction {
+			continue // its allow also carries the repository scope: TestAcrCredentialIssue* cells
+		}
 		req := orgRequest(a)
 		for _, member := range []string{"", "owner"} {
 			wantOwnerShapeAllow(t, a+" platform_admin + "+member+" in an unknown org",

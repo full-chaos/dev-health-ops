@@ -3,6 +3,8 @@ package authorization
 import (
 	"reflect"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
 // acr.credential.issue is repository_scope filtered (catalog 18): device approval and consent take their
@@ -40,6 +42,55 @@ func TestAcrCredentialIssueAllowCarriesTheScopeOfItsCaller(t *testing.T) {
 		}
 		if got.CacheClass != "" || got.ExpiresAtUnixNano != 0 {
 			t.Errorf("%s: cache %q expires %d, want none of its own (catalog class none: never cached)", c.name, got.CacheClass, got.ExpiresAtUnixNano)
+		}
+	}
+}
+
+// The platform-admin rule on acr.credential.issue is the organization branch's, with the org-wide scope: allowed in
+// an active, suspended or unknown organization (also to a role that holds only admin.orgs), denied in a removed or
+// invited one; a platform role without admin.orgs and no membership row is denied no_membership.
+func TestAcrCredentialIssuePlatformAdminAllowIsOrgWideByTheOrganizationBranchRule(t *testing.T) {
+	e := NewEvaluator()
+	injected := newEvaluator(catalogWithOrgsOnlyRole(t))
+	req := orgRequest("acr.credential.issue")
+	want := &Obligations{TenantScope: testOrg, RepositoryScope: RepositoryScopeOrganization}
+	snap := func(role string, org Status) grantFake {
+		return grantFake{fakeSnapshot: platformAdminSnapshot(role, "", org), now: nowNano}
+	}
+	for _, org := range []Status{StatusActive, StatusSuspended, StatusUnknown} {
+		for name, d := range map[string]Decision{
+			"platform_admin":       e.Evaluate(req, snap("platform_admin", org)),
+			"admin.orgs-only role": injected.Evaluate(req, snap("orgs_only", org)),
+		} {
+			if !d.Allowed || d.Reason != ReasonAllowedByPlatformAdmin || !reflect.DeepEqual(d.Obligations, want) {
+				t.Errorf("%s org %v: %+v (obligations %+v), want allowed_by_platform_admin %+v", name, org, d, d.Obligations, want)
+			}
+		}
+	}
+	for _, org := range []Status{StatusRemoved, StatusInvited} {
+		if d := e.Evaluate(req, snap("platform_admin", org)); d.Allowed {
+			t.Errorf("platform_admin org %v: %+v, want deny", org, d)
+		}
+	}
+	if d := e.Evaluate(req, snap("platform_owner", StatusActive)); d.Allowed || d.Reason != ReasonNoMembership {
+		t.Errorf("platform_owner, no membership row: %+v, want deny no_membership", d)
+	}
+}
+
+// Making the action filtered changes neither its cache class (none: a high-risk allow is never cached) nor its
+// impersonation (denied): a delegated session is refused it for every role.
+func TestAcrCredentialIssueStaysNeverCachedAndImpersonationDenied(t *testing.T) {
+	a, err := policycatalog.Default().Action("acr.credential.issue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.CacheClass != policycatalog.CacheNone || a.RiskClass != policycatalog.RiskHigh || a.Impersonation != policycatalog.ImpersonationDenied {
+		t.Fatalf("acr.credential.issue = %+v, want high risk, cache none, impersonation denied", a)
+	}
+	e := NewEvaluator()
+	for _, role := range []string{"viewer", "member", "admin", "owner"} {
+		if d := e.Evaluate(orgRequest("acr.credential.issue"), delegated(role, []string{"acr.credential.issue"}, "platform_admin")); d.Allowed {
+			t.Errorf("delegated %s: %+v, want deny", role, d)
 		}
 	}
 }

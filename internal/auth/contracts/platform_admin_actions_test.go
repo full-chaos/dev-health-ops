@@ -44,6 +44,9 @@ var platformAdminLegacyWebActions = map[string]string{
 		"200 approved, log 863528210512, record f8aff1566d30",
 }
 
+// platformAdminFilteredActions is the closed list of flagged actions that may be repository_scope filtered.
+var platformAdminFilteredActions = map[string]bool{"acr.credential.issue": true}
+
 var adminGuardValidators = []string{"policy.Admin:", "policy.AdminOrg:"}
 
 var platformAdminProfiles = []string{"go-api", "query-api", "auth-service"}
@@ -156,10 +159,18 @@ func TestPlatformAdminFlagIsExactlyTheAdminGuardOrganizationActions(t *testing.T
 		t.Errorf("platform_admin allowed on %v; the go-api admin-guard organization actions and the query-api and go-api lists are %v", got, want)
 	}
 
-	// Part 3: a flagged allow is the owner's shape: no repository scope, no redaction class for any role.
+	// Part 3: a flagged allow is the owner's shape: no repository scope, no redaction class for any role. One closed
+	// exception: acr.credential.issue is repository_scope filtered, because device approval and consent take their
+	// repository scopes from this decision; its platform-admin allow is org-wide (repository_scope organization),
+	// the shape the membership default gives every role.
 	for _, a := range catalog.Actions {
-		if flagged[a.Action] && a.RepositoryScope == "filtered" {
+		if flagged[a.Action] && a.RepositoryScope == "filtered" && !platformAdminFilteredActions[a.Action] {
 			t.Errorf("flagged action %s is repository_scope filtered", a.Action)
+		}
+	}
+	for a := range platformAdminFilteredActions {
+		if !flagged[a] {
+			t.Errorf("listed filtered action %s is not flagged platform_admin allowed", a)
 		}
 	}
 	var redaction struct {

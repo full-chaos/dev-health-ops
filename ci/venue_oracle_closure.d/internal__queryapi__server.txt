@@ -58,7 +58,6 @@ internal/auth/repokey
 internal/auth/requestid
 internal/auth/restorefence
 internal/auth/serviceaccount
-internal/auth/servicecred
 internal/auth/session
 internal/auth/sessionevent
 internal/auth/sessionid

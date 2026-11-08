@@ -761,7 +761,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -790,7 +790,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -819,7 +819,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -848,7 +848,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -892,7 +892,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -921,7 +921,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -952,7 +952,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -983,7 +983,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1014,7 +1014,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1045,7 +1045,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1076,7 +1076,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1123,7 +1123,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1170,7 +1170,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1201,7 +1201,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1232,7 +1232,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1263,7 +1263,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1294,7 +1294,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1325,7 +1325,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1354,7 +1354,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1383,7 +1383,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1412,7 +1412,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1441,7 +1441,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1470,7 +1470,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1499,7 +1499,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1528,7 +1528,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1557,7 +1557,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1586,7 +1586,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1615,7 +1615,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1644,7 +1644,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1673,7 +1673,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1702,7 +1702,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1731,7 +1731,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },
@@ -1760,7 +1760,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 156,
+          "line": 153,
           "note": "func (s *SessionIssueWorkload) authorize",
           "path": "internal/auth/authapi/issue_workload.go"
         },

@@ -89,11 +89,12 @@ func (g *Gate) RootEnforced(class CallerClass, action string) bool {
 // AuthorizeOperation decides the roots of one GraphQL operation whose caller is caller, in the organization orgID
 // the operation is served for, and returns each root key's scope. A root whose cell is off is pepgate.Legacy(orgID).
 // The enforced roots are decided together: one ask per distinct action; any deny refuses the whole operation (a
-// *DenyError), except a deny of an action every root of which LegacyRefuses: those roots get the refusal scope (zero,
-// KindNone) and answer with their resolver's own legacy refusal, the deny still counted (CHAOS-13334); any missing verdict or obligation the gate does not carry out refuses it as unavailable (a local
-// *DenyError); the allows merge into one scope (allowlist = intersection, organization with an allowlist = the
-// allowlist) that every enforced root gets, and an allowlist is carried only when every enforced root is in the
-// registry. Exempt callers never ask and are counted.
+// *DenyError), except a deny of an action in legacyRefusalRoots every root of which is listed there and
+// LegacyRefuses: those roots get the refusal scope (zero, KindNone) and answer with their resolver's own legacy
+// refusal, the deny still counted (CHAOS-13334); any missing verdict or obligation the gate does not carry out refuses
+// it as unavailable (a local *DenyError); the allows merge into one scope (allowlist = intersection, organization with
+// an allowlist = the allowlist) that every enforced root gets, and an allowlist is carried only when every enforced
+// root is in the registry. Exempt callers never ask and are counted.
 func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID string, roots []Root) (map[string]pepgate.Scope, error) {
 	scopes := make(map[string]pepgate.Scope, len(roots))
 	legacy := func() map[string]pepgate.Scope {
@@ -212,10 +213,34 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 	return scopes, nil
 }
 
-// legacyRefusesAll reports whether every root of action has a legacy check that refuses the caller.
+// legacyRefusalRoots is the closed registry of the legacy-refusal path (CHAOS-13334): per catalog action, the root keys
+// whose resolver runs its own pre-resolver guard (graph's fieldPrechecks) before any read or write. A deny of an action
+// not listed, or of an operation naming a root of the action that is not listed, is FORBIDDEN. graph's census test
+// fails when a root mapped to a listed action is not listed or has no guard.
+var legacyRefusalRoots = map[string][]string{
+	"integrations.read": {"Query.dataHealth"},
+	"reports.write": {"Mutation.cloneSavedReport", "Mutation.createSavedReport", "Mutation.deleteSavedReport",
+		"Mutation.triggerReport", "Mutation.updateSavedReport"},
+}
+
+// LegacyRefusalRoots is a copy of the legacy-refusal registry, for the census.
+func LegacyRefusalRoots() map[string][]string {
+	out := make(map[string][]string, len(legacyRefusalRoots))
+	for action, keys := range legacyRefusalRoots {
+		out[action] = slices.Clone(keys)
+	}
+	return out
+}
+
+// legacyRefusesAll reports whether action is in the legacy-refusal registry and every root of it is listed there and
+// has a legacy check that refuses the caller.
 func legacyRefusesAll(roots []Root, action string) bool {
+	keys, registered := legacyRefusalRoots[action]
+	if !registered {
+		return false
+	}
 	for _, root := range roots {
-		if root.Action == action && !root.LegacyRefuses {
+		if root.Action == action && (!root.LegacyRefuses || !slices.Contains(keys, root.Key)) {
 			return false
 		}
 	}

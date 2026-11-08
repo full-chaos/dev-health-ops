@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,12 +11,14 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/full-chaos/dev-health-go/pep"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/reports"
 )
 
 // CHAOS-13334: under enforce, a root the PDP denies whose own legacy check (graph.fieldPrechecks) also refuses the
@@ -46,8 +49,14 @@ func integrationsDenied(t *testing.T) pep.Decider {
 // ingress verified (role, today's scope) and a user access token as the bearer.
 func runQueryEnforce(t *testing.T, gate *pdp.Gate, role, document string) enforceRun {
 	t.Helper()
+	return runQueryEnforceWriting(t, gate, role, document, nil)
+}
+
+// runQueryEnforceWriting is runQueryEnforce with the saved-report writer writer.
+func runQueryEnforceWriting(t *testing.T, gate *pdp.Gate, role, document string, writer *reports.Writer) enforceRun {
+	t.Helper()
 	client := &teamScopeReachClient{}
-	server := newGraphQLServerWithLimits(&graph.Resolver{ClickHouse: client}, 1000, 10)
+	server := newGraphQLServerWithLimits(&graph.Resolver{ClickHouse: client, ReportWriter: writer}, 1000, 10)
 	var roots atomic.Int64
 	server.AroundRootFields(func(ctx context.Context, next graphql.RootResolver) graphql.Marshaler {
 		roots.Add(1)
@@ -160,4 +169,45 @@ func TestGraphQLEnforceDataHealthLocalRefusalIsUnchanged(t *testing.T) {
 	down.Fail(http.StatusServiceUnavailable)
 	downGate, _ := enforceGate(t, pdp.ModeEnforce, "integrations", pepOf(t, down.URL))
 	runGraphQLEnforce(t, downGate, caller, enforceDocDataHealth).code503(t, string(pep.ReasonUnavailable))
+}
+
+// countingPool counts the saved-report transactions a mutation begins (a write attempt) and begins none.
+type countingPool struct{ begins atomic.Int64 }
+
+func (p *countingPool) Begin(context.Context) (pgx.Tx, error) {
+	p.begins.Add(1)
+	return nil, errors.New("countingPool: no database")
+}
+
+// acp (b): a PDP deny of a root whose legacy guard ADMITS the caller never reaches the resolver: FORBIDDEN, no root
+// run, no read, no write. dataHealth as admin and owner (RequireOperator admits) on /graphql and /query; a member's
+// deleteSavedReport for its own org (requireMutationOrg admits), whose legacy run does begin a write.
+func TestGraphQLEnforceDeniedRootTheGuardAdmitsNeverRuns(t *testing.T) {
+	const forbidden = `{"errors":[{"message":"Not authorized","extensions":{"code":"FORBIDDEN"}}],"data":null}`
+	for _, role := range []string{"admin", "owner"} {
+		t.Run(role+" dataHealth", func(t *testing.T) {
+			gate, _ := enforceGate(t, pdp.ModeEnforce, "integrations", integrationsDenied(t))
+			runGraphQLEnforce(t, gate, enforceCaller{user: true, role: role}, enforceDocDataHealth).forbidden(t)
+			gate, _ = enforceGate(t, pdp.ModeEnforce, "integrations", integrationsDenied(t))
+			if got := runQueryEnforce(t, gate, role, enforceDocDataHealth); got.code != http.StatusOK || got.body != forbidden || got.roots != 0 || got.statements != 0 {
+				t.Fatalf("/query: got %+v, want 200 %s, no root run, no read", got, forbidden)
+			}
+		})
+	}
+	t.Run("member deleteSavedReport own org", func(t *testing.T) {
+		document := `mutation M { deleteSavedReport(orgId: "` + ecOrg.String() + `", reportId: "55555555-5555-5555-5555-555555555555") }`
+		legacyPool := &countingPool{}
+		legacy := runQueryEnforceWriting(t, nil, "member", document, &reports.Writer{Pool: legacyPool})
+		if legacy.roots != 1 || legacyPool.begins.Load() != 1 {
+			t.Fatalf("legacy run: %+v with %d writes begun, want the resolver run and one write begun (the guard admits)", legacy, legacyPool.begins.Load())
+		}
+		deny := pdptest.New(t)
+		deny.Deny("role_lacks_action")
+		gate, _ := enforceGate(t, pdp.ModeEnforce, "reports", pepOf(t, deny.URL))
+		pool := &countingPool{}
+		got := runQueryEnforceWriting(t, gate, "member", document, &reports.Writer{Pool: pool})
+		if got.code != http.StatusOK || got.body != forbidden || got.roots != 0 || got.statements != 0 || pool.begins.Load() != 0 {
+			t.Fatalf("enforce: got %+v with %d writes begun, want 200 %s, no root run, no read, no write", got, pool.begins.Load(), forbidden)
+		}
+	})
 }

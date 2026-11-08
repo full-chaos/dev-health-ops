@@ -89,3 +89,59 @@ func isPDPDeny(err error) bool {
 	denied, ok := err.(*DenyError)
 	return ok && !denied.Local
 }
+
+// acp (a): the legacy-refusal path applies only to an action in the registry, and only while every root of the
+// operation on that action is in its registry entry and claims a refusing guard. A root on a registry action that is
+// not in the entry (a new root with no guard), and a root of an action not in the registry, keep the PDP deny
+// (FORBIDDEN), whatever LegacyRefuses says.
+func TestAuthorizeOperationLegacyRefusalOnlyForRegisteredRoots(t *testing.T) {
+	const orgID = "22222222-2222-2222-2222-222222222222"
+	allow, deny := pdptest.New(t), pdptest.New(t)
+	deny.Deny("role_lacks_action")
+	gate := func(t *testing.T) *Gate {
+		_, cfg := newMeter(t)
+		cfg.Mode = ModeEnforce
+		cfg.Decider = byActionDecider{allow: pepClient(t, allow.URL), deny: pepClient(t, deny.URL),
+			denied: map[string]bool{"integrations.read": true, "analytics.read": true}}
+		cfg.Switch = authzenforce.Parse(authzenforce.QueryAPI, "analytics,integrations")
+		return New(cfg)
+	}
+	caller := Caller{Class: CallerUser, Bearer: testBearer}
+	dataHealth := Root{Key: "Query.dataHealth", Action: "integrations.read", LegacyRefuses: true}
+	newRoot := Root{Key: "Query.newIntegrationsRoot", Action: "integrations.read", LegacyRefuses: true}
+	unregistered := Root{Key: "Query.securityOverview", Action: "analytics.read", LegacyRefuses: true}
+	for name, roots := range map[string][]Root{
+		"new root on a registry action":              {newRoot},
+		"new root beside a registered root":          {dataHealth, newRoot},
+		"root of an action not in the registry":      {unregistered},
+		"registered root beside an unregistered one": {dataHealth, unregistered},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := gate(t).AuthorizeOperation(context.Background(), caller, orgID, roots); !isPDPDeny(err) {
+				t.Fatalf("roots %+v: got %v, want the PDP deny (FORBIDDEN)", roots, err)
+			}
+		})
+	}
+}
+
+// acp (e): on the legacy-refusal path the deny is counted exactly once (mode enforce, result deny, the action), and
+// nothing else is counted, however many roots of the action the operation names.
+func TestAuthorizeOperationLegacyRefusalCountsTheDenyOnce(t *testing.T) {
+	const orgID = "22222222-2222-2222-2222-222222222222"
+	deny := pdptest.New(t)
+	deny.Deny("role_lacks_action")
+	meter, cfg := newMeter(t)
+	cfg.Mode = ModeEnforce
+	cfg.Decider = pepClient(t, deny.URL)
+	cfg.Switch = authzenforce.Parse(authzenforce.QueryAPI, "integrations")
+	dataHealth := Root{Key: "Query.dataHealth", Action: "integrations.read", LegacyRefuses: true}
+	scopes, err := New(cfg).AuthorizeOperation(context.Background(), Caller{Class: CallerUser, Bearer: testBearer}, orgID, []Root{dataHealth, dataHealth})
+	if err != nil || scopes[dataHealth.Key].Kind() != pepgate.KindNone {
+		t.Fatalf("got %v %v, want the root left to its legacy refusal", scopes, err)
+	}
+	points := meter.points(t, "dev_health_query_api_pdp_results_total")
+	want := map[string]int64{"action=integrations.read,mode=enforce,result=deny": 1}
+	if len(points) != len(want) || points["action=integrations.read,mode=enforce,result=deny"] != 1 {
+		t.Fatalf("counted %v, want exactly %v", points, want)
+	}
+}

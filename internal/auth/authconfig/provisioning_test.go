@@ -1,6 +1,7 @@
 package authconfig
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -182,6 +183,58 @@ func TestInviteAcceptSecretsWithoutAPreviousKey(t *testing.T) {
 			retired, _ := signedtoken.Build(uuid.New(), testInvitePrevious)
 			if ok, _ := signedtoken.ValidAny(retired, got); ok {
 				t.Fatal("a token signed with a retired key is accepted with no previous key set")
+			}
+		})
+	}
+}
+
+// A previous-key file that is empty once the resolver drops its final newline
+// is an unset previous key (D6465: a hygiene key never refuses a start). An
+// unreadable previous file, a previous key set twice, and an empty signing-key
+// file are still refused.
+func TestInvitePreviousKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		path := dir + "/" + name
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	routes := map[string]string{EnvMembershipRoutes: "true", EnvInviteTokenSecret: testInviteSecret}
+	for _, c := range []struct {
+		name    string
+		env     map[string]string
+		wantErr string
+	}{
+		{name: "empty file", env: merge(routes, map[string]string{EnvInviteTokenSecretPrevious + "_FILE": write("zero", "")})},
+		{name: "file holding LF", env: merge(routes, map[string]string{EnvInviteTokenSecretPrevious + "_FILE": write("lf", "\n")})},
+		{name: "file holding CR", env: merge(routes, map[string]string{EnvInviteTokenSecretPrevious + "_FILE": write("cr", "\r")})},
+		{name: "file holding CRLF", env: merge(routes, map[string]string{EnvInviteTokenSecretPrevious + "_FILE": write("crlf", "\r\n")})},
+		{name: "unreadable file", env: merge(routes, map[string]string{EnvInviteTokenSecretPrevious + "_FILE": dir + "/missing"}),
+			wantErr: EnvInviteTokenSecretPrevious + "_FILE could not be read"},
+		{name: "env and file both set", env: merge(routes, map[string]string{EnvInviteTokenSecretPrevious: testInvitePrevious,
+			EnvInviteTokenSecretPrevious + "_FILE": write("both", testInvitePrevious+"\n")}),
+			wantErr: EnvInviteTokenSecretPrevious + " and " + EnvInviteTokenSecretPrevious + "_FILE are mutually exclusive"},
+		{name: "empty signing-key file", env: map[string]string{EnvMembershipRoutes: "true", EnvInviteTokenSecret + "_FILE": write("signing", "\n")},
+			wantErr: EnvInviteTokenSecret + "_FILE contains an empty value"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := Load(Spec{LookupEnv: lookupFrom(provisioningEnv(c.env))})
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("Load = %v, want an error containing %q", err, c.wantErr)
+				}
+				if strings.Contains(err.Error(), testInvitePrevious) || strings.Contains(err.Error(), testInviteSecret) {
+					t.Fatalf("the error names a key value: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := cfg.InviteAcceptSecrets(); !slices.Equal(got, []string{testInviteSecret}) {
+				t.Fatalf("accept keys: %d, want the signing key only", len(got))
 			}
 		})
 	}

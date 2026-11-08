@@ -59,7 +59,7 @@ func provisioning(lookup secrets.LookupEnv, session SessionTokens) (Provisioning
 	if err != nil {
 		return Provisioning{}, err
 	}
-	previous, hasPrevious, err := secrets.ResolveSecret(EnvInviteTokenSecretPrevious, lookup)
+	previous, hasPrevious, err := resolveOptionalSecret(EnvInviteTokenSecretPrevious, lookup)
 	if err != nil {
 		return Provisioning{}, err
 	}
@@ -77,4 +77,16 @@ func provisioning(lookup secrets.LookupEnv, session SessionTokens) (Provisioning
 		out.InviteSecretPrevious = previous
 	}
 	return out, nil
+}
+
+// resolveOptionalSecret is secrets.ResolveSecret for a key that may be absent:
+// a key_FILE that is empty after the resolver's final-newline rule is the key
+// unset, not a refused start (D6465: a hygiene key never refuses a start). Every
+// other resolver error stands: an unreadable file, a key set twice.
+func resolveOptionalSecret(key string, lookup secrets.LookupEnv) (secrets.Value, bool, error) {
+	value, set, err := secrets.ResolveSecret(key, lookup)
+	if err != nil && err.Error() == fmt.Sprintf("%s_FILE contains an empty value", key) {
+		return secrets.Value{}, false, nil
+	}
+	return value, set, err
 }

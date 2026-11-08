@@ -25,3 +25,5 @@ internal/llmorgsettings/keybinding_test.go:generic-api-key:65
 internal/jobs/investment/categorize/orgtypesafeclient_test.go:generic-api-key:13
 internal/llmorgsettings/typesafe_config_test.go:generic-api-key:11
 internal/jobs/investment/typesafebyo_test.go:generic-api-key:24
+# a git sha in a test literal, not a key; CHAOS-13346
+deploy/helm/dev-health/valkey_networkpolicy_test.go:generic-api-key:236

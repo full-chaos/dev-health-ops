@@ -72,7 +72,7 @@ func TestAnACRAudienceTokenIsRefusedAtQueryAPIBeforeAnyRead(t *testing.T) {
 	} {
 		t.Run(acr.aud, func(t *testing.T) {
 			store := &acrQueryReads{accessStore: newAccessStore()}
-			stack := newAccessStackOn(t, queryAPIUserStore{queryAPIStoreBase: store}, testAccess(m.keys, nil, accessTestNow), true)
+			stack := newAccessStackOn(t, queryAPIUserStore{queryAPIStoreBase: store}, testAccess(m.keys, nil, accessTestNow))
 
 			for _, target := range targets {
 				store.reads = 0

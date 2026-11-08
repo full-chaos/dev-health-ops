@@ -225,7 +225,9 @@ type ServedDecision struct {
 	// They are recorded on the attempt rows and never change a request.
 	endpointType string
 	gatewayID    string
-	classifier   servedClassifier
+	// backend prices the attempt rows by the backend that served them.
+	backend    attemptBackend
+	classifier servedClassifier
 	// identity and stamp are fixed at construction from configured values only,
 	// never from a response field.
 	identity decision.Identity
@@ -383,7 +385,7 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 	classification := result.classification
 	state := shadowState(classification.State)
 	modelReturned := shadowModelID(classification.ModelReturned)
-	rows := attemptRecords(cfg, chwrite.RoleServed, served.identity, served.stamp, unit.workUnitID, result.exchange, state, modelReturned)
+	rows := attemptRecords(cfg, chwrite.RoleServed, served.backend, served.identity, served.stamp, unit.workUnitID, result.exchange, state, modelReturned)
 	for _, row := range rows {
 		row.EndpointType, row.GatewayID = shadowEndpointType(served.endpointType), shadowGatewayID(served.gatewayID)
 		served.attempts.Add(row)

@@ -15,18 +15,20 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pinrig"
 )
 
-// CHAOS-13209 D3, the legacy yardstick for "in any ACTIVE organization": the legacy query-api path over the migrated
-// database (HS256 edge token, the live users row, CheckTokenOrg) for a superuser with no membership row whose org
-// claim names an active or a suspended organization, and, as the control, a viewer member of each. The answers are
-// recorded as CELL lines and asserted as read in the code: CheckTokenOrg reads nothing for an admin.orgs holder
-// (scope.go:341), and the membership read admits only an active organization (store.go:140-144).
+// CHAOS-13209 D3, the legacy yardstick for "in any ACTIVE organization": the answers the legacy query-api path gave
+// over the migrated database (HS256 edge token, the live users row, CheckTokenOrg) for a superuser with no membership
+// row whose org claim names an active or a suspended organization, and, as the control, a viewer member of each. The
+// HS256 class is retired (CHAOS-13126): the same callers come on user access tokens of real sessions through the
+// routed edge verifier, and the wanted statuses stay the legacy ones. The answers are recorded as CELL lines.
 func TestLegacyQueryAPISuperuserInAnInactiveOrganization(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
@@ -71,9 +73,15 @@ VALUES ($1, $2, $3, 'viewer', now(), now(), now())`, uuid.New(), org, viewer); e
 		}
 	}
 
+	rig := pinrig.NewPinRig(t, ctx, pool, pg)
+	sessionOf := map[uuid.UUID]uuid.UUID{superuser: rig.SignIn(t, ctx, superuser), viewer: rig.SignIn(t, ctx, viewer)}
 	verifier, _ := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStore(policy.PGStore{Pool: pool}))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStore(policy.PGStore{Pool: pool}))
 	if err != nil {
+		t.Fatal(err)
+	}
+	m := newAccessMinter(t)
+	if err := routeEdgeVerifier(edge, testAccess(m.keys, nil, accessTestNow).opts); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
@@ -103,7 +111,7 @@ VALUES ($1, $2, $3, 'viewer', now(), now(), now())`, uuid.New(), org, viewer); e
 		{"viewer member", viewer, false, active, "active", http.StatusOK},
 		{"viewer member", viewer, false, inactive, "inactive", http.StatusUnauthorized},
 	} {
-		token := ecMintEdgeToken(t, ecEdgeClaims{sub: c.user.String(), orgID: c.org.String(), role: "viewer", isSuperuser: c.super})
+		token := m.mint(c.user, map[string]any{"sid": sessionid.Wire(sessionOf[c.user]), "org_id": c.org.String()}, nil)
 		for _, row := range paRows {
 			req := httptest.NewRequest(http.MethodGet, row, nil)
 			req.Header.Set("Authorization", "Bearer "+token)

@@ -21,7 +21,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/api/ratelimit"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 func optionalPtr(value *string) pyjson.Value {
@@ -323,7 +322,7 @@ func (h handlers) logout(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if claims, err := h.Verifier.VerifyType(refreshToken, edgetoken.RefreshType); err == nil {
+	if claims, err := h.Verifier.VerifyRefresh(refreshToken); err == nil {
 		// An absent jti reads as nil, which is falsy, as .get("jti") is.
 		if jti := claims["jti"]; truthy(jti) {
 			jtiText, err := pyStrClaim(jti)

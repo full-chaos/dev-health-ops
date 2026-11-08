@@ -5,21 +5,6 @@ import (
 	"testing"
 )
 
-func TestAccessTokenClassDefaultsToHS256Compat(t *testing.T) {
-	for name, set := range map[string]func(map[string]string){
-		"unset":    func(map[string]string) {},
-		"empty":    func(env map[string]string) { env[EnvAccessTokenClass] = "" },
-		"explicit": func(env map[string]string) { env[EnvAccessTokenClass] = "hs256_compat" },
-	} {
-		env := sessionEnv(testAccessSecret, testSuccessorKey)
-		set(env)
-		cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
-		if err != nil || cfg.Session.AccessClass != AccessClassHS256Compat {
-			t.Errorf("%s: class %q, err %v; want hs256_compat", name, cfg.Session.AccessClass, err)
-		}
-	}
-}
-
 func eddsaEnv() map[string]string {
 	env := sessionEnv(testAccessSecret, testSuccessorKey)
 	env[EnvAccessTokenClass] = "eddsa"
@@ -58,7 +43,7 @@ func TestAccessTokenClassRefusesEveryOtherValue(t *testing.T) {
 			t.Errorf("%q: Load accepted it", value)
 			continue
 		}
-		if err.Error() != "AUTH_ACCESS_TOKEN_CLASS must be hs256_compat or eddsa" {
+		if err.Error() != "AUTH_ACCESS_TOKEN_CLASS must be eddsa" {
 			t.Errorf("%q: error %q is not the fixed message (it must not echo the value)", value, err)
 		}
 	}
@@ -97,14 +82,5 @@ func TestAccessTokenClassEdDSARefusesWhitespaceAroundIssAndAud(t *testing.T) {
 	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
 	if err != nil || cfg.TokenIssuerURL != "https://auth.example.test" {
 		t.Fatalf("an exact issuer was refused or changed: %q, %v", cfg.TokenIssuerURL, err)
-	}
-}
-
-func TestHS256CompatKeepsAnyAudienceAsBefore(t *testing.T) {
-	env := sessionEnv(testAccessSecret, testSuccessorKey)
-	env[EnvAccessTokenAudience] = "go-api-legacy-audience"
-	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
-	if err != nil || cfg.Session.AccessAudience != "go-api-legacy-audience" {
-		t.Fatalf("audience %q, err %v", cfg.Session.AccessAudience, err)
 	}
 }

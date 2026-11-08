@@ -122,12 +122,14 @@ func TestQueryAPIEnforceRefusals(t *testing.T) {
 		"extraEnv list":             {[]string{"--set-json", `queryApi.extraEnv=[{"name":"QUERY_API_DATABASE_ROLE","value":"devhealth_query"},{"name":"QUERY_API_AUTHZ_ENFORCE","value":"git"}]`}, "queryApi.extraEnv must not set QUERY_API_AUTHZ_ENFORCE"},
 		"extraEnv headers":          {[]string{"--set-json", `queryApi.extraEnv=[{"name":"QUERY_API_DATABASE_ROLE","value":"devhealth_query"},{"name":"QUERY_API_HEADERS_AUTHZ_ENFORCE","value":"git"}]`}, "queryApi.extraEnv must not set QUERY_API_HEADERS_AUTHZ_ENFORCE"},
 	} {
-		t.Run(name, func(t *testing.T) {
-			_, out, err := renderAuth(t, phaseArgs(2, tc.extra...)...)
-			if err == nil || !strings.Contains(out, tc.want) {
-				t.Fatalf("rendered: err=%v out=%.300s; want a refusal containing %q", err, out, tc.want)
-			}
-		})
+		for _, enabled := range []string{"true", "false"} {
+			t.Run(name+"/queryApi.enabled="+enabled, func(t *testing.T) {
+				_, out, err := renderAuth(t, phaseArgs(2, append(append([]string{}, tc.extra...), "--set", "queryApi.enabled="+enabled)...)...)
+				if err == nil || !strings.Contains(out, tc.want) {
+					t.Fatalf("rendered: err=%v out=%.300s; want a refusal containing %q", err, out, tc.want)
+				}
+			})
+		}
 	}
 }
 

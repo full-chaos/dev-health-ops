@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/pem"
+	"log/slog"
 	"os"
 	"testing"
 
@@ -27,6 +28,33 @@ const queryAPIProfile = "GET /api/v1/home"
 // then the live users row, session and membership through the go-api tables. It is the consumer that must
 // accept what auth-service mints.
 func queryAPIVerifier(t *testing.T, cfg authconfig.Config, store policy.Store) *principal.EdgeVerifier {
+	t.Helper()
+	edge, err := principal.NewEdgeVerifier(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := edge.RouteAccess(queryAPIValidator(t, cfg), "dev-health-query-api"); err != nil {
+		t.Fatal(err)
+	}
+	return edge
+}
+
+// queryAPIAuthenticator is the routed authenticator under queryAPIVerifier: the user it resolves carries the role
+// from the live membership row (an access-token.v1 token carries no role).
+func queryAPIAuthenticator(t *testing.T, cfg authconfig.Config, store policy.Store) *policy.Authenticator {
+	t.Helper()
+	auth, err := policy.NewAuthenticator(store, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.RouteAccess(principal.RoutedAccess(queryAPIValidator(t, cfg)), "dev-health-query-api"); err != nil {
+		t.Fatal(err)
+	}
+	return auth
+}
+
+// queryAPIValidator is query-api's profile-routed validator over this stack's issuer and signing key.
+func queryAPIValidator(t *testing.T, cfg authconfig.Config) *accessverify.Validator {
 	t.Helper()
 	if cfg.TokenIssuerURL == "" || cfg.SigningKeyPath == "" || cfg.SigningKeyID == "" {
 		t.Fatal("query-api's verifier needs the stack's issuer URL and signing key: build the env with newEdDSARoutesEnv")
@@ -59,14 +87,16 @@ func queryAPIVerifier(t *testing.T, cfg authconfig.Config, store policy.Store) *
 	if err != nil {
 		t.Fatal(err)
 	}
-	edge, err := principal.NewEdgeVerifier(store)
+	return validator
+}
+
+// queryAPIRole is the role query-api's routed authenticator resolves for token on its REST row.
+func (e *routesEnv) queryAPIRole(ctx context.Context, token string) (string, error) {
+	user, err := e.queryAuth.Authenticate(policy.WithRouteProfile(ctx, queryAPIProfile), token)
 	if err != nil {
-		t.Fatal(err)
+		return "", err
 	}
-	if err := edge.RouteAccess(validator, "dev-health-query-api"); err != nil {
-		t.Fatal(err)
-	}
-	return edge
+	return user.Role, nil
 }
 
 // queryAPIAccepts is query-api's answer for token on its REST row.

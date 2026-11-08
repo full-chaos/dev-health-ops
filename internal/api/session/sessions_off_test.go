@@ -5,6 +5,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 // With no session issuer (AUTH_PROXY_SESSIONS off) the routes that hand out a token pair answer 503 naming
@@ -63,5 +68,45 @@ func TestWithASessionIssuerNoRouteAnswersTheSessionsOffRefusal(t *testing.T) {
 		if strings.Contains(rec.Body.String(), "AUTH_PROXY_SESSIONS") {
 			t.Errorf("%s: answered the sessions-off refusal with an issuer set: %q", pattern, rec.Body.String())
 		}
+	}
+}
+
+// The go-api plane of the retired HS256 refresh: with AUTH_PROXY_SESSIONS off, go-api's own /refresh answers a
+// valid go-api refresh JWT (signed with go-api's key) with the sessions-off 503 through the full route (guard,
+// body validation, limiter); it verifies nothing and mints nothing.
+func TestSessionsOffRefreshAnswersAValidGoAPIRefreshJWTWith503(t *testing.T) {
+	deps := completeDeps(t)
+	deps.Issuer = nil
+	signer, err := edgetoken.NewSigner("wiring-test-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := signer.Refresh(edgetoken.RefreshClaims{UserID: uuid.NewString(), OrgID: uuid.NewString(), FamilyID: uuid.NewString()},
+		time.Now(), uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deps.Verifier.VerifyRefresh(token); err != nil {
+		t.Fatalf("the planted token is not a valid go-api refresh JWT: %v", err)
+	}
+	var refresh http.Handler
+	for _, route := range Routes(deps) {
+		if route.Method == http.MethodPost && route.Pattern == "/api/v1/auth/refresh" {
+			refresh = route.Handler
+		}
+	}
+	if refresh == nil {
+		t.Fatal("go-api mounts no /api/v1/auth/refresh")
+	}
+	rec := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", strings.NewReader(`{"refresh_token":"`+token+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	refresh.ServeHTTP(rec, request)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"reason_code":"config_missing"`) ||
+		!strings.Contains(rec.Body.String(), "AUTH_PROXY_SESSIONS") {
+		t.Fatalf("go-api /refresh with sessions off: %d %s, want 503 config_missing naming AUTH_PROXY_SESSIONS", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "access_token") || strings.Contains(rec.Body.String(), "refresh_token") {
+		t.Fatalf("go-api /refresh with sessions off answered a token: %s", rec.Body)
 	}
 }

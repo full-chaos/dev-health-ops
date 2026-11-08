@@ -253,8 +253,7 @@
       "resource_kind": "organization",
       "risk_class": "high",
       "cache_class": "none",
-      "impersonation": "denied",
-      "platform_admin": "allowed"
+      "impersonation": "denied"
     },
     {
       "action": "admin.users",

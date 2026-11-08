@@ -148,7 +148,7 @@ func CredentialRoutes(deps CredentialDeps) ([]httpapi.Route, error) {
 		return nil, err
 	}
 	routes = append(routes, register)
-	return routes, nil
+	return mountBearerRoutes(deps.Issuer, deps.Logger, "change-password", routes, "POST "+PatternChangePassword), nil
 }
 
 func inputOf(r *http.Request) credentialInput {

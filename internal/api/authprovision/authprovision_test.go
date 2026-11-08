@@ -13,9 +13,24 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/workloadclient"
 )
 
-const testToken = "svc_authsess_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+// testToken is the workload token the last client built by newWorkloadClient presents.
+var testToken string
+
+// newWorkloadClient is a client of base that presents a workload token (testToken).
+func newWorkloadClient(t *testing.T, base *url.URL, timeout time.Duration) *Client {
+	t.Helper()
+	wc, token := workloadclient.New(t)
+	testToken = token
+	client, err := NewWorkload(base, wc, timeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
 
 type seen struct {
 	method, path, auth, contentType string
@@ -37,11 +52,7 @@ func newClient(t *testing.T, answer func(w http.ResponseWriter, got seen)) (*Cli
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := New(base, testToken, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return client, got
+	return newWorkloadClient(t, base, time.Second), got
 }
 
 func writeJSON(w http.ResponseWriter, status int, body string) {
@@ -71,23 +82,18 @@ func TestPathsAreTheAuthProvisioningRoutes(t *testing.T) {
 	}
 }
 
-func TestNewRefusesAnythingButAnAuthSessionIssuerCredential(t *testing.T) {
+func TestNewWorkloadRefusesNoURLAndNoClient(t *testing.T) {
 	base, _ := url.Parse("http://auth-service:8095")
-	for _, token := range []string{"", "svc_acr_" + strings.Repeat("A", 43), "svc_authsess_short", "Bearer " + testToken} {
-		_, err := New(base, token, time.Second)
-		if err == nil {
-			t.Fatalf("New accepted %q", token)
-		}
-		if token != "" && strings.Contains(err.Error(), token) {
-			t.Fatalf("the error carries the token: %v", err)
-		}
+	wc, _ := workloadclient.New(t)
+	if _, err := NewWorkload(nil, wc, time.Second); err == nil {
+		t.Fatal("NewWorkload accepted no URL")
 	}
-	if _, err := New(nil, testToken, time.Second); err == nil {
-		t.Fatal("New accepted no URL")
+	if _, err := NewWorkload(base, nil, time.Second); err == nil {
+		t.Fatal("NewWorkload accepted no workload client")
 	}
 }
 
-// Each verb posts exactly the route's body with the service credential.
+// Each verb posts exactly the route's body with the workload token.
 func TestEveryVerbSendsItsRouteBodyWithTheServiceCredential(t *testing.T) {
 	org, principal, actor, inviter, other := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	invite := uuid.New()
@@ -322,17 +328,14 @@ func TestATimeoutAndAnUnreachableServerAreUnavailable(t *testing.T) {
 	}))
 	t.Cleanup(slow.Close)
 	base, _ := url.Parse(slow.URL)
-	client, err := New(base, testToken, 50*time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := newWorkloadClient(t, base, 50*time.Millisecond)
 	if err := client.Deprovision(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("timeout = %v, want ErrUnavailable", err)
 	}
 	closed := httptest.NewServer(http.NotFoundHandler())
 	base, _ = url.Parse(closed.URL)
 	closed.Close()
-	client, _ = New(base, testToken, time.Second)
+	client = newWorkloadClient(t, base, time.Second)
 	if err := client.Deprovision(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("unreachable = %v, want ErrUnavailable", err)
 	}
@@ -371,7 +374,8 @@ func TestTheClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	}))
 	defer redirecting.Close()
 	base, _ := url.Parse(redirecting.URL)
-	core, err := NewCore(base, testToken, time.Second)
+	wc, _ := workloadclient.New(t)
+	core, err := NewWorkloadCore(base, wc, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

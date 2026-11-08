@@ -79,9 +79,6 @@ func TestHS256WebTokenIsRefusedOnEveryAccessRowWithAnIssuerURL(t *testing.T) {
 			if path == authapi.PatternChangePassword {
 				body = `{"current_password":"` + strings.Repeat("a", 24) + `","new_password":"` + strings.Repeat("b", 24) + `"}`
 			}
-			if row.LegacyHS256 {
-				t.Fatalf("row %s opts into the retired HS256 class", row.Profile)
-			}
 			// change-password reaches its store before it answers a bad bearer, and the store is unreachable here: 503 is the only other answer.
 			for name, bearer := range map[string]string{"valid": valid, "tampered": tampered} {
 				status, _ := routeAnswer(t, handler, method, path, body, bearer)

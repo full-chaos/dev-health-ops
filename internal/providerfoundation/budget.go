@@ -266,6 +266,7 @@ type Metrics struct {
 	inventoryPageCap               map[string]uint64
 	perRunTruncation               map[string]uint64
 	artifactSkipped                map[string]uint64
+	nonReportMembersSkipped        map[string]uint64
 	skippedArtifactCauseOverflow   map[string]uint64
 	snapshotDiscarded              map[string]uint64
 	resumeReanchor                 map[string]uint64
@@ -327,6 +328,7 @@ func NewMetrics() *Metrics {
 		inventoryPageCap:               map[string]uint64{},
 		perRunTruncation:               map[string]uint64{},
 		artifactSkipped:                map[string]uint64{},
+		nonReportMembersSkipped:        map[string]uint64{},
 		skippedArtifactCauseOverflow:   map[string]uint64{},
 		snapshotDiscarded:              map[string]uint64{},
 		resumeReanchor:                 map[string]uint64{},
@@ -557,6 +559,21 @@ func (m *Metrics) RecordArtifactSkipped(provider, dataset, reason string) {
 	defer m.mu.Unlock()
 	m.artifactSkipped[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
 		":"+MetricArtifactSkipReasonLabel(reason)]++
+}
+
+// RecordNonReportMembersSkipped counts archive members that are not test
+// reports (CHAOS-13193), by bounded provider, dataset and extension class
+// ("json" or "other"). Observability only: it is not an incomplete cause.
+func (m *Metrics) RecordNonReportMembersSkipped(provider, dataset, class string, count int) {
+	if m == nil || count <= 0 {
+		return
+	}
+	if class != "json" {
+		class = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nonReportMembersSkipped[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+":"+class] += uint64(count)
 }
 
 // metricSkippedArtifactCauseOverflowVocabulary bounds the cause label on
@@ -1766,6 +1783,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_artifact_skipped_total",
 		"Provider artifacts skipped as unreadable while the rest of the inventory continued, by bounded provider, dataset, and reason.",
 		"reason", m.artifactSkipped,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_non_report_members_skipped_total",
+		"Artifact members that are not test reports (not .xml or .info) and were skipped, by bounded provider, dataset, and extension class (json or other). Not an incomplete cause (CHAOS-13193).",
+		"class", m.nonReportMembersSkipped,
 	); err != nil {
 		return err
 	}

@@ -735,14 +735,16 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 			authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
 			authconfig.EnvSigningKeyFile: "/nonexistent",
 			authconfig.EnvSigningKeyID:   "routes-test",
+			authconfig.EnvTokenIssuerURL: wellKnownIssuer,
 		}))})
 		if err != nil {
 			t.Fatalf("load config: %v", err)
 		}
 		return cfg
 	}
+	signer := keySigner(t)
 	mountedBy := func(cfg authconfig.Config) string {
-		mounted, err := sessionRoutes(cfg, logger, pool, schema, &stubSigner{}, mustLimits(t), nil)
+		mounted, err := sessionRoutes(cfg, logger, pool, schema, signer, mustLimits(t), nil)
 		if err != nil {
 			t.Fatalf("sessionRoutes: %v", err)
 		}
@@ -753,12 +755,12 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 		return strings.Join(got, ",")
 	}
 	sessionRoutesText := "POST /v1/token/refresh,GET /v1/sessions/current,POST /v1/sessions/revoke,POST /v1/sessions/revoke-all"
-	withLoginStub := sessionRoutesText + ",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /internal/v1/sessions,POST /api/v1/auth/social-login,POST /internal/v1/sessions/state,POST /internal/v1/sessions/delegated,POST /internal/v1/sessions/delegated/end,POST /api/v1/auth/validate,POST /api/v1/auth/switch-org,POST /api/v1/auth/login"
+	withLoginStub := sessionRoutesText + ",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/social-login,POST /api/v1/auth/validate,POST /api/v1/auth/switch-org,POST /api/v1/auth/login"
 	if got := mountedBy(load(sessionEnvironment)); got != withLoginStub {
 		t.Fatalf("with the session secrets: mounted %s, want %s", got, withLoginStub)
 	}
 	withLogin := load(compatEnvironment)
-	if got, want := mountedBy(withLogin), sessionRoutesText+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /internal/v1/sessions,POST /api/v1/auth/social-login,POST /internal/v1/sessions/state,POST /internal/v1/sessions/delegated,POST /internal/v1/sessions/delegated/end,POST /api/v1/auth/validate,POST /api/v1/auth/switch-org"; got != want {
+	if got, want := mountedBy(withLogin), sessionRoutesText+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /api/v1/auth/social-login,POST /api/v1/auth/validate,POST /api/v1/auth/switch-org"; got != want {
 		t.Fatalf("with the lockout key: mounted %s, want %s", got, want)
 	}
 	withLink := load(func(env map[string]string) map[string]string {

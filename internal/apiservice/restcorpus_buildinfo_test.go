@@ -1,20 +1,18 @@
 package apiservice
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // TestBuildInfoIsMountedGuardedAndStamped drives the real route set and
@@ -25,26 +23,14 @@ func TestBuildInfoIsMountedGuardedAndStamped(t *testing.T) {
 	version.Commit = "buildinfotest0123456789abcdef0123456789abcd"
 	t.Cleanup(func() { version.Commit = previous })
 
-	key := strings.Repeat("fixture-key-", 3)
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	user := uuid.New()
-	auth, err := policy.NewAuthenticator(verifier, scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
+	user, org := uuid.New(), uuid.New()
+	auth := tokens.AuthenticatorOver(t, memberScopeStore{scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, user, org}, quietLogger())
 	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(Deps{Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}, quietLogger()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": user.String(), "type": "access", "org_id": uuid.NewString(), "exp": time.Now().Add(time.Hour).Unix(),
-	}).SignedString([]byte(key))
-	if err != nil {
-		t.Fatal(err)
-	}
+	token := tokens.MustMint(t, edtokens.Claims{UserID: user, OrgID: org.String()})
 
 	authed := httptest.NewRequest(http.MethodGet, "/buildinfo", nil)
 	authed.Header.Set("Authorization", "Bearer "+token)
@@ -68,4 +54,22 @@ func TestBuildInfoIsMountedGuardedAndStamped(t *testing.T) {
 			t.Errorf("%s answer lacks the plane/build stamp: %v", name, response.Header())
 		}
 	}
+}
+
+// memberScopeStore is scopeStore with one membership row: user is a member of org.
+type memberScopeStore struct {
+	scopeStore
+	user, org uuid.UUID
+}
+
+func (s memberScopeStore) Membership(_ context.Context, user, org uuid.UUID) (string, bool, error) {
+	if user == s.user && org == s.org {
+		return "member", true, nil
+	}
+	return "", false, nil
+}
+
+func (s memberScopeStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
 }

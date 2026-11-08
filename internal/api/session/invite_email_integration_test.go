@@ -32,7 +32,7 @@ var inviteCases = []inviteCase{
 
 func seedInviteSubject(t *testing.T, ctx context.Context, st stack, tc inviteCase) (userID, userEmail, token string) {
 	t.Helper()
-	return seedInviteSubjectSignedWith(t, ctx, st, tc, signedtoken.Secret("", ""))
+	return seedInviteSubjectSignedWith(t, ctx, st, tc, testLinkSecret)
 }
 
 // seedInviteSubjectSignedWith is seedInviteSubject with the invite token signed

@@ -138,7 +138,7 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 	minter := newAccessMinter(t)
 	base := matrixStoreBase{accessStore: newAccessStore(), counts: counts}
 	setup := testAccess(matrixKeySource{inner: minter.keys, counts: counts}, nil, accessTestNow)
-	stack := newAccessStackOn(t, queryAPIUserStore{queryAPIStoreBase: base}, setup, true)
+	stack := newAccessStackOn(t, queryAPIUserStore{queryAPIStoreBase: base}, setup)
 	stack.user = minter.mint(ecUser, nil, nil)
 
 	// The REST routes' builders need ClickHouse, a registry and JWKS (their
@@ -150,7 +150,7 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	restMux := http.NewServeMux()
@@ -232,6 +232,13 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 					got = stack.sendWith(c.listener, c.row.method, path, "", carrier.bearer, carrier.headers)
 				}
 				keys, store := counts.snapshot()
+				if slices.Contains(c.row.classes, class.id) && platformAdminOnly[c.row.method+" "+c.row.route] && class.id == "user_access_token" {
+					accepts++
+					if got.Status != http.StatusUnauthorized || keys+store == 0 {
+						t.Errorf("%s @%s: class %s of an organization admin answered %d after %d lookups, want 401 after a live read: the row serves a platform admin only", c.row.id, c.listener, class.id, got.Status, keys+store)
+					}
+					continue
+				}
 				if slices.Contains(c.row.classes, class.id) {
 					accepts++
 					if got.Status == http.StatusUnauthorized || !served(got.Status) {
@@ -256,6 +263,10 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 		t.Errorf("classes with no carrier %v, want %v", notDriven, want)
 	}
 }
+
+// platformAdminOnly are the rows that accept user_access_token for a platform admin only (authenticateBuildInfo):
+// the matrix's organization-admin token is refused there after its live users-row read.
+var platformAdminOnly = map[string]bool{"GET /buildinfo": true}
 
 func serveREST(handler http.Handler, method, path string, carrier queryMatrixCell) answer {
 	request := httptest.NewRequest(method, path, nil)

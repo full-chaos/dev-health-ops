@@ -20,7 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
-const delegatedClasses = `,"accepted_credential_classes":["internal_svc_authsess_token","workload_token"]}`
+const delegatedClasses = `,"accepted_credential_classes":["workload_token"]}`
 
 func delegatedRow(route string) string {
 	return `{"service":"` + AccessService + `","method":"POST","route":"` + route + `"` + delegatedClasses
@@ -47,9 +47,6 @@ func delegatedHandlers(t *testing.T, f *compatFixture) compatHandlers {
 		t.Fatal(err)
 	}
 	deps := CompatDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer, IssueWorkload: f.workload, Logger: logger, Projector: f.projector}
-	if f.creds != nil {
-		deps.ServiceCredentials = f.creds
-	}
 	return compatHandlers{CompatDeps: deps, rec: rec}
 }
 
@@ -96,13 +93,13 @@ func TestDelegatedRoutesAreDarkWithoutTheirRows(t *testing.T) {
 		"no rows":     []byte(`{"rows":[]}`),
 		"start only":  []byte(`{"rows":[` + delegatedRow(PatternDelegatedSession) + `]}`),
 		"end only":    []byte(`{"rows":[` + delegatedRow(PatternDelegatedSessionEnd) + `]}`),
-		"wrong class": []byte(strings.ReplaceAll(string(delegatedRowsDocument), "internal_svc_authsess_token", "user_access_token")),
+		"wrong class": []byte(strings.ReplaceAll(string(delegatedRowsDocument), "workload_token", "user_access_token")),
 	} {
 		server := delegatedServer(t, f, rows)
-		if r := postDelegated(server, PatternDelegatedSession, body, issuerBearer); r.Code != http.StatusNotFound {
+		if r := postDelegated(server, PatternDelegatedSession, body, issuerBearer()); r.Code != http.StatusNotFound {
 			t.Errorf("%s: start %d, want 404", name, r.Code)
 		}
-		if r := postDelegated(server, PatternDelegatedSessionEnd, `{"session_id":"`+record.ID.String()+`"}`, issuerBearer); r.Code != http.StatusNotFound {
+		if r := postDelegated(server, PatternDelegatedSessionEnd, `{"session_id":"`+record.ID.String()+`"}`, issuerBearer()); r.Code != http.StatusNotFound {
 			t.Errorf("%s: end %d, want 404", name, r.Code)
 		}
 	}
@@ -113,10 +110,10 @@ func TestDelegatedRoutesAreDarkWithoutTheirRows(t *testing.T) {
 
 func TestDelegatedRoutesMountFromTheEmbeddedRows(t *testing.T) {
 	f, record := startFixture(t)
-	if r := f.do(http.MethodPost, PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer); r.Code != http.StatusCreated {
+	if r := f.do(http.MethodPost, PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer()); r.Code != http.StatusCreated {
 		t.Fatalf("start %d: %s", r.Code, r.Body)
 	}
-	if r := f.do(http.MethodPost, PatternDelegatedSessionEnd, `{"session_id":"`+record.ID.String()+`"}`, issuerBearer); r.Code != http.StatusNoContent {
+	if r := f.do(http.MethodPost, PatternDelegatedSessionEnd, `{"session_id":"`+record.ID.String()+`"}`, issuerBearer()); r.Code != http.StatusNoContent {
 		t.Fatalf("end %d: %s", r.Code, r.Body)
 	}
 	if strings.Contains(f.logs.String(), "auth delegated routes not mounted") {
@@ -127,10 +124,10 @@ func TestDelegatedRoutesMountFromTheEmbeddedRows(t *testing.T) {
 func TestDelegatedRoutesMountWithBothRows(t *testing.T) {
 	f, record := startFixture(t)
 	server := delegatedServer(t, f, delegatedRowsDocument)
-	if r := postDelegated(server, PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer); r.Code != http.StatusCreated {
+	if r := postDelegated(server, PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer()); r.Code != http.StatusCreated {
 		t.Fatalf("start %d: %s", r.Code, r.Body)
 	}
-	if r := postDelegated(server, PatternDelegatedSessionEnd, `{"session_id":"`+record.ID.String()+`"}`, issuerBearer); r.Code != http.StatusNoContent {
+	if r := postDelegated(server, PatternDelegatedSessionEnd, `{"session_id":"`+record.ID.String()+`"}`, issuerBearer()); r.Code != http.StatusNoContent {
 		t.Fatalf("end %d: %s", r.Code, r.Body)
 	}
 }
@@ -151,7 +148,7 @@ func memberNames(t *testing.T, raw []byte) []string {
 
 func TestDelegatedStartAnswersExactlyItsMembers(t *testing.T) {
 	f, record := startFixture(t)
-	r := postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer)
+	r := postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer())
 	if r.Code != http.StatusCreated {
 		t.Fatalf("status %d: %s", r.Code, r.Body)
 	}
@@ -197,7 +194,7 @@ func TestDelegatedStartUnderEdDSAAddsTheSessionToken(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	f, record := startFixture(t)
 	f.issuer = newEdDSAIssuer(t, signer, testAudience)
-	r := postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer)
+	r := postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer())
 	if r.Code != http.StatusCreated {
 		t.Fatalf("status %d: %s", r.Code, r.Body)
 	}
@@ -237,7 +234,7 @@ func TestDelegatedStartRefusalMap(t *testing.T) {
 		t.Run(err.Error(), func(t *testing.T) {
 			f, _ := startFixture(t)
 			f.sessions.startErr = err
-			r := postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer)
+			r := postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer())
 			expectError(t, r, want.status, want.reason)
 			if strings.Contains(r.Body.String(), err.Error()) {
 				t.Fatalf("the cause reached the body: %s", r.Body)
@@ -249,13 +246,13 @@ func TestDelegatedStartRefusalMap(t *testing.T) {
 func TestDelegatedStartAnswersABadReasonMalformed(t *testing.T) {
 	f, _ := startFixture(t)
 	f.sessions.startErr = session.ErrInvalidReason
-	expectMalformed(t, postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer))
+	expectMalformed(t, postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer()))
 }
 
 func TestDelegatedStartMapsAMissingProjection(t *testing.T) {
 	f, _ := startFixture(t)
 	f.projector.gone[f.principal] = true
-	r := postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer)
+	r := postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer())
 	expectError(t, r, http.StatusForbidden, "not_entitled")
 	if len(f.sessions.started) != 0 {
 		t.Fatal("the route reached StartDelegation")
@@ -275,7 +272,7 @@ func TestDelegatedStartBodyIsStrict(t *testing.T) {
 		"not an object":     `[]`,
 		"two values":        good + good,
 	} {
-		expectMalformed(t, postDelegated(server, PatternDelegatedSession, body, issuerBearer))
+		expectMalformed(t, postDelegated(server, PatternDelegatedSession, body, issuerBearer()))
 		if len(f.sessions.started) != 0 {
 			t.Fatalf("%s reached StartDelegation", name)
 		}
@@ -307,7 +304,7 @@ func TestDelegatedMintFailureEndsTheRow(t *testing.T) {
 			f, record := startFixture(t)
 			plant(f, &record)
 			f.sessions.delegated, f.sessions.records[record.ID] = record, record
-			r := postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer)
+			r := postDelegated(delegatedServer(t, f, delegatedRowsDocument), PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer())
 			expectError(t, r, http.StatusServiceUnavailable, "dependency_unavailable")
 			if strings.Contains(r.Body.String(), "access_token") {
 				t.Fatalf("a token left: %s", r.Body)
@@ -323,38 +320,38 @@ func TestDelegatedEndEndsOnlyADelegatedSession(t *testing.T) {
 	f, record := startFixture(t)
 	server := delegatedServer(t, f, delegatedRowsDocument)
 	endBody := func(id uuid.UUID) string { return `{"session_id":"` + id.String() + `"}` }
-	expectError(t, postDelegated(server, PatternDelegatedSessionEnd, endBody(f.record.ID), issuerBearer), http.StatusNotFound, "session_not_found")
-	expectError(t, postDelegated(server, PatternDelegatedSessionEnd, endBody(uuid.New()), issuerBearer), http.StatusNotFound, "session_not_found")
-	expectMalformed(t, postDelegated(server, PatternDelegatedSessionEnd, `{"session_id":"x"}`, issuerBearer))
-	expectMalformed(t, postDelegated(server, PatternDelegatedSessionEnd, `{"session_id":"`+record.ID.String()+`","x":1}`, issuerBearer))
+	expectError(t, postDelegated(server, PatternDelegatedSessionEnd, endBody(f.record.ID), issuerBearer()), http.StatusNotFound, "session_not_found")
+	expectError(t, postDelegated(server, PatternDelegatedSessionEnd, endBody(uuid.New()), issuerBearer()), http.StatusNotFound, "session_not_found")
+	expectMalformed(t, postDelegated(server, PatternDelegatedSessionEnd, `{"session_id":"x"}`, issuerBearer()))
+	expectMalformed(t, postDelegated(server, PatternDelegatedSessionEnd, `{"session_id":"`+record.ID.String()+`","x":1}`, issuerBearer()))
 	if len(f.sessions.ended) != 0 {
 		t.Fatalf("ended %v", f.sessions.ended)
 	}
-	if r := postDelegated(server, PatternDelegatedSessionEnd, endBody(record.ID), issuerBearer); r.Code != http.StatusNoContent || r.Body.Len() != 0 {
+	if r := postDelegated(server, PatternDelegatedSessionEnd, endBody(record.ID), issuerBearer()); r.Code != http.StatusNoContent || r.Body.Len() != 0 {
 		t.Fatalf("end %d: %s", r.Code, r.Body)
 	}
 	if got := f.sessions.ended; len(got) != 1 || got[0] != record.ID {
 		t.Fatalf("ended %v, want %s", got, record.ID)
 	}
 	f.sessions.endErr = session.ErrStore
-	expectError(t, postDelegated(server, PatternDelegatedSessionEnd, endBody(record.ID), issuerBearer), http.StatusServiceUnavailable, "store_unavailable")
+	expectError(t, postDelegated(server, PatternDelegatedSessionEnd, endBody(record.ID), issuerBearer()), http.StatusServiceUnavailable, "store_unavailable")
 }
 
 func TestIssueAnswersADelegatedPredecessorNotEntitled(t *testing.T) {
 	f := newCompatFixture(t)
 	f.sessions.createErr = session.ErrPredecessorDelegated
-	r := f.do(http.MethodPost, PatternIssueSession, issueBodyWithPredecessor(f.principal, f.org.String(), `"`+uuid.NewString()+`"`), issuerBearer)
+	r := f.do(http.MethodPost, PatternIssueSession, issueBodyWithPredecessor(f.principal, f.org.String(), `"`+uuid.NewString()+`"`), issuerBearer())
 	expectError(t, r, http.StatusForbidden, "not_entitled")
 }
 
 func TestSessionStateNamesTheActorOnADelegatedRowOnly(t *testing.T) {
 	f, record := startFixture(t)
 	server := stateServer(t, f, stateRowsDocument)
-	code, answer := doState(t, server, stateBody(record.ID.String()), issuerBearer)
+	code, answer := doState(t, server, stateBody(record.ID.String()), issuerBearer())
 	if code != http.StatusOK || answer["actor_principal_id"] != record.Delegation.Actor.String() {
 		t.Fatalf("%d %v", code, answer)
 	}
-	code, answer = doState(t, server, stateBody(f.record.ID.String()), issuerBearer)
+	code, answer = doState(t, server, stateBody(f.record.ID.String()), issuerBearer())
 	if _, present := answer["actor_principal_id"]; code != http.StatusOK || present {
 		t.Fatalf("%d %v", code, answer)
 	}

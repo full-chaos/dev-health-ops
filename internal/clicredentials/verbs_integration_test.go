@@ -6,6 +6,8 @@ package clicredentials
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +47,9 @@ func noArgs(string) []string { return nil }
 
 // Every family of verbs that builds an error from a ClickHouse connection or
 // statement. A family that is added must be added here.
-func verbs() []verb {
+// bootstrapFile is a readable workload bootstrap file: the delete builds its workload client before the ClickHouse
+// preflight, which refuses before any exchange.
+func verbs(bootstrapFile string) []verb {
 	return []verb{
 		{family: "migrate clickhouse upgrade", root: chmigrate.Command(), path: []string{"upgrade"}, args: noArgs, env: dsnEnv},
 		{family: "migrate clickhouse status", readOnlyNoGrants: true, root: chmigrate.Command(), path: []string{"status"}, args: noArgs, env: dsnEnv},
@@ -89,7 +93,8 @@ func verbs() []verb {
 				// The delete goes through the authentication service, so its
 				// config is checked first; the preflight refuses before any call.
 				env["AUTH_PROXY_URL"] = "http://127.0.0.1:1"
-				env["AUTH_SESSION_ISSUE_TOKEN"] = "svc_authsess_" + "0123456789abcdef0123456789abcdef0123456789a"
+				env["AUTH_WORKLOAD_BOOTSTRAP_FILE"] = bootstrapFile
+				env["AUTH_WORKLOAD_ISSUER"] = "https://auth.dev-health.internal:8443"
 				env["MIGRATION_DATABASE_URI"] = "postgres://orgdel_census:orgdel-census-pg-pw@127.0.0.1:1/devhealth?sslmode=disable"
 				return env
 			}},
@@ -107,7 +112,11 @@ func TestNoVerbPrintsTheClickHouseLoginOrPassword(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	server := chlogin.Start(ctx, t)
-	for _, testCase := range verbs() {
+	bootstrap := filepath.Join(t.TempDir(), "api.bootstrap")
+	if err := os.WriteFile(bootstrap, []byte("not-a-credential"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, testCase := range verbs(bootstrap) {
 		for scenario, dsn := range map[string]struct{ dsn, signature string }{
 			"wrong password": {server.WrongPassword, "Authentication failed"},
 			"no grants":      {server.NoGrants, "Not enough privileges"},

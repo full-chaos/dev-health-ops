@@ -67,8 +67,10 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if issuer != "" {
 		env[authconfig.EnvTokenIssuerURL] = issuer
 		// The workload-token exchange needs the token issuer: the probe turns it
-		// on whenever an issuer is set.
+		// on whenever an issuer is set, and the go-api workload subject, which
+		// mounts the session issue routes, with it.
 		exchangeEnvironment(t, env)
+		workloadIssueEnvironment(env)
 	}
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(provisioningEnvironment(ssoEnvironment(compatEnvironment(env))))})
 	if err != nil {
@@ -110,11 +112,12 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, &stubSigner{}, mustLimits(t), nil)
+	signer := keySigner(t)
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, signer, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), &stubSigner{})
+	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), signer)
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}

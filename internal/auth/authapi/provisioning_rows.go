@@ -29,7 +29,7 @@ var provisioningRouteOps = map[string]string{
 }
 
 // serviceSessionIssuerClass is the endpoint-profile credential class of the
-// session issuer credential (svc_authsess_) the routes take.
+// session issuer credential (svc_authsess_); the session routes take it.
 const serviceSessionIssuerClass = "internal_svc_authsess_token"
 
 var errProvisioningRows = errors.New("authapi: the provisioning routes need their endpoint-profile rows")
@@ -49,14 +49,14 @@ func provisioningRowsPresent(raw []byte) error {
 }
 
 // admittedClasses are the endpoint-profile credential classes the route on
-// pattern admits: the session issuer credential, and the go-api workload
-// token when the route's operation is a workload operation. It is the
-// document's full set for the route, whatever the build's workload path.
+// pattern admits: the go-api workload token when the route's operation is a
+// workload operation, and none for a route that no operation names (so its row
+// is refused: a route that admits nothing is never mounted).
 func admittedClasses(pattern string) []string {
-	classes := []string{serviceSessionIssuerClass}
+	var classes []string
 	for op, route := range provisioningRouteOps {
 		if route == pattern && workloadOperations[op] {
-			classes = append(classes, workloadTokenClass)
+			classes = []string{workloadTokenClass}
 		}
 	}
 	return classes

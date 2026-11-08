@@ -76,7 +76,7 @@ func writeRESTError(w http.ResponseWriter, r *http.Request, component, orgID str
 	w.WriteHeader(status)
 	if encodeErr := json.NewEncoder(w).Encode(restErrorBody{Detail: detail}); encodeErr != nil {
 		log.Printf("query-api: %s: encode error response failed: org_id=%s request_id=%s err=%v",
-			component, orgID, envelopeRequestID(r), encodeErr)
+			component, orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 	}
 }
 
@@ -143,7 +143,7 @@ func writeRESTDataUnavailable(w http.ResponseWriter, r *http.Request, component,
 		return
 	}
 	log.Printf("query-api: %s: degraded to 503 Data unavailable: org_id=%s request_id=%s err=%v",
-		component, orgID, envelopeRequestID(r), err)
+		component, orgID, logSafeRequestID(envelopeRequestID(r)), err)
 	writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, "Data unavailable")
 }
 
@@ -172,7 +172,7 @@ func logRESTBoundHit(r *http.Request, component, orgID string, err error) (detai
 		source = "deadline of the client"
 	}
 	log.Printf("query-api: WARN %s: read hit the %s bound (%s, limit=%s): scope_ids=%d org_id=%s request_id=%s err=%v",
-		component, bound, source, limit, len(r.URL.Query()["scope_id"]), orgID, envelopeRequestID(r), err)
+		component, bound, source, limit, len(r.URL.Query()["scope_id"]), orgID, logSafeRequestID(envelopeRequestID(r)), err)
 	return restBoundDetail(bound), true
 }
 
@@ -281,7 +281,7 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 				var rejection *edgetoken.Rejection
 				if !errors.As(err, &rejection) && !policy.IsRefusal(err) {
 					log.Printf("query-api: %s: edge token users lookup failed: request_id=%s unavailable=%t err=%v",
-						component, envelopeRequestID(r), errors.Is(err, policy.ErrUnavailable), err)
+						component, logSafeRequestID(envelopeRequestID(r)), errors.Is(err, policy.ErrUnavailable), err)
 					policy.WriteAuthFailure(w, "", err)
 					return authctx.Claims{}, false
 				}
@@ -290,7 +290,7 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 			}
 			pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassHS256, routeProfile(r))
 			observeRESTShadow(r, token, claims.OrgID, claims.Caller, claims.Delegated, true)
-			return authctx.Claims{OrgID: claims.OrgID}, true
+			return legacyClaims(claims.OrgID), true
 		}
 	}
 
@@ -302,7 +302,7 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 	}
 	pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassEnvelope, routeProfile(r))
 	observeRESTShadow(r, token, claims.OrgID, policy.ShadowCallerMember, claims.ImpersonationActive || (claims.ImpersonatedBy != nil && *claims.ImpersonatedBy != ""), true)
-	return authctx.Claims{OrgID: claims.OrgID}, true
+	return legacyClaims(claims.OrgID), true
 }
 
 // echoRequestID puts the caller's X-Request-Id on the response so an operator

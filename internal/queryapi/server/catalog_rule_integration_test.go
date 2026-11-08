@@ -13,7 +13,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 
@@ -35,7 +34,7 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 		t.Fatal(err)
 	}
 	// Only hotspots requests reach this handler's resolver (its ClickHouse double answers hotspots).
-	handler, proof, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, proof, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	runOperation := markClassGated(handler) // what buildQueryRoute mounts at /query/run-operation
 	token := signTestEnvelope(t, priv, "org-1")
 	securityAlertsVariables := map[string]any{"orgId": "org-1"}
@@ -61,7 +60,7 @@ func TestCatalogRuleServesAnOperationWithNoRowAndLeavesTheClassRowsAlone(t *test
 	})
 
 	t.Run("empty table: the securityAlerts DOCUMENT is served to the web caller, as its canary row serves it on production", func(t *testing.T) {
-		web, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+		web, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 		// /query refuses with a 404 and nothing else does, so any other status is the executor's own
 		// answer: the request was dispatched. (This handler's ClickHouse double holds no data, so the
 		// answer itself is not asserted.)

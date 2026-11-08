@@ -263,7 +263,9 @@ func goVerbRun(t *testing.T, db *database, extra map[string]string, args []strin
 	var served *fakeCalls
 	if needsProvisioning(args) {
 		env["AUTH_PROXY_URL"], served = startFakeAuthService(t, db.uri)
-		env["AUTH_SESSION_ISSUE_TOKEN"] = fakeToken
+		for key, value := range fakeWorkloadEnv(t) {
+			env[key] = value
+		}
 		args = append(append([]string(nil), args...), "--actor", fakeActor)
 	}
 	for key, value := range extra {

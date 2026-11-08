@@ -30,6 +30,7 @@ var goRoutesWithoutPython = map[string]string{
 	"POST /api/v1/admin/orgs/{org_id}/transfer-ownership": "Go serves the web's shape; the ruled intentional divergence",
 	"POST /api/v1/admin/teams/{team_id}":                  "dispatches POST /api/v1/admin/teams/import; any other id is 405",
 	"POST /api/v1/admin/ip-allowlist/{entry_id}":          "dispatches POST /api/v1/admin/ip-allowlist/check; any other id is 405",
+	"POST /api/v1/admin/impersonate/handoff/consume":      "Go-only one-use consume of the impersonation start handoff; no Python ancestor",
 	"POST /api/v1/auth/change-password":                   "Go-only self-service route (no Python ancestor); answers the switch-org token shape",
 	"GET /buildinfo":                                      "Go-only build stamp; the Python api has no such route",
 	"GET /api/v1/admin/llm-settings/models":               "Go-only list of the saved BYO provider's model ids; the Python api has no such route",

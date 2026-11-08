@@ -2,6 +2,7 @@
 ci/tools/gotestfuncs	main.go	unexpressed	-	-
 cmd/dev-health-migration-matrix	contract_test.go	cmd/dev-health-migration-matrix	dir	*
 cmd/gqlgen-guard	main_test.go	unexpressed	-	-
+cmd/venue-extstub	stub_test.go	cmd/venue-extstub	dir	*
 deploy/helm/dev-health	auth_orgs_owned_removed_test.go	deploy/helm/dev-health/templates	dir	*
 deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed	-	-
 deploy/helm/dev-health	auth_sso_jit_test.go	deploy/helm/dev-health/templates	dir	*
@@ -32,6 +33,7 @@ internal/api/webhookintake	removed_providers_test.go	.	tree	*.go
 internal/apiservice	api_posture_test.go	internal/apiservice	dir	*
 internal/apiservice	endpoint_profile_scan_test.go	unexpressed	-	*.go
 internal/apiservice	enforcer_test.go	internal/apiservice	dir	*
+internal/apiservice	member_list_row_cells_test.go	internal/apiservice/admin	dir	*
 internal/apiservice/admin	operator_password_test.go	internal/apiservice/admin	dir	*
 internal/apiservice/admin	routeguard_test.go	internal/apiservice/admin	dir	*
 internal/apiservice/admin	routeguard_test.go	unexpressed	-	-
@@ -166,6 +168,7 @@ internal/cigates/docs	docs_helpers_test.go	unexpressed	-	-
 internal/cigates/docs	parity_test.go	internal/cigates/docs	dir	*
 internal/cigates/docsprepare	docsprepare.go	unexpressed	-	-
 internal/cigates/docstools	dc_pub.go	unexpressed	-	-
+internal/cigates/docstools	dc_pub_exclude_test.go	unexpressed	-	-
 internal/cigates/docstools	dc_pub_test.go	unexpressed	-	*.md
 internal/cigates/docstools	dc_pub_test.go	unexpressed	-	-
 internal/cigates/docstools	dc_pyhelp.go	unexpressed	-	-
@@ -183,6 +186,7 @@ internal/cigates/docstools	refusals_test.go	unexpressed	-	-
 internal/cigates/docstools	validate_inventory_review.go	unexpressed	-	-
 internal/cigates/docstools	validate_inventory_review_refusals_test.go	unexpressed	-	-
 internal/cigates/emitscan	scan.go	unexpressed	-	-
+internal/cigates/exceptionledger	ledger.go	unexpressed	-	-
 internal/cigates/frozengoldens	frozengoldens_test.go	unexpressed	-	-
 internal/cigates/frozengoldens	reads.go	unexpressed	-	-
 internal/cigates/frozengoldens	reads_guard_test.go	internal/cigates/frozengoldens	dir	*
@@ -235,7 +239,9 @@ internal/cigates/weightsfiles	support_test.go	unexpressed	-	-
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed	-	-
 internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed	-	*.go
 internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed	-	-
+internal/cigates/workflows	auth_proxy_local_login_compose_test.go	ci	dir	*
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed	-	-
+internal/cigates/workflows	live_e2e_auth_stack_test.go	unexpressed	-	-
 internal/cigates/workflows	providerstub_not_release_test.go	.github/workflows	dir	*
 internal/cigates/workflows	race_json_artifact_test.go	unexpressed	-	-
 internal/cigates/workflows	registry_retry_test.go	unexpressed	-	-
@@ -298,6 +304,7 @@ internal/jobs/investment	providerselection_census_test.go	scripts	tree	*
 internal/jobs/investment	providerselection_census_test.go	src	tree	*
 internal/jobs/investment	shadowexecutor_test.go	cmd	tree	*
 internal/jobs/investment	shadowexecutor_test.go	internal	tree	*
+internal/jobs/investment	typesafebyo_test.go	internal/jobs/investment	dir	*
 internal/jobs/investment/categorize	org_egress_guard_test.go	internal/jobs/investment/categorize	dir	*
 internal/jobs/investment/categorize/decision	adapter_test.go	cmd	tree	*
 internal/jobs/investment/categorize/decision	adapter_test.go	internal	tree	*
@@ -335,6 +342,8 @@ internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree	*
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree	*.go
 internal/jobs/workgraph/writercontract	writercontract_test.go	internal	tree	*
 internal/llmorgsettings	baseurl_reader_guard_test.go	unexpressed	-	*.go
+internal/llmorgsettings	keyreaders_census_test.go	cmd	tree	*.go
+internal/llmorgsettings	keyreaders_census_test.go	internal	tree	*.go
 internal/loadharness	pdp_profiles_test.go	internal/loadharness/testdata/pdp	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata/abuse	dir	*
@@ -409,7 +418,9 @@ internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/provide
 internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/scheduler/sync	dir	*
 internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/syncdispatchruntime	dir	*
 internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/syncreconciler	dir	*
+internal/queryapi/graph	field_precheck_parity_test.go	internal/queryapi/graph	dir	*
 internal/queryapi/graph	not_implemented_allowlist_test.go	internal/queryapi/graph/testdata/not_implemented	dir	*
+internal/queryapi/graph	root_class_census_test.go	unexpressed	-	-
 internal/queryapi/graph/model	sdl_nullability_gate_test.go	unexpressed	-	-
 internal/queryapi/home	import_boundary_test.go	unexpressed	-	-
 internal/queryapi/investmentexplain	cache_key_golden_test.go	internal/queryapi/investmentexplain/testdata	dir	*
@@ -418,6 +429,7 @@ internal/queryapi/investmentexplain	llm_token_usage_golden_test.go	internal/quer
 internal/queryapi/investmentexplain	parser_golden_test.go	internal/queryapi/investmentexplain/testdata	dir	*
 internal/queryapi/investmentexplain	prompt_golden_test.go	internal/queryapi/investmentexplain/testdata	dir	*
 internal/queryapi/investmentexplain	resolve_model_name_golden_test.go	internal/queryapi/investmentexplain/testdata	dir	*
+internal/queryapi/pepgate	census_test.go	internal/queryapi/pepgate	dir	*
 internal/queryapi/rowview	census_test.go	cmd	tree	*.go
 internal/queryapi/rowview	census_test.go	internal	tree	*.go
 internal/queryapi/server	build_routes_integration_test.go	unexpressed	-	-
@@ -426,13 +438,16 @@ internal/queryapi/server	edge_users_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_action_fields_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_rows_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_same_line_test.go	unexpressed	-	-
+internal/queryapi/server	graphql_shadow_test.go	unexpressed	-	-
 internal/queryapi/server	internal_auth_test.go	unexpressed	-	*.go
 internal/queryapi/server	internal_auth_test.go	unexpressed	-	-
 internal/queryapi/server	investment_scope_pin_wiring_test.go	unexpressed	-	-
+internal/queryapi/server	log_request_id_census_test.go	unexpressed	-	-
 internal/queryapi/server	mcp_proof_route_retired_test.go	unexpressed	-	*.go
 internal/queryapi/server	org_scope_census_test.go	unexpressed	-	-
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	*.go
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	-
+internal/queryapi/server	rest_allowlist_census_test.go	unexpressed	-	-
 internal/queryapi/server	rest_error_response_test.go	unexpressed	-	-
 internal/queryapi/server	rest_routes_test.go	unexpressed	-	-
 internal/queryapi/server	result_row_bound_census_test.go	unexpressed	-	-
@@ -445,6 +460,7 @@ internal/scheduler/fixed	readiness_timeout_test.go	internal/scheduler/fixed	dir	
 internal/scheduler/sync	venue_golden_address_test.go	internal/scheduler/sync/testdata/golden	dir	*
 internal/schedulerservice	fixed_test.go	contracts/jobs/v1	tree	*
 internal/schedulerservice	readiness_timeout_test.go	internal/schedulerservice	dir	*
+internal/shadowvenue	requestsites_test.go	unexpressed	-	-
 internal/storage/clickhouse/liverow	census_test.go	cmd	tree	*.go
 internal/storage/clickhouse/liverow	census_test.go	internal	tree	*.go
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/api	tree	*

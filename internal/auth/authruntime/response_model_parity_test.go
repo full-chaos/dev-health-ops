@@ -96,6 +96,7 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 		authconfig.EnvTokenIssuerURL:   "https://issuer.example.test",
 	}
 	exchangeEnvironment(t, env)
+	workloadIssueEnvironment(env)
 	env = provisioningEnvironment(ssoEnvironment(compatEnvironment(env)))
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
@@ -111,11 +112,12 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	routes, err := sessionRoutes(cfg, logger, pool, schema, &stubSigner{}, mustLimits(t), nil)
+	signer := keySigner(t)
+	routes, err := sessionRoutes(cfg, logger, pool, schema, signer, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), &stubSigner{})
+	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), signer)
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}

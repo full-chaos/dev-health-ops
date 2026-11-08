@@ -463,7 +463,7 @@ func TestDecideTakesTheUserAccessTokenOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !slices.ContainsFunc(rows, func(r accessverify.Row) bool {
-		return r.Service == AccessService && r.Profile == oauthDecideScope && r.AcceptsUser && !r.LegacyHS256
+		return r.Service == AccessService && r.Profile == oauthDecideScope && r.AcceptsUser
 	}) {
 		t.Fatalf("the embedded document has no %s row accepting the user access token alone", oauthDecideScope)
 	}

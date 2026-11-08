@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
@@ -98,7 +99,24 @@ func iaDispatchWithEdge(t *testing.T, verifier *principal.Verifier, edgeAuth *po
 		w.WriteHeader(http.StatusOK)
 	}))
 	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, edgeAuth, edgeStore, "", nil)
-	return handler, seen
+	return onQueryPattern(handler), seen
+}
+
+// onQueryPattern sets the pattern server.go's mux gives /query (the route profile "POST /query") on a request
+// a test hands the handler directly.
+func onQueryPattern(handler http.HandlerFunc) http.HandlerFunc {
+	return onPattern("/query", handler).ServeHTTP
+}
+
+// onPattern sets pattern, the one server.go's mux matches for the route, on a request a test hands handler
+// directly, so the route profile is the served route's.
+func onPattern(pattern string, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Pattern == "" {
+			r.Pattern = pattern
+		}
+		handler.ServeHTTP(w, r)
+	})
 }
 
 func iaPost(t *testing.T, handler http.HandlerFunc, mutate func(*http.Request)) int {
@@ -158,7 +176,8 @@ func TestQueryAnswersTheSameClaimsForBothCarriers(t *testing.T) {
 			if len(*seen) != 2 || (*seen)[0] != (*seen)[1] {
 				t.Fatalf("carriers disagree: %+v", *seen)
 			}
-			want := authctx.Claims{OrgID: identity.org, Role: identity.role, IsSuperuser: identity.super, ImpersonationActive: identity.imp}
+			want := authctx.Claims{OrgID: identity.org, Role: identity.role, IsSuperuser: identity.super, ImpersonationActive: identity.imp,
+				Scope: pepgate.Legacy(identity.org)}
 			if (*seen)[0] != want {
 				t.Fatalf("got %+v want %+v", (*seen)[0], want)
 			}
@@ -213,7 +232,7 @@ func TestQueryRefusesEveryAmbiguousOrMalformedCarrier(t *testing.T) {
 
 func TestBuildInfoTakesEitherCarrierAndRefusesBoth(t *testing.T) {
 	verifier, priv := iaVerifier(t)
-	handler := newBuildInfoHandler(verifier)
+	handler := newBuildInfoHandler(verifier, nil, nil)
 	get := func(mutate func(*http.Request)) int {
 		req := httptest.NewRequest(http.MethodGet, "/buildinfo", nil)
 		mutate(req)

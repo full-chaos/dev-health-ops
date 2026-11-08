@@ -19,7 +19,7 @@ var investmentReaderConstructors = map[string]bool{
 	"investmentexplain.NewReader": true,
 	"newSankeyGetHandler":         true,
 	"newSankeyPostHandler":        true,
-	"newQueryHandler":             true,
+	"newQueryHandlerWithEdge":     true,
 }
 
 func calleeName(call *ast.CallExpr) string {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
@@ -111,7 +112,7 @@ func TestNewWorkUnitsGetHandlerRequiresAuthContext(t *testing.T) {
 func TestNewWorkUnitsGetHandlerBadRangeDaysIs422(t *testing.T) {
 	handler := newWorkUnitsGetHandler(newTestWorkUnitsReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work-units?range_days=abc", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -144,7 +145,7 @@ func TestNewWorkUnitsGetHandlerBadRangeDaysIs422(t *testing.T) {
 func TestNewWorkUnitsGetHandlerEmptyRangeDaysIs422(t *testing.T) {
 	handler := newWorkUnitsGetHandler(newTestWorkUnitsReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work-units?range_days=", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -160,7 +161,7 @@ func TestNewWorkUnitsGetHandlerEmptyRangeDaysIs422(t *testing.T) {
 func TestNewWorkUnitsGetHandlerBadIncludeTextualIs422(t *testing.T) {
 	handler := newWorkUnitsGetHandler(newTestWorkUnitsReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work-units?include_textual=maybe", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -181,7 +182,7 @@ func TestNewWorkUnitsGetHandlerBadIncludeTextualIs422(t *testing.T) {
 func TestNewWorkUnitsGetHandlerHappyPathShape(t *testing.T) {
 	handler := newWorkUnitsGetHandler(newTestWorkUnitsReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work-units", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -217,7 +218,7 @@ func TestNewWorkUnitsPostHandlerRequiresAuthContext(t *testing.T) {
 func TestNewWorkUnitsPostHandlerMissingFiltersIs422(t *testing.T) {
 	handler := newWorkUnitsPostHandler(newTestWorkUnitsReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/work-units", strings.NewReader(`{}`))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -245,7 +246,7 @@ func TestNewWorkUnitsPostHandlerMissingFiltersIs422(t *testing.T) {
 func TestNewWorkUnitsPostHandlerEmptyBodyIs422(t *testing.T) {
 	handler := newWorkUnitsPostHandler(newTestWorkUnitsReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/work-units", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -265,7 +266,7 @@ func TestNewWorkUnitsPostHandlerEmptyBodyIs422(t *testing.T) {
 func TestNewWorkUnitsPostHandlerHappyPathShape(t *testing.T) {
 	handler := newWorkUnitsPostHandler(newTestWorkUnitsReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/work-units", strings.NewReader(`{"filters":{}}`))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -789,7 +790,7 @@ func TestNewWorkUnitsGetHandlerTeamScopePushesConditionIntoTheWorkUnitQuery(t *t
 	handler := newWorkUnitsGetHandler(reader)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work-units?scope_type=team&scope_id=team-42", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -895,7 +896,7 @@ func TestNewWorkUnitsPostHandlerWorkCategoryFilterNarrowsResults(t *testing.T) {
 	handler := newWorkUnitsPostHandler(reader)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/work-units", strings.NewReader(`{"filters":{"why":{"work_category":["feature_delivery"]}}}`))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {

@@ -23,6 +23,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 type restHomeSentences struct {
@@ -49,7 +50,7 @@ type restHomeSentences struct {
 func getJSON(t *testing.T, mux *http.ServeMux, org, target string, into any) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, target, nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

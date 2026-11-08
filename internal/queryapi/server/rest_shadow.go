@@ -12,9 +12,10 @@ import (
 
 // observeRESTShadow tells the process's 5.12 shadow what the legacy check decided for this request. It runs after the
 // decision and before the answer, returns at once, and never changes the answer. No gate, or a gate with no shadow
-// (off, enforce, a bad knob), is a no-op.
+// (off, enforce, a bad knob), is a no-op, and so is a route whose 5.17 cell is on: the PDP answer is the answer.
 func observeRESTShadow(r *http.Request, bearer, orgID, caller string, delegated, legacyAllowed bool) {
-	shadow := pdp.FromContext(r.Context()).Shadow()
+	gate := pdp.FromContext(r.Context())
+	shadow := gate.Shadow()
 	if shadow == nil {
 		return
 	}
@@ -26,6 +27,9 @@ func observeRESTShadow(r *http.Request, bearer, orgID, caller string, delegated,
 	pattern := r.Pattern
 	if !strings.Contains(pattern, " ") {
 		pattern = routeProfile(r)
+	}
+	if gate.Enforced(pattern) {
+		return
 	}
 	shadow.Observe(r.Context(), policy.ShadowObservation{Pattern: pattern, Bearer: bearer, OrgID: orgID, Caller: caller,
 		UserAccessToken: class == principal.AccessClassUser, Impersonating: delegated, SkipReason: reason, LegacyAllowed: legacyAllowed})

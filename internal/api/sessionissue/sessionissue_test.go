@@ -2,7 +2,6 @@ package sessionissue
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -21,16 +20,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 )
-
-// testToken is an auth-session-issuer credential built at run time.
-func testToken(t *testing.T) string {
-	t.Helper()
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
-		t.Fatal(err)
-	}
-	return "svc_authsess_" + base64.RawURLEncoding.EncodeToString(random)
-}
 
 func baseOf(t *testing.T, raw string) *url.URL {
 	t.Helper()
@@ -61,7 +50,7 @@ func TestIssueSendsTheSessionAndAnswersThePair(t *testing.T) {
 		_, _ = io.WriteString(w, `{"access_token":"a.b.c","refresh_token":"dhr1_x","token_type":"bearer","expires_in":3600}`)
 	}))
 	defer server.Close()
-	client, err := New(baseOf(t, server.URL), token, time.Second)
+	client, err := newTestClient(t, baseOf(t, server.URL), token, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +85,7 @@ func TestIssueWithoutAnOrganizationSendsNull(t *testing.T) {
 		_, _ = io.WriteString(w, `{"access_token":"a","refresh_token":"r","token_type":"bearer"}`)
 	}))
 	defer server.Close()
-	client, err := New(baseOf(t, server.URL), testToken(t), time.Second)
+	client, err := newTestClient(t, baseOf(t, server.URL), testToken(t), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +128,7 @@ func TestIssueFailuresAreUnavailable(t *testing.T) {
 	}
 	for name, answer := range answers {
 		server := httptest.NewServer(answer)
-		client, err := New(baseOf(t, server.URL), testToken(t), 200*time.Millisecond)
+		client, err := newTestClient(t, baseOf(t, server.URL), testToken(t), 200*time.Millisecond)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -149,7 +138,7 @@ func TestIssueFailuresAreUnavailable(t *testing.T) {
 			t.Errorf("%s: err %v, want ErrUnavailable", name, err)
 		}
 	}
-	client, err := New(baseOf(t, down), testToken(t), time.Second)
+	client, err := newTestClient(t, baseOf(t, down), testToken(t), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,31 +147,8 @@ func TestIssueFailuresAreUnavailable(t *testing.T) {
 	}
 }
 
-func TestNewRefusesAnythingButAnIssuerCredential(t *testing.T) {
-	base := baseOf(t, "http://auth-service:8095")
-	good := testToken(t)
-	for name, token := range map[string]string{
-		"empty":           "",
-		"acr credential":  "svc_acr_" + good[len("svc_authsess_"):],
-		"short":           good[:len(good)-1],
-		"trailing space":  good + " ",
-		"not base64url":   "svc_authsess_" + strings.Repeat("+", 43),
-		"another service": "svc_worker_" + good[len("svc_authsess_"):],
-	} {
-		if _, err := New(base, token, 0); err == nil {
-			t.Errorf("%s: accepted", name)
-		}
-	}
-	if _, err := New(nil, good, 0); err == nil {
-		t.Error("no base URL accepted")
-	}
-	if _, err := New(base, good, 0); err != nil {
-		t.Fatalf("a good credential: %v", err)
-	}
-}
-
-// The service credential never goes to an ambient HTTP proxy: the client
-// dials auth-service itself.
+// The workload token never goes to an ambient HTTP proxy: the client dials
+// auth-service itself.
 func TestIssueIgnoresTheEnvironmentsHTTPProxy(t *testing.T) {
 	var proxied atomicCount
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +159,7 @@ func TestIssueIgnoresTheEnvironmentsHTTPProxy(t *testing.T) {
 	t.Setenv("HTTP_PROXY", proxy.URL)
 	t.Setenv("HTTPS_PROXY", proxy.URL)
 	t.Setenv("NO_PROXY", "")
-	client, err := New(baseOf(t, "http://auth-service.invalid:8095"), testToken(t), time.Second)
+	client, err := newTestClient(t, baseOf(t, "http://auth-service.invalid:8095"), testToken(t), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +194,7 @@ func TestIssueNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 		http.Redirect(w, r, other.URL+Path, http.StatusTemporaryRedirect)
 	}))
 	defer redirecting.Close()
-	client, err := New(baseOf(t, redirecting.URL), testToken(t), time.Second)
+	client, err := newTestClient(t, baseOf(t, redirecting.URL), testToken(t), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +237,7 @@ func TestIssueRefusalCarriesTheErrorDocument(t *testing.T) {
 			w.WriteHeader(a.status)
 			_, _ = io.WriteString(w, a.body)
 		}))
-		client, err := New(baseOf(t, server.URL), testToken(t), time.Second)
+		client, err := newTestClient(t, baseOf(t, server.URL), testToken(t), time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -300,7 +266,7 @@ func TestIssueRefusesAnErrorDocumentWithARepeatedMember(t *testing.T) {
 		_, _ = io.WriteString(w, `{"schema_version":"error.v1","status":401,"reason_code":"invalid_credentials","reason_code":"session_revoked"}`)
 	}))
 	defer server.Close()
-	client, err := New(baseOf(t, server.URL), testToken(t), time.Second)
+	client, err := newTestClient(t, baseOf(t, server.URL), testToken(t), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +296,7 @@ func TestIssueProvesTheClientAddress(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"access_token":"a","refresh_token":"r","token_type":"bearer"}`)
 		}))
-		client, err := New(baseOf(t, server.URL), testToken(t), time.Second)
+		client, err := newTestClient(t, baseOf(t, server.URL), testToken(t), time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -39,13 +39,13 @@ func TestSAMLMatchRequestBindsEveryResponseThatNamesARequest(t *testing.T) {
 			"cookie, open matching flow": {cookie: withCookie, flows: &flowsOnly{}, want: nil},
 		} {
 			s := &Service{Flows: tc.flows}
-			err := s.matchRequest(ctx, p, Verified{InResponseTo: "_id1"}, tc.cookie, now)
+			err := s.matchRequest(ctx, p, Verified{InResponseTo: "_id1"}, tc.cookie, "", now)
 			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
 				t.Errorf("allow_idp_initiated=%v %s: err = %v, want %v", allow, name, err, tc.want)
 			}
 		}
 		s := &Service{Flows: &flowsOnly{}}
-		err := s.matchRequest(ctx, p, Verified{}, noCookie, now)
+		err := s.matchRequest(ctx, p, Verified{}, noCookie, "", now)
 		if allow && err != nil {
 			t.Errorf("allow_idp_initiated=true, no InResponseTo: err = %v, want accepted", err)
 		}

@@ -18,7 +18,7 @@ tells an administrator what to decide. The operator page,
 [Service accounts runbook](../../operate/runbooks/auth-service-accounts.md), holds the routes, the bodies, every
 refusal and the audit rows.
 
-A service account is auth-native data (D6651). It has no row in the public user tables. The person who owns it is a
+A service account is auth-native data. It has no row in the public user tables. The person who owns it is a
 user, and `public.users` is the record of that user.
 
 ## Know before you start
@@ -53,7 +53,7 @@ Disable works whether auth-service owns users or not.
 A key is a secret that proves the account. An account holds one live key, or two during a rotation overlap. The registry
 keeps only a digest. The value is shown once, in the answer to issue or rotate.
 
-A key authenticates nowhere yet. No route accepts it until CHAOS-12362 lands. Issue a key only when you need to
+A key authenticates nowhere yet. No route accepts it yet. Issue a key only when you need to
 prepare for that work, and treat the value as a secret from the first moment.
 
 | Goal | Route |

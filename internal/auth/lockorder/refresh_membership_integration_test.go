@@ -72,7 +72,7 @@ func (e *env) post(ctx context.Context, base, path, bearer string, body any) res
 func (e *env) join(t *testing.T, ctx context.Context, cell, base string, user, org, inviter uuid.UUID, onboard bool) string {
 	t.Helper()
 	_, token := e.goInvite(t, ctx, org, inviter, email(user))
-	bearer, err := e.token(user, false)
+	bearer, err := e.token(user)
 	if err != nil {
 		t.Fatal(err)
 	}

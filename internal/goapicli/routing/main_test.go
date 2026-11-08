@@ -68,21 +68,18 @@ func TestRequestedOperationsRefusesAFilterThatNamesNothing(t *testing.T) {
 	}
 }
 
-// The credential env var must name this command's OWN routing credential,
-// never a flag: a flag value reaches ps and shell history.
-func TestBearerEnvVarNamesTheRoutingCredential(t *testing.T) {
-	if bearerEnvVar == "" {
-		t.Fatal("the credential must come from a named environment variable, never a flag: a flag value reaches ps and shell history")
-	}
-	if bearerEnvVar != "GO_API_ROUTING_BEARER" {
-		t.Fatalf("bearerEnvVar = %q, want GO_API_ROUTING_BEARER", bearerEnvVar)
+// The credential env var must name this command's OWN routing credential file, never a flag: a flag value reaches ps
+// and shell history.
+func TestAccessTokenFileEnvVarNamesTheRoutingCredential(t *testing.T) {
+	if accessTokenFileEnvVar != "GO_API_ROUTING_ACCESS_TOKEN_FILE" {
+		t.Fatalf("accessTokenFileEnvVar = %q, want GO_API_ROUTING_ACCESS_TOKEN_FILE", accessTokenFileEnvVar)
 	}
 }
 
 // CHAOS-5479 changed FetchBuildIdentity's credential parameter, and this
 // command's call site had to change with it.
 //
-// r11 S3: this test used to BUILD its own StaticCredential with the same
+// r11 S3: this test used to BUILD its own credential with the same
 // three arguments the production line uses, which proved only that the
 // test agrees with itself -- every wrong-argument mutation at the real
 // call site survived it. It now calls buildInfoCredential, the one-line
@@ -97,9 +94,9 @@ func TestBearerEnvVarNamesTheRoutingCredential(t *testing.T) {
 //     envelope and 401s an edge access token, so this is the word that
 //     tells an operator WHICH credential was refused. Passing the wrong
 //     one is a defect that only shows up against a real stack.
-func TestTheBuildInfoReadCarriesTheEnvelope(t *testing.T) {
-	bearer := syntheticJWT(t, map[string]string{"sub": "u-1"})
-	credential := buildInfoCredential(bearer)
+func TestTheBuildInfoReadCarriesTheUserAccessToken(t *testing.T) {
+	bearer := tokenWithHeader(t, "at+jwt")
+	credential := buildInfoCredential(tokenFile(t, bearer))
 
 	request, err := http.NewRequest(http.MethodGet, "http://query-api.test/buildinfo", nil)
 	if err != nil {
@@ -129,20 +126,19 @@ func TestTheBuildInfoReadCarriesTheEnvelope(t *testing.T) {
 
 	// The kind reaches a 401 message so an operator learns WHICH credential
 	// was refused, without its value.
-	if credential.Kind() != "effective-principal envelope" {
-		t.Fatalf("credential kind = %q; a 401 must name the kind /buildinfo actually checks", credential.Kind())
-	}
-	// Specifically NOT the edge access token: that is the wrong-credential
-	// swap this pin exists for, and it 401s against a real stack.
-	if strings.Contains(strings.ToLower(credential.Kind()), "access token") {
-		t.Fatalf("credential kind = %q -- /buildinfo checks the envelope and 401s an edge access token", credential.Kind())
+	if credential.Kind() != "platform-admin user access token" {
+		t.Fatalf("credential kind = %q; a 401 must name the kind /buildinfo actually serves", credential.Kind())
 	}
 
-	// Empty and whitespace-only are refused at use, whatever the caller's
-	// own checks do -- the second floor under runCommand's explicit check.
-	for _, bad := range []string{"", "   "} {
-		if err := buildInfoCredential(bad).Apply(context.Background(), request); err == nil {
-			t.Fatalf("buildInfoCredential(%q) was installed", bad)
+	// An absent file, an empty one and an envelope are refused at use, whatever the caller's own checks do -- the
+	// second floor under accessTokenCredential's check.
+	for name, path := range map[string]string{
+		"absent":   filepath.Join(t.TempDir(), "absent"),
+		"empty":    tokenFile(t, ""),
+		"envelope": tokenFile(t, tokenWithHeader(t, "JWT")),
+	} {
+		if err := buildInfoCredential(path).Apply(context.Background(), request); err == nil {
+			t.Fatalf("buildInfoCredential(%s) was installed", name)
 		}
 	}
 }
@@ -358,7 +354,7 @@ func TestEveryWriteVerbRequiresBothProvenanceFlags(t *testing.T) {
 // flag.ExitOnError, so a malformed flag calls os.Exit and would take the
 // test binary with it. Every case below parses cleanly and then refuses.
 func TestEveryVerbRefusesItsOwnMissingPreconditions(t *testing.T) {
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 	// POSTGRES_URI is a SUPPORTED fallback for -postgres-uri, so a
 	// developer or a CI runner that has it exported is an ordinary,
 	// correct environment -- and this test's "with no postgres" cases
@@ -374,7 +370,7 @@ func TestEveryVerbRefusesItsOwnMissingPreconditions(t *testing.T) {
 		"enable with no -mode":            {[]string{"enable"}, "-mode is required"},
 		"enable with no provenance":       {[]string{"enable", "-mode", "canary"}, "-recorded-by"},
 		"enable with no postgres":         {[]string{"enable", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y"}, "-postgres-uri"},
-		"enable with no credential":       {[]string{"enable", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"}, bearerEnvVar},
+		"enable with no credential":       {[]string{"enable", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"}, accessTokenFileEnvVar},
 		"disable with no -mode":           {[]string{"disable"}, "-mode is required"},
 		"disable with no postgres":        {[]string{"disable", "-mode", "python"}, "-postgres-uri"},
 		"disable applying with no reason": {[]string{"disable", "-mode", "python", "-postgres-uri", "postgres://x", "-apply"}, "-recorded-by"},
@@ -402,7 +398,7 @@ func TestEveryVerbRefusesItsOwnMissingPreconditions(t *testing.T) {
 // first, matching TestEveryVerbRefusesItsOwnMissingPreconditions's
 // ordering), so every other required flag is supplied here.
 func TestEnableRefusesWithNoQueryAPIURLConfiguredAtAll(t *testing.T) {
-	t.Setenv(bearerEnvVar, "envelope-for-the-test")
+	t.Setenv(accessTokenFileEnvVar, tokenFile(t, tokenWithHeader(t, "at+jwt")))
 	t.Setenv("GO_API_QUERY_API_URL", "")
 	for name, argv := range map[string][]string{
 		"enable, no registry-url": {"enable", "-operations", "mcp:hotspots", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"},
@@ -428,7 +424,7 @@ func TestEnableRefusesWithNoQueryAPIURLConfiguredAtAll(t *testing.T) {
 // is needed. Driven here with no database, no credential, and a registry
 // URL nothing is listening on.
 func TestStatusNeverFailsEvenWithNothingConfigured(t *testing.T) {
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 	t.Setenv("POSTGRES_URI", "")
 	for _, argv := range [][]string{
 		{"status", "-registry-url", "http://127.0.0.1:1", "-timeout", "2s"},
@@ -449,7 +445,7 @@ func TestStatusNeverFailsEvenWithNothingConfigured(t *testing.T) {
 // GO_API_QUERY_API_URL is unset"`): no HTTP attempt at all, and the exact
 // sentence Python's own fallback prints.
 func TestStatusReportsNoQueryAPIURLWithoutProbingAnything(t *testing.T) {
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 	t.Setenv("POSTGRES_URI", "")
 	t.Setenv("GO_API_QUERY_API_URL", "")
 	out, _, err := captureVerb(t, "status", "-timeout", "2s", "-json")
@@ -472,7 +468,7 @@ func TestStatusReportsNoQueryAPIURLWithoutProbingAnything(t *testing.T) {
 // the schema digest / database census, neither of which needs the registry
 // call at all.
 func TestStatusReportsAnUnusableEnvURLInsteadOfRefusing(t *testing.T) {
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 	t.Setenv("POSTGRES_URI", "")
 	// No "//", so Go parses "not" as the scheme -- sanitizeEndpointURL's
 	// http(s)-only gate refuses it.
@@ -552,7 +548,7 @@ func TestEnableTakesNoFlagThatAdmitsAnUnprovenOperation(t *testing.T) {
 // the class-level pin: one refusal from each verb, none needing a
 // database or a running query-api.
 func TestEveryRefusalCarriesTheWordRefused(t *testing.T) {
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 	t.Setenv("POSTGRES_URI", "")
 	cases := []struct {
 		name string
@@ -590,7 +586,7 @@ func TestEveryRefusalCarriesTheWordRefused(t *testing.T) {
 // reports the "nobody configured anything" sentence -- FALSE, since the
 // variable IS set.
 func TestStatusReadsTheRegistryFromTheEnvVarAloneNoFlag(t *testing.T) {
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 	t.Setenv("POSTGRES_URI", "")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/registry" {
@@ -691,7 +687,7 @@ func TestConnectPostgresRefusesAndNeverEchoesTheDSN(t *testing.T) {
 // than connectPostgres directly -- a keyword-form DSN reaching
 // registry_db_error unwrapped would leak the password there instead.
 func TestStatusNeverEchoesADSNPasswordInItsReportField(t *testing.T) {
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 	const password = "SUPERSECRET-NEVER-PRINT"
 	t.Setenv("POSTGRES_URI", "host=127.0.0.1 password = "+password+" connect_timeout=nan")
 	out, _, err := captureVerb(t, "status", "-registry-url", "http://127.0.0.1:1", "-timeout", "2s", "-json")
@@ -1255,7 +1251,7 @@ func TestEveryVerbRefusesATimeoutThatDisablesItsOwnBound(t *testing.T) {
 // grepping the source, so a verb that stops calling it fails here.
 func TestTheTimeoutGuardIsWiredIntoEveryVerb(t *testing.T) {
 	t.Setenv("POSTGRES_URI", "")
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 	for _, argv := range [][]string{
 		{"enable", "-mode", "canary", "-timeout", "0"},
 		{"disable", "-mode", "python", "-timeout", "0"},
@@ -1309,7 +1305,7 @@ func captureVerb(t *testing.T, argv ...string) (out string, errOut string, err e
 // exits 1 is an internal error to every calling script.
 func TestEveryVerbRefusesAnUnconsumedArgument(t *testing.T) {
 	t.Setenv("POSTGRES_URI", "")
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 
 	for name, argv := range map[string][]string{
 		// The exact shapes that bypassed a guard, one per verb.
@@ -1378,7 +1374,7 @@ func TestEveryVerbRefusesAnUnconsumedArgument(t *testing.T) {
 func TestNoRealVerbsUsageTextEverPrintsTheDSN(t *testing.T) {
 	const secret = "hunter2-not-a-real-password"
 	t.Setenv("POSTGRES_URI", "postgresql://postgres:"+secret+"@db.internal:5432/devhealth")
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 
 	for _, verb := range everyVerb(t) {
 		t.Run(verb, func(t *testing.T) {

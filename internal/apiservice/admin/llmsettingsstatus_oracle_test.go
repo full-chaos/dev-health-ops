@@ -252,12 +252,12 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 
 	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {})
-	claimRetirement, claimPin := orgClaimRetirement(t, "testdata/orgclaim/llmsettingsstatus.go-pin.json", llmSettingsStatusOrgClaimPinSHA256,
-		"org not a uuid", "org missing")
-	defer claimPin.Finish(t)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
-		Golden:      golden,
-		Retirements: []venueoracle.Retirement{claimRetirement},
+		Golden: golden,
+		KnownDivergences: []venueoracle.KnownDivergence{
+			orgClaimGap(venueoracle.NotUUIDOrgClaimGap, "org not a uuid"),
+			orgClaimGap(venueoracle.RoleClaimGap, "org missing"),
+		},
 		Normalize: func(request venueoracle.Request, body string) string {
 			if request.Name == "invalid base_url with fallback audit row" {
 				body = timeShapeField(t, body, "last_fallback_at")

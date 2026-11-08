@@ -29,6 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 )
@@ -68,6 +69,77 @@ func teamKeyedMetricsDDL(t *testing.T) []string {
 	return statements
 }
 
+// TestTheRoutedAPIAdmitsItsOwnEdDSALoginToken: on the sessions-owned posture (the login pair comes from
+// auth-service's issue route) the login access token is a routed user access token (EdDSA), and the routed
+// go-api admits it on /me and validates it.
+func TestTheRoutedAPIAdmitsItsOwnEdDSALoginToken(t *testing.T) {
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	access := edtokens.New(t)
+	login := &eddsaLoginIssuer{tokens: access}
+	st := startStackRouted(t, ctx, authmail.Config{}, login, nil, nil, access)
+	login.pool = st.pool
+	do := func(method, path, bearer, body string) (int, string) {
+		t.Helper()
+		request, err := http.NewRequestWithContext(ctx, method, st.server.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		if bearer != "" {
+			request.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		raw, _ := io.ReadAll(response.Body)
+		return response.StatusCode, string(raw)
+	}
+	status, body := do(http.MethodPost, "/api/v1/auth/login", "", `{"email": "alice@example.com", "password": "`+sessionscenario.Password+`", "org_id": "a0000000-0000-4000-8000-00000000000a"}`)
+	if status != http.StatusOK {
+		t.Fatalf("login: %d %s", status, body)
+	}
+	token := sessionscenario.Field(body, "access_token")
+	if normalized := sessionscenario.Normalize(token); !strings.Contains(normalized, `"alg":"EdDSA"`) {
+		t.Fatalf("the login access token is not an EdDSA user access token: %s", normalized)
+	}
+	if status, body := do(http.MethodGet, "/api/v1/auth/me", token, ""); status != http.StatusOK ||
+		!strings.Contains(body, `"id":"10000000-0000-4000-8000-000000000001"`) || !strings.Contains(body, `"org_id":"a0000000-0000-4000-8000-00000000000a","role":"owner"`) {
+		t.Fatalf("me with the own login token: %d %s", status, body)
+	}
+	if status, body := do(http.MethodPost, "/api/v1/auth/validate", "", `{"token": "`+token+`"}`); status != http.StatusOK ||
+		!strings.Contains(body, `"valid":true,"user_id":"10000000-0000-4000-8000-000000000001"`) {
+		t.Fatalf("validate the own login token: %d %s", status, body)
+	}
+}
+
+// eddsaLoginIssuer is auth-service's session issue route as go-api's sign-in routes call it with sessions
+// owned by auth-service: the access token is a routed user access token (EdDSA) of tokens, at the
+// principal's current token version.
+type eddsaLoginIssuer struct {
+	tokens *edtokens.Issuer
+	pool   *pgxpool.Pool
+}
+
+func (i *eddsaLoginIssuer) Issue(ctx context.Context, _ *http.Request, req sessionissue.Request) (sessionissue.Pair, error) {
+	var version int64
+	if err := i.pool.QueryRow(ctx, `SELECT token_version FROM users WHERE id = $1`, req.PrincipalID).Scan(&version); err != nil {
+		return sessionissue.Pair{}, err
+	}
+	claims := edtokens.Claims{UserID: req.PrincipalID, TokenVersion: version}
+	if req.OrganizationID != nil {
+		claims.OrgID = req.OrganizationID.String()
+	}
+	access, err := i.tokens.Mint(claims)
+	if err != nil {
+		return sessionissue.Pair{}, err
+	}
+	return sessionissue.Pair{Access: access, Refresh: "dhr1_" + uuid.NewString(), ExpiresIn: 3600}, nil
+}
+
 // TestSessionCorpusExternalTarget replays the same corpus against the server at
 // DEVHEALTH_AUTH_ORACLE_BASE_URL (go-api, later auth-service), through its URL and stores only.
 func TestSessionCorpusExternalTarget(t *testing.T) {
@@ -88,9 +160,13 @@ type stack struct {
 	// openWindows starts a fresh window on every rate limit.
 	openWindows func()
 	server      *httptest.Server
-	signer      *edgetoken.Signer
-	specs       map[string]map[string]any
+	// access mints the routed user access tokens (EdDSA) the stack's Authenticator verifies.
+	access *edtokens.Issuer
+	specs  map[string]map[string]any
 }
+
+// testLinkSecret is the link secret of every stack whose mail configuration sets none.
+const testLinkSecret = "test-link-secret-0123456789abcdef"
 
 func startStack(t *testing.T, ctx context.Context) stack {
 	t.Helper()
@@ -125,6 +201,19 @@ func startStackWithMailAndIssuer(t *testing.T, ctx context.Context, mail authmai
 func startStackProvisioned(t *testing.T, ctx context.Context, mail authmail.Config, issuer sessionissue.Issuer,
 	routePool func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string) *pgxpool.Pool, provision authprovision.Provisioner) stack {
 	t.Helper()
+	return startStackRouted(t, ctx, mail, issuer, routePool, provision, edtokens.New(t))
+}
+
+// startStackRouted is startStackProvisioned with access as the token issuer. The stack is routed as
+// production's go-api is: the endpoint-profile row of the served route is in the request context before the
+// scope, and the Authenticator verifies only access's routed user access tokens (EdDSA).
+func startStackRouted(t *testing.T, ctx context.Context, mail authmail.Config, issuer sessionissue.Issuer,
+	routePool func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string) *pgxpool.Pool, provision authprovision.Provisioner,
+	access *edtokens.Issuer) stack {
+	t.Helper()
+	if mail.LinkSecret == "" {
+		mail.LinkSecret = testLinkSecret
+	}
 	pg, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -188,10 +277,7 @@ func startStackProvisioned(t *testing.T, ctx context.Context, mail authmail.Conf
 	if routePool != nil {
 		routesPool = routePool(t, ctx, pool, pg.URI)
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: routesPool}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := access.Authenticator(t, policy.PGStore{Pool: routesPool}, logger)
 	oauth := oauthprovider.NewClient()
 	oauth.Endpoints = sessionscenario.ProviderEndpoints(fake.URL)
 	if issuer == nil {
@@ -205,9 +291,13 @@ func startStackProvisioned(t *testing.T, ctx context.Context, mail authmail.Conf
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	scope := policy.NewScope(auth, logger)
-	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(mux))))
+	templates, err := httpapi.NewRouteTemplates(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(policy.RouteProfiles(templates.Match)(scope.Principal(scope.OrgScope(scope.Impersonation(mux)))))
 	t.Cleanup(server.Close)
-	return stack{pool: pool, pg: pg, server: server, signer: signer, specs: specs,
+	return stack{pool: pool, pg: pg, server: server, access: access, specs: specs,
 		openWindows: func() { limiterOffset.Add(int64(16 * time.Minute)) }}
 }
 

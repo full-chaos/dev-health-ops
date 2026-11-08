@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 )
@@ -66,6 +67,16 @@ type GoldenSpec struct {
 	// Scrub it must be deterministic and idempotent, and it is not applied to
 	// the authorization header.
 	KeyScrub func(text string) string
+	// GoBlanked lists, by exact pattern ("body $.session_access_token"), a leaf the Go plane's answer has blanked
+	// on replay that the recording never blanked, with the reason its value is not stable (CHAOS-13107). The
+	// header's "blanked" is the recording's own count, inside the bytes SHA256 pins, so it is never edited: a
+	// Go-only blanked path is declared here, one path each. A pattern the header lists ("body $.access_token") is
+	// a leaf the recording projected whose Go projection differs by design: the test compares it by a place holder
+	// on both planes and reports each such comparison with Golden.Unvalued. A pattern with a glob, an empty reason,
+	// or a golden whose header lists nothing, is refused when the golden opens; a pattern that blanked no leaf (or,
+	// listed, was never compared unvalued) by Finish fails the test. A blanked value is not an unchecked one: the
+	// test that declares a pattern checks the value itself.
+	GoBlanked map[string]string
 }
 
 // Golden is an opened GoldenSpec.
@@ -90,7 +101,9 @@ type Golden struct {
 	// retired counts, per ruling, the answers and row comparisons the test
 	// retired (golden_retired.go).
 	retired map[string]retiredCount
-	state   goldenState
+	// goBlankedSeen records which GoldenSpec.GoBlanked patterns blanked a leaf.
+	goBlankedSeen map[string]bool
+	state         goldenState
 }
 
 // answerSlot is one answer a Golden handed out.
@@ -212,6 +225,9 @@ func openGolden(spec GoldenSpec, test string) (*Golden, error) {
 	if len(g.loaded.Header.ProducerDigest) != 64 {
 		return nil, fmt.Errorf("golden %s names no producer digest: it was not recorded by this harness", spec.Path)
 	}
+	if err := g.goBlankedErr(); err != nil {
+		return nil, err
+	}
 	return g, nil
 }
 
@@ -306,11 +322,34 @@ func headersDigest(headers map[string]string) string {
 	for _, name := range names {
 		value := values[name]
 		if name == "authorization" {
-			value = bearerIdentity(value)
+			value = bearerIdentity(recordedCredential(value))
 		}
 		fmt.Fprintf(hash, "%d:%s=%d:%s\n", len(name), name, len(value), value)
 	}
 	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// recordedRequestTokens maps a token a replay sends to the token the recording sent for the same request (KeyAs).
+var recordedRequestTokens sync.Map
+
+// KeyAs keys every request that carries token, under any Authorization scheme, as the recorded request that
+// carried recorded: a replay that sends a credential of another class than the recording (a user access token
+// where the recording sent an HS256 token) still finds the recorded answer. It changes the request key only;
+// the plane under test receives token.
+func KeyAs(token, recorded string) {
+	recordedRequestTokens.Store(token, recorded)
+}
+
+// recordedCredential is an Authorization value with its credential replaced by the recorded one (KeyAs).
+func recordedCredential(value string) string {
+	scheme, credential, ok := strings.Cut(value, " ")
+	if !ok {
+		return value
+	}
+	if recorded, ok := recordedRequestTokens.Load(credential); ok {
+		return scheme + " " + recorded.(string)
+	}
+	return value
 }
 
 // bearerIdentity reduces "Bearer <jwt>" to the token's header and claims
@@ -681,6 +720,9 @@ func (g *Golden) Finish(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := g.unusedRows(); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.unusedGoBlanked(); err != nil {
 		t.Fatal(err)
 	}
 	WriteGoOnlyProof(t, "Go against the Python plane's answers executed on build "+g.spec.PythonBuild+" (frozen golden "+filepath.Base(g.spec.Path)+")"+g.retiredText())

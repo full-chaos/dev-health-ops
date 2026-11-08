@@ -108,7 +108,7 @@ var optionRegistry = []Option{
 	{
 		Flag: "http-addr", Env: EnvAPIAddress, Kind: KindString,
 		Default: defaultAPIAddress, Group: GroupHTTP,
-		Usage: "host:port for the auth API surface (the session routes mount only when both session secrets are set)",
+		Usage: "host:port for the auth API surface (the session routes mount only when the session secrets are set)",
 	},
 	{
 		Flag: "operator-http-addr", Env: EnvOperatorAddress, Kind: KindString,
@@ -236,8 +236,9 @@ var optionRegistry = []Option{
 	{
 		Env: EnvAccessTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "HS256 key of the compatibility access token (go-api's JWT_SECRET_KEY value, at least 32 characters); " +
-			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Set together with " +
-			EnvSessionSuccessorKey + "; with neither, no session route is mounted",
+			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Under hs256_compat set together with " +
+			EnvSessionSuccessorKey + "; with neither, no session route is mounted. Under eddsa optional (it only verifies go-api's HS256 token) and it needs " +
+			EnvSessionSuccessorKey,
 	},
 	{
 		Env: EnvSessionSuccessorKey, Kind: KindString, Secret: true, Group: GroupSession,
@@ -265,7 +266,8 @@ var optionRegistry = []Option{
 	},
 	{
 		Env: EnvSessionIssueWorkloadSubject, Kind: KindString, Group: GroupSession,
-		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. Needs " +
+		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. " +
+			EnvSessionIssueWorkloadSubject + "_FILE reads it from a mounted file instead (the two are mutually exclusive). Needs " +
 			EnvTokenIssuerURL,
 	},
 	{
@@ -282,7 +284,7 @@ var optionRegistry = []Option{
 		Env: EnvRateLimitKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "key the rate-limit counters digest identifiers with, at least 32 characters; " + EnvRateLimitKey +
 			"_FILE reads it from a mounted file instead. Unset, the limiter is keyed from " + EnvAccessTokenSecret +
-			"; needs the session secrets",
+			"; required while that is unset; needs the session secrets",
 	},
 	{
 		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,

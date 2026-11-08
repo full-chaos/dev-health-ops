@@ -9,6 +9,7 @@ import (
 	"github.com/vektah/gqlparser/v2/parser"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 func guardOperation(t *testing.T, document string, variables map[string]any) *graphql.OperationContext {
@@ -155,6 +156,27 @@ func TestOperationOrgGuardRunsTheOperationAgainstTheNamedOrgForASuperuser(t *tes
 	})(ctx)
 	if seenOrg != "org-own" {
 		t.Errorf("superuser naming their own org: ran as %q, want org-own", seenOrg)
+	}
+}
+
+// CHAOS-12659: the superuser rebind moves the legacy path's scope with the org, so the scope a resolver reads names
+// the org the operation runs in.
+func TestOperationOrgGuardRebindMovesTheLegacyScope(t *testing.T) {
+	t.Parallel()
+	operation := guardOperation(t, `query Q($orgId: String) { doIt(orgId: $orgId) }`, map[string]any{"orgId": "org-other"})
+	run := func(claims authctx.Claims) pepgate.Scope {
+		ctx := graphql.WithOperationContext(authctx.WithClaims(context.Background(), claims), operation)
+		var scope pepgate.Scope
+		OperationOrgGuard{}.InterceptOperation(ctx, func(inner context.Context) graphql.ResponseHandler {
+			seen, _ := authctx.FromContext(inner)
+			scope = seen.Scope
+			return func(context.Context) *graphql.Response { return &graphql.Response{} }
+		})(ctx)
+		return scope
+	}
+	legacy := run(authctx.Claims{OrgID: "org-own", IsSuperuser: true, Scope: pepgate.Legacy("org-own")})
+	if org, ok := legacy.OrgID(); legacy.Kind() != pepgate.KindLegacy || !ok || org != "org-other" {
+		t.Errorf("legacy scope after the rebind: kind %d org %q, want the legacy scope of org-other", legacy.Kind(), org)
 	}
 }
 

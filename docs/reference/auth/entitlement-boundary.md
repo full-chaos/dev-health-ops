@@ -73,6 +73,6 @@ Three tests hold the boundary in code (`internal/auth/entitlement/deps_test.go`)
 | Entitlement revision in the decision cache key | The key type has the field. The authorize route does not set it (`internal/auth/authapi/authorize_cache.go:123-133`), so it is 0, and no entitlement aggregate or feed event exists yet. When one exists it becomes a dependency like the others. |
 | `entitlement_requirement` of an endpoint profile | The field exists in the profile schema. No row of the go-api, query-api or auth-service profiles has a value on `main`. See [endpoint profiles](endpoint-profiles.md#absent-versus-null). |
 | Entitlement in tokens | The query-api principal envelope still has `tier` and `licensed_features` (`internal/queryapi/principal/claims.go`). ADR-07 removes them at the next version of the envelope. Until then the 60 s token lifetime is the compensating control. |
-| Billing and licensing enforcement point | Planned, CHAOS-10862. |
+| Billing and licensing enforcement point | Planned. |
 
 When an entitlement obligation or an entitlement-aware decision lands, this page is the one to change first: the Status table, then the rules that moved from "planned" to "enforced".

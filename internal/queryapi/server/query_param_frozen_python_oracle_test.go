@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -96,7 +97,7 @@ func TestQueryParamValidationMatchesFrozenPython(t *testing.T) {
 		if c.person != "" {
 			request.SetPathValue("person_id", c.person)
 		}
-		request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1"}))
+		request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 		recorder := httptest.NewRecorder()
 		c.handler(recorder, request)
 		if answers[i].Status != http.StatusUnprocessableEntity {

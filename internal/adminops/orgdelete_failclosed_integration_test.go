@@ -112,7 +112,8 @@ func TestOrgsDeleteRefusesWithoutAUsableClickHouse(t *testing.T) {
 			chBefore := chRows()
 
 			authURL, _ := startFakeAuthService(t, db.uri)
-			env := map[string]string{"MIGRATION_DATABASE_URI": db.uri, "AUTH_PROXY_URL": authURL, "AUTH_SESSION_ISSUE_TOKEN": fakeToken}
+			env := fakeWorkloadEnv(t)
+			env["MIGRATION_DATABASE_URI"], env["AUTH_PROXY_URL"] = db.uri, authURL
 			for key, value := range tc.env {
 				env[key] = value
 			}

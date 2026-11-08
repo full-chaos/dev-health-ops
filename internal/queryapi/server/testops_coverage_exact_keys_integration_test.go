@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
@@ -100,7 +99,7 @@ func TestTestOpsCoverageRoute_ExactRepoKeysReturnBranchCoverageOutsideIndependen
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, err := newQueryHandler(analytics.PinInvestmentMembershipScope(queryClient), pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, err := newQueryHandler(analytics.PinInvestmentMembershipScope(queryClient), pool, verifier, itTestSchemaDigest, withIssuer)
 	if err != nil {
 		t.Fatalf("build TestOps Coverage handler: %v", err)
 	}

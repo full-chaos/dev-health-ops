@@ -44,7 +44,7 @@ const (
 var Reasons = []string{ReasonNoProfile, ReasonAlgNotAllowed, ReasonKidUnknown, ReasonSignature, ReasonExpired, ReasonMalformed, ReasonClaims, ReasonLegacy, ReasonNotConfigured, ReasonUnavailable}
 
 // ErrUnavailable is returned when a validator could not decide because a
-// dependency failed; callers answer 503, not 401. A LegacyVerifier wraps it.
+// dependency failed; callers answer 503, not 401.
 var ErrUnavailable = errors.New("accessverify: validator unavailable")
 
 // ErrRefused is returned for every refusal; callers answer 401 with a generic body.
@@ -56,7 +56,6 @@ type Row struct {
 	Service     string
 	Profile     string
 	AcceptsUser bool
-	LegacyHS256 bool
 }
 
 // EdDSAVerifier is satisfied by *authverify.Verifier.
@@ -64,14 +63,10 @@ type EdDSAVerifier interface {
 	Verify(token string, now time.Time) (*authverify.AccessClaims, error)
 }
 
-// LegacyVerifier validates an HS256 access token. Nil: HS256 is never accepted.
-type LegacyVerifier func(ctx context.Context, token string) (any, error)
-
-// Result is an accepted token. Exactly one of Claims and Legacy is set.
+// Result is an accepted token.
 type Result struct {
 	Class  string
 	Claims *authverify.AccessClaims
-	Legacy any
 }
 
 type key struct{ service, profile string }
@@ -80,7 +75,6 @@ type key struct{ service, profile string }
 type Config struct {
 	Rows   []Row
 	EdDSA  EdDSAVerifier
-	Legacy LegacyVerifier
 	Meter  metric.Meter
 	Logger *slog.Logger
 	Now    func() time.Time
@@ -90,7 +84,6 @@ type Config struct {
 type Validator struct {
 	rows     map[key]Row
 	eddsa    EdDSAVerifier
-	legacy   LegacyVerifier
 	accepted metric.Int64Counter
 	refused  metric.Int64Counter
 	logger   *slog.Logger
@@ -112,7 +105,7 @@ func New(cfg Config) (*Validator, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &Validator{rows: make(map[key]Row, len(cfg.Rows)), eddsa: cfg.EdDSA, legacy: cfg.Legacy,
+	v := &Validator{rows: make(map[key]Row, len(cfg.Rows)), eddsa: cfg.EdDSA,
 		accepted: accepted, refused: refused, logger: cfg.Logger, now: cfg.Now}
 	if v.logger == nil {
 		v.logger = slog.New(slog.DiscardHandler)
@@ -129,9 +122,6 @@ func New(cfg Config) (*Validator, error) {
 		v.rows[key{row.Service, row.Profile}] = row
 		if row.AcceptsUser {
 			accepted.Add(ctx, 0, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("class", ClassUser)))
-		}
-		if row.LegacyHS256 {
-			accepted.Add(ctx, 0, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("class", ClassLegacy)))
 		}
 		for _, reason := range Reasons {
 			refused.Add(ctx, 0, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("reason", reason)))
@@ -167,22 +157,6 @@ func (v *Validator) Validate(ctx context.Context, service, profile, bearer strin
 		}
 		v.accepted.Add(ctx, 1, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("class", ClassUser)))
 		return &Result{Class: ClassUser, Claims: claims}, nil
-	case "HS256":
-		if !row.LegacyHS256 {
-			return nil, v.refuse(ctx, row.Service, row.Profile, ReasonAlgNotAllowed)
-		}
-		if v.legacy == nil {
-			return nil, v.refuse(ctx, row.Service, row.Profile, ReasonNotConfigured)
-		}
-		principal, err := v.legacy(ctx, bearer)
-		if errors.Is(err, ErrUnavailable) {
-			return nil, v.unavailable(ctx, row.Service, row.Profile, ErrUnavailable)
-		}
-		if err != nil {
-			return nil, v.refuse(ctx, row.Service, row.Profile, ReasonLegacy)
-		}
-		v.accepted.Add(ctx, 1, metric.WithAttributes(attribute.String("service", row.Service), attribute.String("profile", row.Profile), attribute.String("class", ClassLegacy)))
-		return &Result{Class: ClassLegacy, Legacy: principal}, nil
 	default:
 		return nil, v.refuse(ctx, row.Service, row.Profile, ReasonAlgNotAllowed)
 	}

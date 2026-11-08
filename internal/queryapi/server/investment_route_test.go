@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // emptyRowsInvestmentClient answers every ClickHouse call (including the
@@ -205,7 +206,7 @@ func TestNewInvestmentSunburstGetHandlerRequiresAuthContext(t *testing.T) {
 func TestNewInvestmentGetHandlerHappyPathSetsDeprecatedHeader(t *testing.T) {
 	handler := newInvestmentGetHandler(newTablePresentInvestmentReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment?scope_type=repo&scope_id=repo-a&range_days=7", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -236,7 +237,7 @@ func TestNewInvestmentPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) {
 	handler := newInvestmentPostHandler(newTablePresentInvestmentReader(t))
 	body := `{"filters":{"scope":{"level":"org"},"time":{"range_days":7}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment", bytes.NewReader([]byte(body)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -253,7 +254,7 @@ func TestNewInvestmentPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) {
 func TestNewInvestmentPostHandlerMissingFiltersIs422(t *testing.T) {
 	handler := newInvestmentPostHandler(newEmptyRowsInvestmentReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment", bytes.NewReader([]byte(`{}`)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -267,7 +268,7 @@ func TestNewInvestmentPostHandlerInvalidScopeLevelIs422(t *testing.T) {
 	handler := newInvestmentPostHandler(newEmptyRowsInvestmentReader(t))
 	body := `{"filters":{"scope":{"level":"not-a-real-scope-level"}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment", bytes.NewReader([]byte(body)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -280,7 +281,7 @@ func TestNewInvestmentPostHandlerInvalidScopeLevelIs422(t *testing.T) {
 func TestNewInvestmentGetHandlerInvalidRangeDaysIs422(t *testing.T) {
 	handler := newInvestmentGetHandler(newEmptyRowsInvestmentReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment?range_days=not-a-number", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -294,7 +295,7 @@ func TestNewInvestmentGetHandlerInvalidRangeDaysIs422(t *testing.T) {
 func TestNewInvestmentGetHandlerClickHouseFailureIs503(t *testing.T) {
 	handler := newInvestmentGetHandler(newErroringInvestmentReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -311,7 +312,7 @@ func TestNewInvestmentGetHandlerClickHouseFailureIs503(t *testing.T) {
 func TestNewInvestmentSunburstGetHandlerHappyPathBareArray(t *testing.T) {
 	handler := newInvestmentSunburstGetHandler(newTablePresentInvestmentReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment/sunburst", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -336,7 +337,7 @@ func TestNewInvestmentSunburstGetHandlerHappyPathBareArray(t *testing.T) {
 func TestNewInvestmentSunburstGetHandlerInvalidLimitIs422(t *testing.T) {
 	handler := newInvestmentSunburstGetHandler(newEmptyRowsInvestmentReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment/sunburst?limit=not-a-number", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {

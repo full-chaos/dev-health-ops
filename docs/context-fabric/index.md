@@ -27,7 +27,7 @@ Context Fabric turns the engineering evidence already flowing through Dev Health
 
 <div class="fc-cf-actions" markdown>
 
-[Connect an agent](https://github.com/full-chaos/context-fabric-agents#install){ .md-button .md-button--primary }
+[Connect an agent](../integrate/mcp/index.md){ .md-button .md-button--primary }
 [Choose an entry point](../use/ai-workflows/index.md#choose-the-supported-entry-point){ .md-button }
 
 </div>
@@ -184,7 +184,7 @@ Compatible coding, review, documentation, CI, research, and automation agents ca
 
 </div>
 
-[Configure the ACR MCP sidecar →](https://github.com/full-chaos/context-fabric-agents/blob/main/docs/usage.md){ .fc-cf-card-link }
+[Connect an agent to the hosted MCP server →](../integrate/mcp/index.md){ .fc-cf-card-link }
 
 </article>
 
@@ -223,7 +223,7 @@ Use ACR and MCP when agents need the relevant scope, relationships, history, con
 
 <div class="fc-cf-actions" markdown>
 
-[Configure the ACR MCP sidecar](https://github.com/full-chaos/context-fabric-agents/blob/main/docs/usage.md){ .md-button .md-button--primary }
+[Connect an agent to the hosted MCP server](../integrate/mcp/index.md){ .md-button .md-button--primary }
 [Read the technical architecture](../contribute/architecture/platform.md#ask-dev-and-context-fabric-runtime){ .md-button }
 
 </div>

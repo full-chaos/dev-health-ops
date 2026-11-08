@@ -12,7 +12,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 // AccessClass is the credential class a bearer token's JOSE header names,
@@ -86,37 +85,11 @@ func (r routedAccess) Validate(ctx context.Context, service, profile, bearer str
 	case err != nil:
 		return nil, err
 	}
-	switch {
-	case result.Class == accessverify.ClassLegacy:
-		if user, ok := result.Legacy.(*policy.User); ok && user != nil {
-			return &policy.RoutedResult{Legacy: user}, nil
-		}
-	case result.Class == accessverify.ClassUser && result.Claims != nil:
+	if result.Class == accessverify.ClassUser && result.Claims != nil {
 		claims := result.Claims
 		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID, Actor: claims.ActorSubject}}, nil
 	}
 	return nil, errUnexpectedAccessResult
-}
-
-// LegacyVerifier maps an HS256 authenticate function's errors the way go-api
-// does (acp D3): a refusal and a claim of the wrong type are refusals (401);
-// any other store failure is unavailable (503), never a pass.
-func LegacyVerifier(authenticate func(context.Context, string) (*policy.User, error)) accessverify.LegacyVerifier {
-	return func(ctx context.Context, token string) (any, error) {
-		user, err := authenticate(ctx, token)
-		return legacyResult(user, err)
-	}
-}
-
-func legacyResult(user *policy.User, err error) (any, error) {
-	switch {
-	case err == nil:
-		return user, nil
-	case policy.IsRefusal(err), policy.IsClaimTypeError(err):
-		return nil, err
-	default:
-		return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
-	}
 }
 
 // RouteAccess makes VerifyRouted pick the validator from the request's
@@ -131,51 +104,29 @@ func (v *EdgeVerifier) RouteAccess(validator *accessverify.Validator, service st
 // Routed reports whether RouteAccess was applied; false for a nil verifier.
 func (v *EdgeVerifier) Routed() bool { return v != nil && v.auth.Routed() }
 
-// LegacyAccess is the validator's HS256 verifier for the REST routes: the
-// JWT and users-row half of Verify, with Verify's per-reason telemetry, and
-// without the organization rule, which VerifyRouted applies once the
-// validator has accepted the token.
-func (v *EdgeVerifier) LegacyAccess() accessverify.LegacyVerifier {
-	return func(ctx context.Context, token string) (any, error) {
-		meta := requestMetaFrom(ctx)
-		claims, err := v.verifier.Verify(token)
-		if err != nil {
-			v.reject(ctx, edgetoken.ReasonOf(err), claims, meta)
-			return nil, fmt.Errorf("principal: edge: %w", err)
-		}
-		user, err := v.auth.CheckClaims(ctx, claims)
-		if err != nil {
-			reason := ReasonUserRefused
-			if !policy.IsRefusal(err) {
-				reason = ReasonUserLookupFailed
-			}
-			v.reject(ctx, reason, claims, meta)
-		}
-		return legacyResult(user, err)
-	}
-}
-
 // VerifyRouted authenticates token against the row of profile ("METHOD
 // /route") through the profile-routed validator, then applies Verify's
-// organization rule to either class: a caller with no organization is
-// refused with OrgRequiredError unless the live users row is a superuser's.
-// An error wrapping policy.ErrUnavailable decided nothing; a refusal is
-// policy.IsRefusal. The edge outcome telemetry counts the HS256 class only.
+// membership and organization rules to either class: a token org without a
+// membership row is refused (CheckTokenOrg, the legacy edge answer), and a
+// caller with no organization is refused with OrgRequiredError unless the
+// live users row is a superuser's. An error wrapping policy.ErrUnavailable
+// decided nothing; a refusal is policy.IsRefusal. The edge outcome telemetry
+// counts the HS256 class only.
 func (v *EdgeVerifier) VerifyRouted(ctx context.Context, profile, token string) (*EdgeClaims, error) {
 	edge := AccessClassOf(token) == AccessClassEdge
 	user, err := v.auth.Authenticate(policy.WithRouteProfile(ctx, profile), token)
 	if err != nil {
 		return nil, fmt.Errorf("principal: edge: %w", err)
 	}
-	if edge {
-		if err := v.auth.CheckTokenOrg(ctx, user); err != nil {
+	if err := v.auth.CheckTokenOrg(ctx, user); err != nil {
+		if edge {
 			reason := ReasonUserRefused
 			if !policy.IsRefusal(err) {
 				reason = ReasonUserLookupFailed
 			}
 			v.reject(ctx, reason, nil, requestMetaFrom(ctx))
-			return nil, fmt.Errorf("principal: edge: %w", err)
 		}
+		return nil, fmt.Errorf("principal: edge: %w", err)
 	}
 	if user.OrgID == "" && !user.IsSuperuser {
 		if edge {

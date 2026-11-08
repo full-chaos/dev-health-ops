@@ -142,6 +142,10 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "heatmap", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "heatmap", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		var validationErrors []pydanticErrorDetail
@@ -190,7 +194,7 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -201,7 +205,7 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 		// binary's one call site for it.
 		for key := range query {
 			if peopleForbiddenQueryParams[key] {
-				writeRESTError(w, r, "heatmap", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "heatmap", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
@@ -226,14 +230,14 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 			params.EndDate = &endDate
 		}
 
-		resp, err := heatmap.BuildResponse(r.Context(), client, claims.OrgID, params)
+		resp, err := heatmap.BuildResponse(r.Context(), client, org, params)
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
-				writeTimeWindowOverflow(w, r, "heatmap", claims.OrgID)
+				writeTimeWindowOverflow(w, r, "heatmap", org)
 				return
 			}
 			if reqErr, ok := heatmap.AsRequestError(err); ok {
-				writeRESTError(w, r, "heatmap", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "heatmap", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -241,13 +245,13 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 			// not one of build_heatmap_response's own typed
 			// HTTPExceptions degrades to a generic 503, never a raw
 			// ClickHouse error on the wire.
-			writeRESTDataUnavailable(w, r, "heatmap", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "heatmap", org, err)
 			return
 		}
 
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: heatmap: encode response failed: org_id=%s request_id=%s err=%v",
-				claims.OrgID, envelopeRequestID(r), encodeErr)
+				org, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 			writeModelFailure(w)
 		}
 	}

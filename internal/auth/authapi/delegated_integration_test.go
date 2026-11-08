@@ -17,7 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrmint"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -39,12 +39,47 @@ type delegatedLive struct {
 
 func newDelegatedLive(t *testing.T, ctx context.Context) *delegatedLive {
 	t.Helper()
+	return newDelegatedLiveWith(t, ctx, hs256Issuer(t))
+}
+
+// newGoAPIDelegatedLive is newDelegatedLive whose issuer mints go-api's EdDSA access token (audience
+// dev-health-api, act = the actor) and whose authenticator is go-api's, routed over that issuer's keys.
+func newGoAPIDelegatedLive(t *testing.T, ctx context.Context) *delegatedLive {
+	t.Helper()
+	signer, _, _ := fileSigner(t)
+	l := newDelegatedLiveWith(t, ctx, newEdDSAIssuer(t, signer, contracts.PlatformAPIAudience))
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: l.admin, AuthSchema: "auth"}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeGoAPIAccess(t, auth, signer, slog.New(slog.DiscardHandler))
+	l.authenticator = auth
+	return l
+}
+
+// newSessionBearerDelegatedLive is newDelegatedLive whose issuer mints the EdDSA session-route access token and
+// carries the access check, so the bearer routes mount (they mount only with the check).
+func newSessionBearerDelegatedLive(t *testing.T, ctx context.Context) *delegatedLive {
+	t.Helper()
+	signer, _, _ := fileSigner(t)
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newDelegatedLiveWith(t, ctx, newEdDSAIssuer(t, signer, AccessTokenAudience).WithAccessCheck(check))
+}
+
+// goAPIDelegatedRow is a go-api row that takes a user access token and allows a delegated bearer.
+const goAPIDelegatedRow = "GET /api/v1/auth/me"
+
+func newDelegatedLiveWith(t *testing.T, ctx context.Context, issuer *Issuer) *delegatedLive {
+	t.Helper()
 	p := newPreflightStoreOwned(t, ctx, true)
 	id, err := identity.New(identity.Config{Pool: p.runtime, Schema: p.schema, UsersOwnedByAuth: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := &delegatedLive{preflightStore: p, identity: id, actor: uuid.New(), target: uuid.New(), org: uuid.New(), issuer: newTestIssuer(t)}
+	l := &delegatedLive{preflightStore: p, identity: id, actor: uuid.New(), target: uuid.New(), org: uuid.New(), issuer: issuer}
 	for _, user := range []uuid.UUID{l.actor, l.target} {
 		if _, err := p.admin.Exec(ctx, `INSERT INTO public.users
 	(id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
@@ -80,13 +115,6 @@ VALUES ($1, $2, NULL, 'local', true, true, false, $3, now(), now())`, user, "d-"
 		users: map[uuid.UUID]UserState{l.target: {Email: "t@example.test", IsActive: true, TokenVersion: delegatedTokenVersion}},
 		roles: map[[2]uuid.UUID]*string{{l.target, l.org}: &member},
 	}
-	verifier, err := edgetoken.New(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if l.authenticator, err = policy.NewAuthenticator(verifier, policy.PGStore{Pool: p.admin, AuthSchema: "auth"}, slog.New(slog.DiscardHandler)); err != nil {
-		t.Fatal(err)
-	}
 	return l
 }
 
@@ -94,11 +122,11 @@ VALUES ($1, $2, NULL, 'local', true, true, false, $3, now(), now())`, user, "d-"
 func (l *delegatedLive) server(t *testing.T) http.Handler {
 	t.Helper()
 	routes, err := CompatRoutes(CompatDeps{Sessions: l.store, Users: l.users, Issuer: l.issuer, Projector: l.identity,
-		Logger:             slog.New(slog.DiscardHandler),
-		AppendAudit:        func(context.Context, audit.AuditEvent) error { return nil },
-		ServiceCredentials: &fakeServiceCredentials{id: uuid.NewString()},
-		Meter:              sdkmetric.NewMeterProvider().Meter("test"),
-		Limits:             mustLimits(t, httpapi.NewMemoryCounters(nil)),
+		Logger:        slog.New(slog.DiscardHandler),
+		AppendAudit:   func(context.Context, audit.AuditEvent) error { return nil },
+		IssueWorkload: testIssueWorkload(),
+		Meter:         sdkmetric.NewMeterProvider().Meter("test"),
+		Limits:        mustLimits(t, httpapi.NewMemoryCounters(nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +165,7 @@ type startedAnswer struct {
 
 func (l *delegatedLive) start(t *testing.T, server http.Handler) (uuid.UUID, string) {
 	t.Helper()
-	r := post(server, PatternDelegatedSession, l.body(), issuerBearer)
+	r := post(server, PatternDelegatedSession, l.body(), issuerBearer())
 	if r.Code != http.StatusCreated {
 		t.Fatalf("start %d: %s", r.Code, r.Body)
 	}
@@ -184,7 +212,7 @@ func TestDelegatedMintFailureEndsTheRealRow(t *testing.T) {
 	defer cancel()
 	l := newDelegatedLive(t, ctx)
 	l.users.roleErr = errors.New("read failed")
-	r := post(l.server(t), PatternDelegatedSession, l.body(), issuerBearer)
+	r := post(l.server(t), PatternDelegatedSession, l.body(), issuerBearer())
 	if r.Code != http.StatusServiceUnavailable {
 		t.Fatalf("start %d: %s", r.Code, r.Body)
 	}
@@ -206,16 +234,16 @@ func TestDelegatedEndRouteEndsOnlyADelegatedRow(t *testing.T) {
 	server := l.server(t)
 	id, _ := l.start(t, server)
 	endBody := func(id uuid.UUID) string { return `{"session_id":"` + id.String() + `"}` }
-	if r := post(server, PatternDelegatedSessionEnd, endBody(l.base), issuerBearer); r.Code != http.StatusNotFound {
+	if r := post(server, PatternDelegatedSessionEnd, endBody(l.base), issuerBearer()); r.Code != http.StatusNotFound {
 		t.Fatalf("plain session %d: %s", r.Code, r.Body)
 	}
-	if r := post(server, PatternDelegatedSessionEnd, endBody(id), issuerBearer); r.Code != http.StatusNoContent {
+	if r := post(server, PatternDelegatedSessionEnd, endBody(id), issuerBearer()); r.Code != http.StatusNoContent {
 		t.Fatalf("end %d: %s", r.Code, r.Body)
 	}
 	if !l.ended(t, ctx, id) || l.ended(t, ctx, l.base) {
 		t.Fatalf("delegated ended %v, base ended %v", l.ended(t, ctx, id), l.ended(t, ctx, l.base))
 	}
-	if r := post(server, PatternDelegatedSessionEnd, endBody(id), issuerBearer); r.Code != http.StatusNoContent {
+	if r := post(server, PatternDelegatedSessionEnd, endBody(id), issuerBearer()); r.Code != http.StatusNoContent {
 		t.Fatalf("second end %d: %s", r.Code, r.Body)
 	}
 }
@@ -223,10 +251,10 @@ func TestDelegatedEndRouteEndsOnlyADelegatedRow(t *testing.T) {
 func TestGoAPITakesTheDelegatedTokenUntilTheSessionEnds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	l := newDelegatedLive(t, ctx)
+	l := newGoAPIDelegatedLive(t, ctx)
 	server := l.server(t)
-	id, _ := l.start(t, server)
-	access := l.legacyToken(t, id)
+	id, access := l.start(t, server)
+	ctx = policy.WithRouteProfile(ctx, goAPIDelegatedRow)
 	user, err := l.authenticator.Authenticate(ctx, access)
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
@@ -234,7 +262,7 @@ func TestGoAPITakesTheDelegatedTokenUntilTheSessionEnds(t *testing.T) {
 	if user.UserID != l.target.String() || user.ImpersonatedBy == nil || *user.ImpersonatedBy != l.actor.String() {
 		t.Fatalf("user %+v", user)
 	}
-	if r := post(server, PatternDelegatedSessionEnd, `{"session_id":"`+id.String()+`"}`, issuerBearer); r.Code != http.StatusNoContent {
+	if r := post(server, PatternDelegatedSessionEnd, `{"session_id":"`+id.String()+`"}`, issuerBearer()); r.Code != http.StatusNoContent {
 		t.Fatalf("end %d: %s", r.Code, r.Body)
 	}
 	if _, err := l.authenticator.Authenticate(ctx, access); err == nil {
@@ -245,13 +273,12 @@ func TestGoAPITakesTheDelegatedTokenUntilTheSessionEnds(t *testing.T) {
 func TestGoAPIRefusesTheDelegatedTokenAfterItsBaseIsRevoked(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	l := newDelegatedLive(t, ctx)
-	id, _ := l.start(t, l.server(t))
-	access := l.legacyToken(t, id)
+	l := newGoAPIDelegatedLive(t, ctx)
+	_, access := l.start(t, l.server(t))
 	if _, err := l.store.Revoke(ctx, l.base, session.Actor{PrincipalID: &l.actor}); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if _, err := l.authenticator.Authenticate(ctx, access); err == nil {
+	if _, err := l.authenticator.Authenticate(policy.WithRouteProfile(ctx, goAPIDelegatedRow), access); err == nil {
 		t.Fatal("go-api took the token after its base ended")
 	}
 }
@@ -259,9 +286,8 @@ func TestGoAPIRefusesTheDelegatedTokenAfterItsBaseIsRevoked(t *testing.T) {
 func TestADelegatedBearerIsDeniedOverARealRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	l := newDelegatedLive(t, ctx)
-	id, _ := l.start(t, l.server(t))
-	access := l.legacyToken(t, id)
+	l := newSessionBearerDelegatedLive(t, ctx)
+	id, access := l.start(t, l.server(t))
 	routes := l.bearerRoutes(t)
 	header := map[string]string{"Authorization": "Bearer " + access}
 	request := func(method, path string) int {
@@ -291,7 +317,7 @@ func TestSwitchFromADelegatedSessionIsRefusedOverARealRow(t *testing.T) {
 	l := newDelegatedLive(t, ctx)
 	server := l.server(t)
 	id, _ := l.start(t, server)
-	r := post(server, PatternIssueSession, issueBodyWithPredecessor(l.target, l.org.String(), `"`+id.String()+`"`), issuerBearer)
+	r := post(server, PatternIssueSession, issueBodyWithPredecessor(l.target, l.org.String(), `"`+id.String()+`"`), issuerBearer())
 	if r.Code != http.StatusForbidden {
 		t.Fatalf("switch %d: %s", r.Code, r.Body)
 	}

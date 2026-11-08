@@ -662,13 +662,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
       ],
       "graphql_field_name": null,
@@ -4896,14 +4895,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
-      "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/users [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -4962,13 +4959,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
       ],
       "graphql_field_name": null,
@@ -8243,13 +8239,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
       ],
       "graphql_field_name": null,
@@ -11983,14 +11978,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
-      "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/users [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -12049,13 +12042,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
       ],
       "graphql_field_name": null,

@@ -43,15 +43,21 @@ var platformAdminRoutes = map[string]platformAdminRoute{
 	"POST /api/v1/admin/impersonate/handoff/consume":                     {rule.ActionAdminImpersonate, true},
 }
 
+// adminOrUsersRoutes are the /admin/users rows: mounted WrapAdminOr(admin.users) (an org owner or admin passes too),
+// with whether the body is read first. TestPlatformAction_AdminRoutesAreWrappedByTheirAction (apiservice/admin) pins
+// the real mounts.
+var adminOrUsersRoutes = map[string]platformAdminRoute{
+	"GET /api/v1/admin/users":                     {rule.ActionAdminUsers, false},
+	"GET /api/v1/admin/users/{user_id}":           {rule.ActionAdminUsers, false},
+	"POST /api/v1/admin/users":                    {rule.ActionAdminUsers, true},
+	"PATCH /api/v1/admin/users/{user_id}":         {rule.ActionAdminUsers, true},
+	"POST /api/v1/admin/users/{user_id}/password": {rule.ActionAdminUsers, true},
+	"DELETE /api/v1/admin/users/{user_id}":        {rule.ActionAdminUsers, false},
+}
+
 // platformAdminGapRoutes are the platform-admin rows whose profile row names no action yet, with the guard level they
-// are mounted at (Admin: WrapAdminOr(admin.users); Superuser: WrapPlatform(admin.users)). With the admin cell on, the decision point does not judge them.
+// are mounted at (Superuser: WrapPlatform(admin.users)). With the admin cell on, the decision point does not judge them.
 var platformAdminGapRoutes = map[string]Authz{
-	"GET /api/v1/admin/users":                                              Admin,
-	"GET /api/v1/admin/users/{user_id}":                                    Admin,
-	"POST /api/v1/admin/users":                                             Admin,
-	"PATCH /api/v1/admin/users/{user_id}":                                  Admin,
-	"POST /api/v1/admin/users/{user_id}/password":                          Admin,
-	"DELETE /api/v1/admin/users/{user_id}":                                 Admin,
 	"POST /api/v1/telemetry/report":                                        Authenticated,
 	"GET /api/v1/admin/service-accounts/{service_account_id}/keys":         Superuser,
 	"POST /api/v1/admin/service-accounts/{service_account_id}/keys":        Superuser,
@@ -69,8 +75,8 @@ func productionGoAPIRows(t *testing.T) map[string]ShadowRow {
 	return rows
 }
 
-// The cell table covers exactly the production profile's platform-admin rows: every admin-namespace row except the
-// admin.billing rows (6.9), each with the action of its mount.
+// The cell tables cover exactly the production profile's platform-admin rows: every admin-namespace row except the
+// admin.billing rows (6.9), each with the action of its mount (the platform wraps and the admin-or /admin/users rows).
 func TestPlatformAdminCellsCoverTheProductionPlatformRows(t *testing.T) {
 	rows := productionGoAPIRows(t)
 	got := map[string]string{}
@@ -84,6 +90,9 @@ func TestPlatformAdminCellsCoverTheProductionPlatformRows(t *testing.T) {
 	}
 	want := map[string]string{}
 	for pattern, route := range platformAdminRoutes {
+		want[pattern] = route.action
+	}
+	for pattern, route := range adminOrUsersRoutes {
 		want[pattern] = route.action
 	}
 	if !maps.Equal(got, want) {
@@ -120,16 +129,20 @@ func platformAdminMux(guard *Guard) *http.ServeMux {
 			mux.Handle(pattern, guard.WrapPlatform(route.action, echo))
 		}
 	}
+	for pattern, route := range adminOrUsersRoutes {
+		if route.bodyFirst {
+			mux.Handle(pattern, guard.BodyFirstAdminOr(route.action, echo))
+		} else {
+			mux.Handle(pattern, guard.WrapAdminOr(route.action, echo))
+		}
+	}
 	for pattern, level := range platformAdminGapRoutes {
-		switch level {
-		case Admin:
-			mux.Handle(pattern, guard.WrapAdminOr(rule.ActionAdminUsers, echo))
-		case Superuser:
+		if level == Superuser {
 			// The service account key rows: WrapPlatform(admin.users), as admin/serviceaccount_keys.go mounts them.
 			mux.Handle(pattern, guard.WrapPlatform(rule.ActionAdminUsers, echo))
-		default:
-			mux.Handle(pattern, guard.Wrap(level, echo))
+			continue
 		}
+		mux.Handle(pattern, guard.Wrap(level, echo))
 	}
 	return mux
 }
@@ -392,11 +405,9 @@ func TestPlatformAdminRowsKeepTheLegacyAnswerForARoutedPlatformAdmin(t *testing.
 	}
 }
 
-// The platform-admin rows with no action yet are not decided by a route question with the admin cell on (GAP: the
-// /admin/users rows join the batch when their profile rows name admin.users). Their guard keeps main's checks and asks
-// the decision point only the wrap's own admin.users: a superuser is admitted by main's User.IsAdmin with no question,
-// as on main; a platform admin of the decision point with no local flag is admitted after that one question.
-// The telemetry report row's guard is Authenticated; its handler asks (see the telemetry package).
+// The platform-admin rows with no action yet (the telemetry report row) are not decided by a route question with the
+// admin cell on: a superuser is answered by main's checks with no question. The telemetry report row's guard is
+// Authenticated; its handler asks (see the telemetry package).
 func TestPlatformAdminGapRowsKeepMainsAnswerAndAskTheWrapAction(t *testing.T) {
 	for pattern, level := range platformAdminGapRoutes {
 		t.Run(pattern, func(t *testing.T) {
@@ -413,15 +424,6 @@ func TestPlatformAdminGapRowsKeepMainsAnswerAndAskTheWrapAction(t *testing.T) {
 				}
 			} else if got.status != http.StatusOK || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
 				t.Fatalf("superuser: %d %q, %d PDP calls, counted %v; want main's 200 with 0 calls", got.status, got.body, len(pdp.calls()), rec.snapshot())
-			}
-			if level == Authenticated {
-				return
-			}
-			allow := newTestPDP(t, evaluatorVerdict(pdpState{status: authorization.StatusActive, role: rule.PlatformAdmin}))
-			got = serveCell(cellHandler(t, legacyStore(false, "member"), userClaims(nil), productionEnforcer(t, allow, "admin", "members")), pattern, cellBearer())
-			want := pdpSeen{Principal: shadowBearer, Action: rule.ActionAdminUsers, Type: "platform", Key: "platform", Service: "dev-health-ops-api"}
-			if calls := allow.calls(); got.status != http.StatusOK || len(calls) != 1 || calls[0] != want {
-				t.Fatalf("PDP platform_admin, no local flag: %d %q, PDP saw %+v; want 200 after the one question %+v", got.status, got.body, calls, want)
 			}
 		})
 	}

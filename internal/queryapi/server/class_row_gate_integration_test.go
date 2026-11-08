@@ -89,7 +89,7 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 	})
 
 	t.Run("a dark class root does not gate the envelope caller (web)", func(t *testing.T) {
-		recorder := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
+		recorder := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, bearerCarrier(token), hotspotsVariables())
 		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "org/repo-a") {
 			t.Fatalf("the envelope caller was gated: status %d, body %s", recorder.Code, recorder.Body.String())
 		}

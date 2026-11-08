@@ -43,8 +43,10 @@ func TestEnforceListRendersOnGoAPIAsOneCommaList(t *testing.T) {
 	if value, set := goAPIEnforceEnv(t, docs, enforceEnvName); !set || value != "billing,teams" {
 		t.Fatalf("%s=%q set=%v; want billing,teams", enforceEnvName, value, set)
 	}
-	if strings.Contains(out, "QUERY_API_AUTHZ_ENFORCE") {
-		t.Fatal("the render names QUERY_API_AUTHZ_ENFORCE: query-api has no cell wiring yet")
+	for _, name := range []string{"QUERY_API_AUTHZ_ENFORCE", "QUERY_API_HEADERS_AUTHZ_ENFORCE"} {
+		if strings.Contains(out, name) {
+			t.Fatalf("the render names %s: query-api has no cell wiring yet", name)
+		}
 	}
 }
 

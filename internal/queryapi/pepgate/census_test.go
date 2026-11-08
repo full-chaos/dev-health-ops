@@ -23,9 +23,10 @@ const importPath = "github.com/full-chaos/dev-health-ops/internal/queryapi/pepga
 // entry no call matches fails.
 var constructorSites = map[string][]string{
 	"Organization": {"internal/queryapi/pdp/pdp.go"},
-	"Allowlist":    {"internal/queryapi/pdp/pdp.go"},
+	"Allowlist":    {"internal/queryapi/pdp/operation.go", "internal/queryapi/pdp/pdp.go"},
 	"Legacy": {
 		"internal/queryapi/graph/operation_org_guard.go",
+		"internal/queryapi/pdp/operation.go",
 		"internal/queryapi/pdp/pdp.go",
 		"internal/queryapi/server/ingress_scope.go",
 		"internal/queryapi/server/rest_access.go",

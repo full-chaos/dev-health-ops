@@ -281,7 +281,7 @@ func irBearer(token string) func(*http.Request) {
 // TestQueryProofWriteReadsTheOrgAllowlistOncePerRequest: the proof-write
 // route's org allowlist is a per-request fact of the caller's org, read once.
 func TestQueryProofWriteReadsTheOrgAllowlistOncePerRequest(t *testing.T) {
-	verifier, priv := iaVerifier(t)
+	verifier, _ := iaVerifier(t)
 	ran, asked := 0, 0
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probeWrite": true})
 	mux.Register("probeWrite", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { ran++ }))
@@ -289,7 +289,7 @@ func TestQueryProofWriteReadsTheOrgAllowlistOncePerRequest(t *testing.T) {
 	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(edgeWriteDocument): "probeWrite"}, verifier, nil, nil, digest.KindMutation, allowed)
 	request := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(`{"query": `+jsonQuote(t, edgeWriteDocument)+`}`))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}))
+	iaHeaders(ecOrg.String(), "admin", false, false)(request)
 	recorder := httptest.NewRecorder()
 	handler(recorder, request)
 	if recorder.Code != http.StatusOK || ran != 1 || asked != 1 {

@@ -38,8 +38,10 @@ var platformAdminLegacyGoAPIActions = map[string]string{
 // platformAdminLegacyWebActions maps each web action whose legacy route admits a platform admin with no membership
 // row in the organization of its session to its executed legacy cell (dev-health-web, run against a real ops stack).
 var platformAdminLegacyWebActions = map[string]string{
-	"acr.credential.issue": "web 440ac151 tests/acr-legacy/legacy-cells.proof.ts:447 device approval and :457 consent approve " +
-		"(platform admin, no membership row), recording run legacy-cells-4: 200 approved, record f8aff1566d30",
+	"acr.credential.issue": "full-chaos/dev-health-web 440ac1517f1452956ea547162c49a1a7ba58105c tests/acr-legacy/legacy-cells.proof.ts:447 " +
+		"device approval and :457 consent approve (platform admin, no membership row), suite acr-legacy " +
+		"(vitest.acr-legacy.config.ts, runner ci/acr-legacy/run-legacy-cells.sh), recording run 4 on ops c60f0702: " +
+		"200 approved, log 863528210512, record f8aff1566d30",
 }
 
 var adminGuardValidators = []string{"policy.Admin:", "policy.AdminOrg:"}

@@ -293,6 +293,52 @@ func DeleteStalePRDependencyIssueEdges(
 	return nil
 }
 
+// stalePRTargetCommitIssueNarrowing narrows the version read to commit -> issue
+// identities whose target id is PR-shaped (isPRShapedWorkItemID).
+const stalePRTargetCommitIssueNarrowing = `AND (startsWith(target_id, 'ghpr:')
+              OR (startsWith(target_id, 'gitlab:') AND position(target_id, '!') > 0))`
+
+// isPRShapedWorkItemID is the PR-shape rule the work-graph readers use
+// (queryapi/workgraph dependencyNodeTypeSQL): a ghpr: id, or a gitlab: id that
+// names a merge request (`!`). issueprlinks.IsPullRequestWorkItem is the
+// stricter grammar the writers use, but that package imports this one.
+func isPRShapedWorkItemID(id string) bool {
+	return strings.HasPrefix(id, "ghpr:") ||
+		(strings.HasPrefix(id, "gitlab:") && strings.Contains(id, "!"))
+}
+
+// isStalePRTargetCommitIssueEdge is a commit -> issue edge whose issue side is a
+// pull or merge request work item: a mislabelled shape that put a PR id into the
+// issues list of a work unit.
+func isStalePRTargetCommitIssueEdge(row Row) bool {
+	return row.SourceType == NodeTypeCommit && row.TargetType == NodeTypeIssue &&
+		isPRShapedWorkItemID(row.TargetID)
+}
+
+// PlanStalePRTargetCommitIssueTombstones is one tombstone per live identity in
+// the stale PR-target commit -> issue shape.
+func PlanStalePRTargetCommitIssueTombstones(versions EdgeVersions, clock time.Time) []Row {
+	return PlanTombstonesWhere(versions, clock, isStalePRTargetCommitIssueEdge)
+}
+
+// DeleteStalePRTargetCommitIssueEdges retires every live commit -> issue edge
+// whose target is PR-shaped. Org-scoped; a second run finds only tombstones and
+// writes nothing.
+func DeleteStalePRTargetCommitIssueEdges(
+	ctx context.Context, conn driver.Conn, organizationID string, clock time.Time,
+) error {
+	versions, err := readEdgeVersionsOf(ctx, conn, organizationID, NodeTypeCommit, NodeTypeIssue,
+		stalePRTargetCommitIssueNarrowing)
+	if err != nil {
+		return fmt.Errorf("read stale PR-target commit-issue edges: %w", err)
+	}
+	if _, err := WriteTombstones(ctx, conn, organizationID,
+		PlanStalePRTargetCommitIssueTombstones(versions, clock)); err != nil {
+		return fmt.Errorf("retire stale PR-target commit-issue edges: %w", err)
+	}
+	return nil
+}
+
 // WriteTombstones inserts rows with is_deleted = 1. Confidence is copied from a
 // stored version rather than minted, so it is not re-validated: a tombstone is
 // never grouped.

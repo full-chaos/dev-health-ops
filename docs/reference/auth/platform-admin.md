@@ -59,6 +59,9 @@ A caller who holds the platform action `admin.impersonate` can start an imperson
 - The start is refused for yourself, for a user who is not active, for a superuser, and for a user with no organization membership.
 - While the session is live, an organization-scoped admin route acts in the target's organization. Without a session it
   acts in the organization claim of the caller's token. An `X-Org-Id` header does not move a superuser.
+- The session belongs to the admin user, not to the token or sign-in that started it. While it is live, the rules on
+  this list apply to each request of that admin, from any token, browser tab or client, until the admin stops the
+  session or it expires.
 - `EffectiveOrgID` (`internal/api/policy/scope.go`) decides this on every request, after a live check of the session. Nothing carries the session between requests.
 - The session honors only a caller who holds `admin.impersonate` at that request. A session changes the organization of the route. It adds no role.
 

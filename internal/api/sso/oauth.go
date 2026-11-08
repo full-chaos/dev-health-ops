@@ -372,11 +372,6 @@ func optionalPyStr(value pyjson.Value) string {
 // initiateOAuthByType's GET .../{provider_type}/authorize on the same
 // pattern -- "first" is this route's provider_id.
 func (h handlers) initiateOAuthAuth(w http.ResponseWriter, r *http.Request) {
-	providerID, err := pythonparity.ParseUUID(r.PathValue("first"))
-	if err != nil {
-		h.fail(w, r, "parse provider id", err)
-		return
-	}
 	rawBody, _ := policy.BodyFrom(r.Context())
 	var errs pybody.Errors
 	object, ok := errs.Object(rawBody)
@@ -389,10 +384,16 @@ func (h handlers) initiateOAuthAuth(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	// A malformed id answers as an unknown id (the legacy 500 was a defect), and is never looked up.
+	providerID, err := pythonparity.ParseUUID(r.PathValue("first"))
+	if err != nil {
+		writeOAuthProviderNotFound(w)
+		return
+	}
 	ctx := r.Context()
 	row, err := scanOIDCProvider(h.Pool.QueryRow(ctx, `SELECT `+oidcProviderColumns+` FROM sso_providers WHERE id = $1::uuid`, providerID))
 	if errorsIsNoRows(err) {
-		policy.WriteDetail(w, http.StatusNotFound, "OAuth provider not found", nil)
+		writeOAuthProviderNotFound(w)
 		return
 	}
 	if err != nil {
@@ -417,6 +418,10 @@ func (h handlers) initiateOAuthAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, out, nil)
+}
+
+func writeOAuthProviderNotFound(w http.ResponseWriter) {
+	policy.WriteDetail(w, http.StatusNotFound, "OAuth provider not found", nil)
 }
 
 // buildOAuthAuthorization is generate_authorization_request, shared by

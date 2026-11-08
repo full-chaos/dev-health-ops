@@ -20,7 +20,7 @@ func graphQLEnforce() graph.OperationEnforce {
 	return graph.OperationEnforce{Authorize: func(ctx context.Context, claims authctx.Claims, roots []graph.EnforceRoot) (map[string]pepgate.Scope, *graph.EnforceRefusal) {
 		asked := make([]pdp.Root, len(roots))
 		for i, root := range roots {
-			asked[i] = pdp.Root{Key: root.Key, Action: root.Action}
+			asked[i] = pdp.Root{Key: root.Key, Action: root.Action, LegacyRefuses: root.LegacyRefuses}
 		}
 		caller := graphQLCaller(ctx)
 		caller.Unscoped = claims.Scope.Kind() == pepgate.KindNone

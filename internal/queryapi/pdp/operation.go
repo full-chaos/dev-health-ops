@@ -50,6 +50,9 @@ type Caller struct {
 type Root struct {
 	Key    string
 	Action string
+	// LegacyRefuses is true when the root's own legacy check (the resolver's pre-resolver guard) refuses the caller:
+	// a deny of its action then answers with that refusal, not FORBIDDEN (CHAOS-13334, product rule 1).
+	LegacyRefuses bool
 }
 
 // The closed reasons of a refused GraphQL operation the gate makes itself.
@@ -86,7 +89,8 @@ func (g *Gate) RootEnforced(class CallerClass, action string) bool {
 // AuthorizeOperation decides the roots of one GraphQL operation whose caller is caller, in the organization orgID
 // the operation is served for, and returns each root key's scope. A root whose cell is off is pepgate.Legacy(orgID).
 // The enforced roots are decided together: one ask per distinct action; any deny refuses the whole operation (a
-// *DenyError), any missing verdict or obligation the gate does not carry out refuses it as unavailable (a local
+// *DenyError), except a deny of an action every root of which LegacyRefuses: those roots get the refusal scope (zero,
+// KindNone) and answer with their resolver's own legacy refusal, the deny still counted (CHAOS-13334); any missing verdict or obligation the gate does not carry out refuses it as unavailable (a local
 // *DenyError); the allows merge into one scope (allowlist = intersection, organization with an allowlist = the
 // allowlist) that every enforced root gets, and an allowlist is carried only when every enforced root is in the
 // registry. Exempt callers never ask and are counted.
@@ -155,6 +159,7 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 		return legacy(), nil
 	}
 	decisions := map[string]pep.Decision{}
+	refused := map[string]bool{}
 	var merged pepgate.Scope
 	for _, root := range enforced {
 		decision, asked := decisions[root.Action]
@@ -168,13 +173,19 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 				return nil, &DenyError{Reason: decision.Reason(), Local: true}
 			default:
 				g.count(ctx, ModeEnforce, ResultDeny, root.Action)
-				return nil, &DenyError{Reason: decision.Reason()}
+				if !legacyRefusesAll(enforced, root.Action) {
+					return nil, &DenyError{Reason: decision.Reason()}
+				}
 			}
 		}
-		scope, refused, _ := g.scopeOf(decision, root.Key, root.Action, orgID)
-		if refused != "" {
+		if !decision.Allowed() {
+			refused[root.Key] = true
+			continue
+		}
+		scope, notCarried, _ := g.scopeOf(decision, root.Key, root.Action, orgID)
+		if notCarried != "" {
 			g.count(ctx, ModeEnforce, ResultNotCarriedOut, root.Action)
-			return nil, &DenyError{Reason: refused, Local: true}
+			return nil, &DenyError{Reason: notCarried, Local: true}
 		}
 		if !asked {
 			g.count(ctx, ModeEnforce, ResultAllow, root.Action)
@@ -183,7 +194,7 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 	}
 	if merged.Kind() == pepgate.KindAllowlist {
 		for _, root := range enforced {
-			if !g.carries(root.Key) {
+			if !refused[root.Key] && !g.carries(root.Key) {
 				g.count(ctx, ModeEnforce, ResultNotCarriedOut, root.Action)
 				return nil, &DenyError{Reason: ReasonNotCarriedOut, Local: true}
 			}
@@ -194,8 +205,21 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 	}
 	for _, root := range enforced {
 		scopes[root.Key] = merged
+		if refused[root.Key] {
+			scopes[root.Key] = pepgate.Scope{}
+		}
 	}
 	return scopes, nil
+}
+
+// legacyRefusesAll reports whether every root of action has a legacy check that refuses the caller.
+func legacyRefusesAll(roots []Root, action string) bool {
+	for _, root := range roots {
+		if root.Action == action && !root.LegacyRefuses {
+			return false
+		}
+	}
+	return true
 }
 
 // orgScoped reports whether a root's action is organization-scoped: only those are decided. A platform action (the

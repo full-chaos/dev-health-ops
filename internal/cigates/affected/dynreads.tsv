@@ -123,6 +123,7 @@ internal/auth/contracts	workload_token_goldens_test.go
 internal/auth/contracts/provisioning	vocabulary_test.go
 internal/auth/contracts/tokencorpus	corpus.go
 internal/auth/contracts/tokencorpus	service_account_test.go
+internal/auth/edgetoken	no_hs256_access_verify_census_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity	placeholder_copies_test.go
@@ -546,6 +547,7 @@ internal/queryapi/investmentexplain	explain_golden_test.go
 internal/queryapi/investmentexplain	reader_golden_test.go
 internal/queryapi/investmentexplain	repofilter_golden_test.go
 internal/queryapi/opportunities	response_test.go
+internal/queryapi/pdp	headers_switch_census_test.go
 internal/queryapi/people	golden_test.go
 internal/queryapi/people	identity.go
 internal/queryapi/pepgate	census_test.go
@@ -627,7 +629,10 @@ internal/reconcilerservice	pool_composition_test.go
 internal/reconcilerservice	readiness_timeout_test.go
 internal/rivermigrate	deploy_wiring_test.go
 internal/scheduler/sync	venue_golden_address_test.go
+internal/shadowvenue	bodykeys.go
+internal/shadowvenue	claims.go
 internal/shadowvenue	drive.go
+internal/shadowvenue	mint.go
 internal/shadowvenue	requestsites_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go

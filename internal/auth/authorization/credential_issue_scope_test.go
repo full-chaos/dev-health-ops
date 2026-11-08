@@ -94,3 +94,17 @@ func TestAcrCredentialIssueStaysNeverCachedAndImpersonationDenied(t *testing.T) 
 		}
 	}
 }
+
+// Impersonation as built: an owner-exempt delegated session (platform_owner actor) acting as a default member gets
+// the member's own answer on acr.credential.issue, org-wide, audited; a platform_admin actor stays impersonation-denied.
+func TestDelegatedAcrCredentialIssueIsTheTargetsOwnAnswer(t *testing.T) {
+	e := NewEvaluator()
+	req := orgRequest("acr.credential.issue")
+	d := e.Evaluate(req, delegated("member", []string{"acr.credential.issue"}, ownerActorRol))
+	if !d.Allowed || d.Obligations == nil || d.Obligations.RepositoryScope != RepositoryScopeOrganization || d.Audit == nil {
+		t.Errorf("platform_owner actor -> default member: %+v %+v, want the member's org-wide allow, audited", d, d.Obligations)
+	}
+	if d := e.Evaluate(req, delegated("member", []string{"acr.credential.issue"}, "platform_admin")); d.Allowed || d.Reason != ReasonImpersonationDenied {
+		t.Errorf("platform_admin actor -> default member: %+v, want impersonation_denied", d)
+	}
+}

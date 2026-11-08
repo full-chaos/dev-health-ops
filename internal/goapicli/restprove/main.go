@@ -16,17 +16,16 @@
 // Operator command of record: run from the go-api-tools image,
 // in-cluster, with query-api-url and python-api-url pointed at each
 // service's own ClusterIP/Service address (never a host or an ingress
-// hostname). The two bearer helpers mint DIFFERENT credential CLASSES:
-// -candidate-bearer-exec always names mint-envelope (the
-// effective-principal envelope query-api has always checked) and
-// -baseline-bearer-exec always names mint-edge-token (the edge access
-// token the Python api service checks), never the other way round or the
-// same helper twice:
+// hostname). The query-api candidate is read with a platform admin's user
+// access token from a 0600 file the operator stages
+// (-candidate-access-token-file, read on each use), and
+// -baseline-bearer-exec names mint-edge-token (the edge access token the
+// Python api service checks):
 //
 //	go-api-rest-prove \
 //	  -query-api-url http://<query-api-service>:8090 \
 //	  -python-api-url http://<api-service>:8000 \
-//	  -candidate-bearer-exec '["mint-envelope","-org","<org>"]' \
+//	  -candidate-access-token-file /run/proof/access-token \
 //	  -baseline-bearer-exec  '["mint-edge-token","-org","<org>"]' \
 //	  -artifact-dir "$ARTIFACT_DIR" \
 //	  -org <org> -recorded-by <operator> -review-evidence "<why>" \
@@ -169,8 +168,9 @@ type flags struct {
 
 	allowProverBuildSkew bool
 
-	candidateBearerExec string
-	baselineBearerExec  string
+	candidateBearerExec      string
+	candidateAccessTokenFile string
+	baselineBearerExec       string
 
 	// pythonForwarderOff is the operator's attestation that the Python
 	// app's forwarding switch for every PythonForwarder endpoint is off
@@ -259,7 +259,8 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the service this run measures -- the ONLY source of the build identity every receipt names. Defaults to that service's address + \"/buildinfo\"; under -service=dho-api it must be on the -dho-api-url host")
 	fs.BoolVar(&f.allowProverBuildSkew, proverBuildSkewFlag[1:], false, "measure even when this binary was not built from the candidate build's commit (or carries no commit at all): its declarations, shapes and corpus are then another commit's, and the report records the skew as prover_build_skew_allowed")
 	fs.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written -- the value written always comes from /buildinfo, matching go-api-prove's own -candidate-build flag")
-	fs.StringVar(&f.candidateBearerExec, "candidate-bearer-exec", "", "JSON array whose first element is an ALLOWLISTED HELPER NAME (\"mint-envelope\" or \"mint-edge-token\", never a path -- see goapiproof.MintViaAllowlistedHelper) printing a FRESH bearer credential for query-api on stdout, e.g. [\"mint-envelope\",\"-org\",\"<org>\"]. Re-run as the credential ages. The helper reads any secret it needs from ITS OWN environment -- never from an argument here. The remaining elements are the helper's own argv, never a shell string: nothing is interpolated into a shell. The helper's stdout and stderr are NEVER reported by this command")
+	fs.StringVar(&f.candidateAccessTokenFile, "candidate-access-token-file", "", "under -service=query-api (required there): path to a 0600 file holding a platform admin's user access token (typ at+jwt), the candidate credential, read on each use. Never a token on argv")
+	fs.StringVar(&f.candidateBearerExec, "candidate-bearer-exec", "", "under -service=dho-api (required there): JSON array whose first element is the ALLOWLISTED HELPER NAME \"mint-edge-token\" (never a path -- see goapiproof.MintViaAllowlistedHelper) printing a FRESH bearer credential on stdout, e.g. [\"mint-edge-token\",\"-org\",\"<org>\"]. Re-run as the credential ages. The helper reads any secret it needs from ITS OWN environment -- never from an argument here. The remaining elements are the helper's own argv, never a shell string: nothing is interpolated into a shell. The helper's stdout and stderr are NEVER reported by this command")
 	fs.StringVar(&f.baselineBearerExec, "baseline-bearer-exec", "", "JSON array, same allowlisted-helper-name-plus-argv shape as -candidate-bearer-exec, printing a FRESH bearer credential for the Python api service on stdout -- see credential.go's own doc comment for why one credential kind cannot be assumed to reach both planes")
 	secrets.BindFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar, "domain Postgres DSN holding go_api_proof_run. Required unless -dry-run")
 	fs.StringVar(&f.org, "org", "", "org id every request is made for (required)")
@@ -372,8 +373,13 @@ func parseFlags(args []string) (flags, error) {
 	if f.pythonAPIURL == "" {
 		missing = append(missing, "-python-api-url")
 	}
-	if f.candidateBearerExec == "" {
+	switch {
+	case f.service == goapiproof.RESTServiceDHOAPI && f.candidateBearerExec == "":
 		missing = append(missing, "-candidate-bearer-exec")
+	case f.service != goapiproof.RESTServiceDHOAPI && f.candidateBearerExec != "":
+		return f, fmt.Errorf("-candidate-bearer-exec is for -service=dho-api: the query-api candidate is read with a platform admin's user access token from -candidate-access-token-file")
+	case f.service != goapiproof.RESTServiceDHOAPI && f.candidateAccessTokenFile == "":
+		missing = append(missing, "-candidate-access-token-file")
 	}
 	if f.baselineBearerExec == "" {
 		missing = append(missing, "-baseline-bearer-exec")
@@ -493,6 +499,23 @@ func parseHelperArgv(flagName, raw string) ([]string, error) {
 		return nil, fmt.Errorf("%s: empty argv", flagName)
 	}
 	return argv, nil
+}
+
+// candidateCredentialFor is the candidate leg's credential: under -service=query-api the platform admin's user access
+// token of -candidate-access-token-file, checked once here so a missing file or an envelope in it fails before a
+// request is sent (the value is never printed); under -service=dho-api the minted edge token.
+func candidateCredentialFor(f flags) (*goapiproof.Credential, error) {
+	if f.service == goapiproof.RESTServiceDHOAPI {
+		return buildCredential("Authorization", "candidate bearer", "-candidate-bearer-exec", f.candidateBearerExec)
+	}
+	raw, err := os.ReadFile(f.candidateAccessTokenFile) // #nosec G304 -- operator-supplied token file path, by design
+	if err != nil {
+		return nil, fmt.Errorf("-candidate-access-token-file: the file cannot be read")
+	}
+	if err := goapiproof.ValidateUserAccessTokenShape(strings.TrimSpace(string(raw))); err != nil {
+		return nil, fmt.Errorf("-candidate-access-token-file: %w; query-api is read with a platform admin's user access token. Its VALUE is not printed", err)
+	}
+	return goapiproof.UserAccessTokenFileCredential("candidate bearer", "candidate access token", f.candidateAccessTokenFile), nil
 }
 
 func buildCredential(header, kind, flagName, rawArgv string) (*goapiproof.Credential, error) {
@@ -1248,7 +1271,7 @@ func run(f flags) (err error) {
 		return err
 	}
 
-	candidateCredential, err := buildCredential("Authorization", "candidate bearer", "-candidate-bearer-exec", f.candidateBearerExec)
+	candidateCredential, err := candidateCredentialFor(f)
 	if err != nil {
 		return err
 	}

@@ -451,6 +451,12 @@ internal/envelopemint	keygen.go	internal/testsupport/issuerstub
 internal/envelopemint	keygen.go	internal/testsupport/issuerstub/cmd/issuerstub
 internal/envelopemint	keygen.go	internal/testsupport/proofprincipals
 internal/envelopemint	keygen.go	internal/testsupport/sessionscenario
+internal/goapicli/prove	main.go	cmd/dho
+internal/goapicli/prove	main.go	internal/goapicli/prove
+internal/goapicli/restprove	main.go	cmd/dho
+internal/goapicli/restprove	main.go	internal/goapicli/restprove
+internal/goapicli/routing	main.go	cmd/dho
+internal/goapicli/routing	main.go	internal/goapicli/routing
 internal/goapiproof	artifact.go	cmd/dho
 internal/goapiproof	artifact.go	internal/goapicli/prove
 internal/goapiproof	artifact.go	internal/goapicli/restprove

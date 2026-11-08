@@ -33,7 +33,7 @@ func TestConnectPostgresRedactsCredentialsFromTheEnvironment(t *testing.T) {
 // password the driver resolved (the connect origin; TestEveryDatabaseErrorOrigin...
 // drives the other origins).
 func TestRoutingRedactsResolvedCredentialsOverEveryConnectionForm(t *testing.T) {
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 	for name, base := range map[string][]string{
 		"status":  {"status", "-timeout", "3s"},
 		"disable": {"disable", "-operations", "mcp:hotspots", "-mode", "python", "-timeout", "3s"},
@@ -63,7 +63,7 @@ func TestRoutingRedactsResolvedCredentialsOverEveryConnectionForm(t *testing.T) 
 // read, `disable`'s read and its write transaction) and an error while a result's rows are read.
 // The credentials reach the driver only through PGUSER and PGPASSWORD.
 func TestEveryDatabaseErrorOriginIsRedactedThroughEveryVerb(t *testing.T) {
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 	catalog := filepath.Join("..", "..", "..", "contracts", "graphql", "v1", "go_api_operations.json")
 	origins := map[string]struct {
 		start  func(*testing.T) fakepg.Refusing

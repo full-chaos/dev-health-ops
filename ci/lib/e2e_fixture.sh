@@ -76,6 +76,55 @@ generate_auth_token() {
   E2E_USER_ID="${user_id}" E2E_ORG_ID="${E2E_ORG_ID}" E2E_SESSION_ID="${session_id}" "${BIN_DIR}/cigate" live-e2e mint-token
 }
 
+# generate_platform_admin_token OUT_FILE writes, into a new 0600 file, a user access token of the e2e platform admin:
+# a superuser created through the dho verb, an admin member of the e2e organization, with a live session row, minted
+# by the CI issuer stub's key. The prove tools read /buildinfo with it (query-api serves /buildinfo to a platform admin
+# only). The token never reaches stdout or argv.
+generate_platform_admin_token() {
+  local out_file="$1" created user_id password session_id
+  user_id="$(e2e_psql -c "SELECT id FROM users WHERE email = 'e2e-platform-admin@test.local'" | head -n 1)"
+  if [ -z "${user_id}" ]; then
+    password="Aa1-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+    created="$(printf '%s\n' "${password}" | e2e_dho_admin users create --email e2e-platform-admin@test.local --superuser --password-stdin)" || {
+      echo "ERROR: dho admin users create --superuser failed: ${created}" >&2
+      return 1
+    }
+    user_id="$(printf '%s\n' "${created}" | sed -n 's/^Created user: .* (id: \([0-9a-fA-F-]*\))$/\1/p' | head -n 1)"
+  fi
+  case "${user_id}" in
+    *[!0-9a-fA-F-]* | "")
+      echo "ERROR: the e2e platform admin id is not a uuid" >&2
+      return 1
+      ;;
+  esac
+  e2e_psql -c "
+    INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+      SELECT gen_random_uuid(), '${E2E_ORG_ID}', '${user_id}', 'admin', now(), now(), now()
+      WHERE NOT EXISTS (SELECT 1 FROM memberships WHERE org_id = '${E2E_ORG_ID}' AND user_id = '${user_id}');" >/dev/null || {
+    echo "ERROR: could not add the e2e platform admin to the e2e organization" >&2
+    return 1
+  }
+  session_id="$(e2e_psql -c "
+    INSERT INTO auth.principals (id, kind, display_name) VALUES ('${user_id}', 'user', 'e2e-platform-admin') ON CONFLICT (id) DO NOTHING;
+    INSERT INTO auth.sessions (principal_id, token_hash, expires_at, legacy_token_version)
+      SELECT id, sha256(convert_to(gen_random_uuid()::text, 'UTF8')), now() + interval '2 hours', token_version
+        FROM public.users WHERE id = '${user_id}'
+      RETURNING id;" | tail -n 1)"
+  case "${session_id}" in
+    *[!0-9a-fA-F-]* | "")
+      echo "ERROR: could not read the e2e platform admin session id" >&2
+      return 1
+      ;;
+  esac
+  (
+    umask 077
+    E2E_USER_ID="${user_id}" E2E_ORG_ID="${E2E_ORG_ID}" E2E_SESSION_ID="${session_id}" "${BIN_DIR}/cigate" live-e2e mint-token > "${out_file}"
+  ) || {
+    echo "ERROR: could not mint the e2e platform admin token" >&2
+    return 1
+  }
+}
+
 # run_start_stamp prints the UTC ISO8601 stamp a run records before it seeds: microseconds where `date` supports them
 # (GNU), whole seconds elsewhere.
 run_start_stamp() {

@@ -369,7 +369,7 @@ func wrapDeadline() error {
 // value not greater than zero refused.
 func TestParseFlags_RunDeadline(t *testing.T) {
 	base := []string{"-org", "org-1", "-recorded-by", "r", "-review-evidence", "e", "-dry-run",
-		"-candidate-bearer-exec", `["true"]`, "-baseline-bearer-exec", `["true"]`, "-artifact-dir", t.TempDir(),
+		"-candidate-access-token-file", "/run/proof/access-token", "-baseline-bearer-exec", `["true"]`, "-artifact-dir", t.TempDir(),
 		"-python-api-url", "http://api:8000"}
 	for value, want := range map[string]string{"": "30m0s", "45m": "45m0s", "1ns": "1ns", "0s": "refused", "-1m": "refused"} {
 		args := append([]string(nil), base...)

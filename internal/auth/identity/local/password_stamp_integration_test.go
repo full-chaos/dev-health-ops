@@ -21,7 +21,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -319,11 +318,7 @@ func TestAPasswordChangeEndsTheEarlierResetLinksOnly(t *testing.T) {
 // for an access token with no sid claim and token version tv.
 func (r *endRig) accepts(t *testing.T, ctx context.Context, id uuid.UUID, tv int) bool {
 	t.Helper()
-	verifier, err := edgetoken.New(strings.Repeat("k", 40), "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: r.env.admin, AuthSchema: "auth"}, nil)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: r.env.admin, AuthSchema: "auth"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

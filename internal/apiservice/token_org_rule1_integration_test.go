@@ -63,8 +63,12 @@ func rule1EdTokensServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, auth 
 // without an X-Org-Id naming the claim. The cases: A, the user was removed from an org that exists; A, the
 // org is suspended; B, the claim names no org; B, the claim is not a UUID. Routed is go-api's routed
 // listener (ruleOneServer) and the venue oracles' authenticator (edtokens, accessrouting.go RouteUserTokens).
-// The HS256 token claims role member, the role a user access token (no role claim) carries. The access-token.v1
-// verifier refuses an org claim that is not a UUID (401) where legacy goes on: CHAOS-13262, never wanted.
+// The HS256 path is retired, so the legacy answer is the literal this test recorded on the last main that
+// had it (715e3f93d, the HS256 token claiming role member, the role a user access token carries): bodies cut
+// at 160 bytes in record 13154-legacy-rec-rule1wired-715e3f93.log (sha256 4047ba95ab79), full bodies in
+// form B record 13154-legacy-rec-rule1wired-full-715e3f93.log (sha256 645b72a2ead4; patch e505e33e1f4d
+// changes the log width only). The access-token.v1 verifier refuses an org claim that is not a UUID (401)
+// where legacy goes on: CHAOS-13262, never wanted.
 func TestRule1TokenOrgWithoutMembershipWiredHandlers_CHAOS13227(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -105,31 +109,56 @@ VALUES ($1, $2, 'not-a-hash', true, true, false, 0, now(), now())`, user, email)
 	}
 
 	issuer := edtokens.New(t)
-	legacy := ruleOneServer(t, pool, ch, nil)
 	routed := map[string]http.Handler{
 		"go-api routed":              ruleOneServer(t, pool, ch, issuer),
 		"venue oracle authenticator": rule1EdTokensServer(t, pool, ch, issuer.Authenticator(t, policy.PGStore{Pool: pool}, nil)),
 	}
-	signer, err := edgetoken.NewSigner(ruleOneKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	paths := []string{"/api/v1/admin/impersonate/status", "/api/v1/auth/me", "/api/v1/admin/settings/general", "/api/v1/admin/teams"}
-	for _, c := range []struct{ name, org string }{
-		{"A removed member", removedFrom.String()},
-		{"A suspended org", suspended.String()},
-		{"B-unknown org", uuid.NewString()},
-		{"B-notUUID claim", "not-a-uuid"},
+	for _, c := range []struct {
+		name, org string
+		member    bool
+	}{
+		{"A removed member", removedFrom.String(), true},
+		{"A suspended org", suspended.String(), true},
+		{"B-unknown org", uuid.NewString(), false},
+		{"B-notUUID claim", "not-a-uuid", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			rule1WiredCase(t, c.org, legacy, routed, signer, issuer, user, email, paths)
+			rule1WiredCase(t, c.org, rule1LegacyLiteral(c.org, c.member, user, email), routed, issuer, user, paths)
 		})
 	}
 }
 
-// rule1WiredCase serves one org claim through the legacy listener and each routed one.
-func rule1WiredCase(t *testing.T, org string, legacy http.Handler, routed map[string]http.Handler, signer *edgetoken.Signer,
-	issuer *edtokens.Issuer, user uuid.UUID, email string, paths []string) {
+// rule1LegacyLiteral is the recorded legacy answer (715e3f93d, records 4047ba95ab79 and 645b72a2ead4) for a
+// plain user's HS256 token claiming org and role member. A (the org exists: removed member or suspended org):
+// 403 X-Org-Id on the org-scoped and Admin rows. B (no organizations row): the request goes on in the
+// claimed org, so the org-less row answers and the Admin rows refuse the member role. /auth/me answers the
+// claimed org with role member in every case.
+func rule1LegacyLiteral(org string, orgExists bool, user uuid.UUID, email string) func(path string) (int, string) {
+	const (
+		notPermitted   = `{"detail": "X-Org-Id not permitted for this user"}`
+		adminRequired  = `{"detail":"Admin access required"}`
+		notImpersonate = `{"is_impersonating":false,"target_user_id":null,"target_email":null,"target_org_id":null,"expires_at":null}`
+	)
+	me := `{"id":"` + user.String() + `","email":"` + email + `","username":null,"full_name":null,"org_id":"` + org +
+		`","role":"member","is_superuser":false,"permissions":["analytics:read","analytics:export","metrics:read","work_items:read","git:read","teams:read","settings:read","members:read","org:read"]}`
+	return func(path string) (int, string) {
+		switch {
+		case path == "/api/v1/auth/me":
+			return http.StatusOK, me
+		case orgExists:
+			return http.StatusForbidden, notPermitted
+		case path == "/api/v1/admin/impersonate/status":
+			return http.StatusOK, notImpersonate
+		default:
+			return http.StatusForbidden, adminRequired
+		}
+	}
+}
+
+// rule1WiredCase serves one org claim through each routed listener and holds it to the legacy literal.
+func rule1WiredCase(t *testing.T, org string, legacy func(path string) (int, string), routed map[string]http.Handler,
+	issuer *edtokens.Issuer, user uuid.UUID, paths []string) {
 	t.Helper()
 	serve := func(handler http.Handler, path, token, header string) (int, string) {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
@@ -141,10 +170,6 @@ func rule1WiredCase(t *testing.T, org string, legacy http.Handler, routed map[st
 		handler.ServeHTTP(recorder, request)
 		return recorder.Code, recorder.Body.String()
 	}
-	hs256, err := signer.Access(edgetoken.AccessClaims{UserID: user.String(), Email: email, OrgID: org, Role: "member"}, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
 	eddsa, err := issuer.Mint(edtokens.Claims{UserID: user, OrgID: org})
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +177,7 @@ func rule1WiredCase(t *testing.T, org string, legacy http.Handler, routed map[st
 	notUUIDRefused := []string{}
 	for _, path := range paths {
 		for _, header := range []string{"", org} {
-			wantStatus, wantBody := serve(legacy, path, hs256, header)
+			wantStatus, wantBody := legacy(path)
 			for name, handler := range routed {
 				gotStatus, gotBody := serve(handler, path, eddsa, header)
 				t.Logf("%s X-Org-Id=%q: legacy %d %.160s | %s %d %.160s", path, header, wantStatus, wantBody, name, gotStatus, gotBody)

@@ -464,11 +464,17 @@ func TestCredentialRoutePatternsAreGoAPIs(t *testing.T) {
 	}
 }
 
+// An HS256 impersonation token (the retired class) is refused before any
+// write; the EdDSA delegated bearer is TestADelegatedBearerCannotChangeThePassword.
 func TestChangePasswordRefusesAnImpersonatedBearer(t *testing.T) {
 	c := newCredFixture(t)
 	grant := c.grant()
 	other := uuid.NewString()
-	token, err := c.issuer.signer.Access(edgetoken.AccessClaims{
+	hs256, err := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := hs256.Access(edgetoken.AccessClaims{
 		UserID: grant.PrincipalID.String(), Email: grant.User.Email, OrgID: grant.OrganizationID.String(), Role: grant.Role,
 		TokenVersion: grant.User.TokenVersion, SessionID: ptr(session.WireSessionID(grant.SessionID)), ImpersonatingUserID: &other,
 	}, time.Now(), uuid.NewString())
@@ -477,8 +483,8 @@ func TestChangePasswordRefusesAnImpersonatedBearer(t *testing.T) {
 	}
 	r := c.call(http.MethodPost, PatternChangePassword, `{"current_password":"current-password-1","new_password":"Brand-new-pass-77!"}`,
 		map[string]string{"Authorization": "Bearer " + token})
-	if r.Code != http.StatusForbidden || c.fakes.pwdSet != 0 || c.fakes.revoked != 0 {
-		t.Fatalf("impersonated bearer = %d, writes %d", r.Code, c.fakes.pwdSet)
+	if r.Code != http.StatusUnauthorized || c.fakes.pwdSet != 0 || c.fakes.revoked != 0 {
+		t.Fatalf("HS256 impersonated bearer = %d, writes %d, want 401 and no write", r.Code, c.fakes.pwdSet)
 	}
 }
 

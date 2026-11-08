@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
@@ -247,27 +249,25 @@ func assertUpWiredTheWebCaller(t *testing.T, state, out string) {
 	}
 }
 
-// stop-auth ends auth-service by pid (the outage cell); start-auth brings it back with the saved environment.
-func TestLiveE2EStopAndStartAuthService(t *testing.T) {
+// stopStartFixture fills the state dir with a saved environment, a fake auth-service and a fake readyz. run calls a verb of
+// the script with the fakes first on PATH; down runs at cleanup.
+func stopStartFixture(t *testing.T, fake, state string) (run func(verb string)) {
+	t.Helper()
 	root := repoRoot(t)
-	fake := t.TempDir()
-	state := t.TempDir()
 	for _, d := range []string{"bin", "logs"} {
 		if err := os.Mkdir(filepath.Join(state, d), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write := func(path, body string, mode os.FileMode) {
-		t.Helper()
-		if err := os.WriteFile(path, []byte(body), mode); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(filepath.Join(state, "bin", "auth-service"), "#!/bin/sh\necho \"$MARK\" >> \""+state+"/logs/starts\"\nexec sleep 60\n", 0o755)
-	write(filepath.Join(state, "auth-service.env"), "MARK=started-with-saved-env\n", 0o600)
-	// readyz answers while the pid of the pid file is alive.
-	write(filepath.Join(fake, "curl"), "#!/bin/sh\nkill -0 \"$(cat '"+state+"/auth-service.pid')\" 2>/dev/null\n", 0o755)
-	run := func(verb string) {
+	// auth-service records its start, then writes its pid to auth-service.ready: the real readyz answers only after the
+	// process is up with its environment, not when its parent forked it.
+	writeExec(t, filepath.Join(state, "bin", "auth-service"), "#!/bin/sh\necho \"$MARK\" >> '"+state+"/logs/starts'\n"+
+		"echo $$ > '"+state+"/auth-service.ready'\nexec sleep 60\n", 0o755)
+	writeExec(t, filepath.Join(state, "auth-service.env"), "MARK=started-with-saved-env\n", 0o600)
+	// readyz answers while the pid of the pid file is alive and is the pid that wrote auth-service.ready.
+	writeExec(t, filepath.Join(fake, "curl"), "#!/bin/sh\npid=\"$(cat '"+state+"/auth-service.pid')\"\n"+
+		"[ \"$(cat '"+state+"/auth-service.ready' 2>/dev/null)\" = \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null\n", 0o755)
+	run = func(verb string) {
 		t.Helper()
 		cmd := exec.Command("bash", "ci/live_e2e_auth_stack.sh", verb, state)
 		cmd.Dir = root
@@ -277,12 +277,58 @@ func TestLiveE2EStopAndStartAuthService(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { run("down") })
+	return run
+}
+
+func writeExec(t *testing.T, path, body string, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func startCount(t *testing.T, state string) (int, string) {
+	t.Helper()
+	starts, _ := os.ReadFile(filepath.Join(state, "logs", "starts"))
+	return strings.Count(string(starts), "started-with-saved-env"), string(starts)
+}
+
+// stop-auth ends auth-service by pid (the outage cell); start-auth brings it back with the saved environment.
+func TestLiveE2EStopAndStartAuthService(t *testing.T) {
+	state := t.TempDir()
+	run := stopStartFixture(t, t.TempDir(), state)
 	run("start-auth")
 	run("stop-auth")
 	run("start-auth")
-	starts, _ := os.ReadFile(filepath.Join(state, "logs", "starts"))
-	if strings.Count(string(starts), "started-with-saved-env") != 2 {
-		t.Errorf("FAIL: auth-service started with the saved environment %d times, want 2:\n%s", strings.Count(string(starts), "started-with-saved-env"), starts)
+	if n, starts := startCount(t, state); n != 2 {
+		t.Errorf("FAIL: auth-service started with the saved environment %d times, want 2:\n%s", n, starts)
+	}
+}
+
+// start-auth answers only after auth-service is up with the saved environment. The fake auth-service here holds before
+// it records its start until the ready loop of start-auth polls again (its sleep is a fake that opens the gate), so a
+// readyz that answers before the start is recorded returns from start-auth with no start recorded. The ready file names
+// a live pid that is not auth-service's: a readyz that trusts any ready file or any live pid in it answers too early.
+func TestLiveE2EStartAuthAnswersOnlyAfterAuthServiceRecordedItsStart(t *testing.T) {
+	realSleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake, state := t.TempDir(), t.TempDir()
+	run := stopStartFixture(t, fake, state)
+	for _, f := range []string{"gate", "recorded"} {
+		if err := syscall.Mkfifo(filepath.Join(state, f), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeExec(t, filepath.Join(state, "auth-service.ready"), strconv.Itoa(os.Getpid())+"\n", 0o600)
+	writeExec(t, filepath.Join(state, "bin", "auth-service"), "#!/bin/sh\nread _ < '"+state+"/gate'\n"+
+		"echo \"$MARK\" >> '"+state+"/logs/starts'\necho $$ > '"+state+"/auth-service.ready'\n"+
+		"echo recorded > '"+state+"/recorded'\nexec '"+realSleep+"' 60\n", 0o755)
+	writeExec(t, filepath.Join(fake, "sleep"), "#!/bin/sh\necho go > '"+state+"/gate'\nread _ < '"+state+"/recorded'\n", 0o755)
+	run("start-auth")
+	if n, starts := startCount(t, state); n != 1 {
+		t.Errorf("FAIL: start-auth answered with %d recorded starts, want 1: readyz answered before auth-service was up:\n%s", n, starts)
 	}
 }
 

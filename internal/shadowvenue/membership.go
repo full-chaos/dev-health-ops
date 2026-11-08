@@ -62,6 +62,14 @@ func ParseMembershipSnapshot(raw []byte) (MembershipSnapshot, error) {
 	return out, nil
 }
 
+// orgOrEmpty gives an org claim in the one form "" for none, whether it comes from the plan ("-") or from a slots file.
+func orgOrEmpty(v string) string {
+	if v == none {
+		return ""
+	}
+	return v
+}
+
 // maxSnapshotAge is how long before the drive the before snapshot may have been taken.
 const maxSnapshotAge = 5 * time.Minute
 
@@ -83,16 +91,19 @@ func checkClaims(slots []Slot, m Membership) claimCheck {
 		if s.Gap() {
 			continue
 		}
-		if s.ClaimSub == "" || s.ClaimOrg == "" || s.ClaimExp.IsZero() || s.WantSub == "" || s.WantOrg == "" {
+		// The no-org superuser wants and carries no org: "-" in memory, "" after ParseSlots. Only the sub and the expiry
+		// show that the claims were read back; an org claim that is none on both sides is the proof, not a gap.
+		wantOrg, claimOrg := orgOrEmpty(s.WantOrg), orgOrEmpty(s.ClaimOrg)
+		if s.ClaimSub == "" || s.ClaimExp.IsZero() || s.WantSub == "" {
 			missing++
 			continue
 		}
-		if s.ClaimSub != s.WantSub || s.ClaimOrg != s.WantOrg {
+		if s.ClaimSub != s.WantSub || claimOrg != wantOrg {
 			out.bad[s.Seq] = true
 		}
 		if s.Caller == CallerSuperuserOrg {
-			if user, ok := PrincipalUUID(s.WantSub); ok && s.WantOrg != none {
-				pairs[pairKey(user, s.WantOrg)] = [2]string{user, s.WantOrg}
+			if user, ok := PrincipalUUID(s.WantSub); ok && wantOrg != "" {
+				pairs[pairKey(user, wantOrg)] = [2]string{user, wantOrg}
 			}
 		}
 	}

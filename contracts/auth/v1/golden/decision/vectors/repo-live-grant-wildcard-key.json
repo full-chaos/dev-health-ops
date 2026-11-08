@@ -4,9 +4,7 @@
     "cache_class": "resource_revision_bound",
     "expires_in_seconds": 30,
     "obligations": {
-      "repository_allowlist": [
-        "acme/api"
-      ],
+      "repository_scope": "organization",
       "tenant_scope": "org-a"
     },
     "policy_revision": 18,
@@ -51,5 +49,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "an org-wide grant covers one repository."
+  "why": "an org-wide grant allows the asked repository and marks the allow org-wide: repository_scope organization, no allowlist."
 }

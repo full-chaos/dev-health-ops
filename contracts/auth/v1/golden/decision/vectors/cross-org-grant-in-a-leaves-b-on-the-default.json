@@ -4,9 +4,7 @@
     "cache_class": "resource_revision_bound",
     "expires_in_seconds": 30,
     "obligations": {
-      "repository_allowlist": [
-        "acme/api"
-      ],
+      "repository_scope": "organization",
       "tenant_scope": "org-b"
     },
     "policy_revision": 18,

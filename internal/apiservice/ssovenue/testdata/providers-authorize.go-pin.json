@@ -1,0 +1,3 @@
+{
+  "overlap: POST /oauth/providers/authorize": "404 {\"detail\":\"OAuth provider not found\"}"
+}

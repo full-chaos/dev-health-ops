@@ -690,6 +690,9 @@ func (c *fileCtx) pathKind(e ast.Expr, sc *scope) pathInfo {
 			return dynInfo
 		}
 		left := c.pathKind(x.X, sc)
+		if k, ok := constProduct(func(parts []string) string { return strings.Join(parts, "") }, left, c.pathKind(x.Y, sc)); ok {
+			return k
+		}
 		rest, ok := c.foldString(x.Y, sc)
 		if !ok || !strings.HasPrefix(rest, "/") {
 			return dynInfo
@@ -752,6 +755,13 @@ func (c *fileCtx) pathKind(e ast.Expr, sc *scope) pathInfo {
 					return mkSet(out)
 				}
 			}
+			kinds := []pathInfo{root}
+			for _, a := range x.Args[1:] {
+				kinds = append(kinds, c.pathKind(a, sc))
+			}
+			if k, ok := constProduct(func(parts []string) string { return path.Join(parts...) }, kinds...); ok {
+				return k
+			}
 			var rest []string
 			for _, a := range x.Args[1:] {
 				v, ok := c.foldString(a, sc)
@@ -800,6 +810,61 @@ func (c *fileCtx) pathKind(e ast.Expr, sc *scope) pathInfo {
 		}
 	}
 	return dynInfo
+}
+
+// constElems is the strings a path can be when it is a constant or a set of constants only.
+func constElems(k pathInfo) ([]string, bool) {
+	if k.kind != kConst && k.kind != kSet {
+		return nil, false
+	}
+	elems, ok := setElems(k)
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, len(elems))
+	for i, el := range elems {
+		if el == "" || el[0] != 'c' {
+			return nil, false
+		}
+		out[i] = el[1:]
+	}
+	return out, true
+}
+
+// constProduct is the set of strings of an operation (+ or Join) whose operands are each a constant or a set of
+// constants, at least one a set: one element per combination, each classed as a constant of its own. Any other operand,
+// or a product over maxSet elements, leaves the operation unbounded.
+func constProduct(combine func([]string) string, operands ...pathInfo) (pathInfo, bool) {
+	lists := make([][]string, len(operands))
+	multi := false
+	size := 1
+	for i, o := range operands {
+		l, ok := constElems(o)
+		if !ok {
+			return pathInfo{}, false
+		}
+		lists[i] = l
+		multi = multi || len(l) > 1
+		if size *= len(l); size > maxSet {
+			return pathInfo{}, false
+		}
+	}
+	if !multi {
+		return pathInfo{}, false
+	}
+	out := []string{}
+	var rec func(i int, parts []string)
+	rec = func(i int, parts []string) {
+		if i == len(lists) {
+			out = append(out, "c"+combine(parts))
+			return
+		}
+		for _, v := range lists[i] {
+			rec(i+1, append(parts, v))
+		}
+	}
+	rec(0, nil)
+	return mkSet(out), true
 }
 
 // inlineLimit is the most statements a helper may have to be evaluated at a call site.
@@ -2184,6 +2249,13 @@ func (c *fileCtx) call(x *ast.CallExpr, name string, sc *scope, at func(ast.Node
 		for _, p := range parts {
 			if p.kind == kConst {
 				p = c.resolve(p.value)
+			}
+			if p.kind == kName {
+				// a bare entry name is read in the directory the code runs in: a file of the listed directory only when
+				// that is the directory it was listed from
+				if cwd := c.resolve("."); cwd.kind == kRepo && cwd.value == p.value {
+					p = pathInfo{kind: kWalk, value: p.value, depth: depthDir}
+				}
 			}
 			switch p.kind {
 			case kRepo:

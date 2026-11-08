@@ -59,9 +59,10 @@ type routesEnv struct {
 	identity *identity.Store
 	front    *httptest.Server
 	client   *http.Client
-	edge     *principal.EdgeVerifier
 	root     string
-	logs     *safeBuffer
+	// edge is query-api's REST access check over this stack (queryAPIVerifier); nil without an issuer URL.
+	edge *principal.EdgeVerifier
+	logs *safeBuffer
 	// components are what configure built, for a test that stops them itself.
 	components []lifecycle.Component
 }
@@ -228,18 +229,16 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 	if err != nil {
 		t.Fatal(err)
 	}
-	// query-api's edge verifier over the go-api users table: the consumer
-	// that must keep accepting what auth-service mints.
-	edge, err := principal.NewEdgeVerifier(testAccessSecret, "dev-health-ops", "dev-health-api", policy.PGStore{Pool: admin})
-	if err != nil {
-		t.Fatal(err)
-	}
 	wd, err := contractsRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front,
-		client: &http.Client{Timeout: 10 * time.Second}, edge: edge, root: wd, logs: logs, components: components}
+	var edge *principal.EdgeVerifier
+	if cfg.TokenIssuerURL != "" {
+		edge = queryAPIVerifier(t, cfg, policy.PGStore{Pool: admin, AuthSchema: "auth"})
+	}
+	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front, edge: edge,
+		client: &http.Client{Timeout: 10 * time.Second}, root: wd, logs: logs, components: components}
 }
 
 func contractsRoot() (string, error) {
@@ -360,11 +359,11 @@ func (e *routesEnv) revokedAt(t *testing.T, ctx context.Context, wireID string) 
 func TestSessionRoutesThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	e := newRoutesEnv(t, ctx)
+	e := newEdDSARoutesEnv(t, ctx)
 	user, org := e.seed(t, ctx)
 
-	// Refresh: a rotated credential and a go-api access token that query-api's
-	// edge verifier accepts against the live users row.
+	// Refresh: a rotated credential within the session and an access token that
+	// query-api's routed verifier accepts against the live users row and session.
 	first := e.start(t, ctx, user, &org)
 	rotated, got := e.refresh(t, first.Credential.Reveal())
 	if rotated == nil {
@@ -376,9 +375,9 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if got.header.Get("Cache-Control") != "no-store" {
 		t.Fatal("token response is cacheable")
 	}
-	claims, err := e.edge.Verify(ctx, rotated.AccessToken.Reveal())
+	claims, err := e.queryAPIAccepts(ctx, rotated.AccessToken.Reveal())
 	if err != nil {
-		t.Fatalf("query-api's edge verifier refused the access token: %v", err)
+		t.Fatalf("query-api's routed verifier refused the access token: %v", err)
 	}
 	if claims.OrgID != org.String() {
 		t.Fatalf("org_id = %q, want %s", claims.OrgID, org)
@@ -417,7 +416,7 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if _, err := e.admin.Exec(ctx, `UPDATE users SET token_version = token_version + 1 WHERE id = $1`, user); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.edge.Verify(ctx, fifthTokens.AccessToken.Reveal()); err == nil || !policy.IsRefusal(err) {
+	if _, err := e.queryAPIAccepts(ctx, fifthTokens.AccessToken.Reveal()); err == nil || !policy.IsRefusal(err) {
 		t.Fatalf("query-api accepted a stale token (err %v): the two checks disagree", err)
 	}
 	// The session was pinned to the old token_version: a refresh after the
@@ -432,7 +431,7 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if renewed == nil {
 		t.Fatalf("refresh of a session started after the bump = %d %s", got.status, got.body)
 	}
-	if _, err := e.edge.Verify(ctx, renewed.AccessToken.Reveal()); err != nil {
+	if _, err := e.queryAPIAccepts(ctx, renewed.AccessToken.Reveal()); err != nil {
 		t.Fatalf("query-api refused the renewed token: %v", err)
 	}
 
@@ -470,7 +469,7 @@ func newEdDSARoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 
 // TestSessionRoutesThroughConfigureEdDSA drives the session routes (current, revoke, revoke-all) through configure on
 // the eddsa class: they mount only with the access check, and their bearer is the refresh answer's
-// session_access_token. The refresh and query-api edge cells stay in TestSessionRoutesThroughConfigure.
+// session_access_token. The refresh cells stay in TestSessionRoutesThroughConfigure.
 func TestSessionRoutesThroughConfigureEdDSA(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

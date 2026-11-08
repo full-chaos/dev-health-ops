@@ -341,14 +341,6 @@ func postGraphQLWithVariables(t *testing.T, handler http.HandlerFunc, query stri
 	return rec
 }
 
-// bearerCarrier presents token as the Authorization bearer; an empty token presents no carrier.
-func bearerCarrier(token string) func(*http.Request) {
-	if token == "" {
-		return nil
-	}
-	return irBearer(token)
-}
-
 // TestFeatureFlagsRoute_IsServedByTheCatalog is the CHAOS-4367
 // Wave-1-specific extension of routeswitch's generic table-driven
 // reachability test: it exercises the REAL HTTP handler this wave mounts

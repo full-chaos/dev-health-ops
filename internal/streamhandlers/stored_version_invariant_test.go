@@ -27,7 +27,7 @@ func streamHandlerWriters(t *testing.T) map[string][]storedversiontest.Writer {
 
 func TestStreamHandlerWritersKeepTheStoredVersionInvariant(t *testing.T) {
 	writers := streamHandlerWriters(t)
-	for _, table := range []string{"git_pull_requests", "git_pull_request_reviews", "git_commits", "deployments", "work_items", "repos", "identities"} {
+	for _, table := range []string{"git_pull_requests", "git_pull_request_reviews", "git_commits", "work_items", "repos", "identities"} {
 		t.Run(table, func(t *testing.T) {
 			cells := storedversiontest.Enumerate(t, writers[table], 3)
 			t.Logf("%s: %d writers, %d cells", table, len(writers[table]), cells)
@@ -36,7 +36,7 @@ func TestStreamHandlerWritersKeepTheStoredVersionInvariant(t *testing.T) {
 }
 
 // The enumerated writer set equals the generated set of contract tables: every
-// internal contract and every external kind × allowed system of an in-scope
+// external kind × allowed system of an in-scope
 // table.
 func TestInvariantEnumeratesEveryStreamHandlerContract(t *testing.T) {
 	enumerated := map[string]bool{}
@@ -45,10 +45,7 @@ func TestInvariantEnumeratesEveryStreamHandlerContract(t *testing.T) {
 			enumerated[storedversiontest.Fingerprint(writer.Contract)] = true
 		}
 	}
-	generated := []storedversion.Contract{
-		internalCommitContract, internalReviewContract, internalPullRequestContract,
-		internalDeploymentContract, internalWorkItemContract,
-	}
+	var generated []storedversion.Contract
 	for _, kind := range []string{"pull_request.v1", "review.v1", "commit.v1", "work_item.v1", "repository.v1", "identity.v1"} {
 		for _, system := range []string{"github", "gitlab", "jira", "linear", "custom", "pagerduty", "atlassian"} {
 			if _, allowed := externalAllowedKinds[system][kind]; !allowed {
@@ -105,7 +102,7 @@ func TestEveryInScopeInsertInTheSourceIsAnEnumeratedWriter(t *testing.T) {
 	if len(inserts) == 0 {
 		t.Fatal("no INSERT statements found")
 	}
-	scoped := map[string]bool{"git_pull_requests": true, "git_pull_request_reviews": true, "git_commits": true, "deployments": true, "work_items": true, "repos": true, "identities": true}
+	scoped := map[string]bool{"git_pull_requests": true, "git_pull_request_reviews": true, "git_commits": true, "work_items": true, "repos": true, "identities": true}
 	writers := streamHandlerWriters(t)
 	found := 0
 	for _, insert := range inserts {

@@ -64,7 +64,7 @@ Roll A readback:
 - Roll A has run clean in prod.
 - Prod ClickHouse works.
 - The owner has given the go for the sessions flip; the sessions-flip leaf tickets are merged.
-- The rollback rehearsal is done: kind rehearsal of the flip and its rollback, record run https://github.com/full-chaos/dev-health-ops/actions/runs/39862584421 (strict, 0 findings). A `helm rollback` rehearsal on the chart that carries the pre-rollback grant hook is the second gate: result: `<link>`.
+- The rollback rehearsal is done: kind rehearsal of the flip and its rollback, record run https://github.com/full-chaos/dev-health-ops/actions/runs/39862584421 (strict, 0 findings). That kind rehearsal is retired: once HS256 is gone there is no rollback to phase 1, so it rehearses a transition that no longer exists. A `helm rollback` rehearsal on the chart that carries the pre-rollback grant hook is the second gate: result: `<link>`.
 - The previous helm revision number is written in the roll record.
 
 ### B1 Valkey Secret

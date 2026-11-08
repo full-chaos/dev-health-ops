@@ -255,9 +255,12 @@ func (d *Driver) send(ctx context.Context, slot *Slot, token string) error {
 		slot.End, slot.Status, slot.Note = d.now(), 0, "transport failure"
 		return ctx.Err()
 	}
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, bodyLimit+1))
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, bodyLimit+1))
 	_ = resp.Body.Close()
 	slot.End, slot.Status = d.now(), resp.StatusCode
+	if readErr != nil {
+		return fmt.Errorf("drive: slot %d: the answer body ended before its end (%d bytes read): no digest, no slot line", slot.Seq, len(raw))
+	}
 	if len(raw) > bodyLimit {
 		return fmt.Errorf("drive: slot %d: the answer is over 4 MiB: it would be digested cut", slot.Seq)
 	}

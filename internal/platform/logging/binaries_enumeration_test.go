@@ -831,10 +831,12 @@ func Main() { os.Exit(Execute()) }
 
 // censusFixtures feed serviceHandlerCensus a synthetic tree: the baseline
 // with files added or replaced. Each names the review cell (C*) or the rule
-// clause (R*) it pins; accept says whether the census must accept the tree.
+// clause (R*) it pins; accept says whether the census must accept the tree;
+// want, when set, is a text one finding of a refused tree must hold.
 var censusFixtures = []struct {
 	name   string
 	accept bool
+	want   string
 	files  map[string]string
 }{
 	{name: "baseline", accept: true},
@@ -1222,6 +1224,169 @@ func redactProcessLogger(redact func(string) string) (restore func()) {
 	return logging.InstallDefault(slog.New(logging.WithValueRedaction(slog.Default(), redact)))
 }
 `}},
+	{name: "P1 entry point defers InstallDefault on an inline logging.NewJSON", accept: true, files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	defer logging.InstallDefault(logging.NewJSON(os.Stdout, 0))()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "P1 entry point keeps the restore function in a variable and defers it", accept: true, files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	logger := logging.NewJSON(os.Stdout, 0)
+	restore := logging.InstallDefault(logger)
+	defer restore()
+	logger.Info("run")
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "P1 guard: restore variable reassigned", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	restore := logging.InstallDefault(logging.NewJSON(os.Stdout, 0))
+	restore = func() {}
+	defer restore()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "P1 guard: restore variable address taken", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	restore := logging.InstallDefault(logging.NewJSON(os.Stdout, 0))
+	keep(&restore)
+	defer restore()
+	return 0
+}
+
+func keep(target *func()) { *target = func() {} }
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "P1 guard: restore variable never deferred at top level", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	restore := logging.InstallDefault(logging.NewJSON(os.Stdout, 0))
+	restore()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "P1 guard: restore deferred only inside a nested block", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	restore := logging.InstallDefault(logging.NewJSON(os.Stdout, 0))
+	if len(os.Args) > 0 {
+		defer restore()
+	}
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "P1 guard: restore deferred only inside a closure", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	restore := logging.InstallDefault(logging.NewJSON(os.Stdout, 0))
+	func() { defer restore() }()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "P1 guard: inline install of slog.Default", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	defer logging.InstallDefault(slog.Default())()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "P1 guard: restore variable over a reassigned logger", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	logger := logging.NewJSON(os.Stdout, 0)
+	logger = slog.Default()
+	restore := logging.InstallDefault(logger)
+	defer restore()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
 }
 
 func TestServiceHandlerCensusFixtures(t *testing.T) {
@@ -1249,6 +1414,8 @@ func TestServiceHandlerCensusFixtures(t *testing.T) {
 				t.Errorf("census refused a tree it must accept: %q", findings)
 			case !fixture.accept && len(findings) == 0:
 				t.Error("census accepted a tree it must refuse")
+			case fixture.want != "" && !strings.Contains(strings.Join(findings, "\n"), fixture.want):
+				t.Errorf("census refused the tree without %q: %q", fixture.want, findings)
 			}
 		})
 	}

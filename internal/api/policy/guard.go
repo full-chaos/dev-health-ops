@@ -179,7 +179,7 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		}
 		if user.OrgID == "" && !user.Holds(gt.orglessAction()) && !OrglessMayReach(r.Method, r.URL.Path) {
 			g.observeShadow(r, caller, bearer, false, gt)
-			WriteDetail(w, http.StatusForbidden, msgOrgContextRequired, nil)
+			WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 			return
 		}
 		switch level {
@@ -208,7 +208,7 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			}
 			if level == AdminOrg && user.OrgID == "" {
 				g.observeShadow(r, caller, bearer, false, gt)
-				WriteDetail(w, http.StatusForbidden, msgOrgContextRequired, nil)
+				WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 				return
 			}
 		case Superuser:

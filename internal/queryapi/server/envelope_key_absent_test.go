@@ -191,7 +191,7 @@ func TestRESTRowsRefuseTheEnvelopeWithoutEnvelopeKey(t *testing.T) {
 // verifier routed for the user access token.
 func absentKeyRESTMux(t *testing.T, verifier *principal.Verifier, setup *accessSetup) http.Handler {
 	t.Helper()
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(newAccessStore()))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(newAccessStore()))
 	if err != nil {
 		t.Fatal(err)
 	}

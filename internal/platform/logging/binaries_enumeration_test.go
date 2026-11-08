@@ -1420,6 +1420,116 @@ func Execute() int {
 
 func Main() { os.Exit(Execute()) }
 `}},
+	{name: "P1 guard: plain restore form over an inline logging.NewJSON", accept: true, files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	restore := logging.InstallDefault(logging.NewJSON(os.Stdout, 0))
+	defer restore()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "H1 restore called before its top-level defer", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	restore := logging.InstallDefault(logging.NewJSON(os.Stdout, 0))
+	restore()
+	defer restore()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "H2 restore copied and the copy called", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	restore := logging.InstallDefault(logging.NewJSON(os.Stdout, 0))
+	undo := restore
+	undo()
+	defer restore()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "H3 restore run in a goroutine", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	restore := logging.InstallDefault(logging.NewJSON(os.Stdout, 0))
+	go restore()
+	defer restore()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "H8 restore passed to a function that calls it", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	restore := logging.InstallDefault(logging.NewJSON(os.Stdout, 0))
+	undo(restore)
+	defer restore()
+	return 0
+}
+
+func undo(f func()) { f() }
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "H9 restore deferred twice at top level", want: "func Execute does not install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	restore := logging.InstallDefault(logging.NewJSON(os.Stdout, 0))
+	defer restore()
+	defer restore()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
 }
 
 func TestServiceHandlerCensusFixtures(t *testing.T) {

@@ -35,7 +35,7 @@ type stepResult struct {
 	Exit   int      `json:"exit"`
 	Stdout string   `json:"stdout"`
 	State  string   `json:"state"`
-	// Stderr is what a run said on stderr, normalized (service-credentials steps only).
+	// Stderr is what a run said on stderr, normalized; no users|orgs step sets it.
 	Stderr string `json:"stderr,omitempty"`
 }
 

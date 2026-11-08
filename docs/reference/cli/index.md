@@ -20,7 +20,7 @@ Complete reference for `dho`, the command-line interface of dev-health-ops.
 - `workers` : the operator CLI for the Go job runtime
 - `backfill` : historical backfill
 - `maintenance` : operational cleanup
-- `service-credentials`, `mint` : internal service credentials and credential minting
+- `mint` : credential minting
 - `push` : customer push ingestion client
 - `goapi`, `contracts` : Go API rollout and job-contract operator verbs
 
@@ -83,7 +83,7 @@ When a preflight check says no (for example a refused environment or a refused p
 | Requirement | Commands |
 |-------------|----------|
 | ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync teams`; `metrics validate-flags`; `ai allowlist list/set` (+org); `migrate clickhouse upgrade/status/repair`; `fixtures generate` (`--sink`) |
-| PostgreSQL (`MIGRATION_DATABASE_URI`, else `POSTGRES_URI`) | `admin ...` (except `admin users/orgs/billing` and `billing reconcile`, which also accept `API_DATABASE_URI`); `maintenance ...`; `service-credentials ...`; `migrate postgres ...` |
+| PostgreSQL (`MIGRATION_DATABASE_URI`, else `POSTGRES_URI`) | `admin ...` (except `admin users/orgs/billing` and `billing reconcile`, which also accept `API_DATABASE_URI`); `maintenance ...`; `migrate postgres ...` |
 | Organization (`--org` / `ORG_ID`) | `ai allowlist list/set`, `sync teams` |
 
 > The org id of the `sync <target>` verbs falls back to the first organization in PostgreSQL when `--org` and `ORG_ID` are omitted.
@@ -2101,34 +2101,7 @@ dho maintenance cleanup-all
 
 ## Service Credentials
 
-Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) present to the API. The `worker-operator` service is retired: nothing validates a `svc_worker_*` token, so its credentials authorize nothing (`dho workers` carries no token any more). `create` and `rotate` refuse `--service worker-operator` (exit 1); `list` and `revoke` still work on the rows already stored. The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read`, `llm_config:read` (the org LLM config route) and `principal_access:read` (the per-call principal access read). `worker-operator` still accepts `workers:read` and `workers:operate` at creation, but they authorize nothing; do not create new ones. The `worker-llm-config` service (`svc_wllm_*`) is retired with the worker categorize config route: nothing validates its tokens.
-
-```bash
-# Create a credential (the token is printed once)
-dho service-credentials create --service acr --scope entitlements:read
-
-# A credential that lapses at a fixed time
-dho service-credentials create --service acr \
-  --scope entitlements:read --expires-at 2027-01-01T00:00:00+00:00
-
-# List one service's credentials (metadata only; worker-operator lists leftovers to revoke)
-dho service-credentials list --service acr
-
-# Rotate: issue a replacement now; the old credential stays valid for 5 more minutes
-dho service-credentials rotate <credential-id> --scope entitlements:read --overlap-seconds 300
-
-# Revoke
-dho service-credentials revoke <credential-id>
-```
-
-| Subcommand | Description |
-|------------|-------------|
-| `create` | `--service {acr,worker-operator}` (default `acr`), `--scope` (required, repeatable), `--expires-at` (ISO 8601 with a timezone, in the future), `--created-by-user-id` (a user id) |
-| `list` | `--service` (default `acr`); one JSON line: `id`, `service_name`, `token_prefix`, `scopes`, `expires_at`, `revoked_at`, `last_used_at`, `is_valid` (computed: not revoked and not past `expires_at`) |
-| `rotate` | `<credential_id>` then the `create` options plus `--overlap-seconds` (0 to 3600, default 0). The credential must belong to `--service` (the default is `acr`) and be active; its expiry is set to now + the overlap (even if it had less time left) and a replacement is issued |
-| `revoke` | `<credential_id>`; sets `revoked_at` to now, also on an already revoked credential |
-
-> **Notes:** the database is `MIGRATION_DATABASE_URI`, else `POSTGRES_URI` (as every `dho admin` verb); a missing one is exit 1. `rotate` locks the credential row while it checks and changes it. `--help` prints usage on stdout (exit 0). A refusal is one JSON error line on stderr with exit 1. `list` prints `is_valid` (computed: not revoked and not past `expires_at`), so an expired credential no longer prints like a live one.
+The `service-credentials` verbs are gone. Nothing validates a `svc_acr_*`, `svc_worker_*` or `svc_wllm_*` token: the internal acr routes take only the acr-api workload token. `dho service-credentials` is an unknown command (exit 2). The `internal_service_credentials` rows stay until a later migration drops the table.
 
 ## Billing
 

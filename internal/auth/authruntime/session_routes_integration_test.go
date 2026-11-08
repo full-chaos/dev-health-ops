@@ -63,7 +63,9 @@ type routesEnv struct {
 	root     string
 	// edge is query-api's REST access check over this stack (queryAPIVerifier); nil without an issuer URL or a readable key.
 	edge *principal.EdgeVerifier
-	logs *safeBuffer
+	// queryAuth is the routed authenticator under edge (queryAPIAuthenticator); nil when edge is.
+	queryAuth *policy.Authenticator
+	logs      *safeBuffer
 	// components are what configure built, for a test that stops them itself.
 	components []lifecycle.Component
 }
@@ -235,10 +237,12 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 		t.Fatal(err)
 	}
 	var edge *principal.EdgeVerifier
+	var queryAuth *policy.Authenticator
 	if _, err := os.Stat(cfg.SigningKeyPath); cfg.TokenIssuerURL != "" && err == nil {
 		edge = queryAPIVerifier(t, cfg, policy.PGStore{Pool: admin, AuthSchema: "auth"})
+		queryAuth = queryAPIAuthenticator(t, cfg, policy.PGStore{Pool: admin, AuthSchema: "auth"})
 	}
-	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front, edge: edge,
+	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front, edge: edge, queryAuth: queryAuth,
 		client: &http.Client{Timeout: 10 * time.Second}, root: wd, logs: logs, components: components}
 }
 
@@ -385,6 +389,9 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	}
 	payload := decodePayload(t, rotated.AccessToken.Reveal())
 	// access-token.v1: the role, names and token_version come from the live rows (the verifier above), not claims.
+	if role, err := e.queryAPIRole(ctx, rotated.AccessToken.Reveal()); err != nil || role != "owner" {
+		t.Fatalf("query-api resolves role %q (%v) from the live rows, want owner", role, err)
+	}
 	for key, want := range map[string]any{"sub": session.WirePrincipalID(user), "principal_type": "human", "sid": rotated.SessionID,
 		"org_id": org.String(), "aud": "dev-health-api", "scope": "api:access"} {
 		if payload[key] != want {

@@ -626,7 +626,10 @@ internal/reconcilerservice	pool_composition_test.go
 internal/reconcilerservice	readiness_timeout_test.go
 internal/rivermigrate	deploy_wiring_test.go
 internal/scheduler/sync	venue_golden_address_test.go
+internal/shadowvenue	bodykeys.go
+internal/shadowvenue	claims.go
 internal/shadowvenue	drive.go
+internal/shadowvenue	mint.go
 internal/shadowvenue	requestsites_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go

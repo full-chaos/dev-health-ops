@@ -786,8 +786,14 @@ internal/queryapi/quadrant	identity.go	internal/queryapi/quadrant
 internal/queryapi/quadrant	identity.go	internal/queryapi/server
 internal/queryapi/quadrant	identity.go	internal/queryapiservice
 internal/queryapi/quadrant	identity.go	internal/websmoke
+internal/shadowvenue	bodykeys.go	cmd/shadow-venue
+internal/shadowvenue	bodykeys.go	internal/shadowvenue
+internal/shadowvenue	claims.go	cmd/shadow-venue
+internal/shadowvenue	claims.go	internal/shadowvenue
 internal/shadowvenue	drive.go	cmd/shadow-venue
 internal/shadowvenue	drive.go	internal/shadowvenue
+internal/shadowvenue	mint.go	cmd/shadow-venue
+internal/shadowvenue	mint.go	internal/shadowvenue
 internal/synccli	target.go	cmd/dho
 internal/synccli	target.go	internal/synccli
 internal/syncdispatchcontract	routes.go	cmd/dho

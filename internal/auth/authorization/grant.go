@@ -188,6 +188,17 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 	if !ok {
 		return deny(ReasonGrantAbsent)
 	}
+	// The organization branch's platform-admin rule, unchanged: a flagged repository read is org-wide for a
+	// holder of admin.orgs with no membership row.
+	if e.platformAdminAdmits(r, act, s) {
+		now := gs.NowUnixNano()
+		if now <= 0 {
+			return deny(ReasonClockUnavailable)
+		}
+		d := repositoryAllow(ReasonAllowedByPlatformAdmin, act, rev, now)
+		d.Obligations = &Obligations{TenantScope: r.OrganizationID, RepositoryScope: RepositoryScopeOrganization}
+		return d
+	}
 	if gs.OrganizationStatus(r.OrganizationID) != StatusActive {
 		return deny(ReasonOrganizationInactive)
 	}

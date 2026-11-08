@@ -100,3 +100,25 @@ func TestPlatformAdminRepositoryAnswerEqualsTheOrganizationBranchAnswer(t *testi
 		}
 	}
 }
+
+// Impersonation (known flaw F1: no new widening): an admin.orgs holder who impersonates a user with no
+// membership row gets no platform-admin allow on the flagged repository reads; the actor's platform role
+// never widens the effective subject, and a delegated acr.credential.issue stays impersonation-denied.
+func TestImpersonatingPlatformAdminGetsNoRepositoryAllow(t *testing.T) {
+	e := newEvaluator(catalogWithRepositoryFlags(t))
+	all := append(append([]string{}, platformAdminRepositoryActions...), "acr.credential.issue")
+	for _, action := range platformAdminRepositoryActions {
+		s := delegatedSnapshot{
+			grantFake: platformAdminRepoSnapshot("", StatusActive),
+			d: Delegation{Chain: []Hop{{ActorPrincipalID: testActor, PermittedActions: all}}, ActorPlatformRole: "platform_admin",
+				TargetOrganizationID: testOrg, Assurance: "aal1"},
+			on: true,
+		}
+		if got := e.Evaluate(repositoryRequestFor(action), s); got.Allowed {
+			t.Errorf("%s impersonating a no-row user as platform_admin: %+v, want deny", action, got)
+		}
+	}
+	if got := e.Evaluate(orgRequest("acr.credential.issue"), delegated("owner", all, "platform_admin")); got.Allowed {
+		t.Errorf("acr.credential.issue delegated: %+v, want deny (impersonation denied)", got)
+	}
+}

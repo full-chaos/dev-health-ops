@@ -148,6 +148,11 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 	case g.decider == nil:
 		g.count(ctx, ModeEnforce, ResultNoPDP, label)
 		return nil, &DenyError{Reason: ReasonNoDecisionPoint, Local: true}
+	case orgID == "":
+		// Only a superuser passes the verifier with no organization: its roots keep the legacy answer, as an enforced
+		// REST row does (product rule 1).
+		g.count(ctx, ModeEnforce, ResultNoOrg, label)
+		return legacy(), nil
 	}
 	decisions := map[string]pep.Decision{}
 	var merged pepgate.Scope

@@ -42,6 +42,7 @@ internal/apiservice/admin/impersonation.go	handlers.impersonationStatus	admin.im
 internal/apiservice/admin/impersonation_handoff.go	handlers.handoffRoutes	admin.impersonate	route
 internal/apiservice/admin/orgs.go	handlers.orgRoutes	admin.orgs	route
 internal/apiservice/admin/platformstats.go	handlers.platformRoutes	admin.stats	route
+internal/apiservice/admin/serviceaccount_keys.go	handlers.serviceAccountKeyRoutes	admin.users	route
 internal/apiservice/admin/users.go	handlers.createUserOrg	admin.users	8
 internal/apiservice/admin/users.go	handlers.listUsers	admin.users	8
 internal/apiservice/admin/users.go	handlers.userRoutes	admin.users	route

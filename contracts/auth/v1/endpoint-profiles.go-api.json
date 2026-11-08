@@ -3823,7 +3823,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "none in go-api: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
       "route": "/api/v1/admin/service-accounts/{service_account_id}/keys",
       "service": "dev-health-ops-api",
       "source": {
@@ -11100,7 +11100,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "none in go-api: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path credential id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path credential id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
       "route": "/api/v1/admin/service-accounts/keys/{credential_id}/revoke",
       "service": "dev-health-ops-api",
       "source": {
@@ -11164,7 +11164,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "none in go-api: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
       "route": "/api/v1/admin/service-accounts/{service_account_id}/keys",
       "service": "dev-health-ops-api",
       "source": {
@@ -11228,7 +11228,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "none in go-api: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
       "route": "/api/v1/admin/service-accounts/{service_account_id}/keys/rotate",
       "service": "dev-health-ops-api",
       "source": {

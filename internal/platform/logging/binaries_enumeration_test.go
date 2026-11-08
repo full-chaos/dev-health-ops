@@ -908,6 +908,60 @@ func (discard) Write(p []byte) (int, error) { return len(p), nil }
 
 func logger() *slog.Logger { return slog.New(slog.NewJSONHandler(discard{}, nil)) }
 `}},
+	{name: "W value-redaction wrapper around slog.Default().Handler() (guard)", accept: true, files: map[string]string{
+		"internal/synccli/zz_fixture.go": `package synccli
+
+import (
+	"log/slog"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func redactProcessLogger(redact func(string) string) (restore func()) {
+	return logging.InstallDefault(slog.New(logging.WithValueRedaction(slog.Default().Handler(), redact)))
+}
+`}},
+	{name: "W value-redaction wrapper around a text handler (guard: its stderr writer is refused before the fix too)", files: map[string]string{
+		"internal/synccli/zz_fixture.go": `package synccli
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func redactProcessLogger(redact func(string) string) (restore func()) {
+	return logging.InstallDefault(slog.New(logging.WithValueRedaction(slog.NewTextHandler(os.Stderr, nil), redact)))
+}
+`}},
+	{name: "W value-redaction wrapper around a handler variable", files: map[string]string{
+		"internal/synccli/zz_fixture.go": `package synccli
+
+import (
+	"log/slog"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func redactProcessLogger(redact func(string) string) (restore func()) {
+	handler := slog.Default().Handler()
+	return logging.InstallDefault(slog.New(logging.WithValueRedaction(handler, redact)))
+}
+`}},
+	{name: "W value-redaction wrapper around slog.Default() without .Handler()", files: map[string]string{
+		"internal/synccli/zz_fixture.go": `package synccli
+
+import (
+	"log/slog"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func redactProcessLogger(redact func(string) string) (restore func()) {
+	return logging.InstallDefault(slog.New(logging.WithValueRedaction(slog.Default(), redact)))
+}
+`}},
 }
 
 func TestServiceHandlerCensusFixtures(t *testing.T) {

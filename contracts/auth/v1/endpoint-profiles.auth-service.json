@@ -271,19 +271,14 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 159
+        "line": 157
       },
       "surface_kind": "rest"
     },
     {
       "accepted_credential_classes": [
-        "ops_refresh_token",
         "refresh_credential"
       ],
-      "class_disambiguator": {
-        "kind": "body_field",
-        "name": "refresh_token"
-      },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the credential, its session and the users row are read live; rotation is single use under the session row lock.",
       "disclosure_behavior": "Every refusal of a presented credential is a 401 whose go-api shaped body is {\"detail\":{\"message\":...}} with no reason code and no credential; the reason code goes to the audit row and the log only. A store or key failure is a 5xx.",
@@ -319,7 +314,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 146
+        "line": 144
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -347,7 +342,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 147
+        "line": 145
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -498,7 +493,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 166
+        "line": 164
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -542,7 +537,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 163
+        "line": 161
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"

@@ -58,7 +58,7 @@ func TestGoAPIsIssueClientAgainstTheIssueRoute(t *testing.T) {
 	if len(f.sessions.created) != 1 || pair.Refresh != f.sessions.created[0].issued.Credential.Reveal() {
 		t.Fatalf("pair %+v does not carry the created session's credential", pair)
 	}
-	bearer, _, err := f.issuer.Verify(pair.Access)
+	bearer, _, err := eddsaBearer(t, pair.Access)
 	if err != nil || bearer.SessionID != f.sessions.created[0].issued.Session.ID || bearer.PrincipalID != f.principal {
 		t.Fatalf("access token %+v %v, want the created session", bearer, err)
 	}

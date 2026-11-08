@@ -25,6 +25,7 @@ func credentialConfig(t *testing.T, owned string) authconfig.Config {
 		authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile: "/nonexistent",
 		authconfig.EnvSigningKeyID:   "credentials-test",
+		authconfig.EnvTokenIssuerURL: wellKnownIssuer,
 	})
 	if owned != "" {
 		env[authconfig.EnvUsersOwned] = owned
@@ -47,7 +48,7 @@ func TestCredentialRoutesOwnedUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	routes, components, err := credentialRoutes(credentialConfig(t, "true"), logger, pool, schema, mustLimits(t), nil)
+	routes, components, err := credentialRoutes(credentialConfig(t, "true"), logger, pool, schema, mustLimits(t), keySigner(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestCredentialRoutesNotOwnedWriteNothingAndNeedNoMailProvider(t *testing.T)
 	t.Setenv("MAIL_PROVIDER", "a-provider-that-does-not-exist")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for name, owned := range map[string]string{"unset": "", "false": "false"} {
-		routes, components, err := credentialRoutes(credentialConfig(t, owned), logger, nil, schema, limits, nil)
+		routes, components, err := credentialRoutes(credentialConfig(t, owned), logger, nil, schema, limits, &stubSigner{})
 		if err != nil || len(components) != 0 || len(routes) != 6 {
 			t.Fatalf("%s: routes %d components %d err %v; want 6, 0, nil", name, len(routes), len(components), err)
 		}
@@ -140,7 +141,7 @@ func TestNotOwnedCredentialRoutesAnswer503ThroughTheServerUnderLoad(t *testing.T
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for name, owned := range map[string]string{"unset": "", "false": "false"} {
 		cfg := credentialConfig(t, owned)
-		routes, _, err := credentialRoutes(cfg, logger, nil, schema, mustLimits(t), nil)
+		routes, _, err := credentialRoutes(cfg, logger, nil, schema, mustLimits(t), &stubSigner{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -219,11 +220,11 @@ func TestOnlyTheSixNotOwnedCredentialRoutesAreUnthrottled(t *testing.T) {
 	}
 	for name, owned := range map[string]string{"unset": "", "false": "false", "true": "true"} {
 		cfg := credentialConfig(t, owned)
-		session, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
+		session, err := sessionRoutes(cfg, logger, pool, schema, &stubSigner{}, mustLimits(t), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
+		credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), &stubSigner{})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 
@@ -52,7 +51,7 @@ func TestSavedReportRoutes_ThroughTheSignedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := func(org string) func(*http.Request) {
 		return iaHeaders(org, "member", false, false)
 	}

@@ -13,17 +13,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/egressallow"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -51,6 +50,11 @@ func TestMain(m *testing.M) {
 	// configure refuses a bad TRUSTED_PROXIES at start: no test reads the outer value; a test sets its own.
 	_ = os.Unsetenv("TRUSTED_PROXIES")
 	_ = os.Unsetenv("TRUSTED_PROXIES_NETWORK_FENCED")
+	// configure refuses a start with a database and no access-token issuer (the only verifier); a test that needs it
+	// unset clears it.
+	if _, set := os.LookupEnv(envAccessTokenIssuer); !set {
+		_ = os.Setenv(envAccessTokenIssuer, "https://auth.example.test")
+	}
 	// RunTests is m.Run, and fails the run when a test that ran did not use its golden.
 	os.Exit(venueoracle.RunTests(m))
 }
@@ -347,10 +351,10 @@ func TestConfigureRefusesADatabaseWithoutAUsableSigningKey(t *testing.T) {
 	}
 }
 
-// TestConfigureInstallsTheScopeMiddlewaresWithADatabase proves the wiring:
-// a request carrying a valid token for a caller the (unreachable) database
-// cannot confirm fails in the org scope (503, the database is unavailable),
-// where a server without the scope would answer 404.
+// TestConfigureInstallsTheScopeMiddlewaresWithADatabase proves the wiring: a
+// user access token on a row route whose keys the (unreachable) issuer cannot
+// serve fails in the org scope (503, a dependency is unavailable), where a
+// server without the scope would answer 404.
 func TestConfigureInstallsTheScopeMiddlewaresWithADatabase(t *testing.T) {
 	cfg := apiTestConfig()
 	components, err := configure(context.Background(), cfg, health.NewRegistry(time.Second), quietLogger())
@@ -368,13 +372,8 @@ func TestConfigureInstallsTheScopeMiddlewaresWithADatabase(t *testing.T) {
 			server = candidate
 		}
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": uuid.NewString(), "type": "access", "exp": time.Now().Add(time.Hour).Unix(),
-	}).SignedString([]byte(cfg.APIJWTSecret.Reveal()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
+	token := newEdDSAMinter(t).mint(uuid.New(), nil)
+	request := httptest.NewRequest(http.MethodGet, probeAuthenticated, nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
@@ -410,36 +409,25 @@ func (s scopeStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*po
 // security or CORS header (they are inner), while an impersonated request's
 // response carries the impersonation headers and the security headers.
 func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T) {
-	key := strings.Repeat("fixture-key-", 3)
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	store := scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.AuthenticatorOver(t, store, quietLogger())
 	scope := policy.NewScope(auth, quietLogger())
 	cfg := apiTestConfig()
 	cfg.CORSAllowedOrigins = []string{"https://app.example"}
-	server, err := NewServer(cfg, quietLogger(), nil, scope.Layers()...)
+	// One handler on a real org-scoped go-api row that takes a user access token (the access check judges
+	// a bearer only on a row); it answers 404 as an unrouted path did.
+	const scopedRoute = "/api/v1/billing/invoices"
+	routes := []httpapi.Route{{Method: http.MethodGet, Pattern: scopedRoute, Handler: http.NotFoundHandler()}}
+	server, err := NewServer(cfg, quietLogger(), routes, scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sign := func(sub uuid.UUID, superuser bool) string {
-		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub": sub.String(), "type": "access", "org_id": uuid.NewString(), "is_superuser": superuser,
-			"exp": time.Now().Add(time.Hour).Unix(),
-		}).SignedString([]byte(key))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return token
-	}
+	// No token org: the X-Org-Id header names the org. The admin's users row says superuser.
+	sign := func(sub uuid.UUID) string { return tokens.MustMint(t, edtokens.Claims{UserID: sub}) }
 
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
-	request.Header.Set("Authorization", "Bearer "+sign(uuid.New(), false))
+	request := httptest.NewRequest(http.MethodGet, scopedRoute, nil)
+	request.Header.Set("Authorization", "Bearer "+sign(uuid.New()))
 	request.Header.Set("X-Org-Id", uuid.NewString())
 	request.Header.Set("Origin", "https://app.example")
 	recorder := httptest.NewRecorder()
@@ -457,8 +445,8 @@ func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T
 		t.Fatalf("the org scope 403 lacks the plane stamp the prover reads: %v", recorder.Header())
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
-	request.Header.Set("Authorization", "Bearer "+sign(store.admin, true))
+	request = httptest.NewRequest(http.MethodGet, scopedRoute, nil)
+	request.Header.Set("Authorization", "Bearer "+sign(store.admin))
 	recorder = httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound || recorder.Header().Get("X-Impersonating") != "true" ||

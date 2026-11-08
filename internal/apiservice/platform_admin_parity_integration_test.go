@@ -279,11 +279,7 @@ VALUES ($1::uuid, $2::uuid, $3, 'cus_x', 'open', 100, 'usd', '{}', now(), now())
 		if err != nil {
 			t.Fatal(err)
 		}
-		signer, err := edgetoken.NewSigner(probeKey, "dev-health-ops", "dev-health-api")
-		if err != nil {
-			t.Fatal(err)
-		}
-		auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
+		auth, err := policy.NewAuthenticator(store, quietLogger())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -297,7 +293,7 @@ VALUES ($1::uuid, $2::uuid, $3, 'cus_x', 'open', 100, 'usd', '{}', now(), now())
 			t.Fatal(err)
 		}
 		validator, err := accessverify.New(accessverify.Config{
-			Rows: realRows(t), EdDSA: eddsa, Legacy: legacyVerifier(auth.AuthenticateLegacy),
+			Rows: realRows(t), EdDSA: eddsa,
 			Meter: sdkmetric.NewMeterProvider().Meter("test"), Logger: quietLogger(), Now: func() time.Time { return probeNow },
 		})
 		if err != nil {
@@ -311,7 +307,7 @@ VALUES ($1::uuid, $2::uuid, $3, 'cus_x', 'open', 100, 'usd', '{}', now(), now())
 		if enforcer != nil {
 			guard.SetEnforcer(enforcer)
 		}
-		deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Verifier: verifier, Signer: signer, ACRRevoker: rig.revoker}
+		deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Verifier: verifier, ACRRevoker: rig.revoker}
 		scope := policy.NewScope(auth, quietLogger())
 		server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), scope.Layers()...)
 		if err != nil {

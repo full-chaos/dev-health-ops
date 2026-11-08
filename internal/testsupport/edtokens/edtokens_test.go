@@ -2,6 +2,7 @@ package edtokens_test
 
 import (
 	"context"
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,44 @@ func TestMintedTokenVerifiesWithItsSessionLive(t *testing.T) {
 	}
 	if _, err := issuer.Mint(edtokens.Claims{}); err == nil {
 		t.Fatal("a token without a user was minted")
+	}
+}
+
+// SessionID mints under a session the test names (and remembers it); NoSession mints a token without sid and
+// remembers no session; both at once is refused.
+func TestMintUnderAGivenSessionOrNone(t *testing.T) {
+	issuer := edtokens.New(t)
+	user, sid := uuid.New(), uuid.New()
+	given := issuer.MustMint(t, edtokens.Claims{UserID: user, SessionID: &sid, TokenVersion: 2})
+	claims, err := issuer.Verifier(t).Verify(given, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.SessionID != sessionid.Wire(sid) {
+		t.Fatalf("sid %q, want the given session %s", claims.SessionID, sessionid.Wire(sid))
+	}
+	store := issuer.Store(policy.PGStore{})
+	if row, found, err := store.SessionState(context.Background(), sid); err != nil || !found || row.PrincipalID != user ||
+		row.LegacyTokenVersion == nil || *row.LegacyTokenVersion != 2 {
+		t.Fatalf("the given session is not remembered for its user at pin 2: %+v found=%v err=%v", row, found, err)
+	}
+	none := issuer.MustMint(t, edtokens.Claims{UserID: user, NoSession: true})
+	payload, err := base64.RawURLEncoding.DecodeString(strings.Split(none, ".")[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), `"sid"`) {
+		t.Fatalf("a NoSession token carries sid: %s", payload)
+	}
+	// The contract requires sid: the api verifier refuses the token before any session read.
+	if _, err := issuer.Verifier(t).Verify(none, time.Now()); err == nil {
+		t.Fatal("a token without sid verified")
+	}
+	if got := len(issuer.Sessions()); got != 1 {
+		t.Fatalf("%d sessions remembered, want 1 (the NoSession token has none)", got)
+	}
+	if _, err := issuer.Mint(edtokens.Claims{UserID: user, SessionID: &sid, NoSession: true}); err == nil {
+		t.Fatal("a token with a given session and no session was minted")
 	}
 }
 

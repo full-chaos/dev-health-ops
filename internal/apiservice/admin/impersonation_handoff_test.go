@@ -24,7 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // wantConsumeLua is the consume script as the fake runs it: any other script text is an unknown script.
@@ -526,26 +526,14 @@ func TestHandoffConsumeRouteIsTheExemptPatternAndMounted(t *testing.T) {
 // Through the real scope and guard: with the admin's impersonation row live (it is live once the start ran), the
 // consume route reaches its handler; the start route is refused in the session.
 func TestHandoffConsumeRouteIsReachableWithALiveImpersonationRow(t *testing.T) {
-	const key = "route-order-test-signing-key-32-bytes!!!!"
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, impersonatingStore{active: true}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
+	auth := tokens.AuthenticatorOver(t, impersonatingStore{active: true}, logger)
 	scope := policy.NewScope(auth, logger)
 	admin := uuid.New()
-	bearer, err := signer.Access(edgetoken.AccessClaims{UserID: admin.String(), Email: "root@example.test", IsSuperuser: true}, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The superuser and the live impersonation are the store's users and impersonation rows; the token names only
+	// the admin.
+	bearer := tokens.MustMint(t, edtokens.Claims{UserID: admin})
 	f, client := newFakeValkey(t)
 	touched := new(bool)
 	h := &handlers{store: pgStore{Pool: touchedDB{touched}}, guard: policy.NewGuard(auth, logger), logger: logger, handoffs: valkeyHandoffs{client: client}}
@@ -554,10 +542,11 @@ func TestHandoffConsumeRouteIsReachableWithALiveImpersonationRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	for _, route := range append(h.impersonationRoutes(), h.handoffRoutes()...) {
+	routes := append(h.impersonationRoutes(), h.handoffRoutes()...)
+	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
-	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(mux))))
+	server := httptest.NewServer(profiled(t, routes, scope.Principal(scope.OrgScope(scope.Impersonation(mux)))))
 	defer server.Close()
 	post := func(path, body string) (int, string) {
 		req, _ := http.NewRequest(http.MethodPost, server.URL+path, strings.NewReader(body))
@@ -586,36 +575,24 @@ func TestHandoffConsumeRouteIsReachableWithALiveImpersonationRow(t *testing.T) {
 // scope and guard: the holder's delegated start writes the handoff; with the holder's impersonation row live, the
 // consume route admits it once, and the non-exempt platform routes (start, orgs) are refused in the session.
 func TestHandoffSwitchOnConsumeAdmitsWithALiveRowAndRefusesOtherRoutes(t *testing.T) {
-	const key = "route-order-test-signing-key-32-bytes!!!!"
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, impersonatingStore{active: true}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
+	auth := tokens.AuthenticatorOver(t, impersonatingStore{active: true}, logger)
 	c, f := newHandoffCase(t)
 	if c.h.delegator == nil {
 		t.Fatal("switch off: no delegator")
 	}
 	id := startHandoff(t, c)
 	c.h.guard = policy.NewGuard(auth, logger)
-	bearer, err := signer.Access(edgetoken.AccessClaims{UserID: c.admin.String(), Email: "root@example.test", IsSuperuser: true}, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The superuser and the live impersonation are the store's rows; the token names only the admin.
+	bearer := tokens.MustMint(t, edtokens.Claims{UserID: c.admin})
 	mux := http.NewServeMux()
-	for _, route := range c.h.routes() {
+	routes := c.h.routes()
+	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	scope := policy.NewScope(auth, logger)
-	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(mux))))
+	server := httptest.NewServer(profiled(t, routes, scope.Principal(scope.OrgScope(scope.Impersonation(mux)))))
 	defer server.Close()
 	send := func(method, path, body string) (int, string) {
 		req, _ := http.NewRequest(method, server.URL+path, strings.NewReader(body))

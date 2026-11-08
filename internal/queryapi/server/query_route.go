@@ -5850,7 +5850,8 @@ func digestHex(document string) string {
 }
 
 // queryRouteConfig is env-sourced configuration for the live /query
-// route. All fields are required together -- see loadQueryRouteConfig.
+// route. The two data stores are required together -- see
+// loadQueryRouteConfig; the envelope key is optional (envelope_key.go).
 //
 // There is deliberately no operator-supplied schema-digest field here
 // (CHAOS-5013 removed GO_API_SCHEMA_DIGEST and the startup gate that
@@ -5868,13 +5869,11 @@ type queryRouteConfig struct {
 }
 
 // loadQueryRouteConfig reads the /query route's configuration from the
-// environment. ok is false when ANY required variable is unset -- Wave
-// 0's default ("nothing mounted, only /healthz and /readyz live") is
+// environment. ok is false when ClickHouse or registry Postgres is unset --
+// Wave 0's default ("nothing mounted, only /healthz and /readyz live") is
 // preserved for any caller that does not set these, rather than the
-// process failing to start. This mirrors the deployment shape: a plain
-// `go build`/`go vet`/CI run, or an operator who has not yet configured
-// this service's dependencies, must not be forced to also configure
-// ClickHouse/Postgres/JWKS just to build or run the binary.
+// process failing to start. The envelope key does not gate the mount: a
+// pod without it serves every route and refuses the envelope class.
 func loadQueryRouteConfig(getenv getenvFunc) (queryRouteConfig, bool) {
 	cfg := queryRouteConfig{
 		ClickHouseURI:       getenv("CLICKHOUSE_URI"),
@@ -5883,8 +5882,7 @@ func loadQueryRouteConfig(getenv getenvFunc) (queryRouteConfig, bool) {
 		EnvelopeIssuer:      getenv("GO_API_ENVELOPE_ISSUER"),
 		EnvelopeAudience:    getenv("GO_API_ENVELOPE_AUDIENCE"),
 	}
-	if cfg.ClickHouseURI == "" || cfg.RegistryPostgresURI == "" || cfg.EnvelopeJWKSPath == "" ||
-		cfg.EnvelopeIssuer == "" || cfg.EnvelopeAudience == "" {
+	if cfg.ClickHouseURI == "" || cfg.RegistryPostgresURI == "" {
 		return cfg, false
 	}
 	return cfg, true
@@ -6144,26 +6142,15 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		return queryRouteHandlers{}, nil, nil, err
 	}
 
-	verifier, err := principal.NewVerifier(cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience)
+	// The envelope key is optional and never fails start on its own (D6465): without a usable one the verifier is
+	// nil, the envelope class is refused, and readiness has no query_jwks probe. A key that goes bad after start
+	// still fails query_jwks.
+	envelope, err := loadEnvelopeKey(cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience)
 	if err != nil {
 		pgPool.Close()
 		return queryRouteHandlers{}, nil, nil, err
 	}
-	// CHAOS-4708: eager readiness check, matching the ClickHouse Ping
-	// above's "measurement that did not happen must FAIL, loudly"
-	// discipline -- a missing, unreadable, empty, or malformed JWKS is a
-	// hopeless config exactly like a wrong ClickHouse protocol port is:
-	// refuse to start rather than mount /query behind a verifier that
-	// will 401 every authenticated request. This does NOT substitute for
-	// readinessCheck's live JWKS re-check below: this one-shot call says
-	// nothing about a JWKS that goes bad LATER (deleted, rotated wrong,
-	// truncated by a bad mount refresh) -- exactly the gap this ticket
-	// exists to close for readiness, the same way the ClickHouse
-	// readiness check below does not substitute for THIS eager Ping.
-	if err := verifier.CheckJWKS(); err != nil {
-		pgPool.Close()
-		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: JWKS readiness check failed (GO_API_ENVELOPE_JWKS_PATH must point to a readable, non-empty, valid Ed25519 JWKS document): %w", err)
-	}
+	verifier := envelope.verifier
 
 	// One posture check per process: it proves the role in the background from here
 	// on, and both the combined check and the per-class probes read its last answer.
@@ -6203,7 +6190,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		Registry:   registryHandler,
 		BuildInfo:  newBuildInfoHandler(verifier, edgeAuth, edgeStore),
 		MCP:        mcpHandler,
-		Probes:     readinessProbes(chClient, pgPool, verifier, posture),
+		Probes:     readinessProbes(chClient, pgPool, envelope.jwksProbe(), posture),
 	}
 	// The one registry pool, for Build's edge users check (CHAOS-6290). Set outside the
 	// literal above so that literal keeps the shape posture_readiness_test pins.
@@ -6217,7 +6204,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// applies (postgres.QueryAPIPosture): the read plane, the saved-report
 	// writes, and nothing else. A deployment that names none has not opted in
 	// and is checked for nothing extra.
-	ready := readinessCheck(chClient, pgPool, verifier, posture)
+	ready := readinessCheck(chClient, pgPool, envelope.jwksProbe(), posture)
 	return handlers, ready, cleanup, nil
 }
 
@@ -6276,7 +6263,8 @@ func readinessCheck(chClient readinessPinger, pgPool readinessPinger, verifier j
 }
 
 // readinessProbes are the checks readinessCheck runs, one per dependency class and in
-// that order (the role-posture one only when the deployment named a query-api role).
+// that order (the JWKS one only when the process holds an envelope key, a nil verifier;
+// the role-posture one only when the deployment named a query-api role).
 func readinessProbes(chClient readinessPinger, pgPool readinessPinger, verifier jwksChecker, posture func(context.Context) error) []ReadinessProbe {
 	probes := []ReadinessProbe{
 		{Name: "query_clickhouse", Check: func(ctx context.Context) error {
@@ -6291,12 +6279,14 @@ func readinessProbes(chClient readinessPinger, pgPool readinessPinger, verifier 
 			}
 			return nil
 		}},
-		{Name: "query_jwks", Check: func(context.Context) error {
+	}
+	if verifier != nil {
+		probes = append(probes, ReadinessProbe{Name: "query_jwks", Check: func(context.Context) error {
 			if err := verifier.CheckJWKS(); err != nil {
 				return &readyzDependencyError{Class: readyzClassJWKS, Cause: err}
 			}
 			return nil
-		}},
+		}})
 	}
 	if posture != nil {
 		probes = append(probes, ReadinessProbe{Name: "query_role_posture", Check: func(ctx context.Context) error {

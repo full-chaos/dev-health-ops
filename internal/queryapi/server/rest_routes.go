@@ -77,7 +77,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/investment/explain route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/investment/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/investment/explain route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildInvestmentExplainRoute(getenv, edgeUsers)
@@ -96,7 +96,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/quadrant route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/quadrant route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/quadrant route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildQuadrantRoute(getenv, edgeUsers)
@@ -115,7 +115,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/heatmap route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/heatmap route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/heatmap route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildHeatmapRoute(getenv, edgeUsers)
@@ -135,7 +135,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/sankey route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/sankey route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/sankey route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildSankeyRoute(getenv, edgeUsers)
@@ -155,7 +155,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/home route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/home route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_*/GO_API_REGISTRY_POSTGRES_URI unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/home route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildHomeRoute(getenv, edgeUsers)
@@ -176,7 +176,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/opportunities route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/opportunities route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/opportunities route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildOpportunitiesRoute(getenv, edgeUsers)
@@ -196,7 +196,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/filters/options route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/filters/options route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/filters/options route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildFilterOptionsRoute(getenv, edgeUsers)
@@ -216,7 +216,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/investment route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/investment route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/investment route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildInvestmentRoute(getenv, edgeUsers)
@@ -235,7 +235,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/investment/sunburst route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/investment/sunburst route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/investment/sunburst route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildInvestmentSunburstRoute(getenv, edgeUsers)
@@ -255,7 +255,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/drilldown/prs route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/drilldown/prs route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/drilldown/prs route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildDrilldownPRsRoute(getenv, edgeUsers)
@@ -275,7 +275,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/work-units route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/work-units route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/work-units route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildWorkUnitsRoute(getenv, edgeUsers)
@@ -300,7 +300,7 @@ var restGroups = []restGroup{
 			log.Printf("query-api: build /api/v1/work-units/{work_unit_id}/explain route: %v", err)
 		},
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/work-units/{work_unit_id}/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_*/GO_API_REGISTRY_POSTGRES_URI unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/work-units/{work_unit_id}/explain route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildWorkUnitExplainRoute(getenv, edgeUsers)
@@ -320,7 +320,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/drilldown/issues route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/drilldown/issues route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/drilldown/issues route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildDrilldownIssuesRoute(getenv, edgeUsers)
@@ -339,7 +339,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/people route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/people route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/people route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildPeopleSearchRoute(getenv, edgeUsers)
@@ -359,7 +359,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build %s route: %v", peopleSummaryPath, err) },
 		LogNotConfigured: func() {
-			log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleSummaryPath)
+			log.Printf("query-api: %s route not configured (CLICKHOUSE_URI unset) -- staying unmounted", peopleSummaryPath)
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildPeopleSummaryRoute(getenv, edgeUsers)
@@ -378,7 +378,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build %s route: %v", peopleMetricPath, err) },
 		LogNotConfigured: func() {
-			log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleMetricPath)
+			log.Printf("query-api: %s route not configured (CLICKHOUSE_URI unset) -- staying unmounted", peopleMetricPath)
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildPeopleMetricRoute(getenv, edgeUsers)
@@ -398,7 +398,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build %s route: %v", peopleDrilldownPRsPath, err) },
 		LogNotConfigured: func() {
-			log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleDrilldownPRsPath)
+			log.Printf("query-api: %s route not configured (CLICKHOUSE_URI unset) -- staying unmounted", peopleDrilldownPRsPath)
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildPeopleDrilldownPRsRoute(getenv, edgeUsers)
@@ -419,7 +419,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build %s route: %v", peopleDrilldownIssuesPath, err) },
 		LogNotConfigured: func() {
-			log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleDrilldownIssuesPath)
+			log.Printf("query-api: %s route not configured (CLICKHOUSE_URI unset) -- staying unmounted", peopleDrilldownIssuesPath)
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildPeopleDrilldownIssuesRoute(getenv, edgeUsers)
@@ -461,7 +461,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/explain route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/explain route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildExplainRoute(getenv, edgeUsers)
@@ -481,7 +481,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/flame route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/flame route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/flame route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildFlameRoute(getenv, edgeUsers)
@@ -501,7 +501,7 @@ var restGroups = []restGroup{
 		},
 		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/flame/aggregated route: %v", err) },
 		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/flame/aggregated route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+			log.Print("query-api: /api/v1/flame/aggregated route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 		},
 		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
 			h0, cleanup, ok, err := buildFlameAggregatedRoute(getenv, edgeUsers)

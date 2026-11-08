@@ -132,6 +132,9 @@ func TestSuperuserOrgExemptionNeedsAListedUUID(t *testing.T) {
 	if _, err := ParsePrincipals([]byte(raw + "superuser_o\tsuperuser-O\t-\t" + listed + "\t-\t-\t-\n" + so("superuser-A", listed))); err != nil {
 		t.Fatalf("a listed superuser-O uuid was refused: %v", err)
 	}
+	if _, err := ParsePrincipals([]byte(raw + "superuser_o\tsuperuser-O\t-\t" + strings.ToUpper(listed) + "\t-\t-\t-\n" + so("superuser-A", listed))); err != nil {
+		t.Fatalf("a listed uuid in upper case did not match its principal: %v", err)
+	}
 	for name, file := range map[string]string{
 		"no superuser_o line": raw + so("superuser-A", listed),
 		"another uuid listed": raw + "superuser_o\tsuperuser-O\t-\t" + listed + "\t-\t-\t-\n" + so("superuser-A", unlisted),

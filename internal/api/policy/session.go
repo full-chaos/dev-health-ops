@@ -50,17 +50,11 @@ func AuthSchemaFromEnv(getenv func(string) string) (string, error) {
 	return name, nil
 }
 
-// checkSession decides the sid claim: absent, nothing to check (a go-api
-// token) and no session; present, it must name a live session of subject,
-// and that session's id is returned (User.SessionID). A lookup that fails is
-// that error, never a pass.
-func (a *Authenticator) checkSession(ctx context.Context, claims map[string]any, subject uuid.UUID, userVersion int64) (*uuid.UUID, error) {
-	raw, present := claims["sid"]
-	if !present {
-		return nil, nil
-	}
-	text, _ := raw.(string)
-	id, err := sessionid.Parse(text)
+// checkSession decides the sid claim: it must name a live session of subject,
+// pinned at userVersion, and that session's id is returned (User.SessionID). A
+// lookup that fails is that error, never a pass.
+func (a *Authenticator) checkSession(ctx context.Context, sid string, subject uuid.UUID, userVersion int64) (*uuid.UUID, error) {
+	id, err := sessionid.Parse(sid)
 	if err != nil {
 		a.logger.WarnContext(ctx, "api access denied: unusable session claim", slog.String("user_id", subject.String()))
 		return nil, errRejected

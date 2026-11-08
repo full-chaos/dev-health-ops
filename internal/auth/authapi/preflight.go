@@ -75,23 +75,15 @@ func (c *signerCheck) run(ctx context.Context, check func(context.Context) error
 	return err
 }
 
-// Preflight reports whether the Issuer's class can mint now. A handler calls
-// it before its first write, so a mint that cannot sign refuses with nothing
-// written. Under hs256_compat it does nothing: the token is signed with the
-// shared secret and there is no key to read. Under eddsa it runs the signer's
-// check (memoized, see signerCheckTTL). A key that turns bad between the
-// check and the mint still fails the mint, after the write.
+// Preflight reports whether the Issuer can mint now. A handler calls it before its first write, so a mint that
+// cannot sign refuses with nothing written. It runs the signer's check (memoized, see signerCheckTTL). A key that
+// turns bad between the check and the mint still fails the mint, after the write.
 func (i *Issuer) Preflight(ctx context.Context) error {
-	switch {
-	case i.signer != nil && i.eddsa != nil:
-		return fmt.Errorf("%w: both access token classes are configured", errIssue)
-	case i.eddsa != nil:
-		if err := i.eddsa.check.run(ctx, i.eddsa.signer.Check); err != nil {
-			return fmt.Errorf("%w: %w", errIssue, err)
-		}
-		return nil
-	case i.signer == nil:
+	if i.eddsa == nil {
 		return fmt.Errorf("%w: no access token class is configured", errIssue)
+	}
+	if err := i.eddsa.check.run(ctx, i.eddsa.signer.Check); err != nil {
+		return fmt.Errorf("%w: %w", errIssue, err)
 	}
 	return nil
 }

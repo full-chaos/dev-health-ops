@@ -11,9 +11,9 @@
 //     be frozen as the other venue goldens are, and the replay below compares
 //     the same answers and rows. python_golden.json keeps the answers that last live
 //     run recorded;
-//   - the golden replay (internal/api/session TestSessionRoutesMatchGolden),
-//     where only the Go route set runs, against Postgres/ClickHouse/Valkey
-//     containers, and every answer and row is compared with that golden.
+//   - the corpus against an external target (internal/api/session
+//     TestSessionCorpusExternalTarget), through its URL and stores only:
+//     the former in-process golden replay went with go-api's local token mint.
 //
 // Both runners go through RunTarget (target.go): the corpus reaches the server by base URL and its
 // stores by URI, so go-api in process and an external go-api or auth-service run the same steps. Quirks
@@ -592,17 +592,19 @@ func Run(h *Harness) string {
 	if err != nil {
 		h.T.Fatal(err)
 	}
+	// The HS256 access-token class is retired: no plane verifies one, so these
+	// steps carry an unsigned HS256 token of the recorded shape and every plane
+	// answers it as the recording did (a refusal, or logout's no-op 200).
 	past := time.Now().Add(-3 * time.Hour)
-	expired, _ := signer.Access(edgetoken.AccessClaims{UserID: alice, Email: "alice@example.com", OrgID: orgA, Role: "owner"}, past, "e0000000-0000-4000-8000-000000000001")
+	expired := forgeToken(fmt.Sprintf(`{"sub":%q,"email":"alice@example.com","org_id":%q,"role":"owner","type":"access","exp":%d}`, alice, orgA, past.Add(time.Hour).Unix()))
 	refreshAsAccess, _ := signer.Refresh(edgetoken.RefreshClaims{UserID: alice, OrgID: orgA, FamilyID: "f0000000-0000-4000-8000-000000000001"}, time.Now(), "e0000000-0000-4000-8000-000000000002")
 	otherSigner, _ := edgetoken.NewSigner("a-different-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
 	forgedRefresh, _ := otherSigner.Refresh(edgetoken.RefreshClaims{UserID: alice, OrgID: orgA, FamilyID: "f0000000-0000-4000-8000-000000000002"}, time.Now(), "e0000000-0000-4000-8000-000000000003")
 	forgedUnknownOrg, _ := otherSigner.Refresh(edgetoken.RefreshClaims{UserID: alice, OrgID: "99999999-0000-4000-8000-000000000000", FamilyID: "f0000000-0000-4000-8000-000000000003"}, time.Now(), "e0000000-0000-4000-8000-000000000004")
 	forgedIntOrg := forgeToken(`{"sub":"x","org_id":7,"type":"refresh","exp":9999999999}`)
 	forgedIntSub := forgeToken(`{"sub":5,"org_id":"` + orgA + `","type":"refresh","exp":9999999999}`)
-	// Signed with the real key: an access token whose org claim is not a
-	// UUID.
-	nonUUIDOrg, _ := signer.Access(edgetoken.AccessClaims{UserID: alice, Email: "alice@example.com", OrgID: "not-a-uuid", Role: "owner"}, time.Now(), "e0000000-0000-4000-8000-000000000005")
+	// An HS256 access token whose org claim is not a UUID.
+	nonUUIDOrg := forgeToken(`{"sub":"` + alice + `","email":"alice@example.com","org_id":"not-a-uuid","role":"owner","type":"access","exp":9999999999}`)
 
 	// Batch 1: independent requests, identical on both planes.
 	b1 := []pair{

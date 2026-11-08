@@ -646,10 +646,7 @@ func TestJITAuditRows(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		issuer, err := authapi.NewIssuer(testAccessSecret, "dev-health-ops", "dev-health-api")
-		if err != nil {
-			t.Fatal(err)
-		}
+		issuer := eddsaIssuer(t)
 		var cfg authconfig.Config
 		cfg.SSO.JIT = true
 		sso, err := authapi.NewSSOSessions(authapi.CompatDeps{Sessions: sessions, Users: pgUsers(cfg, e.runtime, authschemaIdent(t)), Issuer: issuer,

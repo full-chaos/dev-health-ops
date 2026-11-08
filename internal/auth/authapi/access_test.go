@@ -246,24 +246,6 @@ func (failingKeys) KeySet(context.Context) (token.KeySet, error) {
 	return token.KeySet{}, errors.New("custody unreadable")
 }
 
-func TestAnHS256TokenIsRefusedAlgNotAllowedOnASessionRow(t *testing.T) {
-	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows := []accessverify.Row{{Service: AccessService, Profile: "GET /v1/sessions/current", AcceptsUser: true}}
-	a := newAccessFixtureWith(t, rows, nil)
-	compact, err := hs.Access(a.grant())
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + compact})
-	expectError(t, r, http.StatusUnauthorized, "malformed")
-	if got := a.counter(accessverify.RefusedMetric, map[string]string{"profile": "GET /v1/sessions/current", "reason": accessverify.ReasonAlgNotAllowed}); got != 1 {
-		t.Errorf("refused alg_not_allowed = %d, want 1", got)
-	}
-}
-
 func TestARevokedSessionRefusesItsEdDSAToken(t *testing.T) {
 	a := newAccessFixture(t)
 	now := time.Now()
@@ -388,10 +370,11 @@ func TestUserBearerRefusesAnEmptyOrInvalidSidMalformed(t *testing.T) {
 	}
 }
 
-// A session-route caller holding the dev-health-api EdDSA token is refused with
-// the audience reason on a user_access_token row, and the HS256 token is
-// refused too: ops_access_token_hs256 is retired, no row opts in.
-func TestEveryHS256TokenIsRefusedOnTheSessionRows(t *testing.T) {
+// Every session row takes the user access token only, and a caller holding
+// the dev-health-api EdDSA token is refused with the audience reason. The
+// retired HS256 class is the plane's one generic-401 cell
+// (authruntime TestHS256WebTokenIsRefusedOnEveryAccessRowWithAnIssuerURL).
+func TestEverySessionRowTakesTheAuthServiceUserTokenOnly(t *testing.T) {
 	a := newAccessFixture(t)
 	rows, err := AuthServiceAccessRows()
 	if err != nil {
@@ -408,19 +391,6 @@ func TestEveryHS256TokenIsRefusedOnTheSessionRows(t *testing.T) {
 	api := a.claims()
 	api.Aud, api.Scope = "dev-health-api", "api:access"
 	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", a.signClaims(api)), http.StatusUnauthorized, "audience")
-
-	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compact, err := hs.Access(a.grant())
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + compact}), http.StatusUnauthorized, "malformed")
-	if got := a.counter(accessverify.RefusedMetric, map[string]string{"profile": "GET /v1/sessions/current", "reason": accessverify.ReasonAlgNotAllowed}); got != 1 {
-		t.Errorf("refused alg_not_allowed = %d, want 1", got)
-	}
 }
 
 func TestSocialLinkAndUnlinkAcceptTheAuthServiceEdDSAToken(t *testing.T) {

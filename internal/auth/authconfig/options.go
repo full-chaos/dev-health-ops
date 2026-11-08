@@ -257,8 +257,7 @@ var optionRegistry = []Option{
 	},
 	{
 		Env: EnvLegacyJWTAudience, Kind: KindString, Default: contracts.PlatformAPIAudience, Group: GroupSession,
-		Usage: "aud that the eddsa access token class checks go-api's HS256 compatibility token with (go-api's JWT_AUDIENCE); hs256_compat uses " +
-			EnvAccessTokenAudience + ". Set but empty is refused at start",
+		Usage: "aud that the eddsa access token class checks go-api's HS256 compatibility token with (go-api's JWT_AUDIENCE). Set but empty is refused at start",
 	},
 	{
 		Env: EnvAuthorizeCallerSubjects, Kind: KindString, Group: GroupSession,

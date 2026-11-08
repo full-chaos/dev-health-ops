@@ -17,7 +17,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
@@ -133,15 +132,17 @@ func sign(t *testing.T, c jwt.MapClaims) string {
 }
 
 // fixtureValidator is the routed validator of these unit tests: it reads a
-// sign() fixture as the verified access-token claims (sub, org_id, sid,
-// impersonating_user_id as act.sub). An absent sid names the session whose id
-// is the subject's own id (fakeStore.SessionState answers it).
-type fixtureValidator struct{ verifier *edgetoken.Verifier }
+// sign() fixture (a test-only HMAC token under testKey, no production class)
+// as the verified access-token claims (sub, org_id, sid, impersonating_user_id
+// as act.sub). An absent sid names the session whose id is the subject's own id
+// (fakeStore.SessionState answers it).
+type fixtureValidator struct{}
 
-func (v fixtureValidator) Validate(_ context.Context, _, _, bearer string) (*RoutedResult, error) {
-	claims, err := v.verifier.Verify(bearer)
-	if err != nil {
-		return nil, err
+func (fixtureValidator) Validate(_ context.Context, _, _, bearer string) (*RoutedResult, error) {
+	var claims jwt.MapClaims
+	if _, err := jwt.ParseWithClaims(bearer, &claims, func(*jwt.Token) (any, error) { return []byte(testKey), nil },
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired()); err != nil {
+		return nil, errRejected
 	}
 	sub, _ := claims["sub"].(string)
 	id, ok := ParsePyUUID(sub)
@@ -163,21 +164,6 @@ func (v fixtureValidator) Validate(_ context.Context, _, _, bearer string) (*Rou
 		out.Actor = &actor
 	}
 	return &RoutedResult{Claims: out}, nil
-}
-
-// checkToken is the live legacy-claims check (Verify, then CheckClaims, as
-// query-api's EdgeVerifier runs it) on a sign() fixture.
-func checkToken(t *testing.T, store Store, token string) (*User, error) {
-	t.Helper()
-	verifier, err := edgetoken.New(testKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	verified, err := verifier.Verify(token)
-	if err != nil {
-		return nil, errRejected
-	}
-	return unrouted(t, store).CheckClaims(context.Background(), verified)
 }
 
 // unrouted is an Authenticator with no access check (no RouteAccess).
@@ -228,15 +214,11 @@ func (f *fakeStore) fixtureUsers() map[uuid.UUID]UserState { return f.users }
 
 func authenticator(t *testing.T, store Store) *Authenticator {
 	t.Helper()
-	verifier, err := edgetoken.New(testKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth, err := NewAuthenticator(fixtureStore{Store: store}, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := auth.RouteAccess(fixtureValidator{verifier: verifier}, "dev-health-ops-api"); err != nil {
+	if err := auth.RouteAccess(fixtureValidator{}, "dev-health-ops-api"); err != nil {
 		t.Fatal(err)
 	}
 	return auth
@@ -270,110 +252,7 @@ func TestBearerTokenIsExtractTokenFromHeader(t *testing.T) {
 	}
 }
 
-func TestAuthenticateDecisionTable(t *testing.T) {
-	unavailable := errors.Join(ErrUnavailable, errors.New("dial"))
-	cases := []struct {
-		name   string
-		claims func(jwt.MapClaims)
-		token  string
-		store  func(*fakeStore)
-		want   string // "ok", "refused", "unavailable", "internal"
-		super  bool
-	}{
-		{name: "canonical", want: "ok"},
-		{name: "bad signature", token: "tamper", want: "refused"},
-		{name: "refresh token", claims: func(c jwt.MapClaims) { c["type"] = "refresh" }, want: "refused"},
-		{name: "expired", claims: func(c jwt.MapClaims) { c["exp"] = time.Now().Add(-time.Minute).Unix() }, want: "refused"},
-		{name: "iat in the future", claims: func(c jwt.MapClaims) { c["iat"] = time.Now().Add(time.Hour).Unix() }, want: "refused"},
-		{name: "wrong audience", claims: func(c jwt.MapClaims) { c["aud"] = "other" }, want: "refused"},
-		{name: "no audience or issuer", claims: func(c jwt.MapClaims) { delete(c, "aud"); delete(c, "iss") }, want: "ok"},
-		{name: "missing sub", claims: func(c jwt.MapClaims) { delete(c, "sub") }, want: "refused"},
-		{name: "non-string sub", claims: func(c jwt.MapClaims) { c["sub"] = 7 }, want: "internal"},
-		{name: "sub not a uuid", claims: func(c jwt.MapClaims) { c["sub"] = "nope" }, want: "refused"},
-		{name: "sub uuid without hyphens", claims: func(c jwt.MapClaims) { c["sub"] = strings.ReplaceAll(userID.String(), "-", "") }, want: "ok"},
-		{name: "sub uuid in braces", claims: func(c jwt.MapClaims) { c["sub"] = "{" + userID.String() + "}" }, want: "ok"},
-		{name: "user not found", store: func(s *fakeStore) { delete(s.users, userID) }, want: "refused"},
-		{name: "user inactive", store: func(s *fakeStore) { s.users[userID] = UserState{} }, want: "refused"},
-		{name: "tv absent", claims: func(c jwt.MapClaims) { delete(c, "tv") }, want: "ok"},
-		{name: "tv null", claims: func(c jwt.MapClaims) { c["tv"] = nil }, want: "ok"},
-		{name: "tv stale", claims: func(c jwt.MapClaims) { c["tv"] = 1 }, want: "refused"},
-		{name: "tv newer than row", store: func(s *fakeStore) { s.users[userID] = UserState{IsActive: true, TokenVersion: 2} }, want: "refused"},
-		{name: "tv matches row", claims: func(c jwt.MapClaims) { c["tv"] = 2 }, store: func(s *fakeStore) { s.users[userID] = UserState{IsActive: true, TokenVersion: 2} }, want: "ok"},
-		{name: "tv string int", claims: func(c jwt.MapClaims) { c["tv"] = " 0 " }, want: "ok"},
-		{name: "tv string garbage", claims: func(c jwt.MapClaims) { c["tv"] = "x" }, want: "refused"},
-		{name: "tv float truncates", claims: func(c jwt.MapClaims) { c["tv"] = 0.9 }, want: "ok"},
-		{name: "tv false", claims: func(c jwt.MapClaims) { c["tv"] = false }, want: "ok"},
-		{name: "tv list", claims: func(c jwt.MapClaims) { c["tv"] = []int{0} }, want: "refused"},
-		{name: "superuser from the row, not the claim", claims: func(c jwt.MapClaims) { c["is_superuser"] = true }, want: "ok"},
-		{name: "row superuser", store: func(s *fakeStore) { s.users[userID] = UserState{IsActive: true, IsSuperuser: true} }, want: "ok", super: true},
-		{name: "store unavailable", store: func(s *fakeStore) { s.errUser = unavailable }, want: "unavailable"},
-		{name: "store other failure", store: func(s *fakeStore) { s.errUser = errors.New("syntax") }, want: "internal"},
-	}
-	for _, test := range cases {
-		t.Run(test.name, func(t *testing.T) {
-			store := newStore()
-			if test.store != nil {
-				test.store(store)
-			}
-			token := test.token
-			if token == "" {
-				token = sign(t, claims(test.claims))
-			} else {
-				token = sign(t, claims(nil)) + test.token
-			}
-			user, err := checkToken(t, store, token)
-			got := "ok"
-			switch {
-			case err == nil:
-			case isRefusal(err):
-				got = "refused"
-			case isUnavailable(err):
-				got = "unavailable"
-			default:
-				got = "internal"
-			}
-			if got != test.want {
-				t.Fatalf("outcome %s (%v), want %s", got, err, test.want)
-			}
-			if got == "ok" && (user.IsSuperuser != test.super || user.ID != userID) {
-				t.Fatalf("user %+v", user)
-			}
-			// A token whose sub does not parse never reaches the database.
-			if test.name == "sub not a uuid" && store.userCalls != 0 {
-				t.Fatalf("%d user lookups for an unparseable sub", store.userCalls)
-			}
-		})
-	}
-}
-
-func TestPyTruthyAndIntAndUUID(t *testing.T) {
-	truthy := map[string]struct {
-		value any
-		want  bool
-	}{
-		"nil": {nil, false}, "false": {false, false}, "true": {true, true}, "zero": {0.0, false},
-		"one": {1.0, true}, "empty": {"", false}, "text": {"false", true}, "empty list": {[]any{}, false},
-		"list": {[]any{1.0}, true}, "empty map": {map[string]any{}, false}, "map": {map[string]any{"a": 1.0}, true},
-	}
-	for name, test := range truthy {
-		if pyTruthy(test.value) != test.want {
-			t.Errorf("pyTruthy(%s)", name)
-		}
-	}
-	ints := map[string]struct {
-		value int64
-		ok    bool
-	}{
-		"7": {7, true}, " -7 ": {-7, true}, "+7": {7, true}, "1_000": {1000, true}, "1__0": {0, false},
-		"_1": {0, false}, "1_": {0, false}, "": {0, false}, "0x1": {0, false}, "1.0": {0, false},
-		"\xa07": {0, false}, // raw byte, not a decoded NBSP: never a JSON string value
-	}
-	for text, test := range ints {
-		value, ok := pyIntString(text)
-		if value != test.value || ok != test.ok {
-			t.Errorf("pyIntString(%q) = (%d, %v)", text, value, ok)
-		}
-	}
+func TestParsePyUUID(t *testing.T) {
 	id := "12345678-1234-4234-8234-123456789abc"
 	for _, form := range []string{id, strings.ToUpper(id), strings.ReplaceAll(id, "-", ""), "{" + id + "}",
 		"urn:uuid:" + id, "1-2345678-1234-4234-8234-123456789abc"} {

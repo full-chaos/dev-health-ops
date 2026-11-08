@@ -1,0 +1,11 @@
+{
+  "oauth authorize: valid": "400 {\"detail\":\"OAuth provider is not active\"}",
+  "oauth by type: valid": "404 {\"detail\":\"No active github OAuth provider found for this organization\"}",
+  "oauth callback: valid": "400 {\"detail\":\"OAuth provider is not active\"}",
+  "oidc authorize: valid": "200 {\"authorization_url\":\"https://issuer.example/authorize?client_id=cid&code_challenge=<per request>&code_challenge_method=S256&nonce=<per request>&redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Foidc%2F22000000-0000-4000-8000-000000000002%2Fcallback&response_type=code&scope=openid&state=<per request>\",\"state\":\"<sealed per request>\"}",
+  "oidc callback: valid": "400 {\"detail\":\"OIDC authentication failed\"}",
+  "overlap: GET /oauth/providers/authorize": "400 {\"detail\":\"Invalid OAuth provider type\"}",
+  "saml acs: by name": "400 {\"detail\":\"SSO provider is not active\"}",
+  "saml initiate: valid": "400 {\"detail\":\"SSO provider is not active\"}",
+  "saml metadata": "200 {\"metadata_xml\":\"<?xml version=\\\"1.0\\\"?>\\n<md:EntityDescriptor xmlns:md=\\\"urn:oasis:names:tc:SAML:2.0:metadata\\\"\\n                     entityID=\\\"http://localhost:8000/saml/22000000-0000-4000-8000-000000000001/metadata\\\">\\n    <md:SPSSODescriptor AuthnRequestsSigned=\\\"false\\\"\\n                        WantAssertionsSigned=\\\"true\\\"\\n                        protocolSupportEnumeration=\\\"urn:oasis:names:tc:SAML:2.0:protocol\\\">\\n        <md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress</md:NameIDFormat>\\n        <md:AssertionConsumerService Binding=\\\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\\\"\\n                                     Location=\\\"http://localhost:8000/saml/22000000-0000-4000-8000-000000000001/acs\\\"\\n                                     index=\\\"0\\\"\\n                                     isDefault=\\\"true\\\"/>\\n    </md:SPSSODescriptor>\\n</md:EntityDescriptor>\",\"entity_id\":\"http://localhost:8000/saml/22000000-0000-4000-8000-000000000001/metadata\",\"acs_url\":\"http://localhost:8000/saml/22000000-0000-4000-8000-000000000001/acs\"}"
+}

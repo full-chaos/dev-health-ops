@@ -152,7 +152,7 @@ func TestDelegatedStartAnswersExactlyItsMembers(t *testing.T) {
 	if r.Code != http.StatusCreated {
 		t.Fatalf("status %d: %s", r.Code, r.Body)
 	}
-	want := []string{"access_token", "expires_in", "session", "token_type"}
+	want := []string{"access_token", "expires_in", "session", "session_access_token", "token_type"}
 	if got := memberNames(t, r.Body.Bytes()); !slices.Equal(got, want) {
 		t.Fatalf("members %v, want %v", got, want)
 	}
@@ -180,7 +180,8 @@ func TestDelegatedStartAnswersExactlyItsMembers(t *testing.T) {
 	if answer.TokenType != "bearer" || answer.ExpiresIn != int64(claims["exp"].(float64)-claims["iat"].(float64)) {
 		t.Fatalf("token_type %q expires_in %d, claims %v", answer.TokenType, answer.ExpiresIn, claims)
 	}
-	if claims["sub"] != f.principal.String() || claims["impersonating_user_id"] != record.Delegation.Actor.String() {
+	act, _ := claims["act"].(map[string]any)
+	if claims["sub"] != session.WirePrincipalID(f.principal) || act["sub"] != session.WirePrincipalID(record.Delegation.Actor) {
 		t.Fatalf("claims %v", claims)
 	}
 	if got := f.sessions.started; len(got) != 1 || got[0].BaseSessionID != f.record.ID || got[0].TargetPrincipalID != f.principal ||

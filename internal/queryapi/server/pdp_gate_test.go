@@ -201,23 +201,15 @@ func TestRESTPDPExemptCallersBypassAndCount(t *testing.T) {
 	for name, routed := range map[string]bool{"routed": true, "unrouted": false} {
 		t.Run(name, func(t *testing.T) {
 			g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, routed)
-			edge := g.do(http.MethodGet, g.edgeToken(t))
-			if routed && edge.Status != http.StatusUnauthorized {
-				t.Fatalf("routed edge token: got %+v, want 401", edge)
-			}
-			if !routed && edge != gatedOK {
-				t.Fatalf("edge token: got %+v, want %+v", edge, gatedOK)
+			if edge := g.do(http.MethodGet, g.edgeToken(t)); edge.Status != http.StatusUnauthorized {
+				t.Fatalf("edge token (retired HS256 class): got %+v, want 401", edge)
 			}
 			if got := g.do(http.MethodGet, g.f.envelope); got.Status != http.StatusOK {
 				t.Fatalf("envelope: got %+v, want 200", got)
 			}
 			got := g.counter(t, "dev_health_query_api_pdp_exempt_total")
-			wantEdge, wantLen := 1, 2
-			if routed {
-				wantEdge, wantLen = 0, 1
-			}
-			if len(got) != wantLen || got["action=analytics.read,class=ops_access_token_hs256"] != int64(wantEdge) || got["action=analytics.read,class=effective_principal_envelope"] != 1 {
-				t.Fatalf("exempt %v, want the envelope once and the edge token %d time(s)", got, wantEdge)
+			if len(got) != 1 || got["action=analytics.read,class=effective_principal_envelope"] != 1 {
+				t.Fatalf("exempt %v, want the envelope once and the edge token never", got)
 			}
 		})
 	}

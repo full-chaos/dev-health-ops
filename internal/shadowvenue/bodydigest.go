@@ -60,12 +60,32 @@ func normalizeBody(key string, raw []byte, frozen ThrowawayIDs, volatile Volatil
 func walkBody(v any, drop map[string]string, frozen ThrowawayIDs) any {
 	switch x := v.(type) {
 	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, val := range x {
-			if _, volatile := drop[k]; volatile {
-				continue
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			if _, volatile := drop[k]; !volatile {
+				keys = append(keys, k)
 			}
-			out[frozen.replaceIDs(k)] = walkBody(val, drop, frozen)
+		}
+		slices.Sort(keys)
+		// Two keys that normalize to the same text (frozen ids of one kind) keep one entry each: the kind placeholder gets
+		// an ordinal by the sorted original key.
+		group := map[string][]string{}
+		for _, k := range keys {
+			n := frozen.replaceIDs(k)
+			group[n] = append(group[n], k)
+		}
+		out := make(map[string]any, len(x))
+		for n, originals := range group {
+			for i, k := range originals {
+				name := n
+				if len(originals) > 1 {
+					name = fmt.Sprintf("%s#%d", n, i+1)
+				}
+				if _, taken := out[name]; taken {
+					name = "\x00collision#" + k
+				}
+				out[name] = walkBody(x[k], drop, frozen)
+			}
 		}
 		return out
 	case []any:

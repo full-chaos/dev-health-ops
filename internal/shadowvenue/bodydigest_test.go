@@ -1,6 +1,8 @@
 package shadowvenue
 
 import (
+	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -103,5 +105,58 @@ func TestNormalizedDigestReplacesAFrozenIDUsedAsAKey(t *testing.T) {
 	c := DigestBody(bdKey, []byte(`{"`+bdUser4+`":{"n":1}}`), bdFrozen(t), nil)
 	if a.Norm != c.Norm {
 		t.Fatal("a frozen id used as a key kept its value")
+	}
+}
+
+// Frozen ids of one kind used as object keys keep one entry each: the normalizer never lets one overwrite another, so two
+// bodies that differ in which value stands for which id never share a digest, and equal bodies always do.
+func TestFrozenIDsAsObjectKeysNeverCollapse(t *testing.T) {
+	var lines strings.Builder
+	lines.WriteString(throwawayHeader + "\n")
+	fmt.Fprintf(&lines, "org\tT1\t%s\n", bdOrg1)
+	ids := make([]string, 8)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("%08x-aea8-4914-a75c-0777e8247241", 0x10000000+i)
+		fmt.Fprintf(&lines, "user\tu%d\t%s\n", i, ids[i])
+	}
+	frozen, err := ParseThrowawayIDs([]byte(lines.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := func(order []int) []byte {
+		var b strings.Builder
+		b.WriteString("{")
+		for n, i := range order {
+			if n > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, "%q:%d", ids[i], i)
+		}
+		b.WriteString("}")
+		return []byte(b.String())
+	}
+	same := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	swapped := []int{0, 1, 2, 3, 4, 5, 7, 6}
+	want := DigestBody(bdKey, []byte(strings.ReplaceAll(string(body(same)), fmt.Sprintf("%q:6", ids[6]), fmt.Sprintf("%q:6", ids[6]))), frozen, nil).Norm
+	for run := 0; run < 200; run++ {
+		if got := DigestBody(bdKey, body(same), frozen, nil).Norm; got != want {
+			t.Fatalf("run %d: the same body gave two digests", run)
+		}
+		other := []byte(strings.Replace(string(body(same)), fmt.Sprintf("%q:6", ids[6]), fmt.Sprintf("%q:600", ids[6]), 1))
+		if DigestBody(bdKey, other, frozen, nil).Norm == want {
+			t.Fatalf("run %d: a changed value of one frozen-id key shares the digest", run)
+		}
+		_ = swapped
+	}
+	// the values of two frozen-id keys exchanged is another body
+	a := []byte(fmt.Sprintf(`{%q:1,%q:2}`, ids[0], ids[1]))
+	b := []byte(fmt.Sprintf(`{%q:2,%q:1}`, ids[0], ids[1]))
+	if DigestBody(bdKey, a, frozen, nil).Norm == DigestBody(bdKey, b, frozen, nil).Norm {
+		t.Fatal("exchanging the values of two frozen-id keys gave the same digest")
+	}
+	// a key holding a literal that looks like a placeholder does not overwrite either
+	c := []byte(fmt.Sprintf(`{%q:1,"{T_USER}":2}`, ids[0]))
+	if got := normalizeBody(bdKey, c, frozen, nil); len(bytes.TrimSpace(got)) == 0 || strings.Count(string(got), ":") != 2 {
+		t.Fatalf("a key collided with a literal placeholder: %s", got)
 	}
 }

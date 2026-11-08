@@ -9,4 +9,3 @@
 internal/adminops	^(TestUsersMatchTheFrozenPythonOutput|TestOrgsDeleteMatchesTheFrozenPythonOutput)$	@MIG;internal/adminops/*
 internal/fixturescli	^TestFinalizeSyntheticWritesTheFrozenPythonRows$	@MIG;internal/fixturescli/*
 internal/auth/usersbackfill	^(TestOrgsBackfill.*|TestReconcileAfterBackfillIsZeroDiffAndSeesPlantedDrift)$	@MIG;internal/auth/usersbackfill/*
-internal/api/session	^TestSessionRoutesMatchGolden$	@MIG;internal/api/session/*

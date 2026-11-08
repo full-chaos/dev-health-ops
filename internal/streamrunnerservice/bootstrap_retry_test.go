@@ -199,7 +199,7 @@ func TestStreamRunnerReadinessRecoversAfterAStartupDependencyOutage(t *testing.T
 			waitForLogLine(t, &logs, "stream consumers started", 15*time.Second)
 			status := waitForReadiness(t, registry, 15*time.Second)
 			want := []string{
-				"clickhouse", "domain_postgres", "internal_ingest_loop", "posture_manifest_lockstep",
+				"clickhouse", "domain_postgres", "posture_manifest_lockstep",
 				"product_telemetry_loop", "stream_consumer", "valkey",
 			}
 			var names []string
@@ -214,8 +214,8 @@ func TestStreamRunnerReadinessRecoversAfterAStartupDependencyOutage(t *testing.T
 			if got := opens.Load(); got != testCase.openFailures+1 {
 				t.Fatalf("storage opened %d times, want %d", got, testCase.openFailures+1)
 			}
-			if storage.handlers.Load() != 2 || storage.transports.Load() != 2 {
-				t.Fatalf("handlers=%d transports=%d, want one per ingest loop", storage.handlers.Load(), storage.transports.Load())
+			if storage.handlers.Load() != 1 || storage.transports.Load() != 1 {
+				t.Fatalf("handlers=%d transports=%d, want one per consumer (product telemetry only)", storage.handlers.Load(), storage.transports.Load())
 			}
 			output := logs.String()
 			if testCase.openFailures > 0 {
@@ -426,7 +426,7 @@ func TestStreamConsumerSupervisorStartsOnceAndReservesDrain(t *testing.T) {
 	if err := supervisor.Start(context.Background()); !errors.Is(err, errStreamConsumersAlreadyStarted) {
 		t.Fatalf("second Start = %v, want %v", err, errStreamConsumersAlreadyStarted)
 	}
-	want := internalIngestRunnerConfig(1).ShutdownDrain + productTelemetryRunnerConfig(1).ShutdownDrain
+	want := productTelemetryRunnerConfig(1).ShutdownDrain
 	if got := supervisor.ShutdownBudget(); got != want {
 		t.Fatalf("shutdown budget = %s, want %s", got, want)
 	}

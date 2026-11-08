@@ -21,7 +21,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -63,14 +62,11 @@ type fakeSessions struct {
 	created         []createdSession
 	signIns         int
 	createErr       error
-	// ExchangeLegacy.
-	legacy          []session.LegacyRefresh
+	// RevokeLegacy.
 	revokedLegacy   []session.LegacyRefresh
 	revokeLegacyErr error
-	legacyResult    session.Result
 	// minted counts accepted exchanges: a successor a client never receives.
-	minted    int
-	legacyErr error
+	minted int
 	// exchanges counts every Exchange, accepted or refused: each one writes.
 	exchanges int
 	// StartDelegation and EndDelegation.
@@ -157,13 +153,6 @@ func (f *fakeSessions) CreateSupersedingAudited(ctx context.Context, principal u
 	defer f.mu.Unlock()
 	f.created[len(f.created)-1].predecessor = &predecessor
 	return issued, nil
-}
-
-func (f *fakeSessions) ExchangeLegacyGuarded(_ context.Context, legacy session.LegacyRefresh, _ session.Guard) (session.Result, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.legacy = append(f.legacy, legacy)
-	return f.legacyResult, f.legacyErr
 }
 
 func (f *fakeSessions) RevokeLegacy(_ context.Context, legacy session.LegacyRefresh, actor session.Actor) (bool, error) {
@@ -270,12 +259,37 @@ type fixture struct {
 	logs      *bytes.Buffer
 }
 
+// newFixture serves the session routes with the EdDSA issuer and its access
+// check: without the check the bearer routes are not mounted.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
+	signer, _, _ := fileSigner(t)
+	issuer := newEdDSAIssuer(t, signer, AccessTokenAudience)
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newFixtureWith(t, issuer.WithAccessCheck(check))
+}
+
+// withSessionBearer gives issuer the access check over a key set of its own
+// (healthy whatever issuer signs with) and returns the EdDSA issuer of that key
+// set, which mints the session-route bearer the check accepts.
+func withSessionBearer(t *testing.T, issuer *Issuer) (*Issuer, *Issuer) {
+	t.Helper()
+	signer, _, _ := fileSigner(t)
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issuer.WithAccessCheck(check), newEdDSAIssuer(t, signer, AccessTokenAudience)
+}
+
+// newUncheckedFixture serves the session routes with the EdDSA issuer and no access
+// check (login, refresh, logout mint; no bearer route mounts).
+func newUncheckedFixture(t *testing.T) *fixture {
+	t.Helper()
+	issuer := newTestIssuer(t)
 	return newFixtureWith(t, issuer)
 }
 
@@ -328,11 +342,20 @@ func (f *fixture) do(method, path, body string, header map[string]string) *httpt
 }
 
 func (f *fixture) bearer(grant Grant) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + f.accessFor(grant)}
+}
+
+// accessFor is the bearer of grant: the EdDSA session token when the issuer checks EdDSA tokens (WithAccessCheck),
+// else go-api's HS256 token, the one the session routes verify without an access check.
+func (f *fixture) accessFor(grant Grant) string {
+	if f.issuer.access == nil {
+		return legacyAccess(f.t, grant)
+	}
 	token, err := f.issuer.Access(grant)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	return map[string]string{"Authorization": "Bearer " + token}
+	return token
 }
 
 func (f *fixture) grant() Grant {
@@ -432,61 +455,6 @@ func TestRefreshOfAStoreRefusedUserRevokesTheSession(t *testing.T) {
 	}
 }
 
-func TestRefreshMintsAGoAPIAccessTokenWithSidAndAnswersRefreshResponseV1(t *testing.T) {
-	f := newFixture(t)
-	rotated := credential()
-	f.sessions.result = session.Result{Reason: session.ReasonAccepted, Issued: session.Issued{
-		Session: f.record, Credential: contracts.NewSecretString(rotated), ExpiresAt: time.Now().Add(7*24*time.Hour - time.Second),
-	}}
-	response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", response.Code, response.Body)
-	}
-	parsed, err := contracts.ParseRefreshResponse(repoRoot(t), response.Body.Bytes())
-	if err != nil {
-		t.Fatalf("not refresh-response.v1: %v", err)
-	}
-	if parsed.RefreshCredential.Reveal() != rotated || parsed.SessionID != session.WireSessionID(f.record.ID) ||
-		parsed.ExpiresIn != 3600 || parsed.RefreshExpiresIn < 1 || parsed.RefreshExpiresIn > 604800 {
-		t.Fatalf("response %+v", parsed)
-	}
-	if response.Header().Get("Cache-Control") != "no-store" {
-		t.Fatal("a token response is cacheable")
-	}
-
-	// go-api's verifier (the same edgetoken decision query-api and go-api use)
-	// accepts it, and the claims are go-api's from the live user and role.
-	verifier, err := edgetoken.New(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	claims, err := verifier.Verify(parsed.AccessToken.Reveal())
-	if err != nil {
-		t.Fatalf("go-api's verifier refused the token: %v", err)
-	}
-	want := map[string]any{
-		"sub": f.principal.String(), "email": "ada@example.com", "org_id": f.org.String(), "role": "admin",
-		"is_superuser": true, "type": "access", "iss": testIssuer, "aud": testAudience, "tv": float64(4),
-		"username": "ada", "sid": session.WireSessionID(f.record.ID),
-	}
-	for key, value := range want {
-		if claims[key] != value {
-			t.Errorf("claim %s = %v, want %v", key, claims[key], value)
-		}
-	}
-	if _, has := claims["full_name"]; has {
-		t.Error("an absent full_name was written")
-	}
-	if exp, iat := claims["exp"].(float64), claims["iat"].(float64); exp-iat != 3600 {
-		t.Errorf("lifetime = %v s, want 3600", exp-iat)
-	}
-	if strings.Contains(f.logs.String(), rotated) || strings.Contains(f.logs.String(), parsed.AccessToken.Reveal()) {
-		t.Fatal("a credential reached the log")
-	}
-}
-
-// A session whose organization has no membership row for its principal (the
-// member was removed or left) is refused and revoked; a superuser keeps it.
 func TestRefreshOfASessionWithoutAMembershipRefusesAndRevokes(t *testing.T) {
 	f := newFixture(t)
 	state := f.users.users[f.principal]
@@ -580,51 +548,6 @@ func TestRefreshRefusedByTheGuardAnswersNoToken(t *testing.T) {
 	}
 }
 
-func TestRefreshTakesGoAPIsRoleRules(t *testing.T) {
-	cases := map[string]struct {
-		org  bool
-		role *string
-		has  bool
-		want string
-	}{
-		"no organization":          {org: false, want: "member"},
-		"no membership, superuser": {org: true, has: false, want: "member"},
-		"NULL role":                {org: true, has: true, role: nil, want: "None"},
-		"membership role":          {org: true, has: true, role: ptr("owner"), want: "owner"},
-	}
-	for name, c := range cases {
-		f := newFixture(t)
-		record := f.record
-		if !c.org {
-			record.OrganizationID = nil
-		}
-		f.users.roles = map[[2]uuid.UUID]*string{}
-		if c.has {
-			f.users.roles[[2]uuid.UUID{f.principal, f.org}] = c.role
-		}
-		f.build()
-		f.sessions.result = session.Result{Reason: session.ReasonGraceReplay, Issued: session.Issued{
-			Session: record, Credential: contracts.NewSecretString(credential()), ExpiresAt: time.Now().Add(time.Hour)}}
-		response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
-		if response.Code != 200 {
-			t.Fatalf("%s: %d %s", name, response.Code, response.Body)
-		}
-		var body map[string]any
-		_ = json.Unmarshal(response.Body.Bytes(), &body)
-		claims, _ := f.issuer.verifier.Verify(body["access_token"].(string))
-		if claims["role"] != c.want {
-			t.Errorf("%s: role = %v, want %q", name, claims["role"], c.want)
-		}
-		wantOrg := ""
-		if c.org {
-			wantOrg = f.org.String()
-		}
-		if claims["org_id"] != wantOrg {
-			t.Errorf("%s: org_id = %v, want %q", name, claims["org_id"], wantOrg)
-		}
-	}
-}
-
 func ptr(s string) *string { return &s }
 
 func TestRefreshOfAGoneOrDeactivatedUserRevokesTheSessionAndMintsNothing(t *testing.T) {
@@ -684,42 +607,22 @@ func TestRefreshRequestIsReadStrictly(t *testing.T) {
 
 func TestSessionRoutesRefuseEveryBearerTheyCannotTrust(t *testing.T) {
 	f := newFixture(t)
-	other, err := edgetoken.NewSigner("a-different-signing-key-0123456789abcdef", testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	goAPI, _ := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
-	now := time.Now()
-	sign := func(s *edgetoken.Signer, claims edgetoken.AccessClaims) string {
-		token, err := s.Access(claims, now, uuid.NewString())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return token
-	}
-	sid := session.WireSessionID(f.record.ID)
-	base := edgetoken.AccessClaims{UserID: f.principal.String(), Email: "ada@example.com", Role: "admin", TokenVersion: 4, SessionID: &sid}
-	refresh, _ := goAPI.Refresh(edgetoken.RefreshClaims{UserID: f.principal.String()}, now, uuid.NewString())
-	foreignSession := session.WireSessionID(uuid.New())
-	withForeign := base
-	withForeign.SessionID = &foreignSession
-	noSID := base
-	noSID.SessionID = nil
-	otherUser := base
-	otherUser.UserID = uuid.NewString()
-
+	foreignGrant := f.grant()
+	foreignGrant.SessionID = uuid.New()
+	otherGrant := f.grant()
+	otherGrant.PrincipalID = uuid.New()
+	// The retired HS256 class is the plane's one generic-401 cell (authruntime
+	// TestHS256WebTokenIsRefusedOnEveryAccessRowWithAnIssuerURL); the EdDSA rows
+	// keep their own reasons.
 	cases := map[string]struct {
 		header map[string]string
 		reason string
 	}{
-		"no header":              {nil, "malformed"},
-		"basic scheme":           {map[string]string{"Authorization": "Basic eDp5"}, "malformed"},
-		"alg none":               {map[string]string{"Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ4In0."}, "bad_signature"},
-		"another key":            {map[string]string{"Authorization": "Bearer " + sign(other, base)}, "bad_signature"},
-		"refresh JWT":            {map[string]string{"Authorization": "Bearer " + refresh}, "type_mismatch"},
-		"go-api token, no sid":   {map[string]string{"Authorization": "Bearer " + sign(goAPI, noSID)}, "malformed"},
-		"unknown session":        {map[string]string{"Authorization": "Bearer " + sign(goAPI, withForeign)}, "session_revoked"},
-		"another user's session": {map[string]string{"Authorization": "Bearer " + sign(goAPI, otherUser)}, "malformed"},
+		"no header":                    {nil, "malformed"},
+		"basic scheme":                 {map[string]string{"Authorization": "Basic eDp5"}, "malformed"},
+		"alg none":                     {map[string]string{"Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ4In0."}, "malformed"},
+		"EdDSA unknown session":        {f.bearer(foreignGrant), "session_revoked"},
+		"EdDSA another user's session": {f.bearer(otherGrant), "malformed"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

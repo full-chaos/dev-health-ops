@@ -11,12 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // activeUsers is a policy.Store where every user exists and is active, and
@@ -47,21 +46,13 @@ func (activeUsers) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impe
 	return nil, nil
 }
 
-const unitKey = "sync-admin-unit-test-key-sync-admin-unit-test-key"
+var tokens = edtokens.Fresh()
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func testGuard(t *testing.T) *policy.Guard {
 	t.Helper()
-	verifier, err := edgetoken.New(unitKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, activeUsers{}, quiet())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return policy.NewGuard(auth, quiet())
+	return policy.NewGuard(tokens.AuthenticatorOver(t, activeUsers{}, quiet()), quiet())
 }
 
 func sign(t *testing.T, role, org string) string {
@@ -70,14 +61,7 @@ func sign(t *testing.T, role, org string) string {
 	if orgID, err := uuid.Parse(org); err == nil {
 		signedRoles.Store([2]uuid.UUID{user, orgID}, role)
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": user.String(), "type": "access", "org_id": org, "role": role, "is_superuser": false,
-		"iss": "dev-health-ops", "aud": "dev-health-api", "exp": time.Now().Add(time.Hour).Unix(), "tv": 0,
-	}).SignedString([]byte(unitKey))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return token
+	return tokens.MustMint(t, edtokens.Claims{UserID: user, OrgID: org})
 }
 
 // TestEveryRouteIsGuardedAtAdminOrg drives each mounted route through its
@@ -126,6 +110,8 @@ func TestEveryRouteIsGuardedAtAdminOrg(t *testing.T) {
 		path := strings.NewReplacer("{config_id}", uuid.NewString(), "{run_id}", uuid.NewString(), "{job_id}", uuid.NewString()).Replace(route.Pattern)
 		for _, tc := range cases {
 			request := httptest.NewRequest(route.Method, path+"?limit=bad", nil)
+			// The route row the access check reads is the mux pattern.
+			request.Pattern = route.Method + " " + route.Pattern
 			if tc.authorization != "" {
 				request.Header.Set("Authorization", tc.authorization)
 			}

@@ -15,7 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
@@ -47,22 +47,10 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, users[na
 	}
 	pgseed.ImpersonationSession(ctx, t, pool, uuid.NewString(), users["root"].String(), users["impersonated"].String(), orgID.String(), "member", time.Now().Add(time.Hour), nil)
 
-	const jwtKey = "user-delete-restrict-test-signing-key-32-bytes!!"
-	const issuer, audience = "dev-health-ops", "dev-health-api"
-	verifier, err := edgetoken.New(jwtKey, issuer, audience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(jwtKey, issuer, audience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.Authenticator(t, policy.PGStore{Pool: pool}, logger)
 	mux := http.NewServeMux()
 	for _, route := range admin.Routes(admin.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Logger: logger}) {
 		if strings.HasPrefix(route.Pattern, "/api/v1/admin/users") {
@@ -71,10 +59,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, users[na
 	}
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	bearer, err := signer.Access(edgetoken.AccessClaims{UserID: users["root"].String(), Email: "del-root@example.com", IsSuperuser: true}, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	bearer := tokens.MustMint(t, edtokens.Claims{UserID: users["root"]})
 	remove := func(name, query string) int {
 		t.Helper()
 		request, err := http.NewRequestWithContext(ctx, http.MethodDelete, server.URL+"/api/v1/admin/users/"+users[name].String()+query, nil)

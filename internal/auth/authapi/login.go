@@ -452,8 +452,8 @@ func loginResponse(tokens Tokens, expiresIn int, refresh contracts.SecretString,
 }
 
 // setSessionAccessToken adds session_access_token to a go-api-wire answer
-// under the eddsa class, as the last member; an hs256_compat answer keeps
-// go-api's exact member list.
+// as the last member, after go-api's recorded member list: web reads it
+// beside the access token.
 func setSessionAccessToken(out *pyjson.Object, tokens Tokens) {
 	if tokens.Session != "" {
 		out.Set("session_access_token", tokens.Session)

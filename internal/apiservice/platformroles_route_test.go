@@ -109,16 +109,12 @@ func TestARoutedUsersReadFollowsThePlatformRolesSwitch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		signer, err := edgetoken.NewSigner(probeKey, "dev-health-ops", "dev-health-api")
+		auth, err := policy.NewAuthenticator(newProbeStore(), quietLogger())
 		if err != nil {
 			t.Fatal(err)
 		}
-		auth, err := policy.NewAuthenticator(verifier, newProbeStore(), quietLogger())
-		if err != nil {
-			t.Fatal(err)
-		}
-		deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
-			PlatformRolesOwned: c.owned, AuthSchema: "auth_x"}
+		deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
+			PlatformRolesOwned: c.owned, AuthSchema: "auth_x", SessionIssuer: stubSessionIssuer{}}
 		server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()))
 		if err != nil {
 			t.Fatal(err)

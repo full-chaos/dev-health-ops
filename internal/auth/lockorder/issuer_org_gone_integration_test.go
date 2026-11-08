@@ -20,7 +20,7 @@ import (
 
 // issuerAccept is go-api's accept-invite on the issuer-mode session routes.
 func (e *env) issuerAccept(ctx context.Context, user uuid.UUID, token string) response {
-	bearer, err := e.token(user, false)
+	bearer, err := e.token(user)
 	if err != nil {
 		return response{status: -1, raw: err.Error()}
 	}

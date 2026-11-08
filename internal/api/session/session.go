@@ -37,7 +37,6 @@ type Deps struct {
 	Guard    *policy.Guard
 	Auth     *policy.Authenticator
 	Verifier *edgetoken.Verifier
-	Signer   *edgetoken.Signer
 	// ClickHouse is the api's own ClickHouse login (organization activity); nil means none (no CLICKHOUSE_URI).
 	ClickHouse driver.Conn
 	// Limits is where the rate limits count: the api's shared counter
@@ -65,8 +64,9 @@ type Deps struct {
 	// validator and rate limiter in front of it stay. nil serves local.
 	Inner func(pattern string, local http.Handler) http.Handler
 	// Issuer, set when auth-service owns sessions (AUTH_PROXY_SESSIONS),
-	// issues every token pair these routes hand out; go-api then mints none
-	// and writes no refresh_tokens row. nil mints in go-api.
+	// issues every token pair these routes hand out; go-api mints none
+	// and writes no refresh_tokens row. nil: the routes that hand out a pair answer 503
+	// naming AUTH_PROXY_SESSIONS.
 	Issuer sessionissue.Issuer
 	// PlatformRoles is how the users reads take is_superuser (AUTH_PLATFORM_ROLES_OWNED).
 	PlatformRoles policy.PlatformRoleRead
@@ -116,7 +116,7 @@ func (d Deps) withDefaults() Deps {
 // invite and onboarding routes. It returns nothing unless the
 // protected-route runtime and the token keys are configured.
 func Routes(deps Deps) []httpapi.Route {
-	if deps.Pool == nil || deps.Guard == nil || deps.Auth == nil || deps.Verifier == nil || deps.Signer == nil {
+	if deps.Pool == nil || deps.Guard == nil || deps.Auth == nil || deps.Verifier == nil {
 		return nil
 	}
 	defaults := deps.withDefaults()
@@ -133,16 +133,16 @@ func Routes(deps Deps) []httpapi.Route {
 	guard := h.Guard
 	inner := func(pattern string, local http.HandlerFunc) http.Handler {
 		if defaults.Inner == nil {
-			return local
+			return h.sessionsOffOr(pattern, local)
 		}
-		return defaults.Inner(pattern, local)
+		return defaults.Inner(pattern, h.sessionsOffOr(pattern, local))
 	}
 	return []httpapi.Route{
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/login", Handler: guard.BodyFirst(policy.Public,
 			httpapi.ValidateThenLimitDependency(validateLogin, h.loginLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/login", h.login)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/social-login", Handler: guard.BodyFirst(policy.Public, inner("/api/v1/auth/social-login", h.socialLogin))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/refresh", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimitDependency(validateRefresh, h.refreshLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/refresh", h.refresh)))},
+			httpapi.ValidateThenLimitDependency(validateRefresh, h.refreshLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/refresh", h.refreshNotLocal)))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me", h.me))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me/organizations", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me/organizations", h.myOrganizations))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/switch-org", Handler: guard.BodyFirst(policy.Authenticated, inner("/api/v1/auth/switch-org", h.switchOrg))},

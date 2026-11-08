@@ -444,8 +444,11 @@ and the prover refuses by name if a Python plane answers the routed `/graphql`. 
 1. refuse unless `venue-prove`'s image is `go-api-tools:sha-<sha>` (prover build skew);
 2. derive the local org read-only (the single org of the local admin account; never printed);
 3. `dho goapi prove` for the local org -- read-only against org data, writes proof receipts only;
-   both credentials are minted in process (envelope key loaded from the mounted file inside the
-   container; `JWT_SECRET_KEY` by compose substitution from `ops/.env`);
+   the proof credential is the local admin's user access token (a platform admin), in a 0600/0400
+   file the operator stages and names by `BIGBOY_PROVE_ACCESS_TOKEN_FILE` (the script refuses a
+   file that is unset, missing, a symlink or of another mode, and never reads the value); it is
+   mounted read-only into the container and read there (`-proof-access-token-file`); the edge token
+   is still minted in process from `JWT_SECRET_KEY` (compose substitution from `ops/.env`);
 
 Full output names the org and stays under the devhealth-root `_records/bigboy-<sha8>/graphql-prove-<ts>/`.
 `BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the running tree the harness works in, the same

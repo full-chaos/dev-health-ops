@@ -49,8 +49,8 @@ func (e *routesEnv) issuerCredential(t *testing.T, ctx context.Context, service,
 
 // issueWorkloadEnv is the real stack with an EdDSA signing key and the go-api
 // workload subject configured: the session issue route mounts and takes only
-// the go-api workload token. The access token class stays the default, so
-// query-api's edge verifier reads what the route issues.
+// the go-api workload token. query-api's routed verifier reads what the route
+// issues.
 func newIssueWorkloadEnv(t *testing.T, ctx context.Context) *workloadProvisioningEnv {
 	t.Helper()
 	useKeyStates(t, staticKeyStates(nil))
@@ -116,9 +116,9 @@ func TestIssueSessionRouteThroughConfigure(t *testing.T) {
 		t.Fatalf("issue = %d %s", got.status, got.body)
 	}
 	issued := object(t, got)
-	claims, err := e.edge.Verify(ctx, issued["access_token"].(string))
+	claims, err := w.queryAPIAccepts(ctx, issued["access_token"].(string))
 	if err != nil || claims.OrgID != org.String() {
-		t.Fatalf("query-api's edge verifier: %+v %v", claims, err)
+		t.Fatalf("query-api's routed verifier: %+v %v", claims, err)
 	}
 	var pinned int
 	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.sessions s JOIN public.users u ON u.id = s.principal_id

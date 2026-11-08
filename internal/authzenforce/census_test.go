@@ -33,7 +33,7 @@ func censusOffenders(t *testing.T, root string) []string {
 			}
 			t.Fatal(err)
 		}
-		for _, name := range []string{"GO_API_AUTHZ_ENFORCE", "QUERY_API_AUTHZ_ENFORCE"} {
+		for _, name := range []string{"GO_API_AUTHZ_ENFORCE", "QUERY_API_AUTHZ_ENFORCE", "QUERY_API_HEADERS_AUTHZ_ENFORCE"} {
 			if strings.Contains(string(data), name) {
 				offenders = append(offenders, rel)
 				break

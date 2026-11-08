@@ -18,11 +18,14 @@ import (
 // legacySites is the closed list of production call sites of pepgate.Legacy, one entry per enclosing function with
 // its call count. Gate.Authorize builds it when a route is not enforced (two returns: nil gate, cell off) and for an
 // enforced row asked with no organization (one return: only a superuser passes with none, product rule 1);
+// Gate.AuthorizeOperation for a GraphQL operation it does not decide (the legacy closure) and for the roots of a decided
+// operation that are not enforced;
 // legacyClaims builds it for an accepted caller the PDP does not decide (HS256 and edge tokens); withLegacyScope for
 // every accepted caller of a GraphQL ingress; OperationOrgGuard moves it to the org a superuser names. A new site, or a
 // second call in a listed function, fails here.
 var legacySites = map[string]int{
 	"internal/queryapi/graph/operation_org_guard.go OperationOrgGuard.InterceptOperation": 1,
+	"internal/queryapi/pdp/operation.go Gate.AuthorizeOperation":                          2,
 	"internal/queryapi/pdp/pdp.go Gate.Authorize":                                         3,
 	"internal/queryapi/server/ingress_scope.go withLegacyScope":                           1,
 	"internal/queryapi/server/rest_access.go legacyClaims":                                1,

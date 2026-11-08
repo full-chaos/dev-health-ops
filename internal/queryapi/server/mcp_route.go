@@ -552,7 +552,7 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	dispatched.Body = io.NopCloser(bytes.NewReader(body))
 
 	buffered := &mcpBufferedResponse{header: http.Header{}, status: http.StatusOK}
-	h.gql.ServeHTTP(buffered, dispatched)
+	serveMCPGraphQL(h.gql, buffered, dispatched)
 	req.clickHouse = obs.callCount()
 
 	if budget := obs.budgetReason(); budget != "" {

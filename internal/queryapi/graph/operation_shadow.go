@@ -50,6 +50,9 @@ func ShadowSubjectFrom(ctx context.Context) (ShadowSubject, bool) {
 type OperationShadow struct {
 	// Sink is the process's shadow for this request; nil, or a nil result, is off.
 	Sink func(ctx context.Context) ShadowSink
+	// Enforced reports whether a user caller's root of action is decided by OperationEnforce; such a root has no
+	// legacy answer to compare, so it is not observed. nil observes every root.
+	Enforced func(ctx context.Context, action string) bool
 }
 
 var _ interface {
@@ -116,6 +119,9 @@ func (s OperationShadow) observe(ctx context.Context) {
 		action, mapped := fieldActions[key]
 		if !mapped {
 			sink.CountSkipped(ctx, policy.ShadowReasonUnmapped)
+			continue
+		}
+		if s.Enforced != nil && s.Enforced(ctx, action) {
 			continue
 		}
 		named := fieldOrgArgument(field, operation.Variables)

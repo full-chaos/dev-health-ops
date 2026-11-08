@@ -7061,6 +7061,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 		if shadowSubject != nil {
 			requestCtx = graph.WithShadowSubject(requestCtx, *shadowSubject)
 		}
+
 		r = r.WithContext(graph.WithRequestBody(authctx.WithClaims(requestCtx, claims), bodyBytes))
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		if edge {
@@ -7082,6 +7083,8 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			}
 		}
 
+		// An operation the decision refuses as unavailable answers 503 (CHAOS-10865).
+		w, r = withRefusalStatus(w, r)
 		if edge {
 			routeMux.DispatchOr(operation, w, r, graphQLEdgeNotEnabled(operation))
 			return

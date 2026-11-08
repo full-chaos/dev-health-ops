@@ -32,16 +32,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/drilldown/issues [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -82,16 +80,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/drilldown/issues [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -132,16 +128,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/drilldown/prs [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -182,16 +176,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/drilldown/prs [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -232,16 +224,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/explain [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -282,16 +272,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/explain [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -332,16 +320,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/filters/options [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -382,16 +368,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/flame [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -432,16 +416,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/flame/aggregated [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -482,16 +464,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/heatmap [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -532,16 +512,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/home [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -582,16 +560,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/home [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -632,16 +608,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/investment [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -682,16 +656,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/investment [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -732,16 +704,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/investment/explain [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -782,16 +752,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/investment/sunburst [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -848,16 +816,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/opportunities [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -898,16 +864,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/opportunities [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -948,16 +912,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -998,17 +960,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure); 404 for a path id with no row in the caller's organization, the same answer as an id that exists nowhere (the read binds the credential's organization)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/drilldown/issues [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1049,17 +1008,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure); 404 for a path id with no row in the caller's organization, the same answer as an id that exists nowhere (the read binds the credential's organization)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/drilldown/prs [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1100,17 +1056,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure); 404 for a path id with no row in the caller's organization, the same answer as an id that exists nowhere (the read binds the credential's organization)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/metric [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1151,17 +1104,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure); 404 for a path id with no row in the caller's organization, the same answer as an id that exists nowhere (the read binds the credential's organization)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/summary [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1202,16 +1152,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/quadrant [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1252,16 +1200,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/sankey [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1302,16 +1248,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/sankey [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1352,16 +1296,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/work-units [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -1402,16 +1344,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/work-units [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1452,17 +1392,14 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure); 404 for a path id with no row in the caller's organization, the same answer as an id that exists nowhere (the read binds the credential's organization)",
       "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/work-units/{work_unit_id}/explain [dev-health-query-api @query,internal]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1491,15 +1428,22 @@
     },
     {
       "accepted_credential_classes": [
-        "effective_principal_envelope"
+        "effective_principal_envelope",
+        "user_access_token"
       ],
+      "access_token_validation": {
+        "legacy_hs256": false
+      },
       "action": "org.read",
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); any verified credential receives the same process build identity",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership, and the impersonation session, are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked; its claims are not read",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest), and for a user access token whose live users row is not a platform admin (admin.orgs), that has an active impersonation session or that is delegated (authenticateBuildInfo); any accepted credential receives the same process build identity",
       "gaps": [
-        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified. /buildinfo does not accept the edge access token.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified. /buildinfo does not accept the HS256 edge access token.",
         "buildinfo: the legacy guard admits any verified credential and reads no organization, so the action is the least one every organization role holds. Deliberate change candidate: admin.telemetry (platform administrators only)"
       ],
       "graphql_field_name": null,
@@ -1512,7 +1456,7 @@
           "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
-        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
+        "description": "authenticateBuildInfo: the internal identity headers or the envelope through authenticateInternalRequest (which picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify), or, with AUTH_ACCESS_TOKEN_ISSUER set, a user access token (EdDSA, typ at+jwt, audience dev-health-api) read by /query's edge carrier (the profile-routed validator and the live users-row check) and served only to a platform admin acting as itself; an HS256 edge access token is refused."
       },
       "public_rationale": null,
       "resource_resolver": "none: the response is the process's build identity; the credential's organization is not read",
@@ -1528,7 +1472,7 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope) or EdDSA at+jwt JWT (user access token of a platform admin)"
       }
     },
     {
@@ -1540,11 +1484,10 @@
       },
       "action": "analytics.read",
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: the users row, session, token version and organization membership, the membership of an X-Org-Id organization and the impersonation session are read on every request and nothing is cached between requests (a change between two requests answers the second)",
       "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document; 500 when an identity read (the users row or the membership) fails for any reason other than policy.ErrUnavailable: the request fails closed and is not served (policy.Scope middleware -> WriteInternal; authenticateGraphQLEdge answers the same 500 on edgeUnavailable); 503 Database temporarily unavailable when the caller lookup is policy.ErrUnavailable: the users store is unavailable, or the token key source is unreadable on the user access token path (writeCallerLookupFailure -> policy.WriteAuthFailure), and when the impersonation session read fails for any reason: the request fails closed and is not served (Scope.Impersonation -> WriteAuthFailure(w, \"\", ErrUnavailable))",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "dispatcher: the action is the minimum the legacy guard requires at this route (a member of the organization, any role); the action of each root field decides per operation (graphql-field-actions.json)"
       ],
       "graphql_field_name": null,
@@ -1585,11 +1528,10 @@
       },
       "action": "analytics.read",
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: the users row, session, token version and organization membership, the membership of an X-Org-Id organization and the impersonation session are read on every request and nothing is cached between requests (a change between two requests answers the second)",
       "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document; 500 when an identity read (the users row or the membership) fails for any reason other than policy.ErrUnavailable: the request fails closed and is not served (policy.Scope middleware -> WriteInternal; authenticateGraphQLEdge answers the same 500 on edgeUnavailable); 503 Database temporarily unavailable when the caller lookup is policy.ErrUnavailable: the users store is unavailable, or the token key source is unreadable on the user access token path (writeCallerLookupFailure -> policy.WriteAuthFailure), and when the impersonation session read fails for any reason: the request fails closed and is not served (Scope.Impersonation -> WriteAuthFailure(w, \"\", ErrUnavailable))",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "dispatcher: the action is the minimum the legacy guard requires at this route (a member of the organization, any role); the action of each root field decides per operation (graphql-field-actions.json)"
       ],
       "graphql_field_name": null,
@@ -1683,12 +1625,11 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership, and the impersonation session, are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope and the internal identity headers read no state: the envelope's signature and exp are checked and its claims are trusted until exp (60 s at issue)",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); 404 for an authenticated unregistered document (shared dispatcher)",
       "gaps": [
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "dispatcher: the action is the minimum the legacy guard requires at this route (a verified credential with an organization, any role); the action of each root field decides per operation (graphql-field-actions.json)"
       ],
       "graphql_field_name": null,
@@ -1724,18 +1665,16 @@
       "accepted_credential_classes": [],
       "action": "analytics.read",
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: no state read: the internal identity headers state the identity on every request; nothing is read or cached",
       "disclosure_behavior": "401 for a missing or invalid identity; 403 for an identity carrying superuser, impersonation or an operator role; 403 for a root field outside the allowlist or an orgId argument that does not name the caller's organization; 404 for a root field not enabled for the MCP caller class",
       "gaps": [
         "The MCP caller-class listener accepts only the internal identity headers (no bearer of any class); the closed credential vocabulary has no class for them, so accepted_credential_classes is empty by declaration, not omission.",
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "dispatcher: the action is the minimum the legacy guard requires at this route; the action of each root field decides per operation (graphql-field-actions.json). Deliberate change candidate: the MCP caller class refuses an identity with the admin, owner or operator role or a superuser or impersonation claim (mcpAuthenticate in mcp_route.go), while the catalog grants analytics.read to admin and owner; the row does not narrow that here"
       ],
       "graphql_field_name": null,
       "id": "POST /query [dev-health-query-api @mcp]",
-      "impersonation_policy": "unknown",
+      "impersonation_policy": "not_applicable_non_main_app",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1770,12 +1709,11 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership, and the impersonation session, are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope and the internal identity headers read no state: the envelope's signature and exp are checked and its claims are trusted until exp (60 s at issue)",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); 404 for an authenticated unregistered document (shared dispatcher)",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted only when the deployment posture permits (mountProofRoute).",
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "dispatcher: the action is the minimum the legacy guard requires at this route (a verified credential with an organization, any role); the action of each root field decides per operation (graphql-field-actions.json)"
       ],
       "graphql_field_name": null,
@@ -1796,7 +1734,7 @@
       "service": "dev-health-query-api",
       "source": {
         "file": "internal/queryapi/server/buildinfo_route.go",
-        "line": 245
+        "line": 272
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -1821,12 +1759,11 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership, and the impersonation session, are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope and the internal identity headers read no state: the envelope's signature and exp are checked and its claims are trusted until exp (60 s at issue); the go_api_proof_orgs allowlist is read on every request",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); 403 for an organization not on the go_api_proof_orgs allowlist",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "proof-write: the legacy guard requires a verified credential with an organization on the go_api_proof_orgs allowlist and no role, so the action is the read floor, not an admin action. Deliberate change candidate: a settings.write (admin, owner) requirement"
       ],
       "graphql_field_name": null,
@@ -1847,7 +1784,7 @@
       "service": "dev-health-query-api",
       "source": {
         "file": "internal/queryapi/server/buildinfo_route.go",
-        "line": 273
+        "line": 300
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -1872,12 +1809,11 @@
         "name": "at+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "unknown",
+      "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership, and the impersonation session, are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope and the internal identity headers read no state: the envelope's signature and exp are checked and its claims are trusted until exp (60 s at issue)",
       "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); 404 for an authenticated unregistered document (shared dispatcher)",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "dispatcher: the action is the minimum the legacy guard requires at this route (a verified credential with an organization, any role); the action of each root field decides per operation (graphql-field-actions.json)"
       ],
       "graphql_field_name": null,

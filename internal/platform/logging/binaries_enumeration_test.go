@@ -48,6 +48,7 @@ var binaryLogging = map[string]string{
 	"registrydump":                           "silent",
 	"shadow-venue":                           "installs",
 	"strip-agent-attribution":                "silent",
+	"venue-extstub":                          "installs",
 }
 
 type listedPackage struct {

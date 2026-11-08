@@ -163,12 +163,12 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 
 // The plane hands the MCP listener a handler that carries the process's gate.
 func TestGraphQLShadowMCPPlaneIsGated(t *testing.T) {
-	raw, err := os.ReadFile("server.go")
+	raw, err := os.ReadFile("pdp_gate.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "MCPHandler: withGate(mcpMux, gate)") {
-		t.Fatal("server.go does not wrap the MCP listener's handler with the process's gate")
+	if !strings.Contains(string(raw), "withGate(mcpMux, gate)") {
+		t.Fatal("pdp_gate.go (gatedListenerHandlers) does not wrap the MCP listener's handler with the process's gate")
 	}
 }
 

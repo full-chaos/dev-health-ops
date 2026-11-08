@@ -43,7 +43,7 @@ func newRESTFixture(t *testing.T, store *accessStore, setup *accessSetup) *restF
 func newRESTFixtureServing(t *testing.T, store *accessStore, setup *accessSetup, serve http.HandlerFunc) *restFixture {
 	t.Helper()
 	verifier, priv := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(store))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,51 +278,5 @@ func TestQueryAPIRESTIssuerAloneServesOnlyTheUserToken(t *testing.T) {
 	}
 	if got := f.reader.counts(t)[accessverify.RefusedMetric+"|profile=GET /api/v1/home,reason=alg_not_allowed,service=dev-health-query-api"]; got != 1 {
 		t.Fatalf("the HS256 refusal is not counted alg_not_allowed: %d", got)
-	}
-}
-
-// Q8 (acp, as C3 D3/D6): the answers that change with the issuer set, each
-// pinned against the issuer-unset answer of the same request.
-func TestQueryAPIRESTIssuerSetDrift(t *testing.T) {
-	quietStdLog(t)
-	m := newAccessMinter(t)
-	edge := ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
-	badSub := ecMintEdgeTokenRaw(t, map[string]any{"sub": 7, "org_id": ecOrg.String(), "tv": 5, "type": "access"})
-	for name, tc := range map[string]struct {
-		store      func(*accessStore)
-		method     string
-		token      string
-		unset, set answer
-	}{
-		"edge token, users store error that is not unavailable": {
-			func(s *accessStore) { s.errUserState = errors.New("syntax error") }, http.MethodGet, edge,
-			answer{http.StatusInternalServerError, `{"detail":"Internal Server Error"}`},
-			answer{http.StatusUnauthorized, restRefusal}},
-		"edge token whose sub is not a string": {
-			nil, http.MethodGet, badSub,
-			answer{http.StatusInternalServerError, `{"detail":"Internal Server Error"}`},
-			answer{http.StatusUnauthorized, restRefusal}},
-		"edge token on a method the route does not serve": {
-			nil, http.MethodPut, edge,
-			answer{http.StatusMethodNotAllowed, `{"detail":"Method Not Allowed"}`},
-			answer{http.StatusUnauthorized, restRefusal}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			for _, routed := range []bool{false, true} {
-				store := newAccessStore()
-				if tc.store != nil {
-					tc.store(store)
-				}
-				var keys authverify.KeySource
-				want := tc.unset
-				if routed {
-					keys, want = m.keys, tc.set
-				}
-				got := newRESTFixture(t, store, testAccess(keys, nil, accessTestNow)).do(tc.method, tc.token)
-				if got != want {
-					t.Errorf("issuer set %v: got %+v, want %+v", routed, got, want)
-				}
-			}
-		})
 	}
 }

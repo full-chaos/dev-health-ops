@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/rand"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -95,12 +94,6 @@ func routeAuthenticator(auth *policy.Authenticator, opts accessOptions) error {
 	return auth.RouteAccess(principal.RoutedAccess(validator), queryAPIAccessService)
 }
 
-// unusedEdgeSecret keys the HS256 half of an edge verifier built for the
-// access-token issuer alone (no GO_API_EDGE_JWT_SECRET). The key is random
-// and held by no minter, and nothing consults it: the routed validator of
-// such a verifier has no HS256 verifier, so an HS256 token is refused first.
-func unusedEdgeSecret() string { return rand.Text() + rand.Text() }
-
 // routeProfile is the endpoint-profile key of the request: its method and the
 // mux pattern that routed it. query-api's muxes register paths without a
 // method, so the method is added here; policy is not changed for it.
@@ -115,8 +108,9 @@ func withRouteProfile(next http.Handler) http.Handler {
 }
 
 // edgeCarrierToken reports whether token goes to the edge carrier rather than
-// the envelope verifier: the HS256 edge token always; the EdDSA user access
-// token only once auth routes by row.
+// the envelope verifier: the retired HS256 edge token always (the carrier
+// refuses it alg_not_allowed); the EdDSA user access token only once auth
+// routes by row.
 func edgeCarrierToken(auth *policy.Authenticator, token string) bool {
 	switch principal.AccessClassOf(token) {
 	case principal.AccessClassEdge:

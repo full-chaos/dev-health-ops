@@ -6172,11 +6172,12 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	classSwitch := newClassRowSwitch(pgPool)
 	// CHAOS-6263 PR (a): /query's edge-access-token carrier, built once
 	// here (not per-request) and threaded into every authenticateInternalRequest
-	// call /query and /buildinfo make. (nil, nil, nil) when GO_API_EDGE_JWT_SECRET is
-	// unset -- same opt-out contract as buildEdgeVerifierFromEnv; an error
-	// here means the secret IS set but malformed, which is a hard config
-	// failure this function refuses to start behind, same discipline as
-	// the envelope verifier's own JWKS check in buildQueryRoute.
+	// call /query and /buildinfo make. (nil, nil, nil) when AUTH_ACCESS_TOKEN_ISSUER
+	// is unset and /query has no pool -- same opt-out contract as
+	// buildEdgeVerifierFromEnv; an error here (the pool without the issuer, or
+	// a malformed issuer config) is a required-config failure this function
+	// refuses to start behind, same discipline as the envelope verifier's own
+	// JWKS check in buildQueryRoute.
 	edgeAuth, edgeStore, err := buildQueryEdgeAuthenticatorFromEnv(getenv, pgPool)
 	if err != nil {
 		pgPool.Close()

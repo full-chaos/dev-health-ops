@@ -89,16 +89,6 @@ var queryAPIOptions = func() []Option {
 			Usage: "audience the edge envelope must carry",
 		},
 		{
-			Flag: "edge-jwt-issuer", Env: "GO_API_EDGE_JWT_ISSUER", Kind: KindString,
-			Services: q, Group: GroupRoutes,
-			Usage: "issuer of the edge JWT the proof route verifies",
-		},
-		{
-			Flag: "edge-jwt-audience", Env: "GO_API_EDGE_JWT_AUDIENCE", Kind: KindString,
-			Services: q, Group: GroupRoutes,
-			Usage: "audience of the edge JWT the proof route verifies",
-		},
-		{
 			Flag: "access-token-issuer", Env: "AUTH_ACCESS_TOKEN_ISSUER", Kind: KindString,
 			Services: q, Group: GroupRoutes,
 			Usage: "https issuer of EdDSA user access tokens (go-api's value): set, the REST, /query and /graphql routes validate the edge and user access tokens by their endpoint-profile row against its JWKS; unset, they do not",
@@ -255,7 +245,6 @@ var queryAPIOptions = func() []Option {
 			Usage: "enable the work units route (default off; it also needs its dependencies configured, or it stays unmounted)",
 		},
 		{Env: "GO_API_REGISTRY_POSTGRES_URI", Secret: true, Services: q, Group: GroupCredentials, Usage: "registry PostgreSQL DSN the /query route reads its operation registry from (the query-api role's own login)"},
-		{Env: "GO_API_EDGE_JWT_SECRET", Secret: true, Services: q, Group: GroupCredentials, Usage: "shared secret the proof route verifies the edge JWT with"},
 	}
 	// Read from the process environment by the code below the routes (identity
 	// mapping, the LLM model choice, two work-graph switches): declared so the service's whole contract is here, environment

@@ -316,7 +316,7 @@ func newLiveREST(t *testing.T, pattern string, shape func(*accessStore)) *liveRE
 	}
 	setup := testAccess(minter.keys, nil, accessTestNow)
 	verifier, priv := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(store))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(store))
 	if err != nil {
 		t.Fatal(err)
 	}

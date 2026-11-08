@@ -174,7 +174,7 @@ func dlpHandler(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.Gat
 func dlpHandlerFor(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.Gate, routes []string) http.Handler {
 	t.Helper()
 	verifier, _ := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(store))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(store))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -92,7 +92,7 @@ func newSeamStack(t *testing.T, route seamRoute) *seamStack {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
 	verifier, priv := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(newAccessStore()))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(newAccessStore()))
 	if err != nil {
 		t.Fatal(err)
 	}

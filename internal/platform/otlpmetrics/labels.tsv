@@ -114,8 +114,6 @@ devhealth_query_api_complexity_timeseries_calls_total		code: internal/queryapi/g
 devhealth_query_api_complexity_timeseries_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
 devhealth_query_api_data_health_calls_total	field	code: internal/queryapi/graph/telemetry.go
 devhealth_query_api_data_health_outcome_total	field,outcome	code: internal/queryapi/graph/telemetry.go
-dev_health_query_api_edge_rejected_total	reason	code: internal/queryapi/principal/edge_telemetry.go
-devhealth_query_api_edge_verify_total	outcome	code: internal/queryapi/principal/edge_telemetry.go
 dev_health_query_api_envelope_rejected_total	reason	code: internal/queryapi/principal/telemetry.go
 devhealth_query_api_envelope_verify_total	outcome	code: internal/queryapi/principal/telemetry.go
 devhealth_query_api_experiments_calls_total		code: internal/queryapi/graph/telemetry.go

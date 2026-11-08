@@ -1,11 +1,11 @@
-// Package edgetoken verifies the edge access token: the HS256 JWT the Python
-// api's AuthService.create_access_token mints and validate_token verifies
-// (src/dev_health_ops/api/services/auth.py). It is the one Go copy of that
-// JWT-level decision; query-api's principal.EdgeVerifier and the dho api's
-// principal both call it, so the two planes cannot drift apart.
+// Package edgetoken verifies the legacy HS256 refresh token the retired go-api
+// session routes minted (validate_token(token, "refresh") in
+// src/dev_health_ops/api/services/auth.py). Logout still revokes one
+// (CHAOS-13125). It verifies no access token: the HS256 access-token class is
+// retired, and every access-token row refuses alg HS256 first.
 //
-// It decides the token only. Whether the user row is still active and the
-// token version is current is the caller's database check.
+// It decides the token only. Whether the session is still live is the
+// caller's database check.
 package edgetoken
 
 import (
@@ -22,10 +22,6 @@ const (
 	// jwt.WithValidMethods, so an alg-confusion token ("none", RS256) is
 	// refused before any key is considered.
 	Algorithm = "HS256"
-	// AccessType is the "type" claim every REST auth path requires
-	// (validate_token called with token_type="access"). A refresh token is
-	// refused.
-	AccessType = "access"
 	// MinSecretLength is _get_jwt_secret's floor.
 	MinSecretLength = 32
 )
@@ -80,26 +76,20 @@ func New(secret, issuer, audience string) (*Verifier, error) {
 	return &Verifier{secret: []byte(secret), issuer: issuer, audience: audience}, nil
 }
 
-// Verify reproduces validate_token(token, "access"):
+// VerifyRefresh reproduces validate_token(token, "refresh"):
 //
 //   - an unverified peek decides whether aud and iss are checked at all: a
 //     claim that is present must match, an absent one is not checked;
 //   - HS256 only; exp, sub and type are required (pyjwt "require");
 //   - exp, nbf and iat are checked with no leeway, as pyjwt does by default
 //     (pyjwt refuses an iat in the future);
-//   - type must equal "access".
+//   - type must equal "refresh".
 //
 // It returns the verified claims. On a rejection it returns the claims it
 // could decode (possibly nil) with a *Rejection, so a caller can log which
 // principal was refused without logging the token.
-func (v *Verifier) Verify(tokenString string) (jwt.MapClaims, error) {
-	return v.VerifyType(tokenString, AccessType)
-}
-
-// VerifyType is validate_token(token, tokenType): Verify's rules with the
-// "type" claim required to equal tokenType (RefreshType for a refresh
-// token).
-func (v *Verifier) VerifyType(tokenString, tokenType string) (jwt.MapClaims, error) {
+func (v *Verifier) VerifyRefresh(tokenString string) (jwt.MapClaims, error) {
+	tokenType := RefreshType
 	var peeked jwt.MapClaims
 	if _, _, err := jwt.NewParser().ParseUnverified(tokenString, &peeked); err != nil {
 		return nil, &Rejection{Reason: ReasonMalformed, Err: err}

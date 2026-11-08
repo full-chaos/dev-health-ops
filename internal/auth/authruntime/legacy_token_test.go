@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
@@ -16,15 +17,27 @@ import (
 // legacyAccess is go-api's HS256 access token for grant, a bearer of the retired class. No production code mints one.
 func legacyAccess(t *testing.T, secret, issuer, audience string, grant authapi.Grant) string {
 	t.Helper()
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"sub": grant.PrincipalID.String(), "email": "", "org_id": "", "role": grant.Role, "is_superuser": false,
+		"type": "access", "iss": issuer, "aud": audience, "exp": now.Add(edgetoken.AccessLifetime).Unix(), "iat": now.Unix(),
+		"jti": uuid.NewString(), "tv": grant.User.TokenVersion, "sid": session.WireSessionID(grant.SessionID),
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// legacyRefresh is go-api's HS256 refresh token for grant: the token logout still revokes (CHAOS-13125).
+func legacyRefresh(t *testing.T, secret, issuer, audience string, grant authapi.Grant) string {
+	t.Helper()
 	signer, err := edgetoken.NewSigner(secret, issuer, audience)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sid := session.WireSessionID(grant.SessionID)
-	now := time.Now()
-	token, err := signer.AccessUntil(edgetoken.AccessClaims{
-		UserID: grant.PrincipalID.String(), Role: grant.Role, TokenVersion: grant.User.TokenVersion, SessionID: &sid,
-	}, now, now.Add(edgetoken.AccessLifetime), uuid.NewString())
+	token, err := signer.Refresh(edgetoken.RefreshClaims{UserID: grant.PrincipalID.String(), FamilyID: uuid.NewString()}, time.Now(), uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
 	}

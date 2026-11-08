@@ -127,17 +127,6 @@ VALUES ($1, $2, 'rule-one', 'github', '[]'::json, '{}'::json, true, now(), now()
 
 	issuer := edtokens.New(t)
 	routed := ruleOneServer(t, pool, ch, issuer)
-	signer, err := edgetoken.NewSigner(ruleOneKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	hs256 := func(id uuid.UUID, email string) string {
-		token, err := signer.Access(edgetoken.AccessClaims{UserID: id.String(), Email: email, OrgID: org.String(), Role: "member"}, time.Now(), uuid.NewString())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return token
-	}
 	eddsa := func(id uuid.UUID) string {
 		token, err := issuer.Mint(edtokens.Claims{UserID: id, OrgID: org.String()})
 		if err != nil {
@@ -169,9 +158,6 @@ VALUES ($1, $2, 'rule-one', 'github', '[]'::json, '{}'::json, true, now(), now()
 		t.Logf("%s platform admin: HS256 200 %.200s | user access token %d %.200s", path, wantBody, gotStatus, gotBody)
 		if gotStatus != http.StatusOK || named(gotBody) != wantBody {
 			t.Errorf("%s platform admin without membership: user access token %d %s, HS256 200 %s", path, gotStatus, gotBody, wantBody)
-		}
-		if status, body := serve(routed, path, hs256(super, "rule-one-super@example.com")); status != http.StatusUnauthorized || strings.TrimSpace(body) != genericRefusal {
-			t.Errorf("%s HS256 on the routed listener %d %s, want the retired-class 401 %s", path, status, body, genericRefusal)
 		}
 		if status, body := serve(routed, path, eddsa(plain)); status != http.StatusForbidden || body != `{"detail": "X-Org-Id not permitted for this user"}` {
 			t.Errorf("%s user without the platform action or the membership: user access token %d %s, HS256 403 X-Org-Id not permitted", path, status, body)

@@ -116,10 +116,6 @@ func TestIssueSessionRouteThroughConfigure(t *testing.T) {
 		t.Fatalf("issue = %d %s", got.status, got.body)
 	}
 	issued := object(t, got)
-	claims, err := e.edge.Verify(ctx, issued["access_token"].(string))
-	if err != nil || claims.OrgID != org.String() {
-		t.Fatalf("query-api's edge verifier: %+v %v", claims, err)
-	}
 	var pinned int
 	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.sessions s JOIN public.users u ON u.id = s.principal_id
 		WHERE s.principal_id = $1 AND s.organization_id = $2 AND s.amr = ARRAY['pwd'] AND s.legacy_token_version = u.token_version

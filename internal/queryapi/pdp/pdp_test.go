@@ -365,9 +365,9 @@ func TestPDPEnforceUnknownRowFailsClosed(t *testing.T) {
 	}
 }
 
-// The exempt list is exactly the two legacy classes; each accepted caller counts in every mode, a user token never.
+// The exempt list is exactly the envelope class; it counts in every mode, the retired HS256 class and a user token never.
 func TestPDPExemptListAndCounter(t *testing.T) {
-	if !slices.Equal(ExemptClasses, []string{"ops_access_token_hs256", "effective_principal_envelope"}) {
+	if !slices.Equal(ExemptClasses, []string{"effective_principal_envelope"}) {
 		t.Fatalf("exempt list %v", ExemptClasses)
 	}
 	for _, mode := range []string{ModeOff, ModeShadow, ModeEnforce, "banana"} {
@@ -378,10 +378,10 @@ func TestPDPExemptListAndCounter(t *testing.T) {
 				cfg.Decider = pepClient(t, pdptest.New(t).URL)
 			}
 			g := New(cfg)
-			g.CountExempt(context.Background(), ClassHS256, testProfile)
+			g.CountExempt(context.Background(), "ops_access_token_hs256", testProfile)
 			g.CountExempt(context.Background(), ClassEnvelope, "POST /api/v1/drilldown/prs")
 			g.CountExempt(context.Background(), "user_access_token", testProfile)
-			want := map[string]int64{"action=analytics.read,class=ops_access_token_hs256": 1, "action=git.read,class=effective_principal_envelope": 1}
+			want := map[string]int64{"action=git.read,class=effective_principal_envelope": 1}
 			if got := m.points(t, exemptMetric); !mapsEqual(got, want) {
 				t.Fatalf("exempt %v, want %v", got, want)
 			}
@@ -409,7 +409,7 @@ func TestPDPLabelsAreClosed(t *testing.T) {
 	g := New(cfg)
 	for _, profile := range []string{testProfile, "GET /api/v1/flame", "GET /x/" + testOrg} {
 		_, _ = g.Authorize(context.Background(), profile, testBearer, testOrg)
-		g.CountExempt(context.Background(), ClassHS256, profile)
+		g.CountExempt(context.Background(), ClassEnvelope, profile)
 	}
 	actions := []string{"analytics.read", "metrics.read", "work_items.read", "git.read", "org.read", "unknown"}
 	closed := map[string][]string{

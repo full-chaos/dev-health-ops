@@ -35,7 +35,7 @@ func edgeFixedToken(t *testing.T, key string, user edgeUser, expired bool) strin
 	}
 	claims := jwt.MapClaims{
 		"sub": user.id.String(), "email": user.name + "@example.com", "org_id": user.tokenOrg, "role": user.tokenRole,
-		"is_superuser": user.superuser, "type": "access", "iss": defaultEdgeJWTIssuer, "aud": defaultEdgeJWTAudience,
+		"is_superuser": user.superuser, "type": "access", "iss": "dev-health-ops", "aud": "dev-health-api",
 		"exp": expires.Unix(), "iat": time.Date(2019, 12, 31, 0, 0, 0, 0, time.UTC).Unix(), "jti": "edge-oracle-fixed-instant-token", "tv": 0,
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(key))

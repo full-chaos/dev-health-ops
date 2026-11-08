@@ -61,7 +61,7 @@ func newEnfRun() *enfRun {
 			if control {
 				expect = "mismatch"
 			}
-			r.yard = append(r.yard, YardSlot{Row: row, Caller: caller, K: k, Key: key, Status: legacy, Verdict: yardVerdict})
+			r.yard = append(r.yard, YardSlot{Seq: len(r.yard) + 1, Row: row, Caller: caller, K: k, Key: key, Status: legacy, Verdict: yardVerdict})
 			start := enfT0.Add(time.Duration(len(r.slots)) * 3 * time.Second)
 			r.slots = append(r.slots, Slot{Start: start, End: start.Add(100 * time.Millisecond), Seq: len(r.slots) + 1, Row: row, Caller: caller, Principal: caller + "-A", Expect: expect, K: k, Method: method, Route: route, Path: route, Status: enforced})
 		}

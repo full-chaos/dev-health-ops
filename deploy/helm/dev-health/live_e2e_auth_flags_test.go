@@ -29,11 +29,11 @@ func liveE2EFlagRows(t *testing.T) [][]string {
 	return rows
 }
 
-// The web live e2e runs go-api and query-api with the auth flags prod runs (authService.phase 3, loginStage goApi:
-// deploy values.prod.yaml). The table must equal the chart's rendering of those flags; a flag moved in the chart and not in the
-// table fails here.
-func TestLiveE2EAuthFlagsEqualPhase3Chart(t *testing.T) {
-	docs := renderPhase(t, 3)
+// The web live e2e runs go-api and query-api with the auth flags prod runs (authService.phase 4, usersOwnedStage owned:
+// deploy values.prod.yaml; CHAOS-13356: every venue runs users owned). The table must equal the chart's rendering of
+// those flags; a flag moved in the chart and not in the table fails here.
+func TestLiveE2EAuthFlagsEqualPhase4Chart(t *testing.T) {
+	docs := renderPhase(t, 4)
 	rows := liveE2EFlagRows(t)
 	for _, target := range []struct{ scope, deployment, container string }{
 		{"go-api", "a-dev-health-go-api", "go-api"},
@@ -42,7 +42,7 @@ func TestLiveE2EAuthFlagsEqualPhase3Chart(t *testing.T) {
 		want := map[string]string{}
 		deployment := authDoc(docs, "Deployment", target.deployment)
 		if deployment == nil {
-			t.Fatalf("FAIL: no %s deployment in the phase 3 render", target.scope)
+			t.Fatalf("FAIL: no %s deployment in the phase 4 render", target.scope)
 		}
 		for _, container := range podContainers(deployment) {
 			if name, _ := at(container, "name").(string); name != target.container {
@@ -72,12 +72,12 @@ func TestLiveE2EAuthFlagsEqualPhase3Chart(t *testing.T) {
 		sort.Strings(names)
 		for _, name := range names {
 			if got[name] != want[name] {
-				t.Errorf("FAIL: %s %s is %q in the flag table, %q in the phase 3 chart", target.scope, name, got[name], want[name])
+				t.Errorf("FAIL: %s %s is %q in the flag table, %q in the phase 4 chart", target.scope, name, got[name], want[name])
 			}
 		}
 		for name := range got {
 			if _, ok := want[name]; !ok {
-				t.Errorf("FAIL: %s %s is in the flag table and not in the phase 3 chart", target.scope, name)
+				t.Errorf("FAIL: %s %s is in the flag table and not in the phase 4 chart", target.scope, name)
 			}
 		}
 	}

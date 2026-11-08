@@ -106,7 +106,7 @@ func TestLiveE2EGoAPIEnvIsProdsFlagSet(t *testing.T) {
 	}
 	for agg, want := range map[apiservice.AuthAggregate]bool{
 		apiservice.AuthSessions: true, apiservice.AuthLocalLogin: true, apiservice.AuthSocial: true,
-		apiservice.AuthCredentials: false, apiservice.AuthOIDC: false, apiservice.AuthSAML: false,
+		apiservice.AuthCredentials: true, apiservice.AuthOIDC: false, apiservice.AuthSAML: false,
 	} {
 		if cfg.Enabled(agg) != want {
 			t.Errorf("FAIL: go-api %s enabled=%v, prod %v", agg, cfg.Enabled(agg), want)
@@ -115,7 +115,11 @@ func TestLiveE2EGoAPIEnvIsProdsFlagSet(t *testing.T) {
 	if cfg.OrgProvisioningOn() {
 		t.Error("FAIL: AUTH_PROXY_ORG_PROVISIONING is on; prod has it off")
 	}
-	for _, name := range []string{"AUTH_USERS_OWNED", "AUTH_SESSION_ISSUE_TOKEN", "AUTH_WORKLOAD_SUBJECT_FILE"} {
+	// CHAOS-13356: users are owned, as prod (phase 4, usersOwnedStage owned): go-api forwards the credentials routes.
+	if env["AUTH_USERS_OWNED"] != "true" {
+		t.Errorf("FAIL: go-api AUTH_USERS_OWNED=%q, prod true", env["AUTH_USERS_OWNED"])
+	}
+	for _, name := range []string{"AUTH_SESSION_ISSUE_TOKEN", "AUTH_WORKLOAD_SUBJECT_FILE"} {
 		if _, ok := env[name]; ok {
 			t.Errorf("FAIL: go-api env carries %s", name)
 		}
@@ -164,7 +168,8 @@ func liveE2EUpFakes(t *testing.T, state string) string {
 	write("psql", "#!/bin/sh\ncase \"$*\" in *-At*) echo 3b1e2c4d-5f60-4a71-8b92-0c1d2e3f4a5b ;; esac\n")
 	write("sleep", "#!/bin/sh\nexit 0\n")
 	write("curl", "#!/bin/sh\ngrep -q '^started$' '"+state+"/logs/auth-service.log'\n")
-	write("dho", "#!/bin/sh\nexit 0\n")
+	// dho records each call with the AUTH_USERS_OWNED it ran under (the seed tool runs owned, CHAOS-13356).
+	write("dho", "#!/bin/sh\nprintf '%s %s\\n' \"${AUTH_USERS_OWNED:-unset}\" \"$*\" >> '"+state+"/dho.calls'\nexit 0\n")
 	return fake
 }
 
@@ -246,6 +251,21 @@ func assertUpWiredTheWebCaller(t *testing.T, state, out string) {
 	}
 	if !strings.Contains(out, "step 5b") || !strings.Contains(out, "step 6b") {
 		t.Errorf("FAIL: up skipped the web binding or the fake TokenReview step:\n%s", out)
+	}
+	// CHAOS-13356: users are owned. The seed tool copies the users the caller seeded before auth-service starts, with
+	// users owned, and auth-service has a mail setting for the credentials routes it now serves.
+	calls, err := os.ReadFile(filepath.Join(state, "dho.calls"))
+	if err != nil || !strings.Contains(string(calls), "true auth users-backfill -insert-only\n") {
+		t.Errorf("FAIL: up did not run the seed tool owned (dho calls %q, err %v)", calls, err)
+	}
+	seed, start := strings.Index(out, "step 4b"), strings.Index(out, "step 7")
+	if seed < 0 || start < 0 || seed > start {
+		t.Errorf("FAIL: the seed step (%d) must come before auth-service starts (%d)", seed, start)
+	}
+	for _, want := range []string{"AUTH_USERS_OWNED=true\n", "EMAIL_PROVIDER=console\n", "AUTH_MAIL_ALLOW_CONSOLE=true\n", "EMAIL_FROM_ADDRESS=", "APP_BASE_URL="} {
+		if !strings.Contains(string(saved), want) {
+			t.Errorf("FAIL: the saved auth-service environment lacks %q", strings.TrimSpace(want))
+		}
 	}
 }
 

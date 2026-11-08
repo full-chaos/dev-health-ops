@@ -511,7 +511,8 @@ func jobCapMinutes(job yamlMap) int {
 }
 
 // authCorpusViolations: the external auth corpus test (ci/auth_corpus_external.sh) takes its timeout from `check_go.sh job-timeout N`,
-// N at most the smallest cap of the jobs that run it minus 3 min; the compiled test binary of the acp leg gets -test.timeout the same way.
+// N at most the smallest cap of the jobs that run it minus 3 min. CHAOS-13356: every leg runs users owned, so the test runs only
+// as its compiled binary (the seed hand-off), which gets -test.timeout that way.
 func authCorpusViolations(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
@@ -528,25 +529,35 @@ func authCorpusViolations(t *testing.T, root string) []string {
 		}
 	}
 	found := 0
-	for _, call := range integrationCalls(script) {
-		if !strings.Contains(call.line, "TestAuthFlowVenueOracle") {
+	lastConst, lastLine := 0, -1000
+	for n, raw := range strings.Split(script, "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if m := jobTimeoutConstRe.FindStringSubmatch(raw); m != nil {
+			lastConst, _ = strconv.Atoi(m[1])
+			lastLine = n
+		}
+		if !strings.Contains(trimmed, "-test.run '^TestAuthFlowVenueOracle$'") {
 			continue
 		}
 		found++
-		if call.constMin == 0 || !strings.Contains(call.line, `-timeout="${tmo}"`) {
-			out = append(out, "ci/auth_corpus_external.sh: the corpus go test call does not take its -timeout from `check_go.sh job-timeout N`")
-		} else if capMin > 0 && call.constMin > capMin-integrationTimeoutMarginMinutes {
-			out = append(out, fmt.Sprintf("ci/auth_corpus_external.sh: the corpus limit %dm must be <= %dm (smallest job cap %dm - %dm)", call.constMin, capMin-integrationTimeoutMarginMinutes, capMin, integrationTimeoutMarginMinutes))
+		constMin := 0
+		if n-lastLine <= 40 {
+			constMin = lastConst
+		}
+		if constMin == 0 || !strings.Contains(trimmed, `-test.timeout="${tmo}"`) {
+			out = append(out, "ci/auth_corpus_external.sh: the corpus test run does not take its -test.timeout from `check_go.sh job-timeout N`")
+		} else if capMin > 0 && constMin > capMin-integrationTimeoutMarginMinutes {
+			out = append(out, fmt.Sprintf("ci/auth_corpus_external.sh: the corpus limit %dm must be <= %dm (smallest job cap %dm - %dm)", constMin, capMin-integrationTimeoutMarginMinutes, capMin, integrationTimeoutMarginMinutes))
 		}
 	}
 	if found != 1 {
-		out = append(out, fmt.Sprintf("ci/auth_corpus_external.sh: found %d corpus go test calls, want 1", found))
+		out = append(out, fmt.Sprintf("ci/auth_corpus_external.sh: found %d corpus test runs, want 1", found))
 	}
 	if !strings.Contains(script, `check_go.sh" job-start`) {
 		out = append(out, "ci/auth_corpus_external.sh: the script does not take the job start of the corpus deadline")
-	}
-	if !strings.Contains(script, `-test.timeout="${tmo}"`) {
-		out = append(out, "ci/auth_corpus_external.sh: the compiled corpus test binary does not get -test.timeout from job-timeout")
 	}
 	return out
 }
@@ -679,8 +690,9 @@ func TestAuthCorpusAndGitlabGuardsCatchPlantedDefects(t *testing.T) {
 		m    mutation
 		want string
 	}{
-		{"the corpus go test loses its timeout", mutation{corpus, `-count=1 -timeout="${tmo}" -v`, "-count=1 -v"}, "does not take its -timeout"},
+		{"the corpus test takes a literal timeout", mutation{corpus, `-test.timeout="${tmo}"`, "-test.timeout=60m"}, "does not take its -test.timeout"},
 		{"the corpus test binary loses -test.timeout", mutation{corpus, ` -test.timeout="${tmo}"`, ""}, "-test.timeout"},
+		{"the corpus test runs twice", mutation{corpus, "TEST_PID=$!\n", "TEST_PID=$!\n# x\n\"${TEST_BIN}\" -test.run '^TestAuthFlowVenueOracle$' -test.timeout=\"${tmo}\"\n"}, "found 2 corpus test runs"},
 		{"the corpus script loses the job start", mutation{corpus, `check_go.sh" job-start`, `check_go.sh" job-timeout 1`}, "job start"},
 		{"the corpus limit is over the cap", mutation{corpus, "job-timeout 27", "job-timeout 29"}, "29m"},
 		{"a GitLab job cap that differs from its timeout", mutation{gl, `CHECK_GO_JOB_CAP_MIN: "60"`, `CHECK_GO_JOB_CAP_MIN: "50"`}, "must equal its timeout"},

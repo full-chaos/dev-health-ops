@@ -59,7 +59,7 @@ type retryRun struct {
 	retryMarker string
 }
 
-func runCorpusWithFailingUp(t *testing.T, leg string, fails int, text, match string) retryRun {
+func runCorpusWithFailingUp(t *testing.T, leg string, fails int, text, match string, extra ...string) retryRun {
 	t.Helper()
 	fake := newFakeDocker(t)
 	fake.withCurl(t)
@@ -67,13 +67,14 @@ func runCorpusWithFailingUp(t *testing.T, leg string, fails int, text, match str
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), leg)
-	cmd.Env = append(fake.env("FAKE_UP_FAILS="+itoa(fails), "FAKE_UP_TEXT="+text, "FAKE_UP_MATCH="+match,
-		"AUTH_CORPUS_USERS_UNOWNED=1"), "PATH="+front+":"+fake.dir+":"+os.Getenv("PATH"))
+	cmd.Env = append(fake.env(append([]string{"FAKE_UP_FAILS=" + itoa(fails), "FAKE_UP_TEXT=" + text, "FAKE_UP_MATCH=" + match}, extra...)...),
+		"PATH="+front+":"+fake.dir+":"+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
 	r := retryRun{out: string(out), err: err}
 	for _, call := range strings.Split(fake.calls(t), "\n") {
 		switch {
-		case strings.Contains(call, " up "):
+		// The step ups (up_service: --build); the seed copy's auth-service recreate (--no-build) is not a step.
+		case strings.Contains(call, " up --build "):
 			r.ups = append(r.ups, call[strings.Index(call, " up ")+4:])
 		case strings.Contains(call, " down ") && !strings.Contains(call, "--volumes"):
 			r.retryDowns++
@@ -137,16 +138,21 @@ func TestAuthCorpusExternalUpRetriesWhenTheOutputHasCRLFLineEnds(t *testing.T) {
 	}
 }
 
-// A retry down removes go-api too, so the auth-service step brings go-api back before it tries auth-service again.
-func TestAuthCorpusExternalAuthServiceStepRetryRestartsGoAPIFirst(t *testing.T) {
-	r := runCorpusWithFailingUp(t, "acp", 1, corpusInfraTexts["2"], " auth-service")
+// CHAOS-13356: leg acp starts auth-service first and go-api only in step 1e, so a retry of the auth-service step starts
+// auth-service again (with its dependencies) and no go-api: go-api would refuse users owned before its flags are set.
+func TestAuthCorpusExternalAuthServiceStepRetryStartsNoGoAPI(t *testing.T) {
+	r := runCorpusWithFailingUp(t, "acp", 1, corpusInfraTexts["2"], " auth-service", "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if want := "AUTH-CORPUS-INFRA-RETRY class=2 step=auth-service"; r.retryMarker != want {
 		t.Fatalf("retry line = %q, want %q\n%s", r.retryMarker, want, r.out)
 	}
-	if len(r.ups) < 4 {
-		t.Fatalf("want go-api, auth-service (fails), go-api, auth-service; got %q", r.ups)
+	if r.err != nil {
+		t.Fatalf("the run must continue after the retry: %v\n%s", r.err, r.out)
 	}
-	for i, svc := range []string{" go-api", " auth-service", " go-api", " auth-service"} {
+	want := []string{" auth-service", " auth-service", " auth-service", " go-api"}
+	if len(r.ups) != len(want) {
+		t.Fatalf("want auth-service (fails), auth-service, auth-service (step 1b), go-api (step 1e); got %q", r.ups)
+	}
+	for i, svc := range want {
 		if !strings.HasSuffix(r.ups[i], svc) {
 			t.Errorf("up %d = %q, want it to end with %q", i, r.ups[i], svc)
 		}

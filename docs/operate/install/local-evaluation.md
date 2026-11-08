@@ -64,9 +64,9 @@ local CA:
 A browser does not call the issuer. To open the issuer URL in a browser, import
 `auth-issuer-ca.pem` into the browser's trust store.
 
-Before auth-service serves, the `auth-users-backfill` job copies `public.users` into the auth schema
-(`dho auth users-backfill -insert-only`, with `AUTH_USERS_OWNED=false` for that run only). It creates
-the auth users that are missing and never changes an existing one. Without the copy,
+Before auth-service serves, the `auth-users-backfill` job runs the seed tool: it copies `public.users`
+into the auth schema (`dho auth users-backfill -insert-only`, with users owned, as every venue runs).
+The seed tool creates the auth users that are missing and never changes an existing one. Without the copy,
 auth-service does not become ready (`users_owned`): a fresh database already holds one service user,
 and an older database can hold more. The job runs on every `docker compose up`.
 

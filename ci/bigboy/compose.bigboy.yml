@@ -151,7 +151,8 @@ x-auth-migration-env: &auth-migration-env
   AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=devhealth_auth_migrator password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
   AUTH_RUNTIME_DATABASE_ROLE: devhealth_auth
   AUTH_SCHEMA_OWNER_ROLE: devhealth_auth_migrator
-  AUTH_USERS_OWNED: 'false'
+  # CHAOS-13356: users are owned here, as prod's phase 4: auth-migrate and auth-grants keep the owned grant set.
+  AUTH_USERS_OWNED: 'true'
 services:
   bugsink:
     container_name: bugsink
@@ -235,9 +236,12 @@ services:
       required: true
     environment:
     - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443
+    - AUTH_PROXY_CREDENTIALS=true
+    - AUTH_PROXY_LOCAL_LOGIN=true
     - AUTH_PROXY_SESSIONS=true
     - AUTH_PROXY_URL=http://auth-service:8095
     - AUTH_SESSION_ISSUE_CREDENTIAL=workload
+    - AUTH_USERS_OWNED=true
     - AUTH_WORKLOAD_BOOTSTRAP_FILE=/run/workload/api.bootstrap
     - AUTH_WORKLOAD_ISSUER=https://auth.bigboy.internal:8443
     - CORS_ALLOWED_ORIGINS=http://localhost:3000
@@ -2313,7 +2317,7 @@ services:
   auth-session-keys-init:
     cap_add: [CHOWN]
     cap_drop: [ALL]
-    command: ['chown 0:0 /run/auth/session; f=/run/auth/session/successor-key; [ -s "$$f" ] || { umask 077; head -c 32 /dev/urandom | base64 | tr "+/" "-_" | tr -d "=\n" > "$$f"; }; chown 0:0 "$$f"; chmod 0700 /run/auth/session; chmod 0600 "$$f"; chown 65532:65532 "$$f"; chown 65532:65532 /run/auth/session']
+    command: ['chown 0:0 /run/auth/session; for f in /run/auth/session/successor-key /run/auth/session/login-lockout-key; do [ -s "$$f" ] || { umask 077; head -c 32 /dev/urandom | base64 | tr "+/" "-_" | tr -d "=\n" > "$$f"; }; chown 0:0 "$$f"; chmod 0600 "$$f"; chown 65532:65532 "$$f"; done; chmod 0700 /run/auth/session; chown 65532:65532 /run/auth/session']
     entrypoint: [/bin/sh, -eu, -c]
     image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     network_mode: none
@@ -2465,7 +2469,8 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     user: 65532:65532
-  # The platform_admin fixture one-off (CHAOS-13282): dho auth users-backfill / users-reconcile with the auth-service runtime login, run by
+  # The seed tool one-off (CHAOS-13282, users owned by CHAOS-13356): `dho auth users-backfill -insert-only` with the auth-service runtime
+  # login, users and platform roles owned (it creates the missing auth users, never changes one, never grants a platform role), run by
   # bigboy-platform-admin-fixture.sh with `run --rm --no-deps`. The default command only lists the assignments (read-only).
   auth-users-backfill:
     cap_drop: [ALL]
@@ -2474,7 +2479,8 @@ services:
     environment:
       AUTH_DATABASE_SCHEMA: auth
       AUTH_DATABASE_URI: host=postgres port=5432 user=devhealth_auth password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
-      AUTH_USERS_OWNED: 'false'
+      AUTH_PLATFORM_ROLES_OWNED: 'true'
+      AUTH_USERS_OWNED: 'true'
     image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/images.env}'
     networks:
       auth_plane: null
@@ -2588,8 +2594,10 @@ services:
       AUTH_DATABASE_URI: host=postgres port=5432 user=devhealth_auth password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
       AUTH_JWT_AUDIENCE: dev-health-api
       AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY}
-      # Prod form for platform roles: the PDP reads the role from the assignments, not users.is_superuser (CHAOS-13282). go-api stays not owned (the drift-S controls need legacy to read the flag); users stay not owned (no mail settings here: auth_mail_config_invalid).
+      # Prod form for platform roles: the PDP reads the role from the assignments, not users.is_superuser (CHAOS-13282).
       AUTH_PLATFORM_ROLES_OWNED: 'true'
+      # go-api forwards local login (AUTH_PROXY_LOCAL_LOGIN): the login route mounts only with the lockout key (auth-session-keys-init).
+      AUTH_LOGIN_LOCKOUT_KEY_FILE: /run/auth/session/login-lockout-key
       AUTH_SERVICE_HTTP_ADDR: :8095
       AUTH_SERVICE_OPERATOR_HTTP_ADDR: :8096
       AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s
@@ -2598,7 +2606,16 @@ services:
       AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
       AUTH_SIGNING_KEY_ID: auth-signing-bigboy
       AUTH_TOKEN_ISSUER_URL: https://auth.bigboy.internal:8443
-      AUTH_USERS_OWNED: 'false'
+      # CHAOS-13356: auth-service owns users, as prod's phase 4 (go-api forwards sessions, local login and credentials), so it sends the
+      # verify and reset mail and refuses to start without a usable mail setting. The venue default is the console provider, as ops
+      # compose.yml: AUTH_MAIL_ALLOW_CONSOLE allows it and an http APP_BASE_URL; no mail is delivered. Set EMAIL_PROVIDER and its keys
+      # in ops/.env for real mail.
+      AUTH_USERS_OWNED: 'true'
+      AUTH_MAIL_ALLOW_CONSOLE: 'true'
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
       AUTH_VALKEY_URI: redis://valkey:6379/1
       AUTH_WORKLOAD_BOOTSTRAP: 'true'
       OTEL_ENABLED: 'false'

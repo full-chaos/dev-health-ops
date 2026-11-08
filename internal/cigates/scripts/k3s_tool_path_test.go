@@ -22,7 +22,6 @@ func TestK3sRunnersUseTheHelmTheSkipGuardFound(t *testing.T) {
 	for name, run := range map[string]func() cmdResult{
 		"pdp_load_k3s":          func() cmdResult { return pdpRun(t, nil, "--print-plan") },
 		"auth_owner_move_k3s":   func() cmdResult { return k3sRun(t, nil, "--print-plan") },
-		"auth_flipback_sso_k3s": func() cmdResult { res, _ := fbRun(t, nil, "--print-plan"); return res },
 	} {
 		if res := run(); !strings.Contains(res.stderr, "tool-helm ") {
 			t.Errorf("%s --print-plan did not run the helm under _work/_tool: exit %d, stderr %q", name, res.code, res.stderr)

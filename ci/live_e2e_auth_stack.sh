@@ -12,7 +12,12 @@
 #   bash ci/live_e2e_auth_stack.sh down STATE_DIR                           stop auth-service by pid
 #   bash ci/live_e2e_auth_stack.sh stop-auth STATE_DIR      stop auth-service by pid (the outage cell); start-auth starts it again with the same environment
 #   bash ci/live_e2e_auth_stack.sh start-auth STATE_DIR
+#   bash ci/live_e2e_auth_stack.sh verify-user STATE_DIR EMAIL  mark one user's e-mail verified in auth.users (the authority:
+#                                                          users are owned) and in its public.users projection
 # SIDE is go-api, query-api, auth-service or web. The flags are ci/live_e2e_auth_flags.tsv (the prod flag set).
+# CHAOS-13356: users are owned by auth-service, as prod (phase 4, usersOwnedStage owned): `up` copies the users the
+# caller already seeded into the auth schema with the seed tool (`dho auth users-backfill -insert-only`) before
+# auth-service starts, and auth-service sends the credentials mail through the console provider (no mail is delivered).
 # The https front (localhost:8443 to 127.0.0.1:8095) with STATE_DIR/tls is the caller's: the Go and web verifiers read
 # the issuer over https and nothing here serves TLS.
 set -euo pipefail
@@ -125,7 +130,11 @@ raw_env() {
         "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER=${CLUSTER_ISSUER}" \
         "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL=https://${TOKENREVIEW_ADDR}" \
         "AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE=${state}/tls/ca.pem" \
-        "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE=${state}/workload/reviewer.token"
+        "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE=${state}/workload/reviewer.token" \
+        "EMAIL_PROVIDER=console" \
+        "EMAIL_FROM_ADDRESS=live-e2e@example.test" \
+        "AUTH_MAIL_ALLOW_CONSOLE=true" \
+        "APP_BASE_URL=${LIVE_E2E_APP_BASE_URL:-http://localhost:3000}"
       ;;
     *) die "unknown side ${side} (go-api, query-api, auth-service, web)" ;;
   esac
@@ -154,7 +163,7 @@ migrate_run() {
   local user="$1" password="$2"
   shift 2
   AUTH_MIGRATION_DATABASE_URI="$(dsn "${user}" "${password}")" \
-    AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=false \
+    AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=true \
     AUTH_RUNTIME_DATABASE_ROLE="${RUNTIME_ROLE}" AUTH_SCHEMA_OWNER_ROLE="${MIGRATION_ROLE}" \
     "${STATE}/bin/auth-migrate" "$@"
 }
@@ -236,6 +245,10 @@ up() {
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" grants >/dev/null
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" restore-fence init -if-absent >/dev/null
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" workloads seed -apply >/dev/null
+
+  printf 'step 4b: the seed tool: copy the users the caller seeded into the auth schema (compose auth-users-backfill)\n'
+  AUTH_DATABASE_URI="$(dsn "${RUNTIME_ROLE}" "${runtime_password}")" AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=true \
+    "${dho}" auth users-backfill -insert-only >/dev/null
 
   printf 'step 5: api workload bootstrap credential (compose auth-workload-bootstrap)\n'
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" workloads bootstrap-create -workload api -out "${STATE}/workload/api.bootstrap" -apply >/dev/null
@@ -356,6 +369,22 @@ start_auth() {
   die "auth-service did not become ready again"
 }
 
+# verify_user STATE EMAIL: the e-mail of one user is verified, in auth.users (the authority while users are owned; its
+# guard admits a write only in a transaction that names itself the audit transaction, authschema 0006) and in the
+# public.users projection go-api still reads. Exactly one row each, or it fails.
+verify_user() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" n
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "verify-user: not an e-mail address"
+  n="$(PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -At -c \
+    "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; \
+     WITH a AS (UPDATE ${SCHEMA}.users SET email_verified_at = coalesce(email_verified_at, clock_timestamp()) WHERE email_lower = lower('${email}') RETURNING 1), \
+          p AS (UPDATE public.users SET is_verified = true WHERE lower(email) = lower('${email}') RETURNING 1) \
+     SELECT (SELECT count(*) FROM a) || ' ' || (SELECT count(*) FROM p)" | tail -n 1)"
+  [ "${n}" = "1 1" ] || die "verify-user: want one auth.users and one public.users row, got ${n:-none}"
+  printf 'verified %s in auth.users and public.users\n' "${email}"
+}
+
 verb="${1:-}"
 case "${verb}" in
   up)
@@ -386,5 +415,9 @@ case "${verb}" in
     [ "$#" -eq 2 ] || die "usage: start-auth STATE_DIR"
     start_auth "$2"
     ;;
-  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth" ;;
+  verify-user)
+    [ "$#" -eq 3 ] || die "usage: verify-user STATE_DIR EMAIL"
+    verify_user "$2" "$3"
+    ;;
+  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | verify-user" ;;
 esac

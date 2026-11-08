@@ -156,10 +156,12 @@ setup() {
   printf 'devhealth_auth' >"$sec/runtime-role"
   printf 'devhealth_auth_migrator' >"$sec/owner-role"
   printf 'devhealth_api,devhealth_query_api' >"$sec/readers"
-  printf 'false' >"$sec/false"
+  # The one-shots take the posture of the chart's own auth-migrate hook Job at this release's phase 3: the chart renders
+  # no AUTH_USERS_OWNED there, so the Secret carries none (CHAOS-13356: no venue sets the switch false; the chart's
+  # phases go with CHAOS-13351 PR-C).
   mk_secret drill-auth-oneshot "AUTH_MIGRATION_DATABASE_URI=$sec/dsn-migrator" "AUTH_DATABASE_SCHEMA=$sec/schema" \
     "AUTH_RUNTIME_DATABASE_ROLE=$sec/runtime-role" "AUTH_SCHEMA_OWNER_ROLE=$sec/owner-role" \
-    "AUTH_SESSION_READER_ROLES=$sec/readers" "AUTH_USERS_OWNED=$sec/false"
+    "AUTH_SESSION_READER_ROLES=$sec/readers"
   mk_secret drill-owner-grants "AUTH_MIGRATION_DATABASE_URI=$sec/dsn-super" "AUTH_DATABASE_SCHEMA=$sec/schema" \
     "AUTH_RUNTIME_DATABASE_ROLE=$sec/runtime-role"
   echo "secrets created (values in $sec, 0600)"

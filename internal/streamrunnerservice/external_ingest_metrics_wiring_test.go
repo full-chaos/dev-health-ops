@@ -70,7 +70,7 @@ func TestExternalProfileWiresReachableIngestCounters(t *testing.T) {
 		wantObserver bool
 	}{
 		{profile: "external", kind: externalIngestHandlerKind, wantObserver: true},
-		{profile: "ingest", kind: internalIngestHandlerKind, wantObserver: false},
+		{profile: "ingest", kind: productTelemetryHandlerKind, wantObserver: false},
 	} {
 		t.Run(testCase.profile, func(t *testing.T) {
 			storage := &observingStreamStorage{}

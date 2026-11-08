@@ -55,6 +55,7 @@ internal/auth/authruntime	fixed_credential_scan_test.go	internal/auth/authruntim
 internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	pgusers_census_test.go	internal/auth/authruntime	dir	*
+internal/auth/authruntime	queryapi_enforce_parity_integration_test.go	unexpressed	-	-
 internal/auth/authruntime	refresh_ttl_source_test.go	internal/auth/authruntime	dir	*
 internal/auth/contracts	access_token_goldens_test.go	contracts/auth/v1/examples/access-token	dir	*
 internal/auth/contracts	acr_embedded_schema_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*

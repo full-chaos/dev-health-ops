@@ -3,6 +3,7 @@ package logging_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/printer"
@@ -56,6 +57,7 @@ type listedPackage struct {
 	Name       string
 	Dir        string
 	GoFiles    []string
+	CgoFiles   []string
 	Deps       []string
 	Module     *struct{ Path string }
 }
@@ -80,7 +82,7 @@ var defaultLoggingCalls = map[string]map[string]bool{
 func loadCmdPackages(t *testing.T) (map[string]listedPackage, map[string][]*ast.File, *token.FileSet) {
 	t.Helper()
 	root := moduleRoot(t)
-	command := exec.Command("go", "list", "-deps", "-json=ImportPath,Name,Dir,GoFiles,Deps,Module", "./cmd/...")
+	command := exec.Command("go", "list", "-deps", "-json=ImportPath,Name,Dir,GoFiles,CgoFiles,Deps,Module", "./cmd/...")
 	command.Dir = root
 	output, err := command.Output()
 	if err != nil {
@@ -106,7 +108,7 @@ func loadCmdPackages(t *testing.T) (map[string]listedPackage, map[string][]*ast.
 		if listed.Module == nil || listed.Module.Path != modulePath {
 			continue
 		}
-		for _, name := range listed.GoFiles {
+		for _, name := range linkedSourceFiles(listed) {
 			file, err := parser.ParseFile(fileSet, filepath.Join(listed.Dir, name), nil, 0)
 			if err != nil {
 				t.Fatalf("parse %s: %v", name, err)
@@ -115,6 +117,11 @@ func loadCmdPackages(t *testing.T) (map[string]listedPackage, map[string][]*ast.
 		}
 	}
 	return packages, parsed, fileSet
+}
+
+// linkedSourceFiles names the files of listed that are parsed for the scans.
+func linkedSourceFiles(listed listedPackage) []string {
+	return listed.GoFiles
 }
 
 // TestEveryBinaryLogsThroughTheRedactingHandler proves by enumeration that
@@ -240,6 +247,14 @@ func requireCall(t *testing.T, binary string, files []*ast.File, path, function 
 // requireFuncCall is requireCall for any top-level function named caller.
 func requireFuncCall(t *testing.T, binary string, files []*ast.File, caller, path, function string) {
 	t.Helper()
+	if !funcCalls(files, caller, path, function) {
+		t.Errorf("binary %s: func %s does not call %s.%s as a top-level statement", binary, caller, path, function)
+	}
+}
+
+// funcCalls reports whether the top-level function named caller calls
+// path.function as one of its own top-level statements.
+func funcCalls(files []*ast.File, caller, path, function string) bool {
 	found := false
 	for _, file := range files {
 		names := importNames(file)
@@ -262,9 +277,7 @@ func requireFuncCall(t *testing.T, binary string, files []*ast.File, caller, pat
 			}
 		}
 	}
-	if !found {
-		t.Errorf("binary %s: func %s does not call %s.%s as a top-level statement", binary, caller, path, function)
-	}
+	return found
 }
 
 // topLevelCall reports whether expression is a call of path.function, or a
@@ -356,6 +369,22 @@ var deployedServices = []string{
 func TestEveryServiceInstallsTheJSONHandler(t *testing.T) {
 	t.Parallel()
 	packages, parsed, fileSet := loadCmdPackages(t)
+	if len(packages[modulePath+"/cmd/auth-service"].GoFiles) == 0 {
+		t.Error("cmd/auth-service is not listed")
+	}
+	for _, finding := range serviceHandlerCensus(fileSet, parsed) {
+		t.Error(finding)
+	}
+}
+
+// serviceHandlerCensus runs the census checks over parsed (import path to
+// the parsed non-test files of that package) and returns one finding per
+// failed check.
+func serviceHandlerCensus(fileSet *token.FileSet, parsed map[string][]*ast.File) []string {
+	var findings []string
+	report := func(format string, arguments ...any) {
+		findings = append(findings, fmt.Sprintf(format, arguments...))
+	}
 	loggingPath := modulePath + "/internal/platform/logging"
 	shellPath := modulePath + "/internal/platform/shell"
 
@@ -374,21 +403,25 @@ func TestEveryServiceInstallsTheJSONHandler(t *testing.T) {
 	}
 	for _, service := range deployedServices {
 		if !callers[service] {
-			t.Errorf("service %s does not call shell.Execute (or is not linked by a cmd binary)", service)
+			report("service %s does not call shell.Execute (or is not linked by a cmd binary)", service)
 		}
 		delete(callers, service)
 	}
 	for extra := range callers {
-		t.Errorf("%s calls shell.Execute but is not named in deployedServices", extra)
+		report("%s calls shell.Execute but is not named in deployedServices", extra)
 	}
 
-	requireInstallsJSON(t, parsed[shellPath], "Execute", loggingPath)
-	requireInstallsJSON(t, parsed[modulePath+"/internal/auth/authruntime"], "Execute", loggingPath)
-	if len(packages[modulePath+"/cmd/auth-service"].GoFiles) == 0 {
-		t.Error("cmd/auth-service is not listed")
+	for _, entry := range []string{shellPath, modulePath + "/internal/auth/authruntime"} {
+		if !installsJSON(parsed[entry], "Execute", loggingPath) {
+			report("func %s does not install a logger built by logging.NewJSON through a top-level defer logging.InstallDefault", "Execute")
+		}
 	}
-	requireCall(t, "auth-service", parsed[modulePath+"/cmd/auth-service"], modulePath+"/internal/auth/authruntime", "Main")
-	requireCall(t, "dho", parsed[modulePath+"/cmd/dho"], modulePath+"/internal/cli", "Main")
+	if !funcCalls(parsed[modulePath+"/cmd/auth-service"], "main", modulePath+"/internal/auth/authruntime", "Main") {
+		report("binary auth-service: func main does not call %s.Main as a top-level statement", modulePath+"/internal/auth/authruntime")
+	}
+	if !funcCalls(parsed[modulePath+"/cmd/dho"], "main", modulePath+"/internal/cli", "Main") {
+		report("binary dho: func main does not call %s.Main as a top-level statement", modulePath+"/internal/cli")
+	}
 
 	for path, files := range parsed {
 		if path == loggingPath {
@@ -401,22 +434,23 @@ func TestEveryServiceInstallsTheJSONHandler(t *testing.T) {
 				switch {
 				case callPath == "log/slog" && function == "NewTextHandler", callPath == "log/slog" && function == "NewJSONHandler":
 					if !discardsOutput(call) {
-						t.Errorf("%s: %s builds a slog handler on a real writer", where, render(call))
+						report("%s: %s builds a slog handler on a real writer", where, render(call))
 					}
 				case callPath == "log" && function == "SetOutput":
 					if !discardsOutput(call) {
-						t.Errorf("%s: %s points the standard log package at a raw writer", where, render(call))
+						report("%s: %s points the standard log package at a raw writer", where, render(call))
 					}
 				case callPath == "log/slog" && function == "SetDefault":
-					t.Errorf("%s: %s installs a default handler outside logging.InstallDefault", where, render(call))
+					report("%s: %s installs a default handler outside logging.InstallDefault", where, render(call))
 				case callPath == loggingPath && function == "InstallDefault":
 					if len(call.Args) != 1 || !jsonInstallArgument(call.Args[0], names, loggingPath, true) {
-						t.Errorf("%s: %s does not install logging.NewJSON", where, render(call))
+						report("%s: %s does not install logging.NewJSON", where, render(call))
 					}
 				}
 			})
 		}
 	}
+	return findings
 }
 
 // discardsOutput reports whether the call's writer (first argument) is
@@ -467,12 +501,11 @@ func jsonInstallArgument(argument ast.Expr, names map[string]string, loggingPath
 	return false
 }
 
-// requireInstallsJSON checks that the top-level function named function
+// installsJSON reports whether the top-level function named function
 // declares logger := logging.NewJSON(...) and later runs
 // defer logging.InstallDefault(logger)() as one of its own top-level
 // statements, so every run of the entry point logs through the JSON handler.
-func requireInstallsJSON(t *testing.T, files []*ast.File, function, loggingPath string) {
-	t.Helper()
+func installsJSON(files []*ast.File, function, loggingPath string) bool {
 	found := false
 	for _, file := range files {
 		names := importNames(file)
@@ -503,7 +536,422 @@ func requireInstallsJSON(t *testing.T, files []*ast.File, function, loggingPath 
 			}
 		}
 	}
-	if !found {
-		t.Errorf("func %s does not install a logger built by logging.NewJSON through a top-level defer logging.InstallDefault", function)
+	return found
+}
+
+// censusBaseline is the smallest source tree serviceHandlerCensus accepts:
+// keys are file paths relative to the module root.
+func censusBaseline() map[string]string {
+	const entry = `import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	logger := logging.NewJSON(os.Stdout, 0)
+	defer logging.InstallDefault(logger)()
+	logger.Info("run")
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`
+	files := map[string]string{
+		"internal/platform/shell/shell.go":     "package shell\n\n" + entry,
+		"internal/auth/authruntime/runtime.go": "package authruntime\n\n" + entry,
+		"cmd/auth-service/main.go":             "package main\n\nimport \"github.com/full-chaos/dev-health-ops/internal/auth/authruntime\"\n\nfunc main() { authruntime.Main() }\n",
+		"cmd/dho/main.go":                      "package main\n\nimport \"github.com/full-chaos/dev-health-ops/internal/cli\"\n\nfunc main() { cli.Main() }\n",
+	}
+	for _, service := range deployedServices {
+		files[service+"/service.go"] = "package " + filepath.Base(service) + "\n\nimport \"github.com/full-chaos/dev-health-ops/internal/platform/shell\"\n\nfunc Run() int { return shell.Execute() }\n"
+	}
+	return files
+}
+
+// censusFixtures feed serviceHandlerCensus a synthetic tree: the baseline
+// with files added or replaced. Each names the review cell (C*) or the rule
+// clause (R*) it pins; accept says whether the census must accept the tree.
+var censusFixtures = []struct {
+	name   string
+	accept bool
+	files  map[string]string
+}{
+	{name: "baseline", accept: true},
+	{name: "C1a linked package installs slog.Default through a variable", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"log/slog"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func install() func() {
+	logger := slog.Default()
+	return logging.InstallDefault(logger)
+}
+`}},
+	{name: "C1b shell entry point reassigns its JSON logger before the install", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	logger := logging.NewJSON(os.Stdout, 0)
+	logger = slog.Default()
+	defer logging.InstallDefault(logger)()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "C1b authruntime entry point reassigns its JSON logger before the install", files: map[string]string{
+		"internal/auth/authruntime/runtime.go": `package authruntime
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	logger := logging.NewJSON(os.Stdout, 0)
+	logger = slog.Default()
+	defer logging.InstallDefault(logger)()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "C2 dot-imported slog installs a text handler", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	. "log/slog"
+	"os"
+)
+
+func init() { SetDefault(New(NewTextHandler(os.Stderr, nil))) }
+`}},
+	{name: "C2 dot-imported log writes raw to stderr", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	. "log"
+	"os"
+)
+
+func init() { SetOutput(os.Stderr) }
+`}},
+	{name: "C2 dot-imported logging installs slog.Default", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"log/slog"
+
+	. "github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func init() { InstallDefault(slog.Default()) }
+`}},
+	{name: "C2 aliased slog installs a text handler (guard: refused before the fix too)", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"os"
+	s "log/slog"
+)
+
+func init() { s.SetDefault(s.New(s.NewTextHandler(os.Stderr, nil))) }
+`}},
+	{name: "C3 cmd/dho calls shell.Execute through a dot import", files: map[string]string{
+		"cmd/dho/main.go": `package main
+
+import (
+	"github.com/full-chaos/dev-health-ops/internal/cli"
+	. "github.com/full-chaos/dev-health-ops/internal/platform/shell"
+)
+
+func main() { cli.Main() }
+
+func serve() int { return Execute() }
+`}},
+	{name: "C3 cmd/dho calls shell.Main through a function variable", files: map[string]string{
+		"cmd/dho/main.go": `package main
+
+import (
+	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
+)
+
+func main() { cli.Main() }
+
+func serve() {
+	run := shell.Main
+	run()
+}
+`}},
+	{name: "C5 R4 a local alias of io.Discard is a discarding writer", accept: true, files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"io"
+	"log"
+	"log/slog"
+)
+
+func quiet() {
+	output := io.Discard
+	log.SetOutput(output)
+	_ = slog.NewTextHandler(output, nil)
+	_ = slog.NewJSONHandler(output, nil)
+}
+`}},
+	{name: "R1 dot import of logging, even around an otherwise allowed install", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"os"
+
+	. "github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func init() { InstallDefault(NewJSON(os.Stderr, 0)) }
+`}},
+	{name: "R2 slog.SetDefault as a function value", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func init() {
+	set := slog.SetDefault
+	set(logging.NewJSON(os.Stderr, 0))
+}
+`}},
+	{name: "R2 slog.NewTextHandler as a function value", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"log/slog"
+	"os"
+)
+
+var build = slog.NewTextHandler
+
+func logger() *slog.Logger { return slog.New(build(os.Stderr, nil)) }
+`}},
+	{name: "R3a logger declared by var, not :=", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func install() func() {
+	var logger = logging.NewJSON(os.Stderr, 0)
+	return logging.InstallDefault(logger)
+}
+`}},
+	{name: "R3a logger is a package variable", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+var logger = logging.NewJSON(os.Stderr, 0)
+
+func install() func() { return logging.InstallDefault(logger) }
+`}},
+	{name: "R3b logger reassigned in a nested block", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func install(quiet bool) func() {
+	logger := logging.NewJSON(os.Stderr, 0)
+	if quiet {
+		logger = slog.Default()
+	}
+	return logging.InstallDefault(logger)
+}
+`}},
+	{name: "R3b logger reassigned in a closure", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func install() func() {
+	logger := logging.NewJSON(os.Stderr, 0)
+	func() { logger = slog.Default() }()
+	return logging.InstallDefault(logger)
+}
+`}},
+	{name: "R3b logger reassigned in a multi-assign", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func install() func() {
+	logger := logging.NewJSON(os.Stderr, 0)
+	var err error
+	logger, err = slog.Default(), nil
+	_ = err
+	return logging.InstallDefault(logger)
+}
+`}},
+	{name: "R3b entry point logger written through a pointer", files: map[string]string{
+		"internal/platform/shell/shell.go": `package shell
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func Execute() int {
+	logger := logging.NewJSON(os.Stdout, 0)
+	*logger = *slog.Default()
+	defer logging.InstallDefault(logger)()
+	return 0
+}
+
+func Main() { os.Exit(Execute()) }
+`}},
+	{name: "R3c logger address taken", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"log/slog"
+	"os"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+func install() func() {
+	logger := logging.NewJSON(os.Stderr, 0)
+	swap(&logger)
+	return logging.InstallDefault(logger)
+}
+
+func swap(target **slog.Logger) { *target = slog.Default() }
+`}},
+	{name: "R4 a reassigned io.Discard alias is a real writer (guard: refused before the fix too)", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"io"
+	"log"
+	"os"
+)
+
+func loud() {
+	output := io.Discard
+	output = os.Stderr
+	log.SetOutput(output)
+}
+`}},
+	{name: "R4 a discard{} literal of a type that writes is a real writer", files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import (
+	"log/slog"
+	"os"
+)
+
+type discard struct{}
+
+func (discard) Write(p []byte) (int, error) { return os.Stderr.Write(p) }
+
+func logger() *slog.Logger { return slog.New(slog.NewJSONHandler(discard{}, nil)) }
+`}},
+	{name: "R4 a discard{} literal of a type that drops every write (guard)", accept: true, files: map[string]string{
+		"internal/apiservice/zz_fixture.go": `package apiservice
+
+import "log/slog"
+
+type discard struct{}
+
+func (discard) Write(p []byte) (int, error) { return len(p), nil }
+
+func logger() *slog.Logger { return slog.New(slog.NewJSONHandler(discard{}, nil)) }
+`}},
+}
+
+func TestServiceHandlerCensusFixtures(t *testing.T) {
+	t.Parallel()
+	for _, fixture := range censusFixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			t.Parallel()
+			tree := censusBaseline()
+			for name, source := range fixture.files {
+				tree[name] = source
+			}
+			fileSet := token.NewFileSet()
+			parsed := map[string][]*ast.File{}
+			for name, source := range tree {
+				file, err := parser.ParseFile(fileSet, name, source, 0)
+				if err != nil {
+					t.Fatalf("parse %s: %v", name, err)
+				}
+				path := modulePath + "/" + filepath.Dir(name)
+				parsed[path] = append(parsed[path], file)
+			}
+			findings := serviceHandlerCensus(fileSet, parsed)
+			switch {
+			case fixture.accept && len(findings) > 0:
+				t.Errorf("census refused a tree it must accept: %q", findings)
+			case !fixture.accept && len(findings) == 0:
+				t.Error("census accepted a tree it must refuse")
+			}
+		})
+	}
+}
+
+// TestLinkedSourceFilesIncludeCgoFiles pins that the scans parse the Cgo
+// files go list reports apart from GoFiles: a binary links them too.
+func TestLinkedSourceFilesIncludeCgoFiles(t *testing.T) {
+	t.Parallel()
+	got := linkedSourceFiles(listedPackage{GoFiles: []string{"plain.go"}, CgoFiles: []string{"with_cgo.go"}})
+	want := map[string]bool{"plain.go": true, "with_cgo.go": true}
+	if len(got) != len(want) {
+		t.Fatalf("linkedSourceFiles = %q, want %d files", got, len(want))
+	}
+	for _, name := range got {
+		if !want[name] {
+			t.Errorf("linkedSourceFiles returned unexpected %q", name)
+		}
 	}
 }

@@ -58,7 +58,7 @@ func authenticateRESTRouted(w http.ResponseWriter, r *http.Request, edgeVerifier
 			requestID = ""
 		}
 		slog.WarnContext(r.Context(), "query-api: access token check failed",
-			slog.String("component", component), slog.String("request_id", requestID),
+			slog.String("component", component), slog.String("request_id", logSafeRequestID(requestID)),
 			slog.Bool("unavailable", errors.Is(err, policy.ErrUnavailable)), logging.ErrorAttr(err))
 		policy.WriteAuthFailure(w, "", err)
 	}

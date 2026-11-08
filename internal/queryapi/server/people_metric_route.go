@@ -125,7 +125,7 @@ func buildPeopleMetricRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler
 func writePeopleMetricResponse(w http.ResponseWriter, r *http.Request, orgID string, resp people.MetricResponse) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: people_metric: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }

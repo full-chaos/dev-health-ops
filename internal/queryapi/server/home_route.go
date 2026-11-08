@@ -427,7 +427,7 @@ func homeFiltersFromMap(filters map[string]any) home.Filters {
 func writeHomeResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *home.Response) {
 	if encodeErr := writeModelResponse(w, homeRESTResponseFrom(resp)); encodeErr != nil {
 		log.Printf("query-api: home: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }

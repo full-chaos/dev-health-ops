@@ -88,7 +88,7 @@ func writePydanticValidationError(w http.ResponseWriter, r *http.Request, orgID 
 	body.Set("detail", list)
 	if _, err := pyjson.Marshal(body); err != nil {
 		log.Printf("query-api: validation-error response is not renderable, answering 500 as FastAPI does: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), err)
+			orgID, logSafeRequestID(envelopeRequestID(r)), err)
 		policy.WriteDetail(w, http.StatusInternalServerError, "Internal Server Error", nil)
 		return
 	}

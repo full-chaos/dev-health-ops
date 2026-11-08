@@ -265,7 +265,7 @@ func TestBuildInfoTakesEitherCarrierAndRefusesBoth(t *testing.T) {
 func TestBrowserReachableRESTAuthIgnoresTheInternalHeaders(t *testing.T) {
 	verifier, _ := iaVerifier(t)
 	m := newAccessMinter(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(newAccessStore()))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(newAccessStore()))
 	if err != nil {
 		t.Fatal(err)
 	}

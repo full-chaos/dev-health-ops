@@ -119,3 +119,26 @@ func TestPrincipalsRefuseAnEmailOfAnotherUUIDEvenAmongPlatformAdmins(t *testing.
 		t.Fatal("a platform admin took the email of another platform admin with a different uuid")
 	}
 }
+
+// The superuser-O exemption is by exact uuid, declared in the principals file by a superuser_o line; the role string alone
+// exempts nothing, and a second platform_admin_org uuid that is not listed is refused.
+func TestSuperuserOrgExemptionNeedsAListedUUID(t *testing.T) {
+	_, raw := testPrincipals(t)
+	const listed, unlisted = "abababab-abab-4bab-8bab-abababababab", "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd"
+	pw := "/var/lib/oci-cache/lane-scratch/pm-13267/none.pw"
+	so := func(name, uuid string) string {
+		return "principal\t" + name + "\tso-" + name + "@example.test\t" + uuid + "\tA\tplatform_admin_org\t" + pw + "\n"
+	}
+	if _, err := ParsePrincipals([]byte(raw + "superuser_o\tsuperuser-O\t-\t" + listed + "\t-\t-\t-\n" + so("superuser-A", listed))); err != nil {
+		t.Fatalf("a listed superuser-O uuid was refused: %v", err)
+	}
+	for name, file := range map[string]string{
+		"no superuser_o line": raw + so("superuser-A", listed),
+		"another uuid listed": raw + "superuser_o\tsuperuser-O\t-\t" + listed + "\t-\t-\t-\n" + so("superuser-A", unlisted),
+		"second unlisted":     raw + "superuser_o\tsuperuser-O\t-\t" + listed + "\t-\t-\t-\n" + so("superuser-A", listed) + so("superuser-B", unlisted),
+	} {
+		if _, err := ParsePrincipals([]byte(file)); err == nil || !strings.Contains(err.Error(), "not listed") {
+			t.Errorf("%s: want a refusal naming the unlisted uuid, got %v", name, err)
+		}
+	}
+}

@@ -7,10 +7,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -457,5 +461,39 @@ func TestMintStepWritesTokenFilesAndPrintsNoToken(t *testing.T) {
 	}
 	if !strings.HasPrefix(out.String(), "member-A\tprn_") {
 		t.Fatalf("mint line %q", out.String())
+	}
+}
+
+// Both judging commands set Strict on the options they build: a run without claim read-back and body digests is never
+// judged. The pin reads the source, so a command that drops the field fails here.
+func TestBothJudgingCommandsSetStrict(t *testing.T) {
+	_, self, _, _ := runtime.Caller(0)
+	file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(filepath.Dir(self), "main.go"), nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		sel, ok := lit.Type.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "JudgeOptions" && sel.Sel.Name != "EnforcedInput") {
+			return true
+		}
+		for _, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Strict" {
+					if val, ok := kv.Value.(*ast.Ident); ok && val.Name == "true" {
+						found[sel.Sel.Name] = true
+					}
+				}
+			}
+		}
+		return true
+	})
+	if !found["JudgeOptions"] || !found["EnforcedInput"] {
+		t.Fatalf("Strict: true is not set on both: %v", found)
 	}
 }

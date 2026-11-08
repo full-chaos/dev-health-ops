@@ -670,6 +670,9 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 		verdicts[i] = fmt.Sprintf("%s %d", verdict, counts[verdict])
 	}
 	fmt.Fprintf(stdout, "judge-enforced: slots %s\n", strings.Join(verdicts, ", "))
+	if noOrg, served, other, err := shadowvenue.UnjudgedTotals(files["metrics-before"], files["metrics-after"]); err == nil {
+		fmt.Fprintf(stdout, "judge-enforced: unjudged no_org %d, served_org %d, other %d\n", noOrg, served, other)
+	}
 	fmt.Fprintf(stdout, "judge-enforced: void %v, exit %d, table %s\n", report.Void, report.Exit(), *out)
 	return finish(file, report.Exit(), stderr)
 }

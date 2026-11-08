@@ -157,3 +157,25 @@ func relabelNoOrgSkips(slots []SlotVerdict, evidence NoOrgEvidence) {
 		}
 	}
 }
+
+// UnjudgedTotals sums the increase of the unjudged counter over all routes: reason no_org, reason served_org, and every
+// other reason together, so the record shows the two counts the verdicts rest on on their own line.
+func UnjudgedTotals(before, after []byte) (noOrg, servedOrg, other int, err error) {
+	all, err := ParseUnjudgedReasons(before, after)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	for _, reasons := range all {
+		for reason, n := range reasons {
+			switch reason {
+			case "no_org":
+				noOrg += n
+			case "served_org":
+				servedOrg += n
+			default:
+				other += n
+			}
+		}
+	}
+	return noOrg, servedOrg, other, nil
+}

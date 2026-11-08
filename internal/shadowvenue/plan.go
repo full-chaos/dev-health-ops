@@ -37,6 +37,9 @@ func (p Principal) Caller() string {
 
 type seed struct{ Name, UUID, Org string }
 
+// superuserOKind is the principals-file kind that lists a superuser-O uuid; only a listed uuid may carry the role.
+const superuserOKind = "superuser_o"
+
 // Venue is the principals file: the proof orgs by label, the principals, and the seed rows by kind.
 type Venue struct {
 	Orgs       map[string]string
@@ -62,6 +65,7 @@ func ParsePrincipals(raw []byte) (Venue, error) {
 		return Venue{}, fmt.Errorf("principals: the first line is not %q", principalsHeader)
 	}
 	names := map[string]bool{}
+	listedSO := map[string]bool{}
 	byUUID, byEmail := map[string]Principal{}, map[string]Principal{}
 	for n, line := range lines[1:] {
 		f := strings.Split(line, "\t")
@@ -98,6 +102,11 @@ func ParsePrincipals(raw []byte) (Venue, error) {
 			}
 			byUUID[p.UUID], byEmail[p.Email] = p, p
 			v.Principals = append(v.Principals, p)
+		case superuserOKind:
+			if !isUUID(id) {
+				return Venue{}, fmt.Errorf("principals: line %d: %s needs a uuid", n+2, superuserOKind)
+			}
+			listedSO[strings.ToLower(id)] = true
 		default:
 			if _, dup := v.seeds[kind]; !dup {
 				v.seeds[kind] = seed{Name: name, UUID: strings.ToLower(id), Org: org}
@@ -105,6 +114,9 @@ func ParsePrincipals(raw []byte) (Venue, error) {
 		}
 	}
 	for _, p := range v.Principals {
+		if p.IsSuperuserOrg() && !listedSO[p.UUID] {
+			return Venue{}, fmt.Errorf("principals: superuser-O principal %s has uuid %s, which no %s line lists: not listed, so no exemption", p.Name, p.UUID, superuserOKind)
+		}
 		if _, ok := v.Orgs[p.Org]; !ok && p.Org != none {
 			return Venue{}, fmt.Errorf("principals: principal %s names org %q, which the file does not list", p.Name, p.Org)
 		}

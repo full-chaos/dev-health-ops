@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -95,5 +96,60 @@ func TestDecideAdminUpdateComparesInTheWritePathForm(t *testing.T) {
 	d := DecideAdminUpdate(cur, &other, &yes)
 	if d.Email == nil || *d.Email != "new@x.test" || d.Verified == nil || !*d.Verified {
 		t.Errorf("new address and verified: %+v, want new@x.test and true", d)
+	}
+}
+
+// scriptedTx answers each QueryRow with the next bool and each Exec with the next command tag.
+type scriptedTx struct {
+	bools []bool
+	tags  []string
+}
+
+func (s *scriptedTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	tag := "UPDATE 1"
+	if len(s.tags) > 0 {
+		tag, s.tags = s.tags[0], s.tags[1:]
+	}
+	return pgconn.NewCommandTag(tag), nil
+}
+
+func (s *scriptedTx) QueryRow(context.Context, string, ...any) pgx.Row {
+	value := true
+	if len(s.bools) > 0 {
+		value, s.bools = s.bools[0], s.bools[1:]
+	}
+	return scriptedRow{value}
+}
+
+type scriptedRow struct{ value bool }
+
+func (r scriptedRow) Scan(dest ...any) error {
+	for _, d := range dest {
+		switch v := d.(type) {
+		case *bool:
+			*v = r.value
+		case *uuid.UUID:
+			*v = uuid.Nil
+		}
+	}
+	return nil
+}
+
+// AlreadyDone is go-api's: the user was inactive and no refresh token was left to revoke. An active user, or one with
+// a live refresh token, is not already done.
+func TestAdminSoftDeleteAlreadyDoneIsGoAPIs(t *testing.T) {
+	for _, c := range []struct {
+		active   bool
+		revoked  string
+		wantDone bool
+	}{{false, "UPDATE 0", true}, {false, "UPDATE 2", false}, {true, "UPDATE 0", false}} {
+		tx := &scriptedTx{bools: []bool{true, c.active}, tags: []string{c.revoked}}
+		got, err := applyAdminSoftDelete(context.Background(), tx, `"auth"`, uuid.New())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.WasActive != c.active || got.AlreadyDone != c.wantDone {
+			t.Errorf("active %v revoked %s: %+v, want already_done %v", c.active, c.revoked, got, c.wantDone)
+		}
 	}
 }

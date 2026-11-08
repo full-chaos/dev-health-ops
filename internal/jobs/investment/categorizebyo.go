@@ -224,6 +224,7 @@ func (byo *orgCategorizeBYO) Build(ctx context.Context, orgID string) (*ServedDe
 		_ = provider.Close()
 		return nil, refuseBYO("")
 	}
+	served.backend.baseURL = cfg.BaseURL
 	return served, nil
 }
 
@@ -254,6 +255,7 @@ func (byo *orgCategorizeBYO) buildClef(ctx context.Context, orgID string, cfg ll
 	}
 	served.byo = true
 	served.endpointType, served.gatewayID, _ = llmorgsettings.ClefEndpoint(cfg.BaseURL)
+	served.backend = attemptBackend{provider: llmorgsettings.ProviderClef, baseURL: postURL, byo: true}
 	return served, nil
 }
 
@@ -281,5 +283,6 @@ func (byo *orgCategorizeBYO) buildTypeSafe(orgID string, cfg llmorgsettings.OrgC
 		return nil, refuseBYO("")
 	}
 	served.byo = true
+	served.backend = attemptBackend{provider: llmorgsettings.ProviderTypeSafe, baseURL: llmorgsettings.TypeSafePostURL, byo: true}
 	return served, nil
 }

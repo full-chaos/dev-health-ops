@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -93,6 +94,19 @@ RETURNING `+providerColumns, providerID, orgID, status, h.Now().UTC()))
 const providerColumns = `id::text, org_id::text, name, protocol, status, default_role, is_default, allow_idp_initiated,
 	auto_provision_users, config::text, allowed_domains::text, last_metadata_sync_at, last_login_at, last_error_at,
 	last_error, created_at, updated_at`
+
+// providerByID is the sso_providers row query for a path provider id. An id uuid.UUID() refused runs no query and
+// scans as no rows, so the route gives its own unknown-id answer.
+func (h handlers) providerByID(ctx context.Context, columns string, id uuid.UUID, parseErr error) pgx.Row {
+	if parseErr != nil {
+		return noProviderRow{}
+	}
+	return h.Pool.QueryRow(ctx, `SELECT `+columns+` FROM sso_providers WHERE id = $1::uuid`, id)
+}
+
+type noProviderRow struct{}
+
+func (noProviderRow) Scan(...any) error { return pgx.ErrNoRows }
 
 func scanProvider(row pgx.Row) (*providerRow, error) {
 	var p providerRow

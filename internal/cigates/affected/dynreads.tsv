@@ -688,7 +688,6 @@ internal/testsupport/recordedfiles	recordedfiles_test.go
 internal/testsupport/sessionscenario	quirks.go
 internal/testsupport/sessionscenario	sessionscenario.go
 internal/testsupport/venuechanged	changed_test.go
-internal/testsupport/venuechanged	closure_test.go
 internal/testsupport/venuechanged	trigger_coverage_test.go
 internal/testsupport/venueoracle	external.go
 internal/testsupport/venueoracle	external_test.go

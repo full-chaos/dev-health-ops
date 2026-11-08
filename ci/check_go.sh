@@ -390,7 +390,9 @@ usage() {
          A path that ci/venue_oracle_triggers.d/ declares for a test (code outside
          its package whose behaviour the test compares; CHAOS-9172) selects that
          test too, and so does a file directly in a package of the dependency
-         closure (ci/venue_oracle_closure.d/, CHAOS-9935). No row selected is a loud no-op. With --list print the selected rows
+         closure (CHAOS-9935): derived from the tree (`go list -deps -test`) into
+         VENUE_CLOSURE_DIR when that directory does not exist, else into a fresh
+         temp directory, never committed (CHAOS-13101). No row selected is a loud no-op. With --list print the selected rows
          (SELECT, package, test, tab-separated) and run nothing.
          With SHARD COUNT (D6039a, CHAOS-9935) only the SHARD-th of COUNT
          cost-balanced slices of the SELECTED rows (ci/venue_oracle_shard.awk,
@@ -1659,7 +1661,7 @@ check_race_weights_rows() {
 
 # check_plan_reads: the declared-read guard of the plan verdict (`cmd/cigate plan-reads`) over the whole tree: every
 # package that names a path of a declared class in a string literal has a reads.tsv row, and --reach recomputes
-# reach.tsv (the programs that call each code-scope unbounded site: go/packages, SSA and RTA over the module; about
+# reach.d/ (the programs that call each code-scope unbounded site: go/packages, SSA and RTA over the module; about
 # 3 min and a 6.5 GiB live heap on 4 cores under the tool's own 8 GiB soft limit; a peak RSS over the 10 GiB budget, reachBudgetMiB, fails: >= 30% under a 16 GiB scope, e.g. capped.sh's GOMEMLIMIT 85% of MemoryMax) and fails on any difference. It runs in the static leg, which runs on every change. With PLAN_READS_REACH_CACHE set (the
 # GitHub-hosted legs only, go-quality.yml) a pull request reuses a store of the same input hash; PLAN_READS_REACH_FRESH (every
 # other event) computes fresh and only stores (CHAOS-11421).
@@ -1923,21 +1925,20 @@ venue_oracle_changed_selects() {
   if vo_grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
     own=0
   fi
-  # The dependency closure of the package's test binary (ci/venue_oracle_closure.d/, CHAOS-9935): a
-  # file directly in, or under testdata of, any package the test binary links selects every
-  # test of the package. Derived by a Go test from `go list -test`, so a missing hand row cannot
-  # hide a dependency. The directory is absent in a scratch tree that holds no Go module.
-  if [ -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
-    local closure_file="${ROOT}/ci/venue_oracle_closure.d/${1//\//__}.txt"
-    [ -f "${closure_file}" ] && [ -r "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is missing or not a readable regular file; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+  # The dependency closure of the package's test binary (VENUE_CLOSURE_DIR, CHAOS-9935): a file directly in, or under
+  # testdata of, any package the test binary links selects every test of the package. Derived from `go list -test`
+  # (venue_oracle_closure_derive), so a missing hand row cannot hide a dependency. A scratch tree with no Go module has none.
+  if [ -d "${VENUE_CLOSURE_DIR:-}" ]; then
+    local closure_file="${VENUE_CLOSURE_DIR}/${1//\//__}.txt"
+    [ -f "${closure_file}" ] && [ -r "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is missing or not a readable regular file; the derivation did not write it"
     # a file that is empty, or holds a line that is not `<dir>` or `~<dir>`, was not written by the generator: refuse it
-    [ -s "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is empty; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+    [ -s "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is empty; the derivation did not write it"
     if vo_grep -qvE '^(~[^[:cntrl:]]+|[^~[:cntrl:]][^[:cntrl:]]*)$' "${closure_file}"; then
-      die "venue-oracles --changed: ${closure_file} has a line that is not a package directory or ~directory; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+      die "venue-oracles --changed: ${closure_file} has a line that is not a package directory or ~directory; the derivation did not write it"
     fi
     # a path with an empty, "." or ".." segment, a leading slash or a trailing slash can never match a changed path
     if vo_grep -qE '^~?/|//|/$|(^|[~/])\.\.?(/|$)' "${closure_file}"; then
-      die "venue-oracles --changed: ${closure_file} has a line that is not a clean relative directory (empty, dot or slash segment); regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+      die "venue-oracles --changed: ${closure_file} has a line that is not a clean relative directory (empty, dot or slash segment); the derivation did not write it"
     fi
     [ "${own}" -ne 0 ] || return 0
     if [ -n "${VENUE_CHANGED_DIRS:-}" ] && vo_grep -qxFf "${closure_file}" < <(printf '%s\n' "${VENUE_CHANGED_DIRS}"); then
@@ -2026,17 +2027,36 @@ venue_oracle_known_summary() {
   printf 'KNOWN-DIVERGENCE skips: %d (tickets %s)\n' "${count}" "${tickets:-none}"
 }
 
+# venue_oracle_closure_derive DIR: write the dependency closure of every venue test binary into DIR, one <package>.txt
+# each, from `go list -deps -test` over this tree (CHAOS-13101: derived, never committed). Its output goes to stderr.
+venue_oracle_closure_derive() {
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off VENUE_CLOSURE_WRITE=1 VENUE_CLOSURE_DIR="$1" \
+    go test -count=1 -run '^TestClosureFilesMatchTheTestBinaryDependencies$' ./internal/testsupport/venuechanged >&2) \
+    || die "venue-oracles --changed: could not derive the venue test closures into $1 (see above)"
+  [ -d "$1" ] || die "venue-oracles --changed: the derivation of the venue test closures wrote no $1"
+}
+
 check_venue_oracles() {
   local shard="${1:-}" shard_count="${2:-}" changed="${VENUE_CHANGED_FILE:-}"
   if [ -n "${changed}" ]; then
     [ -r "${changed}" ] || die "venue-oracles --changed: ${changed} is missing or unreadable"
   fi
   if [ -n "${changed}" ]; then
-    # CHAOS-9935: in the real tree (it holds the generator of the closure files) a missing closure directory is an
-    # error, never "no closure": the selection would silently drop every dependency rule and read as a green no-op.
-    # A scratch tree with no Go module has neither the generator nor the directory and keeps the package and row rules.
-    if [ -d "${ROOT}/internal/testsupport/venuechanged" ] && [ ! -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
-      die "venue-oracles --changed: ${ROOT}/ci/venue_oracle_closure.d is missing; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+    # CHAOS-9935, CHAOS-13101: in the real tree (it holds the generator) the closure is derived before any selection:
+    # into VENUE_CLOSURE_DIR when that directory does not exist yet (the hosted job derives once and its later steps
+    # read it), into a temp directory removed at exit when it is unset; an existing VENUE_CLOSURE_DIR is read as it is. A failed
+    # derivation stops the run, never "no closure". A scratch tree with no Go module has no generator and keeps the
+    # package and row rules, plus ci/venue_oracle_closure.d when a test fixture writes one.
+    if [ -d "${ROOT}/internal/testsupport/venuechanged" ]; then
+      if [ -z "${VENUE_CLOSURE_DIR:-}" ]; then
+        VENUE_CLOSURE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-closure.XXXXXX")" \
+          || die "venue-oracles --changed: no temp directory for the venue test closures"
+        trap 'rm -rf -- "${VENUE_CLOSURE_TMP}"' EXIT
+        VENUE_CLOSURE_DIR="${VENUE_CLOSURE_TMP}/closure"
+      fi
+      [ -d "${VENUE_CLOSURE_DIR}" ] || venue_oracle_closure_derive "${VENUE_CLOSURE_DIR}"
+    else
+      VENUE_CLOSURE_DIR="${VENUE_CLOSURE_DIR:-${ROOT}/ci/venue_oracle_closure.d}"
     fi
     # The package directory of every changed path (a path under .../testdata belongs to the package
     # above it), for the closure rule of venue_oracle_changed_selects.

@@ -355,7 +355,7 @@ jobs:
         run: echo "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build" >> "${GITHUB_ENV}"
 
       - name: Point the plan-reads call graph at its store (GitHub-hosted static leg)
-        # CHAOS-11421: the static leg recomputes reach.tsv from the call graph (about 4 min, 13 to 15 GiB) on every change.
+        # CHAOS-11421: the static leg recomputes reach.d from the call graph (about 4 min, 13 to 15 GiB) on every change.
         # Only a pull request may READ a stored result (the restore below); a merge-queue run and a push to main always
         # compute fresh (PLAN_READS_REACH_FRESH makes the tool ignore any store), and a push to main saves what it computed.
         # The key here is coarse (a hash of the Go files, go.mod/go.sum and the read tables); the tool itself names the
@@ -366,7 +366,7 @@ jobs:
         if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static'
         env:
           EVENT_NAME: ${{ github.event_name }}
-          REACH_KEY: plan-reads-reach-v3-${{ hashFiles('**/*.go', '**/go.mod', '**/go.sum', 'internal/cigates/affected/*.tsv') }}
+          REACH_KEY: plan-reads-reach-v3-${{ hashFiles('**/*.go', '**/go.mod', '**/go.sum', 'internal/cigates/affected/*.tsv', 'internal/cigates/affected/reach.d/*.tsv') }}
         run: |
           set -euo pipefail
           printf 'key=%s\n' "${REACH_KEY}" >> "${GITHUB_OUTPUT}"
@@ -376,7 +376,7 @@ jobs:
           fi
 
       - name: Restore the plan-reads call-graph result (pull requests, GitHub-hosted static leg)
-        # CHAOS-11421: exact key, no restore-keys. The result is compared with reach.tsv again on a hit. The stored header
+        # CHAOS-11421: exact key, no restore-keys. The result is compared with reach.d again on a hit. The stored header
         # binds its rows to the exact input hash (rows-sha256): a store that fails the digest is refused and the leg
         # computes fresh. The directory is under RUNNER_TEMP, outside the workspace; only the tool (after a green computed
         # run), this restore and the save step below touch it (reach_store_hosted_only_test.go).

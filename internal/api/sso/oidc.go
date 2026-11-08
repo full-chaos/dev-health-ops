@@ -64,13 +64,10 @@ package sso
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -785,39 +782,6 @@ func mustParseUUID(text string) uuid.UUID {
 }
 
 func uuidPtr(id uuid.UUID) *uuid.UUID { return &id }
-
-// hashRefreshJTI is refresh_tokens._hash_token: sha256 of the jti's UTF-8
-// bytes, the same hash refreshByHash (internal/api/session/store.go) looks
-// up by. Duplicated rather than exported: one call site (login.go's
-// finishSSOLogin), and the session package's own copy is unexported for
-// the same reason.
-func hashRefreshJTI(jti string) string {
-	sum := sha256.Sum256([]byte(jti))
-	return hex.EncodeToString(sum[:])
-}
-
-// clientHost is request.client.host: the peer's host, nil without one.
-func clientHost(r *http.Request) *string {
-	if r.RemoteAddr == "" {
-		return nil
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	return &host
-}
-
-// userAgentHeader is request.headers.get("user-agent"): the first value,
-// nil when absent.
-func userAgentHeader(r *http.Request) *string {
-	values := r.Header.Values("User-Agent")
-	if len(values) == 0 {
-		return nil
-	}
-	value := policy.Latin1(values[0])
-	return &value
-}
 
 // exchangeOIDCCode is the token-endpoint call: client_secret and the code ride its BODY, which a 307 would send again
 // to any host, so it follows no redirect whatever client was supplied.

@@ -22,11 +22,11 @@ import (
 // loopbackPort is the random loopback port of a run: the Python edge's typed errors name the query-api it forwarded to.
 var loopbackPort = regexp.MustCompile(`127\.0\.0\.1:\d+`)
 
-// edgeFixedToken signs the two time-bound access tokens of the edge oracle (one signed with another key and
-// valid in time, one expired) with instants written in the test: a token valid until 2100 and one that
-// expired in 2020, with a fixed issue time and id. The decision a plane takes on them (accept, refuse) does not
-// depend on the day the test runs, and the recorded request is the same in every run. The golden stores no
-// token: a bearer token is projected to its claims.
+// edgeFixedToken is an HS256 access token of the recording's class with instants written in the test (valid until
+// 2100, or expired in 2020) and a fixed issue time and id: the same bytes in every run. The recording sent such
+// tokens for the time-bound cases (one signed with another key and valid in time, one expired) and for the cases
+// that present a valid token under another scheme. The replay sends user access tokens instead and keys each
+// request as the recorded one (venueoracle.KeyAs); an HS256 token reaches the plane only in the retired-class cell.
 func edgeFixedToken(t *testing.T, key string, user edgeUser, expired bool) string {
 	t.Helper()
 	expires := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -50,8 +50,12 @@ func edgeFixedToken(t *testing.T, key string, user edgeUser, expired bool) strin
 // (every registered document and the refusal domain, routing rows off, a write, an unreachable Postgres). The
 // Python plane runs only while recording; a frozen run sends the requests to query-api and compares what it
 // answers with the recorded Python answers (status, body, headers). The requests are the same bytes in every
-// run: the two time-bound tokens carry fixed instants (edgeFixedToken) and the venue's principals' tokens are
-// projected to their claims.
+// run: the venue's principals' tokens are projected to the recorded callers' claims, and the time-bound and
+// other-scheme tokens are keyed as the recorded HS256 tokens (edgeFixedToken).
+//
+// The tokens are the live class: user access tokens of an in-test HTTPS issuer (startEdgeIssuer) that query-api
+// verifies through AUTH_ACCESS_TOKEN_ISSUER, with their auth-service sessions written (WriteAuthSessions). One
+// more cell, outside the golden, sends an HS256 access token: the retired class is the generic 401.
 //
 // The live oracle stays until the Python delete (CHAOS-7308) with one final live pass.
 func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
@@ -73,15 +77,24 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 	docs := registeredEdgeDocuments(t, root)
 	schemaDigest := digest.Schema(schemav1.SDL)
 
+	issuer := startEdgeIssuer(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: root, JWTKey: edgeOracleJWTKey, LegacyHS256Tokens: true,
+		Golden: golden, Root: root, JWTKey: edgeOracleJWTKey, TokenIssuer: issuer.tokens,
 		Seed: edgeSeed(users, docs, schemaDigest),
 	})
+	// The member's tokens the seed cannot express, each keyed as the HS256 token the recording sent for it.
+	expiredClaims := edgeUserClaims(users[0])
+	expiredClaims.IssuedAt, expiredClaims.Lifetime = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), 24*time.Hour
+	wrongKey := issuer.other.MustMint(t, edgeUserClaims(users[0]))
+	expired := issuer.tokens.MustMint(t, expiredClaims)
+	scheme := issuer.tokens.MustMint(t, edgeUserClaims(users[0]))
+	venueoracle.KeyAs(wrongKey, edgeFixedToken(t, "another-key-another-key-another-key-32b", users[0], false))
+	venueoracle.KeyAs(expired, edgeFixedToken(t, edgeOracleJWTKey, users[0], true))
+	venueoracle.KeyAs(scheme, edgeFixedToken(t, edgeOracleJWTKey, users[0], false))
+	venue.WriteAuthSessions(t, ctx)
 	operatingReviewFixtureHasNoRows(t, ctx, venue.AdminClickHouseURI(t, venue.GoClickHouseDB))
-	settings, goBase, leaveRoot := startEdgePlane(t, ctx, venue, root)
-	suite := edgeOracleCases(t, docs, users, venue, func(key string, user edgeUser, expired bool) string {
-		return edgeFixedToken(t, key, user, expired)
-	}, edgeFixedToken(t, edgeOracleJWTKey, users[0], false))
+	settings, goBase, leaveRoot := startEdgePlane(t, ctx, venue, root, issuer.url)
+	suite := edgeOracleCases(t, docs, venue, wrongKey, expired, scheme)
 	query, mutation, queryBody, member := suite.query, suite.mutation, suite.queryBody, suite.member
 
 	run := func(cs []edgeCase, normalize func(venueoracle.Request, string) string) {
@@ -147,6 +160,8 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 		goWant:   edgeAnswer{status: 503, body: `"Database temporarily unavailable"`}}}
 	deadPython := golden.Python(t, venue, edgeRequests(deadCases))
 	edgeCompare(t, "http://"+deadPublic.Address(), deadCases, deadPython, nil, golden)
+
+	retiredClassCell(t, goBase, queryBody, edgeFixedToken(t, edgeOracleJWTKey, users[0], false))
 
 	leaveRoot() // the golden's file path is relative to the package directory
 	golden.Finish(t)

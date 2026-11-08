@@ -96,7 +96,7 @@ func newSeamStack(t *testing.T, route seamRoute) *seamStack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, testAccess(minter.keys, nil, accessTestNow).opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, testAccess(minter.keys, nil, accessTestNow).opts); err != nil {
 		t.Fatal(err)
 	}
 	s := &seamStack{t: t, route: route, mux: http.NewServeMux(), client: &teamScopeReachClient{}, user: minter.mint(ecUser, nil, nil),

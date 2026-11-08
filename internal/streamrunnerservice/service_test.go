@@ -132,14 +132,13 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 		runStreamComponents(t, registry, components)
 		waitForReadiness(t, registry, 5*time.Second)
 		if !slices.Equal(storage.handlers, []streamHandlerKind{
-			internalIngestHandlerKind,
 			productTelemetryHandlerKind,
 		}) {
 			t.Fatalf("handlers = %v", storage.handlers)
 		}
 		running := componentNames(components[0].(*streamConsumerSupervisor).running)
-		if !slices.Equal(running, []string{"stream-internal_ingest", "stream-product_telemetry"}) {
-			t.Fatalf("running = %v, want the two ingest loops", running)
+		if !slices.Equal(running, []string{"stream-product_telemetry"}) {
+			t.Fatalf("running = %v, want only the product-telemetry loop", running)
 		}
 	})
 
@@ -364,17 +363,6 @@ func TestStreamRunnerOperatorStaysLiveWhenDependenciesAreMissing(t *testing.T) {
 }
 
 func TestProductionRunnerConfigsPreservePythonStreamContracts(t *testing.T) {
-	internal := internalIngestRunnerConfig(1)
-	if internal.ConsumerGroup != "ingest-consumers" || internal.BatchSize != 100 ||
-		!slices.Equal(internal.Patterns, []string{
-			"ingest:*:commits",
-			"ingest:*:deployments",
-			"ingest:*:incidents",
-			"ingest:*:pull-requests",
-			"ingest:*:work-items",
-		}) {
-		t.Fatalf("internal config = %#v", internal)
-	}
 	product := productTelemetryRunnerConfig(1)
 	if product.ConsumerGroup != "product-telemetry-consumers" ||
 		!slices.Equal(product.Patterns, []string{"product-telemetry:*:events"}) {
@@ -432,5 +420,34 @@ func TestPagerDutyConsumerIsTheOnlyOwnerOfTheStream(t *testing.T) {
 	// condition that keeps the readiness gate honest.
 	if !errors.Is(err, errStreamDependencyUnavailable) {
 		t.Fatalf("handler error = %v, want the dependency refusal", err)
+	}
+}
+
+func TestIngestProfileBuildsOnlyTheProductTelemetryConsumer(t *testing.T) {
+	specs, err := streamConsumerSpecs(config.Config{Profile: "ingest", StreamConfiguredReplicas: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 || specs[0].kind != productTelemetryHandlerKind {
+		t.Fatalf("ingest profile specs = %#v, want only the product-telemetry consumer", specs)
+	}
+}
+
+func TestNoConsumerReadsTheRetiredIngestStreams(t *testing.T) {
+	for _, profile := range []string{"ingest", "external", "pagerduty"} {
+		specs, err := streamConsumerSpecs(config.Config{Profile: profile, StreamConfiguredReplicas: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, spec := range specs {
+			for _, pattern := range spec.config.Patterns {
+				if strings.HasPrefix(pattern, "ingest:") {
+					t.Fatalf("profile %s consumer %s reads %q", profile, spec.config.Name, pattern)
+				}
+			}
+			if spec.config.ConsumerGroup == "ingest-consumers" {
+				t.Fatalf("profile %s consumer %s uses the retired group", profile, spec.config.Name)
+			}
+		}
 	}
 }

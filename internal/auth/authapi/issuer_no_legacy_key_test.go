@@ -40,7 +40,7 @@ func TestIssuerWithoutLegacyKeyRefusesAnHS256BearerWithoutReadingIt(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
+	hs, err := newLegacyMinter(testSecret, testIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,9 @@ func TestIssuerWithoutLegacyKeyRefusesAnHS256BearerWithoutReadingIt(t *testing.T
 	}
 }
 
-func TestValidateRouteIsNotMountedWithoutLegacyKey(t *testing.T) {
+// Product rules 1 and 3: without a legacy key the validate route mounts under eddsa (legacy served it; a missing key is
+// no unmount); without the access-token verifier the issuer check refuses the mount and says so.
+func TestValidateRouteMountsWithoutLegacyKeyUnderEdDSA(t *testing.T) {
 	for _, eddsa := range []bool{false, true} {
 		f := newValidateFixture(t, eddsa)
 		f.issuer.verifier = nil
@@ -66,13 +68,35 @@ func TestValidateRouteIsNotMountedWithoutLegacyKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("eddsa=%v: the compat routes do not build without a legacy key: %v", eddsa, err)
 		}
+		mounted := 0
 		for _, route := range routes {
 			if route.Method == http.MethodPost && route.Pattern == PatternCompatValidate {
-				t.Fatalf("eddsa=%v: the validate route is mounted without a legacy key", eddsa)
+				mounted++
 			}
 		}
-		if !strings.Contains(f.logs.String(), "auth validate route not mounted: no legacy key") {
-			t.Fatalf("eddsa=%v: no not-mounted line: %s", eddsa, f.logs)
+		if eddsa {
+			if mounted != 1 || strings.Contains(f.logs.String(), "auth validate route not mounted") {
+				t.Fatalf("eddsa: validate mounted %d times, logs %s; want once and no not-mounted line", mounted, f.logs)
+			}
+			continue
 		}
+		line := "auth validate route not mounted: AUTH_TOKEN_ISSUER_URL is unset (no access-token verifier)"
+		if mounted != 0 || !strings.Contains(f.logs.String(), line) {
+			t.Fatalf("no access-token verifier: validate mounted %d times, logs %s; want 0 and %q", mounted, f.logs, line)
+		}
+	}
+}
+
+// Product rule 1: with no legacy key the validate route answers an EdDSA user token exactly as with the key set.
+func TestValidateAnswersAnEdDSATokenWithoutTheLegacyKeyAsWithIt(t *testing.T) {
+	f := newValidateFixture(t, true)
+	token := f.eddsaToken(contracts.PlatformAPIAudience)
+	withKey := f.post(f.server, tokenBody(token), nil)
+	f.issuer.verifier = nil
+	f.build()
+	without := f.post(f.server, tokenBody(token), nil)
+	expectAnswer(t, "with the legacy key", withKey, http.StatusOK, f.validAnswer("ada@example.com", f.org.String(), "admin"))
+	if without.Code != withKey.Code || without.Body.String() != withKey.Body.String() {
+		t.Errorf("without the legacy key %d %s, with it %d %s; want the same answer", without.Code, without.Body, withKey.Code, withKey.Body)
 	}
 }

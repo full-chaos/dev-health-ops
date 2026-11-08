@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -30,9 +31,8 @@ import (
 
 const ruleOneKey = "rule-one-legacy-signing-key-0123456789abcdef"
 
-// ruleOneServer is the api listener with the wired handlers over pool and ch. issuer nil: the HS256 path alone
-// (no AUTH_ACCESS_TOKEN_ISSUER); set: the profile-routed validator with the HS256 path and issuer's key, as
-// production builds it with the issuer set.
+// ruleOneServer is the api listener with the wired handlers over pool and ch: the profile-routed validator with
+// issuer's key, as production builds it.
 func ruleOneServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, issuer *edtokens.Issuer) http.Handler {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -40,15 +40,7 @@ func ruleOneServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, issuer *edt
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(ruleOneKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var store policy.Store = policy.PGStore{Pool: pool}
-	if issuer != nil {
-		store = issuer.Store(policy.PGStore{Pool: pool})
-	}
-	auth, err := policy.NewAuthenticator(verifier, store, logger)
+	auth, err := policy.NewAuthenticator(issuer.Store(policy.PGStore{Pool: pool}), logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,17 +49,15 @@ func ruleOneServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, issuer *edt
 		t.Fatal(err)
 	}
 	auth.DelegatedRows(delegated)
-	if issuer != nil {
-		validator, err := accessverify.New(accessverify.Config{
-			Rows: realRows(t), EdDSA: issuer.Verifier(t), Legacy: legacyVerifier(auth.AuthenticateLegacy),
-			Meter: sdkmetric.NewMeterProvider().Meter("test"), Logger: logger,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := auth.RouteAccess(routedAccessVerify{validator}, goAPIAccessService); err != nil {
-			t.Fatal(err)
-		}
+	validator, err := accessverify.New(accessverify.Config{
+		Rows: realRows(t), EdDSA: issuer.Verifier(t),
+		Meter: sdkmetric.NewMeterProvider().Meter("test"), Logger: logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.RouteAccess(routedAccessVerify{validator}, goAPIAccessService); err != nil {
+		t.Fatal(err)
 	}
 	rows, err := goAPIScopeRows()
 	if err != nil {
@@ -75,7 +65,7 @@ func ruleOneServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, issuer *edt
 	}
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
-	deps := Deps{Pool: pool, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier, Signer: signer}
+	deps := Deps{Pool: pool, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier}
 	server, err := NewServer(apiTestConfig(), logger, Routes(deps, logger), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
@@ -86,9 +76,11 @@ func ruleOneServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, issuer *edt
 // Product rule 1 (D6773): through the wired handlers on Postgres and ClickHouse, a platform admin whose token
 // names an org it holds no membership row in gets, with a user access token, the HS256 path's answer byte for
 // byte. A user without the platform action and without the membership gets the HS256 path's answer too
-// (CHAOS-13227: the X-Org-Id refusal). CHAOS-13126
-// retired the HS256 class on every routed row: the HS256 path's answer is still read on the HS256-only listener
-// (issuer unset, the legacy path), and on the routed listener the HS256 token is the generic 401.
+// (CHAOS-13227: the X-Org-Id refusal). CHAOS-13126 retired the HS256 class on every routed row: on the listener the
+// HS256 token is the generic 401. The HS256 answers are the executed legacy runs on main 98c7d4f56 (log
+// 13154-legacy-rec-int-98c7d4f5.log sha256 2faa72118ecc, LEGACY-REC-INT lines) and d7e374652 (log
+// 13154-legacy-rec-plain-d7e37465.log sha256 bb390396dbdf, LEGACY-REC-PLAIN lines); the sync config's id and its
+// created_at / updated_at are this run's, so the body is compared with them named.
 func TestProductRule1PlatformAdminWithoutMembershipWiredHandlers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -127,13 +119,14 @@ VALUES ($1, $2, 'not-a-hash', true, true, $3, 0, now(), now())`, user.id, user.e
 			t.Fatal(err)
 		}
 	}
+	syncID := uuid.New()
 	if _, err := pool.Exec(ctx, `INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, created_at, updated_at)
-VALUES ($1, $2, 'rule-one', 'github', '[]'::json, '{}'::json, true, now(), now())`, uuid.New(), org); err != nil {
+VALUES ($1, $2, 'rule-one', 'github', '[]'::json, '{}'::json, true, now(), now())`, syncID, org); err != nil {
 		t.Fatal(err)
 	}
 
 	issuer := edtokens.New(t)
-	legacy, routed := ruleOneServer(t, pool, ch, nil), ruleOneServer(t, pool, ch, issuer)
+	routed := ruleOneServer(t, pool, ch, issuer)
 	signer, err := edgetoken.NewSigner(ruleOneKey, "dev-health-ops", "dev-health-api")
 	if err != nil {
 		t.Fatal(err)
@@ -159,19 +152,29 @@ VALUES ($1, $2, 'rule-one', 'github', '[]'::json, '{}'::json, true, now(), now()
 		handler.ServeHTTP(recorder, request)
 		return recorder.Code, recorder.Body.String()
 	}
+	stamp := regexp.MustCompile(`"(created_at|updated_at)":"[^"]+"`)
+	named := func(body string) string {
+		return stamp.ReplaceAllString(strings.ReplaceAll(body, syncID.String(), "<sync_id>"), `"$1":"<time>"`)
+	}
+	legacy := map[string]string{
+		"/api/v1/admin/settings/general": `{"category":"general","settings":[]}`,
+		"/api/v1/admin/teams":            `[]`,
+		"/api/v1/admin/sync-configs": `[{"id":"<sync_id>","name":"rule-one","provider":"github","credential_id":null,"sync_targets":[],"sync_options":{},` +
+			`"is_active":true,"parent_id":null,"children_count":null,"last_sync_at":null,"last_sync_success":null,"last_sync_error":null,` +
+			`"created_at":"<time>","updated_at":"<time>"}]`,
+	}
 	for _, path := range []string{"/api/v1/admin/settings/general", "/api/v1/admin/teams", "/api/v1/admin/sync-configs"} {
-		wantStatus, wantBody := serve(legacy, path, hs256(super, "rule-one-super@example.com"))
+		wantBody := legacy[path]
 		gotStatus, gotBody := serve(routed, path, eddsa(super))
-		t.Logf("%s platform admin: HS256 %d %.200s | user access token %d %.200s", path, wantStatus, wantBody, gotStatus, gotBody)
-		if wantStatus != http.StatusOK || gotStatus != wantStatus || gotBody != wantBody {
-			t.Errorf("%s platform admin without membership: user access token %d %s, HS256 %d %s", path, gotStatus, gotBody, wantStatus, wantBody)
+		t.Logf("%s platform admin: HS256 200 %.200s | user access token %d %.200s", path, wantBody, gotStatus, gotBody)
+		if gotStatus != http.StatusOK || named(gotBody) != wantBody {
+			t.Errorf("%s platform admin without membership: user access token %d %s, HS256 200 %s", path, gotStatus, gotBody, wantBody)
 		}
 		if status, body := serve(routed, path, hs256(super, "rule-one-super@example.com")); status != http.StatusUnauthorized || strings.TrimSpace(body) != genericRefusal {
 			t.Errorf("%s HS256 on the routed listener %d %s, want the retired-class 401 %s", path, status, body, genericRefusal)
 		}
-		wantStatus, wantBody = serve(legacy, path, hs256(plain, "rule-one-plain@example.com"))
-		if status, body := serve(routed, path, eddsa(plain)); wantStatus != http.StatusForbidden || status != wantStatus || body != wantBody {
-			t.Errorf("%s user without the platform action or the membership: user access token %d %s, HS256 %d %s", path, status, body, wantStatus, wantBody)
+		if status, body := serve(routed, path, eddsa(plain)); status != http.StatusForbidden || body != `{"detail": "X-Org-Id not permitted for this user"}` {
+			t.Errorf("%s user without the platform action or the membership: user access token %d %s, HS256 403 X-Org-Id not permitted", path, status, body)
 		}
 	}
 }

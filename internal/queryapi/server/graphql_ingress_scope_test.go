@@ -163,7 +163,7 @@ func TestGraphQLIngressCarriersServeTheLegacyScope(t *testing.T) {
 
 	store := ecMemberStore()
 	edgeHandler, edgeSeen := iaDispatchWithEdge(t, nil, ecEdgeAuth(t, store), store)
-	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
+	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	if rec := ecPost(edgeHandler, edge); rec.Code != http.StatusOK {
 		t.Fatalf("edge carrier: %d %s", rec.Code, rec.Body.String())
 	}

@@ -67,11 +67,7 @@ func goAPIFront(t *testing.T, upstream string) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(goAPITestKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, goAPIScopeStore{}, logger)
+	auth, err := policy.NewAuthenticator(goAPIScopeStore{}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +76,7 @@ func goAPIFront(t *testing.T, upstream string) http.Handler {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	routes := apiservice.Routes(apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier, Signer: signer,
+	routes := apiservice.Routes(apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier,
 		AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, logger)
 	server, err := apiservice.NewServer(config.Config{APIAddress: "127.0.0.1:0", CORSAllowedOrigins: []string{goAPITestOrigin}}, logger, routes)
 	if err != nil {

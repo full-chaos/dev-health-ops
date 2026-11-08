@@ -31,6 +31,10 @@ const principalPrefix = "prn_"
 // org: the HS256 token's role when it states none (userFromClaims).
 const nonMemberRole = "member"
 
+// orgLessRole is the role of a caller whose token names no org: the HS256
+// path's, as go-api's login minted it (internal/api/session/tokens.go).
+const orgLessRole = "member"
+
 // parsePrincipalID reverses the session.v1 principal id form: "prn_" and the
 // unpadded base64url of the 16 id bytes. The principal id is the users id.
 func parsePrincipalID(wire string) (uuid.UUID, bool) {
@@ -95,7 +99,7 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 	}
 	user := &User{UserID: id.String(), ID: id, Email: row.Email, Username: row.Username, FullName: row.FullName,
 		IsSuperuser: row.State.IsSuperuser, Platform: row.State.Platform, TokenVersion: int(row.State.TokenVersion), accessToken: true, SessionID: sessionID,
-		ImpersonatedBy: impersonatedBy}
+		ImpersonatedBy: impersonatedBy, Role: orgLessRole}
 	if claims.OrgID != nil && *claims.OrgID != "" {
 		role, err := a.tokenOrgRole(ctx, user, *claims.OrgID)
 		if err != nil {

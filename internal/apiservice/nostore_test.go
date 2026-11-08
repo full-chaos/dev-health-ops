@@ -8,15 +8,13 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 const modelsPath = "/api/v1/admin/llm-settings/models"
@@ -47,15 +45,8 @@ func serve(handler http.Handler, request *http.Request) *httptest.ResponseRecord
 // 403) and by the handler (200) all carry no-store through the real chain; a
 // non-admin route does not.
 func TestAdminRoutesAnswerNoStoreThroughTheRealServerChain(t *testing.T) {
-	key := strings.Repeat("fixture-key-", 3)
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
+	auth := tokens.AuthenticatorOver(t, scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
 	scope := policy.NewScope(auth, quietLogger())
 	handler := noStoreServer(t, []httpapi.Route{
 		stubRoute(http.MethodGet, modelsPath, http.StatusOK),
@@ -66,7 +57,7 @@ func TestAdminRoutesAnswerNoStoreThroughTheRealServerChain(t *testing.T) {
 	over := httptest.NewRequest(http.MethodPut, "/api/v1/admin/llm-settings", io.LimitReader(zeros{}, maxBodyBytes+1))
 	over.ContentLength = maxBodyBytes + 1
 	forbidden := httptest.NewRequest(http.MethodGet, modelsPath, nil)
-	forbidden.Header.Set("Authorization", "Bearer "+signedToken(t, key, uuid.New(), false))
+	forbidden.Header.Set("Authorization", "Bearer "+signedToken(t, tokens, uuid.New()))
 	forbidden.Header.Set("X-Org-Id", uuid.NewString())
 
 	for _, tc := range []struct {
@@ -114,16 +105,10 @@ func TestEveryAdminRouteAnswersNoStoreThroughTheServer(t *testing.T) {
 	}
 }
 
-func signedToken(t *testing.T, key string, sub uuid.UUID, superuser bool) string {
+// signedToken is a routed access token for sub with no org: the X-Org-Id header alone names the org.
+func signedToken(t *testing.T, tokens *edtokens.Issuer, sub uuid.UUID) string {
 	t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": sub.String(), "type": "access", "org_id": uuid.NewString(), "is_superuser": superuser,
-		"exp": time.Now().Add(time.Hour).Unix(),
-	}).SignedString([]byte(key))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return token
+	return tokens.MustMint(t, edtokens.Claims{UserID: sub})
 }
 
 // Accepted limit: an UNHANDLED 500 keeps the Python shape (content headers

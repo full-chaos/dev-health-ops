@@ -591,6 +591,8 @@ func FetchBuildIdentity(ctx context.Context, client *LegClient, buildInfoURL str
 	// client is a LegClient: redirects are REFUSED and no proxy is used,
 	// because /registry and /buildinfo are direct endpoints and anything
 	// else means reading something nobody validated.
+	// A read that does not succeed leaves no accepted value behind from an earlier one.
+	credential.forgetAccepted()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, buildInfoURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("goapiproof: build buildinfo request: %w", err)
@@ -598,6 +600,7 @@ func FetchBuildIdentity(ctx context.Context, client *LegClient, buildInfoURL str
 	if err := credential.Apply(ctx, request); err != nil {
 		return "", err
 	}
+	sent := request.Header.Get(credential.header)
 	sentSecrets := SecretsOnRequest(request.Header)
 	legResponse, err := client.Do(request)
 	response := legResponse.Response
@@ -675,6 +678,7 @@ func FetchBuildIdentity(ctx context.Context, client *LegClient, buildInfoURL str
 	case modified:
 		return "", fmt.Errorf("%w: it reports a MODIFIED working tree, so its commit does not identify the source it was built from", ErrNoBuildIdentity)
 	}
+	credential.accept(sent)
 	return commit, nil
 }
 

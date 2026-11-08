@@ -11,9 +11,9 @@
 //     be frozen as the other venue goldens are, and the replay below compares
 //     the same answers and rows. python_golden.json keeps the answers that last live
 //     run recorded;
-//   - the golden replay (internal/api/session TestSessionRoutesMatchGolden),
-//     where only the Go route set runs, against Postgres/ClickHouse/Valkey
-//     containers, and every answer and row is compared with that golden.
+//   - the corpus against an external target (internal/api/session
+//     TestSessionCorpusExternalTarget), through its URL and stores only:
+//     the former in-process golden replay went with go-api's local token mint.
 //
 // Both runners go through RunTarget (target.go): the corpus reaches the server by base URL and its
 // stores by URI, so go-api in process and an external go-api or auth-service run the same steps. Quirks
@@ -457,6 +457,14 @@ type Harness struct {
 	// Rows renders query on the Python database ("" in replay) and on the
 	// Go database.
 	Rows func(query string) (python, goRows string)
+	// Replay and ReplayRows re-judge single golden steps and row sets for a replay (Python nil) whose Go
+	// stack answers some steps differently by a ruling: each gets the golden answer (or rows) and returns
+	// the expected one. Nil keeps every golden answer.
+	Replay     map[string]func(golden RecordedAnswer) RecordedAnswer
+	ReplayRows map[string]func(golden string) string
+	// SkipSteps names replay steps whose fix is not on the base yet (value: the reason, with its ticket). The step's
+	// subtest is SKIPPED, never passed, and fails once the Go plane gives the golden answer, so the skip is removed.
+	SkipSteps map[string]string
 
 	golden    *Recording
 	cursor    int
@@ -503,6 +511,9 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			if admitted, ok := validateLimitAdmitted[p.name]; ok {
 				want = RecordedAnswer{Name: p.name, Status: admitted.status, Body: admitted.body}
 			}
+			if rejudge, ok := h.Replay[p.name]; ok {
+				want = rejudge(want)
+			}
 			goBody := Normalize(goResponse.Body)
 			// The Go api never writes input or ctx of a validation error.
 			same = want.Status == goResponse.Status && pydanticecho.Strip(want.Body) == goBody
@@ -515,6 +526,16 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			// A replay has only the Go plane: later steps read its tokens
 			// for both sides.
 			out[p.name] = answers{python: goResponse, goSide: goResponse}
+		}
+		if reason, skip := h.SkipSteps[p.name]; skip && h.Python == nil {
+			fmt.Fprintf(&h.receipt, "%-64s go=%d SKIP (%s)\n", p.name, goResponse.Status, reason)
+			h.T.Run(p.name, func(t *testing.T) {
+				if same {
+					t.Fatalf("the Go plane now gives the golden answer: remove the skip (%s)", reason)
+				}
+				t.Skipf("%s:\n %s", reason, detail)
+			})
+			continue
 		}
 		fmt.Fprintf(&h.receipt, "%-64s go=%d %s\n", p.name, goResponse.Status, venueoracle.Mark(same))
 		if !same {
@@ -542,6 +563,9 @@ func (h *Harness) compareRows(name, query string) {
 			h.T.Fatalf("golden rows are out of step at %q", name)
 		}
 		pyRows = socialLinkRows(name, h.golden.Rows[h.rowCursor].Rows)
+		if rejudge, ok := h.ReplayRows[name]; ok {
+			pyRows = rejudge(pyRows)
+		}
 		h.rowCursor++
 	} else {
 		h.recording.Rows = append(h.recording.Rows, RecordedRows{Name: name, Rows: pyRows})

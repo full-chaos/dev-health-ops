@@ -19,8 +19,8 @@ func TestQueryEdgeAuthenticatorRoutesByRowOnlyWithTheIssuerSet(t *testing.T) {
 	}
 	defer pool.Close()
 	unset, _, err := buildQueryEdgeAuthenticatorFromEnv(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}), pool)
-	if err != nil || unset == nil || unset.Routed() {
-		t.Fatalf("issuer unset in the lookup: auth %v err %v; want an unrouted authenticator", unset, err)
+	if err == nil || unset != nil {
+		t.Fatalf("issuer unset in the lookup: auth %v err %v; want a start error (the process environment is not read)", unset, err)
 	}
 	set, _, err := buildQueryEdgeAuthenticatorFromEnv(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret, accessTokenIssuerEnvVar: "https://auth.example.test"}), pool)
 	if err != nil || set == nil || !set.Routed() {

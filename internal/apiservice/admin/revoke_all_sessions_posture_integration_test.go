@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -16,7 +15,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,8 +22,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // sessionsPosturePool connects as a login holding exactly the api role's
@@ -111,24 +109,9 @@ VALUES (gen_random_uuid(), $1, NULL, $2, gen_random_uuid(), now() + interval '7 
 		}
 	}
 
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
-	secret := base64.RawURLEncoding.EncodeToString(key)
-	verifier, err := edgetoken.New(secret, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(secret, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: runtime}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.Authenticator(t, policy.PGStore{Pool: runtime}, logger)
 	mux := http.NewServeMux()
 	for _, route := range admin.Routes(admin.Deps{Pool: runtime, Guard: policy.NewGuard(auth, logger), Logger: logger}) {
 		if strings.HasPrefix(route.Pattern, "/api/v1/admin/users") {
@@ -137,11 +120,7 @@ VALUES (gen_random_uuid(), $1, NULL, $2, gen_random_uuid(), now() + interval '7 
 	}
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	bearer, err := signer.Access(edgetoken.AccessClaims{UserID: users["root"].String(), Email: "posture-root@example.com", IsSuperuser: true},
-		time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	bearer := tokens.MustMint(t, edtokens.Claims{UserID: users["root"]})
 	send := func(method, path, body string) (int, string) {
 		t.Helper()
 		request, err := http.NewRequestWithContext(ctx, method, server.URL+path, strings.NewReader(body))

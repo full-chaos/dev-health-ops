@@ -125,13 +125,13 @@ func TestALiveSessionRecordsNoLag(t *testing.T) {
 }
 
 func TestValidateRefusalOfARevokedSessionRecordsItsLag(t *testing.T) {
-	f := newValidateFixture(t, false)
+	f := newValidateFixture(t, true)
 	reader, provider := accessMeter()
 	f.meter = provider.Meter("test")
 	t0 := time.Now().UTC()
 	f.issuer.now = func() time.Time { return t0 }
 	f.build()
-	live := f.post(f.server, tokenBody(f.hs256Token(nil)), nil)
+	live := f.post(f.server, tokenBody(f.eddsaToken("dev-health-api")), nil)
 	if live.Code != http.StatusOK {
 		t.Fatalf("live validate = %d %s", live.Code, live.Body)
 	}
@@ -141,7 +141,7 @@ func TestValidateRefusalOfARevokedSessionRecordsItsLag(t *testing.T) {
 	record := f.record
 	record.RevokedAt = &at
 	f.sessions.records[f.record.ID] = record
-	f.post(f.server, tokenBody(f.hs256Token(nil)), nil)
+	f.post(f.server, tokenBody(f.eddsaToken("dev-health-api")), nil)
 	wantLag(t, reader, 1, 7)
 }
 
@@ -164,7 +164,6 @@ func TestValidateRefusalOfASessionRevokedInItsOwnRowRecordsItsLag(t *testing.T) 
 		eddsa bool
 		token func(*validateFixture) string
 	}{
-		{"HS256", false, func(f *validateFixture) string { return f.hs256Token(nil) }},
 		{"EdDSA", true, func(f *validateFixture) string { return f.eddsaToken("dev-health-api") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,7 +188,7 @@ func TestValidateRefusalOfASessionRevokedInItsOwnRowRecordsItsLag(t *testing.T) 
 }
 
 func TestValidateRefusalOfARevokedRowThatIsNotTheTokenOwnersRecordsNoLag(t *testing.T) {
-	f := newValidateFixture(t, false)
+	f := newValidateFixture(t, true)
 	reader, provider := accessMeter()
 	f.meter = provider.Meter("test")
 	f.build()
@@ -198,23 +197,23 @@ func TestValidateRefusalOfARevokedRowThatIsNotTheTokenOwnersRecordsNoLag(t *test
 	record := f.record
 	record.RevokedAt = &at
 	f.sessions.records[f.record.ID] = record
-	f.post(f.server, tokenBody(f.hs256Token(nil)), nil)
+	f.post(f.server, tokenBody(f.eddsaToken("dev-health-api")), nil)
 	wantLag(t, reader, 0, 0)
 }
 
 func TestValidateRefusalOfARevokedRowWithNoAuthServiceSessionRecordsNoLag(t *testing.T) {
-	f := newValidateFixture(t, false)
+	f := newValidateFixture(t, true)
 	reader, provider := accessMeter()
 	f.meter = provider.Meter("test")
 	f.build()
 	f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: f.principal, Revoked: true, LegacyTokenVersion: f.record.LegacyTokenVersion}
 	delete(f.sessions.records, f.record.ID)
-	f.post(f.server, tokenBody(f.hs256Token(nil)), nil)
+	f.post(f.server, tokenBody(f.eddsaToken("dev-health-api")), nil)
 	wantLag(t, reader, 0, 0)
 }
 
 func TestValidateRefusalOnAStalePinRecordsNoLag(t *testing.T) {
-	f := newValidateFixture(t, false)
+	f := newValidateFixture(t, true)
 	reader, provider := accessMeter()
 	f.meter = provider.Meter("test")
 	f.build()
@@ -224,6 +223,6 @@ func TestValidateRefusalOnAStalePinRecordsNoLag(t *testing.T) {
 	record := f.record
 	record.RevokedAt = &at
 	f.sessions.records[f.record.ID] = record
-	f.post(f.server, tokenBody(f.hs256Token(nil)), nil)
+	f.post(f.server, tokenBody(f.eddsaToken("dev-health-api")), nil)
 	wantLag(t, reader, 0, 0)
 }

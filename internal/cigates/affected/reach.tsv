@@ -767,6 +767,7 @@ internal/pushcli	validate.go	internal/pushcli
 internal/pythonparity/scopeparity	scopeparity.go	internal/pythonparity/scopeparity
 internal/queryapi/heatmap	identity.go	cmd/dev-health-migration-matrix
 internal/queryapi/heatmap	identity.go	cmd/dho
+internal/queryapi/heatmap	identity.go	internal/auth/authruntime
 internal/queryapi/heatmap	identity.go	internal/goapicli/restprove
 internal/queryapi/heatmap	identity.go	internal/migrationmatrix
 internal/queryapi/heatmap	identity.go	internal/queryapi/heatmap
@@ -775,6 +776,7 @@ internal/queryapi/heatmap	identity.go	internal/queryapiservice
 internal/queryapi/heatmap	identity.go	internal/websmoke
 internal/queryapi/people	identity.go	cmd/dev-health-migration-matrix
 internal/queryapi/people	identity.go	cmd/dho
+internal/queryapi/people	identity.go	internal/auth/authruntime
 internal/queryapi/people	identity.go	internal/goapicli/restprove
 internal/queryapi/people	identity.go	internal/migrationmatrix
 internal/queryapi/people	identity.go	internal/queryapi/people
@@ -785,6 +787,7 @@ internal/queryapi/people	identity.go	internal/websmoke
 internal/queryapi/principal	verifier.go	*
 internal/queryapi/quadrant	identity.go	cmd/dev-health-migration-matrix
 internal/queryapi/quadrant	identity.go	cmd/dho
+internal/queryapi/quadrant	identity.go	internal/auth/authruntime
 internal/queryapi/quadrant	identity.go	internal/goapicli/restprove
 internal/queryapi/quadrant	identity.go	internal/migrationmatrix
 internal/queryapi/quadrant	identity.go	internal/queryapi/quadrant
@@ -985,6 +988,7 @@ internal/testsupport/venueoracle	golden_walk.go	internal/apiservice/metricsvenue
 internal/testsupport/venueoracle	golden_walk.go	internal/apiservice/ownershipvenue
 internal/testsupport/venueoracle	golden_walk.go	internal/apiservice/ssovenue
 internal/testsupport/venueoracle	golden_walk.go	internal/atlassianteams
+internal/testsupport/venueoracle	golden_walk.go	internal/auth/authruntime
 internal/testsupport/venueoracle	golden_walk.go	internal/auth/edgetoken
 internal/testsupport/venueoracle	golden_walk.go	internal/auth/identity/local
 internal/testsupport/venueoracle	golden_walk.go	internal/auth/signedtoken
@@ -1088,6 +1092,7 @@ internal/testsupport/venueoracle	opened.go	internal/apiservice/metricsvenue
 internal/testsupport/venueoracle	opened.go	internal/apiservice/ownershipvenue
 internal/testsupport/venueoracle	opened.go	internal/apiservice/ssovenue
 internal/testsupport/venueoracle	opened.go	internal/atlassianteams
+internal/testsupport/venueoracle	opened.go	internal/auth/authruntime
 internal/testsupport/venueoracle	opened.go	internal/auth/edgetoken
 internal/testsupport/venueoracle	opened.go	internal/auth/httpapi
 internal/testsupport/venueoracle	opened.go	internal/auth/identity/local

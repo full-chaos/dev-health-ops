@@ -37,7 +37,6 @@ var internalTextAllowed = regexp.MustCompile(strings.Join([]string{
 	`go-cutover`,
 	`cutover-replay\.sh`,
 	`celeryRiverCutover`,
-	`check_session_cutover_rehearsal\.sh`,
 	`DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER`,
 	`lane_<ticket>`,
 	`CUTOVER-RUNBOOK\.md`,

@@ -15,13 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 func providerSign(secret string, body []byte) string {
@@ -31,16 +30,10 @@ func providerSign(secret string, body []byte) string {
 }
 
 func TestProviderIntakeRoutesRunTheirCheckBeforeAnyCredentialDecode(t *testing.T) {
-	key := strings.Repeat("fixture-key-", 3)
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
+	refusals := &refusalLog{}
 	store := &countingStore{scopeStore: scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.AuthenticatorOver(t, store, slog.New(refusals))
 	scope := policy.NewScope(auth, quietLogger())
 	secrets := webhookintake.Secrets{GitHub: "gh-" + uuid.NewString()}
 	routes := webhookintake.Routes(webhookintake.Deps{Secrets: secrets, Logger: quietLogger()})
@@ -48,16 +41,7 @@ func TestProviderIntakeRoutesRunTheirCheckBeforeAnyCredentialDecode(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := func(sub uuid.UUID, superuser bool) string {
-		signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub": sub.String(), "type": "access", "org_id": uuid.NewString(), "is_superuser": superuser,
-			"exp": time.Now().Add(time.Hour).Unix(),
-		}).SignedString([]byte(key))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return signed
-	}
+	token := func(sub uuid.UUID, _ bool) string { return tokens.MustMint(t, edtokens.Claims{UserID: sub}) }
 	body := []byte(`{"x":1}`)
 	binding := uuid.NewString()
 	type provider struct {
@@ -70,8 +54,10 @@ func TestProviderIntakeRoutesRunTheirCheckBeforeAnyCredentialDecode(t *testing.T
 		// no store is configured here, so the handler answers its store-unavailable status
 		{"pagerduty", "/api/v1/webhooks/pagerduty/" + binding, map[string]string{}, http.StatusInternalServerError},
 	}
+	// send's auth calls are the policy-store reads plus the bearers the access check refused (no route row,
+	// or a row that takes no user token): the scope's work on the request.
 	send := func(method, target string, headers map[string]string, bearer string) (int, int64) {
-		before := store.calls.Load()
+		before := store.calls.Load() + int64(refusals.count(""))
 		request := httptest.NewRequest(method, target, strings.NewReader(string(body)))
 		for name, value := range headers {
 			request.Header.Set(name, value)
@@ -82,7 +68,7 @@ func TestProviderIntakeRoutesRunTheirCheckBeforeAnyCredentialDecode(t *testing.T
 		}
 		recorder := httptest.NewRecorder()
 		server.Handler().ServeHTTP(recorder, request)
-		return recorder.Code, store.calls.Load() - before
+		return recorder.Code, store.calls.Load() + int64(refusals.count("")) - before
 	}
 	for _, p := range providers {
 		for _, bearer := range []string{token(uuid.New(), false), token(store.admin, true)} {

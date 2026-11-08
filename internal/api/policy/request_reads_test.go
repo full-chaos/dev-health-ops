@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -23,7 +24,8 @@ func withReads(auth *Authenticator, fn func(ctx context.Context)) {
 // in a bound request, read for themselves.
 func TestReadOnceReadsEachFactOncePerRequest(t *testing.T) {
 	org := uuid.MustParse(memberOrg)
-	token := sign(t, claims(nil))
+	// No org claim: the access check reads no membership of its own.
+	token := sign(t, claims(func(c jwt.MapClaims) { delete(c, "org_id") }))
 	ask := func(ctx context.Context, auth *Authenticator) {
 		for i := 0; i < 2; i++ {
 			_, _ = auth.Authenticate(ctx, token)

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Issuer rollback of the auth signing-key rotation in the CHART form, on bigboy k3s (stage rollback = S3 of
 # ci/rehearse_auth_key_rotation.sh): the real auth-service and auth-migrate images, the real chart (authService.keySet,
-# authService.accessToken), `helm upgrade` to hs256_compat and `helm rollback` to eddsa. Not a CI job; the lead runs it
+# authService.accessToken), `helm upgrade` to the previous auth-service image (no class flip: hs256_compat is retired) and
+# `helm rollback` to the current revision. Not a CI job; the lead runs it
 # on bigboy in a namespace it made. Never prod, never kind.
 #
 #   ci/rehearse_auth_key_rotation_k3s.sh --print-plan   no cluster: print the plan, render the chart for both classes (needs helm)
@@ -14,6 +15,8 @@
 #   REHEARSAL_RUN_TOKEN   the run token the lead put in that label
 #   REHEARSAL_DIR         a new, empty directory (0700): keys, records, evidence
 #   REHEARSAL_IMAGES_ENV  a file with DEV_HEALTH_GO_{AUTH_MIGRATE,AUTH_SERVICE}_IMAGE=repo@sha256:<64 hex>
+#   REHEARSAL_PREVIOUS_IMAGES_ENV  a file with DEV_HEALTH_GO_AUTH_SERVICE_IMAGE=repo@sha256:<64 hex> of the PREVIOUS release: the rollback is a
+#                         helm upgrade to this auth-service image
 #   REHEARSAL_RUN_ID      optional: the CI run id the digests come from (digits only)
 #
 # This script never creates or deletes a namespace and never uses the admin kubeconfig. It refuses, before any write, a name
@@ -99,17 +102,16 @@ if [ "${PRINT_PLAN}" = 1 ]; then
     'stage rollback: namespace-scoped ServiceAccount kubeconfig only; postgres, valkey, key and DSN Secrets (stdin), chart install' \
     '                with authService.keySet (a active, b pending) and class eddsa; port-forward auth-service; discovery issuer pinned.' \
     'S3 chart:       adopt, register b, publish floor 300 s (real), compromise a -successor b: a leaves the JWKS and is denied;' \
-    '                helm upgrade class hs256_compat: Deployment env flips, a still absent and compromised, keys rollback a refused;' \
-    '                helm rollback to the eddsa revision: Deployment env eddsa, a still absent and compromised, b published.' \
+    '                helm upgrade to the previous auth-service image (no class flip): Deployment image is the previous one, a still absent and compromised, keys rollback a refused;' \
+    '                helm rollback to the eddsa revision: Deployment image is the current one, class eddsa, a still absent and compromised, b published.' \
     'not covered:    token cells (login, HS256 alg, revoked sid): they need go-api and a seeded user, see the compose driver.' \
-    'needs:          kubectl, helm, jq, openssl, curl; REHEARSAL_KUBECONFIG, REHEARSAL_NAMESPACE, REHEARSAL_RUN_TOKEN, REHEARSAL_SERVER, REHEARSAL_DIR, REHEARSAL_IMAGES_ENV'
-  for class in eddsa hs256_compat; do
-    chart_args "${class}" "registry.invalid/auth-service@sha256:${zeros}" "registry.invalid/auth-migrate@sha256:${zeros}"
-    rendered="$(KUBECONFIG=/dev/null helm template "${CHART_ARGS[@]}" --show-only templates/auth-service.yaml)" || die "the chart does not render for class ${class}"
-    grep -qF "value: \"${class}\"" <<<"${rendered}" || die "the chart does not render AUTH_ACCESS_TOKEN_CLASS ${class}"
-    grep -qF 'checksum/keyset:' <<<"${rendered}" || die "the chart does not render the key set"
-    say "PASS: plan: the chart renders class ${class} with the key set"
-  done
+    'needs:          kubectl, helm, jq, openssl, curl; REHEARSAL_KUBECONFIG, REHEARSAL_NAMESPACE, REHEARSAL_RUN_TOKEN, REHEARSAL_SERVER, REHEARSAL_DIR, REHEARSAL_IMAGES_ENV, REHEARSAL_PREVIOUS_IMAGES_ENV'
+class="eddsa"
+  chart_args "${class}" "registry.invalid/auth-service@sha256:${zeros}" "registry.invalid/auth-migrate@sha256:${zeros}"
+  rendered="$(KUBECONFIG=/dev/null helm template "${CHART_ARGS[@]}" --show-only templates/auth-service.yaml)" || die "the chart does not render for class ${class}"
+  grep -qF "value: \"${class}\"" <<<"${rendered}" || die "the chart does not render AUTH_ACCESS_TOKEN_CLASS ${class}"
+  grep -qF 'checksum/keyset:' <<<"${rendered}" || die "the chart does not render the key set"
+  say "PASS: plan: the chart renders class ${class} with the key set"
   exit 0
 fi
 
@@ -140,6 +142,10 @@ for name in DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE DEV_HEALTH_GO_AUTH_SERVICE_IMAGE; d
   export "${name}=${value}"
 done
 IMG_SVC="${DEV_HEALTH_GO_AUTH_SERVICE_IMAGE}"
+: "${REHEARSAL_PREVIOUS_IMAGES_ENV:?set REHEARSAL_PREVIOUS_IMAGES_ENV to the digest file of the previous release}"
+[ -f "${REHEARSAL_PREVIOUS_IMAGES_ENV}" ] || die "REHEARSAL_PREVIOUS_IMAGES_ENV names no file"
+IMG_SVC_PREVIOUS="$(sed -n "s/^DEV_HEALTH_GO_AUTH_SERVICE_IMAGE=//p" "${REHEARSAL_PREVIOUS_IMAGES_ENV}" | tail -n 1)"
+[[ "${IMG_SVC_PREVIOUS}" =~ ${DIGEST_RE} ]] || die "DEV_HEALTH_GO_AUTH_SERVICE_IMAGE in ${REHEARSAL_PREVIOUS_IMAGES_ENV} is not a registry digest reference"
 IMG_MIG="${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE}"
 
 kc() { kubectl --kubeconfig "${KCFG}" "$@"; }
@@ -232,7 +238,7 @@ eq() { [ "$1" = "$2" ]; }
 
 rec_open "${DIR}/records/50-S3-issuer-rollback-k3s.txt" "S3 issuer rollback on k3s, chart form $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 rec_line "namespace=${NS} ci_run=${REHEARSAL_RUN_ID:-unset} kubernetes=${version}"
-rec_line "auth_service_digest=${IMG_SVC##*@} auth_migrate_digest=${IMG_MIG##*@}"
+rec_line "auth_service_digest=${IMG_SVC##*@} auth_migrate_digest=${IMG_MIG##*@} previous_auth_service_digest=${IMG_SVC_PREVIOUS##*@}"
 
 # put_secret NAME KEY: the value on stdin only
 put_secret() { own "secret/$1"; K create secret generic "$1" --from-file="$2=/dev/stdin" --dry-run=client -o yaml | K apply -f - >/dev/null; }
@@ -333,6 +339,7 @@ keys_cmd() {
 }
 key_state() { keys_cmd list; [ "${KRC}" = 0 ] && keys_list_state "${KOUT}" "$1"; }
 refused_as() { [ "${KRC}" = 1 ] && [ "$(refusal_reason "${KERR}")" = "$1" ]; }
+image_is() { [ "$(K get "deploy/${DEPLOYMENT}" -o json | jq -r '.spec.template.spec.containers[0].image')" = "$1" ]; }
 class_is() { [ "$(K get "deploy/${DEPLOYMENT}" -o json | jq -r '.spec.template.spec.containers[0].env[] | select(.name == "AUTH_ACCESS_TOKEN_CLASS") | .value')" = "$1" ]; }
 helm_revision() { hm history "${RELEASE}" -o json | jq -r 'map(select(.status == "deployed")) | last | .revision'; }
 
@@ -364,12 +371,12 @@ check a-compromised eq "$(key_state a)" compromised
 check b-active eq "$(key_state b)" active
 check a-left-the-jwks wait_jwks_kids "b" 60
 
-say "step 5: issuer rollback by helm upgrade, class hs256_compat"
-chart_args hs256_compat "${IMG_SVC}" "${IMG_MIG}"
+say "step 5: issuer rollback by helm upgrade to the previous auth-service image (class stays eddsa)"
+chart_args eddsa "${IMG_SVC_PREVIOUS}" "${IMG_MIG}"
 hm upgrade "${CHART_ARGS[@]}" --wait --timeout 8m >/dev/null
 fwd
-check rollback-class-is-hs256-compat class_is hs256_compat
-rec_line "hs256_compat_helm_revision=$(helm_revision)"
+check rollback-image-is-the-previous-one image_is "${IMG_SVC_PREVIOUS}"
+rec_line "previous_image_helm_revision=$(helm_revision)"
 check rollback-a-still-absent-from-the-jwks jwks_lacks a
 check rollback-a-still-compromised eq "$(key_state a)" compromised
 keys_cmd rollback -kid a -apply
@@ -379,6 +386,7 @@ say "step 6: chart rollback to the eddsa revision"
 hm rollback "${RELEASE}" "${EVIDENCE_EDDSA_REVISION}" --wait --timeout 8m >/dev/null
 fwd
 check forward-class-is-eddsa class_is eddsa
+check forward-image-is-the-current-one image_is "${IMG_SVC}"
 rec_line "after_helm_rollback_revision=$(helm_revision)"
 check forward-a-still-absent-from-the-jwks jwks_lacks a
 check forward-a-still-compromised eq "$(key_state a)" compromised

@@ -51,11 +51,14 @@ type signerCase struct {
 	VerifyAs string         `json:"verify_as"`
 }
 
-// TestSignerMatchesFrozenAuthService pins every token the Signer mints to the
-// token the Python AuthService mints from the same arguments, clock and jti
-// (the same SHA-256 and length), and to the frozen verdict of the real
+// TestSignerMatchesFrozenAuthService pins every refresh token the Signer mints
+// to the token the Python AuthService mints from the same arguments, clock and
+// jti (the same SHA-256 and length), and to the frozen verdict of the real
 // validate_token for that token: accepted. The Go token is those same bytes,
-// so the verdict is the verdict for the Go token.
+// so the verdict is the verdict for the Go token. The program's input still
+// holds the six recorded access-token cases, so the frozen golden is read as
+// recorded; no Go token is compared to them: the HS256 access-token class is
+// retired and nothing mints one (CHAOS-13197).
 func TestSignerMatchesFrozenAuthService(t *testing.T) {
 	const key = "signer-oracle-key-0123456789abcdef-0123"
 	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
@@ -63,39 +66,23 @@ func TestSignerMatchesFrozenAuthService(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := signerInstant
-	strPtr := func(s string) *string { return &s }
-	type accessCase struct {
-		claims edgetoken.AccessClaims
-		args   map[string]any
-	}
-	accessCases := []accessCase{
-		{edgetoken.AccessClaims{UserID: "u-1", Email: "a@b.com", OrgID: "", Role: "member", TokenVersion: 0},
-			map[string]any{"user_id": "u-1", "email": "a@b.com"}},
-		{edgetoken.AccessClaims{UserID: "u-2", Email: "Ünï@bücher.de", OrgID: "o-1", Role: "owner", IsSuperuser: true,
-			Username: strPtr("ü-name"), FullName: strPtr("Zoë \"Q\" <x> &   \U0001f600"), TokenVersion: 7},
-			map[string]any{"user_id": "u-2", "email": "Ünï@bücher.de", "org_id": "o-1", "role": "owner", "is_superuser": true,
-				"username": "ü-name", "full_name": "Zoë \"Q\" <x> &   \U0001f600", "token_version": 7}},
-		{edgetoken.AccessClaims{UserID: "u-3", Email: "c@d.org", OrgID: "o-2", Role: "admin", Username: strPtr(""), FullName: strPtr(""), TokenVersion: 2},
-			map[string]any{"user_id": "u-3", "email": "c@d.org", "org_id": "o-2", "role": "admin", "username": "", "full_name": "", "token_version": 2}},
-		{edgetoken.AccessClaims{UserID: "u-4", Email: "tab\t@x.com", OrgID: "o-3", Role: "viewer", Username: strPtr("\x7f\x00"), TokenVersion: -1},
-			map[string]any{"user_id": "u-4", "email": "tab\t@x.com", "org_id": "o-3", "role": "viewer", "username": "\x7f\x00", "token_version": -1}},
-		{edgetoken.AccessClaims{UserID: "u-5", Email: "e@f.io", OrgID: "o-4", Role: "admin", FullName: strPtr("F"), ImpersonatingUserID: strPtr("super-1")},
-			map[string]any{"user_id": "u-5", "email": "e@f.io", "org_id": "o-4", "role": "admin", "full_name": "F", "impersonating_user_id": "super-1"}},
-		{edgetoken.AccessClaims{UserID: "u-6", Email: "g@h.io", Role: "member", ImpersonatingUserID: strPtr("")},
-			map[string]any{"user_id": "u-6", "email": "g@h.io", "role": "member", "impersonating_user_id": ""}},
+	retiredAccessArgs := []map[string]any{
+		{"user_id": "u-1", "email": "a@b.com"},
+		{"user_id": "u-2", "email": "Ünï@bücher.de", "org_id": "o-1", "role": "owner", "is_superuser": true,
+			"username": "ü-name", "full_name": "Zoë \"Q\" <x> &   \U0001f600", "token_version": 7},
+		{"user_id": "u-3", "email": "c@d.org", "org_id": "o-2", "role": "admin", "username": "", "full_name": "", "token_version": 2},
+		{"user_id": "u-4", "email": "tab\t@x.com", "org_id": "o-3", "role": "viewer", "username": "\x7f\x00", "token_version": -1},
+		{"user_id": "u-5", "email": "e@f.io", "org_id": "o-4", "role": "admin", "full_name": "F", "impersonating_user_id": "super-1"},
+		{"user_id": "u-6", "email": "g@h.io", "role": "member", "impersonating_user_id": ""},
 	}
 	var cases []signerCase
 	var want []string
-	for index, c := range accessCases {
+	for index, args := range retiredAccessArgs {
 		jti := []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222",
 			"33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444",
 			"88888888-8888-4888-8888-888888888888", "99999999-9999-4999-8999-999999999999"}[index]
-		token, err := signer.Access(c.claims, now, jti)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cases = append(cases, signerCase{Kind: "access", Args: c.args, JTI: jti, VerifyAs: "access"})
-		want = append(want, token)
+		cases = append(cases, signerCase{Kind: "access", Args: args, JTI: jti, VerifyAs: "access"})
+		want = append(want, "")
 	}
 	refreshJTI, familyJTI := "55555555-5555-4555-8555-555555555555", "66666666-6666-4666-8666-666666666666"
 	refresh, err := signer.Refresh(edgetoken.RefreshClaims{UserID: "u-1", OrgID: "o-1", FamilyID: "fam-1"}, now, refreshJTI)
@@ -127,6 +114,9 @@ func TestSignerMatchesFrozenAuthService(t *testing.T) {
 		t.Fatalf("decode: %v (%d of %d answers)", err, len(got), len(cases))
 	}
 	for index, c := range cases {
+		if c.Kind == "access" {
+			continue
+		}
 		if digestOf(want[index]) != got[index].Token {
 			t.Errorf("case %d (%s): the Go token is not the Python token: go %+v, python %+v", index, c.Kind, digestOf(want[index]), got[index].Token)
 		}

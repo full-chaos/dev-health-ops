@@ -11,6 +11,8 @@
 # Environment (no value is printed):
 #   REHEARSAL_DIR         a new, empty directory (0700): keys, TLS, records, evidence
 #   REHEARSAL_IMAGES_ENV  a file with DEV_HEALTH_GO_{OPERATOR,DHO,AUTH_MIGRATE,AUTH_SERVICE}_IMAGE=repo@sha256:<64 hex>
+#   REHEARSAL_PREVIOUS_IMAGES_ENV  a file with DEV_HEALTH_GO_{DHO,AUTH_SERVICE}_IMAGE=repo@sha256:<64 hex> of the PREVIOUS release: the
+#                         rollback in S3 and in the smoke stage is a roll back of auth-service, go-api and query-api to these images
 #   REHEARSAL_RUN_ID      optional: the CI run id the digests come from (recorded)
 #
 # Every cell prints a literal "PASS: <name>" or "FAIL: <name>"; the first FAIL stops the run. One record file per
@@ -73,12 +75,12 @@ if [ "${PRINT_PLAN}" = 1 ]; then
     '                Window a (no restart): literal WINDOW_A lines, seconds go-api and query-api keep accepting a b-token (bound 330 s).' \
     '                Window b (pm): compromise c -successor d, then restart go-api and query-api one at a time right after the key' \
     '                drop: literal WINDOW_B lines; a verifier that still accepts the old kid is a FINDING (exit 1 at the end).' \
-    'S3 rollback:    class eddsa -> hs256_compat (auth-service, go-api and query-api recreated): new tokens are HS256, go-api accepts them, the' \
+    'S3 rollback:    auth-service, go-api and query-api recreated on the previous image (no class flip): new tokens are HS256, go-api accepts them, the' \
     '                compromised kid stays out of the JWKS and denied, the revoked sessions stay refused, a b-token is refused;' \
     '                back to eddsa: c signs, b is still absent.' \
     'stage drill:    smoke, then S2 window a on key a (successor b), S2 window b on key b (successor c), S3; no S1; about 20 minutes.' \
     'floors:         real, once (about 80 minutes); no state_since is edited.' \
-    'needs:          docker, curl, jq, openssl; REHEARSAL_DIR, REHEARSAL_IMAGES_ENV'
+    'needs:          docker, curl, jq, openssl; REHEARSAL_DIR, REHEARSAL_IMAGES_ENV, REHEARSAL_PREVIOUS_IMAGES_ENV'
   exit 0
 fi
 
@@ -104,6 +106,16 @@ for name in DEV_HEALTH_GO_OPERATOR_IMAGE DEV_HEALTH_GO_DHO_IMAGE DEV_HEALTH_GO_A
   [[ "${value}" =~ ${DIGEST_RE} ]] || die "${name} in ${REHEARSAL_IMAGES_ENV} is not a registry digest reference"
   export "${name}=${value}"
 done
+
+: "${REHEARSAL_PREVIOUS_IMAGES_ENV:?set REHEARSAL_PREVIOUS_IMAGES_ENV to the digest file of the previous release}"
+[ -f "${REHEARSAL_PREVIOUS_IMAGES_ENV}" ] || die "REHEARSAL_PREVIOUS_IMAGES_ENV names no file"
+for name in DHO AUTH_SERVICE; do
+  value="$(sed -n "s/^DEV_HEALTH_GO_${name}_IMAGE=//p" "${REHEARSAL_PREVIOUS_IMAGES_ENV}" | tail -n 1)"
+  [[ "${value}" =~ ${DIGEST_RE} ]] || die "DEV_HEALTH_GO_${name}_IMAGE in ${REHEARSAL_PREVIOUS_IMAGES_ENV} is not a registry digest reference"
+  export "PREVIOUS_${name}_IMAGE=${value}"
+done
+CURRENT_DHO_IMAGE="${DEV_HEALTH_GO_DHO_IMAGE}"
+CURRENT_AUTH_SERVICE_IMAGE="${DEV_HEALTH_GO_AUTH_SERVICE_IMAGE}"
 
 PROJECT="authrot$$-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
 KEYS_VOL="${PROJECT}_rehearsal_keys"
@@ -178,6 +190,8 @@ check() {
 rec_open "${DIR}/records/00-environment.txt" "environment $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 rec_line "stage=${STAGE} project=${PROJECT} ci_run=${REHEARSAL_RUN_ID:-unset}"
 rec_line "images_env_sha256=$(sha256sum "${REHEARSAL_IMAGES_ENV}" | cut -c1-64)"
+rec_line "previous_images_env_sha256=$(sha256sum "${REHEARSAL_PREVIOUS_IMAGES_ENV}" | cut -c1-64)"
+rec_line "previous_dho_digest=${PREVIOUS_DHO_IMAGE##*@} previous_auth_service_digest=${PREVIOUS_AUTH_SERVICE_IMAGE##*@}"
 for name in DEV_HEALTH_GO_OPERATOR_IMAGE DEV_HEALTH_GO_DHO_IMAGE DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE DEV_HEALTH_GO_AUTH_SERVICE_IMAGE; do
   value="${!name}"
   rec_line "${name}=${value##*@}"
@@ -185,7 +199,7 @@ done
 rec_line "pending_floor_s=${PENDING_FLOOR} retiring_floor_s=${RETIRING_FLOOR} verifier_cache_bound_s=${VERIFIER_CACHE_BOUND}"
 
 say "step 0: pull the images by digest"
-for name in DEV_HEALTH_GO_OPERATOR_IMAGE DEV_HEALTH_GO_DHO_IMAGE DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE DEV_HEALTH_GO_AUTH_SERVICE_IMAGE; do
+for name in DEV_HEALTH_GO_OPERATOR_IMAGE DEV_HEALTH_GO_DHO_IMAGE DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE DEV_HEALTH_GO_AUTH_SERVICE_IMAGE PREVIOUS_DHO_IMAGE PREVIOUS_AUTH_SERVICE_IMAGE; do
   registry_retry_run "pull-${name}" -- docker pull --quiet "${!name}" >/dev/null
 done
 
@@ -483,18 +497,31 @@ scenario_compromise() {
   fi
 }
 
+# roll_images previous|current: recreate auth-service, go-api and query-api on the previous or the current image. The class stays
+# eddsa on the current image; the previous image is run with its own default class (the variable is set empty).
+roll_images() {
+  if [ "$1" = previous ]; then
+    export DEV_HEALTH_GO_DHO_IMAGE="${PREVIOUS_DHO_IMAGE}" DEV_HEALTH_GO_AUTH_SERVICE_IMAGE="${PREVIOUS_AUTH_SERVICE_IMAGE}"
+    export REHEARSAL_ACCESS_CLASS=""
+    export REHEARSAL_VERIFY_ISSUER=""
+  else
+    export DEV_HEALTH_GO_DHO_IMAGE="${CURRENT_DHO_IMAGE}" DEV_HEALTH_GO_AUTH_SERVICE_IMAGE="${CURRENT_AUTH_SERVICE_IMAGE}"
+    export REHEARSAL_ACCESS_CLASS="eddsa"
+    export REHEARSAL_VERIFY_ISSUER="${ISSUER_URL}"
+  fi
+  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
+  refresh_ports
+}
+
 # scenario_issuer_rollback BADKID: BADKID is compromised; COMPROMISED_ACCESS/REFRESH are a token and refresh credential of it.
 scenario_issuer_rollback() {
   local bad="$1" good="$2" pre
   rec_open "${DIR}/records/40-S3-issuer-rollback.txt" "S3 issuer rollback $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  say "S3: class eddsa -> hs256_compat (auth-service and go-api recreated)"
+  say "S3: roll auth-service, go-api and query-api back to the previous image"
   login_or_die
   pre="${L_ACCESS}"
   check s3-good-token-accepted-before-rollback me_accepts "${pre}"
-  export REHEARSAL_ACCESS_CLASS="hs256_compat"
-  export REHEARSAL_VERIFY_ISSUER=""
-  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
-  refresh_ports
+  roll_images previous
   login_or_die
   check s3-new-token-is-hs256 alg_is "${L_ACCESS}" HS256
   check s3-go-api-accepts-the-hs256-token me_accepts "${L_ACCESS}"
@@ -505,11 +532,8 @@ scenario_issuer_rollback() {
   keys_cmd rollback -kid "${bad}" -apply
   check "s3-key-rollback-of-${bad}-refused" refused_as compromised_terminal
   check "s3-jwks-has-no-${bad}" jwks_lacks "${bad}"
-  say "S3: forward again: class hs256_compat -> eddsa"
-  export REHEARSAL_ACCESS_CLASS="eddsa"
-  export REHEARSAL_VERIFY_ISSUER="${ISSUER_URL}"
-  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
-  refresh_ports
+  say "S3: forward again: roll back to the current image, class eddsa"
+  roll_images current
   login_or_die
   check "s3-forward-signed-by-${good}" kid_is "${L_ACCESS}" "${good}"
   check "s3-forward-go-api-accepts-${good}" me_accepts "${L_ACCESS}"
@@ -525,21 +549,15 @@ wait_publish_floor() { # wait_publish_floor KID EPOCH_OF_REGISTER
 }
 
 if [ "${STAGE}" = smoke ]; then
-  say "smoke: issuer class flip (hs256_compat and back) before any floor"
-  export REHEARSAL_ACCESS_CLASS="hs256_compat"
-  export REHEARSAL_VERIFY_ISSUER=""
-  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
-  refresh_ports
+  say "smoke: roll to the previous image and forward again before any floor"
+  roll_images previous
   login_or_die
-  check smoke-flip-token-is-hs256 alg_is "${L_ACCESS}" HS256
-  check smoke-flip-go-api-accepts-hs256 me_accepts "${L_ACCESS}"
-  check smoke-flip-jwks-still-served jwks_lacks b
-  export REHEARSAL_ACCESS_CLASS="eddsa"
-  export REHEARSAL_VERIFY_ISSUER="${ISSUER_URL}"
-  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
-  refresh_ports
+  check smoke-roll-token-is-hs256 alg_is "${L_ACCESS}" HS256
+  check smoke-roll-go-api-accepts-hs256 me_accepts "${L_ACCESS}"
+  check smoke-roll-jwks-still-served jwks_lacks b
+  roll_images current
   login_or_die
-  check smoke-flip-back-signed-by-a kid_is "${L_ACCESS}" a
+  check smoke-roll-back-signed-by-a kid_is "${L_ACCESS}" a
   say "smoke done"
   exit 0
 fi

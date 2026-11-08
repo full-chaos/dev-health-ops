@@ -26,6 +26,7 @@ const goAPIUnavailable = `{"detail":{"message":"Authentication service unavailab
 func newSignerOutageEnv(t *testing.T, ctx context.Context) *routesEnv {
 	t.Helper()
 	return newRoutesEnvWith(t, ctx, map[string]string{
+		authconfig.EnvSigningKeyFile:      "/nonexistent",
 		authconfig.EnvAccessTokenClass:    authconfig.AccessClassEdDSA,
 		authconfig.EnvAccessTokenAudience: "dev-health-api",
 		authconfig.EnvTokenIssuerURL:      "https://auth.example.test",

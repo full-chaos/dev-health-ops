@@ -1,26 +1,24 @@
 package apiservice
 
 import (
-	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
 	"github.com/full-chaos/dev-health-go/authverify"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
-// platformAdminRig is the api listener as newMatrixRig builds it (real rows,
-// real scope layers, the real route guard on each protected row) with probeUser
-// a superuser or not; routed false is the HS256 path alone.
-func platformAdminRig(t *testing.T, superuser, routed bool) (http.Handler, *eddsaMinter, *lookupCounts) {
+// platformAdminRig is the routed api listener as newMatrixRig builds it (real
+// rows, real scope layers, the real route guard on each protected row) with
+// probeUser a superuser or not.
+func platformAdminRig(t *testing.T, superuser bool) (http.Handler, *eddsaMinter) {
 	t.Helper()
 	counts := &lookupCounts{}
 	minter := newEdDSAMinter(t)
@@ -29,11 +27,7 @@ func platformAdminRig(t *testing.T, superuser, routed bool) (http.Handler, *edds
 	row.state.IsSuperuser = superuser
 	probe.users[probeUser] = row
 	store := matrixStore{probeStore: probe, counts: counts}
-	hs, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(hs, store, quietLogger())
+	auth, err := policy.NewAuthenticator(store, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,20 +35,16 @@ func platformAdminRig(t *testing.T, superuser, routed bool) (http.Handler, *edds
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := legacyVerifier(auth.AuthenticateLegacy)
 	validator, err := accessverify.New(accessverify.Config{
 		Rows: realRows(t), EdDSA: eddsa,
-		Legacy: func(ctx context.Context, token string) (any, error) { return legacy(ctx, token) },
-		Meter:  sdkmetric.NewMeterProvider().Meter("test"), Logger: quietLogger(),
+		Meter: sdkmetric.NewMeterProvider().Meter("test"), Logger: quietLogger(),
 		Now: func() time.Time { return probeNow },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if routed {
-		if err := auth.RouteAccess(matrixValidator{inner: routedAccessVerify{validator}, counts: counts}, goAPIAccessService); err != nil {
-			t.Fatal(err)
-		}
+	if err := auth.RouteAccess(matrixValidator{inner: routedAccessVerify{validator}, counts: counts}, goAPIAccessService); err != nil {
+		t.Fatal(err)
 	}
 	scopeRows, err := goAPIScopeRows()
 	if err != nil {
@@ -75,8 +65,19 @@ func platformAdminRig(t *testing.T, superuser, routed bool) (http.Handler, *edds
 	if err != nil {
 		t.Fatal(err)
 	}
-	return server.Handler(), minter, counts
+	return server.Handler(), minter
 }
+
+// legacyProbeBody is the HS256 path's 200 body on the probe rows below for the probe user (role member, the users
+// row's profile, token version 3) in org: the executed legacy runs on main 98c7d4f56 (log 13154-legacy-rec-98c7d4f5.log
+// sha256 8ba2f74cdd64) and 715e3f93d (log 13154-legacy-rec-pa-715e3f93.log, LEGACY-REC-PA lines).
+func legacyProbeBody(org string, superuser bool) string {
+	return fmt.Sprintf(`{"org":%q,"user":{"email":"user@example.test","full_name":"Probe User","is_superuser":%v,"org_id":%q,"role":"member","token_version":3,"user_id":"00000000-0000-4000-8000-0000000000a1","username":"user"}}`, org, superuser, org) + "\n"
+}
+
+// legacyXOrgRefusal is the HS256 path's answer on an org-scoped admin row for a caller with no membership and no
+// platform action (same logs).
+const legacyXOrgRefusal = `{"detail": "X-Org-Id not permitted for this user"}`
 
 // Product rule 1 (D6773): on org-scoped admin rows a platform admin whose
 // token names an org it holds no membership row in gets, with a user access
@@ -94,46 +95,30 @@ func TestProductRule1PlatformAdminWithoutMembershipAnswersAsLegacy(t *testing.T)
 		handler.ServeHTTP(recorder, request)
 		return recorder.Code, recorder.Body.String()
 	}
-	// The HS256 token a minter gives a non-member: role member, the users
-	// row's profile, the row's token version.
-	hs256 := func(org string) string {
-		return "Bearer " + probeHS256(t, probeKey, jwt.MapClaims{"sub": probeUser.String(), "org_id": org,
-			"role": "member", "email": "user@example.test", "username": "user", "full_name": "Probe User", "tv": 3})
-	}
+	target := probeTargetOrg.String()
 	for _, superuser := range []bool{true, false} {
-		legacy, _, _ := platformAdminRig(t, superuser, false)
-		routed, minter, _ := platformAdminRig(t, superuser, true)
-		eddsa := "Bearer " + minter.mint(probeUser, map[string]any{"org_id": probeTargetOrg.String()})
+		routed, minter := platformAdminRig(t, superuser)
+		eddsa := "Bearer " + minter.mint(probeUser, map[string]any{"org_id": target})
 		for _, path := range rows {
-			wantStatus, wantBody := serve(legacy, path, hs256(probeTargetOrg.String()))
-			gotStatus, gotBody := serve(routed, path, eddsa)
-			if superuser {
-				if wantStatus != http.StatusOK || gotStatus != wantStatus || gotBody != wantBody {
-					t.Fatalf("%s superuser: user access token %d %s, HS256 %d %s", path, gotStatus, gotBody, wantStatus, wantBody)
-				}
-				continue
+			wantStatus, wantBody := http.StatusOK, legacyProbeBody(target, superuser)
+			if !superuser && path != probeAuthenticated {
+				wantStatus, wantBody = http.StatusForbidden, legacyXOrgRefusal
 			}
-			legacyStatus := http.StatusForbidden
-			if path == probeAuthenticated {
-				legacyStatus = http.StatusOK
-			}
-			if wantStatus != legacyStatus || gotStatus != wantStatus || gotBody != wantBody {
-				t.Fatalf("%s non-member without the platform action: user access token %d %s, HS256 %d %s", path, gotStatus, gotBody, wantStatus, wantBody)
+			if gotStatus, gotBody := serve(routed, path, eddsa); gotStatus != wantStatus || gotBody != wantBody {
+				t.Fatalf("%s superuser %v: user access token %d %s, HS256 %d %s", path, superuser, gotStatus, gotBody, wantStatus, wantBody)
 			}
 		}
 	}
 	t.Run("org claim not a UUID", func(t *testing.T) {
-		legacy, _, _ := platformAdminRig(t, false, false)
-		routed, minter, _ := platformAdminRig(t, false, true)
+		routed, minter := platformAdminRig(t, false)
 		eddsa := "Bearer " + minter.mint(probeUser, map[string]any{"org_id": "not-a-uuid"})
 		refused := []string{}
 		for _, path := range rows {
-			wantStatus, wantBody := serve(legacy, path, hs256("not-a-uuid"))
+			wantStatus, wantBody := http.StatusOK, legacyProbeBody("not-a-uuid", false)
 			gotStatus, gotBody := serve(routed, path, eddsa)
-			t.Logf("%s: HS256 %d %.120s | user access token %d %.120s", path, wantStatus, wantBody, gotStatus, gotBody)
 			switch {
 			case gotStatus == wantStatus && gotBody == wantBody:
-			case gotStatus == http.StatusUnauthorized && wantStatus != http.StatusUnauthorized:
+			case gotStatus == http.StatusUnauthorized:
 				refused = append(refused, path)
 			default:
 				t.Fatalf("%s: user access token %d %s, HS256 %d %s", path, gotStatus, gotBody, wantStatus, wantBody)

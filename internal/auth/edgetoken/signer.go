@@ -26,8 +26,10 @@ const (
 // separators.
 var headerSegment = base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 
-// Signer mints the tokens AuthService mints: HS256 over the same secret,
-// with the same issuer and audience. It is safe for concurrent use.
+// Signer mints the legacy HS256 refresh token AuthService minted, over the
+// same secret, issuer and audience; test rigs use it for the logout cells. No
+// production file calls it (TestNoProductionFileMintsAnHS256AccessToken). It is
+// safe for concurrent use.
 type Signer struct {
 	secret   []byte
 	issuer   string
@@ -42,69 +44,12 @@ func NewSigner(secret, issuer, audience string) (*Signer, error) {
 	return &Signer{secret: []byte(secret), issuer: issuer, audience: audience}, nil
 }
 
-// AccessClaims are create_access_token's arguments.
-type AccessClaims struct {
-	UserID       string
-	Email        string
-	OrgID        string
-	Role         string
-	IsSuperuser  bool
-	Username     *string
-	FullName     *string
-	TokenVersion int64
-	// ImpersonatingUserID is the impersonating_user_id claim, written only
-	// when non-empty, after full_name, as the Python dict holds it.
-	ImpersonatingUserID *string
-	// SessionID is the "sid" claim, written last and only when non-empty.
-	// go-api never sets it; auth-service sets it to the session.v1 session_id
-	// so its /v1/sessions routes know the bearer's session. Readers decode
-	// claims into a map and ignore it.
-	SessionID *string
-}
-
 // RefreshClaims are create_refresh_token's (and
 // create_refresh_token_with_jti's) arguments.
 type RefreshClaims struct {
 	UserID   string
 	OrgID    string
 	FamilyID string
-}
-
-// Access mints create_access_token(...) at now with jti: the claims in
-// the order the Python dict holds them, username, full_name and
-// impersonating_user_id only when non-empty.
-func (s *Signer) Access(claims AccessClaims, now time.Time, jti string) (string, error) {
-	return s.AccessUntil(claims, now, now.Add(AccessLifetime), jti)
-}
-
-// AccessUntil is Access with a given expiry.
-func (s *Signer) AccessUntil(claims AccessClaims, now, expiresAt time.Time, jti string) (string, error) {
-	var payload claimWriter
-	payload.str("sub", claims.UserID)
-	payload.str("email", claims.Email)
-	payload.str("org_id", claims.OrgID)
-	payload.str("role", claims.Role)
-	payload.boolean("is_superuser", claims.IsSuperuser)
-	payload.str("type", AccessType)
-	payload.str("iss", s.issuer)
-	payload.str("aud", s.audience)
-	payload.integer("exp", expiresAt.Unix())
-	payload.integer("iat", now.Unix())
-	payload.str("jti", jti)
-	payload.integer("tv", claims.TokenVersion)
-	if claims.Username != nil && *claims.Username != "" {
-		payload.str("username", *claims.Username)
-	}
-	if claims.FullName != nil && *claims.FullName != "" {
-		payload.str("full_name", *claims.FullName)
-	}
-	if claims.ImpersonatingUserID != nil && *claims.ImpersonatingUserID != "" {
-		payload.str("impersonating_user_id", *claims.ImpersonatingUserID)
-	}
-	if claims.SessionID != nil && *claims.SessionID != "" {
-		payload.str("sid", *claims.SessionID)
-	}
-	return s.sign(payload.close())
 }
 
 // Refresh mints create_refresh_token(...) at now with jti, expiring
@@ -156,11 +101,6 @@ func (w *claimWriter) key(name string) {
 func (w *claimWriter) str(name, value string) {
 	w.key(name)
 	w.buffer = pythonparity.AppendPythonJSONString(w.buffer, value)
-}
-
-func (w *claimWriter) boolean(name string, value bool) {
-	w.key(name)
-	w.buffer = strconv.AppendBool(w.buffer, value)
 }
 
 func (w *claimWriter) integer(name string, value int64) {

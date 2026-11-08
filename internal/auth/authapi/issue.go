@@ -145,8 +145,8 @@ type issueAnswer struct {
 	RefreshToken string `json:"refresh_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
-	// SessionAccessToken is the session routes' token under the eddsa class;
-	// absent under hs256_compat.
+	// SessionAccessToken is the token of audience auth-service the session
+	// routes accept.
 	SessionAccessToken string `json:"session_access_token,omitempty"`
 }
 

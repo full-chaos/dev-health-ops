@@ -94,7 +94,8 @@ func newRefreshRig(t *testing.T) *refreshRig {
 	}
 	// The issuer shares the key, issuer and audience of the minted legacy tokens, so a refusal of one of them
 	// is the refresh gate's decision and not a signature mismatch.
-	issuer, err := NewIssuer(usertokens.Secret, usertokens.LegacyIssuer, usertokens.Audience)
+	accessSigner, _, _ := fileSigner(t)
+	issuer, err := NewEdDSAIssuer(usertokens.Secret, usertokens.LegacyIssuer, usertokens.Audience, accessSigner, goldenIssuer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,8 +167,9 @@ func refreshRows() []refreshRow {
 	compat := func(token string) string { return `{"refresh_token":` + quoteJSON(token) + `}` }
 	return []refreshRow{
 		{name: "POST /v1/token/refresh", pattern: PatternRefresh, body: native, refusedStatus: http.StatusUnauthorized, garbage: "not-a-credential"},
-		// A go-api refresh JWT is this row's genuine credential (exchanged once): "legacy-refresh" is its control.
-		{name: "POST /api/v1/auth/refresh", pattern: PatternCompatRefresh, body: compat, control: "legacy-refresh", refusedStatus: http.StatusUnauthorized, garbage: "aaaa.bbbb.cccc"},
+		// The opaque credential is this row's genuine credential; a go-api refresh JWT is refused like garbage (the HS256
+		// refresh exchange is retired).
+		{name: "POST /api/v1/auth/refresh", pattern: PatternCompatRefresh, body: compat, refusedStatus: http.StatusUnauthorized, garbage: "aaaa.bbbb.cccc"},
 		// Logout also ends a go-api refresh JWT's lineage, so "legacy-refresh" is its control too.
 		{name: "POST /api/v1/auth/logout", pattern: PatternCompatLogout, body: compat, control: "legacy-refresh", noProjection: true, refusedStatus: http.StatusOK, garbage: "not-a-credential"},
 	}

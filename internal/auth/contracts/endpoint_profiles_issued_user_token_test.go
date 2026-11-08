@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// Under the eddsa access token class the change-password route returns a user_access_token; the row names it beside
-// the HS256 token, and the class registry lists a validator for it.
-func TestTheChangePasswordRowIssuesBothAccessTokenClasses(t *testing.T) {
+// The change-password route returns a user_access_token and a refresh credential; the row names both, and the class
+// registry lists a validator for the access token.
+func TestTheChangePasswordRowIssuesTheUserAccessToken(t *testing.T) {
 	var found bool
 	for _, row := range authServiceRows(t) {
 		if id, _ := row["id"].(string); !strings.HasPrefix(id, "POST /api/v1/auth/change-password ") {
@@ -21,7 +21,7 @@ func TestTheChangePasswordRowIssuesBothAccessTokenClasses(t *testing.T) {
 			class, _ := credential["class_id"].(string)
 			issued[class] = true
 		}
-		for _, class := range []string{"ops_access_token_hs256", "user_access_token", "refresh_credential"} {
+		for _, class := range []string{"user_access_token", "refresh_credential"} {
 			if !issued[class] {
 				t.Errorf("the change-password row does not issue %s: %v", class, issued)
 			}

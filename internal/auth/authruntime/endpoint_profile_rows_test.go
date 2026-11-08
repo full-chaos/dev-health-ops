@@ -552,24 +552,6 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) 
 	}
 }
 
-// TestWithoutAnIssuerTheDiscoveryRowsAreStale pins that the probe really mounts
-// the discovery document: with AUTH_TOKEN_ISSUER_URL unset only the JWKS is
-// served, so the two discovery rows are reported as rows for routes nothing serves.
-func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
-	served := servedAuthRoutesWithIssuer(t, "")
-	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
-	// The workload-token exchange and the OAuth authorization server need the issuer too, so their rows are stale as well,
-	// and so are the bearer routes (without the issuer there is no access check to verify a user bearer with) and the
-	// session issue routes, which take only the go-api workload token.
-	wantStale := []string{"DELETE /v1/identities/social/{id}@api", "GET /.well-known/oauth-authorization-server/oauth@api", "GET /.well-known/openid-configuration@api", "GET /oauth/.well-known/jwks.json@api", "GET /oauth/.well-known/openid-configuration@api", "GET /oauth/authorize@api", "GET /v1/sessions/current@api", "HEAD /.well-known/openid-configuration@api", "POST /api/v1/auth/change-password@api", "POST /api/v1/auth/switch-org@api", "POST /api/v1/auth/validate@api", "POST /internal/v1/sessions/delegated/end@api", "POST /internal/v1/sessions/delegated@api", "POST /internal/v1/sessions/state@api", "POST /internal/v1/sessions@api", "POST /internal/v1/token/exchange@api", "POST /oauth/authorize@api", "POST /v1/identities/social@api", "POST /v1/sessions/revoke-all@api", "POST /v1/sessions/revoke@api"}
-	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
-		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)
-	}
-	if served["GET /.well-known/jwks.json@api"] != true || served["HEAD /.well-known/jwks.json@api"] != true {
-		t.Error("the JWKS must be served without an issuer")
-	}
-}
-
 // TestAWellKnownRowWithNoRouteIsStale is the stale-row control for the new rows.
 func TestAWellKnownRowWithNoRouteIsStale(t *testing.T) {
 	served := servedAuthRoutes(t)

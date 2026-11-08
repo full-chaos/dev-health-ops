@@ -100,20 +100,15 @@ func (a *Authenticator) authenticateRouted(ctx context.Context, token string) (*
 	}
 }
 
-// IsClaimTypeError reports a legacy token claim whose JSON type the Python
-// api raised on (a 500 there).
-func IsClaimTypeError(err error) bool { return errors.Is(err, errClaimType) }
-
 // mayImpersonate decides whether Impersonation runs its full check, from the
 // Principal decision alone: a user access token (it carries no is_superuser
-// claim), or a legacy token whose verified is_superuser claim is truthy, or,
-// while the platform roles switch is owned, a legacy token whose live read
-// says superuser (a newly granted admin's claim is stale until renewal). With
-// no decision, or a failed lookup, the check runs and refuses (fail closed).
+// claim), or, while the platform roles switch is owned, a caller whose live
+// read says superuser. With no decision, or a failed lookup, the check runs
+// and refuses (fail closed).
 func (s *Scope) mayImpersonate(r *http.Request) bool {
 	decision, ok := decisionFrom(r.Context())
 	if !ok || decision.err != nil {
 		return true
 	}
-	return decision.user != nil && (decision.user.accessToken || decision.user.superuserClaim || (decision.user.IsSuperuser && s.ReadsPlatformRoles()))
+	return decision.user != nil && (decision.user.accessToken || (decision.user.IsSuperuser && s.ReadsPlatformRoles()))
 }

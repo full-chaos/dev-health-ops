@@ -397,7 +397,7 @@ groups:
       # segment is a per-org or per-integration identifier. Labeling by the
       # literal stream key would put an org/integration identity on a metric
       # label, which the PRD forbids outright. Each runner kind (pagerduty,
-      # internal_ingest, product_telemetry, external_ingest) instead runs as
+      # product_telemetry, external_ingest) instead runs as
       # its own scrape target, so grouping by Prometheus's own job/instance
       # labels — already relied on by GoWorkerTelemetryTargetDown below —
       # is the bounded, policy-safe way to say *which deployment* is behind.

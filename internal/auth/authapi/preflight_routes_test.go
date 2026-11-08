@@ -50,7 +50,7 @@ func compatWrites(f *compatFixture) int {
 	projected := len(f.projector.userCalls) + len(f.projector.orgCalls)
 	f.projector.mu.Unlock()
 	f.sessions.mu.Lock()
-	sessions := len(f.sessions.created) + len(f.sessions.legacy) + len(f.sessions.revoked) + len(f.sessions.revokedLegacy) + f.sessions.exchanges
+	sessions := len(f.sessions.created) + len(f.sessions.revoked) + len(f.sessions.revokedLegacy) + f.sessions.exchanges
 	f.sessions.mu.Unlock()
 	return f.attempts.failures + len(f.loginUsers.projected) + len(f.appended) + projected + sessions
 }
@@ -94,9 +94,6 @@ func TestCompatRefreshRefusesBeforeExchangeWhenSignerUnavailable(t *testing.T) {
 	opaque := func(f *compatFixture) *httptest.ResponseRecorder {
 		return f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
 	}
-	legacy := func(f *compatFixture) *httptest.ResponseRecorder {
-		return f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+legacyToken(t, f, f.org.String(), testSecret)+`"}`, nil)
-	}
 	cases := []struct {
 		name    string
 		mutate  func(*compatFixture)
@@ -111,7 +108,6 @@ func TestCompatRefreshRefusesBeforeExchangeWhenSignerUnavailable(t *testing.T) {
 		{"opaque reused", func(f *compatFixture) {
 			f.sessions.result = session.Result{Reason: session.ReasonRefreshReused}
 		}, opaque, http.StatusUnauthorized},
-		{"legacy accepted", func(f *compatFixture) { f.sessions.legacyResult = accepted(f.record) }, legacy, http.StatusOK},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -50,13 +50,6 @@ func TestEdDSAAccessSecretAloneIsRefused(t *testing.T) {
 	}
 }
 
-func TestHS256CompatSessionsStillNeedBothSecrets(t *testing.T) {
-	_, err := Load(Spec{LookupEnv: lookupFrom(successorOnlyEnv(AccessClassHS256Compat))})
-	if err == nil || !strings.Contains(err.Error(), EnvAccessTokenSecret) {
-		t.Fatalf("got %v, want an error naming %s", err, EnvAccessTokenSecret)
-	}
-}
-
 func TestEdDSASessionRefusalsNameTheSuccessorKeyOnly(t *testing.T) {
 	for name, set := range map[string]func(map[string]string){
 		"lockout key":      func(env map[string]string) { env[EnvLoginLockoutKey] = testSuccessorKey },

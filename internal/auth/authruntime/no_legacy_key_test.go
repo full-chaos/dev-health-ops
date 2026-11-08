@@ -97,14 +97,7 @@ func TestEdDSASessionRoutesBuildAndServeWithoutTheLegacyKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hs, err := authapi.NewIssuer(testAccessSecret, cfg.Session.AccessIssuer, "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy, err := hs.Access(grant)
-	if err != nil {
-		t.Fatal(err)
-	}
+	legacy := legacyAccess(t, testAccessSecret, cfg.Session.AccessIssuer, "dev-health-api", grant)
 	handler := mountRoutes(routes)
 	if status, reason := routeAnswer(t, handler, http.MethodGet, authapi.PatternCurrent, "", eddsa); status != http.StatusServiceUnavailable || reason != "store_unavailable" {
 		t.Errorf("EdDSA bearer: %d %q; want 503 store_unavailable", status, reason)

@@ -109,7 +109,6 @@ func wrapStreamRunnerReadinessCheckWithLogging(logger *slog.Logger, check string
 type streamHandlerKind string
 
 const (
-	internalIngestHandlerKind   streamHandlerKind = "internal-ingest"
 	productTelemetryHandlerKind streamHandlerKind = "product-telemetry"
 	externalIngestHandlerKind   streamHandlerKind = "external-ingest"
 	pagerdutyHandlerKind        streamHandlerKind = "pagerduty"
@@ -320,8 +319,6 @@ func (storage *productionStreamStorage) Handler(kind streamHandlerKind, observer
 		return nil, errStreamDependencyUnavailable
 	}
 	switch kind {
-	case internalIngestHandlerKind:
-		return streamhandlers.NewInternalIngestHandler(storage.clickHouse)
 	case productTelemetryHandlerKind:
 		return streamhandlers.NewProductTelemetryHandler(storage.clickHouse)
 	case externalIngestHandlerKind:
@@ -514,7 +511,6 @@ func streamConsumerSpecs(cfg config.Config) ([]streamConsumerSpec, error) {
 	switch cfg.Profile {
 	case "ingest":
 		specs = []streamConsumerSpec{
-			{kind: internalIngestHandlerKind, config: internalIngestRunnerConfig(replicas)},
 			{kind: productTelemetryHandlerKind, config: productTelemetryRunnerConfig(replicas)},
 		}
 	case "external":
@@ -579,24 +575,6 @@ func buildStreamRunner(
 		return nil, err
 	}
 	return runner, nil
-}
-
-func internalIngestRunnerConfig(replicas int) streamrunner.Config {
-	return streamrunner.Config{
-		Name: "internal_ingest",
-		Patterns: []string{
-			"ingest:*:commits",
-			"ingest:*:deployments",
-			"ingest:*:incidents",
-			"ingest:*:pull-requests",
-			"ingest:*:work-items",
-		},
-		ConsumerGroup: "ingest-consumers", ConsumerName: "go-internal-ingest",
-		BatchSize: 100, DiscoveryLimit: 10_000, Block: 5 * time.Second,
-		ReclaimEvery: time.Minute, ReclaimIdle: 5 * time.Minute,
-		MaxDeliveries: 5, ShutdownDrain: 10 * time.Second,
-		ConfiguredReplicas: replicas,
-	}
 }
 
 func productTelemetryRunnerConfig(replicas int) streamrunner.Config {

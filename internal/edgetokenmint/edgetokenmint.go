@@ -1,21 +1,11 @@
-// Package edgetokenmint mints the product ACCESS TOKEN the Python edge
-// accepts, for go-api-prove's dedicated proof service principal.
+// Package edgetokenmint mints the product ACCESS TOKEN for go-api-prove's
+// dedicated proof service principal: an access-token.v1 EdDSA user token
+// (eddsa.go). No HS256 access token is minted.
 //
 // go-api-prove carries two bearers. The effective-principal envelope is
 // minted in the tools pod by internal/envelopemint. This package is its
-// sibling for the other bearer: the edge access token that
-// AuthService.authenticate_access_token (src/dev_health_ops/api/services/
-// auth.py) validates on every request. The same design applies. The tools
-// pod holds the signing key the api pod's environment already holds
-// (JWT_SECRET_KEY), reached the same way (a Secret key via secretKeyRef),
-// and mints locally. It never execs into a running api pod and never calls
-// one.
-//
-// The bearer check on the edge stays exactly as it is. A token minted here
-// is an ordinary access token: HS256 over JWT_SECRET_KEY, type "access",
-// the same issuer and audience, and a "tv" claim the edge compares with
-// users.token_version for the principal row on every request. The edge
-// also refuses the token when that row is gone or inactive.
+// sibling for the other bearer. The tools pod holds an Ed25519 key file and
+// mints locally. It never execs into a running api pod and never calls one.
 //
 // The principal is a DEDICATED service identity, never a human user:
 //
@@ -46,14 +36,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
-	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"os"
 	"strings"
 	"time"
-	"unicode/utf8"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -62,24 +48,13 @@ import (
 )
 
 const (
-	// Algorithm matches auth.py's JWT_ALGORITHM. The edge accepts no other.
-	Algorithm = "HS256"
-
-	// TokenType is the "type" claim authenticate_access_token requires.
-	TokenType = "access"
-
 	// Env var names match auth.py's os.getenv calls exactly, so a pod
 	// wired from the same Secret keys as the api pod needs no new names.
-	SigningKeyEnvVar = "JWT_SECRET_KEY"
-	IssuerEnvVar     = "JWT_ISSUER"
-	AudienceEnvVar   = "JWT_AUDIENCE"
+	IssuerEnvVar   = "JWT_ISSUER"
+	AudienceEnvVar = "JWT_AUDIENCE"
 
 	DefaultIssuer   = "dev-health-ops"
 	DefaultAudience = "dev-health-api"
-
-	// MinSigningKeyLength matches _get_jwt_secret's length floor, counted
-	// in characters the way Python's len() counts them.
-	MinSigningKeyLength = 32
 
 	// DefaultTTL and MaxTTL bound the token's life. A prove run re-mints
 	// as the token ages (see go-api-prove's edge credential freshness), so
@@ -125,8 +100,6 @@ func RoleAllowedFor(userID, role string) bool {
 // Refusals. Each names what is wrong with the principal, never a key or a
 // token.
 var (
-	ErrSigningKeyMissing   = fmt.Errorf("%s is not set", SigningKeyEnvVar)
-	ErrSigningKeyTooShort  = fmt.Errorf("%s must be at least %d characters", SigningKeyEnvVar, MinSigningKeyLength)
 	ErrPrincipalNotFound   = errors.New("edgetokenmint: the proof service principal has no users row")
 	ErrPrincipalInactive   = errors.New("edgetokenmint: the proof service principal is not active")
 	ErrPrincipalNotService = errors.New("edgetokenmint: the principal row is not marked as a service identity")
@@ -134,58 +107,6 @@ var (
 	ErrNoMembership        = errors.New("edgetokenmint: the proof service principal has no membership in this org")
 	ErrRoleNotAllowed      = errors.New("edgetokenmint: the proof service principal's role in this org is not a role it may hold")
 )
-
-// Claims is the access-token payload auth.py's create_access_token writes,
-// field for field. aud is a single string, as PyJWT writes it. username
-// and full_name are omitted: create_access_token omits them when empty,
-// and a service principal has neither.
-type Claims struct {
-	Subject      string `json:"sub"`
-	Email        string `json:"email"`
-	OrgID        string `json:"org_id"`
-	Role         string `json:"role"`
-	IsSuperuser  bool   `json:"is_superuser"`
-	Type         string `json:"type"`
-	Issuer       string `json:"iss"`
-	Audience     string `json:"aud"`
-	ExpiresAt    int64  `json:"exp"`
-	IssuedAt     int64  `json:"iat"`
-	ID           string `json:"jti"`
-	TokenVersion int    `json:"tv"`
-}
-
-// The jwt.Claims methods, so a test can parse a minted token with the
-// library's own validation (expiry, issuer, audience) switched on.
-func (c Claims) GetExpirationTime() (*jwt.NumericDate, error) {
-	return jwt.NewNumericDate(time.Unix(c.ExpiresAt, 0)), nil
-}
-func (c Claims) GetIssuedAt() (*jwt.NumericDate, error) {
-	return jwt.NewNumericDate(time.Unix(c.IssuedAt, 0)), nil
-}
-func (c Claims) GetNotBefore() (*jwt.NumericDate, error) { return nil, nil }
-func (c Claims) GetIssuer() (string, error)              { return c.Issuer, nil }
-func (c Claims) GetSubject() (string, error)             { return c.Subject, nil }
-func (c Claims) GetAudience() (jwt.ClaimStrings, error) {
-	return jwt.ClaimStrings{c.Audience}, nil
-}
-
-// LoadSigningKey checks raw the way _get_jwt_secret does and returns its
-// bytes. The error never carries the value.
-func LoadSigningKey(raw string) ([]byte, error) {
-	if raw == "" {
-		return nil, ErrSigningKeyMissing
-	}
-	if utf8.RuneCountInString(raw) < MinSigningKeyLength {
-		return nil, ErrSigningKeyTooShort
-	}
-	return []byte(raw), nil
-}
-
-// LoadSigningKeyFromEnv reads SigningKeyEnvVar by name. The key is never a
-// flag value, so it never reaches argv or the process table.
-func LoadSigningKeyFromEnv() ([]byte, error) {
-	return LoadSigningKey(envsecrets.GetenvSecret(SigningKeyEnvVar))
-}
 
 // Principal is what a minted token claims. Build it with LookupPrincipal,
 // which checks the database, not by hand.
@@ -232,53 +153,6 @@ func envOr(name, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// Mint signs an access token for principal. The result is the raw JWT,
-// with no "Bearer " prefix.
-func Mint(signingKey []byte, principal Principal, opts Options) (string, error) {
-	if utf8.RuneCount(signingKey) < MinSigningKeyLength {
-		return "", ErrSigningKeyTooShort
-	}
-	if _, err := uuid.Parse(principal.UserID); err != nil {
-		return "", errors.New("edgetokenmint: principal user id is not a UUID")
-	}
-	if _, err := uuid.Parse(principal.OrgID); err != nil {
-		return "", errors.New("edgetokenmint: org id is not a UUID")
-	}
-	if strings.TrimSpace(principal.Email) == "" {
-		return "", errors.New("edgetokenmint: principal email must not be empty")
-	}
-	if !RoleAllowedFor(principal.UserID, principal.Role) {
-		return "", ErrRoleNotAllowed
-	}
-	opts = opts.withDefaults()
-	if err := acraudience.Refuse("edgetokenmint", opts.Audience); err != nil {
-		return "", err
-	}
-	if opts.TTL < 0 || opts.TTL > MaxTTL {
-		return "", fmt.Errorf("edgetokenmint: TTL must be between 0 and %s", MaxTTL)
-	}
-	now := opts.Now()
-	claims := Claims{
-		Subject:      principal.UserID,
-		Email:        principal.Email,
-		OrgID:        principal.OrgID,
-		Role:         principal.Role,
-		IsSuperuser:  false,
-		Type:         TokenType,
-		Issuer:       opts.Issuer,
-		Audience:     opts.Audience,
-		ExpiresAt:    now.Add(opts.TTL).Unix(),
-		IssuedAt:     now.Unix(),
-		ID:           uuid.NewString(),
-		TokenVersion: principal.TokenVersion,
-	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(signingKey)
-	if err != nil {
-		return "", fmt.Errorf("edgetokenmint: sign: %w", err)
-	}
-	return signed, nil
 }
 
 // RowQuerier is the one pgx method LookupPrincipal needs. *pgxpool.Pool
@@ -365,24 +239,4 @@ func lookupPrincipal(ctx context.Context, db RowQuerier, principalID, orgID stri
 		return Principal{}, ErrRoleNotAllowed
 	}
 	return Principal{UserID: id, Email: email, OrgID: orgID, Role: *role, TokenVersion: tokenVersion}, nil
-}
-
-// MintForAdminProve looks up the org-admin proof service principal for orgID
-// and mints its token (role admin).
-func MintForAdminProve(ctx context.Context, db RowQuerier, signingKey []byte, orgID string, opts Options) (string, error) {
-	principal, err := LookupAdminPrincipal(ctx, db, orgID, opts)
-	if err != nil {
-		return "", err
-	}
-	return Mint(signingKey, principal, opts)
-}
-
-// MintForProve looks up the proof service principal for orgID and mints
-// its token. This is the entry point cmd/mint-edge-token uses.
-func MintForProve(ctx context.Context, db RowQuerier, signingKey []byte, orgID string, opts Options) (string, error) {
-	principal, err := LookupPrincipal(ctx, db, orgID, opts)
-	if err != nil {
-		return "", err
-	}
-	return Mint(signingKey, principal, opts)
 }

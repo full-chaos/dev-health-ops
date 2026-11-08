@@ -478,7 +478,7 @@ func TestDecideTakesTheUserAccessTokenOnly(t *testing.T) {
 	t.Run("hs256", func(t *testing.T) {
 		a := newAccessFixtureWith(t, nil, nil)
 		o := newOAuthFixture(t, a.fixture, nil)
-		hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
+		hs, err := newLegacyMinter(testSecret, testIssuer, contracts.PlatformAPIAudience)
 		if err != nil {
 			t.Fatal(err)
 		}

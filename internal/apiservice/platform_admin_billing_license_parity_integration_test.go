@@ -252,10 +252,6 @@ VALUES ('` + msrInvoice + `', '` + msrOrgB.String() + `', 'in_msr_b', 'cus_msr_b
 		if err != nil {
 			t.Fatal(err)
 		}
-		signer, err := edgetoken.NewSigner(probeKey, "dev-health-ops", "dev-health-api")
-		if err != nil {
-			t.Fatal(err)
-		}
 		auth, err := policy.NewAuthenticator(store, quietLogger())
 		if err != nil {
 			t.Fatal(err)
@@ -289,7 +285,7 @@ VALUES ('` + msrInvoice + `', '` + msrOrgB.String() + `', 'in_msr_b', 'cus_msr_b
 		}
 		scope := policy.NewScope(auth, quietLogger())
 		scope.DeclaredRows(scopeRows)
-		deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Verifier: verifier, Signer: signer}
+		deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Verifier: verifier}
 		server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), scope.Layers()...)
 		if err != nil {
 			t.Fatal(err)

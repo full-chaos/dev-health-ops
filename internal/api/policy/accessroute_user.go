@@ -28,7 +28,7 @@ type AccessUserStore interface {
 const principalPrefix = "prn_"
 
 // nonMemberRole is the role of a caller with no membership row in the token
-// org: the HS256 token's role when it states none (userFromClaims).
+// org: the legacy answer for a token that stated no role.
 const nonMemberRole = "member"
 
 // orgLessRole is the role of a caller whose token names no org: the HS256
@@ -93,7 +93,7 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 		a.logger.WarnContext(ctx, "api user access token without a session", slog.String("user_id", id.String()))
 		return nil, errRejected
 	}
-	sessionID, err := a.checkSession(ctx, map[string]any{"sid": claims.SessionID}, id, row.State.TokenVersion)
+	sessionID, err := a.checkSession(ctx, claims.SessionID, id, row.State.TokenVersion)
 	if err != nil {
 		return nil, err
 	}

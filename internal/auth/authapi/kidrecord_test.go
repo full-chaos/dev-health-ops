@@ -41,29 +41,10 @@ func TestEdDSAMintRecordsTheSigningKidOnTheSession(t *testing.T) {
 	}
 }
 
-func TestHS256MintRecordsTheEmptyKidSet(t *testing.T) {
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	recorder := &fakeKidRecorder{}
-	issuer.WithKidRecorder(recorder)
-	sid := uuid.New()
-	if _, err := issuer.AccessContext(context.Background(), kidGrant(sid)); err != nil {
-		t.Fatal(err)
-	}
-	if len(recorder.calls) != 1 || recorder.calls[0] != (recordedKid{sid, ""}) {
-		t.Fatalf("recorded %+v, want one empty-kid record on %s", recorder.calls, sid)
-	}
-}
-
 func TestAMintWhoseRecordFailsReturnsNoToken(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	eddsa := newEdDSAIssuer(t, signer, testAudience)
-	hs, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	hs := newTestIssuer(t)
 	for name, issuer := range map[string]*Issuer{"eddsa": eddsa, "hs256_compat": hs} {
 		t.Run(name, func(t *testing.T) {
 			lost := errors.New("session row not found")

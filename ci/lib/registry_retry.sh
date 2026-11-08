@@ -8,7 +8,7 @@
 #                                       (stdout and stderr merged) and to a per-try file under RUNNER_TEMP or TMPDIR that is
 #                                       removed at the end. Returns 0 on success, else the last try's rc.
 # Classes: T1 a blob fetch of a digest-pinned image answered "not found" by the mirror (layer, config or other media type);
-# T2 a 429 or 5xx from mirror.gcr.io; T3 a network error on a registry fetch. A permanent line anywhere vetoes the retry.
+# T2 a 429 or 5xx from mirror.gcr.io; T3 a network error on a line that names a registry (host, URL, :443 or "from remote"); a local-context error (daemon, Dockerfile read) never matches. A permanent line anywhere vetoes the retry.
 
 # shellcheck source=ci/lib/retry.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/retry.sh"
@@ -20,18 +20,18 @@ _REGISTRY_RETRY_NAME=""
 registry_transient() {
   local text
   text="$(tr -d '\r' <"$1")" || return 1
-  if LC_ALL=C grep -aEq '(manifest unknown|denied|unauthorized|pull access denied|repository does not exist|no match for platform in manifest|invalid reference format)|^manifest [^ ]+ not found$|^#[0-9]+ ERROR: process "|^dependency failed to start: |is unhealthy|exited \([1-9][0-9]*\)|didn.t complete successfully' <<<"${text}"; then
+  if LC_ALL=C grep -aEq '(manifest unknown|denied|unauthorized|pull access denied|repository does not exist|no match for platform in manifest|invalid reference format)|^(#[0-9]+ [^ ]+ )?(ERROR: )?([^:]+: )*manifest [^ ]+ not found$|^#[0-9]+ ERROR: process "|^dependency failed to start: |is unhealthy|exited \([1-9][0-9]*\)|didn.t complete successfully' <<<"${text}"; then
     return 1
   fi
   if LC_ALL=C grep -aEq '^#[0-9]+ ERROR: failed to copy: httpReadSeeker: failed open: could not fetch content descriptor sha256:[0-9a-f]{64} \(application/vnd\.(oci|docker)\.[A-Za-z0-9.+-]+\) from remote: not found$' <<<"${text}"; then
     echo T1
     return 0
   fi
-  if LC_ALL=C grep -aEq '^#[0-9]+ ERROR: failed to .*unexpected status from (GET|HEAD) request to https://mirror\.gcr\.io/[^ ]*: (429 Too Many Requests|50[0234] [A-Za-z ]+)$' <<<"${text}"; then
+  if LC_ALL=C grep -aEq '^#[0-9]+ ERROR: failed to .*unexpected status from (GET|HEAD) request to https://mirror\.gcr\.io/[^ ]*: (429 Too Many Requests|5[0-9][0-9] [A-Za-z ]+)$' <<<"${text}"; then
     echo T2
     return 0
   fi
-  if LC_ALL=C grep -aEq '^#[0-9]+ ERROR: failed to .*(TLS handshake timeout|i/o timeout|connection reset by peer|unexpected EOF)$' <<<"${text}"; then
+  if LC_ALL=C grep -aEq '^#[0-9]+ ERROR: failed to .*(https://|mirror\.gcr\.io|ghcr\.io|docker\.io|:443[: ]|from remote).*(TLS handshake timeout|i/o timeout|connection reset by peer|unexpected EOF)$' <<<"${text}"; then
     echo T3
     return 0
   fi

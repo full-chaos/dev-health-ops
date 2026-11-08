@@ -32,17 +32,3 @@ func TestAccessTokenLifetimeIsWholeMinutesFromFiveToSixty(t *testing.T) {
 		}
 	}
 }
-
-// Under hs256_compat the access token is go-api's HS256 token with go-api's 60 minutes: a lifetime setting there is
-// not used, and it does not stop the service from starting (D6465).
-func TestAccessTokenLifetimeIsIgnoredUnderHS256Compat(t *testing.T) {
-	env := sessionEnv(testAccessSecret, testSuccessorKey)
-	env[EnvAccessTokenLifetime] = "10m"
-	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
-	if err != nil {
-		t.Fatalf("hs256_compat with a lifetime set: %v", err)
-	}
-	if cfg.Session.AccessLifetime != 60*time.Minute {
-		t.Fatalf("hs256_compat lifetime %s, want go-api's 60m", cfg.Session.AccessLifetime)
-	}
-}

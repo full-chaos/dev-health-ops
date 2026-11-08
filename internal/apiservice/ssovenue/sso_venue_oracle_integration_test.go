@@ -240,14 +240,19 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 	}
 	python := golden.Python(t, venue, requests)
 	signInPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/signin.go-pin.json", SHA256: signInPinSHA256, Ruling: signInRuling})
+	providersAuthorizePin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{
+		Path: "testdata/providers-authorize.go-pin.json", SHA256: providersAuthorizePinSHA256, Ruling: providersAuthorizeRuling,
+	})
 	var orglessRefused []string
 	// The owner's tokens with an org claim it holds no membership in (another org, not a UUID): the legacy answer stays
 	// the wanted one (product rule 1). The other org's token claims the owner role, which the handler reads
 	// (api/sso/providers.go setStatus); a user access token carries no role claim.
 	receipt := venueoracle.Diff(t, startGoAPI(t, ctx, venue, key), requests, python, venueoracle.DiffOptions{
 		Golden: golden, Retire: func(request venueoracle.Request) bool { return signInRetired[request.Name] }, Pin: signInPin,
+		Retirements: []venueoracle.Retirement{
+			{Match: func(request venueoracle.Request) bool { return request.Name == providersAuthorizeStep }, Pin: providersAuthorizePin},
+		},
 		KnownDivergences: []venueoracle.KnownDivergence{
-			{Match: func(request venueoracle.Request) bool { return request.Name == providersAuthorizeStep }, Ticket: providersAuthorizeDefect},
 			{Match: func(request venueoracle.Request) bool { return request.Name == "activate: token of the other org" }, Ticket: venueoracle.RoleClaimGap},
 			{Match: func(request venueoracle.Request) bool { return request.Name == "activate: org claim not a uuid" }, Ticket: venueoracle.NotUUIDOrgClaimGap},
 		},
@@ -279,7 +284,7 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
-	venueoracle.FinishPins(t, signInPin)
+	venueoracle.FinishPins(t, signInPin, providersAuthorizePin)
 	golden.Finish(t)
 }
 
@@ -300,11 +305,16 @@ var signInRetired = map[string]bool{
 	"overlap: GET /oauth/providers/authorize": true,
 }
 
-// providersAuthorizeStep answers 500 on the real handler: "providers" is not a provider UUID, and initiateOAuthAuth
-// fails the parse as an internal error (internal/api/sso/oauth.go). The same 500 is on the PR base with a Signer.
+// providersAuthorizeStep sends "providers", not a provider UUID, to the real initiateOAuthAuth: it answers as a
+// well-formed id with no row (internal/api/sso/oauth.go writeOAuthProviderNotFound).
 const providersAuthorizeStep = "overlap: POST /oauth/providers/authorize"
 
-const providersAuthorizeDefect = "CHAOS-13328, a provider id that is not a UUID answers 500 on POST /oauth/{id}/authorize (initiateOAuthAuth)"
+// providersAuthorizeRuling retires the step's Python answer: the frozen 402 is the license shim, and legacy's real
+// handler took provider_id: str and raised a 500 on uuid.UUID(), a defect.
+const providersAuthorizeRuling = "CHAOS-13328: a malformed provider id answers as an unknown id (the legacy 500 was a defect; the frozen 402 is the license shim)"
+
+// providersAuthorizePinSHA256 is the digest of testdata/providers-authorize.go-pin.json.
+const providersAuthorizePinSHA256 = "cf7ba866886071e670390d379d7152f61035ff7666e2844192864cfa4258c510"
 
 // statePattern is the sealed OAuth state of an authorize answer, and perRequestParamPattern the authorization URL's
 // PKCE challenge, nonce and state: new on every request.

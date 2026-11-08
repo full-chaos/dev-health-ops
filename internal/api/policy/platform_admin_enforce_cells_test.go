@@ -405,6 +405,8 @@ func TestPlatformAdminGapRowsKeepMainsAnswerAndAskTheWrapAction(t *testing.T) {
 			if level == Superuser {
 				// A WrapPlatform gap row (the service account key rows): no route question, but the platform gate asks
 				// the decision point its own admin.users once, so a decision point that denies refuses a local superuser.
+				// The guard obeys a PDP deny (fake PDP); the real evaluator allows superusers, see
+				// TestServiceAccountKeyRowsAdminCellOnSuperuserWithoutMembershipIs200.
 				if got.status != http.StatusForbidden || len(pdp.calls()) != 1 || len(rec.snapshot()) != 0 {
 					t.Fatalf("superuser, PDP deny: %d %q, %d PDP calls, counted %v; want 403 after the one admin.users question", got.status, got.body, len(pdp.calls()), rec.snapshot())
 				}

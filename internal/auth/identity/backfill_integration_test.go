@@ -478,3 +478,60 @@ VALUES ($1, $2, $3, $4)`, assignment, target.ID, PlatformAdminRole, granter.ID)
 		t.Fatalf("granted assignment removed: %d", n)
 	}
 }
+
+// Every platform_admin grant is counted in the result, for a principal that
+// exists and for one the backfill inserts, in a dry run and in the real run
+// the dry run foretold (CHAOS-13281). A grant of a role already held is not.
+func TestBackfillCountsEveryPlatformRoleGrant(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	assigned := func(ids ...uuid.UUID) int {
+		n := 0
+		for _, id := range ids {
+			n += e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1 AND role_key = 'platform_admin'`, id)
+		}
+		return n
+	}
+	existing := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfc1"), Active: true}
+	if _, err := e.store.BackfillUser(ctx, existing, false); err != nil {
+		t.Fatalf("seed an existing principal: %v", err)
+	}
+	existing.Superuser = true
+	fresh := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfc2"), Active: true, Superuser: true}
+	targets := []BackfillTarget{existing, fresh}
+
+	granted := func(dryRun bool) int {
+		n := 0
+		for _, target := range targets {
+			res, err := e.store.BackfillUser(ctx, target, dryRun)
+			if err != nil {
+				t.Fatalf("dry=%v: %v", dryRun, err)
+			}
+			if res.RoleGranted {
+				n++
+			}
+		}
+		return n
+	}
+	before := assigned(existing.ID, fresh.ID)
+	if n := granted(true); n != 2 {
+		t.Fatalf("dry run counted %d grants, want 2 (one existing principal, one new)", n)
+	}
+	if after := assigned(existing.ID, fresh.ID); after != before {
+		t.Fatalf("dry run wrote assignments: %d -> %d", before, after)
+	}
+	if n := granted(false); n != 2 {
+		t.Fatalf("real run counted %d grants, want 2", n)
+	}
+	if after := assigned(existing.ID, fresh.ID); after-before != 2 {
+		t.Fatalf("real run wrote %d assignments, want 2", after-before)
+	}
+	// Both now hold the role: a rerun grants nothing, so it counts nothing.
+	if n := granted(false); n != 0 {
+		t.Fatalf("rerun counted %d grants of a role already held, want 0", n)
+	}
+	if n := granted(true); n != 0 {
+		t.Fatalf("dry rerun counted %d grants of a role already held, want 0", n)
+	}
+}

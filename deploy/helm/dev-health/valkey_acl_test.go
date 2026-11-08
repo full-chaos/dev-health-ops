@@ -110,7 +110,7 @@ func TestValkeyAclFileOffWithoutTheInClusterValkey(t *testing.T) {
 func valkeySection(out string) string {
 	var keep []string
 	for _, part := range strings.Split(out, "\n---\n") {
-		if strings.Contains(part, "\n  name: a-dev-health-valkey\n") && (strings.Contains(part, "kind: Deployment") || strings.Contains(part, "kind: Service") || strings.Contains(part, "kind: PersistentVolumeClaim")) {
+		if strings.Contains(part, "-valkey") && (strings.Contains(part, "kind: Deployment") || strings.Contains(part, "kind: Service") || strings.Contains(part, "kind: PersistentVolumeClaim")) {
 			keep = append(keep, part)
 		}
 	}

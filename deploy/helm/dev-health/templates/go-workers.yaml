@@ -324,9 +324,6 @@ spec:
               that must reach one group and no other (a credential or a trial
               switch) goes here; the shared ConfigMap/Secret reach all groups.
             */}}
-            {{- if $group.valkey }}
-            {{- include "dev-health.valkeyClientEnv" (dict "ctx" $ "extraEnv" $group.extraEnv) | trim | nindent 12 }}
-            {{- end }}
             {{- $chartOwned := concat (list "OPERATIONAL_ORDERING_CONTRACT" "OTEL_SERVICE_NAME" "CLICKHOUSE_URI" "POSTGRES_URI") $dsnNames ($.Values.goWorkers.secretKeys | default (list)) }}
             {{- with $group.extraEnv }}
             {{- range $entry := . }}

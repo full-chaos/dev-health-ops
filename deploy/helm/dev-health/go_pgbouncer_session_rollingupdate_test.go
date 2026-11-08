@@ -106,22 +106,6 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 			t.Errorf("%s render: %d PDP rate-limit env entries, want four per auth-service Deployment", name, n)
 		}
 		tip = pdpEnv.ReplaceAllString(tip, "")
-		// CHAOS-13346: the shared ConfigMaps (main and migrate hook) lost REDIS_URL and VALKEY_URI, and the five worker groups flagged
-		// valkey: true carry VALKEY_URI themselves. Those lines are left out of both sides (4 ConfigMap lines in the base, 5 env entries in
-		// the tip); the config checksum annotation moves with the ConfigMap content, so it is blanked on both sides (the ConfigMap bodies stay compared).
-		cmURL := regexp.MustCompile(`(?m)^  (REDIS_URL|VALKEY_URI): "[^"]*"\n`)
-		if n := len(cmURL.FindAllString(base, -1)); n != 4 {
-			t.Errorf("%s render: %d REDIS_URL/VALKEY_URI ConfigMap lines in the base, want 4", name, n)
-		}
-		base = cmURL.ReplaceAllString(base, "")
-		workerURL := regexp.MustCompile(`            - name: VALKEY_URI\n              value: "[^"]*"\n`)
-		if n := len(workerURL.FindAllString(tip, -1)); n != 5 {
-			t.Errorf("%s render: %d per-workload VALKEY_URI entries in the tip, want 5 (the valkey: true groups)", name, n)
-		}
-		tip = workerURL.ReplaceAllString(tip, "")
-		checksum := regexp.MustCompile(`checksum/config: [0-9a-f]{64}`)
-		base = checksum.ReplaceAllString(base, "checksum/config: X")
-		tip = checksum.ReplaceAllString(tip, "checksum/config: X")
 		// The Valkey args gained a pinned --appendfsync after the base: that one pair is left out of the tip, exactly once.
 		fsyncArgs := "            - --appendfsync\n            - everysec\n"
 		if n := strings.Count(tipValkey, fsyncArgs); n != 1 {

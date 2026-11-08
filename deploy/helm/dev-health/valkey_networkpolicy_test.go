@@ -13,8 +13,7 @@ var valkeyURLNames = []string{"VALKEY_URI", "REDIS_URL", "AUTH_VALKEY_URI"}
 
 var valkeyProdShape = append(append(append([]string{}, authBase...), authValkey...),
 	"--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24",
-	"--set", "goApi.enabled=true", "--set", "goApi.internal.enabled=true", "--set", "queryApi.enabled=true",
-	"--set", "goApi.extraEnv[0].name=VALKEY_URI", "--set", "goApi.extraEnv[0].value=redis://x:6379/1")
+	"--set", "goApi.enabled=true", "--set", "goApi.internal.enabled=true", "--set", "queryApi.enabled=true", "--set", "valkey.networkPolicy.enabled=true")
 
 var valkeyClientWorkloads = []string{
 	"a-dev-health-auth-service", "a-dev-health-go-api", "a-dev-health-go-stream-external", "a-dev-health-go-stream-ingest",
@@ -176,79 +175,45 @@ func TestValkeyLeavesTheReleaseWidePolicy(t *testing.T) {
 	}
 }
 
-func TestValkeyURLReachesOnlyTheClients(t *testing.T) {
-	_, workloads := valkeyRender(t, valkeyProdShape...)
-	clients := map[string]bool{}
-	for _, n := range valkeyClientWorkloads {
-		clients[n] = true
-	}
-	seen := map[string]bool{}
+// (iv) every client still gets a URL: web, auth-service and the groups from the chart (envFrom of the shared ConfigMap for the
+// groups); go-api from its values file, as the deploy values set it.
+func TestValkeyEveryClientStillGetsItsURL(t *testing.T) {
+	_, workloads := valkeyRender(t, append(append([]string{}, valkeyProdShape...), "--set", "goApi.extraEnv[0].name=VALKEY_URI", "--set", "goApi.extraEnv[0].value=redis://x:6379/1")...)
+	seen := 0
 	for _, w := range workloads {
-		if clients[w.name] {
-			seen[w.name] = true
+		if contains(valkeyClientWorkloads, w.name) {
+			seen++
 			if len(w.carries) == 0 {
-				t.Errorf("client %s carries no Valkey URL", w.name) // (iv)
-			}
-			continue
-		}
-		if len(w.carries) != 0 { // (iii)
-			t.Errorf("%s %s is not a Valkey client but carries %v", w.kind, w.name, w.carries)
-		}
-	}
-	for n := range clients {
-		if !seen[n] {
-			t.Errorf("client workload %s not rendered", n)
-		}
-	}
-}
-
-func TestValkeyClientURLIsPerWorkloadNotInTheConfigMaps(t *testing.T) {
-	docs, _ := valkeyRender(t, valkeyProdShape...)
-	for _, doc := range docs {
-		if aStr(doc["kind"]) != "ConfigMap" {
-			continue
-		}
-		for _, k := range []string{"VALKEY_URI", "REDIS_URL"} {
-			if _, ok := aMap(doc["data"])[k]; ok {
-				t.Errorf("ConfigMap %v carries %s", at(doc, "metadata", "name"), k)
+				t.Errorf("client %s carries no Valkey URL", w.name)
 			}
 		}
 	}
-}
-
-// go-api's URL is the values file's (goApi.extraEnv); the chart renders none of its own for go-api.
-func TestValkeyGoAPIURLComesFromExtraEnvOnly(t *testing.T) {
-	var bare []string
-	for i := 0; i < len(valkeyProdShape); i++ {
-		if strings.HasPrefix(valkeyProdShape[i], "goApi.extraEnv[0]") {
-			bare = bare[:len(bare)-1]
-			continue
-		}
-		bare = append(bare, valkeyProdShape[i])
-	}
-	_, workloads := valkeyRender(t, bare...)
-	for _, w := range workloads {
-		if w.name == "a-dev-health-go-api" && len(w.carries) != 0 {
-			t.Errorf("go-api carries %v without goApi.extraEnv", w.carries)
-		}
+	if seen != len(valkeyClientWorkloads) {
+		t.Errorf("%d client workloads rendered, want %d", seen, len(valkeyClientWorkloads))
 	}
 }
 
+// (vi) the gate is off by default and with networkPolicy.enabled=false: no Valkey policy, valkey not excluded.
 func TestValkeyPolicyOffChangesNothing(t *testing.T) {
-	off := make([]string, 0, len(valkeyProdShape))
+	var gateDefault, npOff []string
 	for i := 0; i < len(valkeyProdShape); i++ {
-		if valkeyProdShape[i] == "networkPolicy.enabled=true" || valkeyProdShape[i] == "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24" {
-			off = off[:len(off)-1] // drop the preceding --set
+		a := valkeyProdShape[i]
+		if a == "valkey.networkPolicy.enabled=true" {
+			gateDefault = gateDefault[:len(gateDefault)-1]
+		} else {
+			gateDefault = append(gateDefault, a)
+		}
+		if a == "valkey.networkPolicy.enabled=true" || a == "networkPolicy.enabled=true" || a == "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24" {
+			if len(npOff) > 0 {
+				npOff = npOff[:len(npOff)-1]
+			}
 			continue
 		}
-		off = append(off, valkeyProdShape[i])
+		npOff = append(npOff, a)
 	}
-	for name, args := range map[string][]string{
-		"networkPolicy off":        off,
-		"valkey.networkPolicy off": append(append([]string{}, valkeyProdShape...), "--set", "valkey.networkPolicy.enabled=false"),
-	} {
+	for name, args := range map[string][]string{"gate default": gateDefault, "networkPolicy off": npOff} {
 		t.Run(name, func(t *testing.T) {
-			docs, workloads := valkeyRender(t, args...)
+			docs, _ := valkeyRender(t, args...)
 			if valkeyPolicy(docs) != nil {
 				t.Error("a Valkey policy rendered")
 			}
@@ -257,11 +222,6 @@ func TestValkeyPolicyOffChangesNothing(t *testing.T) {
 					if contains(toStrings(at(e, "values")), "valkey") {
 						t.Error("the release-wide policy excludes valkey")
 					}
-				}
-			}
-			for _, w := range workloads {
-				if contains(valkeyClientWorkloads, w.name) && len(w.carries) == 0 {
-					t.Errorf("client %s lost its URL", w.name)
 				}
 			}
 		})

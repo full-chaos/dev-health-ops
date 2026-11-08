@@ -247,7 +247,7 @@ func (failingKeys) KeySet(context.Context) (token.KeySet, error) {
 }
 
 func TestAnHS256TokenIsRefusedAlgNotAllowedOnASessionRow(t *testing.T) {
-	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
+	hs, err := newLegacyMinter(testSecret, testIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +409,7 @@ func TestEveryHS256TokenIsRefusedOnTheSessionRows(t *testing.T) {
 	api.Aud, api.Scope = "dev-health-api", "api:access"
 	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", a.signClaims(api)), http.StatusUnauthorized, "audience")
 
-	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
+	hs, err := newLegacyMinter(testSecret, testIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		t.Fatal(err)
 	}

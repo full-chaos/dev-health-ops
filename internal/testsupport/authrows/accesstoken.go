@@ -155,7 +155,17 @@ func AccessTokenUnvalued(body string) (string, bool) {
 // step whose access token the leg compares unvalued (goBlanked names AccessTokenPattern), both bodies carry the one
 // place holder in its place and unvalued is true: the runner then reports Golden.Unvalued(AccessTokenPattern).
 func SignInBodies(step, golden, target string, goBlanked map[string]string) (pyBody, goBody string, unvalued bool) {
-	pyBody, goBody = GoldenResponseBody(step, golden), TargetResponseBody(target, goBlanked)
+	return SignInBodiesLogin(step, golden, target, goBlanked, true)
+}
+
+// SignInBodiesLogin is SignInBodies for a leg that says who answers the sign-ins: with loginForwarded false
+// (local_login not forwarded) go-api itself chooses alice's organization on both planes, so her organization is not
+// rewritten (GoldenRefreshBody); the other ruled differences are classified as SignInBodies classifies them.
+func SignInBodiesLogin(step, golden, target string, goBlanked map[string]string, loginForwarded bool) (pyBody, goBody string, unvalued bool) {
+	pyBody, goBody = GoldenRefreshBody(golden), TargetResponseBody(target, goBlanked)
+	if loginForwarded {
+		pyBody = GoldenResponseBody(step, golden)
+	}
 	if _, ok := AccessTokenUser(step); !ok || goBlanked[AccessTokenPattern] == "" {
 		return pyBody, goBody, false
 	}

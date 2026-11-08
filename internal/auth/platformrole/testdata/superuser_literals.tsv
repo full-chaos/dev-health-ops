@@ -8,7 +8,6 @@ internal/api/policy/accessroute_user.go	PGStore.AccessUser	1	grant-error text
 internal/api/policy/principal.go	userFromClaims	1	claim key (a hint; the decision is the live read)
 internal/api/policy/store.go	PGStore.UserState	1	grant-error text
 internal/api/policy/store.go	PGStore.superuserColumn	1	read: the off column of PlatformRoleRead
-internal/api/session/refresh.go	refreshUserInfo	1	response key
 internal/api/session/routes.go	handlers.me	1	response key
 internal/api/session/store.go	-	1	read: userColumns, used only through userColumnsFor
 internal/api/session/store.go	handlers.userColumnsFor	2	read: the off column of PlatformRoleRead

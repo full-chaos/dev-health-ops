@@ -183,6 +183,7 @@ HELM_ARGS=(
   --set authService.database.secretName=auth-db
   --set authService.migrate.secretName=auth-migrate-db
   --set authService.signingKey.secretName=auth-key --set authService.signingKey.keyId=k8s-proof
+  --set authService.accessToken.issuerURL=https://auth.k8s-proof.example
   --set-json 'authService.networkPolicy.egress.database.to=[{"podSelector":{"matchLabels":{"app":"auth-postgres"}}}]'
   --set-json 'authService.networkPolicy.allowedFrom=[{"matchLabels":{"role":"auth-consumer"}}]'
   --set-json 'authService.networkPolicy.metricsFrom=[{"matchLabels":{"role":"auth-scraper"}}]'

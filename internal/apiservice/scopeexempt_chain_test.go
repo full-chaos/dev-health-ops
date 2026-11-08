@@ -27,10 +27,6 @@ func TestTheEncodedSlashStripeWebhookIsJudgedAndRefusedOnTheProductionChain(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(mountedKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +37,7 @@ func TestTheEncodedSlashStripeWebhookIsJudgedAndRefusedOnTheProductionChain(t *t
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = clickHouse.Close() })
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier}
 	server, err := newServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), nil, deps.AuthProxy.ScopeExemptRoutes(),
 		policy.NewScope(auth, quietLogger()).Layers()...)
 	if err != nil {

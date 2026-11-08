@@ -426,8 +426,8 @@ func assertProvisionedMember(t *testing.T, ctx context.Context, st stack, orgID 
 WHERE u.email = $1 AND u.auth_provider = $2 AND u.auth_provider_id = $3 AND m.role = 'member'`, email, provider, subject, orgID); n != 1 {
 		t.Fatalf("account with identity and membership rows = %d, want 1", n)
 	}
-	if n := countRows(t, ctx, st, `SELECT count(*) FROM refresh_tokens WHERE org_id = $1`, orgID); n != 1 {
-		t.Fatalf("refresh rows in the org = %d, want 1", n)
+	if n := countRows(t, ctx, st, `SELECT count(*) FROM refresh_tokens WHERE org_id = $1`, orgID); n != 0 {
+		t.Fatalf("refresh rows in the org = %d, want 0: auth-service owns sessions", n)
 	}
 }
 

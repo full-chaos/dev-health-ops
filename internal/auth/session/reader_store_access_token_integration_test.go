@@ -26,7 +26,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -132,12 +131,70 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 		t.Fatal("the api role reads sessions.expires_at: the session reader grant is wider than its columns")
 	}
 	store := policy.PGStore{Pool: api, AuthSchema: schemaName}
+	auth, mint := routedReaderAuth(t, store, principal)
+	now := time.Now().Unix()
+	routed := policy.WithRouteProfile(ctx, routedReaderProfile)
+
+	user, err := auth.Authenticate(routed, mint(live.Session.ID, &org))
+	if err != nil {
+		t.Fatalf("a live session's user token: %v", err)
+	}
+	if user.ID != principal || user.OrgID != org.String() || user.Role != "admin" || user.Email != "routed@example.test" ||
+		user.Username == nil || *user.Username != "routed" || user.FullName == nil || *user.FullName != "Routed User" || user.TokenVersion != 2 {
+		t.Fatalf("user %+v", user)
+	}
+	for name, token := range map[string]string{
+		"revoked session": mint(revoked.Session.ID, &org),
+		"unknown session": mint(uuid.New(), &org),
+	} {
+		if _, err := auth.Authenticate(routed, token); !policy.IsRefusal(err) {
+			t.Errorf("%s: err = %v, want a refusal", name, err)
+		}
+	}
+	// Product rule 1: an org claim without a membership row is the legacy HS256 answer at the authenticator: the
+	// recorded literal of policy/principal.go userFromClaims (no membership read, the claimed org, role member for a
+	// token with no role claim, the same user id; the HS256 class is retired here). The token org is refused later, by
+	// the org scope, the guard or CheckTokenOrg, on the same real rows.
+	got, err := auth.Authenticate(routed, mint(live.Session.ID, &otherOrg))
+	if err != nil || got.ID != principal || got.OrgID != otherOrg.String() || got.Role != "member" {
+		t.Fatalf("org without a member: user %+v err %v, want the legacy principal (id %s, org %s, role member)", got, err, principal, otherOrg)
+	}
+	if err := auth.CheckTokenOrg(ctx, got); !policy.IsRefusal(err) {
+		t.Errorf("org without a member: CheckTokenOrg err = %v, want a refusal", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE public.users SET token_version = token_version + 1 WHERE id = $1`, principal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.Authenticate(routed, mint(live.Session.ID, &org)); !policy.IsRefusal(err) {
+		t.Errorf("a session older than the token_version: err = %v, want a refusal", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE public.users SET token_version = token_version - 1 WHERE id = $1`, principal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.Authenticate(ctx, mint(live.Session.ID, &org)); !policy.IsRefusal(err) {
+		t.Errorf("no profile: err = %v, want a refusal", err)
+	}
 	keyText := strings.Repeat("routed-store-signing-", 2)
-	edge, err := edgetoken.New(keyText, "dev-health-ops", "dev-health-api")
+	legacy, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": principal.String(), "type": "access", "iss": "dev-health-ops", "aud": "dev-health-api",
+		"exp": now + 300, "iat": now, "tv": 2, "org_id": org.String(), "role": "admin",
+	}).SignedString([]byte(keyText))
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(edge, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if user, err := auth.Authenticate(routed, legacy); !policy.IsRefusal(err) || user != nil {
+		t.Fatalf("an HS256 token on a user row (its class is retired): user %+v err %v, want a refusal", user, err)
+	}
+}
+
+// routedReaderProfile is the one go-api user row routedReaderAuth routes.
+const routedReaderProfile = "GET /api/v1/auth/me"
+
+// routedReaderAuth is go-api's Authenticator over store, routed on routedReaderProfile over an EdDSA key of
+// its own, and mint: a user access token of principal naming sid (and orgID when not nil).
+func routedReaderAuth(t *testing.T, store policy.Store, principal uuid.UUID) (*policy.Authenticator, func(sid uuid.UUID, orgID *uuid.UUID) string) {
+	t.Helper()
+	auth, err := policy.NewAuthenticator(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,17 +207,9 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const profile = "GET /api/v1/auth/me"
 	validator, err := accessverify.New(accessverify.Config{
-		Rows:  []accessverify.Row{{Service: "dev-health-ops-api", Profile: profile, AcceptsUser: true, LegacyHS256: true}},
+		Rows:  []accessverify.Row{{Service: "dev-health-ops-api", Profile: routedReaderProfile, AcceptsUser: true}},
 		EdDSA: verifier, Meter: noop.NewMeterProvider().Meter("routed"),
-		Legacy: func(ctx context.Context, token string) (any, error) {
-			user, err := auth.AuthenticateLegacy(ctx, token)
-			if errors.Is(err, policy.ErrUnavailable) {
-				return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
-			}
-			return user, err
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -180,69 +229,7 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 		signing := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
 		return signing + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, []byte(signing)))
 	}
-	routed := policy.WithRouteProfile(ctx, profile)
-
-	user, err := auth.Authenticate(routed, mint(live.Session.ID, &org))
-	if err != nil {
-		t.Fatalf("a live session's user token: %v", err)
-	}
-	if user.ID != principal || user.OrgID != org.String() || user.Role != "admin" || user.Email != "routed@example.test" ||
-		user.Username == nil || *user.Username != "routed" || user.FullName == nil || *user.FullName != "Routed User" || user.TokenVersion != 2 {
-		t.Fatalf("user %+v", user)
-	}
-	for name, token := range map[string]string{
-		"revoked session": mint(revoked.Session.ID, &org),
-		"unknown session": mint(uuid.New(), &org),
-	} {
-		if _, err := auth.Authenticate(routed, token); !policy.IsRefusal(err) {
-			t.Errorf("%s: err = %v, want a refusal", name, err)
-		}
-	}
-	// Product rule 1: an org claim without a membership row is the legacy HS256 answer at the authenticator
-	// (policy/principal.go userFromClaims: no membership read, the claimed org, role member for a token with no role
-	// claim). The token org is refused later, by the org scope, the guard or CheckTokenOrg, on the same real rows.
-	legacyOther, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": principal.String(), "type": "access", "iss": "dev-health-ops", "aud": "dev-health-api",
-		"exp": now + 300, "iat": now, "tv": 2, "org_id": otherOrg.String(),
-	}).SignedString([]byte(keyText))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, err := auth.AuthenticateLegacy(ctx, legacyOther)
-	if err != nil || want.OrgID != otherOrg.String() || want.Role != "member" {
-		t.Fatalf("org without a member, legacy: user %+v err %v, want the claimed org and role member", want, err)
-	}
-	got, err := auth.Authenticate(routed, mint(live.Session.ID, &otherOrg))
-	if err != nil || got.ID != want.ID || got.OrgID != want.OrgID || got.Role != want.Role {
-		t.Fatalf("org without a member: user %+v err %v, want the legacy principal %+v", got, err, want)
-	}
-	for plane, user := range map[string]*policy.User{"legacy": want, "routed": got} {
-		if err := auth.CheckTokenOrg(ctx, user); !policy.IsRefusal(err) {
-			t.Errorf("org without a member, %s: CheckTokenOrg err = %v, want a refusal", plane, err)
-		}
-	}
-	if _, err := admin.Exec(ctx, `UPDATE public.users SET token_version = token_version + 1 WHERE id = $1`, principal); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := auth.Authenticate(routed, mint(live.Session.ID, &org)); !policy.IsRefusal(err) {
-		t.Errorf("a session older than the token_version: err = %v, want a refusal", err)
-	}
-	if _, err := admin.Exec(ctx, `UPDATE public.users SET token_version = token_version - 1 WHERE id = $1`, principal); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := auth.Authenticate(ctx, mint(live.Session.ID, &org)); !policy.IsRefusal(err) {
-		t.Errorf("no profile: err = %v, want a refusal", err)
-	}
-	legacy, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": principal.String(), "type": "access", "iss": "dev-health-ops", "aud": "dev-health-api",
-		"exp": now + 300, "iat": now, "tv": 2, "org_id": org.String(), "role": "admin",
-	}).SignedString([]byte(keyText))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user, err := auth.Authenticate(routed, legacy); err != nil || user.ID != principal {
-		t.Fatalf("a legacy token on a legacy row: user %+v err %v", user, err)
-	}
+	return auth, mint
 }
 
 // routedValidator is go-api's adapter (internal/apiservice routedAccessVerify)
@@ -256,9 +243,6 @@ func (r routedValidator) Validate(ctx context.Context, service, profile, bearer 
 	}
 	if err != nil {
 		return nil, err
-	}
-	if user, ok := result.Legacy.(*policy.User); ok {
-		return &policy.RoutedResult{Legacy: user}, nil
 	}
 	if claims := result.Claims; claims != nil {
 		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID}}, nil

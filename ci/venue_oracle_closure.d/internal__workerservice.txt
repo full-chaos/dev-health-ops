@@ -13,12 +13,10 @@ internal/apiservice/accessrouting
 internal/atlassianteams
 internal/audit
 internal/auth/accessverify
-internal/auth/acraudience
 internal/auth/clientaddr
 internal/auth/contracts
 internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
-internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
 internal/auth/platformrole/rule

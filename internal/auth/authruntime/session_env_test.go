@@ -2,6 +2,7 @@ package authruntime
 
 import (
 	"encoding/base64"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,4 +67,13 @@ func mustLimits(t *testing.T) *authapi.Limits {
 		t.Fatal(err)
 	}
 	return limits
+}
+
+// keySigner is a file signer over a key of its own: with AUTH_TOKEN_ISSUER_URL
+// set it gives the issuer the access check, so the bearer routes mount.
+func keySigner(t *testing.T) *token.Signer {
+	t.Helper()
+	dir := t.TempDir()
+	writeSigningKey(t, dir, "k1.pem")
+	return token.NewFileSigner(token.FileConfig{KeyPath: filepath.Join(dir, "k1.pem"), KeyID: "k1"})
 }

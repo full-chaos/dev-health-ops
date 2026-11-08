@@ -38,7 +38,6 @@ var requestIDExemptions = map[string]string{
 	"explain_route.go#newExplainPostHandler#1":               "argument to writeExplainResponse, which wraps the id at its log",
 	"internal_auth.go#authenticateInternalRequest#1":         "principal.WithRequestMeta, not a log",
 	"rest_error_response.go#authenticateRESTRequest#1":       "principal.WithRequestMeta, not a log",
-	"rest_error_response.go#authenticateRESTRequest#2":       "principal.WithRequestMeta, not a log",
 	"rest_error_response.go#echoRequestID#1":                 "response header, only for an acceptable id",
 	"rest_error_response.go#bindRequestID#1":                 "response header and request context, only for an acceptable id",
 	"rest_error_response.go#bindRequestID#2":                 "response header and request context, only for an acceptable id",

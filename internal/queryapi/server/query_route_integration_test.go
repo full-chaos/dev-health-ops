@@ -332,9 +332,9 @@ func startTestRegistryPostgres(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func postGraphQL(t *testing.T, handler http.HandlerFunc, query, bearer string) *httptest.ResponseRecorder {
+func postGraphQL(t *testing.T, handler http.HandlerFunc, query string, carrier func(*http.Request)) *httptest.ResponseRecorder {
 	t.Helper()
-	return postGraphQLWithVariables(t, handler, query, bearer, map[string]any{
+	return postGraphQLWithVariables(t, handler, query, carrier, map[string]any{
 		"orgId": "org-1",
 		"limit": 1000,
 	})
@@ -345,7 +345,7 @@ func postGraphQL(t *testing.T, handler http.HandlerFunc, query, bearer string) *
 // single `$input` object variable, a different shape than featureFlags's
 // individual scalar variables, so a caller-supplied variables map is
 // needed rather than postGraphQL's hardcoded featureFlags-shaped ones.
-func postGraphQLWithVariables(t *testing.T, handler http.HandlerFunc, query, bearer string, variables map[string]any) *httptest.ResponseRecorder {
+func postGraphQLWithVariables(t *testing.T, handler http.HandlerFunc, query string, carrier func(*http.Request), variables map[string]any) *httptest.ResponseRecorder {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{
 		"query":     query,
@@ -356,12 +356,20 @@ func postGraphQLWithVariables(t *testing.T, handler http.HandlerFunc, query, bea
 	}
 	req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
+	if carrier != nil {
+		carrier(req)
 	}
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	return rec
+}
+
+// bearerCarrier presents token as the Authorization bearer; an empty token presents no carrier.
+func bearerCarrier(token string) func(*http.Request) {
+	if token == "" {
+		return nil
+	}
+	return irBearer(token)
 }
 
 // TestFeatureFlagsRoute_IsServedByTheCatalog is the CHAOS-4367
@@ -375,7 +383,7 @@ func postGraphQLWithVariables(t *testing.T, handler http.HandlerFunc, query, bea
 func TestFeatureFlagsRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +394,7 @@ func TestFeatureFlagsRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -419,7 +427,7 @@ func TestFeatureFlagsRoute_IsServedByTheCatalog(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, "")
+		rec := postGraphQL(t, handler, registeredFeatureFlagsDocument, nil)
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
@@ -448,7 +456,7 @@ func reviewEdgesVariables() map[string]any {
 func TestReviewEdgesRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +467,7 @@ func TestReviewEdgesRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeReviewEdgesCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -499,7 +507,7 @@ func TestReviewEdgesRoute_IsServedByTheCatalog(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, "", reviewEdgesVariables())
+		rec := postGraphQLWithVariables(t, handler, registeredReviewEdgesDocument, nil, reviewEdgesVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
@@ -527,7 +535,7 @@ func cognitiveLoadVariables() map[string]any {
 func TestCognitiveLoadRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +546,7 @@ func TestCognitiveLoadRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeCognitiveLoadCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -568,7 +576,7 @@ func TestCognitiveLoadRoute_IsServedByTheCatalog(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, "", cognitiveLoadVariables())
+		rec := postGraphQLWithVariables(t, handler, registeredCognitiveLoadDocument, nil, cognitiveLoadVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
@@ -597,7 +605,7 @@ func complexityTimeseriesVariables() map[string]any {
 func TestComplexityTimeseriesRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +616,7 @@ func TestComplexityTimeseriesRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeComplexityTimeseriesCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -644,7 +652,7 @@ func TestComplexityTimeseriesRoute_IsServedByTheCatalog(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, "", complexityTimeseriesVariables())
+		rec := postGraphQLWithVariables(t, handler, registeredComplexityTimeseriesDocument, nil, complexityTimeseriesVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
@@ -672,7 +680,7 @@ func hotspotsVariables() map[string]any {
 func TestHotspotsRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -683,7 +691,7 @@ func TestHotspotsRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -716,7 +724,7 @@ func TestHotspotsRoute_IsServedByTheCatalog(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, "", hotspotsVariables())
+		rec := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, nil, hotspotsVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
@@ -780,7 +788,7 @@ func operatingReviewTeamID(t *testing.T, rec *httptest.ResponseRecorder) string 
 func TestOperatingReviewRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,7 +799,7 @@ func TestOperatingReviewRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -828,7 +836,7 @@ func TestOperatingReviewRoute_IsServedByTheCatalog(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, "", operatingReviewVariables())
+		rec := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, nil, operatingReviewVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
@@ -839,7 +847,7 @@ func TestOperatingReviewRoute_IsServedByTheCatalog(t *testing.T) {
 func TestOperatingReviewRoute_CurrentTeamIDsPreservesLegacyOneTeam(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -850,7 +858,7 @@ func TestOperatingReviewRoute_CurrentTeamIDsPreservesLegacyOneTeam(t *testing.T)
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 
 	legacy := postGraphQLWithVariables(t, handler, registeredOperatingReviewV2Document, token, operatingReviewTeamVariables("team-a", false))
 	current := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewTeamVariables("team-a", true))
@@ -907,7 +915,7 @@ func (emptyHomeCHClient) Query(_ context.Context, query string, _ []clickhouse.B
 func TestHomeRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -918,7 +926,7 @@ func TestHomeRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(emptyHomeCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -961,7 +969,7 @@ func TestHomeRoute_IsServedByTheCatalog(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, "", homeVariables())
+		rec := postGraphQLWithVariables(t, handler, registeredHomeDocument, nil, homeVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
@@ -1091,7 +1099,7 @@ func flowMatrixVariables() map[string]any {
 func TestFlowMatrixRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1102,7 +1110,7 @@ func TestFlowMatrixRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 
 	handler, _, _, _, _ := newQueryHandler(&fakeFlowMatrixCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
 	// routing-state row. The catalog rule serves a registered operation that has no row at any schema
@@ -1149,7 +1157,7 @@ func TestFlowMatrixRoute_IsServedByTheCatalog(t *testing.T) {
 	})
 
 	t.Run("missing_bearer_token_is_unauthorized_even_when_enabled", func(t *testing.T) {
-		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, "", flowMatrixVariables())
+		rec := postGraphQLWithVariables(t, handler, registeredFlowMatrixDocument, nil, flowMatrixVariables())
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no token: got %d, want 401", rec.Code)
 		}
@@ -1184,7 +1192,7 @@ func investmentEvidenceQualityVariables() map[string]any {
 func TestInvestmentEvidenceQualityRoute_IsServedByTheCatalogAndPreservesNullZero(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1194,7 +1202,7 @@ func TestInvestmentEvidenceQualityRoute_IsServedByTheCatalogAndPreservesNullZero
 	}
 	handler, _, _, _, _ := newQueryHandler(fakeInvestmentEvidenceQualityCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 
-	rec := postGraphQLWithVariables(t, handler, registeredInvestmentEvidenceQualityDocument, signTestEnvelope(t, priv, "org-1"), investmentEvidenceQualityVariables())
+	rec := postGraphQLWithVariables(t, handler, registeredInvestmentEvidenceQualityDocument, iaHeaders("org-1", "admin", false, false), investmentEvidenceQualityVariables())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("catalog request status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}

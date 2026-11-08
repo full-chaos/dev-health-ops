@@ -1226,7 +1226,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 		t.Fatal(err)
 	}
 	venue.ApplyAuthSchema(t, ctx)
-	plane := authplane.Start(t, ctx, venue.AdminURI(t, venue.GoDB), venueoracle.AuthSchema, key, sessionscenario.Key)
+	plane := authplane.Start(t, ctx, venue.AdminURI(t, venue.GoDB), key, sessionscenario.Key)
 	routeVenueTokens(t, ctx, venue, auth, logger)
 	valkeyClient, err := valkey.Open(ctx, valkey.DefaultConfig(venue.ValkeyURI))
 	if err != nil {

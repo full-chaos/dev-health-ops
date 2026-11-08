@@ -85,25 +85,25 @@ type Plane struct {
 	Issuer *sessionissue.Client
 }
 
-// Start serves the plane over the database at adminURI, whose auth schema is already applied, signing access tokens
+// Schema is the auth schema the plane serves over: the api's default (AUTH_DATABASE_SCHEMA unset).
+const Schema = "auth"
+
+// Start serves the plane over the database at adminURI, whose auth schema (Schema) is already applied, signing access tokens
 // with key. jwtKey is auth-service's JWT_SECRET_KEY. It first projects every public.users row into the auth schema with
 // auth-service's projector (the users-backfill state of a deployed auth-service), so a principal written later for a
 // seeded session (venueoracle.WriteAuthSessions) is already a whole user.
-func Start(t testing.TB, ctx context.Context, adminURI, schemaName string, key Key, jwtKey string) Plane {
+func Start(t testing.TB, ctx context.Context, adminURI string, key Key, jwtKey string) Plane {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, adminURI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	schema, err := authschema.NewValidatedIdentifier(schemaName)
+	schema, err := authschema.NewValidatedIdentifier(Schema)
 	if err != nil {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if os.Getenv("DEV_HEALTH_VENUE_GO_LOG") != "" {
-		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	}
 	sessions, err := session.New(session.Config{Pool: pool, Schema: schema, Logger: logger,
 		SuccessorKey: contracts.NewSecretString(random(t))})
 	if err != nil {
@@ -145,7 +145,7 @@ func Start(t testing.TB, ctx context.Context, adminURI, schemaName string, key K
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	// The audit rows of the issue route name the workload principal as their actor.
-	if _, err := pool.Exec(ctx, `INSERT INTO `+authschema.Quote(schema)+`.principals (id, kind, display_name) VALUES ($1, 'workload', 'go-api-venue')`,
+	if _, err := pool.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'workload', 'go-api-venue')`,
 		workload.principal.String()); err != nil {
 		t.Fatal(err)
 	}

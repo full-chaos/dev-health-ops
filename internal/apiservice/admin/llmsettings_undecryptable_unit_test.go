@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -71,9 +72,47 @@ func (db settingsDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, e
 }
 
 func (db settingsDB) QueryRow(_ context.Context, _ string, args ...any) pgx.Row {
+	if len(args) == 5 {
+		// llmorgsettings.ReadScopeKey: provider, base_url and api_key rows of one scope.
+		var scoped [3]*setting
+		for i := range scoped {
+			key, _ := args[2+i].(string)
+			if row, ok := db.rows[key]; ok {
+				scoped[i] = &row
+			}
+		}
+		return scopeKeyRow(scoped)
+	}
 	key, _ := args[2].(string)
 	row, ok := db.rows[key]
 	return settingRow{row: row, found: ok}
+}
+
+// scopeKeyRow answers ReadScopeKey's select; every present row has one instant.
+type scopeKeyRow [3]*setting
+
+func (r scopeKeyRow) Scan(dest ...any) error {
+	written := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	stamp := func(row *setting) *time.Time {
+		if row == nil {
+			return nil
+		}
+		return &written
+	}
+	value := func(row *setting) *string {
+		if row == nil {
+			return nil
+		}
+		return row.Value
+	}
+	*dest[0].(**string), *dest[1].(**time.Time) = value(r[0]), stamp(r[0])
+	*dest[2].(**string), *dest[3].(**time.Time) = value(r[1]), stamp(r[1])
+	*dest[4].(**string), *dest[6].(**time.Time) = value(r[2]), stamp(r[2])
+	if r[2] != nil {
+		encrypted := r[2].IsEncrypted
+		*dest[5].(**bool) = &encrypted
+	}
+	return nil
 }
 
 func plainRow(key, value string) setting {

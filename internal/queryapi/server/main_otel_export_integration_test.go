@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // stubTraceCollector implements coltracepb.TraceServiceServer -- the real
@@ -146,7 +147,7 @@ func TestOrgScopingDenialSpanReachesARealOTLPCollector(t *testing.T) {
 	}
 
 	resolver := &graph.Resolver{}
-	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-authorized"})
+	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-authorized", Scope: pepgate.Legacy("org-authorized")})
 	if _, err := resolver.Query().FeatureFlags(ctx, "org-requested-different", nil, nil, nil, 10); err == nil {
 		t.Fatal("expected an authorization rejection for a mismatched org id")
 	}

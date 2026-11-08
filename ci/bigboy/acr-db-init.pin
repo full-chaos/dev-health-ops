@@ -1,0 +1,4 @@
+# The acr commit whose deploy/compose/acr-db-init.sh the venue services acr-db-init and acr-db-acl run, and the sha256 of that file.
+# It is the acr commit of the acr-api pin, BIGBOY_ACR_COMMIT in ops ci/bigboy/images.env (a test compares the two). An acr repin updates both files and both lines here; acr-db-init-fetch.sh refuses a file that does not match.
+ACR_DB_INIT_COMMIT=d168fa9546453c742747faa896a868c9e2b1841d
+ACR_DB_INIT_SHA256=b7a84538b26f31dfaf7de3320809357a28cd73809d069ee7cc6a51810ecc7b46

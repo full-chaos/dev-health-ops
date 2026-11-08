@@ -26,33 +26,12 @@ children after direct repository evidence. That compute-time repository cascade
 is separate from the work-item team precedence below. Its multi-pass behavior,
 ambiguity rules, and persisted provenance are defined in
 [Investment repository inheritance](../../reference/data-models/investment.md#repository-inheritance).
-There is no final team-ownership fallback (removed by CHAOS-12949, chris: "Drop
-fallback"). A unit with no repository evidence is unattributed: a team's
+There is no final team-ownership fallback. A unit with no repository evidence is unattributed: a team's
 repositories are never a unit's repository, and no team, project, member or
 manual ownership of any provider reaches an investment allocation. See
 [Investment: units without repository evidence](../../reference/data-models/investment.md#units-without-repository-evidence).
 Older allocation generations written by that fallback are replaced unit by unit
 as materialization recomputes the units.
-
-> **Restoration note (2026-08-19, CHAOS-3968).** This page was deleted on 2026-07-27 when
-> `.github/docs-legacy/` was removed, with no replacement of equivalent scope. It is restored here
-> substantially verbatim from git history (`git show e23ede618^:.github/docs-legacy/architecture/team-attribution.md`).
-> Two things changed since it was first written and are marked inline where they matter: the original
-> `Related` list pointed at sibling `docs-legacy/architecture/` pages that no longer exist under the
-> current documentation IA (replaced above), and a new **§0.6** was added to reconcile this doc with the
-> Celery-to-Go worker cutover, which happened after the original was written. Everything else is the
-> original text, checked against current code during restoration and corrected only where noted.
->
-> A second verification pass the same day confirmed the §0.1 precedence ladder is **implemented
-> exactly as written, not merely a superseded target state** (`_SOURCE_ORDER` /
-> `compute_work_items.py:136-144,456`), added several facts not present in the original recovered
-> text (marked "Added at restoration" inline: the `Enum8`-codes-are-not-precedence warning, the
-> provider-disjoint ownership ranks, the bitemporal/immortal ownership rows, three documented
-> exceptions to §5's query-time-join claim, and a pre-replay-snapshot prerequisite for the backfill
-> runbook), and named the shared read contract (`PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE`) so
-> future readers can cite it directly instead of re-deriving it. See "Stale references to this
-> document" near the end for a swept list of other places still citing this page's dead
-> pre-migration path.
 
 > First slice of the system-wide architecture-documentation epic. Documents how
 > every work item (issue, PR, MR) is stamped with a `team_id`, why PRs used to
@@ -72,9 +51,9 @@ empty (no two teams ever co-occur on a work scope).
 
 The fix adds a fourth, **provider-agnostic** tier: a work item with no team of
 its own inherits the team of an issue it links to via `work_item_dependencies`.
-A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
+A GitHub PR closing Linear `ENG-2400` borrows that issue's `ENG` team.
 
-> **CHAOS-4244 (2026-08-24).** "Author often isn't a team member" was true but
+> **Author membership (2026-08-24).** "Author often isn't a team member" was true but
 > incomplete: `assignee_membership` (rank 4) only ever read the item's
 > **assignee** — GitHub's assignee field, distinct from and far less commonly
 > set than the PR's **author**. A PR opened by a team member with no assignee,
@@ -86,15 +65,10 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > pathway change: GitHub PRs were already modeled as `WorkItem`s and already
 > flowed into this resolver (`providers/github/normalize.py:541` /
 > `internal/providersync/github_work_items_rows.go:517`).
->
-> **Ruling superseding the first cut (chris, 2026-08-24): author is its OWN
-> rank 6, NOT `assignee_membership`'s rank 4.** The initial implementation
-> folded the author candidate into `assignee_membership` (still rank 4, no
-> new precedence tier) — codex adversarial review flagged that this let a
-> person-shaped signal beat a real `linked_issue` donor (rank 5) far more
+> **Author is its OWN rank 6, NOT `assignee_membership`'s rank 4.** The initial implementation
+> folded the author candidate into `assignee_membership` (still rank 4, no new precedence tier), which let a person-shaped signal beat a real `linked_issue` donor (rank 5) far more
 > often than the pre-existing assignee mechanism ever did, since an author is
-> set on nearly every PR while an assignee rarely is. Chris's ruling: an
-> author is a PERSON signal, "at best a low-precedence fallback" — it must
+> set on nearly every PR while an assignee rarely is. An author is a PERSON signal, "at best a low-precedence fallback" — it must
 > NOT beat a real linked_issue donor. The fix gives the author candidate its
 > own source, `author_membership`, ranked BELOW `linked_issue` (5) and ABOVE
 > `manual_fallback` (now 7) — this widens the `Enum8` (migration 078; CS1's
@@ -102,9 +76,7 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > `metrics/compute_work_items.py:405-642` and
 > `internal/teamattribution` (the Go owner; the sync-time loader was removed with the deriver).
 
-> **CHAOS-4321 (chris's ruling, 2026-08-26, final form 08:30 PT).** Plain
-> wording (chris-approved, quoted verbatim wherever this rule is described —
-> ticket, PR, docs, evidence strings): *"A work item gets a team from the
+> **Team attribution rule (2026-08-26).** Plain wording (used wherever this rule is described, including docs and evidence strings): *"A work item gets a team from the
 > project/repo it lives in. That is team attribution. If that finds nothing,
 > we look at the person on the item (assignee, or PR author). If that person
 > is mapped to one team, the item goes to that team. If the person is mapped
@@ -138,10 +110,7 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >
 >    `teams.manual_members` (migration `079_teams_manual_members.py` -- a
 >    Python migration, not pure DDL, since it also backfills from
->    `identities.team_ids` for pre-existing admin-mapped identities) is a
->    CHAOS-4321 fix, not the original design: an earlier revision of this
->    ticket treated ALL of `teams.members` as the override, but a codex
->    adversarial review (HIGH, both languages) found provider auto-import
+>    `identities.team_ids` for pre-existing admin-mapped identities) is a later fix, not the original design: an earlier revision treated ALL of `teams.members` as the override, but provider auto-import
 >    writes UNREVIEWED roster rows straight into `teams.members` too
 >    (`ClickHouseTeamDriftProjector.project_team`'s `AUTO_APPLY_POLICY`
 >    branch, for any identity that doesn't conflict with an existing manual
@@ -150,22 +119,18 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    provider's work item sharing the same identity string. `manual_members`
 >    is the admin-EXCLUSIVE subset (confirmed by tracing every write site);
 >    provider auto-import carries it forward unchanged on every sync write
->    and never sets or clears it. **CHAOS-9087:** the roster column
+>    and never sets or clears it. The roster column
 >    `teams.members` is gone (no Go reader or writer; the frozen Python code still names it; migration 118 drops the
 >    column): the provider layer below is `team_memberships` alone.
 > 2. **Provider layer (the fallback).** `team_memberships`, populated
->    by the four provider team-catalog syncs. (Before CHAOS-9087 the
->    mixed-provenance roster column `teams.members` was a second member of
->    this layer; it is removed, a declared difference from the Python
->    loader `metrics/loaders/clickhouse.py`.) Consulted ONLY when layer 1 has zero candidates for
->    that identity (chris, 08:30 PT: *"manual is override — if the override
->    exists, use it, else use attribution from providers"*; refined
->    2026-08-26 10:39 PT: *"admin is an override, not a default — it's the
+>    by the four provider team-catalog syncs. (The mixed-provenance roster column `teams.members` is no longer part of this layer.) Consulted ONLY when layer 1 has zero candidates for
+>    that identity (*"manual is override — if the override
+>    exists, use it, else use attribution from providers"*; *"admin is an override, not a default — it's the
 >    sync config mapping, but admin can override it in the panel"*). Same
 >    one-team gate: ambiguous here is `ambiguous_provider_membership`;
 >    nothing in either layer is `no_membership`.
 >
->    **Inactive teams (CHAOS-8938).** An inactive team takes no work item
+>    **Inactive teams.** An inactive team takes no work item
 >    (`dropInactiveTeamCandidates`), so the gate also drops inactive teams
 >    BEFORE it counts teams, in both layers, with the same test
 >    (`candidateNamesInactiveTeam`): a person of inactive T1 and active T2
@@ -179,15 +144,15 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    `TestAMemberOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam`.
 >
 > `team_memberships` keeps its other consumer (drift/conflict review, §0.5)
-> untouched — this ticket only changes which candidate source(s) attribution
+> untouched — this rule only changes which candidate source(s) attribution
 > reads and in what order, not what writes `team_memberships` or how drift
 > review reconciles it.
 >
-> The pre-existing single-team ambiguity gate (CHAOS-4110, previously
+> The pre-existing single-team ambiguity gate (previously
 > author-only, provider-layer-only) now applies to BOTH assignee and author,
 > and to BOTH layers (assignee previously had no gate at all — an ambiguous
 > member's ranking by specificity/priority silently picked an arbitrary
-> winner, the exact defect this ticket removes). Telemetry rides the
+> winner, the exact defect this rule removes). Telemetry rides the
 > existing `no_candidate:<reason>` evidence mechanism (already generalized by
 > `work_item_team_attribution_metric_source` /
 > `githubWorkItemTeamAttributionMetricSource` — those mappers strip any
@@ -199,7 +164,7 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > (author path only, unchanged).
 >
 > Net effect: the precedence ladder, its ranks, its Enum8 codes and its
-> donor-eligibility set are **unchanged by this ticket** — only HOW
+> donor-eligibility set are **unchanged by this rule** — only HOW
 > `assignee_membership`/`author_membership` resolve changed (a two-layer
 > lookup replacing a single flat one). See
 > `metrics/compute_work_items.py::_resolve_membership`/`resolve_team_attribution`
@@ -209,39 +174,32 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > **Regression, not new design.** This override existed before: the
 > ClickHouse-backed roster resolver (`providers/teams.py::_build_member_to_team`,
 > reachable via `load_team_resolver_from_store` reading `teams.members`) is
-> the ancestor this ticket restores as the admin layer's manual-facet half —
+> the ancestor this rule restores as the admin layer's manual-facet half —
 > now via the narrower, provably admin-exclusive `teams.manual_members`
 > column rather than the mixed-provenance `teams.members` an earlier
-> revision used, per the fix above — see "Stale references to this
-> document" / the CHAOS-4321 PR body for the file:line history of where the
-> override stopped being wired into `resolve_team_attribution`'s default
-> call path.
+> revision used, per the fix above.
 
 ---
 
-## 0. Target state (CHAOS-2600) — ClickHouse-only team attribution
+## 0. Target state — ClickHouse-only team attribution
 
 > **Governing target contract.** This §0 is the source of truth for the intended model and the
-> debugging navigation aid; **new code must follow it.** It is implemented across CHAOS-2600
-> CS1–CS7 — the ClickHouse enum widening lands in **CS1** (see *Schema prerequisite* below), the
+> debugging navigation aid; **new code must follow it.** It is implemented across CS1–CS7 — the ClickHouse enum widening lands in **CS1** (see *Schema prerequisite* below), the
 > precedence tests are inverted in **CS2**, and the legacy Postgres bridge path is removed in
-> **CS5/CS6**. CS1–CS6 have landed: the ladder in §0.1 is the live cascade (see the restoration note
-> above), and §1 is kept for the cascade flow it draws.
+> **CS5/CS6**. CS1–CS6 have landed: the ladder in §0.1 is the live cascade, and §1 is kept for the cascade flow it draws.
 
-> **CS6 reality (CHAOS-2607).** ClickHouse is the system of record for **both** the team
+> **CS6 reality.** ClickHouse is the system of record for **both** the team
 > catalog **and** identity→team membership. As of CS6 the Postgres `team_mappings` / `identity_mappings`
 > tables and models are **deleted** (Alembic `0020`), along with the `TeamMappingService` /
 > `IdentityMappingService` / `TeamDriftSyncService` classes, the `sync-team-drift` /
 > `reconcile-team-members` tasks, and the Postgres-backed drift engine. (The four admin drift-review
-> endpoints currently stand as HTTP 501 stubs and are being **rebuilt natively on ClickHouse — not
-> deleted — under CHAOS-2622**; see §0.5. The earlier "removed in CS7 with the web caller —
-> CHAOS-2608" intent is superseded — CHAOS-2608 is an unrelated Done web ticket.) (CS5 had already deleted the
+> endpoints currently stand as HTTP 501 stubs and are being **rebuilt natively on ClickHouse — not deleted**; see §0.5.) (CS5 had already deleted the
 > Postgres→ClickHouse team bridge `providers/team_bridge.py` and `providers/team_reconcile.py`.) Admin
 > team/identity CRUD goes through `ClickHouseTeamAdminService` + `ClickHouseIdentityStore`, writing the
 > ClickHouse `teams` and `identities` tables directly. Identity membership uses **surgical replacement**
 > semantics: updating an identity removes its facets from teams it left and replaces changed facets in
-> teams it stayed in, editing `teams.manual_members` (CHAOS-4321) add/remove-by-facet
-> (never a full recompute) so Auto Import / catalog members are preserved. See *CS6 status (CHAOS-2607)*
+> teams it stayed in, editing `teams.manual_members` add/remove-by-facet
+> (never a full recompute) so Auto Import / catalog members are preserved. See *CS6 status*
 > at the end of §4.
 
 **ClickHouse is the only source used for analytics attribution. Postgres does not store or resolve
@@ -257,14 +215,13 @@ linked_issue, author_membership, manual_fallback, unassigned}`; `confidence ∈ 
 > **Schema prerequisite (CS1).** The `issue_project` / `manual_fallback` sources and the `manual` /
 > `none` confidence values require the ClickHouse `Enum8` widening on `work_item_team_attributions`
 > (migration 053) to land **before** any resolver emits them — emitting an unknown enum value fails
-> the insert. This is CHAOS-2600 ordering rule §4.1: migrate enums (CS1) → then emit (CS2/CS3).
-> `author_membership` followed the same rule under **CHAOS-4244** (migration 078).
->
-> **Restoration check (2026-08-19):** confirmed current. Migration `053_manual_attribution_fallbacks.sql`
+> the insert. This is ordering rule §4.1: migrate enums (CS1) → then emit (CS2/CS3).
+> `author_membership` followed the same rule (migration 078).
+> Migration `053_manual_attribution_fallbacks.sql`
 > widens `work_item_team_attributions.source` to an 8-value enum
 > (`native_team=1, linked_issue=2, project_ownership=3, repo_ownership=4, assignee_membership=5,
 > unassigned=6, issue_project=7, manual_fallback=8`) and `confidence` to 5 values, on top of the base
-> table created by migration 051. **CHAOS-4244 (2026-08-24)** appended a 9th code, migration
+> table created by migration 051. On 2026-08-24 a 9th code was appended, migration
 > `078_author_membership_source.sql`: `author_membership=9`. All three migrations are still applied
 > and the enum still matches this section exactly.
 >
@@ -299,10 +256,10 @@ flowchart TD
     PO -->|"yes"| Win
     PO -->|"no"| RO{"3 · repo_ownership candidate?"}
     RO -->|"yes"| Win
-    RO -->|"no"| AM["4 · assignee_membership: PROVENANCE ONLY (CHAOS-9414)<br/>recorded as is_primary = 0, never the primary team"]
+    RO -->|"no"| AM["4 · assignee_membership: PROVENANCE ONLY<br/>recorded as is_primary = 0, never the primary team"]
     AM --> LK{"5 · linked_issue candidate?<br/>(real donor row resolving to a team)"}
     LK -->|"yes"| Win
-    LK -->|"no"| AU["6 · author_membership: PROVENANCE ONLY (CHAOS-9414)<br/>recorded as is_primary = 0, never the primary team"]
+    LK -->|"no"| AU["6 · author_membership: PROVENANCE ONLY<br/>recorded as is_primary = 0, never the primary team"]
     AU --> MF{"7 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
     MF -->|"yes"| Win
     MF -->|"no"| UN["is_primary = unassigned (8)"]
@@ -312,8 +269,7 @@ flowchart TD
     API --> UI["Frontend renders only — no recompute"]
 ```
 
-> **CHAOS-9414 (D7; AGENTS.md "team = ownership of repositories and projects only"): membership
-> is provenance only.** `assignee_membership` (4) and `author_membership` (6) keep their ranks,
+> **Team = ownership of repositories and projects only: membership is provenance only.** `assignee_membership` (4) and `author_membership` (6) keep their ranks,
 > Enum8 codes and gates, and every candidate that passes a gate is still persisted — but always
 > with `is_primary = 0`. Neither tier ever produces the primary team. A work item whose only
 > signal is a member's team stays `unassigned` (`is_primary = 1`, null-carrying), with the
@@ -326,24 +282,24 @@ flowchart TD
 **Invariants:** the **winner is the highest-precedence matching source** (every matching source that
 passes its own gate is still persisted as a candidate — precedence decides `is_primary`, not which
 sources are computed); `assignee_membership` (4) and `author_membership` (6) additionally require
-the resolved team to **own the item's repo per `team_repo_ownership`** (CHAOS-4320) — a repo with an
+the resolved team to **own the item's repo per `team_repo_ownership`** — a repo with an
 explicit owner other than the resolved team drops the candidate entirely (falls through the cascade
 exactly like a non-member would, not merely loses precedence); a repo with **no** ownership row at
-all is `ownership_unknown` and the gate does not apply (R74, 2026-09-09: an absent ownership row is
+all is `ownership_unknown` and the gate does not apply (2026-09-09: an absent ownership row is
 treated as missing data, not as "not owned" — two orgs with old fixture data and no ownership rows
 at all pass membership through unchanged); `linked_issue` (5) requires a real `work_item_dependencies`
 donor row resolving to a `work_items`
-row whose **own team came from a first-class fact (sources 0–3; membership never wins, CHAOS-9414)** — a donor resolved only by
+row whose **own team came from a first-class fact (sources 0–3; membership never wins)** — a donor resolved only by
 `author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author
 signal nor a bare prefix can ever be laundered into rank-5 inheritance (both fall through to 6/7).
 **The donor's team is its own attribution ROW as of the linked item's day, copied, never resolved again
-(CHAOS-9460; lead ruling (i), daily partition semantics):** a donor that the same run writes gives the row
+(daily partition semantics):** a donor that the same run writes gives the row
 that run computes for it with the facts of the linked item's day (a daily partition's day; the backstop's
 day of each linked item; a provider sync for the items it syncs); any other donor gives its stored newest
 primary row in `work_item_team_attributions` (`ClickHouseFactSource.LoadDonorRows`), with that row's team
 and source, never a resolution of it. A donor with no row of its own gives nothing (the item falls
 through) until it is attributed; a later run then copies its row. **A later change of the donor's row
-re-derives the items that copy it (CHAOS-9478):** each backstop run reads the stored rows and re-derives an
+re-derives the items that copy it:** each backstop run reads the stored rows and re-derives an
 item that inherits through an inheritable edge when one of its donors has a primary row newer than the
 item's, and the donor the item would copy now (the cascade's winner over the stored rows: the lowest target id
 whose newest primary row is own-sourced and names an active team, with that row's team) differs from the one
@@ -362,16 +318,10 @@ Python oracles wrote `linked_issue=<item id>`, the item's own id; the oracle com
 `TestAPullRequestCopiesItsDonorsStoredRow`, `TestALinkedItemCopiesTheTeamOfItsDonorsOwnRow` (real
 ClickHouse, a donor of each of github, gitlab, jira and linear) and
 `TestTheBackstopGivesALinkedItemItsDonorsRowOfTheLinkedItemsDay`;
-`author_membership` (6) is a PERSON signal, "at best a low-precedence fallback" (chris,
-CHAOS-4244) and, since CHAOS-9414, never wins at all — it is provenance only; `manual_fallback` (7) can only beat `unassigned`; a whole org at `unassigned` usually
+`author_membership` (6) is a PERSON signal, "at best a low-precedence fallback" and never wins at all — it is provenance only; `manual_fallback` (7) can only beat `unassigned`; a whole org at `unassigned` usually
 means the ClickHouse `teams` dimension is empty.
 
-> **CHAOS-5649 (R179, chris 2026-09-12) — two more `author_membership`/membership rules, on top of
-> the CHAOS-4320 ownership gate above.** Evidence record:
-> `.remember/lanes/lane-team-attribution/handoff-2026-09-02.md` plus memory
-> `project_ops_team_null_carrying.md`; prod measurement 2026-09-12 (gh:ops-team, one member
-> `github:chrisgeo`): 232 primary `author_membership` rows and 834 non-primary ones, all belonging
-> to a team chris never attached to any repo or project.
+> **Two more `author_membership`/membership rules (2026-09-12), on top of the repo-level ownership gate above.** Prod measurement 2026-09-12 (gh:ops-team, one member): 232 primary `author_membership` rows and 834 non-primary ones, all belonging to a team never attached to any repo or project.
 >
 > 1. **`author_membership` never stacks a SECOND (different) team onto an item that already has a
 >    higher-ranked primary attribution.** Before this rule, the `order` loop in `Resolve()`
@@ -382,27 +332,25 @@ means the ClickHouse `teams` dimension is empty.
 >    count in `work_item_team_attributions`, not a precedence bug (team A still won `is_primary`
 >    correctly) — the row simply should never have existed. A candidate naming the **same** team as
 >    the existing primary is unaffected (kept, for provenance — see
->    `TestGitHubWorkItemDerivationReporterAndAssigneeSamePersonSameTeamStayDistinctProvenance`,
->    CHAOS-4244): only a genuinely *second* team is suppressed. No other source in the `order` list
+>    `TestGitHubWorkItemDerivationReporterAndAssigneeSamePersonSameTeamStayDistinctProvenance`): only a genuinely *second* team is suppressed. No other source in the `order` list
 >    gets this treatment — every other source keeps recording its non-primary candidates exactly as
 >    before (the "no team_id collapse here, deliberately" contract, same function).
 > 2. **A provider-synced team with NO ownership signal anywhere — no `team_repo_ownership`, no
 >    `team_project_ownership`/`project_keys`, and (transitively, since GitHub has no native Project
 >    entity) no issue ownership — is NULL-CARRYING and excluded from the cascade entirely.** This is
->    a **team-level** gate, distinct from CHAOS-4320/R74's **repo-level** gate above: R74 says "this
+>    a **team-level** gate, distinct from the **repo-level** gate above: that gate says "this
 >    ONE repo has no ownership row, treat that as unknown, pass membership through"; rule 2 says
 >    "this TEAM has zero ownership signal anywhere in the org (and a `teams` catalog row proves it —
 >    the team is not merely absent from data we happened to load), never let it resolve via
 >    `assignee_membership`/`author_membership` regardless of what any one repo's ownership looks
 >    like." The two do not conflict: a team this run's context has **no `teams` catalog row for at
->    all** stays on R74's unknown-pass-through (unproven, not gated); only a team with a **real**
+>    all** stays on the unknown-pass-through (unproven, not gated); only a team with a **real**
 >    catalog row and **zero** ownership facts is gated. Implemented as `teamOwnsSubjectRepo`'s first
->    check (`teamIsNullCarrying`, same file) — a null-carrying team fails the SAME CHAOS-4320
->    ownership gate assignee/author membership already goes through, so its member's unclaimed PRs
+>    check (`teamIsNullCarrying`, same file) — a null-carrying team fails the SAME ownership gate assignee/author membership already goes through, so its member's unclaimed PRs
 >    fall to `unassigned` exactly like a non-member would, with evidence
 >    `no_candidate:team_null_carrying`.
 >
-> Both rules landed together in the CHAOS-5649 PR; neither changes the 9-value `_SOURCE_ORDER`
+> Neither rule changes the 9-value `_SOURCE_ORDER`
 > ladder or any rank — they change what gets *recorded* (rule 1) and what gets *resolved at all*
 > (rule 2), not precedence. Confirmed serving-path scope while implementing: both the flow-matrix
 > Team node (`primaryWorkItemTeamAttributionSource`, `internal/queryapi/analytics/flowmatrix.go`)
@@ -413,10 +361,7 @@ means the ClickHouse `teams` dimension is empty.
 > it was rule 2's 232 PRIMARY rows, never rule 1's 834 non-primary ones (which were already inert
 > for both serving paths).
 
-> **Restoration verification (2026-08-19, updated 2026-08-24 for CHAOS-4244): this ladder is
-> implemented, not just intended.** A prior reading of this repository, using the `Enum8` storage
-> codes instead of the precedence order, reported a *different* six-member ladder missing
-> `issue_project` and `manual_fallback`. That reading was wrong (see the Enum8 warning in §0 above) —
+> **This ladder is implemented, not just intended.** Reading the `Enum8` storage codes as the precedence order gives a *different* six-member ladder missing `issue_project` and `manual_fallback`. That reading is wrong (see the Enum8 warning in §0 above) —
 > the ladder above is exactly what runs. Verbatim, `metrics/compute_work_items.py:143-153`:
 > ```python
 > _SOURCE_ORDER: dict[TeamAttributionSource, int] = {
@@ -434,7 +379,7 @@ means the ClickHouse `teams` dimension is empty.
 > The `manual_fallback` donor guard the doc describes below is also real, not aspirational —
 > `_DONOR_SOURCES` at `compute_work_items.py:164-172`, used at `:727` to gate which sources a
 > `linked_issue` donor may pass on: `{native_team, issue_project, project_ownership, repo_ownership,
-> assignee_membership}` — ranks 0–4 only, UNCHANGED by CHAOS-4244. `author_membership`,
+> assignee_membership}` — ranks 0–4 only. `author_membership`,
 > `manual_fallback` and `unassigned` are excluded by construction, so neither a person-shaped author
 > signal nor a fallback rule (especially the provider-neutral `issue_key_prefix` scope) can ever be
 > laundered into rank-5 `linked_issue` provenance on a dependent item, exactly as this page already
@@ -449,14 +394,14 @@ means the ClickHouse `teams` dimension is empty.
 | 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider, else admin teams (section 0.4e) | high | all below | — (top) | `native_team_key` |
 | 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
-| 3 | `repo_ownership` | `team_repo_ownership` | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner since CHAOS-9411) | 4–8 | 0–2 | `repo_full_name` |
-| 4 | `assignee_membership` | CHAOS-4321 two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only (CHAOS-9414), never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
-| 5 | `linked_issue` | `work_item_dependencies` donor → the team of the donor's own attribution row (CHAOS-9460) | medium | 6–8 | 0–3 | `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` |
-| 6 | `author_membership` | CHAOS-4244 PR/MR-only + CHAOS-4321 two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only (CHAOS-9414), never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
+| 3 | `repo_ownership` | `team_repo_ownership` | medium; high from a main-owner row (`is_primary = 1`, e.g. the inferred main owner) | 4–8 | 0–2 | `repo_full_name` |
+| 4 | `assignee_membership` | two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
+| 5 | `linked_issue` | `work_item_dependencies` donor → the team of the donor's own attribution row | medium | 6–8 | 0–3 | `linked_issue=<donor_work_item_id>;dependency_type=<rel>;donor_provider=<p>;donor_source=<donor row source>` |
+| 6 | `author_membership` | PR/MR-only + two-layer (same as row 4), non-bot | high (admin) / medium (provider) | none: provenance only, never `is_primary` | 0–5 | `canonical_id, identity` (evidence text: `reporter=<id>`) |
 | 7 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 8 only | 0–6 | `scope_type, scope_id, reason` |
 | 8 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
 
-> **Added at restoration (2026-08-19): ranks 2 and 3 are provider-disjoint, not overlapping tiers.**
+> **Ranks 2 and 3 are provider-disjoint, not overlapping tiers.**
 > This is not in the original recovered text and is easy to misread as damage. GitHub writes
 > `team_repo_ownership` (rank 3, `repo_ownership`) and never `team_project_ownership` — GitHub has no
 > native Project entity. GitLab, Jira, and Linear write `team_project_ownership` (rank 2,
@@ -466,12 +411,11 @@ means the ClickHouse `teams` dimension is empty.
 > `sink.write_team_repo_ownership`; `workers/team_autoimport_gitlab.py:209` calls
 > `sink.write_team_project_ownership` (Jira/Linear autoimporters write the same table).
 
-> **CHAOS-4365 `inferred`: an already-declared `team_repo_ownership.source` value gets its first
-> writer -- not the 9-value ladder above, and not a schema change.** Ruling (chris, 2026-08-28
-> 07:58-08:04 PT): "the repo should still have a team as well as the PR through the linear
-> connection," amended 08:07 PT to be provider-agnostic: "the graph associated VIA ANY TOOL THAT CAN
+> **`inferred`: an already-declared `team_repo_ownership.source` value gets its first
+> writer -- not the 9-value ladder above, and not a schema change.** Rule: "the repo should still have a team as well as the PR through the linear
+> connection," and provider-agnostic: "the graph associated VIA ANY TOOL THAT CAN
 > MAP to github/gitlab objects. The SOURCE github/gitlab/bitbucket ARE irrelevant." Coordinated
-> producer design (CHAOS-4365 lane): edge-walk `work_items` -- either the item's **own** `project_id`,
+> producer design: edge-walk `work_items` -- either the item's **own** `project_id`,
 > or, when that has no ownership row, a **donor's** `project_id` reached by walking
 > `work_item_dependencies` (§2, tracker-to-tracker, provider-agnostic) -- into `team_project_ownership`
 > to resolve a team, then stamp that team onto the **original** pull request's / merge request's own `repo_id` (already a
@@ -494,7 +438,7 @@ means the ClickHouse `teams` dimension is empty.
 > through `work_graph_issue_pr` (§1.1's new PR-inheritance branch) that the original summary above
 > did not cover. See the ownership-derivation diagram in §1.1 and the ER callouts in §3.
 >
-> **Start of an `inferred` row (`valid_from`) = its earliest evidence, not the derive run (CHAOS-9396 F1).**
+> **Start of an `inferred` row (`valid_from`) = its earliest evidence, not the derive run (F1).**
 > The row a run writes for a (team, repository) claim starts at the earliest evidence time of the WINNING team's
 > claim: the `created_at` of the earliest pull/merge request of the repository the team's work reaches (an own
 > pull/merge request work item: `work_items.created_at`; a linked issue: the linked pull request's
@@ -505,14 +449,14 @@ means the ClickHouse `teams` dimension is empty.
 > judged that evidence, and a row at the evidence time would have the key of the retracted row and reopen it, so a
 > read of the interval the other team owned would name this team again (logged with `before_retraction`). A row
 > closed at its own start (superseded, below) is no retraction. A new main owner never takes over before the prior
-> one ends (co-owners own the repository beside the main owners, CHAOS-9411): a main owner's claim whose evidence is
+> one ends (co-owners own the repository beside the main owners): a main owner's claim whose evidence is
 > older than the end of ANOTHER ACTIVE team's main tenure on the repository (the latest close of that team's main row,
 > or this run when this run retracts its open main row) starts at that end (logged with `after_other_owner`). The
 > tenure of a team that is inactive now (its newest `teams` row) never moves a start: an inactive team owns nothing for
 > any reader (§0.4g rule 1), so after a team id replacement the new id starts at its own evidence while the old id's
 > rows close at the replacement and stay as history (logged with `inactive_tenure_ignored`); the end is
 > stored as the other team's `valid_to`, so the next run reads the same start and writes nothing. A claim whose open
-> main row started before that end was a main owner beside the other team (a full tie, D5990, CHAOS-9459) and keeps
+> main row started before that end was a main owner beside the other team (a full tie) and keeps
 > its start. A co-owner's start is never moved by another team. A repository whose roles
 > change while the guard holds one of its closes or retractions keeps all its rows that run (§1.1), so a held row
 > never leaves two main rows.
@@ -522,28 +466,27 @@ means the ClickHouse `teams` dimension is empty.
 > `team_repo_ownership_derivation.superseded_by_evidence_start`, stats `Superseded`). The next derive run after
 > deploy therefore rewrites the history of every inferred claim; a read of a past day (the landscape, team risk)
 > sees the owner the evidence shows. The other ownership writers (GitHub team access, GitLab group projects,
-> Jira/Linear team projects) have no grant time in their APIs: since CHAOS-10521 they start a link at its earliest
+> Jira/Linear team projects) have no grant time in their APIs: they start a link at its earliest
 > evidence by the same supersede (section 0.4b, "A catalog link starts at its evidence"); see the
 > first-known-ownership fallback (F2) for days before a repository's first recorded ownership.
 
-> **CHAOS-4458 part (b) (fixed): the derivation's Linear arm never resolved, because
+> **Fixed: the derivation's Linear arm never resolved, because
 > `team_project_ownership`'s Linear rows and `work_items.project_id` for a Linear item were two
 > DISJOINT id spaces AT THE TIME OF DIAGNOSIS** (`"{org_id}:linear:{team_key}"` vs. the raw Linear
-> Project UUID). CHAOS-4431 (merged after this diagnosis) now ALSO writes `team_project_ownership`
+> Project UUID). The route now ALSO writes `team_project_ownership`
 > rows keyed by the raw Linear Project UUID for every org this route has synced — the two id spaces
 > now co-exist rather than staying permanently disjoint; see the "Two Linear id spaces, one resolver"
-> callout in §1.1 for the full trace, the fix, and the post-CHAOS-4431 update.
-> Prod symptom (CHAOS-4458): `team_repo_ownership` derivation `outcome=no_signal`, 0 rows, every org
+> callout in §1.1 for the full trace, the fix, and the update.
+> Prod symptom: `team_repo_ownership` derivation `outcome=no_signal`, 0 rows, every org
 > — the GitLab/Jira arms of this same join were unaffected (their ownership writers and work-item
 > normalizers agree on what `project_id` means), so this was a Linear-specific gap, not a general
-> failure of the CHAOS-4365 item 1b producer.
+> failure of the producer.
 
-> **CHAOS-4365: a second `team_repo_ownership` consumer, and the operator path to populate it for a
+> **A second `team_repo_ownership` consumer, and the operator path to populate it for a
 > real org.** `metrics/job_daily.py::_write_compounding_risk_for_day` (and the standalone
 > `metrics/job_compounding_risk.py` CLI job) resolves one team per repo for
-> `compounding_risk_daily`'s `scope='team'` rows. Before CHAOS-4365 that resolution read ONLY
-> `teams.repo_patterns` (glob strings, `providers/teams.py::build_repo_pattern_resolver`) — CHAOS-4276
-> seeds patterns for a repo's primary owner in **fixtures** data, but no native auto-importer (GitHub,
+> `compounding_risk_daily`'s `scope='team'` rows. Previously that resolution read ONLY
+> `teams.repo_patterns` (glob strings, `providers/teams.py::build_repo_pattern_resolver`) — **fixtures** data seeds patterns for a repo's primary owner, but no native auto-importer (GitHub,
 > GitLab, Jira, Linear) ever writes `repo_patterns`, so a real org's compounding-risk team rows were
 > silently empty even when GitHub auto-import HAD populated `team_repo_ownership` correctly. The fix
 > (`providers/teams.py::load_team_repo_ownership_map`) reads `team_repo_ownership` directly
@@ -555,11 +498,11 @@ means the ClickHouse `teams` dimension is empty.
 > GitLab/Jira/Linear-only orgs have no `team_repo_ownership` writer by design (§0.2 above); their
 > repos resolve to a team only via `teams.repo_patterns` (manually configured, or fixtures).
 
-> **CHAOS-8512: TestOps daily rows use repository ownership, not patterns.** The native
+> **TestOps daily rows use repository ownership, not patterns.** The native
 > `testops_pipeline`, `testops_test`, `testops_coverage`, and `testops_risk` families retain a
 > non-empty source-row `team_id` when one exists. Otherwise, they use the single authoritative
 > `team_repo_ownership` owner for the repository at the **end of the target day**, ranked by
-> `(is_primary = 1) DESC, specificity DESC, updated_at DESC, team_id ASC` (CHAOS-9411: a co-owner row,
+> `(is_primary = 1) DESC, specificity DESC, updated_at DESC, team_id ASC` (a co-owner row,
 > `is_primary = 2`, ranks with the rows that are not primary). An unowned repository stays
 > NULL: these families do not fall back to `teams.repo_patterns` or person membership. The shared
 > ownership reader resolves direct and provider-access ownership rows by repository identity before
@@ -567,21 +510,19 @@ means the ClickHouse `teams` dimension is empty.
 > integration tests seed an in-day multi-claim and require the primary owner on all six TestOps
 > output tables.
 
-> **CHAOS-4365 item 2 (merged, `dev-health-ops#1963`, squash `017f964b2`): `team_cognitive_load_daily` — an
+> **`team_cognitive_load_daily` — an
 > append-only, ownership-scoped table.** The `resolveCognitiveLoad` GraphQL resolver's single-team
 > path (`teamId` set, `repoId` NOT set) reads this table directly instead of the org-wide
-> user_metrics_daily`/`team_metrics_daily` merge (`dev-health-ops#1970`) — that merge filtered on
+> user_metrics_daily`/`team_metrics_daily` merge — that merge filtered on
 > those tables' own `team_id` column, which is exactly the membership-fallback-tainted column this
 > table exists to avoid; a single-team query on a real org returned zero rows via that path even
 > though the org-wide query worked. Team-keyed cognitive load
 > (interruption load, context spread, review-request load, after-hours/weekend commit ratios) does
 > not exist today — `user_metrics_daily` (migration `016`) carries these signals per person/repo
-> only, and its own `team_id` column falls back to membership resolution (CHAOS-4396), which
-> CHAOS-4321 forbids as a team key. `team_cognitive_load_daily` (migration
+> only, and its own `team_id` column falls back to membership resolution, which is not allowed as a team key. `team_cognitive_load_daily` (migration
 > `081_team_cognitive_load_daily.sql`) will be written by aggregating
 > `user_metrics_daily`/`team_metrics_daily` rows **by `repo_id`**, then mapping `repo_id → team`
-> through the same `team_repo_ownership` (merged over `teams.repo_patterns`) resolution CHAOS-4365
-> item 1 wired into `providers/teams.py::load_team_repo_ownership_map` — never through either
+> through the same `team_repo_ownership` (merged over `teams.repo_patterns`) resolution wired into `providers/teams.py::load_team_repo_ownership_map` — never through either
 > source table's own `team_id` column.
 >
 > | Column | Type | Notes |
@@ -602,13 +543,11 @@ means the ClickHouse `teams` dimension is empty.
 > sorting key must stay the reader key: a narrower key would merge rows the readers keep apart.
 >
 > **Producer runs in the finalize step, once per org/day** — `run_daily_metrics_finalize`
-> (`metrics/job_daily.py`), the same once-per-org/day stage CHAOS-4399 moved
-> `compounding_risk_daily`'s team-scope aggregation into. Unlike `compounding_risk_daily` (which
-> CHAOS-4399 fixed to read that day's per-repo rows back from ClickHouse, `argMax`-deduped), the
+> (`metrics/job_daily.py`), the same once-per-org/day stage that holds `compounding_risk_daily`'s team-scope aggregation. Unlike `compounding_risk_daily` (which reads that day's per-repo rows back from ClickHouse, `argMax`-deduped), the
 > cognitive-load producer aggregates THIS RUN's already-computed in-memory
 > `user_metrics_daily`/`team_metrics_daily` rows directly and deliberately never re-queries
 > ClickHouse for them — either way, it writes exactly one row per `(org_id, team_id, day)`. A
-> per-repo write inside the daily partition loop was the CHAOS-4399 bug class (a multi-repo team
+> per-repo write inside the daily partition loop was a past bug class (a multi-repo team
 > silently kept only the last-processed repo's numbers) and must never be reintroduced here.
 >
 > **Schema pin:** column types and the `ORDER BY`/engine clause are pinned byte-for-byte in
@@ -620,17 +559,16 @@ means the ClickHouse `teams` dimension is empty.
 > embedded copy in `dev-health-go` and reruns its test — editing only this migration does not, by
 > itself, break `dev-health-go` CI.
 
-> **CHAOS-4406 (fixed): the team+repo COMBINED `resolveCognitiveLoad` path also stopped trusting the
+> **Fixed: the team+repo COMBINED `resolveCognitiveLoad` path also stopped trusting the
 > tainted `team_id` column.** `team_cognitive_load_daily` carries no `repo_id` dimension, so it
 > cannot serve a query where BOTH `teamId` and `repoId` are set — that combined path used to fall
-> through to the pre-CHAOS-4365 two-query merge over `user_metrics_daily`/`team_metrics_daily`,
-> filtered on those tables' own `team_id` column (the same CHAOS-4396 taint). The fix,
+> through to the earlier two-query merge over `user_metrics_daily`/`team_metrics_daily`,
+> filtered on those tables' own `team_id` column (the same taint). The fix,
 > `_resolve_owned_repo_id` (`resolvers/cognitive_load.py`), reuses the SAME two-source,
 > ownership-wins-over-pattern merge every other ownership-scoped reader in this codebase applies
 > (`providers/teams.py::load_team_repo_ownership_map`; `job_daily.py`'s
 > `_repo_to_team_map_for_compounding_risk`; `metrics/team_cognitive_load.py`'s own write-time
-> resolution) — an early version of this fix (codex R1) reinvented a narrower, incorrect version
-> that filtered `team_repo_ownership` on a bare `argMax(repo_id, …) IS NOT NULL`, which silently
+> resolution) — a narrower variant must not be used: it filters `team_repo_ownership` on a bare `argMax(repo_id, …) IS NOT NULL`, which silently
 > rejected **every** native GitHub ownership row (§0.2's `repo_id is Nullable and often NULL`
 > note): (1) native `team_repo_ownership` wins where it resolves the repo, via the SAME
 > `coalesce(repo_id, name-joined id)` + `matched` sentinel join `load_team_repo_ownership_map`
@@ -645,8 +583,7 @@ means the ClickHouse `teams` dimension is empty.
 > additive counts across **every** `team_id` label attached to that repo's rows before
 > recomputing the ratio (mirroring `_fetch_team_metrics`'s SUM-then-recompute discipline for a
 > team's several repos, transposed: here several `team_id` labels collapse onto one repo, since
-> one repo's commits can be split across per-commit membership-fallback team_id fragments —
-> CHAOS-4396). Known residual gap: if the org has the same repo slug under two providers and the
+> one repo's commits can be split across per-commit membership-fallback team_id fragments). Known residual gap: if the org has the same repo slug under two providers and the
 > requesting team owns both, only one is served (matches `_fetch_user_metrics`'s own pre-existing
 > slug-resolution shape for the org-wide path) — tracked as a follow-up, not closed here.
 
@@ -655,24 +592,24 @@ means the ClickHouse `teams` dimension is empty.
 | Symptom | Likely stage | Diagnose | Fix |
 |---|---|---|---|
 | A whole org is `unassigned` | 7 (floor) | `get_all_teams()` empty? CH `teams` populated for `org_id`? | re-home teams population; verify daily-chain order |
-| PR attributed to a surprising team via `linked_issue` | 5 | which `work_item_dependencies` edge? the donor's own newest primary row in `work_item_team_attributions` (the team the PR copies, CHAOS-9460)? extkey ambiguous? | confirm donor row + `_canonical_target`; check `_INHERITABLE_RELATIONSHIP_TYPES` |
-| A PR that WAS attributed via `linked_issue` silently becomes `unassigned` on a later run | 5 → 7 | is the donor edge older than the sync window? compare the edge's `last_synced` against the run window — donor and dependent stamped minutes apart rules staleness out | **fixed CHAOS-4112**: the donor preload unions the STORED inheritable edges for the items being recomputed with the fresh ones (`_merge_stored_inheritable_edges`), so an edge aging out of the window no longer un-attributes the PR. Watch `devhealth_work_item_team_attribution_downgrades_total` — a teamed→`unassigned` transition is always a bug |
+| PR attributed to a surprising team via `linked_issue` | 5 | which `work_item_dependencies` edge? the donor's own newest primary row in `work_item_team_attributions` (the team the PR copies)? extkey ambiguous? | confirm donor row + `_canonical_target`; check `_INHERITABLE_RELATIONSHIP_TYPES` |
+| A PR that WAS attributed via `linked_issue` silently becomes `unassigned` on a later run | 5 → 7 | is the donor edge older than the sync window? compare the edge's `last_synced` against the run window — donor and dependent stamped minutes apart rules staleness out | **fixed**: the donor preload unions the STORED inheritable edges for the items being recomputed with the fresh ones (`_merge_stored_inheritable_edges`), so an edge aging out of the window no longer un-attributes the PR. Watch `devhealth_work_item_team_attribution_downgrades_total` — a teamed→`unassigned` transition is always a bug |
 | `manual_fallback` beats a real team | precedence | `_SOURCE_ORDER` has `manual_fallback=7`? loader merging manual at the wrong rank? | restore rank — manual is the lowest non-unassigned tier |
-| An author beats a real `linked_issue` donor | precedence | `_SOURCE_ORDER` has `author_membership=6` (below `linked_issue=5`)? did a fix accidentally fold it back into `assignee_membership=4`? | restore rank — author is a PERSON signal, never above a real linked_issue donor (CHAOS-4244, chris's 2026-08-24 ruling) |
-| A bare prefix (e.g. `CHAOS`) attributes as `linked_issue` | 5 vs 7 | did a full key resolve to a real `work_items` row, or did a prefix shortcut leak in? | no prefix→team in `linked_issue`; route to manual `issue_key_prefix` |
-| A PR inherits via `linked_issue` from a donor that only has an `author_membership` or `manual_fallback` rule | 5 (donor) | is the donor's *primary* source in 0–4? a rank-6/7 fallback must never be relabeled rank-5 | donors gated to `_DONOR_SOURCES` (0–4) in `build_linked_issue_team_resolver`; an author-only or manual-only donor is never a linked_issue donor (done CS3; author exclusion CHAOS-4244) |
+| An author beats a real `linked_issue` donor | precedence | `_SOURCE_ORDER` has `author_membership=6` (below `linked_issue=5`)? did a fix accidentally fold it back into `assignee_membership=4`? | restore rank — author is a PERSON signal, never above a real linked_issue donor |
+| A bare prefix (e.g. `ENG`) attributes as `linked_issue` | 5 vs 7 | did a full key resolve to a real `work_items` row, or did a prefix shortcut leak in? | no prefix→team in `linked_issue`; route to manual `issue_key_prefix` |
+| A PR inherits via `linked_issue` from a donor that only has an `author_membership` or `manual_fallback` rule | 5 (donor) | is the donor's *primary* source in 0–4? a rank-6/7 fallback must never be relabeled rank-5 | donors gated to `_DONOR_SOURCES` (0–4) in `build_linked_issue_team_resolver`; an author-only or manual-only donor is never a linked_issue donor (done CS3; author exclusion) |
 | Same scope shows duplicate ownership candidates / bloats over time | RMT read | `valid_from` is in the `ORDER BY` of the ownership AND membership tables (`team_repo_ownership`, `team_project_ownership`, `team_memberships`; section 0.4b), so `FINAL` cannot collapse re-imports (each daily run is a new sort key) | reads dedup per *logical* scope via `argMax((updated_at, valid_from))`, NOT `FINAL` (done CS3, `load_team_attribution_context`); manual-fallback read keeps `FINAL` (its sort key has no `valid_from`) |
-| A retracted ownership/membership (a new row, same sort key, `valid_to` set) still attributes until the RMT pair merges | RMT read | the retraction is a second physical row under the same sort key until a merge; a loader that filtered `valid_to` first dropped it and kept the older open row | the three Go loaders (`LoadProjects`, `LoadRepos`, `LoadProviderMembers`) resolve the newest row per full sort key first (`argMax` by `updated_at`), THEN apply `valid_from`/`valid_to`, then dedup per logical scope; asserted by `TestLoadersHonorARetractionBeforeTheRowPairMerges` (CHAOS-6637). Readers that already use `FINAL` before the window (`teamownership`, `teamscope`) are correct for this class |
-| Team flips / stale team lingers after a re-org | write side | ownership writers set `valid_from=now` but never `valid_to`, so a reassigned scope keeps the old-team row active; readers can't tell stale from co-ownership | needs writer-side `valid_to` expiry on re-derivation — tracked **CHAOS-2610** (read-side `argMax` already makes the newest the primary by recency tiebreak) |
-| `manual_fallback` resolves the wrong team | scope match | which `manual_attribution_fallbacks` row matched (repo/project/member/issue_key_prefix)? | check `_manual_fallback_candidates` scope match + rule `priority`; manual is rank 7 (done CS3; renumbered from 6 by CHAOS-4244) |
+| A retracted ownership/membership (a new row, same sort key, `valid_to` set) still attributes until the RMT pair merges | RMT read | the retraction is a second physical row under the same sort key until a merge; a loader that filtered `valid_to` first dropped it and kept the older open row | the three Go loaders (`LoadProjects`, `LoadRepos`, `LoadProviderMembers`) resolve the newest row per full sort key first (`argMax` by `updated_at`), THEN apply `valid_from`/`valid_to`, then dedup per logical scope; asserted by `TestLoadersHonorARetractionBeforeTheRowPairMerges`. Readers that already use `FINAL` before the window (`teamownership`, `teamscope`) are correct for this class |
+| Team flips / stale team lingers after a re-org | write side | ownership writers set `valid_from=now` but never `valid_to`, so a reassigned scope keeps the old-team row active; readers can't tell stale from co-ownership | needs writer-side `valid_to` expiry on re-derivation — known limitation (read-side `argMax` already makes the newest the primary by recency tiebreak) |
+| `manual_fallback` resolves the wrong team | scope match | which `manual_attribution_fallbacks` row matched (repo/project/member/issue_key_prefix)? | check `_manual_fallback_candidates` scope match + rule `priority`; manual is rank 7 (done CS3; renumbered from 6 when `author_membership` was added) |
 | Provenance absent in the API | GraphQL | resolver SELECTs the provenance columns? SDL has the fields? | expose `source/confidence/evidence` |
 | Web shows a different team than the backend | client recompute | any client-side mapping derived from `evidence`? | render-only; delete client derivation |
-| A team's row count in `work_item_team_attributions` looks inflated vs. its `is_primary=1` count | 6 (author_membership) | are the extra rows non-primary `author_membership`, on items that already had a higher-ranked primary? | **fixed CHAOS-5649 (R179 rule 1)**: `author_membership` no longer records a SECOND (different) team once a higher-ranked source already set primary for that item |
-| A team with no `team_repo_ownership`/`team_project_ownership` row anywhere still gets `is_primary=1` attributions via a member's PRs | 4/6 (membership) | is the team's ONLY signal `assignee_membership`/`author_membership`, with zero rows in either ownership table for it? | **fixed CHAOS-5649 (R179 rule 2)**: a catalogued team with zero ownership signal anywhere is null-carrying and excluded from both membership sources; its members' unclaimed PRs fall to `unassigned` |
+| A team's row count in `work_item_team_attributions` looks inflated vs. its `is_primary=1` count | 6 (author_membership) | are the extra rows non-primary `author_membership`, on items that already had a higher-ranked primary? | **fixed**: `author_membership` no longer records a SECOND (different) team once a higher-ranked source already set primary for that item |
+| A team with no `team_repo_ownership`/`team_project_ownership` row anywhere still gets `is_primary=1` attributions via a member's PRs | 4/6 (membership) | is the team's ONLY signal `assignee_membership`/`author_membership`, with zero rows in either ownership table for it? | **fixed**: a catalogued team with zero ownership signal anywhere is null-carrying and excluded from both membership sources; its members' unclaimed PRs fall to `unassigned` |
 
-> Full data-flow and data-object-hierarchy diagrams: see the CHAOS-2600 plan §1.6–1.7 / `team-flow.md`.
+> Full data-flow and data-object-hierarchy diagrams: see `team-flow.md`.
 
-> **Restoration verification (2026-08-19): ownership rows are bitemporal but effectively immortal —
+> **Ownership rows are bitemporal but effectively immortal —
 > a missed sync does not degrade attribution.** The "Team flips / stale team lingers" row above
 > already flagged that writers never set `valid_to`; confirmed still true and worth stating plainly.
 > The rank-2/rank-3 loader reads (`metrics/loaders/clickhouse.py:417-418` for `project_ownership`,
@@ -687,7 +624,7 @@ means the ClickHouse `teams` dimension is empty.
 > attribution does not go stale or empty — the previous generation's rows are still `valid_from`-
 > eligible and still the `argMax` winner.** This is a resilience property, not a bug, but it also
 > means a *removed* ownership mapping (a repo reassigned away from a team) has no clean way to
-> retire the old row short of CHAOS-2610's tracked writer-side `valid_to` expiry.
+> retire the old row short of a writer-side `valid_to` expiry (a known limitation).
 
 ### 0.4 Provider coverage contract (attribution is provider-agnostic)
 
@@ -708,26 +645,25 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
 
 > **The matrix above tracks TEST coverage, not whether the data is pulled.** Functionally we ingest teams, projects, and members for *every* provider that supports them (auto-import, when the option is selected). Don't read a `partial`/`no` cell as "not consumed" — it means "not yet asserted."
 
-**The executed matrix (CHAOS-9425).** `TestCrossProviderAttributionMatrix` (`internal/fixturescli`, integration)
+**The executed matrix.** `TestCrossProviderAttributionMatrix` (`internal/fixturescli`, integration)
 loads the provider worlds of `dho fixtures generate` (GitHub, GitLab, Jira, Linear; each written by the
-production collectors, routes and link builders, CHAOS-9420), runs the production attribution verbs in
+production collectors, routes and link builders), runs the production attribution verbs in
 production order (inferred repository-ownership derivation, the daily `work_item_attribution` family for every
 day of the worlds, the backstop) and judges every cell of `contracts/attribution-matrix/v1/matrix.json`
 (provider × entity × check). A cell no world exercises fails as `fixture_gap`; a `known_red` cell names its
 ticket and fails when it turns green, until it is moved to `pass`; every provider × entity pair is a cell or a
 `not_applicable` entry with its rule, and every check of an entity is a cell or an `omitted` entry with its
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
-(§0.4j), of active teams, with the first recorded owners applied backward before the first record (D5987,
-option C); the shared ownership readers are judged against that rule at now and on every item day, and apply the
-first owners backward (CHAOS-9404). No cell is known red: the catalog writers start a link at its evidence
-(CHAOS-10521, section 0.4b), and each provider world runs its team catalog again after its sync (CHAOS-10566), the
-next catalog run that moves each link to its evidence; GitLab ownership names the catalog project since CHAOS-8883.
-The inferred repository owner starts at its earliest linked evidence since CHAOS-9403 (#4049): its cell is pass. The GitHub cell of a pull request's `linked_issue` row
-is pass since CHAOS-9409: owners tied at the top rank with no main row (two `provider_access` grants) are all the
+(§0.4j), of active teams, with the first recorded owners applied backward before the first record; the shared ownership readers are judged against that rule at now and on every item day, and apply the
+first owners backward. No cell is known red: the catalog writers start a link at its evidence
+(section 0.4b), and each provider world runs its team catalog again after its sync, the
+next catalog run that moves each link to its evidence; GitLab ownership names the catalog project.
+The inferred repository owner starts at its earliest linked evidence: its cell is pass. The GitHub cell of a pull request's `linked_issue` row
+is pass: owners tied at the top rank with no main row (two `provider_access` grants) are all the
 donor's team on that day (`tiedOwnersAt`, §0.4d).
 A pull request's `linked_issue` row must name the team an issue it is actually linked to holds on its own on
 the pull request's day (a relation of record, or a link of record; an `extkey:` relation counts only through
-the one existing item of that key; the backstop follows the issue's later row changes, CHAOS-9478). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the
+the one existing item of that key; the backstop follows the issue's later row changes). The acceptance gate (`TestCrossProviderAttributionMatrix/rediscovers_known_defects`) plants the
 defects the matrix exists to catch into the same state the production verbs wrote (sync-time `valid_from`, a
 landscape grouped by membership, an issue-key prefix taken as a native link, a pull request team inherited
 without a linked issue, from a donor without a team of its own or naming another team than its issue's, a
@@ -735,7 +671,7 @@ co-owner written as a candidate row, a reader with its own ownership SQL, a tied
 shared reader that names one tied owner, a shared reader that gives no owner before a repository's first record)
 and requires the judging cell to turn red on each.
 
-**The full-tie cell (CHAOS-9533, D5990).** None of the worlds holds a repository that two teams reach with equal
+**The full-tie cell.** None of the worlds holds a repository that two teams reach with equal
 link counts at every tier, so the matrix adds one to each world before the production verbs run: a repository,
 two pull requests and two linked issues of two different teams, as provider-shaped source rows cloned from rows
 the world holds (the derivation writes the ownership; no `team_repo_ownership` row is written by the test). The
@@ -746,7 +682,7 @@ so the GitHub tie is built from project ownership rows of the same shape the oth
 derivation is provider-agnostic (it joins `(provider, project_id)`), and a GitHub repository reaches an inferred
 owner in a real organization only through another tracker's issues.
 
-#### 0.4b Project identity: one project, one id (CHAOS-8851)
+#### 0.4b Project identity: one project, one id
 
 A project is named by ONE id in the three tables that hold it. The team that owns a project reaches the
 project's work items by `(provider, project_id)`; no reader has to join on `project_key`.
@@ -756,9 +692,9 @@ project's work items by `(provider, project_id)`; no reader has to join on `proj
 | jira | native project id (`10001`) | the same id | the same id | one id |
 | linear | raw project UUID | the same UUID | the same UUID | one id |
 | github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`) | the same board id | one id |
-| gitlab | `{org_id}:gitlab:{native id}` | the same id (CHAOS-8883); the path is `project_key` | the same id (CHAOS-3383 PR 3b2); `work_items.project_key` is the project's minted `identity_path` (stable across a rename, so the metric work scope does not split) | one id for catalog, ownership and work items. A GitLab item written before 3b2 holds the path in `project_id`; the attribution reads map it, through its `repo_id` and `repos.provider_repo_id`, to the catalog id (`teamattribution.AnchorGitLabSubjectProjects`), and the old path is its project key. Name joins (repo ownership by full name, manual repo and project rules) accept both the current path and the identity path of the item's GitLab `repos` row, except an identity path another GitLab row now holds as its current path (a reused path belongs to the project at it; the old project's items answer only to their current path). The team issue-project key lookup follows the same set. A path is never an ownership join key: a stale item at a reused path joins nothing of the path's new owner |
+| gitlab | `{org_id}:gitlab:{native id}` | the same id; the path is `project_key` | the same id; `work_items.project_key` is the project's minted `identity_path` (stable across a rename, so the metric work scope does not split) | one id for catalog, ownership and work items. A GitLab item written before the catalog id was adopted holds the path in `project_id`; the attribution reads map it, through its `repo_id` and `repos.provider_repo_id`, to the catalog id (`teamattribution.AnchorGitLabSubjectProjects`), and the old path is its project key. Name joins (repo ownership by full name, manual repo and project rules) accept both the current path and the identity path of the item's GitLab `repos` row, except an identity path another GitLab row now holds as its current path (a reused path belongs to the project at it; the old project's items answer only to their current path). The team issue-project key lookup follows the same set. A path is never an ownership join key: a stale item at a reused path joins nothing of the path's new owner |
 
-GitLab ownership rows written before CHAOS-8883 hold the path as `project_id`. Until that sync, the attribution reads map such a row on the fly: a path-keyed GitLab ownership row is moved to the catalog id of the ONE project the `repos` rows name at that path (current or minted path; `teamattribution.LoadGitLabProjectNativesByPath`, `RemapLegacyGitLabProjectFacts`), so it lands on the same key as an item anchored to that id. A path two projects have used is not a grant for either: the row joins no item (the team still holds the ownership). The same rule applies to a repository-ownership row keyed by full name (it joins by the catalog id of the one project its path names); a path no `repos` row names stays as it is.
+GitLab ownership rows written earlier hold the path as `project_id`. Until that sync, the attribution reads map such a row on the fly: a path-keyed GitLab ownership row is moved to the catalog id of the ONE project the `repos` rows name at that path (current or minted path; `teamattribution.LoadGitLabProjectNativesByPath`, `RemapLegacyGitLabProjectFacts`), so it lands on the same key as an item anchored to that id. A path two projects have used is not a grant for either: the row joins no item (the team still holds the ownership). The same rule applies to a repository-ownership row keyed by full name (it joins by the catalog id of the one project its path names); a path no `repos` row names stays as it is.
 The next GitLab team-catalog sync
 moves an open one to the catalog id of the same project: the listed project at that path, or, when the store has seen
 exactly one project id at the path (`projects.project_key`, or a `repos` row whose `repo` or `identity_path` is the
@@ -769,7 +705,7 @@ the repository-ownership supersede writes), so at every instant exactly one row 
 seen another project id at that path (a path a new project took over). That row is closed at the run, and the new
 project's grant starts at the run.
 
-GitLab repository identity (CHAOS-3383, chris's option A, 2026-10-15). A GitLab project's `repo_id` and work-item
+GitLab repository identity (2026-10-15). A GitLab project's `repo_id` and work-item
 ids no longer follow its current path. Every GitLab route resolves the identity through `repos`
 (`internal/providersync/gitlab_repo_identity.go`):
 
@@ -786,7 +722,7 @@ ids no longer follow its current path. Every GitLab route resolves the identity 
 - Not changed yet: `work_items.project_id` and sprint ids keep the current path. Until they move to the catalog id,
   a project at a reused path shares `project_id` with the old project's items, and so its ownership join.
 
-GitHub repository identity (CHAOS-9879): the same rules, keyed by GitHub's numeric repository id. The GitHub
+GitHub repository identity: the same rules, keyed by GitHub's numeric repository id. The GitHub
 repository route writes `repos.provider_repo_id` (the numeric id) and `repos.identity_path` (the name the `repo_id`
 was minted from); every other GitHub route and the work-items collector resolve the `repo_id` through the same
 reader (`GitLabRepoIdentityClickHouseReader` with `Provider: "github"`, the one shared resolver
@@ -794,7 +730,7 @@ reader (`GitLabRepoIdentityClickHouseReader` with `Provider: "github"`, the one 
 
 - A repository the store holds keeps its `repo_id` and identity name across a rename or transfer. A repository the
   store does not hold mints from its current name, so the first run of a repository before its repo-metadata unit
-  has written the anchor can still split on a rename (CHAOS-10130).
+  has written the anchor can still split on a rename.
 - A new repository at a name another repository's id was minted from mints from `{name}@{id}`.
 - GitHub work-item, pull-request and sprint ids are `gh:{identity_name}#{n}`, `ghpr:{identity_name}#{n}` and
   `ghms:{identity_name}:{id}`. `work_items.project_id` stays the current name, so name-keyed ownership grants keep
@@ -811,7 +747,7 @@ rows with one key, ownership pointed at the row no work item used, and a team re
 project's items by id. Now:
 
 - The Jira team catalog reads `id` from the project search answer (it writes `projects` rows and legacy
-  links; since CHAOS-8888 it writes no team from a project, section 0.4c); Atlassian Teams takes it from the
+  links; it writes no team from a project, section 0.4c); Atlassian Teams takes it from the
   last segment of the project ARI of the team's connected-space link (section 0.4c); a legacy link takes it
   from the same run's search answer for its key.
 - A project with no usable native id gets NO ownership row and NO `projects` row. It is counted and logged
@@ -819,7 +755,7 @@ project's items by id. Now:
   `jira_atlassian_teams_project_link_skipped`). An id is never built from the key as a fallback, and the
   sink refuses an open row that carries one.
 - `project_key` stays on the row as a label. Team ids do not change.
-- **Memberships keep their first-seen `valid_from` too** (CHAOS-9007; `providersync.ReuseFirstSeenMembershipValidFrom`):
+- **Memberships keep their first-seen `valid_from` too** (`providersync.ReuseFirstSeenMembershipValidFrom`):
   `team_memberships` is keyed by `(org_id, provider, team_id, member_id, source, valid_from)`, so a stamp of the
   run time at each sync added one open row per fact. The four catalog writers take the `valid_from` of a
   membership the run holds again from the EARLIEST open row of the same org, provider, source, team and member,
@@ -836,7 +772,7 @@ project's items by id. Now:
   key-built id. The `source = 'native'` rows with `team_id = project_key` (the project-as-team class) are
   not given to the snapshot rule: every catalog run retires them as a class (section 0.4c). The catalog closes nothing when its
   project search returned no project.
-- **A repeat of an open row is not written again** (CHAOS-9548): `PlanOwnershipSnapshot` marks a fresh row
+- **A repeat of an open row is not written again**: `PlanOwnershipSnapshot` marks a fresh row
   whose open row, on the first-seen `valid_from`, has the same shape (project key or repository id, match type,
   `is_primary`, `specificity`, `priority`; a repository row from the inferred derivation also its `share`). The
   Jira, GitLab, GitHub, Linear and Atlassian Teams writers leave such a row out of the write. A change of any of
@@ -847,7 +783,7 @@ project's items by id. Now:
   project only when its ownership changed after the last run. The `...Written` counters of a catalog result keep
   counting the rows the run found; `OwnershipUnchanged` and `RepoOwnershipUnchanged` say how many of them were not
   written again.
-- **A catalog link starts at its evidence** (CHAOS-10521; `providersync.CarryCatalogEvidenceStarts`,
+- **A catalog link starts at its evidence** (`providersync.CarryCatalogEvidenceStarts`,
   `catalog_evidence_start.go`). No provider gives the time of a team grant or of a membership, so the catalog writers
   (GitHub team access and memberships, GitLab group projects and memberships, the Jira legacy links, the Atlassian
   Teams links and memberships, the Linear team projects and memberships) take the start of a link from its earliest
@@ -883,7 +819,7 @@ project's items by id. Now:
   `TestAtlassianTeamsLinksStartAtTheEvidence` and `TestAFailedEvidenceReadKeepsTheStartAndTheSync`; the decision table
   `TestCatalogEvidenceCarryMovesTheFirstRowOfAFact`.
 - **A row is closed only through its fact kind, on that kind's own proof** (`providersync.PlanSnapshot`,
-  `ownership_snapshot.go`; CHAOS-8886). A writer gives the rule one typed snapshot for each kind of fact its
+  `ownership_snapshot.go`). A writer gives the rule one typed snapshot for each kind of fact its
   table holds (`KindSnapshot`): the kind (`snapshot_kinds.go`: a name, the rows it holds, and what an empty
   answer of the kind means) and a proof made only from named terms (`ProveSnapshot`; the zero value and a
   term with no reason are not proven). There is no completeness bool and no count argument: the rule sorts
@@ -942,8 +878,7 @@ project's items by id. Now:
       and an empty answer with no end signal prove nothing.
     `TestHeldSetWalkCensus` names every list walk of the five collectors and the held set it feeds; a new
     walk fails it until it is named with its proof.
-  - **direct answer** (`AbsenceByListing` with no one-response proof; the Linear and Atlassian Teams kinds,
-    CHAOS-9124). Their walks are by the provider's cursor, which states no contract for a list that changes while
+  - **direct answer** (`AbsenceByListing` with no one-response proof; the Linear and Atlassian Teams kinds). Their walks are by the provider's cursor, which states no contract for a list that changes while
     it is read, so the END of such a walk proves nothing: every open fact the run does not hold is a candidate,
     and it closes only on the provider's own answer for that one fact (a per-kind prover), inside the budget of
     `AbsenceLookupBudget` per run and kind. A failed or refused read, an answer outside the recorded ones and a
@@ -973,7 +908,7 @@ project's items by id. Now:
   A walk that did NOT reach its proven end (an error, a cut, a bound) closes nothing, for every kind: that is
   the kind's `SnapshotProof`, as before.
 
-  **Team membership kinds** (CHAOS-9079). A member is closed (`valid_to` = the run time) only when ALL of these
+  **Team membership kinds**. A member is closed (`valid_to` = the run time) only when ALL of these
   hold, per team for every provider:
   1. the member is absent from the COMPLETE member read of ITS team, in a scope no other integration reads
      (with another active integration of the provider in the organization the kind closes nothing).
@@ -993,7 +928,7 @@ project's items by id. Now:
      that pages by cursor cannot be shifted by a departure between two requests, so its list rule stands.
   3. no open row of the fact is newer than the time the run read the provider: a run whose list is older than a
      row never closes it (two overlapping runs of one integration). This holds for EVERY close of a membership
-     row, not only a departure (CHAOS-9204): a surplus open row of a member the run returns again is retired only
+     row, not only a departure: a surplus open row of a member the run returns again is retired only
      when it is not newer than the read (else it stays open and is counted in `row_newer_than_read`); a rename
      never replaces a member id that holds a newer row; and the Jira (Atlassian Teams) writer leaves a whole fact
      open when any of its open rows is newer than the run's read. The same rule, one case set, for GitHub, GitLab,
@@ -1001,7 +936,7 @@ project's items by id. Now:
   4. a member whose id is made from an email is NOT closed by the list rule: a hidden or changed email would read
      as a departure. `raw_provider_user_id` still holds the first identity facet, not the provider's user id (the
      field is pinned by the frozen comparison with the reference); the provider's own stable user id is the
-     separate column `team_memberships.provider_user_id` (CHAOS-9144, migration 117, `Nullable(String)`): GitHub
+     separate column `team_memberships.provider_user_id` (migration 117, `Nullable(String)`): GitHub
      and GitLab numeric user id, Linear user id, Atlassian accountId; NULL on a row written before the column
      and on a row a person wrote by hand. Its one use is the **rename rule**: when a run returns a member
      under a NEW member id (a GitHub or GitLab login rename, a Linear email change) whose `provider_user_id`
@@ -1036,7 +971,7 @@ project's items by id. Now:
   | 1 or 2 | every row another id (none NULL, none newer than the read) | 0 | `close_history_new_row` | the run time | every open row of the member id, as history (`team_membership_id_reused`) |
   | 1 or 2 | every row another id | 1 or 2 | `close_history_rename_continue` | earliest of the renamed rows | the member id's rows as history AND the renamed rows |
 
-  The four review findings of PR #3995 are cells of this table: a login rename is `rename_continue`; two open rows
+  These cases are cells of this table: a login rename is `rename_continue`; two open rows
   of one id are both replaced (earliest `valid_from`); a member already open with no id stored yet is `continue_row`
   (never renamed away, so never two open rows); the same member id back with another id is `close_history_new_row`
   (the first person keeps their row as history). Open rows of another provider, a row newer than the read, a row
@@ -1094,7 +1029,7 @@ project's items by id. Now:
     rule), is left as it is: it is not given to the snapshot rule, and no ownership row is written or
     re-keyed for an archived project (`jira_team_catalog_archived_ownership_held`). The project row of an
     archived project is written as `completed` with source `jira.project.status=archived` and
-    `is_active` 0 (CHAOS-9438 rule), so it does not keep the empty state it had before states were written. This read failing at any
+    `is_active` 0, so it does not keep the empty state it had before states were written. This read failing at any
     page, the first one included, does not fail the walk: the snapshot is not complete
     (`jira_team_catalog_archived_project_search_incomplete`) and nothing is closed. A project in
     neither answer (deleted, or no longer visible to the credential) loses its rows on a complete run.
@@ -1114,7 +1049,7 @@ project's items by id. Now:
   (`loadTeamRepoOwnershipProjectLinks`) takes the newest version of each row key first and filters
   `valid_to` after, the same two-level `argMax` form as the attribution cascade (`LoadProjects`).
   Test: `TestTeamRepoOwnershipProjectLinksLeaveOutAClosedRowBeforeAMerge`.
-- Linear plans its ownership rows through the same function since CHAOS-8886
+- Linear plans its ownership rows through the same function
   (`LinearReferenceCatalogClickHouseEffects.SnapshotOwnership`; open rows read are `provider = 'linear'`,
   `source = 'native'`). Those rows are two fact kinds, each closed on its own walk: the ownership of real
   projects (every project page and project-team page reached a stated end and no project-team link was
@@ -1122,18 +1057,17 @@ project's items by id. Now:
   empty answer of a kind closes no row of that kind: zero project nodes with a team present keeps every
   open project row, and zero teams with a project present keeps every open team-key row
   (`TestLinearCollectorEmptyAnswerOfAKindClosesNoRowOfThatKind`).
-  GitLab plans its rows through the same function since CHAOS-8952
+  GitLab plans its rows through the same function
   (section 0.4a); a
   census test (`TestJiraOwnershipWriterCensus`) names every writer of the table and fails for a new Jira
   writer that does not plan its rows through the shared function.
-- **One typed project id** (`providersync.ProjectID`, `project_id.go`, CHAOS-8886): the field is unexported
+- **One typed project id** (`providersync.ProjectID`, `project_id.go`): the field is unexported
   and every row type that persists a project id (`projects.id`, `team_project_ownership.project_id`) holds the
   type, so a bare string does not compile into a sink row and a zero id is refused at the write. One
   constructor per form: `JiraProjectID` and `LinearProjectID` (the native id, bare), `GitLabCatalogProjectID`
   (`{org_id}:gitlab:{native id}`). Three NAMED exceptions, each with its reason in `projectIDNamedExceptions`:
-  `GitLabPathOwnershipProjectID` (the project path, until CHAOS-8883), `GitHubRepoProjectID` (GitHub has no
-  project; ownership names the repository full name), `LinearTeamKeyProjectID` (`{org_id}:linear:{team key}`,
-  CHAOS-4458). The stored strings are the same as before. Tests:
+  `GitLabPathOwnershipProjectID` (the project path), `GitHubRepoProjectID` (GitHub has no
+  project; ownership names the repository full name), `LinearTeamKeyProjectID` (`{org_id}:linear:{team key}`). The stored strings are the same as before. Tests:
   `TestProjectIDConstructorsAreByteEqualToTheHandBuiltForms`, `TestProjectIDCannotBeBuiltFromAString` (real
   compile failures, with a control that must compile), `TestProjectIDConstructionCensus` (no literal, no
   hand-built `{org}:{provider}:` string, exception callers pinned, sink field types pinned).
@@ -1152,7 +1086,7 @@ that cannot be read, close nothing; the complete run after them closes the lost 
 `TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership` (a store with key-built rows only, a store with both
 id forms, an empty live answer).
 
-#### 0.4c Jira teams × projects: the Atlassian team's connected space (CHAOS-8887)
+#### 0.4c Jira teams × projects: the Atlassian team's connected space
 
 The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira project (the product calls it a
 "space") only when the provider returns a link row that carries the team id and the project id.
@@ -1228,9 +1162,9 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
   `team_project_links_skipped_no_native_id`, `team_project_links_skipped_no_project_key` and
   `team_project_links_skipped_unknown_type`, next to `team_project_ownership` (the rows written). The Info
   line `jira_atlassian_teams_project_links` gives seen / written / skipped / closed for each run.
-- **Precedence.** An Atlassian team's link is source `native` at 110/10. Since CHAOS-8888 there is no
-  project-as-team owner left to rank against: the Atlassian Teams are the only Jira teams.
-- **The project-as-team rows are retired (CHAOS-8888).** Earlier catalogs made one team per Jira project
+- **Precedence.** An Atlassian team's link is source `native` at 110/10. There is no
+  project-as-team owner to rank against: the Atlassian Teams are the only Jira teams.
+- **The project-as-team rows are retired.** Earlier catalogs made one team per Jira project
   (`teams.id` = the project key = `native_team_key`), owning that project (`source = 'native'`, 100/10) with
   the project lead as its member. A Jira project is not a team. The catalog now writes no team, ownership or
   membership row from a project, and every Jira team-catalog run retires the stored ones of its organization
@@ -1323,35 +1257,35 @@ and `TestALinkTheProviderStillReturnsIsNeverClosed` (real ClickHouse: a link wit
 does not read beside one it reads, two ids, no `edges`, null `edges`, a team search with no `pageInfo`;
 controls: a link that is gone and an explicit empty list are closed).
 
-#### 0.4d A project of several teams: every active team takes the item (CHAOS-8905)
+#### 0.4d A project of several teams: every active team takes the item
 
-> **Rule of record: one main owner, lesser owners keep their own share (chris, 2026-10-12, verbatim):** *"it's not
+> **Rule of record: one main owner, lesser owners keep their own share (2026-10-12):** *"it's not
 > 'equal shares', the entire history keeps one team as the main owner, and the others who have a lesser percentage
-> share as the share they have."* The measure (lead D5988, from the D5432 ranking in section 1.1): a team's share of a
+> share as the share they have."* The measure (from the ranking in section 1.1): a team's share of a
 > repository is its **linked share**, the link counts per tier (`native`, then `explicit_text`, then `heuristic`); the
 > team with the largest linked share is the main owner and keeps `is_primary` over the whole history, and every other
-> owning team gets a row with its own share. **Co-owner share floor (chris, 2026-10-15, verbatim): *"Drop them if
+> owning team gets a row with its own share. **Co-owner share floor (2026-10-15): *"Drop them if
 > they're < 1%"*.** A co-owner whose linked share is below 0.01 gets no row (`teamRepoOwnershipCoOwnerShareFloor` in
 > `internal/providersync/team_repo_ownership_derivation.go`); a co-owner at exactly 0.01 keeps its row, and the main
 > owner (every tied main owner too) keeps its row whatever its share. The kept rows store their linked share over all
 > links of the repository, dropped teams included. An open row of a dropped co-owner, and an open row that no current
 > link supports, is retracted by the derivation's own diff (`diffTeamRepoOwnershipRetractions`: a replacement row
-> with `valid_to` set and a newer `updated_at`, never a delete), under the retraction guard (CHAOS-9045). The run logs
+> with `valid_to` set and a newer `updated_at`, never a delete), under the retraction guard. The run logs
 > `team_repo_ownership_derivation.co_owner_below_share_floor` with the count (tests:
 > `team_repo_ownership_co_owner_floor_test.go`, every provider pair). **A dropped co-owner holds no share on any day
-> (CHAOS-9913).** The share is a measure over the whole history (D5988), so a co-owner below the floor now was below it
+>.** The share is a measure over the whole history, so a co-owner below the floor now was below it
 > on every day: its rows, the open one and every earlier closed one, are voided (`valid_to = valid_from`, the
 > supersede tombstone form), not closed at the run, and as-of readers (`teamownership.OwnerSharesByRepo`, filter
 > `valid_from <= asOf < valid_to`) give it nothing on any day, so a trailing recompute of a daily team table cannot write
 > its share back. Logged as `team_repo_ownership_derivation.co_owner_voided`, stat `CoOwnersVoided`; test
 > `TestADroppedCoOwnerHoldsNoShareOnAnyDay` (real ClickHouse, jira, linear, github and gitlab). Every other retraction
 > (no supporting link left, a reassigned project) still closes at the run and keeps the history. The writer stores the share (`team_repo_ownership.share`, section 1.1)
-> and the investment and quadrant readers weigh a co-owned repository by it (CHAOS-9408, `teamscope.OwnerShares`,
+> and the investment and quadrant readers weigh a co-owned repository by it (`teamscope.OwnerShares`,
 > next to "The team review quadrant" and "Every analytics team grouping on the investment path" below). Other text
 > below that says "same rank", "owners at the winner's rank" or "shared equally" about the attribution cascade
-> describes the code as it is on main and does not yet implement this rule (tracked in CHAOS-9407).
+> describes the code as it is on main and does not yet implement this rule.
 >
-> A team-scoped read has two parts (CHAOS-9413). `teamscope.RepoCondition` says WHICH repositories the team owns
+> A team-scoped read has two parts. `teamscope.RepoCondition` says WHICH repositories the team owns
 > (membership: a listing, a per-entity read, a median or a rate, which is a property of the repository and not a
 > quantity split among its owners). `teamscope.RepoShare` says HOW MUCH of a repository the selected teams hold, the sum
 > of their own shares, and a reader that SUMS a measure over the scope multiplies each repository's measure by it: the
@@ -1361,10 +1295,10 @@ controls: a link that is gone and an explicit empty list are closed).
 > once. An owner with no measured share (`provider_access`, `native` or `manual` rows) is the known limit: the owners
 > of that repository split it equally.
 >
-> **The daily team tables read the owner shares too (CHAOS-9410).** `teamownership.OwnerSharesByRepo` is the one Go
-> reader of "who owns a repository": the main owner (every tied team of a full tie, D5990) first, then every lesser
+> **The daily team tables read the owner shares too.** `teamownership.OwnerSharesByRepo` is the one Go
+> reader of "who owns a repository": the main owner (every tied team of a full tie) first, then every lesser
 > owner, each with its own share (`team_repo_ownership.share`, the largest non-NULL share of the team's open rows,
-> divided by the sum over all owners; equal where any owner has no measure; no rounding, threshold or cap in the reader, D5991; the writer's co-owner floor above decides which rows exist).
+> divided by the sum over all owners; equal where any owner has no measure; no rounding, threshold or cap in the reader; the writer's co-owner floor above decides which rows exist).
 > `AuthoritativeOwnersByRepo` is the same read cut to the main owners. A caller picks its rule by the kind of measure:
 > - **An additive measure** (a sum over repositories) takes each owner at its share. `team_cognitive_load_daily`
 >   does so: the pull-request interruption load, the review request load and the context-spread count are the sums
@@ -1372,18 +1306,18 @@ controls: a link that is gone and an explicit empty list are closed).
 >   share-weighted commit counts. The counts of repositories and authors stay whole. `team_complexity_daily`
 >   (lines of code, cyclomatic total, the two function counts) and `team_metrics_daily` (the commit, after-hours and
 >   weekend counts, written per team and repository by the wellbeing executor) do the same since migration 124
->   (CHAOS-9601): their counter columns are Float64, a co-owning team holds a fraction of a count, nothing is
+>: their counter columns are Float64, a co-owning team holds a fraction of a count, nothing is
 >   rounded, and the ratios are recomputed from the weighted sums. The cognitive-load executor reads
 >   `team_metrics_daily` per repository and sums the rows of one generation, so the owners' shares of a repository
 >   (which sum to 1) give the whole repository back before the cognitive-load share is applied once.
->   `ai_impact_metrics_daily` does the same since migration 128 (CHAOS-9604, D5998): its twelve count columns are
+>   `ai_impact_metrics_daily` does the same since migration 128: its twelve count columns are
 >   Float64 and the AI impact GraphQL count fields are `Float!`. A pull request that the ownership read gives to a
 >   team counts in that team's rows at the owner's share (`total`, `merged`, the bucket counts, rework, follow-up
 >   commits, reverts, test-gap pull requests, and the leverage pull-request component; incidents are not shares, see below); the ratios, the
 >   averages (cycle time, reviews per pull request) and the baselines are the repository's own and are never scaled,
 >   so a lesser owner reads the repository's rates and a fraction of its counts. The readers that add rows (the impact
 >   summary, the comparison, the risk breakdown, the review load) add the fractions and weight the averages by them.
->   An incident is not a pull request and is not split by ownership share (D6040, D6041, CHAOS-9915): it counts
+>   An incident is not a pull request and is not split by ownership share: it counts
 >   once, for one team, on one row, so `incidents_count` is always a whole number and, over every row of a
 >   repository and day, adds up to the incidents that started that day. The team is the first of:
 >   1. the team the incident source names: the owning team of the incident's service, a provider reference mapped
@@ -1397,7 +1331,7 @@ controls: a link that is gone and an explicit empty list are closed).
 >      AI bucket and work type alike, and the day's pull request facts read the same best-tier link, so an incident and its triggering pull request share one row; the work item's attribution row of the pull request's own repository wins, and
 >      rows of other repositories count only when they all name one team; a pull request whose best-tier links name no
 >      team or several has no owner);
->   3. the main owner of the repository. Among tied main owners (D5990) the incident goes to the tied team that owned
+>   3. the main owner of the repository. Among tied main owners the incident goes to the tied team that owned
 >      the most recently merged pull request of the repository before the incident started, else to the lowest team
 >      id. A repository no team owns keeps its incidents in its no-team rows.
 >      An incident whose service maps to several repositories is one incident: it sits on the repository of its
@@ -1411,7 +1345,7 @@ controls: a link that is gone and an explicit empty list are closed).
 >   name but that owns neither the triggering pull request nor the repository takes none, and a group with no pull
 >   request of the day gets an empty row so the incident still counts. `incident_drag_rate` is the row's incidents over
 >   the row's merged pull requests (it was the repository's incidents over the group's). The source's team reference is mapped only through the team catalog; no Postgres mapping bridges the two.
-> - **The share is the weight of a repository in a team's aggregate (D5998, CHAOS-9620).** `compounding_risk_daily`
+> - **The share is the weight of a repository in a team's aggregate.** `compounding_risk_daily`
 >   (team scope) gives every owner, main and lesser, a row. Its additive columns are the pooled review-window counts
 >   (`merged_prs_30d`, `reviewed_prs_30d`, Float64 since migration 124): the sum over the team's repositories of the
 >   repository's count times the owner's share. Its intensive columns are the six raw inputs (`rework_churn`,
@@ -1438,13 +1372,12 @@ project (section 0.1): a native team key gives one team.
   another provider does not make that team an owner of the item's project (a team reaches an item only through
   ownership of its project), so it takes no row. `project_ownership` facts are
   looked up by the item's provider. When the winning source of an item is `issue_project`, `project_ownership`
-  or `repo_ownership`, every other team of that source is a co-owner, at ANY rank (`projectCoOwners`; CHAOS-9409,
-  D5988: every owning team of the project or repository gets a row of the item, the rank decides only which ONE is
+  or `repo_ownership`, every other team of that source is a co-owner, at ANY rank (`projectCoOwners`: every owning team of the project or repository gets a row of the item, the rank decides only which ONE is
   the primary row). A repository owner beside the main owner (a co-owner fact, `is_primary = 2`) is never the
   primary row, even when it outranks a `provider_access` grant by specificity: it is a co-owner row. A repository
-  with several main owners (a full ownership tie, D5990, CHAOS-9459) attributes its items to each of them, and so
+  with several main owners (a full ownership tie) attributes its items to each of them, and so
   does a repository or project whose top owners tie at equal rank (`specificity`, `priority`) with no main row
-  (`is_primary = 1`), such as two `provider_access` grants (lead ruling on CHAOS-9409, following D5990): every tied
+  (`is_primary = 1`), such as two `provider_access` grants (a tied rank): every tied
   owner is an owner, the first by the cascade's deterministic order (`RankDerivationCandidates`) is the primary row
   and the others are co-owner rows, so a donor's team of that day is any tied owner (the attribution matrix,
   `tiedOwnersAt`). No new tie-break picks one of them; that would be a data decision. An empty
@@ -1464,13 +1397,13 @@ project (section 0.1): a native team key gives one team.
   and a team(s) view (a filter on several teams) read `IN (1, 2)` and show the item under each of their teams
   that owns it. A team-grouped view (one row, point or node per team, not summed into an organization total)
   also reads `IN (1, 2)`. The team cycle/throughput quadrant is the exception that weighs: it splits the item among
-  its teams (CHAOS-9562, D5998), see "The team quadrants weigh by owner share" below. Team-scoped and team-grouped readers today: the issues drilldown with a team scope
+  its teams, see "The team quadrants weigh by owner share" below. Team-scoped and team-grouped readers today: the issues drilldown with a team scope
   (`internal/queryapi/drilldown/issues.go`), the aggregated-flame throughput with a team
   (`internal/queryapi/aggflame/clickhouse.go`), the team cycle/throughput quadrant
   (`internal/queryapi/quadrant/quadrant.go`, one point per team), the TEAM and REPO flow-matrix dimensions
   (`internal/queryapi/analytics/flowmatrix.go`: a node per team; repository pairs joined through the team) and the
   work-item half of the landscape (`ic_landscape_rolling_30d`, one point per team and person, through the team split
-  of `work_item_user_metrics_daily`; CHAOS-12535).
+  of `work_item_user_metrics_daily`).
   Readers that stay on `= 1` although they name a team: the organization flame (a breakdown of the
   organization total by primary team), the daily rollup inputs and the investment team-repository donors
   (one team per item, section "Known limit" below), and the one-team-per-work-unit votes
@@ -1517,10 +1450,10 @@ project (section 0.1): a native team key gives one team.
   change. A rollup-based team view shows a co-owned item under its primary team only, until the rollup rows
   carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
   passes the primary team only. One exception holds the team set: the `team_split_*` arrays of a
-  `work_item_user_metrics_daily` row (CHAOS-12535), which the work_item family fills from one more read,
+  `work_item_user_metrics_daily` row, which the work_item family fills from one more read,
   `loadWorkItemScopeTeamSets` (`is_primary IN (1, 2)`, one row per item and team), for the landscape only; the row's
   `team_id` label and its counts keep the primary team.
-- **The team review quadrant reads repository ownership (CHAOS-9339).** At the team grain the quadrant's
+- **The team review quadrant reads repository ownership.** At the team grain the quadrant's
   `user_metrics_daily` metrics (review load, review latency, and churn, which the churn/throughput pair reads at the
   repository grain unless `scope_type=service`) group a row by the team that owns its repository now
   (`teamscope.OwnerShares`, active teams only), never by the row's stored `team_id`: that id is the PERSON's
@@ -1528,7 +1461,7 @@ project (section 0.1): a native team key gives one team.
   are the reviews in the repositories the team owns, not the reviews by its members. A repository with no owner is no
   team's point. Selected teams narrow the owners, after the shares are computed over every owner. Asserted on real
   ClickHouse by `TestTheTeamReviewQuadrantGroupsByTheRepositoryOwner`.
-- **The team quadrants weigh by owner share (CHAOS-9562, D5983, D5998).** A co-owned unit is split among its owners
+- **The team quadrants weigh by owner share.** A co-owned unit is split among its owners
   so the team points conserve the organization's total (the sum of the additive axis over the team points equals the
   organization's count) and a sole owner reads the unweighted value.
   - Review load x review latency: each `user_metrics_daily` row of a repository has the weight `owner_share` of the
@@ -1543,13 +1476,13 @@ project (section 0.1): a native team key gives one team.
     weights over the team's distinct items; cycle time is the weighted mean over the items that have one. Asserted by
     `TestTheCycleThroughputTeamPointsSplitAnItemByOwnerShareAndConserveTheOrgTotal`.
   - Churn x throughput at the team grain (`scope_type=service`, the one route that serves a team-keyed churn, read by
-    the Landscape Teams tab; the org and team scopes force the repository grain, CHAOS-2079): churn is additive, a
-    team's churn is the sum over its repositories of the repository's churn x the owner's share (CHAOS-9693).
+    the Landscape Teams tab; the org and team scopes force the repository grain): churn is additive, a
+    team's churn is the sum over its repositories of the repository's churn x the owner's share.
     Throughput on that route stays the rollup's team. Asserted by
     `TestTheTeamChurnQuadrantSumsEachRepositoryTimesOwnerShareAndConservesTheOrgChurn`.
   - Known limit: owners whose team is inactive hold a share that no point shows, so the organization's units in a
     repository with an inactive owner are partly in no point.
-- **The person quadrant reads only that person's own rows (CHAOS-9343).** At the person grain the quadrant resolves the
+- **The person quadrant reads only that person's own rows.** At the person grain the quadrant resolves the
   person id to the person's identity strings and binds each read (`user_metrics_daily.identity_id`,
   `work_item_user_metrics_daily.user_identity`) to them. There is no membership-team lookup (`identities.team_ids`) and
   no cohort: the response holds no other person's identity or points, and a person with no rows gets an empty point list,
@@ -1560,23 +1493,23 @@ project (section 0.1): a native team key gives one team.
   work-unit vote over the items' primary rows (`resolveWorkUnitTeamAttributions`): one team per work unit. The census holds
   every reader of the vote's team to a named list (`workUnitVoteConsumers`); a new reader must be classified there,
   and a stale entry fails. Every **analytics team grouping on the investment path** reads repository ownership instead
-  (CHAOS-9297): the TEAM dimension of the sankey (the Investment flow), breakdown, timeseries and the flow matrix, and
+: the TEAM dimension of the sankey (the Investment flow), breakdown, timeseries and the flow matrix, and
   the flow matrix's team bridge, all through the one `ut` context of `investmentContextFor`. So do the **team scope**
-  of the analytics theme readers (CHAOS-9221) and the investment-path sankey `teamCoverage` (CHAOS-9266; the
+  of the analytics theme readers and the investment-path sankey `teamCoverage` (the
   non-investment path, `useInvestment` unset or false, still counts the `team_id` of `work_item_completion_daily`): a
   unit is in a team's scope when the team owns one of the unit's repositories (`teamscope.RepoCondition` over
   `team_repo_ownership`; `AnyTeamRepoCondition` for the coverage), and a repository scope reads the unit's repository
   rows (`teamscope.UnitScope`), with effort allocated per repository.
   The grouping's team is the owner of the repository of each effort row (`teamscope.OwnerShares`, the same ownership
   statement; an ownership row with an empty team id owns nothing): a repository with no owner is `unassigned`; a
-  repository owned by several teams is **shared by linked share** among its owners (CHAOS-9408, D5988: the stored
+  repository owned by several teams is **shared by linked share** among its owners (the stored
   `team_repo_ownership.share` of each owner, the largest non-NULL share of its open rows, divided by the sum over ALL
   owners of the repository; the main owner keeps its own share and each lesser owner its own lesser share, never an equal
-  split; a full tie is stored as equal shares, D5990, and reads equal; a single owner holds the repository whole;
+  split; a full tie is stored as equal shares and reads equal; a single owner holds the repository whole;
   when any owner of the repository has no measured share (NULL: a `provider_access`, `native` or `manual` row, or a row written
   before migration 122) or the shares sum to nothing, no weight is invented and the owners of the repository split equally),
   so the THEME and REPO nodes keep their totals; under a team scope the owner rows are narrowed to the teams in view
-  AFTER the shares are computed over every owner (CHAOS-9413), so a selected co-owner reads its own share of a
+  AFTER the shares are computed over every owner, so a selected co-owner reads its own share of a
   repository, never the whole of it, and the selected teams of one repository together read it once. The unassigned share of the flow equals `1 - teamCoverage` except for a unit that touches an owned and an
   unowned repository: the coverage assigns that unit whole (a per-unit flag), the flow splits its effort by repository.
   See [Investment data model](../../reference/data-models/investment.md).
@@ -1599,7 +1532,7 @@ real producer, every provider);
 organization once and equal to the store without co-owner rows);
 `TestTheDailyAttributionReadersIgnoreACoOwnerRow`; `TestWorkItemTeamAttributionCoOwnerRowIsNotPrimary`.
 
-#### 0.4e A key string is not a link across providers (CHAOS-8924)
+#### 0.4e A key string is not a link across providers
 
 `native_team` and `issue_project` resolve a key string (the item's native team key; its scope and project keys)
 to the teams that hold it, as their id, their `native_team_key` (section 0.4f) or in `project_keys`. A team reaches an item only through ownership of
@@ -1666,7 +1599,7 @@ admin team that holds it; else on the next source. An item of a team whose id an
 provider shares is attributed to its team again (before, it was dropped). Each item still has exactly one primary row, so organization totals do
 not change. Per-team totals move: the daily rollups keyed by the primary team (`work_item_metrics_daily`,
 `work_item_state_durations_daily`, `work_item_cycle_times`, `issue_type_metrics_daily`,
-`work_item_completion_daily` (which replaced `investment_metrics_daily`, CHAOS-9264), `work_item_user_metrics_daily`), the primary-team views and the one-team-per-work-unit
+`work_item_completion_daily` (which replaced `investment_metrics_daily`), `work_item_user_metrics_daily`), the primary-team views and the one-team-per-work-unit
 votes move such items from the other provider's team (or an admin team that a team of the item's provider
 outranks) to the team of the item's provider, to an admin team, to a `project_ownership` or lower source, or
 to `unassigned`.
@@ -1687,7 +1620,7 @@ cascade, real writer, real ClickHouse, every provider, the admin cases included)
 `TestProviderTaggedTeamTwinsMatchTheFrozenAnswersForEveryProvider` (the frozen answers, written for admin teams,
 also hold for a team of the item's provider).
 
-#### 0.4f Team ids carry a provider prefix (CHAOS-8939)
+#### 0.4f Team ids carry a provider prefix
 
 A team is its id, and the id is unique in an organization because it carries its provider's prefix. The
 `teams` sorting key is (org_id, id), without `provider`, and every reader that uses `FINAL`, `GROUP BY id` or
@@ -1697,7 +1630,7 @@ already carries ANY known provider key (`gh:`, `gl:`, `linear:`, `jira:`, `ms-te
 system prefix) keeps it, whatever system writes it, and gets no second one. A custom id with no known key gets
 `<system>:`. The `atlassian:` form folds into `jira:`.
 
-**Custom teams (chris D5685).** A team the web admin writes and a team the `team.v1` system `custom` pushes are
+**Custom teams.** A team the web admin writes and a team the `team.v1` system `custom` pushes are
 the same kind of team (an override), in ONE namespace, `custom:<id>` (`teamid.Custom`): an admin team `eng` and a
 pushed `custom` team `eng` are one team, `custom:eng`, and a push and an admin write of it address that team; the
 last write wins, as for any team. Both writers store a custom team with provider `""` (`teamid.StoredProvider`):
@@ -1706,7 +1639,7 @@ its own provider, else the teams with no provider), so a custom team holds its p
 work items of every provider, as an admin team always did. A pushed custom team written before this rule has
 provider `custom` until its next push.
 
-**Origin of a team row (chris D5682/D5683).** Every writer names its integration (its origin), and the seam keys
+**Origin of a team row.** Every writer names its integration (its origin), and the seam keys
 a bare id by it the same way for every integration (`linear:`, `gl:`, `custom:`); nothing infers an origin from
 provider `""`. `teams.provider`, `native_team_key`, `parent_team_id` and `source_id` are the row's origin. An
 admin write of an EXISTING team (create-or-update, update, member writes, a drift approval, an import) addresses
@@ -1755,12 +1688,12 @@ Only a NEW team takes the writer's origin: a custom team for an admin create, th
   the team by its native key, not by its id (section 0.4e). The repository-ownership derivation
   (`resolveWorkItemTeamID`) maps a Linear item's `native_team_key` to the id of the known Linear team with that
   native key; when two teams hold one key, the prefixed id wins.
-- **Old rows.** Rows written before this change hold bare ids. The carry (below, CHAOS-8940) moves them to the
+- **Old rows.** Rows written before this change hold bare ids. The carry (below) moves them to the
   prefixed form. It runs before every write path of a prefixed team id reads or writes one (the seam below),
   and the two changes reach a deploy together, so no prefixed row is written beside an active bare row of the
   same team.
 
-**The carry (CHAOS-8940).** `providersync.CarryTeamIDs` (`internal/providersync/team_id_carry.go`) moves one
+**The carry.** `providersync.CarryTeamIDs` (`internal/providersync/team_id_carry.go`) moves one
 organization's bare team ids to the prefixed form. `providersync.CarryTeamIDsBeforeWrite` calls it with the
 time of the call. It runs at ONE seam per write path, before the path reads or writes a team id; an error stops
 the path before it writes:
@@ -1783,7 +1716,7 @@ the path before it writes:
 or builds a team catalog collector or writes Atlassian team ids, and fails on a new one. The operator verb
 `dho workers providersync carry-team-ids` runs the same function (section 1.1).
 
-**One resolver (CHAOS-8940).** `providersync.ResolveTeamID` (`internal/providersync/team_id_resolve.go`) is the one
+**One resolver.** `providersync.ResolveTeamID` (`internal/providersync/team_id_resolve.go`) is the one
 rule that turns a team id into the id a writer writes, given the integration of the caller (never inferred: a
 bare id with no integration is `ErrTeamIDNoOrigin`): the carry (a team's own id, an admin team, an admin edit, a
 parent) and the write seam call it. A prefixed id keeps its canonical form; an owner's (`TeamIDOwner`: a
@@ -1793,13 +1726,13 @@ active holder, a conflict when two hold it, else a new team of the writer's inte
 parent resolves against the teams its id moves to, narrowed to
 the child's provider when the id is not one team.
 
-**The write seam (CHAOS-8940).** A writer that takes a team id from outside, not from a provider's own key, writes
+**The write seam.** A writer that takes a team id from outside, not from a provider's own key, writes
 only what `providersync.KeyTeamIDsForWrite` (`internal/providersync/team_id_write_seam.go`) returns. It runs the
 carry first, on the writer's own ClickHouse login: for the api that is `dho_api_ch`, whose manifest
-(`clickhouse.APIPosture`) grants select and insert on every table the carry reads and writes (CHAOS-9005; a
+(`clickhouse.APIPosture`) grants select and insert on every table the carry reads and writes (a
 missing grant made every admin team write a 500). It then keeps a prefixed id in its canonical form and resolves a bare id to the ONE active prefixed team
 of the organization that holds it (`teamid.Candidates`: every known prefix plus the id). A bare id that no
-active prefixed team holds is a new custom team, `custom:<id>` (chris D5631/D5685), the id the carry gives an
+active prefixed team holds is a new custom team, `custom:<id>`, the id the carry gives an
 admin's bare team: `POST /teams` with `team_id: "eng"` writes and answers `team_id: "custom:eng"`, and a later
 write that names `eng` lands on it, also when a push of the `custom` system wrote `custom:eng` (one team). A
 plain id that one active team holds is an edit of that team, which keeps its origin (an update of an id that no
@@ -1817,11 +1750,11 @@ keeps the admin's manual members.
 
 A read that names one team (`GET /teams/{team_id}`, `GET /teams/{team_id}/discover-members`,
 `GET /teams/{team_id}/infer-members`) resolves its id with the same rule and lookup
-(`providersync.ResolveTeamIDForRead`, chris D5711/D5712), without the carry: a prefixed id is read as given, a
+(`providersync.ResolveTeamIDForRead`), without the carry: a prefixed id is read as given, a
 bare id reads the one active prefixed team that holds it (HTTP 409 when two do), and a bare id that no prefixed
 team holds is read as given, so a row the carry has not moved yet is still found and no row is a 404.
 
-**Team uuid (chris D5714).** `teams.team_uuid` derives from the team id: every provider writer and the
+**Team uuid.** `teams.team_uuid` derives from the team id: every provider writer and the
 `team.v1` sink write `uuid5(URL, "team:" + id)` at every write, the admin store gives a new team
 `uuid5(URL, "team:" + org_id + ":" + id)` and keeps the stored value on an edit, and the carry writes the
 writer's rule for the new id. It is not a stable identity across an id change: the admin REST `id` field
@@ -1858,7 +1791,7 @@ write, and on a store write that does not refuse a bare id before its batch.
     `RetireJiraProjectAsTeamRows` retires it (section 0.4c).
   - An admin team (provider `""`) moves to `teamid.Of(provider, id)` when exactly one provider's observation
     names its id (it came from that provider's import; it keeps provider `""` and its `native_team_key`). Any
-    other admin team is a custom team and moves to `custom:<id>` (chris D5631/D5685; counted as
+    other admin team is a custom team and moves to `custom:<id>` (counted as
     `admin_teams_to_custom`), the id the write seam gives a plain admin id; when a pushed `custom` team already
     holds `custom:<id>`, that row stays (`teams_already_keyed`), takes the admin row's manual members it does not
     hold yet, and the bare admin row goes inactive: one team.
@@ -1870,7 +1803,7 @@ write, and on a store write that does not refuse a bare id before its batch.
     moved row holds manual members the kept row does not, a new version of the kept row takes them
     (`manual_members_folded`), written at the stored version (ReplacingMergeTree keeps the last inserted row
     of an equal version), so a later write of its own writer stamped at or after that version still wins. Manual members are an admin's statement that no other writer restores; the kept row and
-    the moved team are one team. The new version is written by `teamprovider.Restate` (CHAOS-10099): ONE
+    the moved team are one team. The new version is written by `teamprovider.Restate`: ONE
     `INSERT INTO teams ... SELECT ... FROM teams FINAL` of the kept ids, which takes every column from the stored
     row in that statement (the members it gains added once, `is_active`, the oldest `created_at`, and the provider
     identity by the 0.4i rule), so a write of the kept row that commits after the carry's read, even at the same
@@ -1880,7 +1813,7 @@ write, and on a store write that does not refuse a bare id before its batch.
     `team_id_carry_kept_teams_not_restated`, counter `dev_health_team_id_carry_kept_teams_not_restated_total`).
     The window left is the one statement (section 0.4i).
     A custom team (an admin's own or a pushed one, stored with provider `""`) carries as the ACTIVE team
-    (chris D6023, CHAOS-9003: custom = admin = push API): when the kept row's current version is inactive, the
+    (a custom team is the admin team is the push API team): when the kept row's current version is inactive, the
     same new version of the kept row is written with `is_active = 1` (`keyed_teams_activated`), also when it
     holds every member already, so one active team holds the admin team and its members. When an admin
     deleted the kept row, that id has no team (a write under the id of a deleted team is a new team, as in the
@@ -1890,7 +1823,7 @@ write, and on a store write that does not refuse a bare id before its batch.
     that row as it is (the provider's newer word).
   - An admin edit of a provider team (the same id, provider `""`) moves with that team; the newer of the two
     rows gives the new row's values, and the team's origin (provider, native key, parent, source) stays the
-    provider row's (chris D5682). An admin edit of an id that two providers' teams hold is neither team: it
+    provider row's. An admin edit of an id that two providers' teams hold is neither team: it
     moves to `custom:<id>` with its members (the providers' teams move to their own ids).
   - A custom team the carry writes is stored with provider `""` (`teamid.StoredProvider`), also a bare team an
     older push of the `custom` system wrote with provider `custom`.
@@ -1900,10 +1833,10 @@ write, and on a store write that does not refuse a bare id before its batch.
   - An id that two providers' teams hold (or a provider's team and an active Jira project-as-team row) is
     `ambiguous`: each provider's rows move to that provider's id, and the rows that name the id without a
     provider (sync policy, drift changes, `identities.team_ids`, manual fallbacks) stay.
-  - An id that already holds a key is never rewritten (chris D5427). When the new id already has a row (a
+  - An id that already holds a key is never rewritten. When the new id already has a row (a
     prefixed writer wrote it), that row is kept and the old row goes inactive; the kept row only takes the old
-    row's manual members it does not hold yet (lead D5698, see `manual_members_folded` above), so an admin's
-    members are not lost, and a custom team makes an inactive kept row active (chris D6023, see
+    row's manual members it does not hold yet (see `manual_members_folded` above), so an admin's
+    members are not lost, and a custom team makes an inactive kept row active (see
     `keyed_teams_activated` above).
   - An id that is only a provider prefix (`gh:`, `linear: `, `atlassian:`) is no team of any provider:
     `teamid.Of` would give it a second prefix (`linear:gh:`). The carry leaves it, counts it as
@@ -1937,11 +1870,11 @@ write, and on a store write that does not refuse a bare id before its batch.
   - `identities.team_ids` and `manual_attribution_fallbacks.team_id`: the old id is replaced.
   - The team rows and then the observations are written last, so after a failure part way the old team is
     still found and a re-run moves what is left.
-- **Idempotence.** No marker table (lead D5468). With nothing to carry, the carry is one count read and no
+- **Idempotence.** No marker table. With nothing to carry, the carry is one count read and no
   write; a second run reports zero.
 - **Not rewritten: computed rows.** Attribution and metric rows (`work_item_team_attributions`,
   `team_metrics_daily` and the other daily tables keyed by `team_id`) keep the old id. The full-history
-  recompute that writes them under the new id is a separate step after the carry (CHAOS-8941). Until it runs,
+  recompute that writes them under the new id is a separate step after the carry. Until it runs,
   team trend lines break at the carry.
 - **Counts only.** The outcome and the log line `team_ids_carried` hold counts, never an id or a name.
 
@@ -1999,7 +1932,7 @@ Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderT
 - **Legacy rows.** Rows written before migration 113, and rows written by a Python writer, have `created_at = NULL`. No mutation backfills them (versions already merged away cannot be recovered). The carry fills the column from the oldest surviving version at the team's next Go write. Until then readers show `coalesce(created_at, updated_at)`, so for such a team `created_at` can equal `updated_at`; this is a fallback, not a measured creation time.
 - **Reader.** The admin teams API (`GET/POST/PATCH /admin/teams`) renders the stored `created_at` and an unchanged `updated_at`. `identities` still render `created_at = updated_at`.
 
-#### 0.4i A team's provider identity (`teams.provider_team_id`, `provider_name`, `gone_at`; CHAOS-9432)
+#### 0.4i A team's provider identity (`teams.provider_team_id`, `provider_name`, `gone_at`)
 
 Migration 137 adds three columns to `teams`. `provider_team_id` is the provider's immutable id of the team as text (the
 GitHub team id, the GitLab group id, the Linear team uuid, the Atlassian team uuid), `provider_name` is the name the
@@ -2007,11 +1940,11 @@ provider reports (the `name` column can be edited by an admin under the team's s
 a run proved the team gone at the provider; NULL = not gone. The row id is minted once from the first slug, path or key
 the sync saw and is never changed: a rename at the provider changes `native_team_key`, and the stored provider id is
 what tells the sync it is the same team (the rename change builds on it). `is_active` is not touched by `gone_at`: a
-gone team keeps its past reads and attribution (chris ruling, CHAOS-9432: never deactivate a gone team).
+gone team keeps its past reads and attribution (a gone team is never deactivated).
 
-- **Carry, inside the write (CHAOS-9999).** Every Go writer of `teams` writes through `internal/teamprovider.Insert`
+- **Carry, inside the write.** Every Go writer of `teams` writes through `internal/teamprovider.Insert`
   (or `teamprovider.Restate`, which writes a stored team again from its own stored version: the team id carry's
-  kept rows, CHAOS-10099):
+  kept rows):
   one `INSERT ... SELECT` that reads the stored values of the three columns in the same statement. `provider_team_id`
   and `provider_name` are the run's own value when it has one, else the newest NON-EMPTY value over every stored
   version (a writer that does not know the provider's id never erases it); `gone_at` is NULL for a catalog write of a
@@ -2020,7 +1953,7 @@ gone team keeps its past reads and attribution (chris ruling, CHAOS-9432: never 
   version, and after a merge (ReplacingMergeTree keeps one row per id) no read can find it again. Residual window: the
   SELECT reads a snapshot taken when the statement starts, so a write that commits while that one statement runs is
   still overwritten (ClickHouse has no transaction); `provider_team_id` and `provider_name` are written again by the
-  next catalog sync that lists the team, `gone_at` is not. The fix stays inside `teams` (chris ruling on CHAOS-9999: no
+  next catalog sync that lists the team, `gone_at` is not. The fix stays inside `teams` (no
   second table, no duplicated columns). The Python `insert_teams` writers (not run by any deployed workload: the
   chart runs only the `dho` image) still read before they insert. A census test (`internal/teamprovider`) fails when a
   Go writer of `teams` does not write through `Insert` (or an `INSERT ... SELECT` that joins
@@ -2030,7 +1963,7 @@ gone team keeps its past reads and attribution (chris ruling, CHAOS-9432: never 
   run, so an existing row gets its provider id on the first sync that lists the team (no backfill job). A team listed
   under a key whose stored provider id differs is logged at Warn with counts (`team_provider_identity_written`).
 
-#### 0.4g A stored day after a team id changes (CHAOS-9026)
+#### 0.4g A stored day after a team id changes
 
 A daily table whose sorting key holds a team id keeps one row for each team id. The tables are append only and a
 reader takes the newest row of each KEY. So when a later compute of a stored day gives the day's work to another team
@@ -2060,7 +1993,7 @@ metric family:
 `repo_patterns` through `teamresolve.ResolveFromOwnershipMap`, as its siblings do; a repository with no owner is
 `unassigned`. It never resolves a team through `teams.members` (a declared difference from the Python reference). The
 census `TestNoDailyFamilyResolvesATeamThroughTeamMembersExceptICFinalize` names `ic_finalize` as the one daily family
-that still does (CHAOS-9084). A day computed before this change keeps its `unassigned` rows until it is computed again;
+that still does. A day computed before this change keeps its `unassigned` rows until it is computed again;
 a new compute of the day leaves each of them as a row of zeros under the stale-key rule.
 
 The SQL text of these reads is the Python reference's and is not changed: the inactive ids are a second read
@@ -2068,7 +2001,7 @@ The SQL text of these reads is the Python reference's and is not changed: the in
 reference's. A failed read of the inactive ids fails the family; it is never taken as "no inactive team".
 Asserted on real ClickHouse by `TestNoTeamResolverResolvesToAnInactiveTeam`.
 
-**An admin delete is a team set inactive (CHAOS-9119).** `DELETE /api/v1/admin/teams/{team_id}` does not remove the
+**An admin delete is a team set inactive.** `DELETE /api/v1/admin/teams/{team_id}` does not remove the
 team row. It writes a new version of the row with `is_active = 0` and `deleted_at` = the time of the delete
 (`teams.deleted_at`, ClickHouse migration 115; NULL = not deleted). Rule 1 then holds for a deleted team as for any
 inactive team: at the next compute it takes no work item, owns no repository and has no member, and the rows stored
@@ -2177,7 +2110,7 @@ It is then the newest generation of its repository, for any clock of the worker.
 | `compounding_risk_daily` (rows of scope `team`) | `compounding_risk_team` | in the finalize family | the organization's day |
 
 `issue_type_metrics_daily` and `work_item_completion_daily` hold the same rule in their own writers
-(`withIssueTypeMetricsZeroRows`, `withWorkItemCompletionZeroRows`; `investment_metrics_daily` is no longer written, CHAOS-9264). They are plain `MergeTree` tables: a row of zeros
+(`withIssueTypeMetricsZeroRows`, `withWorkItemCompletionZeroRows`; `investment_metrics_daily` is no longer written). They are plain `MergeTree` tables: a row of zeros
 replaces nothing there, so the rule holds only for a reader that takes the newest row of a key by `computed_at`.
 
 The tables are declared once, in `internal/teamkeytables`. The writer (`supersedeStaleTeamKeys`,
@@ -2201,7 +2134,7 @@ take it through `internal/storage/clickhouse/liverow`, and the rule there is: a 
   all of them, and drops the measured ones with it. The home theme allocation reads the stored investment area
   (day, repository, team, area, project stream), applies the predicate there, and only then takes the theme.
 
-**The two user-level daily tables (CHAOS-9135).** `user_metrics_daily` and `work_item_user_metrics_daily` hold the team
+**The two user-level daily tables.** `user_metrics_daily` and `work_item_user_metrics_daily` hold the team
 in a VALUE column (the sorting key is scope, person and day), so a key that a run no longer produces cannot be told
 from a key the run measured as zero: a person whose measured row is all zero is a real row (a person assigned only
 to an item created that day). They take an explicit marker instead: `retracted UInt8 DEFAULT 0`
@@ -2238,7 +2171,7 @@ when a declaration does not agree with the table's columns, when a declared tabl
 file that is not a declared writer holds an INSERT of one of the tables, and when a partition family calls the rule
 for a table whose key scope is not the repository (such a table is decided once for the run).
 
-**Tables outside the registry (CHAOS-9055).** These tables hold a team id and take no row of zeros; the rule for
+**Tables outside the registry.** These tables hold a team id and take no row of zeros; the rule for
 them is in their readers:
 
 | Table | Team id | Why no row of zeros | Reader rule |
@@ -2246,10 +2179,10 @@ them is in their readers:
 | the six testops daily tables (`testops_pipeline_metrics_daily`, `testops_test_metrics_daily`, `testops_coverage_metrics_daily`, `testops_release_confidence`, `testops_quality_drag`, `testops_pipeline_stability`) | a VALUE of the (org, repository, day) key: the repository's authoritative active owner | a recompute writes the key again and replaces the team; there is no stale team key | a reader takes the newest row of the KEY first and only then its team. The benchmarking job groups by the table's key and takes the team by `argMax` (`benchmarking.FetchMetricSeriesByScope`; `TestEveryMetricGroupsByTheKeyOfItsTable`): grouping by `team_id` kept an older row under a superseded id as a series of its own |
 | the six benchmarking outputs (`testops_metric_baselines`, `testops_metric_anomalies`, `testops_maturity_bands`, `testops_metric_correlations`, `testops_period_comparisons`, `testops_benchmark_insights`) | `scope_key` of a row of `scope_type = 'team'` | append-only results, read by no reader; a row of zeros would be a result that was not computed | the job writes no team series of an inactive team (`teamactive`): an inactive team is not a target. Rows written before the fix stay; no reader shows them |
 | `capacity_forecasts` | a value of the forecast | one forecast per row, replaced by the next forecast of the same id | the forecast list with no team named lists the active teams and the forecasts with no team (`activeteams.ListablePredicate`); a named team is read as named |
-| `recommendations_daily` | in the key | a rule result (fired or not), not a count | the readers read only the team ids a request names (D5773: no rule) |
+| `recommendations_daily` | in the key | a rule result (fired or not), not a count | the readers read only the team ids a request names (no rule) |
 
 Asserted on real ClickHouse by `TestTestopsTeamSeriesHoldNoSupersededTeam` and `TestForecastListHoldsNoSupersededTeam`.
-The acr readers of `capacity_forecasts` and `recommendations_daily` are CHAOS-9022's.
+The acr readers of `capacity_forecasts` and `recommendations_daily` are the acr surface's own.
 
 Limits:
 
@@ -2257,7 +2190,7 @@ Limits:
   count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
   of zeros are equal.
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
-- `ic_landscape_rolling_30d` (ruling D5985): the team of a point's git half is the team that OWNS the repository of the
+- `ic_landscape_rolling_30d`: the team of a point's git half is the team that OWNS the repository of the
   person's row, never the person's membership and never a team id stored on the row. A person's 30-day git numbers in a
   team (churn, merged pull requests, cycle time) are the person's `user_metrics_daily` rows in the repositories the team owns (`teamownership.OwnersByRepo` as
   of the last millisecond of the day: the ownership rule of the query API's team groupings -- FINAL, the bitemporal
@@ -2269,7 +2202,7 @@ Limits:
   agnostic: a GitHub access grant, a GitLab group's project grant and a Jira or Linear team's project, each derived
   into repository ownership, give the same answer (tested per provider).
 - The work-item half of a landscape point (completed items in `delivery_units_30d`, `wip_max_30d`) takes the team of
-  the ITEMS (CHAOS-12535), for every provider: section 0.1's primary team (`is_primary = 1`, `unassigned` for an item
+  the ITEMS, for every provider: section 0.1's primary team (`is_primary = 1`, `unassigned` for an item
   with none), and each co-owner team of section 0.4d (`is_primary = 2`) takes the item WHOLE, as a co-owned repository
   row counts whole in each owner (the landscape is a team-grouped view; one item counts once in the organization).
   The work_item family stores, on each person's `work_item_user_metrics_daily` row, a team split (four parallel
@@ -2280,13 +2213,12 @@ Limits:
   before the split existed) is `unassigned`; a remainder of 0 gives no entry, so a person with work items and no
   count in the window has no work-item point. An item with no assignee (the person `unassigned`) stays on team
   `unassigned`, and counts once (its primary entry). Membership plays no part. The rollup tables keep the primary team only (the known limit above).
-- The cycle of a landscape point (`cycle_p50_30d_hours`, CHAOS-12562) is the median over the days of the window that
+- The cycle of a landscape point (`cycle_p50_30d_hours`) is the median over the days of the window that
   hold a cycle: a git row with a merged pull request (`delivery_units` less `work_items_completed` above 0). A day with
   no merged pull request has no cycle (its stored `cycle_p50_hours` 0 is not a cycle of 0 hours); a merged pull request
   of 0 hours is a cycle of 0 and counts. Work items give no cycle. A person with no such day has no 30-day cycle: the
   column is `Nullable(Float64)` and holds NULL, the person has no `cycle_throughput` point (the ranks of that map are
-  over the people with a cycle), and a mean over points leaves the person out. The whole-person report chart (ruling
-  D5986) reads the same days. Past days get the value when ic_finalize recomputes them (a roll step); a stored 0 of an
+  over the people with a cycle), and a mean over points leaves the person out. The whole-person report chart reads the same days. Past days get the value when ic_finalize recomputes them (a roll step); a stored 0 of an
   older day stays until then. Asserted on real ClickHouse by
   `TestTheLandscapeCycleReadsOnlyTheDaysWithAMergedPullRequest` (jira, gitlab, github, linear).
   Past days get the split when the work_item family recomputes them and the landscape when ic_finalize recomputes
@@ -2295,7 +2227,7 @@ Limits:
   - a stored point of a day the run does not compute keeps the team it was stored with until that day is computed
     again (a recompute of history is a separate decision);
   - a report chart of a person metric of the landscape (churn, delivery, cycle time, WIP, the raw axes) that is NOT
-    grouped by team counts each person once with the person's WHOLE value (ruling D5986): the person's live
+    grouped by team counts each person once with the person's WHOLE value: the person's live
     `user_metrics_daily` rows of the 30 days ending on the point's day, never a value rebuilt from the team rows (a
     shared repository is in two teams, and a median or a max does not add). The chart's own filter (organization,
     days, teams) only selects which people of which day are in it. A chart grouped by team reads the team values;
@@ -2305,7 +2237,7 @@ Limits:
   read, `LoadProviderMembers`, as of the day: `valid_from` at or before the day, and no `valid_to` or a later one),
   and only from ACTIVE teams. The row of the day holds ONE team: the first by the attribution's rank (primary, then
   specificity, priority, the newer row, the team id). A person with no membership valid at the day is `unassigned`,
-  id and name. The NAME of the row's team comes from the same read as its id (CHAOS-9134): the name of the newest
+  id and name. The NAME of the row's team comes from the same read as its id: the name of the newest
   membership fact of that team that has one, so the id and the name of one row never come from different teams (a
   team no fact names keeps its id as its name; the reference passed the stored name through, a declared narrow
   divergence). The team a STORED row holds is never a source: after the first run of a day the newest stored row is
@@ -2350,7 +2282,7 @@ Limits:
 - Between the last partition and the end of a run, a shared work scope can hold the rows of a partition whose read
   was older than another partition's attribution write. The end of the run replaces them. A run whose finalize does
   not complete leaves them until its retry or the next run of the day.
-- `work_item_cycle_times` (not team-keyed) is written by the partitions only. `work_item_user_metrics_daily` is settled at run scope (retraction marker, CHAOS-9135).
+- `work_item_cycle_times` (not team-keyed) is written by the partitions only. `work_item_user_metrics_daily` is settled at run scope (retraction marker).
 - Two runs of one day that are in progress at the same time each settle the day from the inputs stored when they end.
   When the inputs change between the two ends, the rows of the run that ended on the later version stay.
 - `team_metrics_daily`: a row of zeros has the `computed_at` of its batch. When another run wrote the superseded key
@@ -2358,7 +2290,7 @@ Limits:
 - The run-level step reads the items of every work scope of the run once more and writes their rows once more. Its
   cost is about one more read and write of the work-item families for each run.
 
-#### 0.4i A push batch: the team rows before the identities that name them (CHAOS-9125)
+#### 0.4i A push batch: the team rows before the identities that name them
 
 - **Order.** A push batch (`internal/streamhandlers`) writes its kinds in the order of the Python sink
   (`write_batch`): repository, commit, pull request, review, team, identity, the operational kinds in the order of
@@ -2377,33 +2309,33 @@ Limits:
 - **Not changed here.** What a reader makes of a team id with no team row (section 0.4c: the cascade keeps it
   as an unknown team).
 
-#### 0.4j The day whose facts give an item its team (CHAOS-9178)
+#### 0.4j The day whose facts give an item its team
 
 Ownership and membership rows are bitemporal (`valid_from`, `valid_to`). An item takes its team from the rows
 valid on **the item's day**, never from the rows valid when a job runs. Ownership starts when it was first
 known, and a later change of owner does not rewrite the items of earlier days.
 
-**Time rule of an inferred ownership row (CHAOS-9403):** the first snapshot of a claim back-dates its row to the
+**Time rule of an inferred ownership row:** the first snapshot of a claim back-dates its row to the
 claim's earliest evidence, and a change a later derive run observes (a new owner, a retraction, a claim that wins
 again, a change of main owner) starts and ends at that run, so a repository has one main owner at a time (§1.1).
 Only another ACTIVE team's tenure delays a start: an inactive team owns nothing for any reader (§0.4g rule 1).
 
-> **Superseded (chris, 2026-10-12 17:26Z, lead D5987, option C):** for a day before the first recorded ownership
+> **Superseded (2026-10-12):** for a day before the first recorded ownership
 > of a repository, the repository's FIRST recorded owners apply backward; the earlier rule ("an item of a day
-> before the first known ownership stays unassigned", chris 2026-10-10, D5922) no longer holds. The one rule is
-> `internal/ownershipwindow` (CHAOS-9404): the instant a reader tests an ownership row at is clamped up to the
+> before the first known ownership stays unassigned", 2026-10-10) no longer holds. The one rule is
+> `internal/ownershipwindow`: the instant a reader tests an ownership row at is clamped up to the
 > repository's first record, so the rows valid at the first record are the owners. It is rendered by the shared
 > readers (`OwnedRepoIDs`, `OwnersByRepo`, `OwnerSharesByRepo` and `AuthoritativeOwnersByRepo` of
 > `internal/teamownership`), by `internal/queryapi/teamscope` (`RepoCondition`, `OwnerShares`, `RepoShare`) and by the
-> work-item cascade `LoadRepos` (CHAOS-10517; it keeps the rows of an inactive team, the cascade drops them), which is the
-> only ownership read of `work_item_attribution` (the backstop and the daily family, at the item's day, CHAOS-10519), and by the
-> investment materialize donor set (`TeamRepoDonorSet.DonorsAt`, CHAOS-10518; the one-shot `FetchTeamRepoDonors` keeps the
+> work-item cascade `LoadRepos` (it keeps the rows of an inactive team, the cascade drops them), which is the
+> only ownership read of `work_item_attribution` (the backstop and the daily family, at the item's day), and by the
+> investment materialize donor set (`TeamRepoDonorSet.DonorsAt`; the one-shot `FetchTeamRepoDonors` keeps the
 > plain window and is tests-only). The
 > first record of a repository is the earliest `valid_from` of its rows of ACTIVE teams (an inactive team owns
 > nothing, section 0.4g rule 1, so it does not set it, in `teamscope` too); an instant at or after the first record
 > reads as before, and an instant in a gap between two records has no owner. Not yet applying it: the investment team
-> ownership read of `queryapi/analytics` (CHAOS-10520). The catalog writers
-> start a link at its evidence (CHAOS-10521, section 0.4b), the inferred derivation at its own (CHAOS-9403).
+> ownership read of `queryapi/analytics`. The catalog writers
+> start a link at its evidence (section 0.4b), the inferred derivation at its own.
 
 - **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
   `completed_at`), and the start of the current day for an item that is not completed. A done item with no
@@ -2430,7 +2362,7 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
   the work-items sync sink of every provider refuses the nine tables computed from stored work-item rows,
   `work_item_team_attributions` among them (`TestWorkItemSyncSinksRefuseEveryDailyJobTable`).
 - **The investment materialize job** reads no team ownership. Its former team-ownership fallback was removed
-  (CHAOS-12949); the ownership windows of this section still govern the team readers (`teamscope`,
+; the ownership windows of this section still govern the team readers (`teamscope`,
   `analytics/investmentownershipteam.go`), not the allocation of a unit to a repository.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
@@ -2442,7 +2374,7 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
 | github | ✓ `discover_github` | n/a (repo = scope) | ✓ `discover_members_github` | ✓ `team_repo_ownership` | edges **+ roster** (this CS) |
 | gitlab | ✓ `discover_gitlab` | ✓ (GitLab project paths) | ✓ `discover_members_gitlab` | — | edges **+ roster** (this CS) |
 
-**GitHub `provider_access` repo ownership is a snapshot, not an append (CHAOS-8944).** Each GitHub team catalog run
+**GitHub `provider_access` repo ownership is a snapshot, not an append.** Each GitHub team catalog run
 (`GitHubTeamCatalogClickHouseEffects.SnapshotTeamRepoOwnership`, `internal/providersync/github_team_catalog_effects_clickhouse.go`)
 writes the grants `GET /orgs/{org}/teams/{slug}/repos` returned and closes (writes the same sort key again with
 `valid_to` set) every open `team_repo_ownership` row that GitHub no longer returns. It goes through the one snapshot
@@ -2458,20 +2390,20 @@ rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). S
   did not select teams (members-only), closes nothing: "the measurement did not happen" is never read as "GitHub returned
   nothing". A team that is listed with an empty repo list is a real, complete answer, and its rows close.
 - a team that GitHub no longer lists (deleted, or hidden from the credential) is a DROPPED team: its open rows close
-  under the rule "A team that is no longer listed" below (CHAOS-9102).
+  under the rule "A team that is no longer listed" below.
 - a failed read of the open rows fails the run before the ownership write. It does not fail the run before every write: the
   catalog collector writes the team rows (and the other rows it selected) earlier in the same run, and only the
   `team_repo_ownership` write waits for the read.
 - a grant that is still returned keeps the `valid_from` of its earliest open row, so a repeat run replaces the row instead
   of adding one, and an older open duplicate of the same grant is closed.
 
-**GitLab `provider_access` project ownership is a snapshot, not an append (CHAOS-8952).** GitLab writes
+**GitLab `provider_access` project ownership is a snapshot, not an append.** GitLab writes
 `team_project_ownership` (`source = 'provider_access'`), not `team_repo_ownership`. Each GitLab team catalog run that
 selects projects (`GitLabTeamCatalogCollector.CollectTeamCatalog`, `internal/providersync/gitlab_team_catalog_route.go`)
 asks `GitLabTeamCatalogClickHouseEffects.SnapshotOwnership` for the rows of the ownership write: the grants the group
 `/projects` listings returned, plus a closing version (the same sort key written again with `valid_to` set) of every
 open row GitLab no longer returns. It is the same one rule as GitHub and Jira, `PlanOwnershipSnapshot` (the project id
-is the catalog id `{org}:gitlab:{native id}`, CHAOS-8883); only the open-row read and the listed-team set are GitLab's.
+is the catalog id `{org}:gitlab:{native id}`); only the open-row read and the listed-team set are GitLab's.
 The absence question for a catalog-keyed row asks GitLab by the numeric id (`GET /projects/:id`, a rename does not
 hide it): the project still in the group's namespace holds the row; another namespace, or GitLab's own
 `404 Project Not Found`, proves it gone; any other answer proves nothing. A row of the older path form is asked by
@@ -2483,7 +2415,7 @@ its path as before. Scope of a close, all of it required:
 - only the teams whose group `/projects` listing was read to a confirmed end in this run
   (`GitLabTeamCatalogRows.OwnershipListedTeamIDs`: the root group and every subgroup of the walk, less the close gate's
   exclusions below). A group that GitLab no longer lists (a deleted subgroup) is a DROPPED team: its open rows close
-  under the rule "A team that is no longer listed" below (CHAOS-9102). A group listed with no project is a
+  under the rule "A team that is no longer listed" below. A group listed with no project is a
   real, complete answer, and its rows close. A project held by a group and by its subgroup is closed only where the
   listing dropped it.
 - a failed listing closes nothing: under non-strict the whole walk is skipped (no write at all), under strict the run
@@ -2499,7 +2431,7 @@ Tests (real ClickHouse, seeded through the real writers and the collector): `Tes
 (in `gitlab_team_catalog_ownership_snapshot_integration_test.go`); the census `TestJiraOwnershipWriterCensus`
 names `SnapshotOwnership` and its planner `gitlabOwnershipSnapshot`.
 
-**The close gate, GitHub and GitLab alike (CHAOS-8952).** Every `provider_access` close goes through ONE gate,
+**The close gate, GitHub and GitLab alike.** Every `provider_access` close goes through ONE gate,
 `decideOwnershipClose` (`internal/providersync/ownership_close_gate.go`), before the snapshot is planned. A close runs only
 when both of these hold; otherwise that scope closes nothing (its grants are still written, on their first-seen
 `valid_from`), and the skip is loud: one WARN line `ownership_close_skipped` (org, provider, reasons, counts), a
@@ -2522,16 +2454,16 @@ when both of these hold; otherwise that scope closes nothing (its grants are sti
 - **No other integration of the provider in the org.** The rows carry no integration key, and two integrations'
   configured scopes cannot be compared safely (a subgroup of the other's group, a numeric group id, a trailing `/`, an
   escaped path, another case), so when the org has ANY other ACTIVE integration of the same provider, the run closes
-  nothing (reason `scope_shared`), whatever scope that integration names. A per-integration key on the rows is CHAOS-8990.
+  nothing (reason `scope_shared`), whatever scope that integration names. Known limitation: the rows carry no per-integration key.
   The census is `teamCatalogScopeCensus.CountActiveSiblingIntegrations` (`internal/workerservice/team_catalog_clients.go`):
   the count of the org's other active integrations whose provider matches without case or surrounding space. A failed
   census read (`scope_census_failed`), no census, or a run with no integration id (`scope_census_unavailable`: the
   `dho sync teams` CLI verb, whose collectors carry no census) closes nothing; the CLI shows only the WARN line.
 
-**A team that is no longer listed (CHAOS-9102).** The GitHub, GitLab and Linear catalog writers do not deactivate a team
+**A team that is no longer listed.** The GitHub, GitLab and Linear catalog writers do not deactivate a team
 the provider stops listing (only Atlassian Teams does, and its close of a deleted team's memberships and links is its own
 kind; the Jira catalog has no team of its own), so the team's `teams` row stays active and no reader's inactive-team rule
-hides it. Before CHAOS-9102 the gate read the open rows of the LISTED teams only, so the open ownership and membership
+hides it. Earlier the gate read the open rows of the LISTED teams only, so the open ownership and membership
 rows of such a team kept owning repositories, projects and members for ever. The gate now also takes the DROPPED teams of
 the close: the teams that hold an open row of the close's table, `provider` and `source` (GitHub ownership: under the run's
 `<github org>/` repository prefix; GitLab: under the run's root group, team ids starting `gl:<root>/`; memberships: the
@@ -2546,7 +2478,7 @@ GitLab the root group's subgroups, Linear the workspace's teams). A dropped team
    body GitHub documents), GitLab `GET /groups/:id` (the full path) answers its own 404 (`404 Group Not Found`). A
    listing read by page number or offset loses a team that still exists when another team is removed between two
    requests, so for a listing of more than one response the absence is a CANDIDATE until the provider answers. For a
-   cursor walk (Linear) the end of the walk is no proof either (CHAOS-9124): the team is a candidate until Linear's own
+   cursor walk (Linear) the end of the walk is no proof either: the team is a candidate until Linear's own
    answer (`teams(filter: {key: {eq: KEY}})`, an empty node list) says it is gone.
 A 200 (the listing lost the team: reason `team_absent_from_listing_still_there`), an answer for another slug or path (a
 renamed team), a 404 with another body (a gateway), a 401/403/429/5xx, a failed read and a candidate past the run's
@@ -2573,21 +2505,20 @@ ClickHouse).
 
 One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.)
 
-> **Three (legacy bridge) + three (native, CHAOS-4431/4434/4432) chains reach `team_autoimport_<provider>.
-> populate()` or bypass it entirely — status as of CHAOS-4431's base branch (`team-catalog-native-dispatch`,
-> stacked PRs #1989/#1984/#1985, NOT YET MERGED — main is under deploy-freeze).**
+> **Three (legacy bridge) + three (native) chains reach `team_autoimport_<provider>.
+> populate()` or bypass it entirely.**
 >
 > The first two rows name `src/dev_health_ops/api/internal/worker_sync.py`, which was removed with the Python api.
 >
 > | Producer | Chain | Honours the 3 flags? | Providers |
 > |---|---|---|---|
 > | Go post-sync River job → HTTP bridge → Python `populate()` | `internal/syncdispatchruntime/worker.go:93` (`RegisterTeamAutoimportWorker`, the one bounded-registry River kind this runtime hosts) → `internal/syncdispatchruntime/bridge.go:113` (`POST /api/internal/worker-sync/team-autoimport`) → `src/dev_health_ops/api/internal/worker_sync.py:269-278` (removed with the Python api) (`team_autoimport_reference`) → `workers/team_autoimport.py:228` (`run_post_sync_team_autoimport`) → `team_autoimport_<provider>.populate()` (file:line above) | **Yes** — reads `sync_options`' three independent booleans | jira always; github/gitlab/linear only when their native collector degrades (resolver/collector error, or no registered native collector) — see `teamCatalogAutoimportBridge` below |
-> | Go reference-discovery River job → HTTP bridge → `run_team_autoimport_strict` | `internal/syncdispatchruntime/worker.go:83` (`referenceDiscoveryWorker`, registered unconditionally, unlike the gated team-autoimport kind above) → `internal/syncdispatchruntime/bridge.go:137` (`POST /api/internal/worker-sync/reference-discovery-populate`) → `src/dev_health_ops/api/internal/worker_sync.py:287` (removed with the Python api) (`reference_discovery_populate_reference`) → `workers/reference_discovery.py:226,217` (`run_reference_discovery_populate_for_sync_run` calling `run_team_autoimport_strict`) → `team_autoimport_<provider>.populate()` | **Yes, as of CHAOS-4437** — `run_team_autoimport_strict` now threads `import_categories` from the canonical `SyncConfiguration.sync_options` the same way the post-sync path does (`workers/team_autoimport_categories.py`'s module docstring). Dispatch-blocking sprint/cycle discovery (Jira, Linear) stays unconditional regardless of category selection — dispatch itself only checks the `SyncRunReferenceDiscovery.status` column, never CH team/sprint rows directly, so gating the team/project/member WRITE is safe. Also used by backfill. | jira always; github/gitlab/linear only when their native collector degrades, same fallback as above |
-> | Linear Go-native route — `internal/providersync` (CHAOS-4431, PR #1989) | `LinearTeamCatalogCollector` behind the SAME claim-free `TeamCatalogCollector` seam as github/gitlab below (`TeamCatalogDiscoveryExecutor` for reference-discovery, `teamCatalogAutoimportBridge` for post-sync) → `LinearReferenceCatalogRouteHandler.CollectReferenceCatalog` (GraphQL walk: teams, members, projects, cycles/sprints) → `LinearReferenceCatalogClickHouseEffects`, `source='native'` | **Yes**, plus the CHAOS-4444 drift-review engine (`team_drift_review.go`/`identity_drift_review.go`, shared by all three native routes): every observed team ALWAYS records a `team_provider_observations` row; `applyTeamSyncPolicyGuard` excludes a non-auto-apply-`sync_policy` team from the write and (policy 1 only — policy 2 stages nothing) diffs it against the persisted row, staging/superseding/resolving `team_drift_changes` rows; `applyTeamMembershipConflictGuard` excludes a membership conflicting with an active manual membership/fallback to a different team AND stages the conflict as an identity `team_drift_changes` row, resolving/superseding stale pending rows for members no longer observed. Sprints/cycles stay unconditional, same rule as the bridge row above. | linear, when its native collector is reached (built + unit-tested on `team-catalog-native-dispatch`; **not yet merged to main** — main deploy-frozen) |
-> | GitHub Go-native route — `internal/providersync` (CHAOS-4434, PR #1984, stacked on #1989) | native via #1984 (`TeamCatalogCollector`, both guards — sync_policy + membership-conflict, same shapes as Linear's, both now backed by the CHAOS-4444 staged-review engine — plus `team_repo_ownership` via `provider_access`) | **Yes**, same staged-review behavior as Linear | github, when its native collector is reached (stacked on the shared base, **not yet merged to main**) |
-> | GitLab Go-native route — `internal/providersync` (CHAOS-4432, PR #1985, stacked on #1989) | `GitLabTeamCatalogCollector` (registered `Native["gitlab"]` + `case "gitlab":` in `ResolveClient`, same shape as Linear/GitHub) walks root/subgroups/per-group-projects/native-projects in `discover_gitlab`'s ONE unified walk → writes `teams`/`team_project_ownership`/`team_memberships` (`source='provider_access'`) + native `projects`, same tables Linear's native route uses. `applyGitLabTeamSyncPolicyGuard`/`gitlabMembershipConflictsWithManualState` mirror Linear's corrected any-other-team-differs guards, both backed by the CHAOS-4444 staged-review engine. **Non-strict walk failure ≠ Linear's partial-prefix preservation**: Python's `_populate_async` has no inner per-stage catch (`team_discovery.py:225-278`), so a non-strict failure anywhere in the walk returns a clean `TeamCatalogResult{Skipped: true, SkipReason: "<stage>_fetch_failed"}` -- no writes, no partial rows -- reported as `TeamCatalogOutcomeSkipped`, never a silent zero-row "native" success. Strict re-raises unchanged. | **Yes** | gitlab, when its native collector is reached (stacked on the shared base, **not yet merged to main**) |
+> | Go reference-discovery River job → HTTP bridge → `run_team_autoimport_strict` | `internal/syncdispatchruntime/worker.go:83` (`referenceDiscoveryWorker`, registered unconditionally, unlike the gated team-autoimport kind above) → `internal/syncdispatchruntime/bridge.go:137` (`POST /api/internal/worker-sync/reference-discovery-populate`) → `src/dev_health_ops/api/internal/worker_sync.py:287` (removed with the Python api) (`reference_discovery_populate_reference`) → `workers/reference_discovery.py:226,217` (`run_reference_discovery_populate_for_sync_run` calling `run_team_autoimport_strict`) → `team_autoimport_<provider>.populate()` | **Yes** — `run_team_autoimport_strict` now threads `import_categories` from the canonical `SyncConfiguration.sync_options` the same way the post-sync path does (`workers/team_autoimport_categories.py`'s module docstring). Dispatch-blocking sprint/cycle discovery (Jira, Linear) stays unconditional regardless of category selection — dispatch itself only checks the `SyncRunReferenceDiscovery.status` column, never CH team/sprint rows directly, so gating the team/project/member WRITE is safe. Also used by backfill. | jira always; github/gitlab/linear only when their native collector degrades, same fallback as above |
+> | Linear Go-native route — `internal/providersync` | `LinearTeamCatalogCollector` behind the SAME claim-free `TeamCatalogCollector` seam as github/gitlab below (`TeamCatalogDiscoveryExecutor` for reference-discovery, `teamCatalogAutoimportBridge` for post-sync) → `LinearReferenceCatalogRouteHandler.CollectReferenceCatalog` (GraphQL walk: teams, members, projects, cycles/sprints) → `LinearReferenceCatalogClickHouseEffects`, `source='native'` | **Yes**, plus the drift-review engine (`team_drift_review.go`/`identity_drift_review.go`, shared by all three native routes): every observed team ALWAYS records a `team_provider_observations` row; `applyTeamSyncPolicyGuard` excludes a non-auto-apply-`sync_policy` team from the write and (policy 1 only — policy 2 stages nothing) diffs it against the persisted row, staging/superseding/resolving `team_drift_changes` rows; `applyTeamMembershipConflictGuard` excludes a membership conflicting with an active manual membership/fallback to a different team AND stages the conflict as an identity `team_drift_changes` row, resolving/superseding stale pending rows for members no longer observed. Sprints/cycles stay unconditional, same rule as the bridge row above. | linear, when its native collector is reached |
+> | GitHub Go-native route — `internal/providersync` | native (`TeamCatalogCollector`, both guards — sync_policy + membership-conflict, same shapes as Linear's, both now backed by the staged-review engine — plus `team_repo_ownership` via `provider_access`) | **Yes**, same staged-review behavior as Linear | github, when its native collector is reached |
+> | GitLab Go-native route — `internal/providersync` | `GitLabTeamCatalogCollector` (registered `Native["gitlab"]` + `case "gitlab":` in `ResolveClient`, same shape as Linear/GitHub) walks root/subgroups/per-group-projects/native-projects in `discover_gitlab`'s ONE unified walk → writes `teams`/`team_project_ownership`/`team_memberships` (`source='provider_access'`) + native `projects`, same tables Linear's native route uses. `applyGitLabTeamSyncPolicyGuard`/`gitlabMembershipConflictsWithManualState` mirror Linear's corrected any-other-team-differs guards, both backed by the staged-review engine. **Non-strict walk failure ≠ Linear's partial-prefix preservation**: Python's `_populate_async` has no inner per-stage catch (`team_discovery.py:225-278`), so a non-strict failure anywhere in the walk returns a clean `TeamCatalogResult{Skipped: true, SkipReason: "<stage>_fetch_failed"}` -- no writes, no partial rows -- reported as `TeamCatalogOutcomeSkipped`, never a silent zero-row "native" success. Strict re-raises unchanged. | **Yes** | gitlab, when its native collector is reached |
 >
-> **CHAOS-4444 (this ticket) closed the drift-review parity gap** the three rows above used to describe as "interim fail-safe guards ahead of the CHAOS-2622/CHAOS-4444 drift-aware projector" — that projector is now ported (`team_drift_review.go`, `identity_drift_review.go`), shared by all three native collectors via the same guard wrapper seam, canonical-JSON-encoding and change-id-hashing byte-parity with `clickhouse_team_drift_projector.py`/`clickhouse_identity_drift.py` proven by 4 live-python-oracle pairs (`team-catalog/drift/*`, `identity-drift/review/*`). Not yet ported: `resolve_missing_provider_changes` (no native call site ever passes it `True`, confirmed by reading every `team_autoimport_<provider>.py` call site — genuinely out of scope, not a gap).
+> **Drift-review parity:** the three rows above use the drift-aware projector, ported (`team_drift_review.go`, `identity_drift_review.go`), shared by all three native collectors via the same guard wrapper seam, canonical-JSON-encoding and change-id-hashing byte-parity with `clickhouse_team_drift_projector.py`/`clickhouse_identity_drift.py` proven by 4 live-python-oracle pairs (`team-catalog/drift/*`, `identity-drift/review/*`). Not yet ported: `resolve_missing_provider_changes` (no native call site ever passes it `True`, confirmed by reading every `team_autoimport_<provider>.py` call site — genuinely out of scope, not a gap).
 >
 > ```mermaid
 > flowchart LR
@@ -2595,12 +2526,12 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 >         PS["Go post-sync River job"] -->|"HTTP"| PYPOP["team_autoimport_&lt;provider&gt;.populate()"]
 >         RD["Go reference-discovery River job"] -->|"HTTP"| PYPOP
 >     end
->     subgraph native["Native (CHAOS-4431/4434/4432, stacked, unmerged)"]
+>     subgraph native["Native"]
 >         TCDE["TeamCatalogDiscoveryExecutor<br/>(reference-discovery)"] --> COLL{"registered native<br/>collector?"}
 >         TCAB["teamCatalogAutoimportBridge<br/>(post-sync)"] --> COLL
->         COLL -->|"linear"| LTCC["LinearTeamCatalogCollector (#1989)"]
->         COLL -->|"github"| GTCC["GitHub collector (#1984)"]
->         COLL -->|"gitlab"| GLTCC["GitLab collector (#1985)"]
+>         COLL -->|"linear"| LTCC["LinearTeamCatalogCollector"]
+>         COLL -->|"github"| GTCC["GitHub collector"]
+>         COLL -->|"gitlab"| GLTCC["GitLab collector"]
 >         COLL -->|"no / degraded"| PYPOP
 >         LTCC --> GUARDS1["sync_policy + membership-conflict guards"] --> CH[("ClickHouse: teams,<br/>team_memberships,<br/>team_project_ownership,<br/>members, projects, sprints")]
 >         GTCC --> GUARDS2["sync_policy + membership-conflict guards<br/>+ team_repo_ownership"] --> CH
@@ -2609,16 +2540,16 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 >     PYPOP -.->|"source='native' rows stop<br/>once a provider's bridge<br/>fallback never fires"| CH
 > ```
 >
-> **CHAOS-4323 (`alembic/versions/0112_split_auto_import_teams_into_three_categories.py`)** replaced
+> **`alembic/versions/0112_split_auto_import_teams_into_three_categories.py`** replaced
 > the single "Auto-import teams, projects & members" checkbox with three independently-selectable
 > `sync_options` keys (`auto_import_teams`/`auto_import_projects`/`auto_import_members`, each off by
-> default). As of CHAOS-4437 both chains that reach `populate()` honour that selection for the
+> default). Both chains that reach `populate()` honour that selection for the
 > WRITE side (teams/team_memberships/team_project_ownership rows); only the always-on reference-data
 > paths (Jira/Linear sprint and cycle discovery) run unconditionally, because dispatch depends on
 > the `SyncRunReferenceDiscovery` ledger status, never on those CH rows existing. See the Manual QA
 > walkthrough in §4 for the sync-config UI path.
 >
-> **The switches stay independent, and a link needs an imported team (chris 2026-10-14, CHAOS-9123).**
+> **The switches stay independent, and a link needs an imported team.**
 > A run with members or projects on and teams off writes a `team_memberships` or `team_project_ownership`
 > row only for a team that already has a `teams` row (in any version: an inactive or deleted team was
 > imported); a team the same run writes (teams on) counts too. The open link rows of a team that was never
@@ -2628,8 +2559,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > with counts. The `jira_legacy` ops-team ownership rows are exempt: they name `jira:<ops team id>` (the ops-team
 > links row of "Team ids"), an id no writer of `teams` holds by design.
 >
-> **A fourth, architecturally SEPARATE `team_repo_ownership` producer (CHAOS-4365 item 1b,
-> implemented): the sync-derived `inferred` row, never routed through `team_autoimport_<provider>.populate()`
+> **A fourth, architecturally SEPARATE `team_repo_ownership` producer: the sync-derived `inferred` row, never routed through `team_autoimport_<provider>.populate()`
 > at all.** Triggered as a sibling writer in `NativePostSyncService.Fanout`
 > (`internal/syncdispatchruntime/native_post_sync.go`'s `publishTeamRepoOwnershipDerivation`,
 > pattern = `publishTeamAutoimport` just above), publishing a new bounded-registry River kind
@@ -2640,31 +2570,27 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > fetch, fires on every sync (see §1.1's diagram for the resolution logic). Unlike every row in the
 > table above, this producer never calls `populate()` and is not gated by the three `sync_options`
 > flags: it derives from already-synced `team_project_ownership` (however THAT got populated -- any
-> row of the table above, or the Linear-native route, ACTIVE since CHAOS-4431, §1.1) joined against `work_items`/
+> row of the table above, or the Linear-native route, §1.1) joined against `work_items`/
 > `work_item_dependencies`/`work_graph_issue_pr`, so it runs for every provider combination, not just
-> GitHub. It also carries no prerequisite completion key against those OTHER producers (team-lead
-> ruling, codex adversarial-review finding #4, 2026-08-28): a brand-new org's first qualifying sync
+> GitHub. It also carries no prerequisite completion key against those OTHER producers (2026-08-28): a brand-new org's first qualifying sync
 > can run this producer before team-autoimport's async Python bridge or the workgraph builder have
 > landed their own writes, observed as the `inputs_not_ready` telemetry outcome rather than an
 > error -- it converges on that org's next qualifying sync, since this producer is idempotent and
 > re-triggered by every sync with git-or-work-items data.
 >
-> **Deploy 5.5 ordering (team-lead ruling, 2026-08-28, "non-fatal != silent"):** this producer's
+> **Deploy ordering:** this producer's
 > `worker_job_routes` route row (alembic migration seeding `sync.team_repo_ownership_derivation`,
 > river/unconditional/no Celery rollback) must land in Postgres BEFORE or WITH the worker image that
 > carries this code -- if the worker image ships first, every publish attempt hits a deterministic
 > outbox rejection (`publish_not_permitted_for_route`) that `publishTeamRepoOwnershipDerivation`
-> swallows by design (non-fatal, same as team-autoimport, CHAOS-3946), so the fanout's OTHER
-> handoffs keep succeeding while this one silently never queues. Confirmed live on the local compose
-> stack, 2026-08-28: the worker image was rebuilt and running before the Postgres migration had been
-> applied, and this exact rejection fired on the very next fanout cycle. "Non-fatal" was never meant
-> to mean "silent," so the swallow now also records the `route_missing` telemetry outcome (ERROR-level
+> swallows by design (non-fatal, same as team-autoimport), so the fanout's OTHER
+> handoffs keep succeeding while this one silently never queues. "Non-fatal" does not mean "silent": the swallow also records the `route_missing` telemetry outcome (ERROR-level
 > slog too) -- but the deploy-ordering requirement itself does not go away: land the migration
 > first or with the image, every time.
 
-**Two member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). (A third, the mixed-provenance roster column `teams.members`, is removed under CHAOS-9087: no reader, no writer.) `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
+**Two member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is the PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the callout under "Why this exists"). (A third, the mixed-provenance roster column `teams.members`, is removed: no reader, no writer.) `teams.manual_members` (roster) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred.
 
-> **Identity must match what the assignee path produces — UNDER THE ORG ALIAS MAP (CHAOS-2609).**
+> **Identity must match what the assignee path produces — UNDER THE ORG ALIAS MAP.**
 > Both consumers key on the *resolver-consumed* identity. Auto-import resolves each member through the
 > **same** `IdentityResolver` the assignee path uses — `load_identity_resolver()` (the global
 > `identity_mapping.yaml` / `IDENTITY_MAPPING_PATH`) — via `IdentityResolver.membership_facets`, so an
@@ -2677,8 +2603,8 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > persisted to the `team_memberships.identity_facets` `Array(String)` column (migration **060**); the
 > loader `argMax`-reads it and fans **every** facet into the ladder's `member_by_identity` (alongside
 > the legacy `raw_provider_user_id` = `facets[0]` + `raw_email` slots), **and** writes them to the
-> provider team roster (`TeamResolver`; the `teams.members` column was removed, CHAOS-9087). This closes the deferred
-> **email-alias-distinct-canonical** edge (**CHAOS-2625**): when an org maps a member's provider id and
+> provider team roster (`TeamResolver`; the `teams.members` column was removed). This closes the deferred
+> **email-alias-distinct-canonical** edge: when an org maps a member's provider id and
 > email to *different* canonicals (`github:lead` → canonicalA, `personal@…` → canonicalB), an assignee
 > resolving to canonicalB now hits the canonical ladder directly with `assignee_membership` provenance
 > instead of the weaker roster fallback. The `member_id` **primary** keeps its `gh:`/`gl:`/`jira:<id>`
@@ -2704,9 +2630,9 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   work-scope/repo/type bridges, and unassigned/no-WITA detail rows, but not the
   owning team identity.
   The Investment team **scope** and the investment-path sankey `teamCoverage` are the exception:
-  they read repository ownership (CHAOS-9221, CHAOS-9266), not this snapshot. The non-investment coverage path
+  they read repository ownership, not this snapshot. The non-investment coverage path
   (`useInvestment` unset or false) counts `work_item_completion_daily.team_id`.
-- **Which edges linked-issue inheritance considers (CHAOS-4112):** the donor
+- **Which edges linked-issue inheritance considers:** the donor
   preload in `metrics/job_work_items.py` unions the **stored** inheritable
   edges for the items being recomputed with this run's **fresh** ones. Fresh
   edges remain authoritative for their own
@@ -2743,17 +2669,17 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   item that loses its LAST edge of a given kind emits no fresh edge of that
   kind and its stored one keeps donating until another appears. Closing that
   needs a sync-layer "this extractor ran and found nothing" marker (an
-  empty-snapshot tombstone), tracked in **CHAOS-4129**. The residual errs
+  empty-snapshot tombstone), a known limitation. The residual errs
   toward *preserving* a team — the opposite failure direction from the decay
   this fix removes.
   A teamed → `unassigned` transition across recomputes is counted by
   `devhealth_work_item_team_attribution_downgrades_total` and logged at WARN
   — it is always a bug, never a precedence change.
-- **Cross-provider donor edges (CHAOS-3978):** the same union now exists in the
+- **Cross-provider donor edges:** the same union now exists in the
   Go work-item writer (`internal/providersync`), which had never read
-  `work_item_dependencies` at all — original design (#921), not a regression.
+  `work_item_dependencies` at all — original design, not a regression.
   Per-provider fresh-edges-only was sound *within* a provider and wrong across
-  providers: `ghpr:…#1794 --relates_to--> linear:CHAOS-3914`
+  providers: `ghpr:…#1794 --relates_to--> linear:ENG-3914`
   (`relationship_type_raw = linear_attachment`) is minted **exclusively by the
   Linear sync** from a Linear attachment, and the GitHub writer never mints a
   `linear:` target, so the edge was structurally invisible to the side that
@@ -2769,13 +2695,13 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   That key shape is pinned by test on BOTH sides
   (the sync-time loader test is removed with the loader; `tests/metrics/test_cross_provider_donor_edges.py` is removed with the Python api): both runtimes write
   `work_item_team_attributions` for the same items, so a divergence in it
-  would undo CHAOS-4112 from whichever side drifted.
+  would silently change attribution from whichever side drifted.
   **Failure policy differs from Python deliberately:** the Go read retries once
   and then FAILS THE UNIT (D17). Degrading would re-stamp `unassigned` over
   correct rows with nothing in the row saying the run was blind; Python's
   degrade-and-continue at the equivalent site is catalogued as a
-  silent-degradation defect (CHAOS-4150), not a precedent.
-  **The sync unit no longer runs this derivation (CHAOS-8811).** A work-items
+  silent-degradation defect, not a precedent.
+  **The sync unit no longer runs this derivation.** A work-items
   sync unit writes raw rows only. It writes no `work_item_team_attributions`
   row, and each provider's sync sink refuses one. The daily family
   `work_item_attribution` (`internal/jobs/metrics/daily`) is the one writer of
@@ -2786,7 +2712,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   `watermark_held_for_derived_gap`. A unit logs
   `providersync.work_items.derived_tables_left_to_daily_job` and counts
   `dev_health_work_item_derived_tables_left_to_daily_job_total{provider}`.
-- **Which evidence refs bridge a work unit to a team (CHAOS-2416):** the
+- **Which evidence refs bridge a work unit to a team:** the
   Investment `unit_team` resolution reads **both** the `issues` **and** the
   `prs` arrays of `work_unit_investments.structural_evidence_json`. A `prs`
   entry is a work-graph node id (`{repo_uuid}#pr{number}`, minted by
@@ -2798,7 +2724,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   resolves to more than one provider fails closed and bridges nothing, since
   electing one by `argMax` could attach the other provider's team; that guard
   only covers the window before the two `repos` rows merge, and making the id
-  seed provider-aware is tracked in **CHAOS-4122**. This adds no attribution
+  seed provider-aware is a known limitation. This adds no attribution
   logic of its own — it reuses the team the resolver already computed for the
   PR/MR work item, with that resolver's precedence and provenance — so a unit
   whose PR has no primary attribution row still resolves `unassigned`. Before
@@ -2808,7 +2734,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   The CTE has exactly one definition —
   `api/queries/investment.py:build_unit_team_subquery` — rendered by the five
   investment fetchers, `fetch_investment_quality_stats`' team-scope join and the
-  GraphQL Sankey compiler (the analytics coverage resolver left it in CHAOS-9266
+  GraphQL Sankey compiler (the analytics coverage resolver does not use it
   and reads repository ownership); it was
   previously copy-pasted into all eight, where a partial edit made the views
   disagree about which units have a team. Person cohort selection reads ClickHouse `identities`
@@ -2819,9 +2745,8 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   and members from an integration → `run_team_autoimport`, writing ClickHouse directly); manual
   fallback is the separate explicit-override option. Because jira/github/gitlab work items carry
   `native_team_key = None` (only Linear sets it real), non-Linear attribution depends *entirely* on
-  this dimension — so its coverage cells are the highest-risk. (CHAOS-2600 does not change these
-  sync ops; CS5 removes only the Postgres bridge.)
-- **Open gaps → CLOSED by CHAOS-2609 (CS-COV):** the dimension's test holes are now asserted —
+  this dimension — so its coverage cells are the highest-risk. 
+- **Test coverage:** the dimension's test holes are asserted —
   gitlab/members (was normalized but never asserted), gitlab epics (`gitlab_epic_to_work_item`), jira
   team/member coverage (403-skip + member de-dupe), linear **and** jira native `ProjectRecord` fields
   (linear native projects ARE ingested via `team.associations.project_keys` — the prior "not ingested"
@@ -2831,7 +2756,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   resolves to its team via both the canonical ladder and the roster — previously the roster stored a
   bare login the resolver never matched, so member attribution silently missed for no-email
   github/gitlab/jira assignees. The matrix above is the source of truth for what is/ isn't proven.
-- **Email-alias-distinct-canonical edge → CLOSED by CHAOS-2625:** the canonical ladder now indexes
+- **Email-alias-distinct-canonical edge:** the canonical ladder now indexes
   *every* facet a member resolves to via the `team_memberships.identity_facets` `Array(String)` column
   (migration 060) + loader fan-out, so a member mapped to *two different* canonicals (provider id →
   canonicalA, email → canonicalB) attributes via the ladder on **either** canonical — previously only
@@ -2840,19 +2765,13 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   ladder hit) + the provider×entity writer assertions in
   `tests/workers/test_team_autoimport_{github_gitlab,jira,linear}.py`.
 
-### 0.5 Drift-review reconciliation (CHAOS-2622) — rebuilt on ClickHouse
+### 0.5 Drift-review reconciliation (on ClickHouse)
 
-The CHAOS-2600 migration dropped the Postgres-backed **drift-review** surface as collateral: the
-admin workflow that detects when provider discovery disagrees with the curated/manual config and
-lets an admin approve or dismiss each change. It was built on Postgres `TeamMapping` columns
-(`flagged_changes` / `sync_policy` / `managed_fields`) + `TeamDriftSyncService`, all deleted in CS6,
-leaving the four admin endpoints as HTTP 501 stubs. **CHAOS-2622 rebuilds it natively on ClickHouse
-— the four endpoints and the web `PendingChangesPanel` are NOT deleted.** (The earlier "removed in
-CS7 with the web caller — CHAOS-2608" intent is superseded; CHAOS-2608 is an unrelated Done web
-ticket that never touched these endpoints.)
+Drift review is the admin workflow that detects when provider discovery disagrees with the curated/manual config and
+lets an admin approve or dismiss each change. It runs natively on ClickHouse; the four admin endpoints and the web
+`PendingChangesPanel` serve it.
 
-**Provider-observed vs curated split.** A faithful rebuild re-separates the two layers that Postgres
-held in `TeamMapping` and that the CH `teams` `ReplacingMergeTree` collapsed into a single curated
+**Provider-observed vs curated split.** Two layers are kept apart: provider-observed state and curated state. The CH `teams` `ReplacingMergeTree` holds a single curated
 row. Three sidecar `ReplacingMergeTree` tables hold the review state, while `teams FINAL` stays the
 resolved catalog every reader (§0.1–0.2) keeps using:
 
@@ -2868,7 +2787,7 @@ existing orgs see **no behavior change** — discovery writes straight to `teams
 `repo_patterns`) into the pending lane instead of clobbering the catalog. Provider membership
 imports also gate attribution-impacting `team_memberships` rows when they conflict with a manual
 membership or `manual_attribution_fallbacks(scope_type='member')`; the
-`teams.manual_members` (CHAOS-4321) roster is then updated surgically on approval (the `teams.members` roster is gone, CHAOS-9087; a staged change for the retired field `members` is superseded). `policy 2` is
+`teams.manual_members` roster is then updated surgically on approval (the `teams.members` roster is gone; a staged change for the retired field `members` is superseded). `policy 2` is
 manual/none. `status` / `change_type` are
 low-cardinality strings, not `Enum8`, to avoid enum-widening migration ordering before new values
 can be emitted.
@@ -2901,90 +2820,30 @@ the change `approved`, dismiss marks it `dismissed` (catalog unchanged). `POST
 had no consumer since the task itself was deleted as dead code. The web side adds `FlaggedChange.change_id`
 and sends `change_ids`. All three tables join the org-deletion purge path.
 
-> **Identities/members slice (implemented by CHAOS-2656).** Member/identity drift +
+> **Identities/members slice.** Member/identity drift +
 > `manual_attribution_fallbacks(scope_type='member')` reconciliation reuses `team_drift_changes` via
 > `entity_type='identity'`, `change_type='membership_changed'`, and `field ∈ {'team_memberships',
 > 'manual_attribution_fallbacks.member'}`. Provider auto-import gates the `team_memberships`
 > attribution dimension before write-through whenever the
 > provider row would replace a manual membership or member fallback. Approving inserts the provider
 > membership, expires the conflicting manual row/fallback, and adds the incoming member facets to
-> `teams.manual_members` (CHAOS-4321, via
+> `teams.manual_members` (via
 > `ClickHouseTeamAdminService.add_members` — see below); dismissing leaves both the catalog and
 > attribution dimensions unchanged.
 >
-> **CHAOS-4321 cross-reference.** `team_memberships` is the PROVIDER (fallback) attribution layer as
-> of this ticket (see the CHAOS-4321 callout in "Why this exists" above and §0.2 rows 4/6) — read
+> **Cross-reference.** `team_memberships` is the PROVIDER (fallback) attribution layer (see the callout in "Why this exists" above and §0.2 rows 4/6) — read
 > only when an identity has no ADMIN mapping (`identities`/`teams.manual_members`) at all. Approving a
 > pending identity change here inserts the provider's row into `team_memberships` under ITS OWN
 > auto-import `source` (`provider_access`/`native`/`jira_legacy`) — it does not relabel the row
 > `manual` and does not touch `identities.team_ids`. **This is one of the two genuinely
 > admin-exclusive writers of `teams.manual_members`** (the admin Identities screen is the other;
 > `/org/admin/teams` itself has no member-editing endpoint at all — confirmed by tracing every write
-> site during CHAOS-4321): `apply_identity_membership_change` calls
-> `team_admin.add_members`/`remove_members` directly, which now writes `teams.manual_members` (not
-> just `teams.members`) as of CHAOS-4321. So approving a drift change here DOES mint an admin
+> site): `apply_identity_membership_change` calls
+> `team_admin.add_members`/`remove_members` directly, which writes `teams.manual_members`. So approving a drift change here DOES mint an admin
 > (override) mapping — a human clicking "approve" is itself the admin action that earns override
-> status, even though the underlying data originated from provider auto-import. (Before CHAOS-4321's
-> provenance fix, this was NOT true: `add_members` wrote only `teams.members`, and this section
-> claimed approval could "never mint an admin mapping" — that claim is now stale and corrected here.)
+> status, even though the underlying data originated from provider auto-import.
 
-### 0.6 Current execution transport (Go worker cutover) — added at restoration
-
-> **Added 2026-08-19 (CHAOS-3968).** Everything above predates a Celery-to-Go worker migration.
-> This section states what changed in *how the computation is invoked*; it does not change what §0.1
-> and §0.2 say about *how a team is resolved* — that logic has not moved.
-
-**Python was the source of truth for the attribution computation when this section was first
-written (2026-08-19); that has since changed for GitHub/GitLab/Jira/Linear work items.**
-`resolve_team_attribution` / `compute_work_item_team_attributions` /
-`write_work_item_team_attributions` remain the ORACLE — Python is still authoritative for the
-precedence ladder's *correctness* (the Go port below is verified against it, not the other way
-around) — but a full independent Go REIMPLEMENTATION now exists:
-`internal/teamattribution`'s `NewGitHubWorkItemDerivationContext`, shared across
-GitHub/GitLab/Jira/Linear (the sync-time loader and writer in providersync were deleted; the daily job is the one writer), with a
-row-vs-row compute-parity oracle (`internal/testsupport/oraclecompare`,
-`github_work_items_derivation_context_oracle_test.go`, run via `ci/check_go.sh live-python-oracles`
-or `fast`/`ci`/`all` — see `ops/.claude/skills/go-checks/SKILL.md`). Any change to the precedence
-ladder or its source tables — CHAOS-4321 included — must land in BOTH `compute_work_items.py` and
-`internal/teamattribution` in the same PR, or the oracle gate fails: confirmed
-directly during CHAOS-4321, where an interim Go-only change (a telemetry evidence string, then a
-`team_memberships`-vs-`identities`/`teams` query mismatch) failed dozens of oracle cases under
-`ci/check_go.sh fast` while plain `go test` stayed green — see AGENTS.md "Anything
-cross-implementation needs a differential oracle."
-
-What moved is dispatch. The daily chain is now:
-
-```text
-metrics.daily_dispatch (Go, go_default/river)
-  → Go orchestrates run and partition state (internal/jobs/metrics/daily)
-  → HTTP compatibility bridge: POST /internal/worker/daily-metrics/v1/execute
-    (internal/workerservice/daily.go:97, daily.NewHTTPCompatibilityExecutor)
-  → Python compute_work_item_team_attributions / write_work_item_team_attributions
-```
-
-`HTTPCompatibilityExecutor` (removed with the Python api) was a thin, fixed
-bridge: it posted `{operation, run_id, partition_id}` to one hardcoded internal path and treated
-anything other than an HTTP 2xx with `{"status": "success"|"skipped"}` as a failure. It carried no
-executable, command, or credential — the server side decided which reviewed Python computation ran.
-
-> **Deleted 2026-09-07 (CHAOS-3092, PR-A).** The chain above no longer exists in any form:
-> `compatibility_http.go`, the `daily.CompatibilityExecutor` interface, `NewHTTPCompatibilityExecutor`,
-> the `ComputePartition` call in `PartitionHandler.Work`, and the Python route
-> `POST /internal/worker/daily-metrics/v1/execute` are all removed. `daily.NewPartitionHandler` no
-> longer takes a compatibility executor at all. Read §0.7 below for the current state; everything in
-> §0.6 is retained only as the record of how it used to work.
-
-**`internal/jobs/metrics/daily/families.json` is a planning document, not executable config.**
-It lists `work_item_attribution` with `"port": "pending"`, which reads as if the attribution family
-still runs the old way and Go dispatch has not picked it up. That is not what `port` tracks, and the
-file is not even wired into the running binary: grep confirms `internal/jobs/metrics/daily/families.json`
-is read only by its own test (`internal/jobs/metrics/daily/families_test.go`); the only production
-`//go:embed families.json` in this tree is in `internal/jobs/metrics/remaining/families.go`, and it
-embeds a *different* file (`internal/jobs/metrics/remaining/families.json`, a different job family
-list entirely). Do not treat `daily/families.json`'s `port` field as evidence of what actually runs —
-the compatibility-bridge chain above is verified in `internal/workerservice/daily.go` and is what
-executes. Two prior investigations were misled by this file; if you are deciding whether attribution
-runs through Go, read the wiring in `daily.go`, not this JSON file.
+### 0.6 Provenance of attribution rows
 
 **The table has no writer/origin column.** `work_item_team_attributions` is
 `ReplacingMergeTree(computed_at)` (migrations 051, widened by 053) with no column recording which
@@ -2994,23 +2853,22 @@ authoritative Python-computed row after the fact — there is nothing in the sch
 Anyone adding a second writer to this table must either add a provenance column first or accept that
 divergence will be silent.
 
-### 0.7 Python compute deleted entirely (CHAOS-5310/CHAOS-5321/CHAOS-3092, R6) — added 2026-09-06
+### 0.7 Python compute deleted entirely (2026-09-06)
 
-**Everything in §0.6 above is now HISTORICAL for the daily-partition path.** `compute_work_item_
+`compute_work_item_
 team_attributions` (and its `work_item`/`work_item_state` siblings, `compute_work_item_metrics_
 daily`/`compute_work_item_state_durations_daily`) is deleted from the codebase entirely —
 `WorkItemAttributionExecutor`/`WorkItemExecutor`/`WorkItemStateExecutor` (native Go,
 `internal/jobs/metrics/daily/`) are the only writers of `work_item_team_attributions`/`work_item_
 metrics_daily`/`work_item_user_metrics_daily`/`work_item_cycle_times`/`work_item_state_durations_
-daily` for the daily-partition path. The §0.6 HTTP compatibility bridge to Python no longer carries
-these three families at all; `families.json`'s `python` field now reads `"DELETED (CHAOS-5310/5321)
+daily` for the daily-partition path. The HTTP compatibility bridge to Python does not carry
+these three families; `families.json`'s `python` field now reads `"DELETED
 -- ..."` for each.
 
-Python was ALSO the oracle §0.6 describes ("Python is still authoritative for the precedence
+Python was also the oracle ("Python is still authoritative for the precedence
 ladder's correctness... the Go port... is verified against it") for the SEPARATE ingest-time
 derivation this section does not cover (`internal/providersync`'s `resolve()`, run per-provider at
-sync time, not at daily-partition time) — that oracle relationship is gone too, and since CHAOS-8811
-the work-items sync unit no longer runs that derivation: it writes raw rows only. Prod Celery has
+sync time, not at daily-partition time) — that oracle relationship is gone too, and the work-items sync unit no longer runs that derivation: it writes raw rows only. Prod Celery has
 been stopped since 2026-08-19, so the Python callers that used to invoke `compute_work_item_team_
 attributions` (`job_daily.py`'s daily job, `job_work_items.py`'s `run_work_items_sync_job` via
 webhook/backfill Celery tasks) never execute in production regardless. The live-Python comparison
@@ -3026,8 +2884,7 @@ records are gone.
 
 ## 1. Attribution cascade (decision flow)
 
-> **Implemented model: see §0 (CHAOS-2600).** As of CS2 the resolver applies the (now 9-source,
-> CHAOS-4244) staged precedence in §0 (`native_team > issue_project > project_ownership >
+> **Implemented model: see §0.** The resolver applies the (now 9-source) staged precedence in §0 (`native_team > issue_project > project_ownership >
 > repo_ownership > assignee_membership > linked_issue > author_membership > manual_fallback >
 > unassigned`) — `linked_issue` is now a true fallback below ownership/assignee, the issue's own
 > project key resolves as `issue_project`, and a PR/MR author resolves as its own `author_membership`
@@ -3054,30 +2911,30 @@ flowchart TD
     N --> R[("stamp team_id on the row")]
 ```
 
-### 1.1 Ownership derivation (current, §0 — added for CHAOS-4365)
+### 1.1 Ownership derivation (current, §0)
 
 The 4-tier cascade above predates ownership derivation entirely. `team_project_ownership` and
 `team_repo_ownership` are not admin-authored — they are written by the sync, and the admin
-override layer (`identities`/`teams.manual_members`, CHAOS-4321) sits **on top of**, not inside,
+override layer (`identities`/`teams.manual_members`) sits **on top of**, not inside,
 that derivation:
 
 ```mermaid
 flowchart TD
-    SYNC["Sync: Go post-sync River job<br/>internal/syncdispatchruntime/worker.go:93 (RegisterTeamAutoimportWorker)<br/>-- bridge.go:113 --&gt; POST /api/internal/worker-sync/team-autoimport<br/>-- api/internal/worker_sync.py:269-278 --&gt; run_post_sync_team_autoimport<br/>-- workers/team_autoimport.py:228 --&gt; team_autoimport_&lt;provider&gt;.populate()<br/>(per-config teams/projects/members selections, CHAOS-4323)"]
+    SYNC["Sync: Go post-sync River job<br/>internal/syncdispatchruntime/worker.go:93 (RegisterTeamAutoimportWorker)<br/>-- bridge.go:113 --&gt; POST /api/internal/worker-sync/team-autoimport<br/>-- api/internal/worker_sync.py:269-278 --&gt; run_post_sync_team_autoimport<br/>-- workers/team_autoimport.py:228 --&gt; team_autoimport_&lt;provider&gt;.populate()<br/>(per-config teams/projects/members selections)"]
     SYNC -->|"GitHub only -- team_autoimport_github.py:139 (_repo_ownership_rows), source=provider_access"| TRO_direct["team_repo_ownership (direct)"]
     SYNC -->|"GitLab -- team_autoimport_gitlab.py:137 (_project_ownership_rows), source=provider_access"| TPO["team_project_ownership"]
     SYNC -->|"Jira / Linear -- team_autoimport_{jira,linear}.py, source=native"| TPO
-    LGN["Linear Go-native route (CHAOS-4431, ACTIVATED 2026-08-29, 27bef7286 --<br/>bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_route.go:386-390 (per-Project<br/>rows, ProjectID=raw Linear Project UUID) + :410-414 (per-team synthetic<br/>org_id:linear:team_key row, kept for backward compat) -&gt; team_project_ownership,<br/>source=native -- WIRED to production as of the 5.6 deploy cut"] --> TPO
+    LGN["Linear Go-native route (ACTIVE since 2026-08-29 --<br/>bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_route.go:386-390 (per-Project<br/>rows, ProjectID=raw Linear Project UUID) + :410-414 (per-team synthetic<br/>org_id:linear:team_key row, kept for backward compat) -&gt; team_project_ownership,<br/>source=native -- WIRED to production"] --> TPO
 
-    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; a pull / merge request item carries its own repo_id)<br/>Linear only, CHAOS-4537: native_team_key column IS the resolved<br/>team_id, once validated against a CURRENT teams-table catalog<br/>(codex round 2 P1) -- self-resolving, tried ONLY when the project_id<br/>arm above does not resolve, no team_project_ownership lookup at all<br/>-- resolution arm 'linear_team_key'"]
-    TPO -->|"OR match: a DONOR's own project_id (same arm above),<br/>OR the donor's own native_team_key column directly (CHAOS-4537),<br/>reached by walking work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
+    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; a pull / merge request item carries its own repo_id)<br/>Linear only: native_team_key column IS the resolved<br/>team_id, once validated against a CURRENT teams-table catalog<br/>-- self-resolving, tried ONLY when the project_id<br/>arm above does not resolve, no team_project_ownership lookup at all<br/>-- resolution arm 'linear_team_key'"]
+    TPO -->|"OR match: a DONOR's own project_id (same arm above),<br/>OR the donor's own native_team_key column directly,<br/>reached by walking work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
 
-    WI -->|"derive: resolve the team (own or donor, project_id arm tried first,<br/>Linear's native_team_key arm as fallback -- CHAOS-4458 part b);<br/>stamp it onto a PULL/MERGE REQUEST item's own repo_id (work_items.type pr|merge_request;<br/>an issue's own repo_id is never read -- issues reach repos via work_graph_issue_pr)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)<br/>resolution arm recorded in telemetry (dev_health_team_repo_ownership_derivation_resolution_arm_total)"| TRO_derived["team_repo_ownership (source=inferred)"]
+    WI -->|"derive: resolve the team (own or donor, project_id arm tried first,<br/>Linear's native_team_key arm as fallback);<br/>stamp it onto a PULL/MERGE REQUEST item's own repo_id (work_items.type pr|merge_request;<br/>an issue's own repo_id is never read -- issues reach repos via work_graph_issue_pr)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)<br/>resolution arm recorded in telemetry (dev_health_team_repo_ownership_derivation_resolution_arm_total)"| TRO_derived["team_repo_ownership (source=inferred)"]
 
-    WGIP["work_graph_issue_pr<br/>(cross-provider issue&lt;-&gt;PR link, §2, CHAOS-2416 --<br/>THIS table's own repo_id, not the linked work item's:<br/>a genuine cross-repo link is possible)"] -->|"the linked work_item_id's resolved team<br/>(own or donor project_id, same resolver as above)<br/>stamped on work_graph_issue_pr's OWN repo_id --<br/>PR inheritance, design check (b)"| TRO_derived
+    WGIP["work_graph_issue_pr<br/>(cross-provider issue&lt;-&gt;PR link, §2 --<br/>THIS table's own repo_id, not the linked work item's:<br/>a genuine cross-repo link is possible)"] -->|"the linked work_item_id's resolved team<br/>(own or donor project_id, same resolver as above)<br/>stamped on work_graph_issue_pr's OWN repo_id --<br/>PR inheritance, design check (b)"| TRO_derived
     WI -. "work_item_id lookup" .-> WGIP
 
-    ADMIN["Admin override layer: identities.team_ids ∪ teams.manual_members<br/>(CHAOS-4321) -- a distinct, later precedence step: layered ON TOP,<br/>never itself a sync-derived ownership source"]
+    ADMIN["Admin override layer: identities.team_ids ∪ teams.manual_members<br/> -- a distinct, later precedence step: layered ON TOP,<br/>never itself a sync-derived ownership source"]
     ADMIN -. overrides .-> TPO
     ADMIN -. overrides .-> TRO_direct
     ADMIN -. overrides .-> TRO_derived
@@ -3093,10 +2950,10 @@ designed-empty case, which is not a failure by itself, or it derived facts it co
 carried, so read `facts_derived` and `facts_unchanged` to tell them apart), `inputs_not_ready`, `error`. A quiet table with
 `unchanged` runs is healthy; a quiet table with `no_signal` runs needs the two counts: `facts_derived=0` is the designed-empty
 case, `facts_derived>0` with `facts_unchanged<facts_derived` is a derivation that did not write what it derived.
-A full tie (next paragraph) is no unresolved state (D5990): the run's `team_repo_ownership_derivation` Info line carries its
-count as `owner_ties`, for provenance only; there is no tie outcome and no WARN line (both were removed with D5448).
+A full tie (next paragraph) is no unresolved state: the run's `team_repo_ownership_derivation` Info line carries its
+count as `owner_ties`, for provenance only; there is no tie outcome and no WARN line.
 
-**Retraction is guarded per provider and per fact kind (CHAOS-9045).** A run retracts an open inferred row it no longer
+**Retraction is guarded per provider and per fact kind.** A run retracts an open inferred row it no longer
 derives only when it read the input that could derive that row. Each kind of input has its own proof
 (`team_repo_ownership_retraction_guard.go`, a `SnapshotProof` of one named term): `project_links:<provider>` holds when the
 run has at least one open `team_project_ownership` link of that provider (reason `no_open_project_link_of_the_provider`);
@@ -3105,22 +2962,19 @@ run has at least one open `team_project_ownership` link of that provider (reason
 provider `P` whose links (open or closed) ever named the team, and `linear_team_key` when the team is a Linear team (a
 `linear:` id, or a team the Linear catalog lists). The row is retracted only when the proof of every one of its kinds holds;
 otherwise it stays open. So in an org with two providers, provider A with no open link and provider B with one, A's
-derived rows stay open, the same as in a single-provider org; before CHAOS-9045 one count over the links of all providers
-let B's link retract them, which turned any wrong upstream close of A's links into a loss of derived repository ownership.
+derived rows stay open, the same as in a single-provider org; a single count over the links of all providers would let B's link retract them, which would turn any wrong upstream close of A's links into a loss of derived repository ownership.
 A's rows are retracted again once A has an open link and the run does not derive them. A team that no link ever named and
-that is no Linear team has no kind: its row is retracted when the run has an open link of any provider (the guard before
-CHAOS-9045, for this case only). Every kept row is counted: `rows_retraction_held` on the `team_repo_ownership_derivation`
+that is no Linear team has no kind: its row is retracted when the run has an open link of any provider (the older guard, kept for this case only). Every kept row is counted: `rows_retraction_held` on the `team_repo_ownership_derivation`
 log line, one WARN `team_repo_ownership_derivation.retraction_held` line per kind (`kind`, `provider`, `reasons`,
 `open_rows_kept`), and `team_repo_ownership_retraction_held_total{kind,provider,reason}`. Pinned by
 `team_repo_ownership_retraction_guard_test.go` and `team_repo_ownership_retraction_guard_integration_test.go` (real
 ClickHouse, every ordered pair of jira, gitlab, github and linear).
 
-**Every owning team of a repo, each with its linked share; one main owner, or every team of a full tie (rulings D5432, D5988, D5990; CHAOS-8945, CHAOS-9411, CHAOS-9459).**
+**Every owning team of a repo, each with its linked share; one main owner, or every team of a full tie.**
 The derivation counts each team's candidates on a repo per link tier. The tier of a `work_graph_issue_pr` candidate is that
 row's `provenance`; a pull request's / merge request's own `repo_id` (`work_items.type` `pr` or `merge_request`) and its
 `work_item_dependencies` donor edge are provider-recorded facts and count as `native` (the issue<->PR link builder stamps
-the same dependency row `native`). **A key parsed from the pull request's text is not (chris, 2026-10-15: text is a
-fallback only).** A donor reached only through an `extkey:KEY` target (`external_issue_key` or `relates_to`, from the
+the same dependency row `native`). **A key parsed from the pull request's text is not (text is a fallback only).** A donor reached only through an `extkey:KEY` target (`external_issue_key` or `relates_to`, from the
 pull request body, head branch or a comment) counts as `explicit_text`; a native donor edge of the same pull request is
 used first, whatever the order of the targets; and a pull request that has a `native` row in `work_graph_issue_pr`
 gets no candidate from its text key at all. The same holds for a `work_graph_issue_pr` row whose work item reaches a
@@ -3136,13 +2990,12 @@ owner. **Every team with a link of any tier owns the repo** (all three tiers are
 of the repo, so the shares of a repo add up to 1; never an equal split. The **main owner** (`is_primary = 1`) is the top
 team by the lexicographic rank: the most `native` links first, then the most `explicit_text` links, then the most
 `heuristic` links, then links with any other recorded provenance; every other owning team is a **co-owner**
-(`is_primary = 2`, the CHAOS-8905 convention). The main owner is decided over the whole history of links, and every row
-starts at the earliest evidence of its own team's claim (CHAOS-9403). Because one `native` link outranks fifty
+(`is_primary = 2`). The main owner is decided over the whole history of links, and every row
+starts at the earliest evidence of its own team's claim. Because one `native` link outranks fifty
 `explicit_text` links for the main owner while the share counts every link, the main owner can hold a smaller share than
 a co-owner; each row carries both its role and its share. The same rule applies to every provider: the team's provider is
 never an input. A **full tie** for the top (equal counts at every tier) makes **every tied team a main owner**
-(`is_primary = 1`, each with its share, equal among the tied teams; chris ruling D5990, which supersedes D5448's "a tie
-names no new main owner"): a tie never means no owner. A team outside the tie is a co-owner. The tie is reported for
+(`is_primary = 1`, each with its share, equal among the tied teams): a tie never means no owner. A team outside the tie is a co-owner. The tie is reported for
 provenance only (`stats.Ties`, `owner_ties` above). A team that no longer reaches the repo has its row retracted, as
 before; a team whose share changed gets a new version of its row under the same key (same `valid_from`), so each
 claim has one open row. A **role change** seen by a later run (the main owner changes from team A to team B) is dated at
@@ -3156,23 +3009,20 @@ that run. So at any instant of its history a repo's main rows are its one leader
 tie. A role close goes through the retraction guard; a repo whose roles change while the guard holds any close or
 retraction of it keeps all its rows that run (no write, retraction or close; `team_repo_ownership_derivation.role_change_held`)
 and waits for a run that proves them all, so a held row never leaves a main row that is no longer a leader's, nor a repo without the main row it had. A new main
-owner never starts before the end of another active team's main tenure (CHAOS-9403 `after_other_owner`); a main row that was
+owner never starts before the end of another active team's main tenure (`after_other_owner`); a main row that was
 already open before that end belonged to a main owner beside the other team (a tie) and keeps its start; a co-owner's
 start is its own evidence. A claim with no timed evidence keeps the start of its earliest open row. Readers that pick the
-owner never take a co-owner row, and **return every main owner** (D5990): `teamownership.AuthoritativeOwnersByRepo`
+owner never take a co-owner row, and **return every main owner**: `teamownership.AuthoritativeOwnersByRepo`
 (repo -> owners) and the cognitive-load gate leave out `is_primary = 2` rows and rank `(is_primary = 1) DESC` first; when
 the first row is a main owner's, every other main owner at the same specificity is an owner too, in rank order (a repo
 whose top row is a `provider_access` grant keeps one owner). The daily families whose table keys a row by team count the
 repo whole in each main owner (team cognitive load, team complexity, compounding risk team scope, wellbeing
 `team_metrics_daily`, AI impact); a TestOps daily table holds one row per repo, so TestOps takes the first owner by rank.
 The cascade's `LoadRepos` carries co-owner rows; a co-owner fact is never the item's primary row, it is a co-owner row of
-the item, as every other owner of the repository is (CHAOS-9409, section 0.4d; `RankDerivationCandidates` also ranks
+the item, as every other owner of the repository is (section 0.4d; `RankDerivationCandidates` also ranks
 only `is_primary = 1` first). The main
 owner keeps outranking a `provider_access` grant by specificity. An ownership fact with `is_primary = 2` carries the
-confidence of a fact that is not primary (`medium`). Readers that use the co-owner rows and the share are tickets 9408,
-9409, 9410 and 9413.
-Before CHAOS-8945, a single `explicit_text` link from a second team dropped the repo and retracted its owner; before
-CHAOS-9411, the other teams got no row and no share was stored. Pinned by
+confidence of a fact that is not primary (`medium`). A single `explicit_text` link from a second team does not drop the repo or retract its owner, and the other teams get a row and a stored share. Pinned by
 `internal/providersync/team_repo_ownership_ranked_owner_integration_test.go` (real ClickHouse, every provider pair: main
 owner, co-owners and shares read back), the `TestRankedOwner*`, `TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate` and
 `TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier` tests in `team_repo_ownership_derivation_test.go`,
@@ -3198,7 +3048,7 @@ join `repos` once, by `repo_id`, to stamp `repo_full_name`/`provider` onto the r
 §0.1/§0.2) reads whichever `team_repo_ownership` row wins the `is_primary`/`specificity` tie-break
 for that repo — direct (`native`)/(`provider_access`) or derived (`inferred`) alike.
 
-**Two Linear id spaces, one resolver (CHAOS-4458 part (b)).** `team_project_ownership`'s Linear rows
+**Two Linear id spaces, one resolver.** `team_project_ownership`'s Linear rows
 and `work_items.project_id` for a Linear item are written by two DIFFERENT normalizers that disagree
 on what `project_id` means:
 - `team_autoimport_linear.py`'s ownership writer stamps `project_id = "{org_id}:linear:{team_key}"`
@@ -3214,7 +3064,7 @@ locally (org `70d529e0`, real synced data) at 0 of 3168 project-id-bearing Linea
 their org's ownership row, and on prod (org `c6a38355`, 2809 Linear ownership rows) at
 `outcome=no_signal`, 0 rows written. The fix (`resolveWorkItemProjectRef` in
 `team_repo_ownership_derivation.go`) tries the direct `project_id` match first (unchanged — covers
-every other provider today, and a future project-UUID-keyed Linear ownership row per CHAOS-4108's
+every other provider today, and a future project-UUID-keyed Linear ownership row following the
 dual-arm precedent), and only when that does not resolve, for a Linear item carrying
 `work_items.native_team_key` (migration `050`, the raw `issue.team.key`), retries against the
 reconstructed team-key-shaped identity `"{org_id}:linear:{native_team_key}"`. Applied identically to
@@ -3225,14 +3075,15 @@ When two teams reach the same repo, the ranked-owner rule above picks the owner,
 resolved each team. Which arm produced each run's rows is visible in
 `dev_health_team_repo_ownership_derivation_resolution_arm_total{arm="project_id"|"linear_team_key"}`.
 
-**Post-CHAOS-4431 update: the two id spaces now co-exist, not just the team-key one.** CHAOS-4431's
+**The two id spaces co-exist, not just the team-key one.** The
 Linear native team-catalog collector (`linear_reference_catalog_route.go`) writes TWO ownership rows
 per synced Linear team, not one: a raw-Linear-Project-UUID-keyed row for each of the team's actual
 Linear Projects (`:386-390`, `ProjectID: project.ID`) AND the pre-existing synthetic
 `"{org_id}:linear:{team_key}"` row for backward compatibility (`:410-414`, unchanged shape/writer
-intent). So for any org this route has synced since CHAOS-4431 activated, `team_project_ownership`
-holds BOTH shapes simultaneously — the "never intersect" finding above describes the pre-CHAOS-4431
-state, not a permanent invariant. Practical consequence, confirmed live (lane-4458b-live, org
+intent). So for any org this route has synced, `team_project_ownership`
+holds BOTH shapes simultaneously — the "never intersect" finding above describes an earlier
+state, not a permanent invariant. Practical consequence, confirmed live (org
+
 `70d529e0`, 2026-08-29): a Linear work item that IS assigned to a real Linear Project now resolves
 via the direct `project_id` arm (first priority, unchanged); the `linear_team_key` arm remains the
 correct fallback for a Linear item that was never assigned to any Project (`project_id=""` —
@@ -3244,51 +3095,44 @@ items), `assign()`'s existing `project_id > linear_team_key` priority means the 
 correctly present and load-bearing for other data, but never the WINNING arm observed on THIS org's
 current topology — not a defect, a consequence of the two features interacting as designed.
 
-**CHAOS-4530 update: the team-key-shaped `projects` row is gone; the matching `team_project_ownership`
-row is not.** CHAOS is a Linear TEAM, not a project. Until CHAOS-4530, `linear_reference_catalog_route.go`
-wrote the `"{org_id}:linear:{team_key}"` identity to BOTH `projects` (an un-typed, team-shaped catalog
-row -- `id`/`project_key` = the team's own key, `name` = the team's display name) AND
-`team_project_ownership` (this section's `linear_team_key` fallback arm). Because
-`acr`'s `projectOwnershipJoinSQL` resolves a project's facts only through `projects.project_key`, and
-that synthetic row was the ONLY non-empty `project_key` this collector ever wrote for Linear, every
-project fact resolved to "team CHAOS" and no real Linear project was ever reachable (CHAOS-4530's own
-finding). CHAOS-4530 removed ONLY the `projects` write -- CHAOS is typed as a team again, nowhere in
-`projects`. The `team_project_ownership` write (formerly `:410-414`, now the loop right after the
-native-projects block) is UNCHANGED: this section's `linear_team_key` arm
-(`team_repo_ownership_derivation.go`'s `linearTeamKeyProjectID`) reads only `team_project_ownership`,
-never `projects`, so it is unaffected and remains the correct fallback described above. Also as of
-CHAOS-4530, a REAL project's `team_project_ownership` row (the `ProjectID: project.ID`-keyed row from
-the paragraph above) never carries the owning team's key as its `project_key` any more -- that value
-was always the TEAM's key, never a genuine per-project key, and stamping it there was the same defect.
-Real Linear projects still have no genuine per-project key source, so `projects.project_key` and this
+**The team-key-shaped `projects` row is not written; the matching `team_project_ownership`
+row is.** ENG is a Linear TEAM, not a project. `linear_reference_catalog_route.go` writes the
+`"{org_id}:linear:{team_key}"` identity to `team_project_ownership` only (this section's `linear_team_key`
+fallback arm), never to `projects`. An un-typed, team-shaped catalog row there (`id`/`project_key` = the team's own
+key, `name` = the team's display name) would be the ONLY non-empty `project_key` this collector writes for
+Linear; because `acr`'s `projectOwnershipJoinSQL` resolves a project's facts only through
+`projects.project_key`, every project fact would then resolve to "team ENG" and no real Linear project would be
+reachable. So ENG is typed as a team, nowhere in `projects`. The `team_project_ownership` write (the loop right
+after the native-projects block) is read by this section's `linear_team_key` arm
+(`team_repo_ownership_derivation.go`'s `linearTeamKeyProjectID`), which reads only `team_project_ownership`,
+never `projects`. A REAL project's `team_project_ownership` row (the `ProjectID: project.ID`-keyed row from
+the paragraph above) never carries the owning team's key as its `project_key` -- that value
+would be the TEAM's key, never a genuine per-project key.
+Real Linear projects have no genuine per-project key source, so `projects.project_key` and this
 ownership row's `project_key` both stay `NULL`/nil for them; making a real project's facts reachable by
-key is CHAOS-4521b's (acr-side) job, tracked separately and not blocked on this collector.
+key is an acr-side job, not part of this collector.
 
-An intermediate revision of this fix (also shipped as part of CHAOS-4530) briefly wrote a soft-delete
-TOMBSTONE version of the `projects` row (`is_active=0`, `project_key=nil`) instead of omitting the write
-outright, on the theory that a still-present but inactive row would read as retired. CF (acr owner)
-found that wrong: acr's identity resolution does not filter `projects.is_active` at all, and
-`is_active=0` already legitimately marks two REAL completed Linear projects for an unrelated reason, so
-it could never be a reader-recognizable "retired" signal for anyone. The collector now NEVER writes this
-identity to `projects`, active or tombstoned; already-synced orgs' stale rows (either shape) are retired
+The collector NEVER writes this identity to `projects`, active or tombstoned: acr's identity resolution does not
+filter `projects.is_active` at all, and `is_active=0` already legitimately marks two REAL completed Linear
+projects for an unrelated reason, so a tombstone row could never be a reader-recognizable "retired" signal.
+Already-synced orgs' stale rows (either shape) are retired
 by a separate, one-time operator action -- `dho workers providersync
 retire-linear-pseudo-projects` (`internal/providersync/linear_pseudo_project_cleanup.go`), a physical
 `ALTER TABLE projects DELETE`, never a per-sync write.
 
-**CHAOS-4548 (hygiene, not a behavior change): a sibling one-time verb for the `team_project_ownership`
-side.** Every sync cycle before CHAOS-4530's writer fix also stamped the owning team's key onto a REAL
+**A sibling one-time verb for the `team_project_ownership`
+side (hygiene, not a behavior change).** Older sync cycles also stamped the owning team's key onto a REAL
 project's `team_project_ownership.project_key` (not just the `{org_id}:linear:{team_key}` pseudo-identity
 row above) -- those stale rows were never reachable by any reader (this section's `project_id`-keyed
 `linear_team_key`/`project_id` arms never select `project_key`; the acr project-fact join only ever
-matches through `projects.project_key`, which is `NULL` for every real Linear project since CHAOS-4530),
+matches through `projects.project_key`, which is `NULL` for every real Linear project),
 so this is pure hygiene, confirmed empirically on local org `70d529e0` (every stale row's `team_id` agreed
 with its NULL-keyed replacement before deletion). `dho workers providersync
 retire-stale-linear-project-ownership` (`internal/providersync/linear_stale_project_ownership_cleanup.go`)
 deletes them via the same synchronous `ALTER TABLE ... DELETE` pattern, and explicitly excludes any
-`project_id` shaped like the `{org_id}:linear:{team_key}` pseudo-identity -- that row is CHAOS-4560's
-separate, still-open concern, not this verb's.
+`project_id` shaped like the `{org_id}:linear:{team_key}` pseudo-identity -- that row is outside this verb's scope.
 
-**CHAOS-8851: the same one-time shape for the Jira key-built `projects` rows.** `dho workers providersync
+**The same one-time shape for the Jira key-built `projects` rows.** `dho workers providersync
 retire-jira-key-projects` (`internal/providersync/jira_key_project_cleanup.go`) physically deletes the Jira
 `projects` rows whose id is `{org_id}:jira:{KEY}` (section 0.4b), for the reason given above for Linear:
 a reader of `projects` does not have to filter `is_active`, so the second row of a key must be absent.
@@ -3299,20 +3143,20 @@ version. It prints counts only. It touches `projects` only; the ownership rows o
 closed by the sync itself (the snapshot rule, section 0.4b). Order: deploy, wait for one Jira
 team-autoimport sync, run with `--dry-run`, then run.
 
-**CHAOS-8888: the Jira project-as-team rows.** `dho workers providersync retire-jira-project-as-team
+**The Jira project-as-team rows.** `dho workers providersync retire-jira-project-as-team
 --org-stdin [--dry-run]` retires them for one organization now, with the function every Jira team-catalog
 run calls (section 0.4c): teams inactive, open ownership, membership and derived repository ownership closed,
 nothing deleted. The organization comes from stdin only; the verb prints counts only and no organization
 id. It is not required: the next Jira team-catalog run of the organization does the same.
 
-**CHAOS-8940: bare team ids.** `dho workers providersync carry-team-ids --org-stdin [--dry-run]` moves the
+**Bare team ids.** `dho workers providersync carry-team-ids --org-stdin [--dry-run]` moves the
 bare team ids of one organization to the provider-prefixed form now, with the function that runs before every
 write path of a prefixed team id (section 0.4f, "The carry"). The old team rows go inactive, their open links are
 closed, nothing is deleted. The organization comes from stdin only; the verb prints counts only. A second run
-reports zero. Computed attribution and metric rows are not rewritten: the full-history recompute (CHAOS-8941)
+reports zero. Computed attribution and metric rows are not rewritten: the full-history recompute
 runs after the carry.
 
-**Deployment ordering (codex review, PR #2012 round 3):** the cleanup verb has no fence against a
+**Deployment ordering:** the cleanup verb has no fence against a
 still-running writer. The go-workers Helm chart rolls with `start-first`, so an old pod running the
 prior (tombstone-writing) collector revision can still be up when the verb runs, and can write a
 tombstone row moments after the verb's `DELETE` reports success -- the row would then reappear.
@@ -3321,46 +3165,40 @@ left), and re-run it if that is in doubt: the verb is idempotent (its `SELECT` a
 the identical predicate), so a clean second pass finds nothing and is a safe way to confirm no
 straggler wrote the row back.
 
-**CHAOS-4537 update: the `linear_team_key` arm no longer reads `team_project_ownership` at all.**
-CHAOS-4530 deliberately KEPT the team-key-shaped `team_project_ownership` row (the paragraph above,
-"the matching `team_project_ownership` row is not") because `resolveWorkItemProjectRef`
-(as it was then named) still reconstructed the `"{org_id}:linear:{team_key}"` identity and looked it
-up there. CHAOS-4537 removed that indirection: the renamed `resolveWorkItemTeamID`
+**The `linear_team_key` arm does not read `team_project_ownership` at all.**
+The team-key-shaped `team_project_ownership` row (the paragraph above) is not read by this arm:
+the renamed `resolveWorkItemTeamID`
 (`team_repo_ownership_derivation.go`) trusts a Linear work item's own `work_items.native_team_key`
 column **as the resolved `team_id` directly, once validated against the org's current team catalog**
-(see the codex round 2 paragraph below) — no `teamRepoOwnershipProjectRef` construction, no
-`team_project_ownership` lookup, for this arm. This was always a safe, value-preserving change: the
+(see the validation paragraph below) — no `teamRepoOwnershipProjectRef` construction, no
+`team_project_ownership` lookup, for this arm. This is value-preserving: the
 ownership writer's team-key-shaped row's `team_id` column was always stamped to the team's own key
 (`linear_reference_catalog_route.go`'s "The MATCHING team_project_ownership row below" block,
 `teamID := team.ID` where `team.ID` is itself the team key —
 `linear_reference_catalog.go`'s `normalizeLinearReferenceTeam`), the exact same string
 `work_items.native_team_key` already carries. The `project_id` arm (this section's main narrative,
 above) is completely unaffected — still tried first, still the same `team_project_ownership` lookup,
-still outranks `linear_team_key` via `teamRepoOwnershipResolutionArmPriority` on a conflict. The
-mermaid diagram above reflects this: the `linear_team_key` edge no longer originates from `TPO`.
+still outranks `linear_team_key` via `teamRepoOwnershipResolutionArmPriority` on a conflict. The mermaid diagram above reflects this: the `linear_team_key` edge does not originate from `TPO`.
 
-Two correctness fixes rode along, both early-return short-circuits that assumed every resolution
-path required a `team_project_ownership` row — sound before CHAOS-4537, no longer true after.
-`deriveTeamRepoOwnership` used to return early with zero rows whenever `team_project_ownership`
-produced no `project_id`-arm links at all (`len(projectToTeam) == 0`); removed. One layer up, the
-ClickHouse-loading `Derive` had its OWN early return on `len(projectLinks) == 0`, *before even
-loading `work_items`* — also removed, so an org with real, already-synced Linear work items but a
-`team_project_ownership` table that has not synced yet no longer reports `inputsReady=false` and
-skips resolution.
+No early-return short-circuit assumes that every resolution path requires a `team_project_ownership` row.
+`deriveTeamRepoOwnership` does not return early with zero rows when `team_project_ownership`
+produced no `project_id`-arm links (`len(projectToTeam) == 0`). One layer up, the
+ClickHouse-loading `Derive` has no unconditional early return on `len(projectLinks) == 0` *before
+loading `work_items`*, so an org with real, already-synced Linear work items but a
+`team_project_ownership` table that has not synced yet does not report `inputsReady=false` and
+skip resolution.
 
-Codex review on the CHAOS-4537 PR (P1, confirmed real) caught that this removal was too broad: `Derive`
-has a SEPARATE guard — `len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0` —
+`Derive` has a SEPARATE guard — `len(workItems) == 0 && len(dependencyEdges) == 0 && len(issuePRLinks) == 0` —
 that protects every provider, not just Linear, from a different failure mode: if none of the linkage
 tables have synced yet REGARDLESS of `team_project_ownership`'s state (the opposite ordering — ownership
 synced, work-items not yet, a plausible transient partial-sync snapshot), proceeding anyway would read
 as a genuine `inputsReady=true`, `derived=[]` evaluation and retract every previously-derived row for
-the org. That guard is unchanged, still in place; only the `projectLinks`-only guard above it was
-removed.
+the org. That guard is independent of the `projectLinks` guard described below.
 
-**Codex review, round 2 (P1, confirmed real): `native_team_key` must be validated against the org's
-CURRENT team catalog, never trusted unconditionally.** The first version of this redirect trusted
-`item.NativeTeamKey` straight through with no check at all — a divergence from the established
-"native_team" resolution contract every OTHER native-team lookup in this codebase follows: this
+**`native_team_key` is validated against the org's
+CURRENT team catalog, never trusted unconditionally.** Trusting
+`item.NativeTeamKey` with no check would diverge from the established
+"native_team" resolution contract that every OTHER native-team lookup in this codebase follows: this
 section's own §0.2 table (rank 0, `native_team`: `WorkItem.native_team_key -> teams`),
 `compute_work_items.py`'s `_native_team_candidate`/`build_project_key_resolver`, and this repo's own
 Go port for GitHub work items, `github_work_items_derivation_context.go`'s
@@ -3369,7 +3207,7 @@ built from the org's CURRENT `teams` rows before trusting it, precisely because 
 whatever was true AT SYNC TIME, not necessarily the team catalog's current state (a team can be
 renamed or deleted in Linear without every work item that once carried its old key being re-synced).
 Without validation, a stale, renamed, or garbage `native_team_key` would mint phantom
-`team_repo_ownership` for a team that no longer exists. Fixed: `deriveTeamRepoOwnership` now takes a
+`team_repo_ownership` for a team that no longer exists. `deriveTeamRepoOwnership` takes a
 `knownTeams []TeamRepoOwnershipKnownTeam` parameter (loaded by
 `loadTeamRepoOwnershipKnownTeams`, `GROUP BY provider, id` + `argMax` on `is_active` — `teams`'
 `ReplacingMergeTree` `ORDER BY` is `(id)` alone, no `org_id`, so a plain `FINAL` is not itself a safe
@@ -3381,11 +3219,10 @@ means the arm resolves nothing that cycle, same as an org with no `team_project_
 the `project_id` arm resolving nothing. It DOES factor into the combined readiness guard the next
 paragraph describes, though — see there for why "zero known teams" alone is not sufficient reasoning.
 
-**Codex review, round 3 (final; P1, confirmed real): the `projectLinks`-empty guard's removal was too
-unconditional.** Round 1's fix removed that guard outright so the `linear_team_key` arm could resolve
-with zero `team_project_ownership` rows. Round 3 caught that this reopened the SAME retraction hazard
-round 1 itself had just fixed, mirrored onto the opposite input combination: `team_project_ownership`
-transiently empty (the exact gap this ticket targets) for a **non-Linear org, or a Linear org with no
+**The `projectLinks`-empty guard is conditional.**
+The `linear_team_key` arm must resolve with zero `team_project_ownership` rows, but dropping the guard
+unconditionally would reopen the retraction hazard described above, on the opposite input combination:
+`team_project_ownership` transiently empty for a **non-Linear org, or a Linear org with no
 `native_team_key` signal at all**. In that case `workItems`/`dependencyEdges`/`issuePRLinks` are
 non-empty (the linkage-empty guard does not fire), but with `projectLinks` empty and no Linear-native
 signal, NEITHER arm can resolve anything — `derived` comes back empty, and the retraction diff would
@@ -3396,45 +3233,29 @@ guard (treats it as ready despite `len(projectLinks) == 0`) ONLY when that helpe
 Linear-native signal is present — the one case the guard's removal was meant to unblock. This requires
 loading `knownTeams` BEFORE this guard runs, not after (its call site moved earlier in `Derive`).
 
-**Superseded by CHAOS-8939 (section 0.4f):** a Linear team id is now `linear:<key>`, so
+**Linear team ids (section 0.4f):** a Linear team id is `linear:<key>`, so
 `resolveWorkItemTeamID` maps `NativeTeamKey` to the known team with that `native_team_key` and returns that
-team's id. The paragraph below is the record of the earlier design.
+team's id.
 
-**Codex review, round 3 (final; P2 raised, verified NOT applicable to this codebase): native keys are
-not resolved to a separately-looked-up canonical team id.** `resolveWorkItemTeamID` validates
-`NativeTeamKey` against `TeamRepoOwnershipKnownTeam.ID` (`teams.id`) and then returns `NativeTeamKey`
-itself as the resolved `team_id` — never a distinct `teams.id` value looked up via an alias. Codex
-raised this as a P1 (a hypothetical `teams.id != teams.native_team_key` shape); executed-read
-verification (not assumed) found it is NOT reachable in this codebase: EVERY Linear team row ever
-written — the live Go writer, `linear_reference_catalog.go`'s `normalizeLinearReferenceTeam`
-(`nativeTeamKey := teamKey; ...; ID: teamKey, ..., NativeTeamKey: &nativeTeamKey`), and the retired
-Python writer, `team_autoimport_linear.py`'s `_linear_team_row` (`"id": team_id, ...,
-"native_team_key": team_id`) — stamps both columns from the exact same source value, always. No
-alias-resolution machinery was added for a case that cannot occur; instead,
-`TestLinearReferenceCatalogTeamRowIDMatchesNativeTeamKey` pins the invariant directly (reusing
-`linear_reference_catalog_test.go`'s existing `chaos4530CollectReferenceCatalog` harness) so a FUTURE
-change that lets the two columns diverge fails loudly here, not silently in production.
 
-**Delta-only re-review of round 3's own fix (the final allowed codex pass per the round cap — minimal
-fix only, no further round): P1 confirmed real, the readiness guard fixed above was still retraction-
-unsafe for a MIXED org.** `diffTeamRepoOwnershipRetractions` is a single GLOBAL diff over the whole
+
+
+**The readiness guard above is also retraction-safe for a MIXED org.** `diffTeamRepoOwnershipRetractions` is a single GLOBAL diff over the whole
 org's active rows vs. `derived`, not scoped per resolution arm. The `hasResolvableLinearNativeTeamKey`
 guard above correctly lets a cycle proceed (`inputsReady=true`) when `projectLinks` is empty but ONE
 Linear item has a validly-known native key — but `derived` can never reproduce a `project_id`-arm pair
 in that state (the arm has no `projectToTeam` entries to resolve from at all with `projectLinks` empty).
 Diffing anyway would treat "this cycle cannot reconfirm them" as "they're no longer true" and retract
 every previously-good `project_id`-arm row for the org, including repos the single Linear item never
-touches. Fixed then: skip the retraction diff entirely whenever `projectLinks` is empty (still derive and
-write any newly-resolvable `linear_team_key` rows). CHAOS-9045 replaced that one org-wide count with the
-per-provider, per-kind guard described under "Retraction is guarded per provider and per fact kind". `TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg`
+touches. The retraction diff is therefore guarded per provider and per fact kind (see "Retraction is guarded per provider and per fact kind"),
+not by one org-wide count, while newly-resolvable `linear_team_key` rows are still derived and written.
+`TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg`
 pins both halves: the new row is written, and the pre-existing `project_id`-arm row for the other repo
 survives untouched.
 
 The team-key-shaped `team_project_ownership` row itself is **still written** today
-(`linear_reference_catalog_route.go`, unchanged, out of CHAOS-4537's scope) — it is now vestigial
-from this reader's point of view, kept only as a still-open fast-follow: once this redirect is proven
-live, the collector can stop writing it entirely, closing the last trace of the
-`"{org_id}:linear:{team_key}"` identity out of this schema. `linearTeamKeyProjectID` (still present in
+(`linear_reference_catalog_route.go`) — it is vestigial
+from this reader's point of view; no reader depends on it. `linearTeamKeyProjectID` (still present in
 `team_repo_ownership_derivation.go`) is kept only so `linear_reference_catalog_test.go`'s
 `TestLinearReferenceCatalogTeamKeyOwnershipRowMatchesItsOneReader` can still name that row's shape by
 construction — it has no other caller.
@@ -3442,7 +3263,7 @@ construction — it has no other caller.
 **Inheritance is gated**, so it never imports a wrong team. This governs BOTH the work-item-level
 `LinkedIssueTeamResolver` (attribution source 5, `linked_issue`) AND item 1b's `team_repo_ownership`
 donor walk above — the latter (`internal/providersync/team_repo_ownership_derivation.go`'s
-`buildDonorTeamIDResolver`, renamed from `buildDonorProjectIDResolver` by CHAOS-4537) reuses these
+`buildDonorTeamIDResolver`) reuses these
 exact rules rather than a looser first-donor walk:
 - only **inheritance-safe** relationship types transfer a team
   (`relates_to`, `relates`, `duplicates`, `external_issue_key`); blocking links
@@ -3489,13 +3310,13 @@ sequenceDiagram
 ```
 
 `job_daily` (the scheduled recompute) follows the same build → compute path but
-**reads** persisted edges instead of extracting them — see §4. As of §0.6, `job_daily`'s dispatch is
-now orchestrated by the Go worker and invoked through the HTTP compatibility bridge; the diagram
+**reads** persisted edges instead of extracting them — see §4. `job_daily`'s dispatch is
+orchestrated by the Go worker (§0.7); the diagram
 above describes the sync-time (`job_work_items`) path, which is unchanged.
 
 ### Link capture sources & precedence
 
-A PR/MR only inherits a team if an edge to its issue exists. The link is captured from where it actually lives, in descending order of authority (PR #924 — the primary/secondary sources; #921 added the tertiary):
+A PR/MR only inherits a team if an edge to its issue exists. The link is captured from where it actually lives, in descending order of authority:
 
 | Tier | Source | Trust gate | Edge |
 |---|---|---|---|
@@ -3511,8 +3332,7 @@ PR to their own issue drives that PR's attribution — the feature working as
 intended on collaborative data, not a forgery (same-org analytics, not an authz
 boundary).
 
-**This tier table is a per-provider PRIMARY/FALLBACK rule, not a Linear-only rule** (chris,
-CHAOS-4752 investigation, 2026-09-01): the intended design for *every* PM provider is PRIMARY =
+**This tier table is a per-provider PRIMARY/FALLBACK rule, not a Linear-only rule**: the intended design for *every* PM provider is PRIMARY =
 the provider's own attached-PR mapping (Linear's issue-attachment integration, Jira's
 dev-status/GitHub-for-Jira panel, GitHub's own linked-PR/closing-reference tracking), preferred at
 *resolution* time whenever it is present — FALLBACK = text parsing (magic-word/branch-convention).
@@ -3535,11 +3355,11 @@ cycle-time consumer, and DOES apply to Linear). Today:
 | Provider | PRIMARY (provider-attached PR mapping) | Go port (`internal/providersync`) | Path-B fallback (`work_graph/builder.py` text-parse) |
 |---|---|---|---|
 | Linear | `extract_linear_dependencies` (`providers/linear/normalize.py`) — issue attachments, sourceType + trusted-host gated | `normalizeLinearDependencies`/`linearAttachmentWorkItemID` (`linear_work_items_route.go`) — **ported with equivalent trust-gate semantics (sourceType + host allowlist), no loss.** One minor divergence: Python's PR/MR-number match requires digits (`\d+`, `normalize.py:77`); Go accepts any final path segment (`linear_work_items_route.go:890`) — functionally inert (a non-numeric segment can't match a real `git_pull_requests.number`), not literally byte-for-byte. | Excluded from THIS Path-B fallback by design (`builder.py:1112-1114` — Linear's links arrive as attachments via the dependency pass above, not via text parsing here). §2's Secondary/Tertiary above is Linear's own (Path A) fallback and is very much used. |
-| Jira | **Built, Go-only** (CHAOS-4757) — `fetchJiraDevStatusPullRequests`/`extractJiraDevStatusDependencies` (`internal/providersync/jira_dev_status.go`) call `GET /rest/dev-status/1.0/issue/detail` once per application type, `GitHub` then `GitLab` (CHAOS-8526; a GitLab merge-request URL becomes a `gitlab:<path>!<n>` source, a GitHub pull URL `ghpr:<owner>/<repo>#<n>`; both share the `dev_status_max_requests` budget; a failing type does not hide the links the other returned; each type's outcome — synced, empty, `dev_status_unavailable`, failed, `cap_skipped` — is logged per issue and counted as `dev_health_jira_dev_status_total{outcome="<type>_<outcome>"}`, so a wrong application-type value reads as a loud zero), gated behind a `fetch_dev_status` claim option (default false — an extra REST call per issue). A 400/404 (no app configured for this issue) is a ruled clean typed no-op (`dev_status_unavailable`, `dev_health_jira_dev_status_total` metric), never an error. `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) remains issue↔issue `issuelinks` only — no Python dev-status ingestion exists or is planned | **No Python producer** — per the standing sync-ownership rule, this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from. **Fixtures-only proof**: no local org has the GitHub-for-Jira app installed, so this has not been proven against real dev-status data; live proof awaits such an org | A fallback only (chris, 2026-10-15): the text-parse links a key only when neither the pull request nor the issue has a native link; see the tier rule below the table. Hosts beyond public GitHub/GitLab.com are trusted through `JIRA_TRUSTED_SCM_HOSTS` (`host` or `host/root`; the root is the instance's relative URL root, stripped before the project path, case-sensitive). |
-| GitLab | **Built, Go-only** (CHAOS-8526) — per issue, `GET /projects/:id/issues/:iid/closed_by` (`collectGitLabClosingMergeRequests`, under the `fetch_links` option) → `normalizeGitLabClosingMergeRequests` (`internal/providersync/gitlab_work_items_rows.go`) emits MR-source / issue-target rows of raw kind `gitlab_closing_reference`; the `issueprlinks` admission for it accepts only a well-formed `gitlab:<path>#<n>` issue target. **State rule (same as GitHub's `closingIssuesReferences`):** every MR `closed_by` returns links, open, merged or closed-unmerged; the MR's state is not a filter. A failing `closed_by` fetch is logged with the issue, counted (`dev_health_gitlab_closing_mr_fetch_total`, `closing_reference_fetch_failed`), listed under `incomplete`; the batch goes on. **Transient** failures (5xx, timeout, 429, network) hold the watermark so the next run asks again; **terminal** ones, which repeat on every run for the same issue, advance it: 404/403 (`terminal_unavailable`), page cap exceeded (`terminal_page_cap`), answer does not decode (`terminal_undecodable`) (D4771). A cancelled run stops (no test yet) | **No Python producer.** Fixtures-only proof: no live GitLab org read yet | The text-parse fallback stays, gated by the tier rule below the table; an `extkey:` prefix is never a donor row |
-| GitHub Issues | **Built, Go-only** (CHAOS-4757) — `extractGitHubClosingIssueReferences` (`internal/providersync/github_work_items_rows.go`) parses `closingIssuesReferences` off the existing per-PR GraphQL social fetch (`gitHubWorkItemPRSocialFetcher`, `github_work_items_social_fetch.go`), requested unconditionally on the top-level (non-continuation) page and tolerated as absent rather than erroring — a deliberate leniency for a best-effort supplementary field, unlike the strict Comments/TimelineItems connections | **No Python producer** — per the standing sync-ownership rule (no Python sync changes for anything Go workers run), this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from | A fallback only (chris, 2026-10-15): the text-parse links an issue only when neither the pull request nor the issue has a native link; see the tier rule below the table. The GitHub `work-items` native route's planner-level veto was lifted (CHAOS-4731), but this org had **zero** `work_items` rows for `provider = 'github'` as of the CHAOS-4752 investigation (2026-09-01) — an operator/sync-config fact for THIS org, not a code-level gate; a different org with that dataset enabled would have rows to look up against. |
+| Jira | **Built, Go-only** — `fetchJiraDevStatusPullRequests`/`extractJiraDevStatusDependencies` (`internal/providersync/jira_dev_status.go`) call `GET /rest/dev-status/1.0/issue/detail` once per application type, `GitHub` then `GitLab` (a GitLab merge-request URL becomes a `gitlab:<path>!<n>` source, a GitHub pull URL `ghpr:<owner>/<repo>#<n>`; both share the `dev_status_max_requests` budget; a failing type does not hide the links the other returned; each type's outcome — synced, empty, `dev_status_unavailable`, failed, `cap_skipped` — is logged per issue and counted as `dev_health_jira_dev_status_total{outcome="<type>_<outcome>"}`, so a wrong application-type value reads as a loud zero), gated behind a `fetch_dev_status` claim option (default false — an extra REST call per issue). A 400/404 (no app configured for this issue) is a ruled clean typed no-op (`dev_status_unavailable`, `dev_health_jira_dev_status_total` metric), never an error. `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) remains issue↔issue `issuelinks` only — no Python dev-status ingestion exists or is planned | **No Python producer** — per the standing sync-ownership rule, this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from. **Fixtures-only proof**: no local org has the GitHub-for-Jira app installed, so this has not been proven against real dev-status data; live proof awaits such an org | A fallback only: the text-parse links a key only when neither the pull request nor the issue has a native link; see the tier rule below the table. Hosts beyond public GitHub/GitLab.com are trusted through `JIRA_TRUSTED_SCM_HOSTS` (`host` or `host/root`; the root is the instance's relative URL root, stripped before the project path, case-sensitive). |
+| GitLab | **Built, Go-only** — per issue, `GET /projects/:id/issues/:iid/closed_by` (`collectGitLabClosingMergeRequests`, under the `fetch_links` option) → `normalizeGitLabClosingMergeRequests` (`internal/providersync/gitlab_work_items_rows.go`) emits MR-source / issue-target rows of raw kind `gitlab_closing_reference`; the `issueprlinks` admission for it accepts only a well-formed `gitlab:<path>#<n>` issue target. **State rule (same as GitHub's `closingIssuesReferences`):** every MR `closed_by` returns links, open, merged or closed-unmerged; the MR's state is not a filter. A failing `closed_by` fetch is logged with the issue, counted (`dev_health_gitlab_closing_mr_fetch_total`, `closing_reference_fetch_failed`), listed under `incomplete`; the batch goes on. **Transient** failures (5xx, timeout, 429, network) hold the watermark so the next run asks again; **terminal** ones, which repeat on every run for the same issue, advance it: 404/403 (`terminal_unavailable`), page cap exceeded (`terminal_page_cap`), answer does not decode (`terminal_undecodable`). A cancelled run stops (no test yet) | **No Python producer.** Fixtures-only proof: no live GitLab org read yet | The text-parse fallback stays, gated by the tier rule below the table; an `extkey:` prefix is never a donor row |
+| GitHub Issues | **Built, Go-only** — `extractGitHubClosingIssueReferences` (`internal/providersync/github_work_items_rows.go`) parses `closingIssuesReferences` off the existing per-PR GraphQL social fetch (`gitHubWorkItemPRSocialFetcher`, `github_work_items_social_fetch.go`), requested unconditionally on the top-level (non-continuation) page and tolerated as absent rather than erroring — a deliberate leniency for a best-effort supplementary field, unlike the strict Comments/TimelineItems connections | **No Python producer** — per the standing sync-ownership rule (no Python sync changes for anything Go workers run), this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from | A fallback only: the text-parse links an issue only when neither the pull request nor the issue has a native link; see the tier rule below the table. The GitHub `work-items` native route's planner-level veto was lifted, but this org had **zero** `work_items` rows for `provider = 'github'` as of 2026-09-01 — an operator/sync-config fact for THIS org, not a code-level gate; a different org with that dataset enabled would have rows to look up against. |
 
-**Tier rule: text and heuristic links are a fallback only (chris, 2026-10-15, verbatim):** *"Text inferred when
+**Tier rule: text and heuristic links are a fallback only:** *"Text inferred when
 there's a PR link should have never happened, that's a been a hardfast rule since the start. Inferred is 100% a
 fallback only."* In `work_graph_issue_pr` a pull request (`repo_id`, `pr_number`) that has a `native` link gets no
 `explicit_text` or `heuristic` link to any issue, and an issue (`work_item_id`) that has a `native` link gets no
@@ -3566,7 +3386,7 @@ over Jira, Linear, GitHub and GitLab). Where it is held:
   heuristic's work items skip it, and `issue_pr_fallback_retraction` retracts a stored lower-tier row and edge whose
   issue side is one (prod had `ghpr:...#120 -> 121` text rows and heuristic self-links). Tests:
   `pr_never_issue_side_test.go`.
-- **Invariant check (CHAOS-10062).** The pre-step `issue_pr_fallback_invariant` runs after
+- **Invariant check.** The pre-step `issue_pr_fallback_invariant` runs after
   `issue_pr_edges_heuristic`, the last step that writes `work_graph_issue_pr`. It counts the lower-tier rows that
   still break the rule: beside a native link (by pull request side, by issue side) or with a pull request work item as the
   issue side, and the total (each row once; the same rows `issue_pr_fallback_retraction` removes). The count must be 0. The step repairs
@@ -3586,13 +3406,13 @@ The prod case that showed the defect: acr pull requests whose bodies quoted test
 Linear link, and the text matcher still linked the real Jira issues `API-1`, `BILL-1` and `FC-1`, which made three
 Jira teams co-owners of the repository.
 
-A PR whose PM-provider integration was never configured for that issue (chris: *"if it's not
-setup to attach github ↔ project management that's the user's problem"*) legitimately falls
+A PR whose PM-provider integration was never configured for that issue (if it is not
+set up to attach GitHub to project management, that is a configuration matter for the user) legitimately falls
 through to fallback or stays unlinked — that is not a defect. A PR whose provider mapping DOES
 exist but never reaches evidence IS a defect; see the investment-materializer path below, which is
-exactly this failure mode (CHAOS-4752).
+exactly this failure mode.
 
-### Investment work-graph consumption (structural evidence bridge, CHAOS-4752)
+### Investment work-graph consumption (structural evidence bridge)
 
 §2 above documents one consumer of `work_item_dependencies`: `job_work_items` →
 `build_linked_issue_team_resolver` → `work_item_cycle_times` (rank-5 `linked_issue`, per-metric
@@ -3600,9 +3420,8 @@ attribution). A **second, independent consumer** reads the same captured edges i
 *investment* work-graph — the path that feeds `work_unit_investments.structural_evidence_json`
 and, through it, a per-unit team vote across its evidence items' PRIMARY attributions via
 `build_unit_team_subquery` (often resolving to `native_team`, rank 0, for a Linear-primary org like
-this ticket's — but not the only reachable outcome; see the diagram). The two paths share only
-`work_item_dependencies`; everything downstream of it is separate code, separate tables, and (per
-CHAOS-4752) a separate defect the §2 diagram does not cover:
+the example here — but not the only reachable outcome; see the diagram). The two paths share only
+`work_item_dependencies`; everything downstream of it is separate code, separate tables, and a separate defect the §2 diagram does not cover:
 
 ```mermaid
 flowchart TD
@@ -3617,11 +3436,11 @@ flowchart TD
 
     subgraph PathB["Path B — investment work-unit evidence (this section)"]
         direction TB
-        Derive["issue-PR link derivation<br/>Go · internal/jobs/workgraph/issueprlinks<br/>(CHAOS-5249: was Python's _derive_issue_pr_links_from_dependencies,<br/>deleted -- issueprlinks is the sole producer, wired as a pre-step)"]
+        Derive["issue-PR link derivation<br/>Go · internal/jobs/workgraph/issueprlinks<br/>(issueprlinks is the sole producer, wired as a pre-step)"]
         WGIP[("work_graph_issue_pr<br/>(internal staging table)")]
         FastPath["_build_issue_pr_edges_from_fast_path<br/>Python · work_graph/builder.py"]
         WGE[("work_graph_edges<br/>(generic graph, what the materializer reads)")]
-        Materialize["investment materializer<br/>Python · work_graph/investment/materialize.py<br/>⚠️ CHAOS-4752/CHAOS-4758 — a PR-only work unit's<br/>structural_evidence_json can lose its issue link when<br/>the CHAOS-2775 oversized-component split's hub removal<br/>orphans the PR from its component; fix in progress"]
+        Materialize["investment materializer<br/>Python · work_graph/investment/materialize.py<br/>⚠️ Known limitation — a PR-only work unit's<br/>structural_evidence_json can lose its issue link when<br/>the oversized-component split's hub removal<br/>orphans the PR from its component"]
         SEJ[("work_unit_investments<br/>.structural_evidence_json.issues")]
         UnitTeam["build_unit_team_subquery<br/>Python · api/queries/investment.py<br/>Go · internal/queryapi/analytics/investment.go"]
         Resolved(["team with the most votes across the unit's evidence<br/>items' PRIMARY attributions (work_item_team_attributions,<br/>is_primary = 1), tie-broken by team_id — NOT simply the<br/>single highest-ranked source. native_team (rank 0) is this<br/>section's worked example outcome, not the only reachable one"])
@@ -3633,7 +3452,7 @@ flowchart TD
 ```
 
 **Ownership:** the issue-PR link derivation node (`Derive` above, `work_graph_issue_pr`) is Go-native
-(`internal/jobs/workgraph/issueprlinks`, CHAOS-5249) — Python's own producer was deleted, not merely
+(`internal/jobs/workgraph/issueprlinks`) — Python's own producer was deleted, not merely
 superseded. Every node from `_build_issue_pr_edges_from_fast_path` through `structural_evidence_json`
 remains Python-only — no Go port exists for them. `build_unit_team_subquery`,
 the READ side that turns that evidence into a team vote, IS ported to Go
@@ -3642,14 +3461,12 @@ WRITE side (the materializer that produces `structural_evidence_json` in the fir
 Go-native COMPUTE — Go does own the execution orchestration (River job registration and the
 HTTP compatibility bridge to Python, `internal/workerservice/workgraph.go:23-53`) and the
 `work_item_dependencies` write (verified correct for Linear, see the table above); it just doesn't
-run the graph/materialization logic itself. The materializer node is marked as the confirmed CHAOS-4752 defect, root-caused
-as **CHAOS-4758**: Linear `relates`/`blocks` edges captured at confidence 1.0 (`work_graph/builder.py:905`)
-fuse issues into an oversized connected component; the CHAOS-2775 size-cap split cannot drop edges to
+run the graph/materialization logic itself. The materializer node is marked as a known limitation: Linear `relates`/`blocks` edges captured at confidence 1.0 (`work_graph/builder.py:905`)
+fuse issues into an oversized connected component; the size-cap split cannot drop edges to
 stay under the cap, so its hub-removal step deletes issue nodes to shrink the component — orphaning
-the PRs that reached their issue only through a removed hub. Fix in progress as a **native-Go job**
-(`internal/jobs/workgraph`, a new `Kind`, no LLM required) rather than a Python patch — see CHAOS-4752
-for the fix-shape writeup and CHAOS-4758 for the root-cause mechanism.
-Since CHAOS-9269 (chris, 2026-10-11) the Go unit build reads issue -> issue links (`relates`,
+the PRs that reached their issue only through a removed hub. The fix is in progress as a **native-Go job**
+(`internal/jobs/workgraph`, a new `Kind`, no LLM required) rather than a Python patch.
+The Go unit build reads issue -> issue links (`relates`,
 `blocks`, `duplicates`, `parent_of`/`child_of`) as references, not unit membership: they no longer
 fuse issues into one component, an issue whose only links are issue links is a one-node unit, and the
 links stay in `work_graph_edges` for the graph and blocker readers.
@@ -3658,7 +3475,7 @@ links stay in `work_graph_edges` for the graph and blocker readers.
 
 ## 3. Data flow & relationships (ER)
 
-> **Provider-agnostic, by ruling (chris, 2026-08-28 08:07 PT, CHAOS-4365 amendment):** *"It's not
+> **Provider-agnostic:** *"It's not
 > just linear to be clear, the graph associated VIA ANY TOOL THAT CAN MAP to github/gitlab objects.
 > The SOURCE github/gitlab/bitbucket ARE irrelevant."* Every edge below that crosses from a tracker
 > (Linear/Jira/GitLab issues/…) to an SCM object (GitHub/GitLab/Bitbucket repo or PR) is drawn
@@ -3680,18 +3497,18 @@ erDiagram
     teams ||--o{ team_project_ownership : "team_id (attribution source 2: project_ownership)"
     team_project_ownership }o..o{ work_items : "project_id OR project_key, direct value match -- attribution never joins through projects (metrics/compute_work_items.py:559-577)"
     teams ||--o{ work_items : "teams.project_keys array vs work_scope_id/project_key, direct resolver match (attribution source 1: issue_project) -- also never via projects"
-    work_items }o..o{ projects : "Ask Dev investigation subsystem only (_project_identity.py), NOT the attribution resolver -- provider-specific: Linear and Jira by id (a Jira catalog row written before CHAOS-8851 had a key-built id and met its work items by project_key only); GitLab by project_key (its catalog id is a separate opaque numeric space, incompatible with work_items.project_id)"
+    work_items }o..o{ projects : "Ask Dev investigation subsystem only (_project_identity.py), NOT the attribution resolver -- provider-specific: Linear and Jira by id (an older Jira catalog row had a key-built id and met its work items by project_key only); GitLab by project_key (its catalog id is a separate opaque numeric space, incompatible with work_items.project_id)"
 
     teams ||--o{ team_repo_ownership : "team_id (attribution source 3: repo_ownership)"
     team_repo_ownership }o..o{ repos : "repo_id is Nullable and often NULL (e.g. every GitHub provider_access row, team_autoimport_github.py:308-338); resolved at READ time by a case-insensitive (org_id, provider, repo_full_name) name join, unmatched rows dropped -- providers/teams.py:380-392"
     repos ||--o{ work_items : "repo_id"
-    team_project_ownership }o..o{ team_repo_ownership : "sync-derived, provider-agnostic (CHAOS-4365, implemented -- internal/providersync/team_repo_ownership_derivation.go deriveTeamRepoOwnership, internal/providersync/team_repo_ownership_derivation_clickhouse.go TeamRepoOwnershipDerivationService.Derive): work_items' own OR (via work_item_dependencies, §2, gated to inheritance-safe relationship types) a donor's project_id resolves a team; stamps a pull request's / merge request's own repo_id (an issue's own repo_id is never read) -- source=inferred, an already-declared value gaining its first writer. Also reachable via work_graph_issue_pr (design check b): a PR inherits its linked work item's resolved team, stamped on the LINK TABLE's own repo_id (not the work item's), since that link can be genuinely cross-repo."
+    team_project_ownership }o..o{ team_repo_ownership : "sync-derived, provider-agnostic (implemented --  internal/providersync/team_repo_ownership_derivation.go deriveTeamRepoOwnership, internal/providersync/team_repo_ownership_derivation_clickhouse.go TeamRepoOwnershipDerivationService.Derive): work_items' own OR (via work_item_dependencies, §2, gated to inheritance-safe relationship types) a donor's project_id resolves a team; stamps a pull request's / merge request's own repo_id (an issue's own repo_id is never read) -- source=inferred, an already-declared value gaining its first writer. Also reachable via work_graph_issue_pr (design check b): a PR inherits its linked work item's resolved team, stamped on the LINK TABLE's own repo_id (not the work item's), since that link can be genuinely cross-repo."
 
     repos ||--o{ git_pull_requests : "repo_id (raw git-log-sourced PR facts; tenant-scoped by org_id since migration 027, but NO work_item_id: NOT an attribution input)"
-    work_items ||--o{ work_graph_issue_pr : "work_item_id (tracker-issue side of the work-graph's own cross-provider link, CHAOS-2416)"
+    work_items ||--o{ work_graph_issue_pr : "work_item_id (tracker-issue side of the work-graph's own cross-provider link)"
     git_pull_requests ||--o{ work_graph_issue_pr : "(repo_id, number = pr_number) (SCM-PR side of that same link)"
 
-    teams }o--o{ identities : "team_ids (ADMIN override membership set, CHAOS-4321 -- override layer, NOT an attribution source itself)"
+    teams }o--o{ identities : "team_ids (ADMIN override membership set -- override layer, NOT an attribution source itself)"
     teams ||--o{ team_memberships : "team_id (PROVIDER fallback membership layer -- NOT an attribution source itself; consulted only inside attribution sources 4/6)"
 
     work_items {
@@ -3755,7 +3572,7 @@ erDiagram
         uuid     repo_id "Nullable -- often NULL, resolved by name at read time"
         string   repo_full_name
         string   match_type
-        string   source "native|jira_legacy|provider_access|manual|inferred (inferred's first writer is implemented, CHAOS-4365 -- §0.2)"
+        string   source "native|jira_legacy|provider_access|manual|inferred (inferred's first writer is implemented -- §0.2)"
         uint8    is_primary
         uint16   specificity
         datetime valid_from
@@ -3828,8 +3645,7 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   is real and sync-written (§0.4a), but its only consumer that actually JOINS `work_items` to it is
   a **different** subsystem: Ask Dev's investigation/evidence queries
   (`api/dev/_project_identity.py`), and even there the join is provider-specific, not a uniform
-  `project_id = id` — Linear and Jira match by raw id (section 0.4b; a Jira catalog row written before
-  CHAOS-8851 had a key-built id and met its work items by `project_key` only), and GitLab by `project_key`
+  `project_id = id` — Linear and Jira match by raw id (section 0.4b; an older Jira catalog row had a key-built id and met its work items by `project_key` only), and GitLab by `project_key`
   only (GitLab's catalog id is a separate, opaque, prefixed numeric space that never equals
   `work_items.project_id`).
 - **Two different "cross-provider link" tables exist for two different consumers — do not conflate
@@ -3839,7 +3655,7 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   `work_items`⇄`work_items` self-edge, captured per §2. (2) `work_graph_issue_pr` is a **separate**
   real table the work-graph build writes (`work_graph_edges`' fast-path sibling, migration
   `014_work_graph.sql`) feeding `work_unit_investments.structural_evidence_json`'s `prs` array
-  (§0.4 CHAOS-2416 bullet) — it is not read by the team-attribution resolver at all. Both answer
+  (§0.4) — it is not read by the team-attribution resolver at all. Both answer
   "which table carries the cross-provider link," for different readers.
   For the entity tree, `work_graph_issue_pr` is the issue <> pull request link of record; its
   `provenance` tier ranks native > explicit_text > heuristic, and a consumer names the tier. The two
@@ -3850,15 +3666,15 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   `027`) used for git-side PR metrics (review load, cycle time from the git side) — with no
   `work_item_id` column it cannot itself be an attribution input; `work_graph_issue_pr.pr_number`
   is the only column that ties a `git_pull_requests` row back to a tracker work item.
-- **The `inferred` `team_repo_ownership.source` derivation (CHAOS-4365) is NOT a new
+- **The `inferred` `team_repo_ownership.source` derivation is NOT a new
   attribution-ladder rank, and NOT a schema change.** `inferred` is already one of the five values
   ClickHouse accepts for this column (migration `051`) — this producer is its first writer, so a
   repo can get a team from ANY tracker's project ownership, reached by walking a work item's own or
-  a donor's `project_id` (provider-agnostic per chris's 08:07 PT amendment, quoted above), when no
+  a donor's `project_id` (provider-agnostic, as quoted above), when no
   direct producer row (`native` for Jira/Linear, `provider_access` for GitHub/GitLab team
   auto-import — §0.4a) exists for that repo. The attribution resolver's rank-3 `repo_ownership`
   source (§0.1) reads `team_repo_ownership` uniformly regardless of which sub-source populated the
-  winning row. Since CHAOS-9411 this producer writes the main owner `is_primary = 1` and every
+  winning row. This producer writes the main owner `is_primary = 1` and every
   co-owner `is_primary = 2`, each with its `share` (§1.1, "Every owning team of a repo"); readers
   rank `(is_primary = 1) DESC` first, then `specificity`, so the main inferred owner (specificity
   150) outranks a GitHub `provider_access` grant (`is_primary = 0`, specificity 100), as the
@@ -3869,8 +3685,7 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   `TeamRepoOwnershipDerivationService.Derive` (ClickHouse read/write glue); see the
   ownership-derivation diagram in §1.1.
 - **Admin override vs. provider fallback are two different roster layers, neither is an
-  `work_item_team_attributions.source` value.** `identities.team_ids` ∪ `teams.manual_members` is the
-  CHAOS-4321 admin (override) layer; `team_memberships` is the provider (fallback)
+  `work_item_team_attributions.source` value.** `identities.team_ids` ∪ `teams.manual_members` is the admin (override) layer; `team_memberships` is the provider (fallback)
   layer. Both are consulted only *inside* the `assignee_membership` (rank 4) / `author_membership`
   (rank 6) resolution step (§0 "Why this exists") — they never appear as their own row in
   `work_item_team_attributions.source`.
@@ -3926,12 +3741,12 @@ flowchart LR
     CH -. team resolvers .-> D4
 ```
 
-> **No Postgres in the team/identity path (CHAOS-2600).** The team resolvers read ClickHouse
+> **No Postgres in the team/identity path.** The team resolvers read ClickHouse
 > `teams` / `identities` (and the ownership dimensions). The Postgres `team_mappings` /
-> `identity_mappings` tables and their models/services were dropped in CS6 (CHAOS-2607); the
+> `identity_mappings` tables and their models/services were dropped in CS6; the
 > Postgres→ClickHouse bridge (`team_bridge.py`), `team_reconcile.py`, the `sync-team-drift` /
 > `reconcile-team-members` tasks are all deleted; the four admin drift-review endpoints remain as HTTP
-> 501 stubs until CS7 (CHAOS-2608). Admin
+> 501 stubs until CS7. Admin
 > team/identity CRUD writes ClickHouse via `ClickHouseTeamAdminService` / `ClickHouseIdentityStore`;
 > identity membership is edited surgically (add/remove-by-facet) so Auto Import members are preserved.
 
@@ -3939,7 +3754,7 @@ flowchart LR
 
 ### Manual QA: auto-imported ownership coverage
 
-Use this check when validating CHAOS-2401/2547 against a real tenant. It proves
+Use this check when validating auto-imported ownership against a real tenant. It proves
 the sync surface fills the ClickHouse ownership dimensions that the attribution
 resolver reads, then verifies the user-visible Investment → Allocation coverage
 does not collapse to `unassigned`.
@@ -3947,8 +3762,7 @@ does not collapse to `unassigned`.
 1. In Admin → Sync, create or edit a real Linear work-items sync and enable
    **Import teams**, **Import projects**, and **Import members** (`sync_options`
    keys `auto_import_teams`/`auto_import_projects`/`auto_import_members`, each
-   independently selectable and off by default; CHAOS-4323 replaced the single
-   "Auto-import teams, projects & members" checkbox with these three).
+   independently selectable and off by default; there is no single "Auto-import teams, projects & members" checkbox).
 2. Trigger the sync through the sync-config UI or worker-backed trigger endpoint
    so the configured worker credentials are used.
 3. After the sync succeeds, dispatch daily metrics for that day (the worker
@@ -3995,15 +3809,14 @@ does not collapse to `unassigned`.
 > next sync re-extracts the source. A link-lifecycle/tombstone (which also
 > affects the work-graph) is a tracked follow-up.
 
-### CS6 status (CHAOS-2607)
+### CS6 status
 
 - **Drift-review implementation is removed; endpoints kept as 501 stubs.** The Postgres-backed drift
   engine (`TeamDriftSyncService` + the `TeamMapping` flagged-changes substrate) is **deleted** in CS6.
   The four admin drift-review endpoints (`GET /teams/pending-changes`,
   `POST /teams/{id}/approve-changes`, `/dismiss-changes`, `POST /teams/trigger-drift-sync`) **remain as
   HTTP 501 compatibility stubs** so the web admin keeps getting a clean 501; they are removed together
-  with the web caller (`PendingChangesPanel`) in CS7 — see **CHAOS-2608**. A ClickHouse-backed
-  drift-review rebuild is tracked separately by **CHAOS-2622**.
+  with the web caller (`PendingChangesPanel`) in CS7. A ClickHouse-backed drift-review rebuild does not exist yet.
 - **Postgres mapping deletion is done.** The `TeamMappingService` / `IdentityMappingService` /
   `TeamDriftSyncService` classes, the dead `JiraActivityInferenceService.match_and_confirm` /
   `TeamMembershipService.confirm_links` paths, the `sync-team-drift` / `reconcile-team-members` tasks,
@@ -4035,14 +3848,12 @@ The investment **allocation** views derive team at *query time*: the coverage %,
 team-exchange chord, team Cycle Time × Throughput quadrant, and work-unit
 investment evidence read `work_unit_investments` / cycle-time activity and join
 latest primary `work_item_team_attributions` rows for team identity. So three
-things must be true, and the backfill **runner (CHAOS-5351: `run_backfill_via_planner`,
-the native provider-sync dispatch path -- `run_work_items_sync_job` and the
-Python `run_backfill_for_config` that called it are deleted) only dispatches
+things must be true, and the backfill **runner (`run_backfill_via_planner`, the native provider-sync dispatch path) only dispatches
 a provider work-items backfill — it does NOT fan out** to the work-graph or
 investment jobs (only the live sync path chains those). They must be
 triggered explicitly.
 
-> **Restoration check (2026-08-19):** confirmed still true, with named citation and documented
+> **Reader contract:** confirmed, with named citation and documented
 > exceptions. The reader contract has a name: `PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE`, defined
 > once at `api/queries/investment.py:271-285` and `LEFT JOIN`ed at query time by 19 of 24 identified
 > read sites (six of them in `api/queries/investment.py` alone, lines 494/560/628/696/768/912; more
@@ -4054,16 +3865,14 @@ triggered explicitly.
 > `team_id` and `source` **inside** the ReplacingMergeTree key, so a re-attribution event (a scope
 > reassigned to a different team) inserts a *new* candidate row rather than replacing the old one —
 > `FINAL` alone cannot retire a superseded candidate because its key differs. This is asserted in
-> `tests/test_team_attribution_provenance_live.py` (removed with the Python api) (CHAOS-2605) and explained in a comment at
+> `tests/test_team_attribution_provenance_live.py` (removed with the Python api) and explained in a comment at
 > `api/graphql/resolvers/team_attribution.py:99-107`. Any new caller that reads
 > `work_item_team_attributions` without both `FINAL` and the fence will silently see stale
 > candidates. A code comment at `investment_flow.py:259-267` documents this pattern as the single
-> source every Investment Sankey/coverage team join must read from, and (as of this restoration)
-> still cites this document by its pre-migration path (`docs/architecture/team-attribution.md §0`) —
-> see the stale-reference sweep at the end of this page.
+> source every Investment Sankey/coverage team join must read from.
 >
 > **Three documented exceptions where team identity does *not* come from a query-time join to
-> `work_item_team_attributions`** — found during this restoration, not in the original text. §5's
+> `work_item_team_attributions`** — §5's
 > claim holds for the read paths above but not universally:
 >
 > | Path | What it does instead | Where |
@@ -4074,12 +3883,11 @@ triggered explicitly.
 >
 > None of these are necessarily bugs — they may be deliberate scope decisions — but a reader relying
 > on "team is always derived at query time" to reason about a stale-team symptom in the quadrant or a
-> non-investment view will be wrong. This table is not exhaustive; it is what this restoration
-> verified, not a completeness claim.
+> non-investment view will be wrong. This table is not exhaustive; it is what was verified, not a completeness claim.
 
 ```mermaid
 flowchart TD
-    DEP["1. Merge + deploy (#921, #923, #924)"] --> SYNC
+    DEP["1. Merge + deploy"] --> SYNC
     subgraph SYNC ["2. Work-items sync/backfill — ALL providers"]
         L["Linear (issues + attachment edges)"]
         G["GitHub / GitLab (PRs/MRs + comment/body edges)"]
@@ -4092,7 +3900,7 @@ flowchart TD
 
 ### Ordered steps (per affected org)
 
-> **Added at restoration (2026-08-19): snapshot BEFORE you replay, not after.** You cannot verify a
+> **Snapshot BEFORE you replay, not after.** You cannot verify a
 > backfill's effect from the table after the fact. `work_item_team_attributions` is
 > `ReplacingMergeTree(computed_at)`; ClickHouse's background merges physically collapse each
 > `ORDER BY` key to its newest version over time, so on a table that has had time to merge, a plain
@@ -4103,17 +3911,17 @@ flowchart TD
 > WHERE org_id = {org} AND is_primary = 1 GROUP BY source`) and diff it against the same query after
 > step 5. This is a prerequisite, not an optional nicety.
 
-1. **Merge + deploy** #921 (mechanism), #923 (backfill CLI), #924 (capture).
+1. **Merge + deploy** the mechanism, the backfill CLI and the capture change.
 2. **Backfill all providers** — Linear **and** GitHub/GitLab. Linear-only does
    nothing: the PR/MR rows and their edges come from the git providers, and the
    donor issues come from Linear. A single `--provider all` run (or per-provider
    with Linear synced so its issues are present) writes the edges and recomputes
    `work_item_team_attributions`. The org is derived from the sync config
-   (#923), so `--org` is optional.
+, so `--org` is optional.
 3. **Work-graph build**, then
 4. **`dho workers investment trigger`** — these rebuild
    `work_unit_investments` + its `structural_evidence_json` `issues` **and**
-   `prs` arrays (the coverage join keys — see the CHAOS-2416 bullet in §0);
+   `prs` arrays (the coverage join keys — see §0);
    the backfill does not trigger them.
 5. **Verify & recover** — the coverage %, chord, team Cycle Time × Throughput
    quadrant, and work-unit investment evidence recover automatically via the
@@ -4134,16 +3942,16 @@ flowchart TD
 
 > Exact CLI flags vary per command — confirm with `<cmd> --help`. The relevant
 > entry points: work-items ingestion is automatic (native Go provider-sync
-> route + webhooks, CHAOS-5351) -- `sync work-items` is deleted, `backfill
+> route + webhooks) -- `sync work-items` is deleted, `backfill
 > run` → `run_backfill_via_planner` (dispatches the same native route, does
 > not call Python compute); `work-graph build` → `run_work_graph_build`;
 > `investment trigger` → the native `investment.materialize` River kind
-> (`dev-hops investment materialize` was deleted, CHAOS-5173); `metrics
+> (`dev-hops investment materialize` was deleted); `metrics
 > daily` → `run_daily_metrics`.
 
 ---
 
-## 6. Team complexity rollup (CHAOS-4365 item 3 / 4347-C)
+## 6. Team complexity rollup
 
 `team_complexity_daily` (ops migration `082_team_complexity_daily.sql`) is a
 new, append-only, ownership-scoped table: team-keyed cyclomatic complexity,
@@ -4151,9 +3959,9 @@ rolled up from the repo-level `repo_complexity_daily` (already productionized
 — `job_complexity.py`/`job_complexity_db.py`, `metrics complexity` CLI). Only
 the team rollup was greenfield; repo-level complexity compute is unchanged.
 
-Same CHAOS-4321 hard rule as items 1-2: team = project/repo **ownership**
+Same hard rule as items 1-2: team = project/repo **ownership**
 only. `repo_complexity_daily` carries no `team_id` column of its own (unlike
-`user_metrics_daily`/`team_metrics_daily`, CHAOS-4396's taint source), so
+`user_metrics_daily`/`team_metrics_daily`), so
 there is nothing to route around here — the resolution path
 (`team_repo_ownership` merged over `teams.repo_patterns`, §0.2/§1.1) is
 reused purely for consistency with items 1-2, not to avoid a tainted column.
@@ -4185,8 +3993,7 @@ via `argMax(<col>, computed_at)` because merges are eventual.
 executor (`internal/jobs/metrics/daily/team_complexity_native_executor.go`,
 `TeamComplexityExecutor.ComputeFinalizeFamily`, registered via
 `FinalizeHandler.SetNativeFinalizeFamilies`), the same once-per-org/day
-finalize scope `ic_finalize`/`team_cognitive_load_daily` use (CHAOS-4399's
-original once-per-org/day discipline, CHAOS-5051's native port). Unlike
+finalize scope `ic_finalize`/`team_cognitive_load_daily` use. Unlike
 `team_cognitive_load_daily` (which aggregates the current run's
 already-computed in-memory rows directly), `team_complexity_daily` reads
 `repo_complexity_daily` back from ClickHouse via
@@ -4195,29 +4002,15 @@ already-computed in-memory rows directly), `team_complexity_daily` reads
 separate job (`metrics complexity`) on its own cadence, not inside the daily
 partition loop, so there is no in-memory copy to reuse. A day with no
 `repo_complexity_daily` rows yet degrades to zero team rows (`return 0,
-nil`), logged and counted (never raised) — same CHAOS-4246 contract every
-finalize family follows. The Python compute this executor replaced
-(`job_daily.py`'s `_write_team_complexity_for_day`/
-`_fetch_repo_complexity_for_day`) was deleted outright, not skip-gated
-(CHAOS-5051, same reachability argument as CHAOS-5141's team_cognitive_load
-deletion): `buildDailyWorker` refuses the whole daily worker before any
-native family construction is attempted if the ClickHouse connection fails
-to open, so a construction-time fallback to Python was never actually
-reachable in production.
+nil`), logged and counted (never raised) — same contract every
+finalize family follows. There is no Python fallback: `buildDailyWorker` refuses the whole daily worker before any native family
+construction is attempted if the ClickHouse connection fails to open.
 
-**Fixtures finding (CHAOS-4365 item 3):** the Python fixtures generator
-(`fixtures/runner.py`, run with `--with-metrics`) never called `run_daily_metrics_finalize` before this
-change — it only ran `run_daily_metrics_job`'s own older, narrower inline
-finalize block (IC metrics/landscape only). Every `--with-metrics` fixtures
-run therefore produced REPO-scope rows only for `compounding_risk_daily`,
-and **zero** rows for `compounding_risk_daily` scope=team and
-`team_cognitive_load_daily` — silently, with no exception or warning,
-since `run_daily_metrics_job` never invoked the code path that would have
-logged the zero-rows warning either. Fixed in `fixtures/runner.py`: the
-`--with-metrics` path now also calls `run_daily_metrics_finalize` once per
-generated day, mirroring `_cmd_metrics_daily`'s CLI pattern. This closes a
-test-coverage gap for items 1-2 as well as item 3 — see the ops PR body for
-before/after readback counts.
+**Fixtures:** the Python fixtures generator (`fixtures/runner.py`, run with `--with-metrics`) calls
+`run_daily_metrics_finalize` once per generated day, mirroring `_cmd_metrics_daily`'s CLI pattern, so a
+`--with-metrics` fixtures run produces the finalize-scope rows (`compounding_risk_daily` scope=team,
+`team_cognitive_load_daily`, `team_complexity_daily`) and not only the REPO-scope `compounding_risk_daily` rows
+of `run_daily_metrics_job`'s own inline finalize block (IC metrics/landscape only).
 
 **Schema pin:** column types and the `ORDER BY`/engine clause are pinned
 byte-for-byte in `full-chaos/dev-health-go`'s `schema.go`
@@ -4225,46 +4018,6 @@ byte-for-byte in `full-chaos/dev-health-go`'s `schema.go`
 `v0.4.0`) with a test asserting they match an **embedded copy** of this
 migration's DDL exactly — same manually-synchronized pin as
 `team_cognitive_load_daily` (§0.2), not automatic cross-repo enforcement.
-
----
-
-## Stale references to this document (swept 2026-08-19, CHAOS-3968)
-
-This page's old pre-migration path, `docs/contribute/architecture/team-attribution.md`, is still cited in
-several places found by a repo-wide sweep. This restoration is docs-only and does not touch code, so
-only the two doc references were fixed here; the rest are reported for a follow-up code change.
-
-**Fixed in this restoration:**
-- `AGENTS.md:38` and `:40` — now point at `docs/contribute/architecture/team-attribution.md`.
-
-**Still stale — code comments, out of scope for a docs-only change:**
-- `src/dev_health_ops/metrics/compute_work_items.py:135` (removed with the Python api) (on `_SOURCE_ORDER`) and `:154` (on
-  `_DONOR_SOURCES`) — two citations in this one file, not one.
-- `src/dev_health_ops/external_ingest/sinks.py:514` (removed with the Python api).
-
-**Planning records — now honoured, not just flagged:**
-- `docs-data/redirects.tsv:50`, `docs-data/inventory/disposition-matrix.tsv:118`, and
-  `docs-data/inventory/ops-reference.tsv:25` record a ratified `documentation-remediation-audit`
-  disposition for `docs/contribute/architecture/team-attribution.md`: `move-and-rewrite` into
-  `/reference/data-models/work-graph/`, publishing only the durable supported contract while
-  "implementation history stays internal." That disposition was never executed — the source file was
-  deleted instead, and the redirect it produced pointed at a page that never received the content.
-  This restoration resolves that in two parts: the precedence model, source reference matrix, and
-  provider coverage contract (the durable supported contract) are now summarized on
-  [`reference/data-models/work-graph.md`](../../reference/data-models/work-graph.md), so the existing
-  redirect resolves to real content; the implementation detail this page's §0.3, §1-4, and §5 carry
-  (debugging matrices, job/component maps, the recovery runbook, the source map) is published here
-  instead of being dropped a second time, on the reading that `contribute/architecture/` — which
-  already publishes comparably deep detail in `platform.md`/`contracts.md`/`data-and-storage.md` — is
-  what "stays internal" meant relative to the customer-facing `use/`/`reference/` tier the disposition
-  was written against, not "does not get published at all."
-
-**A caveat for the code comments above:** they cite the raw repo path `docs/contribute/architecture/team-attribution.md`,
-which does not exist under any name after the original deletion — neither this page nor
-`work-graph.md` share that literal path, and the mkdocs redirect only rewrites published site URLs,
-not GitHub file links in source comments. Fixing those four comments needs a code change; whoever
-makes it should point at `docs/contribute/architecture/team-attribution.md` for the implementation
-detail the comments actually reference (the resolver internals), not at `work-graph.md`.
 
 ---
 
@@ -4283,9 +4036,8 @@ detail the comments actually reference (the resolver internals), not at `work-gr
 | GitLab capture | `providers/gitlab/normalize.py` |
 | Recovery runbook | §5 above; backfill `backfill/runner.py`, investment `workers/work_graph_tasks.py` |
 | Tests | `tests/test_linked_issue_team_inheritance.py` (removed with the Python api), `tests/test_pr_issue_link_capture.py` (removed with the Python api) |
-| Schema (base + widened) | `internal/chmigrate/history/051_team_attribution_dimensions.sql`, `internal/chmigrate/history/053_manual_attribution_fallbacks.sql` — see §0.6 |
-| Go dispatch → Python compatibility bridge (added §0.6) | `internal/workerservice/daily.go` (`NewHTTPCompatibilityExecutor`) (HTTP compatibility executor removed with the Python api) |
+| Schema (base + widened) | `internal/chmigrate/history/051_team_attribution_dimensions.sql`, `internal/chmigrate/history/053_manual_attribution_fallbacks.sql` |
 
 > All Python paths above are repo-relative to `src/dev_health_ops/` (e.g. `metrics/compute_work_items.py`,
 > removed with the Python api; its Go owner is `internal/teamattribution/cascade.go`). All Go paths are repo-relative to `ops/`.
-> Every path in this table was verified to still exist during the 2026-08-19 restoration (CHAOS-3968).
+

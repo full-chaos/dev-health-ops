@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
@@ -33,6 +35,11 @@ import (
 // extras) leaves apiservice.Deps exactly as it was before those fields
 // existed.
 type adminDepsExtra func(*apiservice.Deps)
+
+// withLinkSecret gives go-api the link signing key (LINK_TOKEN_SECRET): without it the invite route answers 503.
+func withLinkSecret(key string) adminDepsExtra {
+	return func(deps *apiservice.Deps) { deps.Invites = admin.InviteConfig{LinkSecret: key} }
+}
 
 // venueJWTIssuer/venueJWTAudience mirror config.go's unexported
 // defaultJWTIssuer/defaultJWTAudience and auth.py's own JWT_ISSUER/
@@ -420,18 +427,8 @@ func splitRows(joined string) []string {
 	return strings.Split(joined, venueoracle.JSONRowSeparator)
 }
 
-// orgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user
-// holds no live membership in, as written (not a member, not a UUID, not canonical, no such organization).
-const orgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:90-102); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
-
-// orgClaimRetirement pins Go's answer to each named request under orgClaimRuling in the pin at path (relative to
-// this package). The caller finishes the pin.
-func orgClaimRetirement(t *testing.T, path, digest string, names ...string) (venueoracle.Retirement, *venueoracle.GoPin) {
-	t.Helper()
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: path, SHA256: digest, Ruling: orgClaimRuling})
-	named := map[string]bool{}
-	for _, name := range names {
-		named[name] = true
-	}
-	return venueoracle.Retirement{Match: func(request venueoracle.Request) bool { return named[request.Name] }, Pin: pin}, pin
+// orgClaimGap is the known divergence ticket of the named requests: their bearer's org claim is one the legacy HS256
+// path trusted (product rule 1). The legacy answer stays the wanted one; each is skipped until the answers agree.
+func orgClaimGap(ticket string, names ...string) venueoracle.KnownDivergence {
+	return venueoracle.KnownDivergence{Match: func(request venueoracle.Request) bool { return slices.Contains(names, request.Name) }, Ticket: ticket}
 }

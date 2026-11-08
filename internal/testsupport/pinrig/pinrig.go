@@ -16,7 +16,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -86,12 +85,8 @@ func NewPinRig(t *testing.T, ctx context.Context, admin *pgxpool.Pool, instance 
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier, err := edgetoken.New(base64.RawURLEncoding.EncodeToString(key), "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	reader := policy.PGStore{Pool: login(roles["pin_reader"]), AuthSchema: "auth"}
-	auth, err := policy.NewAuthenticator(verifier, pinStore{PGStore: reader, users: admin},
+	auth, err := policy.NewAuthenticator(pinStore{PGStore: reader, users: admin},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

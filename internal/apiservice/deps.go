@@ -150,12 +150,12 @@ type Deps struct {
 	Decryptor providerfoundation.FernetDecryptor
 	// GitHubApp and GitHubStateSigner configure the GitHub App install
 	// routes (internal/api/githubapp): the App's identity read from
-	// GITHUB_APP_* when the api starts, and the JWT secret, issuer and
+	// GITHUB_APP_* when the api starts, and the GITHUB_APP_STATE_SECRET key, issuer and
 	// audience its install state is signed with.
 	GitHubApp         githubapp.Config
 	GitHubStateSigner githubapp.Signer
-	// SSOStateSecret keys the SSO login state (OIDC, OAuth, SAML): SSO_STATE_SECRET, else JWT_SECRET_KEY.
-	SSOStateSecret, SSOStateSecretFallback string
+	// SSOStateSecret keys the SSO login state (OIDC, OAuth, SAML): SSO_STATE_SECRET only.
+	SSOStateSecret string
 	// GitHubAppHTTPClient, GitHubAppURL and GitHubAppAPIURL are the install
 	// callback's outbound seam: nil/empty in production (github.com and
 	// api.github.com, no redirects); the venue oracle points them at a stub.

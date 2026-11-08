@@ -41,11 +41,13 @@ internal/auth/passwordpolicy
 internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/publicaudit
+internal/auth/repoidentityevent
 internal/auth/repokey
 internal/auth/requestid
 internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
+internal/auth/workloadinput
 internal/authzenforce
 internal/chmigrate
 internal/cli
@@ -104,6 +106,7 @@ internal/testsupport/moduleroot
 internal/testsupport/pgseed
 internal/testsupport/pydanticecho
 internal/testsupport/venueoracle
+internal/testsupport/workloadclient
 ~contracts/auth/v1/jsonschema
 ~internal/auth/passwordpolicy/data
 ~internal/chmigrate/baseline

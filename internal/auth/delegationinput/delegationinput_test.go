@@ -351,7 +351,7 @@ func TestDelegatedSnapshotKeepsTheGrantsOfAGrantsReportingInner(t *testing.T) {
 		t.Fatal("a delegated snapshot over a grants-reporting inner is not a GrantSnapshot")
 	}
 	d := eval(s, ordinary)
-	if !d.Allowed || d.Obligations == nil || d.Obligations.RepositoryScope != authorization.RepositoryScopeOrganization {
+	if !d.Allowed || d.Obligations == nil || d.Obligations.RepositoryScope != "" || d.Obligations.RepositoryRestricted {
 		t.Fatalf("ordinary: %+v", d)
 	}
 	if _, ok := s.(authorization.DelegationSnapshot); !ok {
@@ -368,7 +368,7 @@ func TestDelegatedSnapshotOverAPlainInnerStaysPlain(t *testing.T) {
 	if _, ok := s.(authorization.GrantSnapshot); ok {
 		t.Fatal("a plain inner became a GrantSnapshot")
 	}
-	if d := eval(s, ordinary); d.Allowed || d.Reason != authorization.ReasonGrantAbsent {
-		t.Fatalf("%+v", d)
+	if d := eval(s, ordinary); !d.Allowed {
+		t.Fatalf("%+v: an org-wide read needs no grant rows", d)
 	}
 }

@@ -91,7 +91,7 @@ func fullInternalEnv(t *testing.T, caller string) map[string]string {
 	if caller != "" {
 		env[authconfig.EnvAuthorizeCallerSubjects] = caller
 	}
-	exchangeEnvironment(t, env)
+	exchangeEnvironment(t, workloadIssueEnvironment(env))
 	return provisioningEnvironment(ssoEnvironment(compatEnvironment(env)))
 }
 

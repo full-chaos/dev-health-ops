@@ -1,4 +1,0 @@
-{
-  "W authorize malformed org id claim is 403": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
-  "W authorize uppercase org id claim": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}"
-}

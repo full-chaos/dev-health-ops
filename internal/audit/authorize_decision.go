@@ -15,9 +15,17 @@ import (
 // action the policy catalog classes high risk, allow or deny.
 const EventAuthorizeHighRiskDecided = "auth.authorize.high_risk_decided"
 
+// EventAuthorizeDelegatedDecided is one decision of POST /v1/authorize for a
+// delegated (impersonation) session, allow or deny, at any risk class. The
+// actor is the real actor, the subject the target user.
+const EventAuthorizeDelegatedDecided = "auth.authorize.delegated_decided"
+
 // Registered here, not in the appendOnlyEventTypes literal, so the line anchors
 // that contracts/auth/v1 pins in append.go stay where they are.
-func init() { appendOnlyEventTypes[EventAuthorizeHighRiskDecided] = true }
+func init() {
+	appendOnlyEventTypes[EventAuthorizeHighRiskDecided] = true
+	appendOnlyEventTypes[EventAuthorizeDelegatedDecided] = true
+}
 
 // AppendAll writes the audit rows of append-only event types in ONE
 // transaction: all rows or none. Each row is validated as Append validates it,

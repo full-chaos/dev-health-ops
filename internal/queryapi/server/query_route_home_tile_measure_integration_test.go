@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -44,7 +43,7 @@ func (c *statementRecordingHomeCH) readsIssueSize() bool {
 // is still read in COUNT.
 func TestHomeInvestmentTileIsIssueSizeOnlyForADocumentThatAsksForItsCoverage(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +51,7 @@ func TestHomeInvestmentTileIsIssueSizeOnlyForADocumentThatAsksForItsCoverage(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := signTestEnvelope(t, priv, "org-1")
+	token := iaHeaders("org-1", "admin", false, false)
 
 	for name, tc := range map[string]struct {
 		document  string
@@ -64,7 +63,7 @@ func TestHomeInvestmentTileIsIssueSizeOnlyForADocumentThatAsksForItsCoverage(t *
 	} {
 		t.Run(name, func(t *testing.T) {
 			ch := &statementRecordingHomeCH{}
-			handler, _, _, _, _ := newQueryHandler(ch, pool, verifier, itTestSchemaDigest, os.Getenv)
+			handler, _, _, _, _ := newQueryHandler(ch, pool, verifier, itTestSchemaDigest, withIssuer)
 			rec := postGraphQLWithVariables(t, handler, tc.document, token, homeVariables())
 			if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"errors"`) {
 				t.Fatalf("got %d %s", rec.Code, rec.Body.String())

@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // emptyRowsDrilldownClient answers every ClickHouse call with zero rows --
@@ -121,7 +122,7 @@ func TestNewDrilldownPRsGetHandlerRequiresAuthContext(t *testing.T) {
 func TestNewDrilldownPRsGetHandlerHappyPathSetsDeprecatedHeader(t *testing.T) {
 	handler := newDrilldownPRsGetHandler(newEmptyRowsDrilldownReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/prs?scope_type=repo&scope_id=repo-a&range_days=7", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -167,7 +168,7 @@ func TestNewDrilldownPRsPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) {
 	handler := newDrilldownPRsPostHandler(newEmptyRowsDrilldownReader(t))
 	body := `{"filters":{"scope":{"level":"org"},"time":{"range_days":7}},"sort":"created_at","limit":10}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(body)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -197,7 +198,7 @@ func TestNewDrilldownPRsPostHandlerLimitFallback(t *testing.T) {
 	handler := newDrilldownPRsPostHandler(reader)
 	body := `{"filters":{"scope":{"level":"org"}},"limit":0}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(body)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -221,7 +222,7 @@ func (f fakeQueryClientFunc) Query(ctx context.Context, query string, bindings [
 func TestNewDrilldownPRsGetHandlerClickHouseFailureIs503(t *testing.T) {
 	handler := newDrilldownPRsGetHandler(newErroringDrilldownReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/prs", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -237,7 +238,7 @@ func TestNewDrilldownPRsGetHandlerClickHouseFailureIs503(t *testing.T) {
 func TestNewDrilldownPRsPostHandlerClickHouseFailureIs503(t *testing.T) {
 	handler := newDrilldownPRsPostHandler(newErroringDrilldownReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(`{"filters":{}}`)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {

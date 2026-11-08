@@ -35,7 +35,7 @@ func TestLLMConfigRefusesABaseURLThatCarriesTheKey(t *testing.T) {
 	for name, baseURL := range cases {
 		t.Run(name, func(t *testing.T) {
 			var logs bytes.Buffer
-			response, body := call(t, &fakeVerifier{}, sourceWithBaseURL(baseURL), &logs, testOrg, "Bearer "+testToken)
+			response, body := call(t, sourceWithBaseURL(baseURL), &logs, testOrg, "Bearer "+testToken)
 			if response.StatusCode != http.StatusNotFound || response.Header.Get(NoConfigHeader) != NoConfigValue {
 				t.Fatalf("status %d marker %q, want the marked 404 (body %s)", response.StatusCode, response.Header.Get(NoConfigHeader), body)
 			}
@@ -63,7 +63,7 @@ func TestLLMConfigRefusesABaseURLThatCarriesTheKey(t *testing.T) {
 func TestLLMConfigRefusesWhenTheStoreFlagsAKeyInTheBaseURL(t *testing.T) {
 	source := sourceWithBaseURL("https://p.example.invalid/v1")
 	source.cfg.KeyInBaseURL = true
-	response, body := call(t, &fakeVerifier{}, source, io.Discard, testOrg, "Bearer "+testToken)
+	response, body := call(t, source, io.Discard, testOrg, "Bearer "+testToken)
 	if response.StatusCode != http.StatusNotFound || response.Header.Get(NoConfigReasonHeader) != "byo_base_url_carries_key" {
 		t.Fatalf("status %d reason %q body %s", response.StatusCode, response.Header.Get(NoConfigReasonHeader), body)
 	}
@@ -77,7 +77,7 @@ func TestLLMConfigServesACleanBaseURL(t *testing.T) {
 		"half of the key as-is": "https://p.example.invalid/sk-live-VERY",
 	} {
 		t.Run(name, func(t *testing.T) {
-			response, body := call(t, &fakeVerifier{}, sourceWithBaseURL(baseURL), io.Discard, testOrg, "Bearer "+testToken)
+			response, body := call(t, sourceWithBaseURL(baseURL), io.Discard, testOrg, "Bearer "+testToken)
 			if response.StatusCode != http.StatusOK || response.Header.Get(NoConfigReasonHeader) != "" {
 				t.Fatalf("status %d reason %q body %s", response.StatusCode, response.Header.Get(NoConfigReasonHeader), body)
 			}
@@ -93,7 +93,7 @@ func TestLLMConfigRefusesAShortKeysHexFormInTheBaseURL(t *testing.T) {
 	source := configured()
 	source.cfg.APIKey = secrets.NewHidden("tiny")
 	source.cfg.BaseURL = "https://p.example.invalid/" + hex.EncodeToString([]byte("tiny"))
-	response, body := call(t, &fakeVerifier{}, source, io.Discard, testOrg, "Bearer "+testToken)
+	response, body := call(t, source, io.Discard, testOrg, "Bearer "+testToken)
 	if response.StatusCode != http.StatusNotFound || response.Header.Get(NoConfigReasonHeader) != "byo_base_url_carries_key" {
 		t.Fatalf("status %d reason %q body %s", response.StatusCode, response.Header.Get(NoConfigReasonHeader), body)
 	}
@@ -103,7 +103,7 @@ func TestLLMConfigRefusesAShortKeysHexFormInTheBaseURL(t *testing.T) {
 func TestLLMConfigServesAKeylessConfigUnchanged(t *testing.T) {
 	source := configured()
 	source.cfg.APIKey = secrets.NewHidden("")
-	response, body := call(t, &fakeVerifier{}, source, io.Discard, testOrg, "Bearer "+testToken)
+	response, body := call(t, source, io.Discard, testOrg, "Bearer "+testToken)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("status %d body %s", response.StatusCode, body)
 	}

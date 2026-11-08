@@ -102,7 +102,7 @@ func TestCheckClaimsEndsATokenWhoseSessionIsRevoked(t *testing.T) {
 			if test.store != nil {
 				test.store(store)
 			}
-			_, err := authenticator(t, store).Authenticate(context.Background(), sign(t, claims(test.claims)))
+			_, err := checkToken(t, store, sign(t, claims(test.claims)))
 			if got := outcomeOf(err); got != test.want {
 				t.Fatalf("outcome %s (%v), want %s", got, err, test.want)
 			}
@@ -119,11 +119,11 @@ func TestCheckClaimsEndsATokenWhoseSessionIsRevoked(t *testing.T) {
 // A store that cannot read sessions refuses every token that carries sid:
 // never a pass for want of the check.
 func TestCheckClaimsRefusesASidTokenItCannotCheck(t *testing.T) {
-	_, err := authenticator(t, newStore()).Authenticate(context.Background(), sign(t, claims(withSID(liveSessionID))))
+	_, err := checkToken(t, newStore(), sign(t, claims(withSID(liveSessionID))))
 	if got := outcomeOf(err); got != "refused" {
 		t.Fatalf("outcome %s (%v), want refused", got, err)
 	}
-	if _, err := authenticator(t, newStore()).Authenticate(context.Background(), sign(t, claims(nil))); err != nil {
+	if _, err := checkToken(t, newStore(), sign(t, claims(nil))); err != nil {
 		t.Fatalf("a token without sid: %v", err)
 	}
 }
@@ -147,14 +147,14 @@ func TestAuthSchemaFromEnv(t *testing.T) {
 // a token without sid carries none.
 func TestTheCheckedSessionIsOnThePrincipal(t *testing.T) {
 	store := newSessionStore()
-	user, err := authenticator(t, store).Authenticate(context.Background(), sign(t, claims(withSID(liveSessionID))))
+	user, err := checkToken(t, store, sign(t, claims(withSID(liveSessionID))))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if user.SessionID == nil || *user.SessionID != liveSessionID {
 		t.Fatalf("SessionID %v, want %s", user.SessionID, liveSessionID)
 	}
-	user, err = authenticator(t, newSessionStore()).Authenticate(context.Background(), sign(t, claims(nil)))
+	user, err = checkToken(t, newSessionStore(), sign(t, claims(nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@
 package authruntime
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -153,46 +154,6 @@ func TestCompatRefreshOfAnInvalidTokenWritesGoAPIsRefusalRow(t *testing.T) {
 	}
 }
 
-// G1: the go-api refresh token of a deactivated user is refused before its exchange creates a session: no session,
-// no auth.session.refreshed row, and go-api's deactivated row once.
-func TestCompatRefreshOfALegacyTokenIsGuardedBeforeTheExchange(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	e := newRoutesEnv(t, ctx)
-	user, org, _ := e.parityUser(t, ctx)
-	signer, err := edgetoken.NewSigner(testAccessSecret, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	jti, family := uuid.NewString(), uuid.New()
-	token, err := signer.Refresh(edgetoken.RefreshClaims{UserID: user.String(), OrgID: org.String(), FamilyID: family.String()}, time.Now(), jti)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := sha256.Sum256([]byte(jti))
-	if _, err := e.admin.Exec(ctx, `INSERT INTO public.refresh_tokens (id, user_id, org_id, token_hash, family_id, expires_at, created_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, now() + interval '1 day', now())`, user, org, hex.EncodeToString(digest[:]), family); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_active = false WHERE id = $1`, user); err != nil {
-		t.Fatal(err)
-	}
-	sessions := e.countRows(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user)
-	if got := e.refreshAs(t, token); got.status != http.StatusUnauthorized {
-		t.Fatalf("refresh of a deactivated user's go-api token = %d %s", got.status, got.body)
-	}
-	if n := e.countRows(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user); n != sessions {
-		t.Errorf("sessions %d -> %d: the refused go-api token was exchanged before the guard", sessions, n)
-	}
-	if n := e.refreshedCount(t, ctx, user); n != 0 {
-		t.Errorf("%s events = %d, want 0", compatRefreshedEvent, n)
-	}
-	want := refusalRow(org, user, true, "Token refresh failed: user deactivated", "Account is disabled")
-	if got := e.compatPublicRows(t, ctx, want.action, *want.description); len(got) != 1 || text(got[0].org) != org.String() || text(got[0].user) != user.String() {
-		t.Errorf("deactivated rows = %+v, want go-api's one row for the user in the token's organization", got)
-	}
-}
-
 // legacyRefreshToken mints a go-api refresh JWT for the user in org and seeds its public.refresh_tokens row.
 func (e *routesEnv) legacyRefreshToken(t *testing.T, ctx context.Context, user, org uuid.UUID) string {
 	t.Helper()
@@ -211,34 +172,6 @@ func (e *routesEnv) legacyRefreshToken(t *testing.T, ctx context.Context, user, 
 		t.Fatal(err)
 	}
 	return token
-}
-
-// G1, the guard's own refusal: a go-api refresh token of a user no longer a member of the token's organization is
-// refused by the refresh guard inside the exchange, before the exchange commits a session (the store itself would
-// exchange it); go-api's not-a-member row once.
-func TestCompatRefreshOfALegacyTokenOfARemovedMemberIsGuardedBeforeTheExchange(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	e := newRoutesEnv(t, ctx)
-	user, org, _ := e.parityUser(t, ctx)
-	token := e.legacyRefreshToken(t, ctx, user, org)
-	if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships WHERE user_id = $1 AND org_id = $2`, user, org); err != nil {
-		t.Fatal(err)
-	}
-	sessions := e.countRows(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user)
-	if got := e.refreshAs(t, token); got.status != http.StatusUnauthorized {
-		t.Fatalf("refresh of a removed member's go-api token = %d %s", got.status, got.body)
-	}
-	if n := e.countRows(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user); n != sessions {
-		t.Errorf("sessions %d -> %d: the refused go-api token was exchanged before the guard", sessions, n)
-	}
-	if n := e.refreshedCount(t, ctx, user); n != 0 {
-		t.Errorf("%s events = %d, want 0", compatRefreshedEvent, n)
-	}
-	want := refusalRow(org, user, true, "Token refresh failed: not a member", "Not a member of the organization")
-	if got := e.compatPublicRows(t, ctx, want.action, *want.description); len(got) != 1 || text(got[0].org) != org.String() || text(got[0].user) != user.String() {
-		t.Errorf("not-a-member rows = %+v, want go-api's one row for the user in the token's organization", got)
-	}
 }
 
 // disablePrincipal disables the user's auth principal through audit.Commit, as the identity store does (a guarded
@@ -279,26 +212,33 @@ func TestCompatRefreshOfADisabledCopyOfAnActiveUserIsServed(t *testing.T) {
 	}
 }
 
-// acp answers-11400-impl-2 Q1: a deactivated principal's first go-api exchange revokes the token's family in the
-// store's own transaction and writes go-api's row in a transaction after it. When that row write fails the answer is
-// 500 and the family stays revoked.
-func TestCompatRefreshOfADeactivatedLegacyTokenWithAFailedRowAnswers500AndKeepsTheRevoke(t *testing.T) {
+// The HS256 refresh exchange is retired: a go-api refresh JWT that verifies, with a live public.refresh_tokens row,
+// gets the answer and the row of one that does not verify (TestCompatRefreshOfAnInvalidTokenWritesGoAPIsRefusalRow):
+// no session is created and its go-api row stays as it was.
+func TestCompatRefreshOfAVerifiedLegacyTokenIsRefusedLikeAnInvalidOne(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	e := newRoutesEnv(t, ctx)
 	user, org, _ := e.parityUser(t, ctx)
 	token := e.legacyRefreshToken(t, ctx, user, org)
-	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_active = false WHERE id = $1`, user); err != nil {
-		t.Fatal(err)
+	sessions := e.countRows(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user)
+	events := e.countRows(t, ctx, `SELECT count(*) FROM auth.security_audit_events`)
+	verified := e.refreshAs(t, token)
+	forged := e.refreshAs(t, forgedRefresh(user.String(), org.String()))
+	if verified.status != http.StatusUnauthorized || verified.status != forged.status || !bytes.Equal(verified.body, forged.body) {
+		t.Fatalf("verified go-api refresh JWT = %d %s; forged = %d %s; want the same 401", verified.status, verified.body, forged.status, forged.body)
 	}
-	e.refusePublicAuditInserts(t, ctx, true)
-	if got := e.refreshAs(t, token); got.status != http.StatusInternalServerError {
-		t.Fatalf("refresh with a failing row write = %d %s, want go-api's 500", got.status, got.body)
+	if n := e.countRows(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user); n != sessions {
+		t.Errorf("sessions %d -> %d: a go-api refresh JWT was exchanged", sessions, n)
 	}
-	if n := e.countRows(t, ctx, `SELECT count(*) FROM public.refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL`, user); n != 0 {
-		t.Errorf("live go-api refresh tokens of the user = %d, want 0: the family revoke stands", n)
+	if n := e.countRows(t, ctx, `SELECT count(*) FROM auth.security_audit_events`); n != events {
+		t.Errorf("auth events %d -> %d: no auth state changed", events, n)
 	}
-	if n := e.countRows(t, ctx, `SELECT count(*) FROM public.audit_logs`); n != 0 {
-		t.Errorf("public.audit_logs rows = %d, want 0", n)
+	if n := e.countRows(t, ctx, `SELECT count(*) FROM public.refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL`, user); n != 1 {
+		t.Errorf("live go-api refresh rows of the user = %d, want its 1 row untouched", n)
+	}
+	want := refusalRow(org, user, true, "Refresh token validation failed", "Invalid or expired refresh token")
+	if got := e.compatPublicRows(t, ctx, want.action, *want.description); len(got) != 2 {
+		t.Errorf("public.audit_logs rows of %q = %d, want 2 (verified and forged alike)", *want.description, len(got))
 	}
 }

@@ -22,6 +22,7 @@ func TestTheSwitchOrgRouteIsMountedOnItsEmbeddedProfileRow(t *testing.T) {
 		authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile: "/nonexistent",
 		authconfig.EnvSigningKeyID:   "switch-org-test",
+		authconfig.EnvTokenIssuerURL: wellKnownIssuer,
 	})
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
@@ -37,7 +38,7 @@ func TestTheSwitchOrgRouteIsMountedOnItsEmbeddedProfileRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	var logs bytes.Buffer
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewJSONHandler(&logs, nil)), pool, schema, &stubSigner{}, mustLimits(t), nil)
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewJSONHandler(&logs, nil)), pool, schema, keySigner(t), mustLimits(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

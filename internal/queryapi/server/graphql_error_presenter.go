@@ -63,11 +63,11 @@ func safeGraphQLErrorPresenter(label string, observe func(context.Context)) grap
 			presented.Message = graphQLInternalMessage
 			presented.Extensions = withRequestID(presented.Extensions, requestID)
 			log.Printf("query-api: %s resolver error masked from the client: request_id=%s unwrap chain: %s",
-				label, requestID, truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
+				label, logSafeRequestID(requestID), truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
 			return withMutationLocation(ctx, presented)
 		}
 		log.Printf("query-api: %s resolver error unwrap chain: request_id=%s %s",
-			label, requestID, truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
+			label, logSafeRequestID(requestID), truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
 		return withMutationLocation(ctx, presented)
 	}
 }

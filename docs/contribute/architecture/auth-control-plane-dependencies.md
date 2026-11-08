@@ -1,6 +1,6 @@
 ---
 page_id: con-auth-cp-dependencies
-summary: The dependency and cryptography choices behind the Wave 1 Auth Control Plane - what the binaries link today, what the accepted ADRs select for later waves, the signing-key and secret rules, and how a dependency is added or replaced.
+summary: The dependency and cryptography choices behind the Auth Control Plane - what the binaries link today, what the accepted ADRs select for later waves, the signing-key and secret rules, and how a dependency is added or replaced.
 content_type: architecture
 owner: engineering
 source_of_truth:
@@ -15,7 +15,7 @@ lifecycle: active
 # Auth Control Plane dependencies and cryptography
 
 The selection record is [ACP-ADR-01](auth-control-plane-adrs.md) (Go dependency
-selection) with its Wave 1 addendum (OAuth/OIDC, SAML, password hashing) and
+selection) with its addendum (OAuth/OIDC, SAML, password hashing) and
 [ACP-ADR-02](auth-control-plane-adrs.md) (signing-key custody). This page says
 what that means in the tree today. The rule behind all of it: standard library
 first, no hand-rolled cryptographic primitive, every security dependency
@@ -50,13 +50,13 @@ tree is library code that later waves compose:
 Versions live in `go.mod` and are not repeated here, because a copy would rot.
 The OAuth/OIDC client (`golang.org/x/oauth2`, `github.com/coreos/go-oidc/v3`)
 and SAML (`github.com/crewjam/saml`) libraries selected by the ADR-01 addendum
-are in `go.mod` for the identity-brokerage waves; the Wave 1 binaries do not
+are in `go.mod` for the identity-brokerage work; the binaries do not
 link them.
 
 ## Cryptography rules
 
 - **Asymmetric platform tokens are Ed25519/EdDSA**, not RS256 (ACP-ADR-01
-  item 4). The Wave 1 keystore parses and proves a key but holds no minting
+  item 4). The keystore parses and proves a key but holds no minting
   material (`internal/auth/keystore` package comment), so the service issues no
   token.
 - **The signing key is a file, never a value.** `AUTH_SIGNING_KEY_FILE` names a

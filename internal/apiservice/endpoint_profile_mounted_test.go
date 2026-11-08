@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/billing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // mountedRoute is one route a go-api listener serves.
@@ -35,8 +36,14 @@ func mountedRoutes(t *testing.T) []mountedRoute {
 	return mountedRoutesWith(t, nil)
 }
 
-// mountedKey is the HS256 key the mounted routes verify with.
+// mountedKey is the HS256 key of go-api's own refresh verifier and signer on the mounted routes.
 var mountedKey = strings.Repeat("fixture-key-", 3)
+
+// mountedTokens mints the access tokens the mounted routes verify; mountedUser is a member of mountedOrg.
+var (
+	mountedTokens           = edtokens.Fresh()
+	mountedUser, mountedOrg = uuid.New(), uuid.New()
+)
 
 // mountedRoutesWith is mountedRoutes with configure applied to the
 // Authenticator before the routes are built.
@@ -47,10 +54,7 @@ func mountedRoutesWith(t *testing.T, configure func(*policy.Authenticator)) []mo
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := mountedTokens.AuthenticatorOver(t, memberScopeStore{scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, mountedUser, mountedOrg}, quietLogger())
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)

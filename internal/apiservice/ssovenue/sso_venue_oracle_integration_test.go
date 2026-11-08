@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/authplane"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -26,6 +27,9 @@ import (
 // jwtKey is JWT_SECRET_KEY on both planes. It is assembled at run time so
 // the source holds no credential-shaped literal.
 var jwtKey = "sso-venue-" + strings.Repeat("0123456789abcdef", 2)
+
+// ssoStateKey is go-api's own SSO_STATE_SECRET, as prod sets it; run-time assembled, distinct from jwtKey.
+var ssoStateKey = "sso-state-" + strings.Repeat("fedcba9876543210", 2)
 
 // Fixed ids, so rows and answers name the same subjects on both planes.
 const (
@@ -119,7 +123,8 @@ var updatedAtPattern = regexp.MustCompile(`"updated_at":"[^"]*"`)
 func TestSSORoutesVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("s-s-o-routes-venue-oracle", t.Name(), "a66dead8a13b12e7c3f28c6f8ad484f9af72d001989145992f7b7a19961c3f09"))
 	ctx := context.Background()
-	venue := venueoracle.Start(t, ctx, venueoracle.Options{Golden: golden, Root: venueRoot(), JWTKey: jwtKey,
+	key := authplane.NewKey(t)
+	venue := venueoracle.Start(t, ctx, venueoracle.Options{Golden: golden, Root: venueRoot(), JWTKey: jwtKey, TokenIssuer: key.Tokens,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Seed: seed})
 	tok := venue.Tokens
 	req := func(name, method, path, bearer, body string) venueoracle.Request {
@@ -234,21 +239,29 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 		req("deactivate: GET is 405", get, "/sso/providers/"+samlID+"/deactivate", "owner", ""),
 	}
 	python := golden.Python(t, venue, requests)
+	signInPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/signin.go-pin.json", SHA256: signInPinSHA256, Ruling: signInRuling})
 	var orglessRefused []string
-	// The owner's tokens with an org claim it holds no membership in (another org, not a UUID).
-	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/orgclaim.go-pin.json", SHA256: ssoOrgClaimPinSHA256, Ruling: ssoOrgClaimRuling})
-	claimRetired := map[string]bool{"activate: token of the other org": true, "activate: org claim not a uuid": true}
-	receipt := venueoracle.Diff(t, startGoAPI(t, ctx, venue), requests, python, venueoracle.DiffOptions{
-		Golden:      golden,
-		Retirements: []venueoracle.Retirement{{Match: func(request venueoracle.Request) bool { return claimRetired[request.Name] }, Pin: claimPin}},
+	// The owner's tokens with an org claim it holds no membership in (another org, not a UUID): the legacy answer stays
+	// the wanted one (product rule 1). The other org's token claims the owner role, which the handler reads
+	// (api/sso/providers.go setStatus); a user access token carries no role claim.
+	receipt := venueoracle.Diff(t, startGoAPI(t, ctx, venue, key), requests, python, venueoracle.DiffOptions{
+		Golden: golden, Retire: func(request venueoracle.Request) bool { return signInRetired[request.Name] }, Pin: signInPin,
+		KnownDivergences: []venueoracle.KnownDivergence{
+			{Match: func(request venueoracle.Request) bool { return request.Name == providersAuthorizeStep }, Ticket: providersAuthorizeDefect},
+			{Match: func(request venueoracle.Request) bool { return request.Name == "activate: token of the other org" }, Ticket: venueoracle.RoleClaimGap},
+			{Match: func(request venueoracle.Request) bool { return request.Name == "activate: org claim not a uuid" }, Ticket: venueoracle.NotUUIDOrgClaimGap},
+		},
 		// D6145: the token without an org is refused 403 where Python answered 500 (activate).
 		OrglessTokens: map[string]bool{venue.Tokens["noorg"]: true}, MaxOrglessRefusals: 1,
 		OnOrglessRefused: func(request venueoracle.Request) { orglessRefused = append(orglessRefused, request.Name) },
-		Normalize: func(_ venueoracle.Request, body string) string {
+		Normalize: func(request venueoracle.Request, body string) string {
+			if signInRetired[request.Name] {
+				body = statePattern.ReplaceAllString(body, `"state":"<sealed per request>"`)
+				body = perRequestParamPattern.ReplaceAllString(body, `${1}=<per request>`)
+			}
 			return updatedAtPattern.ReplaceAllString(body, `"updated_at":"<stamped>"`)
 		},
 	})
-	claimPin.Finish(t)
 	if len(orglessRefused) != 1 {
 		t.Errorf("org-less refusals declared: %v, want exactly 1", orglessRefused)
 	}
@@ -266,12 +279,43 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	venueoracle.FinishPins(t, signInPin)
 	golden.Finish(t)
 }
 
+// signInRuling retires the Python answers of the sign-in steps: the frozen 402 is the license shim go-api answered
+// only without a token minter, a state production never ran; with a session issuer go-api runs the real handlers, as
+// production did before and after the HS256 minter was retired.
+const signInRuling = "license shim unreachable with a session issuer; prod served the real handlers before and after (CHAOS-13155)"
+
+// signInPinSHA256 is the digest of testdata/signin.go-pin.json.
+const signInPinSHA256 = "ddd414d42158a028f75e60a1a05dcd0dffd3c215820b556eb6c765710ffb013f"
+
+// signInRetired are the sign-in steps signInRuling retired. Each real handler checks the org's enterprise
+// entitlement first (requireEntitlement, internal/api/sso/gate.go); the seeded organizations are enterprise.
+var signInRetired = map[string]bool{
+	"saml metadata": true, "saml initiate: valid": true, "saml acs: by name": true,
+	"oidc authorize: valid": true, "oidc callback: valid": true,
+	"oauth authorize: valid": true, "oauth callback: valid": true, "oauth by type: valid": true,
+	"overlap: GET /oauth/providers/authorize": true,
+}
+
+// providersAuthorizeStep answers 500 on the real handler: "providers" is not a provider UUID, and initiateOAuthAuth
+// fails the parse as an internal error (internal/api/sso/oauth.go). The same 500 is on the PR base with a Signer.
+const providersAuthorizeStep = "overlap: POST /oauth/providers/authorize"
+
+const providersAuthorizeDefect = "CHAOS-13328, a provider id that is not a UUID answers 500 on POST /oauth/{id}/authorize (initiateOAuthAuth)"
+
+// statePattern is the sealed OAuth state of an authorize answer, and perRequestParamPattern the authorization URL's
+// PKCE challenge, nonce and state: new on every request.
+var (
+	statePattern           = regexp.MustCompile(`"state":"[A-Za-z0-9_-]+"`)
+	perRequestParamPattern = regexp.MustCompile(`\b(code_challenge|nonce|state)=[^&"\\]+`)
+)
+
 // startGoAPI builds the dho api route set against the venue's Go copy as
 // the api role.
-func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue) string {
+func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, key authplane.Key) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
@@ -287,7 +331,13 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue) str
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger)}
+	// Sessions are auth-service's (AUTH_PROXY_SESSIONS=true), as in production: the sign-in routes run their own
+	// validation and take a completed sign-in's pair from the issue route of an in-process auth plane.
+	venue.ApplyAuthSchema(t, ctx)
+	plane := authplane.Start(t, ctx, venue.AdminURI(t, venue.GoDB), key, jwtKey)
+	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), SSOStateSecret: ssoStateKey,
+		SessionIssuer: plane.Issuer,
+		AuthProxy:     apiservice.AuthProxyConfig{Upstream: plane.URL, On: map[apiservice.AuthAggregate]bool{apiservice.AuthSessions: true}}}
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.Layers()...)
 	if err != nil {
@@ -297,13 +347,6 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue) str
 	t.Cleanup(ts.Close)
 	return ts.URL
 }
-
-// ssoOrgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user
-// holds no live membership in.
-const ssoOrgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:90-102); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
-
-// ssoOrgClaimPinSHA256 is the digest of testdata/orgclaim.go-pin.json.
-const ssoOrgClaimPinSHA256 = "7a2edb56f1b47ebf630d0e5ac820670842e3432889356ac708fc89abd4be485a"
 
 // venueRoot is the repository root, where the venue finds the Python api.
 func venueRoot() string {

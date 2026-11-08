@@ -29,20 +29,12 @@ type fakeValidator struct {
 	result   *RoutedResult
 	err      error
 	profiles []string
-	legacy   func(ctx context.Context, token string) (*User, error)
 }
 
 var errRefusedByValidator = errors.New("validator: refused")
 
 func (f *fakeValidator) Validate(ctx context.Context, service, profile, bearer string) (*RoutedResult, error) {
 	f.profiles = append(f.profiles, service+"|"+profile)
-	if f.legacy != nil {
-		user, err := f.legacy(ctx, bearer)
-		if err != nil {
-			return nil, errRefusedByValidator
-		}
-		return &RoutedResult{Legacy: user}, nil
-	}
 	return f.result, f.err
 }
 
@@ -105,7 +97,7 @@ func routed(t *testing.T, store Store, validator RoutedValidator) *Authenticator
 }
 
 func TestRouteAccessRefusesAnIncompleteSetup(t *testing.T) {
-	auth := authenticator(t, newStore())
+	auth := unrouted(t, newStore())
 	if auth.RouteAccess(nil, "dev-health-ops-api") == nil || auth.RouteAccess(&fakeValidator{}, "") == nil || auth.Routed() {
 		t.Fatal("RouteAccess accepted a nil validator or an empty service")
 	}
@@ -172,24 +164,30 @@ func TestRoutedUserPath(t *testing.T) {
 		adjust func(*accessStore)
 		ok     bool
 		err    error
+		// nonMember is the org claim of a caller with no membership row:
+		// the user is returned in that org with nonMemberRole, as the HS256
+		// path returns it; the org scope and the guard decide later.
+		nonMember string
 	}{
 		"member of the org claim": {result: userClaims(nil), ok: true},
 		"no sid":                  {result: userClaims(func(c *AccessTokenClaims) { c.SessionID = "" })},
 		"bad sid":                 {result: userClaims(func(c *AccessTokenClaims) { c.SessionID = "ses_bad" })},
 		"bad subject":             {result: userClaims(func(c *AccessTokenClaims) { c.Subject = "prn_!!" })},
 		"subject not a principal": {result: userClaims(func(c *AccessTokenClaims) { c.Subject = userID.String() })},
-		"not a member of the org": {result: userClaims(func(c *AccessTokenClaims) { org := "66666666-6666-4666-8666-666666666666"; c.OrgID = &org })},
-		"revoked session":         {result: userClaims(nil), adjust: func(s *accessStore) { s.rows[liveSID] = SessionRow{PrincipalID: userID, Revoked: true} }},
-		"pin older than the row":  {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, i64(1)) }},
-		"pin newer than the row":  {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, i64(3)) }},
-		"pin equal to the row":    {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, i64(2)) }, ok: true},
-		"no pin":                  {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, nil) }},
-		"inactive user":           {result: userClaims(nil), adjust: func(s *accessStore) { s.users[userID] = UserState{} }},
-		"users read unavailable":  {result: userClaims(nil), adjust: func(s *accessStore) { s.errUser = ErrUnavailable }, err: ErrUnavailable},
-		"membership read fails":   {result: userClaims(nil), adjust: func(s *accessStore) { s.errMember = ErrUnavailable }, err: ErrUnavailable},
-		"empty result":            {result: &RoutedResult{}},
-		"no result":               {result: nil},
-		"both set":                {result: &RoutedResult{Legacy: &User{}, Claims: &AccessTokenClaims{}}},
+		"not a member of the org": {result: userClaims(func(c *AccessTokenClaims) { org := removedOrg; c.OrgID = &org }), nonMember: removedOrg},
+		"org claim names no org": {result: userClaims(func(c *AccessTokenClaims) { org := deletedOrg; c.OrgID = &org }),
+			adjust: func(s *accessStore) { s.absentOrgs = map[uuid.UUID]bool{uuid.MustParse(deletedOrg): true} }, nonMember: deletedOrg},
+		"org claim not a uuid":   {result: userClaims(func(c *AccessTokenClaims) { org := notUUIDOrg; c.OrgID = &org }), nonMember: notUUIDOrg},
+		"revoked session":        {result: userClaims(nil), adjust: func(s *accessStore) { s.rows[liveSID] = SessionRow{PrincipalID: userID, Revoked: true} }},
+		"pin older than the row": {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, i64(1)) }},
+		"pin newer than the row": {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, i64(3)) }},
+		"pin equal to the row":   {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, i64(2)) }, ok: true},
+		"no pin":                 {result: userClaims(nil), adjust: func(s *accessStore) { pinAccess(s, 2, nil) }},
+		"inactive user":          {result: userClaims(nil), adjust: func(s *accessStore) { s.users[userID] = UserState{} }},
+		"users read unavailable": {result: userClaims(nil), adjust: func(s *accessStore) { s.errUser = ErrUnavailable }, err: ErrUnavailable},
+		"membership read fails":  {result: userClaims(nil), adjust: func(s *accessStore) { s.errMember = ErrUnavailable }, err: ErrUnavailable},
+		"empty result":           {result: &RoutedResult{}},
+		"no result":              {result: nil},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -203,6 +201,10 @@ func TestRoutedUserPath(t *testing.T) {
 				if err != nil || user.ID != userID || user.OrgID != ownOrg || user.Role != "admin" || user.Email != "user@example.com" || user.UserID != userID.String() {
 					t.Fatalf("user %+v err %v", user, err)
 				}
+			case tc.nonMember != "":
+				if err != nil || user.ID != userID || user.OrgID != tc.nonMember || user.Role != nonMemberRole {
+					t.Fatalf("user %+v err %v, want the user in %s with role %s", user, err, tc.nonMember, nonMemberRole)
+				}
 			case tc.err != nil:
 				if !errors.Is(err, tc.err) || IsRefusal(err) {
 					t.Fatalf("err %v, want %v", err, tc.err)
@@ -213,18 +215,6 @@ func TestRoutedUserPath(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestRoutedLegacyPathDoesNotRecurse: the legacy verifier the validator calls
-// is AuthenticateLegacy, which never goes back through the validator.
-func TestRoutedLegacyPathDoesNotRecurse(t *testing.T) {
-	validator := &fakeValidator{}
-	auth := routed(t, newAccessStore(), validator)
-	validator.legacy = auth.AuthenticateLegacy
-	user, err := auth.Authenticate(WithRouteProfile(context.Background(), "GET /p"), sign(t, claims(nil)))
-	if err != nil || user.ID != userID || len(validator.profiles) != 1 {
-		t.Fatalf("user %+v err %v calls %v", user, err, validator.profiles)
 	}
 }
 

@@ -144,7 +144,7 @@ func buildPeopleSummaryRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handle
 func writePeopleSummaryResponse(w http.ResponseWriter, r *http.Request, orgID string, resp people.SummaryResponse) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: people_summary: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }
@@ -164,6 +164,10 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
 			writeRESTUnauthorized(w, r, "people_summary", "Not authenticated")
+			return
+		}
+		org, ok := restScopeOrg(w, r, "people_summary", claims)
+		if !ok {
 			return
 		}
 
@@ -195,7 +199,7 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -204,12 +208,12 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 		// query param above already parsed cleanly.
 		for key := range query {
 			if peopleForbiddenQueryParams[key] {
-				writeRESTError(w, r, "people_summary", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "people_summary", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
 
-		resp, err := people.BuildSummaryResponse(r.Context(), reader, claims.OrgID, people.SummaryParams{
+		resp, err := people.BuildSummaryResponse(r.Context(), reader, org, people.SummaryParams{
 			PersonID:    personID,
 			RangeDays:   rangeDays,
 			CompareDays: compareDays,
@@ -217,18 +221,18 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 		})
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
-				writeTimeWindowOverflow(w, r, "people_summary", claims.OrgID)
+				writeTimeWindowOverflow(w, r, "people_summary", org)
 				return
 			}
 			if reqErr, ok := people.AsRequestError(err); ok {
-				writeRESTError(w, r, "people_summary", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "people_summary", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1088-1089).
-			writeRESTDataUnavailable(w, r, "people_summary", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "people_summary", org, err)
 			return
 		}
-		writePeopleSummaryResponse(w, r, claims.OrgID, resp)
+		writePeopleSummaryResponse(w, r, org, resp)
 	}
 }

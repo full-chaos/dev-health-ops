@@ -454,16 +454,26 @@ func (c *drainingComponent) Shutdown(context.Context) error {
 
 // stopProbe records when its shutdown began and whether its context had already ended.
 type stopProbe struct {
-	name      string
-	record    func(string)
+	name   string
+	record func(string)
+
+	mu        sync.Mutex
 	stoppedAt time.Time
 	expired   bool
+}
+
+func (c *stopProbe) stopped() (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stoppedAt, c.expired
 }
 
 func (c *stopProbe) Name() string                { return c.name }
 func (c *stopProbe) Start(context.Context) error { return nil }
 func (c *stopProbe) Shutdown(ctx context.Context) error {
 	c.record("stop:" + c.name)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.stoppedAt, c.expired = time.Now(), ctx.Err() != nil
 	return nil
 }
@@ -503,7 +513,7 @@ func TestShutdownWaitsForTheDrainBeforeTheNextComponent(t *testing.T) {
 		if want := []string{"stop:server", "drained:server", "stop:store"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("shutdown order %v, want %v: the store must stop only after the server drained", got, want)
 		}
-		if store.expired {
+		if _, expired := store.stopped(); expired {
 			t.Fatal("the store was stopped with an ended context, want the rest of the global budget")
 		}
 	})
@@ -531,11 +541,12 @@ func TestShutdownBoundsTheDrainWaitByTheGlobalDeadline(t *testing.T) {
 		started := time.Now()
 		err = runtime.shutdown(context.Background(), []Component{store, server})
 		returnedAt := time.Now()
-		if store.stoppedAt.IsZero() {
+		stoppedAt, _ := store.stopped()
+		if stoppedAt.IsZero() {
 			t.Fatal("the store was never stopped")
 		}
-		if !store.stoppedAt.Equal(started.Add(shutdownTimeout)) {
-			t.Fatalf("the store was stopped at +%v of virtual time, want +%v: the drain wait ends at the global deadline", store.stoppedAt.Sub(started), shutdownTimeout)
+		if !stoppedAt.Equal(started.Add(shutdownTimeout)) {
+			t.Fatalf("the store was stopped at +%v of virtual time, want +%v: the drain wait ends at the global deadline", stoppedAt.Sub(started), shutdownTimeout)
 		}
 		if !returnedAt.Equal(started.Add(shutdownTimeout)) {
 			t.Fatalf("shutdown returned at +%v of virtual time, want +%v: the hard shutdown bound", returnedAt.Sub(started), shutdownTimeout)

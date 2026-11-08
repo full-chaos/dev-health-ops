@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
@@ -98,7 +99,24 @@ func iaDispatchWithEdge(t *testing.T, verifier *principal.Verifier, edgeAuth *po
 		w.WriteHeader(http.StatusOK)
 	}))
 	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, edgeAuth, edgeStore, "", nil)
-	return handler, seen
+	return onQueryPattern(handler), seen
+}
+
+// onQueryPattern sets the pattern server.go's mux gives /query (the route profile "POST /query") on a request
+// a test hands the handler directly.
+func onQueryPattern(handler http.HandlerFunc) http.HandlerFunc {
+	return onPattern("/query", handler).ServeHTTP
+}
+
+// onPattern sets pattern, the one server.go's mux matches for the route, on a request a test hands handler
+// directly, so the route profile is the served route's.
+func onPattern(pattern string, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Pattern == "" {
+			r.Pattern = pattern
+		}
+		handler.ServeHTTP(w, r)
+	})
 }
 
 func iaPost(t *testing.T, handler http.HandlerFunc, mutate func(*http.Request)) int {
@@ -158,7 +176,8 @@ func TestQueryAnswersTheSameClaimsForBothCarriers(t *testing.T) {
 			if len(*seen) != 2 || (*seen)[0] != (*seen)[1] {
 				t.Fatalf("carriers disagree: %+v", *seen)
 			}
-			want := authctx.Claims{OrgID: identity.org, Role: identity.role, IsSuperuser: identity.super, ImpersonationActive: identity.imp}
+			want := authctx.Claims{OrgID: identity.org, Role: identity.role, IsSuperuser: identity.super, ImpersonationActive: identity.imp,
+				Scope: pepgate.Legacy(identity.org)}
 			if (*seen)[0] != want {
 				t.Fatalf("got %+v want %+v", (*seen)[0], want)
 			}
@@ -213,7 +232,7 @@ func TestQueryRefusesEveryAmbiguousOrMalformedCarrier(t *testing.T) {
 
 func TestBuildInfoTakesEitherCarrierAndRefusesBoth(t *testing.T) {
 	verifier, priv := iaVerifier(t)
-	handler := newBuildInfoHandler(verifier)
+	handler := newBuildInfoHandler(verifier, nil, nil)
 	get := func(mutate func(*http.Request)) int {
 		req := httptest.NewRequest(http.MethodGet, "/buildinfo", nil)
 		mutate(req)
@@ -244,12 +263,21 @@ func TestBuildInfoTakesEitherCarrierAndRefusesBoth(t *testing.T) {
 // route shares; a full header set with no bearer, and with a valid bearer
 // naming another org, must not change what it answers.
 func TestBrowserReachableRESTAuthIgnoresTheInternalHeaders(t *testing.T) {
-	verifier, priv := iaVerifier(t)
+	verifier, _ := iaVerifier(t)
+	m := newAccessMinter(t)
+	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(newAccessStore()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := routeEdgeVerifier(edge, testAccess(m.keys, nil, accessTestNow).opts); err != nil {
+		t.Fatal(err)
+	}
 	call := func(mutate func(*http.Request)) (int, authctx.Claims) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/home", nil)
+		req.Pattern = "/api/v1/home"
 		mutate(req)
 		rec := httptest.NewRecorder()
-		claims, ok := authenticateRESTRequest(rec, req, verifier, nil, "test")
+		claims, ok := authenticateRESTRequest(rec, req, verifier, edge, "test")
 		if !ok {
 			return rec.Code, authctx.Claims{}
 		}
@@ -259,12 +287,12 @@ func TestBrowserReachableRESTAuthIgnoresTheInternalHeaders(t *testing.T) {
 	if code, _ := call(iaHeaders("org-1", "owner", true, false)); code != http.StatusUnauthorized {
 		t.Fatalf("headers alone authenticated a REST request: %d", code)
 	}
-	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: "org-real", Role: "member"})
+	user := m.mint(ecUser, nil, nil)
 	code, claims := call(func(r *http.Request) {
-		r.Header.Set("Authorization", "Bearer "+envelope)
+		r.Header.Set("Authorization", "Bearer "+user)
 		iaHeaders("org-forged", "owner", true, false)(r)
 	})
-	if code != http.StatusOK || claims.OrgID != "org-real" {
+	if code != http.StatusOK || claims.OrgID != ecOrg.String() {
 		t.Fatalf("forged headers changed a REST identity: %d %+v", code, claims)
 	}
 }
@@ -396,8 +424,17 @@ func iaInternalCtx(ctx context.Context) context.Context {
 // listener. The same forged four headers that grant an identity there are
 // deleted, logged and counted on the public one.
 func TestIdentityHeadersAreHonouredOnlyOnTheInternalListener(t *testing.T) {
-	verifier, priv := iaVerifier(t)
-	handler, seen := iaDispatch(t, verifier)
+	verifier, _ := iaVerifier(t)
+	m := newAccessMinter(t)
+	store := newQueryAPIUserStoreFrom(newAccessStore())
+	auth := ecEdgeAuth(t, store)
+	if err := routeAuthenticator(auth, testAccess(m.keys, nil, accessTestNow).opts); err != nil {
+		t.Fatal(err)
+	}
+	dispatch, seen := iaDispatchWithEdge(t, verifier, auth, store)
+	// Served through a mux: a routed token is judged by the row of the pattern the mux recorded.
+	handler := http.NewServeMux()
+	handler.Handle("/query", dispatch)
 	public, internal := newListenerServers("127.0.0.1:0", "127.0.0.1:0", handler, handler)
 	if internal == nil {
 		t.Fatal("no internal server built although an internal address was given")
@@ -438,15 +475,15 @@ func TestIdentityHeadersAreHonouredOnlyOnTheInternalListener(t *testing.T) {
 	}
 	// A bearer caller sending stray headers to the public port is served by the
 	// bearer (the headers are gone, so it is no longer ambiguous).
-	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "member"})
+	user := m.mint(ecUser, nil, nil)
 	if code := post(public, func(r *http.Request) {
 		rawForged(r)
-		r.Header.Set("Authorization", "Bearer "+envelope)
+		r.Header.Set("Authorization", "Bearer "+user)
 	}); code != http.StatusOK {
 		t.Fatalf("bearer + stray headers on the public listener: %d, want 200", code)
 	}
-	if got := (*seen)[len(*seen)-1]; got.OrgID != "org-1" {
-		t.Fatalf("public listener resolved %+v, want the bearer's org-1", got)
+	if got := (*seen)[len(*seen)-1]; got.OrgID != ecOrg.String() {
+		t.Fatalf("public listener resolved %+v, want the bearer's org %s", got, ecOrg)
 	}
 	// The same four headers on the internal listener grant the stated identity.
 	*seen = nil

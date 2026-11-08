@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,10 +17,10 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -218,23 +217,29 @@ func orgProvisioningFromEnv(env cli.Env) (bool, error) {
 }
 
 // provisionerFromEnv builds the client of auth-service's provisioning routes
-// the way go-api does: AUTH_PROXY_URL and the AUTH_SESSION_ISSUE_TOKEN service
-// credential of the workload the CLI runs in. Either missing gives a nil client
-// (the Operator then refuses by name); a malformed one is a configuration error.
+// the way go-api does: AUTH_PROXY_URL and the go-api workload token, exchanged
+// from the workload inputs (AUTH_WORKLOAD_SUBJECT_FILE or
+// AUTH_WORKLOAD_BOOTSTRAP_FILE, and AUTH_WORKLOAD_ISSUER) of the workload the
+// CLI runs in. The session issuer credential is retired on these routes. No URL
+// or no subject file gives a nil client (the Operator then refuses by name); a
+// malformed input is a configuration error.
 func provisionerFromEnv(env cli.Env) (authprovision.Provisioner, int) {
-	raw, _ := env.Lookup("AUTH_PROXY_URL")
+	raw, _ := env.Lookup(workloadinput.EnvProxyURL)
 	raw = strings.TrimSpace(raw)
-	token, _ := env.Lookup(sessionissue.EnvToken)
-	token = strings.TrimSpace(token)
-	if raw == "" || token == "" {
+	subject, _ := env.Lookup(workloadinput.EnvSubjectFile)
+	bootstrap, _ := env.Lookup(workloadinput.EnvBootstrapFile)
+	if raw == "" || (strings.TrimSpace(subject) == "" && strings.TrimSpace(bootstrap) == "") {
 		return nil, 0
 	}
-	upstream, err := url.Parse(raw)
-	if err != nil || (upstream.Scheme != "http" && upstream.Scheme != "https") || upstream.Host == "" || upstream.User != nil ||
-		(upstream.Path != "" && upstream.Path != "/") || upstream.RawQuery != "" || upstream.Fragment != "" || upstream.Opaque != "" {
+	upstream, ok := workloadinput.ParseOrigin(raw)
+	if !ok {
 		return nil, writeError(env.Stderr, "auth_proxy_invalid", "AUTH_PROXY_URL must be an http(s) origin such as http://auth-service:8095, with no path, query or credentials")
 	}
-	client, err := authprovision.New(&url.URL{Scheme: upstream.Scheme, Host: upstream.Host}, token, 0)
+	workload, err := workloadinput.NewClient(upstream, 0, env.Lookup, []workloadinput.Ask{{Flag: workloadinput.EnvProxyURL}})
+	if err != nil {
+		return nil, writeError(env.Stderr, "provisioning_credential_invalid", err.Error())
+	}
+	client, err := authprovision.NewWorkload(upstream, workload, 0)
 	if err != nil {
 		return nil, writeError(env.Stderr, "provisioning_credential_invalid", err.Error())
 	}
@@ -336,6 +341,9 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 	op, closePool, code := usersWriteOperator(ctx, env, true, *superuser)
 	defer closePool()
 	if code != 0 {
+		if owned, err := usersOwnedFromEnv(env); err == nil && owned {
+			fmt.Fprintln(env.Stderr, "next step: dho auth users-create --email <email> --password-stdin (runs with the auth runtime login; it never grants a platform role)")
+		}
 		return code
 	}
 	user, err := op.CreateUser(ctx, admin.CreateUserInput{Email: email.value, Password: password.value,

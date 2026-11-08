@@ -26,12 +26,12 @@ func TestIssuerSetBodyFirstRoutesKeepTheRouteProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, newProbeStore(), quietLogger())
+	auth, err := policy.NewAuthenticator(newProbeStore(), quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
 	reader := sdkmetric.NewManualReader()
-	validator, err := accessverify.New(accessverify.Config{Rows: realRows(t), Legacy: legacyVerifier(auth.AuthenticateLegacy),
+	validator, err := accessverify.New(accessverify.Config{Rows: realRows(t),
 		// The SDK's default limit of 2000 series per instrument folds most of the refused counter (10 reasons per row) into overflow.
 		Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithCardinalityLimit(10000)).Meter("test"), Logger: quietLogger()})
 	if err != nil {

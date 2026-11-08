@@ -23,7 +23,7 @@ func TestDHOAPICorpusEntriesAreMountedRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
+	auth, err := policy.NewAuthenticator(scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

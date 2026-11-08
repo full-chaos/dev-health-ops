@@ -478,7 +478,7 @@ func (h *handlers) modelList(ctx context.Context, orgID string, cfg readinessBYO
 		}
 		return respond(nil, llmModelsSourceCatalog, reason, nil), nil
 	}
-	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, apiKey)
+	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, apiKey, cfg.staleKey.Reveal())
 	if err != nil {
 		return nil, err
 	}
@@ -516,6 +516,9 @@ func (h *handlers) storedLLMKey(ctx context.Context, orgID string) (string, erro
 	cfg, err := h.loadReadinessBYOConfig(ctx, orgID)
 	if err != nil {
 		return "", err
+	}
+	if cfg.staleKey.Configured() {
+		return cfg.staleKey.Reveal(), nil
 	}
 	return cfg.apiKey.Reveal(), nil
 }

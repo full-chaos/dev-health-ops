@@ -1,0 +1,52 @@
+# Known divergences of product rule 1 (D6773) the venue-oracles verb of ci/check_go.sh accepts as a skip: ticket,
+# test, row (the subtest path after the test, as go test names it), reason. A skip passes only when its message is
+# "KNOWN-DIVERGENCE <ticket> python=<answer> go=<answer>" (venueoracle.KnownDivergenceSkip) and this file holds
+# its ticket, test and row. CI does not ask the tracker. Remove a row when its answers agree (the skip then fails).
+CHAOS-13262	TestAuthFlowVenueOracle	skip:_org_claim_not_a_uuid	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestAuthFlowVenueOracle	state:_alice,_org_claim_not_a_uuid	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13261	TestLLMSettingsRoutesVenueOracle	W_delete_org_missing	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13262	TestLLMSettingsRoutesVenueOracle	W_delete_org_not_a_uuid	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestLLMSettingsRoutesVenueOracle	W_put_422_beats_org_check	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13261	TestLLMSettingsRoutesVenueOracle	W_put_org_missing	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13262	TestLLMSettingsRoutesVenueOracle	W_put_org_not_a_uuid	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestLLMSettingsRoutesVenueOracle	get_org_id_not_a_uuid	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13261	TestLLMSettingsRoutesVenueOracle	get_org_missing	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13261	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	W_delete_org_missing	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13262	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	W_delete_org_not_a_uuid	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	W_put_422_beats_org_check	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13261	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	W_put_org_missing	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13262	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	W_put_org_not_a_uuid	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	get_org_id_not_a_uuid	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13261	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	get_org_missing	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13261	TestLLMSettingsStatusRouteVenueOracle	org_missing	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13262	TestLLMSettingsStatusRouteVenueOracle	org_not_a_uuid	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestPagerDutyAuthorizeVenueOracle	W_authorize_malformed_org_id_claim_is_403	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestPagerDutyAuthorizeVenueOracle	W_authorize_uppercase_org_id_claim	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestPagerDutyAuthorizeVenueOracle	authorization_request_rows_rows	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestPagerDutyAuthorizeWithoutClientIDVenueOracle	W_authorize_malformed_org_id_claim_is_403	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestPagerDutyAuthorizeWithoutClientIDVenueOracle	W_authorize_uppercase_org_id_claim	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestPagerDutyAuthorizeWithoutEncryptionKeyVenueOracle	W_authorize_malformed_org_id_claim_is_403	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestPagerDutyAuthorizeWithoutEncryptionKeyVenueOracle	W_authorize_uppercase_org_id_claim	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestPagerDutyWebhookBindingsVenueOracle	create_bad_org_claim_is_the_gate's_403	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestPagerDutyWebhookBindingsVenueOracle	get_bad_org_claim_is_a_400	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestPagerDutyWebhookBindingsVenueOracle	revoke:_bad_org_claim_is_a_400	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestSSORoutesVenueOracle	activate:_org_claim_not_a_uuid	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13261	TestSSORoutesVenueOracle	activate:_token_of_the_other_org	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13328	TestSSORoutesVenueOracle	overlap:_POST_/oauth/providers/authorize	a provider id that is not a UUID answers 500 on POST /oauth/{id}/authorize (initiateOAuthAuth); pre-existing, not product rule 1
+CHAOS-13262	TestVenueOracleBillingLedger	ent:_bad_org_claim	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestVenueOracleBillingLedger	inv_list:_bad_org_claim	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestVenueOracleBillingPlansCheckout	checkout:_bad_org_claim	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestVenueOracleBillingPlansCheckout	portal:_bad_org_claim	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestVenueOracleBillingPlansCheckout	sub:_bad_org_claim	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestVenueOracleCustomerPushReads	bad_org_claim	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13262	TestVenueOracleProtectedRoutes	ent:_bad_org_claim	the access-token.v1 verifier refuses an org claim that is not a canonical lowercase UUID (401)
+CHAOS-13261	TestTokenOrgMembershipIsTheLivePublicRow	unknown_org_claim:_the_legacy_answer/not-a-uuid/admin_org/x-org-id=claimed	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13261	TestTokenOrgMembershipIsTheLivePublicRow	unknown_org_claim:_the_legacy_answer/not-a-uuid/admin_org/x-org-id=none	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13261	TestTokenOrgMembershipIsTheLivePublicRow	unknown_org_claim:_the_legacy_answer/not-a-uuid/admin/x-org-id=claimed	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13261	TestTokenOrgMembershipIsTheLivePublicRow	unknown_org_claim:_the_legacy_answer/not-a-uuid/admin/x-org-id=none	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13261	TestTokenOrgMembershipIsTheLivePublicRow	unknown_org_claim:_the_legacy_answer/uuid/admin_org/x-org-id=claimed	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13261	TestTokenOrgMembershipIsTheLivePublicRow	unknown_org_claim:_the_legacy_answer/uuid/admin_org/x-org-id=none	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13261	TestTokenOrgMembershipIsTheLivePublicRow	unknown_org_claim:_the_legacy_answer/uuid/admin/x-org-id=claimed	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13261	TestTokenOrgMembershipIsTheLivePublicRow	unknown_org_claim:_the_legacy_answer/uuid/admin/x-org-id=none	a user access token has no role claim: a caller without a membership row is a member where legacy used the claimed role
+CHAOS-13261	TestPlatformAdminInAnUnknownOrDeletedOrganizationGoAPIAnswersEqualLegacy	control_plain/EdDSA/org_U_no_row_(never_existed)_GET_/api/v1/billing/invoices	org without an organizations row; plain user; enforced organization_inactive, legacy admits after #5887
+CHAOS-13261	TestPlatformAdminInAnUnknownOrDeletedOrganizationGoAPIAnswersEqualLegacy	control_plain/EdDSA/org_R_no_row_(deleted)_GET_/api/v1/billing/invoices	org without an organizations row; plain user; enforced organization_inactive, legacy admits after #5887

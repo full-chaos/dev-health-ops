@@ -124,7 +124,7 @@ func buildPeopleDrilldownPRsRoute(getenv getenvFunc, edgeUsers edgeUserStore) (h
 func writePeopleDrilldownPRsResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *people.DrilldownPRsResponse) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: people_drilldown_prs: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }
@@ -144,6 +144,10 @@ func newPeopleDrilldownPRsHandler(reader *people.Reader) http.HandlerFunc {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
 			writeRESTUnauthorized(w, r, "people_drilldown_prs", "Not authenticated")
+			return
+		}
+		org, ok := restScopeOrg(w, r, "people_drilldown_prs", claims)
+		if !ok {
 			return
 		}
 
@@ -178,7 +182,7 @@ func newPeopleDrilldownPRsHandler(reader *people.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -187,7 +191,7 @@ func newPeopleDrilldownPRsHandler(reader *people.Reader) http.HandlerFunc {
 		// query param above already parsed cleanly.
 		for key := range query {
 			if peopleForbiddenQueryParams[key] {
-				writeRESTError(w, r, "people_drilldown_prs", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "people_drilldown_prs", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
@@ -197,7 +201,7 @@ func newPeopleDrilldownPRsHandler(reader *people.Reader) http.HandlerFunc {
 			cursorPtr = &cursorTime
 		}
 
-		resp, err := people.BuildDrilldownPRsResponse(r.Context(), reader, claims.OrgID, people.DrilldownPRsParams{
+		resp, err := people.BuildDrilldownPRsResponse(r.Context(), reader, org, people.DrilldownPRsParams{
 			PersonID:  personID,
 			RangeDays: rangeDays,
 			Limit:     limit,
@@ -206,18 +210,18 @@ func newPeopleDrilldownPRsHandler(reader *people.Reader) http.HandlerFunc {
 		})
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
-				writeTimeWindowOverflow(w, r, "people_drilldown_prs", claims.OrgID)
+				writeTimeWindowOverflow(w, r, "people_drilldown_prs", org)
 				return
 			}
 			if reqErr, ok := people.AsRequestError(err); ok {
-				writeRESTError(w, r, "people_drilldown_prs", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "people_drilldown_prs", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1148-1149).
-			writeRESTDataUnavailable(w, r, "people_drilldown_prs", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "people_drilldown_prs", org, err)
 			return
 		}
-		writePeopleDrilldownPRsResponse(w, r, claims.OrgID, resp)
+		writePeopleDrilldownPRsResponse(w, r, org, resp)
 	}
 }

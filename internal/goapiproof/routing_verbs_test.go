@@ -489,10 +489,10 @@ func TestEveryEnableRequestRefusalCarriesTheRefusalSentinel(t *testing.T) {
 	}
 }
 
-// EnvelopeSubject reads the `sub` out of a credential. Two properties
+// TokenSubject reads the `sub` out of a credential. Two properties
 // matter and both are pinned here: it must never render the token in an
 // error, and it must refuse rather than invent a subject.
-func TestEnvelopeSubjectReadsTheClaimAndNeverEchoesTheToken(t *testing.T) {
+func TestTokenSubjectReadsTheClaimAndNeverEchoesTheToken(t *testing.T) {
 	// A real-shaped envelope: three unpadded base64url segments.
 	payload := base64.RawURLEncoding.EncodeToString([]byte(
 		`{"v":1,"sub":"b0a1c2d3-0000-4000-8000-000000000001","org_id":"70d529e0","role":"admin"}`))
@@ -500,9 +500,9 @@ func TestEnvelopeSubjectReadsTheClaimAndNeverEchoesTheToken(t *testing.T) {
 	const signature = "c2lnbmF0dXJl"
 	token := header + "." + payload + "." + signature
 
-	got, err := EnvelopeSubject(token)
+	got, err := TokenSubject(token)
 	if err != nil {
-		t.Fatalf("EnvelopeSubject: %v", err)
+		t.Fatalf("TokenSubject: %v", err)
 	}
 	if got != "b0a1c2d3-0000-4000-8000-000000000001" {
 		t.Fatalf("subject = %q, want the envelope's sub claim", got)
@@ -510,12 +510,12 @@ func TestEnvelopeSubjectReadsTheClaimAndNeverEchoesTheToken(t *testing.T) {
 	// The "Bearer " prefix and surrounding whitespace are tolerated: the
 	// same value is handed to an Authorization header elsewhere, and a
 	// caller should not have to remember which form this wants.
-	if got, err := EnvelopeSubject("  Bearer " + token + "  "); err != nil || got == "" {
-		t.Fatalf("EnvelopeSubject with a Bearer prefix = (%q, %v)", got, err)
+	if got, err := TokenSubject("  Bearer " + token + "  "); err != nil || got == "" {
+		t.Fatalf("TokenSubject with a Bearer prefix = (%q, %v)", got, err)
 	}
 }
 
-func TestEnvelopeSubjectRefusesEveryShapeThatCarriesNoSubject(t *testing.T) {
+func TestTokenSubjectRefusesEveryShapeThatCarriesNoSubject(t *testing.T) {
 	noSub := base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"org_id":"70d529e0"}`))
 	emptySub := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"   "}`))
 	notJSON := base64.RawURLEncoding.EncodeToString([]byte(`not json at all`))
@@ -530,12 +530,12 @@ func TestEnvelopeSubjectRefusesEveryShapeThatCarriesNoSubject(t *testing.T) {
 		"blank sub claim":    "aaaa." + emptySub + ".cccc",
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := EnvelopeSubject(token)
-			if !errors.Is(err, ErrEnvelopeSubjectMissing) {
-				t.Fatalf("EnvelopeSubject(%s) = (%q, %v), want ErrEnvelopeSubjectMissing", name, got, err)
+			got, err := TokenSubject(token)
+			if !errors.Is(err, ErrTokenSubjectMissing) {
+				t.Fatalf("TokenSubject(%s) = (%q, %v), want ErrTokenSubjectMissing", name, got, err)
 			}
 			if got != "" {
-				t.Fatalf("EnvelopeSubject(%s) returned %q alongside its error", name, got)
+				t.Fatalf("TokenSubject(%s) returned %q alongside its error", name, got)
 			}
 		})
 	}
@@ -544,7 +544,7 @@ func TestEnvelopeSubjectRefusesEveryShapeThatCarriesNoSubject(t *testing.T) {
 // A credential must never reach an error string. Every refusal above is
 // checked against the token it was given, including the one case where
 // the token is well-formed enough to be a real envelope.
-func TestEnvelopeSubjectErrorsNeverContainTheCredential(t *testing.T) {
+func TestTokenSubjectErrorsNeverContainTheCredential(t *testing.T) {
 	const secret = "eyJzZWNyZXQiOiJkbwbm90bGVhayJ9" // gitleaks:allow -- fabricated fixture, never accepted by any real verifier
 	for _, token := range []string{
 		secret,
@@ -552,7 +552,7 @@ func TestEnvelopeSubjectErrorsNeverContainTheCredential(t *testing.T) {
 		"aaaa." + secret + ".cccc",
 		"Bearer " + secret,
 	} {
-		_, err := EnvelopeSubject(token)
+		_, err := TokenSubject(token)
 		if err == nil {
 			continue
 		}

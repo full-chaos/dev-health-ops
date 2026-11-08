@@ -30,7 +30,7 @@ For a go-api route whose profile row names a catalog action (see the [action map
 
 A call is **skipped** (counted, never asked) when the caller cannot be judged: the token is not a user access token (a legacy HS256 token), the route is organization-scoped and the caller has no organization, or the row is high risk while `AUTH_SHADOW_PDP_HIGH_RISK` is off. Routes with no catalog action are not counted at all.
 
-A call is counted **impersonation_refused** (never asked) when a live go-api impersonation row is in force for the caller's own bearer, as enforcement refuses it; the stop route is asked. A delegated session's own bearer is asked like any other caller.
+A call is counted **impersonation_refused** (never asked) when a live go-api impersonation row is in force for the caller's own bearer and enforcement refuses it (a write, or a platform wrap); its read that the legacy check admits is counted **skipped**, as enforcement keeps the legacy answer; the stop route is asked. A delegated session's own bearer is asked like any other caller.
 
 ## Switches
 

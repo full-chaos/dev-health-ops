@@ -2,6 +2,9 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -60,6 +63,35 @@ func TokenFileCredential(kind TokenFileKind, path string) *Credential {
 		}
 		return strings.TrimSpace(string(raw)), nil
 	}).WithShapeValidator(kind.Validate)
+}
+
+// ValidateUserAccessTokenShape rejects a value that is not a user access token (access-token.v1): a JWT whose header
+// names alg EdDSA and typ at+jwt. The effective-principal envelope (typ JWT) and an HS256 token are refused here, at
+// construction, rather than as a 401 later. Nothing is verified; the service that reads the token does that. The
+// value is never included in the error.
+func ValidateUserAccessTokenShape(value string) error {
+	if err := ValidateEnvelopeShape(value); err != nil {
+		return err
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), "Bearer "))
+	raw, err := base64.RawURLEncoding.DecodeString(strings.SplitN(token, ".", 2)[0])
+	if err != nil {
+		return errors.New("its header segment is not base64url")
+	}
+	var header struct {
+		Alg string `json:"alg"`
+		Typ string `json:"typ"`
+	}
+	if json.Unmarshal(raw, &header) != nil || header.Alg != "EdDSA" || header.Typ != "at+jwt" {
+		return errors.New("it is not a user access token (typ at+jwt)")
+	}
+	return nil
+}
+
+// UserAccessTokenFileCredential is the credential of a user access token the operator stages in a file: read on each
+// use, shape-checked, and never printed. label names it in reports and errors, what in a missing-file error.
+func UserAccessTokenFileCredential(label, what, path string) *Credential {
+	return TokenFileCredential(TokenFileKind{What: what, Label: label, Validate: ValidateUserAccessTokenShape}, path)
 }
 
 // CheckTokenFile reads a token file once and checks its shape, so a run can

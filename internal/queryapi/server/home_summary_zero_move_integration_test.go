@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // CHAOS-9139 (D5900): the Home summary sentence of a measured move of 0 % names no driver, on both
@@ -55,7 +56,7 @@ VALUES (?, generateUUIDv4(), 'Ops', [], ?, ?, 'github', 1)`, id, computedAt, org
 	}
 	restSentence := func(org string) string {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/home?range_days=7&compare_days=7&end_date=2026-08-25", nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		var out struct {
@@ -75,7 +76,7 @@ VALUES (?, generateUUIDv4(), 'Ops', [], ?, ?, 'github', 1)`, id, computedAt, org
 		})
 		req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 		rec := httptest.NewRecorder()
 		gql.ServeHTTP(rec, req)
 		var out struct {

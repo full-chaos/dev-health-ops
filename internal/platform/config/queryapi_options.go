@@ -1,5 +1,7 @@
 package config
 
+import "github.com/full-chaos/dev-health-ops/internal/authzenforce"
+
 // QueryAPIServiceName is the service identity of `dho query-api`, the read-only
 // Go query plane. Its options are scoped to it, so no other binary advertises or
 // parses them. The environment names are the ones the chart and the compose files
@@ -105,6 +107,18 @@ var queryAPIOptions = func() []Option {
 			Flag: "pdp-mode", Env: "QUERY_API_PDP_MODE", Kind: KindString,
 			Services: q, Group: GroupRoutes,
 			Usage: "the REST routes' PDP gate: off (unset, default: no call), shadow (ask auth-service's PDP, count and compare, never deny) or enforce (a PDP deny is 403, no verdict is 503); a bad value, or shadow/enforce with a missing input, never fails the start: one ERROR names the variable and every PDP-gated request answers 503",
+		},
+		{
+			// The name is authzenforce's: one reader of the variable (internal/authzenforce census_test.go).
+			Flag: "authz-enforce", Env: authzenforce.QueryAPI.Env(), Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "comma list of catalog action namespaces (analytics, metrics, git, work_items, ...) whose REST routes and GraphQL root fields of a user access token caller the PDP decides (the 5.17 cells; unset: none). A listed namespace needs QUERY_API_PDP_MODE shadow or enforce for the client, else its routes answer 503; with no namespace listed the PDP never refuses. An item that is not a namespace is ignored and stays off (one ERROR), never a start failure",
+		},
+		{
+			// The name is authzenforce's: one reader of the variable (internal/authzenforce census_test.go).
+			Flag: "headers-authz-enforce", Env: authzenforce.QueryAPIHeaders.Env(), Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "comma list of catalog action namespaces whose GraphQL root fields are decided for the X-DH-Internal-* header carrier (the MCP listener, /query on the internal listener; D6721, unset: none). That carrier has no principal the PDP can judge, so a listed namespace refuses its operations with 503 authz_enforce_no_principal; unset, they stay on today's path. An item that is not a namespace is ignored and stays off (one ERROR), never a start failure",
 		},
 		{
 			Flag: "auth-proxy-url", Env: "AUTH_PROXY_URL", Kind: KindString,

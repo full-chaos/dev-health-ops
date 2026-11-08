@@ -4,7 +4,7 @@ package routing
 //
 // Nothing is typed but operation names. The schema digest comes from the running query-api's /registry (which must
 // agree with this binary's SDL), the build from /buildinfo. It needs Postgres, /registry (unauthenticated) and
-// /buildinfo (envelope minted in process) -- not the internal listener and not the proof allowlist. A shadow decision
+// /buildinfo (a platform admin's user access token from GO_API_ROUTING_ACCESS_TOKEN_FILE) -- not the internal listener and not the proof allowlist. A shadow decision
 // alone routes no client anywhere; shadow->canary is still `enable`.
 
 import (
@@ -41,7 +41,7 @@ func runSeed(argv []string) error {
 	if err := common.requirePostgres(); err != nil {
 		return err
 	}
-	credential, err := envelopeCredential()
+	credential, err := accessTokenCredential()
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func runSeed(argv []string) error {
 		}
 		return refuse("%v", err)
 	}
-	principalID, err := credential.EnvelopeSubject(ctx)
+	principalID, err := credential.TokenSubject(ctx)
 	if err != nil {
 		return refuse("%v", err)
 	}

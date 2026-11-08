@@ -3,7 +3,6 @@ package authapi
 import (
 	"encoding/json"
 	"net/http"
-	"slices"
 	"strings"
 	"testing"
 
@@ -24,7 +23,7 @@ func newReadWorkloadFixture(t *testing.T, rows []byte) *readWorkloadFixture {
 	if rows == nil {
 		rows = docWithRows(t, append(readPatterns(), PatternOrgSuspend, PatternOrgRename)...)
 	}
-	f := newProvFixtureFor(t, rows, w.workload)
+	f := newProvFixtureFor(t, rows, w)
 	seedReads(f)
 	return &readWorkloadFixture{provFixture: f, w: w}
 }
@@ -36,9 +35,6 @@ func TestReadRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 		got := f.post(c.path, c.body(f.provFixture), header)
 		if got.Code != http.StatusOK {
 			t.Errorf("%s with the go-api workload token: %d %s", c.op, got.Code, got.Body)
-		}
-		if len(f.creds.scopes) != 0 {
-			t.Errorf("%s: a workload token reached the service credential check: %v", c.op, f.creds.scopes)
 		}
 		if f.storeCalls() != 0 || f.users.reads != 0 {
 			t.Errorf("%s wrote or read an actor", c.op)
@@ -70,7 +66,8 @@ func TestReadRoutesRefuseOtherWorkloadTokens(t *testing.T) {
 }
 
 func TestReadRoutesRefuseAWorkloadTokenWithoutTheWorkloadPath(t *testing.T) {
-	f := newReadFixture(t)
+	f := newProvFixtureOff(t, docWithRows(t, append(readPatterns(), PatternOrgSuspend, PatternOrgRename)...))
+	seedReads(f)
 	w := newWorkloadIssueFixture(t)
 	header, _ := w.mint(contracts.WorkloadTokenTyp, nil)
 	for _, c := range readCases() {
@@ -78,24 +75,8 @@ func TestReadRoutesRefuseAWorkloadTokenWithoutTheWorkloadPath(t *testing.T) {
 	}
 }
 
-func TestReadRoutesServiceCredentialUnchangedWithWorkloadPath(t *testing.T) {
-	for _, c := range readCases() {
-		f := newReadWorkloadFixture(t, nil)
-		f.creds.held = []string{c.scope}
-		if got := f.post(c.path, c.body(f.provFixture), nil); got.Code != http.StatusOK {
-			t.Errorf("%s with its scope: %d %s", c.op, got.Code, got.Body)
-		}
-		other := newReadWorkloadFixture(t, nil)
-		other.creds.held = []string{"memberships:write"}
-		expectRefusal(t, other.post(c.path, c.body(other.provFixture), nil), http.StatusUnauthorized, reasonInvalidCredentials)
-		if !slices.Equal(other.creds.scopes, []string{c.scope}) {
-			t.Errorf("%s asked for scopes %v", c.op, other.creds.scopes)
-		}
-	}
-}
-
-func TestReadRoutesStayDarkUnlessTheRowListsBothClasses(t *testing.T) {
-	for _, classes := range [][]string{{serviceSessionIssuerClass}, {workloadTokenClass}} {
+func TestReadRoutesStayDarkUnlessTheRowListsExactlyTheWorkloadToken(t *testing.T) {
+	for _, classes := range [][]string{{serviceSessionIssuerClass}, {serviceSessionIssuerClass, workloadTokenClass}, {workloadTokenClass, serviceSessionIssuerClass}} {
 		for _, c := range readCases() {
 			f := newReadWorkloadFixture(t, plantReadClasses(t, c.path, classes...))
 			header, _ := f.w.mint(contracts.WorkloadTokenTyp, nil)
@@ -147,7 +128,9 @@ func TestReadRoutesRefuseEveryWorkloadTokenWithoutAConfiguredSubject(t *testing.
 		w := newWorkloadIssueFixture(t)
 		unset := &SessionIssueWorkload{verifier: w.workload.verifier, now: w.workload.now}
 		rows := docWithRows(t, append(readPatterns(), PatternOrgSuspend, PatternOrgRename)...)
-		f := newProvFixtureFor(t, rows, unset)
+		unsetFixture := *w
+		unsetFixture.workload = unset
+		f := newProvFixtureFor(t, rows, &unsetFixture)
 		seedReads(f)
 		for _, mutate := range []func(*contracts.WorkloadTokenClaims){nil, func(cl *contracts.WorkloadTokenClaims) { cl.Sub = "" }} {
 			header, _ := w.mint(contracts.WorkloadTokenTyp, mutate)

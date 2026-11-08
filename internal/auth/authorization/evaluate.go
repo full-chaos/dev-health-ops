@@ -12,6 +12,7 @@ const (
 	resourcePlatform     = "platform"
 	resourceRepository   = "repository"
 	wildcardKey          = "*"
+	platformAdminAction  = "admin.orgs"
 	maxFieldLen          = 128
 )
 
@@ -120,7 +121,15 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 			return deny(ReasonPlatformRoleAbsent)
 		}
 	case policycatalog.ScopeOrganization:
-		if s.OrganizationStatus(r.OrganizationID) != StatusActive {
+		// The legacy paths admit a holder of admin.orgs before they read the membership row, in an active,
+		// suspended or unknown organization (no organization row); a removed organization still denies.
+		orgStatus := s.OrganizationStatus(r.OrganizationID)
+		if (orgStatus == StatusActive || orgStatus == StatusSuspended || orgStatus == StatusUnknown) && act.PlatformAdmin &&
+			e.cat.Allows(s.PlatformRole(), platformAdminAction) {
+			return Decision{Allowed: true, Reason: ReasonAllowedByPlatformAdmin, PolicyRevision: rev,
+				Obligations: &Obligations{TenantScope: r.OrganizationID}}
+		}
+		if orgStatus != StatusActive {
 			return deny(ReasonOrganizationInactive)
 		}
 		m, found := s.Membership(r.OrganizationID)

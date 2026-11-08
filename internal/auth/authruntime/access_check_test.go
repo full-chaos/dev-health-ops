@@ -68,8 +68,8 @@ func routeAnswer(t *testing.T, h http.Handler, method, path, body, bearer string
 // The production constructors (sessionRoutes, credentialRoutes) build the
 // access check from the signer's key set when the token issuer is set: an
 // auth-service EdDSA token passes validation and reaches the session store,
-// which the test leaves unreachable (503); without the check the same token is
-// a 401 at validation.
+// which the test leaves unreachable (503); without the check the bearer routes
+// are not mounted (404).
 func TestProductionRoutesConstructTheAccessCheck(t *testing.T) {
 	dir := t.TempDir()
 	writeSigningKey(t, dir, "k1.pem")

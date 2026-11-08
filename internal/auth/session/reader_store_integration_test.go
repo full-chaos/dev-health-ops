@@ -8,19 +8,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -49,6 +44,11 @@ type oneUser struct {
 
 func (o oneUser) UserState(_ context.Context, id uuid.UUID) (policy.UserState, bool, error) {
 	return policy.UserState{IsActive: true}, id == o.user, nil
+}
+
+// AccessUser is the routed path's users read: the reader login holds no users grant.
+func (o oneUser) AccessUser(_ context.Context, id uuid.UUID) (policy.AccessUserRow, bool, error) {
+	return policy.AccessUserRow{State: policy.UserState{IsActive: true}}, id == o.user, nil
 }
 
 func (o oneUser) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
@@ -138,23 +138,9 @@ func TestPolicyStoreReadsTheSessionAsAReaderRole(t *testing.T) {
 		t.Fatalf("unknown session: found=%v err=%v", found, err)
 	}
 
-	keyText := strings.Repeat("reader-store-signing-", 2)
-	verifier, err := edgetoken.New(keyText, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, oneUser{PGStore: reader, user: principal}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": principal.String(), "type": "access", "iss": "dev-health-ops", "aud": "dev-health-api",
-		"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "tv": 0, "sid": WireSessionID(issued.Session.ID),
-	}).SignedString([]byte(keyText))
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth, mint := routedReaderAuth(t, oneUser{PGStore: reader, user: principal}, principal)
+	ctx = policy.WithRouteProfile(ctx, routedReaderProfile)
+	token := mint(issued.Session.ID, nil)
 	if _, err := auth.Authenticate(ctx, token); err != nil {
 		t.Fatalf("a live session's token: %v", err)
 	}

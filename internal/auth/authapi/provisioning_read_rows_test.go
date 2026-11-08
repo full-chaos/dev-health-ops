@@ -12,7 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
 
-func TestEmbeddedProfileHoldsABothClassRowForEveryReadRoute(t *testing.T) {
+func TestEmbeddedProfileHoldsAWorkloadOnlyRowForEveryReadRoute(t *testing.T) {
 	var document struct {
 		Rows []struct {
 			ID      string   `json:"id"`
@@ -35,9 +35,8 @@ func TestEmbeddedProfileHoldsABothClassRowForEveryReadRoute(t *testing.T) {
 			if row.ID != "POST "+c.path+" [dev-health-auth-service @api]" {
 				t.Errorf("%s: row id %q is not an API listener row", c.op, row.ID)
 			}
-			slices.Sort(row.Classes)
-			if !slices.Equal(row.Classes, []string{serviceSessionIssuerClass, workloadTokenClass}) {
-				t.Errorf("%s: row classes %v, want the session issuer credential and the workload token", c.op, row.Classes)
+			if !slices.Equal(row.Classes, []string{workloadTokenClass}) {
+				t.Errorf("%s: row classes %v, want the workload token only", c.op, row.Classes)
 			}
 		}
 		if found != 1 {
@@ -59,20 +58,12 @@ func TestEmbeddedProfileServesTheReadRoutesToTheirCredentials(t *testing.T) {
 			t.Errorf("%s: go-api workload token %d, want 200", c.op, got.Code)
 		}
 
-		held := newEmbeddedReadFixture(t)
-		held.creds.held = []string{c.scope}
-		if got := held.post(c.path, c.body(held.provFixture), nil); got.Code != http.StatusOK {
-			t.Errorf("%s: svc_authsess_ with %s %d, want 200", c.op, c.scope, got.Code)
+		retired := newEmbeddedReadFixture(t)
+		expectRefusal(t, retired.post(c.path, c.body(retired.provFixture), map[string]string{"Authorization": "Bearer " + provisioningToken}),
+			http.StatusUnauthorized, reasonInvalidCredentials)
+		if retired.reads.calls+retired.grantReads.calls != 0 || retired.w.keys.reads != 0 {
+			t.Errorf("%s: the retired svc_authsess_ credential reached a store or the key set", c.op)
 		}
-
-		wrong := newEmbeddedReadFixture(t)
-		wrong.creds.held = []string{"memberships:write", "sessions:issue"}
-		for _, scope := range []string{"principals:read", "organizations:read", "memberships:read", "grants:read"} {
-			if scope != c.scope {
-				wrong.creds.held = append(wrong.creds.held, scope)
-			}
-		}
-		expectRefusal(t, wrong.post(c.path, c.body(wrong.provFixture), nil), http.StatusUnauthorized, reasonInvalidCredentials)
 
 		for _, typ := range []string{"at+jwt", "jwt", contracts.ServiceAccountTokenTyp} {
 			other := newEmbeddedReadFixture(t)
@@ -125,12 +116,14 @@ func mountedReadPatterns(t *testing.T, rows []byte) []string {
 
 func TestReadRoutesMountOnlyOnAnExactClassRow(t *testing.T) {
 	if got := mountedReadPatterns(t, authv1.AuthServiceEndpointProfiles); len(got) != len(readCases()) {
-		t.Errorf("exact two-class rows mount %d routes, want %d", len(got), len(readCases()))
+		t.Errorf("exact workload-only rows mount %d routes, want %d", len(got), len(readCases()))
 	}
 	for _, c := range readCases() {
-		rows := readRowsWithExtraClass(t, c.path, "user_access_token")
-		if slices.Contains(mountedReadPatterns(t, rows), c.path) {
-			t.Errorf("%s: a row that also lists user_access_token still mounts the route", c.op)
+		for _, extra := range []string{"user_access_token", serviceSessionIssuerClass} {
+			rows := readRowsWithExtraClass(t, c.path, extra)
+			if slices.Contains(mountedReadPatterns(t, rows), c.path) {
+				t.Errorf("%s: a row that also lists %s still mounts the route", c.op, extra)
+			}
 		}
 	}
 }

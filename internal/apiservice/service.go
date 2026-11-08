@@ -241,9 +241,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// comment). Cipher is the same FernetDecryptor
 			// (SETTINGS_ENCRYPTION_KEY) every other stored-secret decrypt
 			// in this process already uses. StateSecret is
-			// SSO_STATE_SECRET, else JWT_SECRET_KEY (statePurposeSecrets);
+			// SSO_STATE_SECRET only (statePurposeSecrets);
 			// HKDF derives one key per protocol from it (state.go).
-			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, StateSecretFallback: deps.SSOStateSecretFallback, Inner: proxy.inner,
+			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, Inner: proxy.inner,
 			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
@@ -437,13 +437,13 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_workload_credential", "api_workload_credential_config_invalid", err)
 	}
-	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup, sessionCred)
+	deps.SessionIssuer, err = sessionIssuer(authProxy, sessionCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
 	}
 	deps.Delegator = impersonationDelegator(ctx, authProxy, deps.SessionIssuer, logger)
-	orgClient, err := orgLifecycleClient(authProxy, envsecrets.ProcessLookup, provisioningCred)
+	orgClient, err := orgLifecycleClient(authProxy, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
@@ -452,7 +452,7 @@ func configureWith(
 		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState = orgClient, orgClient, orgClient
 	}
 	depComponents = append(depComponents, orgStateReconciler(deps, logger)...)
-	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup, provisioningCred)
+	deps.OrgProvisioner, err = orgProvisioner(authProxy, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
@@ -484,7 +484,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 	}
-	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, logger)
+	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, acrSubjectSourceOf(deps.Pool, deps.AuthSchema))
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_acr_workload", "api_acr_workload_config_invalid", err)
@@ -523,7 +523,13 @@ func configureWith(
 	}
 	deps.Invites = inviteConfig(cfg, logger, envsecrets.ProcessLookup)
 	deps.GitHubApp = GitHubAppConfig(envsecrets.ProcessLookup)
-	deps.SSOStateSecret, deps.SSOStateSecretFallback, deps.GitHubStateSigner = statePurposeSecrets(cfg)
+	deps.SSOStateSecret, deps.GitHubStateSigner = statePurposeSecrets(cfg)
+	if deps.SSOStateSecret == "" {
+		logger.Warn("config_missing: SSO_STATE_SECRET is not set; the OIDC, SAML and OAuth sign-in routes answer 503")
+	}
+	if deps.GitHubStateSigner.Secret == "" {
+		logger.Warn("config_missing: GITHUB_APP_STATE_SECRET is not set; the GitHub App install routes answer 503")
+	}
 	deps.RegisterLimit, err = registerLimit(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
@@ -599,18 +605,16 @@ func configureWith(
 // /api/v1/internal/* routes. They are NOT part of Routes, so the public
 // listener has no handler for them; only the listener bound to
 // APIInternalAddress serves them. The network boundary (the chart's
-// NetworkPolicy, no Ingress) is the first control; every route also checks a
-// svc_acr_ bearer (CHAOS-9993).
+// NetworkPolicy, no Ingress) is the first control; every route also checks
+// the acr-api workload token, the only bearer it accepts.
 func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var store acr.EntitlementStore
 	var llmConfig acr.LLMConfigSource
-	var credentials acr.CredentialVerifier
 	var auth acr.CredentialStore
 	var access acr.PrincipalAccessStore
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
 		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeInvestigate)
-		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
 		auth = acr.PostgresCredentialStore{Pool: deps.Pool, Now: deps.Now}
 		// The users, membership and impersonation reads run on go-api's pool
 		// (policy.PGStore with the auth schema, as the authenticator reads it).
@@ -641,7 +645,7 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		counters = httpapi.NewMemoryCounters(deps.Now)
 	}
 	return internalRoutesWith(acr.Deps{
-		Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials,
+		Store: store, Logger: logger, LLMConfig: llmConfig,
 		Auth: auth, Limiter: httpapi.NewKeyedLimiter(counters, acr.AuthAttemptLimit),
 		Workload: deps.ACRWorkload,
 		Access:   access, AccessLimiter: httpapi.NewKeyedLimiter(counters, acr.AccessAttemptLimit),
@@ -691,9 +695,10 @@ type protection struct {
 	authSchema string
 }
 
-// newProtection builds the principal service. The api verifies the access
-// token the Python api mints, so with a database it needs the same key:
-// JWT_SECRET_KEY is required, and a missing or short key stops startup.
+// newProtection builds the principal service. Access tokens are verified by
+// the endpoint-profile row only (buildAccessVerify); JWT_SECRET_KEY keys the
+// local session signer and its refresh-token verifier, so with a database it
+// is required, and a missing or short key stops startup.
 func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, logger *slog.Logger) (protection, error) {
 	if !cfg.APIJWTSecret.Configured() {
 		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
@@ -706,7 +711,7 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	if err != nil {
 		return protection{}, err
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}, logger)
 	if err != nil {
 		return protection{}, err
 	}

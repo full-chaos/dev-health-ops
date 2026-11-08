@@ -177,11 +177,14 @@ type phaseConfig struct {
 }
 
 func phaseConfigs() []phaseConfig {
+	// Every phase sets AUTH_TOKEN_ISSUER_URL: without it the bearer routes are
+	// not mounted, and the roll preflight refuses a pod that lacks it.
 	base := func() map[string]string {
 		return map[string]string{
 			authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
 			authconfig.EnvSigningKeyFile: "/nonexistent",
 			authconfig.EnvSigningKeyID:   "proxied-routes-test",
+			authconfig.EnvTokenIssuerURL: wellKnownIssuer,
 		}
 	}
 	owned := compatEnvironment(base())
@@ -210,11 +213,12 @@ func mountedAuthRoutes(t *testing.T, env map[string]string) map[string]bool {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	routes, err := sessionRoutes(cfg, logger, pool, schema, &stubSigner{}, mustLimits(t), nil)
+	signer := keySigner(t)
+	routes, err := sessionRoutes(cfg, logger, pool, schema, signer, mustLimits(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), &stubSigner{})
+	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), signer)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/pep"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -388,17 +387,19 @@ func TestShadowSkipsAreCountedAndAskNothing(t *testing.T) {
 	}
 }
 
-// The shadow mirrors enforcement for a caller with a live go-api impersonation row: never asked, counted
+// The shadow mirrors enforcement for a caller with a live go-api impersonation row: never asked; a read the legacy
+// check admits is counted skipped (enforcement keeps its legacy answer), a platform wrap's read and a write are counted
 // impersonation_refused, also on a high-risk row with its switch off.
 func TestShadowAnImpersonatingAdminIsCountedRefusedAndAskedNothing(t *testing.T) {
 	for _, cell := range []struct {
 		name, method, path string
 		who                persona
 		mutate             func(*ShadowConfig)
+		want               string
 	}{
-		{"organization row", "GET", "/api/v1/admin/teams", personaAdmin, nil},
-		{"platform row", "GET", "/api/v1/admin/orgs", personaSuperuser, nil},
-		{"high-risk row with the second switch off", "POST", "/api/v1/admin/teams", personaAdmin, func(c *ShadowConfig) { c.HighRisk = false }},
+		{"organization row read", "GET", "/api/v1/admin/teams", personaAdmin, nil, "skipped"},
+		{"platform row", "GET", "/api/v1/admin/orgs", personaSuperuser, nil, "impersonation_refused"},
+		{"high-risk row with the second switch off", "POST", "/api/v1/admin/teams", personaAdmin, func(c *ShadowConfig) { c.HighRisk = false }, "impersonation_refused"},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			rec := recordShadow(t)
@@ -406,8 +407,8 @@ func TestShadowAnImpersonatingAdminIsCountedRefusedAndAskedNothing(t *testing.T)
 			sh, _ := newShadowFor(t, pdp.client(t), cell.mutate)
 			shadowRequest(shadowHandler(t, personaStore(cell.who), userClaims(nil), sh, impersonating), cell.method, cell.path)
 			sh.wg.Wait()
-			if _, results := rec.snapshot(); !slices.Equal(results, []string{"impersonation_refused"}) {
-				t.Errorf("results %v, want [impersonation_refused]", results)
+			if _, results := rec.snapshot(); !slices.Equal(results, []string{cell.want}) {
+				t.Errorf("results %v, want [%s]", results, cell.want)
 			}
 			if n := len(pdp.calls()); n != 0 {
 				t.Errorf("%d PDP calls, want 0", n)
@@ -509,26 +510,6 @@ func TestShadowHighRiskRowAsksWhenTheSecondSwitchIsOn(t *testing.T) {
 	}
 	if _, results := rec.snapshot(); !slices.Equal(results, []string{"match"}) {
 		t.Fatalf("results %v", results)
-	}
-}
-
-func TestShadowLegacyHS256BearerIsSkipped(t *testing.T) {
-	rec := recordShadow(t)
-	pdp := newTestPDP(t, allowAll)
-	sh, _ := newShadowFor(t, pdp.client(t), nil)
-	store := newStore()
-	withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
-	guard := NewGuard(authenticator(t, store), quiet())
-	guard.SetShadow(sh)
-	mux := http.NewServeMux()
-	mux.Handle("GET /api/v1/admin/teams", guard.Wrap(AdminOrg, echo))
-	got := serve(mux, http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
-	sh.wg.Wait()
-	if got.status != http.StatusOK {
-		t.Fatalf("status %d %s", got.status, got.body)
-	}
-	if _, results := rec.snapshot(); !slices.Equal(results, []string{"skipped"}) || len(pdp.calls()) != 0 {
-		t.Fatalf("results %v calls %d, want [skipped] and 0", results, len(pdp.calls()))
 	}
 }
 
@@ -642,8 +623,8 @@ func TestShadowCounterLabelSetsAreClosed(t *testing.T) {
 // The skipped counter carries one reason label from one closed list: go-api never sets one, so every go-api skip and
 // every non-skip result is "none"; a caller-supplied reason outside the list is "none", never a new value.
 func TestShadowResultReasonIsFromTheClosedList(t *testing.T) {
-	if got := ShadowReasons(); !slices.Equal(got, []string{"none", "hs256", "envelope"}) {
-		t.Fatalf("closed reasons %v, want [none hs256 envelope]", got)
+	if got := ShadowReasons(); !slices.Equal(got, []string{"none", "hs256", "envelope", "no_user_bearer", "cap", "unmapped", "op_refused"}) {
+		t.Fatalf("closed reasons %v, want [none hs256 envelope no_user_bearer cap unmapped op_refused]", got)
 	}
 	rec := recordShadow(t)
 	pdp := newTestPDP(t, allowAll)

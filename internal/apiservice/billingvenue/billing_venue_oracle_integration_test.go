@@ -518,14 +518,10 @@ func billingSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) billingF
 	return f
 }
 
-// billingOrglessSuperusers is the "super" seed: a superuser whose org claim (orgD) names an organization it holds
-// no membership in. auth-service login mints such a user's access token with no org claim (auth/authapi/login.go:184-190),
-// so its user access token carries none; the recorded request stays keyed by the recorded claim.
-var billingOrglessSuperusers = []string{"super"}
-
-// orgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user holds
-// no live membership in, or is not a UUID.
-const orgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:90-102); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
+// billingOrglessSuperusers names no seed: the "super" seed (a superuser whose org claim, orgD, names an organization
+// it holds no membership in) keeps its recorded org claim, and its user access token gets the recorded (HS256)
+// answer (product rule 1, D6773).
+var billingOrglessSuperusers []string
 
 func (f billingFixture) tokenSpecs() map[string]map[string]any {
 	spec := func(user uuid.UUID, org, role string, extra map[string]any) map[string]any {
@@ -925,17 +921,18 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	var refusedNames []string
 	refusedCheckouts := 0
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/billing-plans-checkout.go-pin.json", SHA256: plansCheckoutPinSHA256, Ruling: overflowPageRuling})
-	// orgClaimRuling: Go refuses the bad-org-claim checkout, so Python's checkout of that request is one more Stripe call
-	// and one more session number Go never spends, counted the same way.
-	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/orgclaim/billing-plans-checkout.go-pin.json", SHA256: plansCheckoutOrgClaimPinSHA256, Ruling: orgClaimRuling})
-	claimRetired := map[string]bool{"checkout: bad org claim": true, "portal: bad org claim": true, "sub: bad org claim": true}
+	// venueoracle.NotUUIDOrgClaimGap: Go refuses the bad-org-claim checkout, so Python's checkout of that request is one
+	// more Stripe call and one more session number Go never spends, counted the same way.
+	notUUIDClaim := map[string]bool{"checkout: bad org claim": true, "portal: bad org claim": true, "sub: bad org claim": true}
 	claimCheckouts := 0
 	receipt := venueoracle.Diff(t, base, main, python[:len(main)], venueoracle.DiffOptions{
-		Normalize:     func(_ venueoracle.Request, body string) string { return normalize(body) },
-		Golden:        golden,
-		Retire:        func(request venueoracle.Request) bool { return request.Name == "list: offset overflow" },
-		Pin:           pin,
-		Retirements:   []venueoracle.Retirement{{Match: func(request venueoracle.Request) bool { return claimRetired[request.Name] }, Pin: claimPin}},
+		Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
+		Golden:    golden,
+		Retire:    func(request venueoracle.Request) bool { return request.Name == "list: offset overflow" },
+		Pin:       pin,
+		KnownDivergences: []venueoracle.KnownDivergence{
+			{Match: func(request venueoracle.Request) bool { return notUUIDClaim[request.Name] }, Ticket: venueoracle.NotUUIDOrgClaimGap},
+		},
 		OrglessTokens: map[string]bool{venue.Tokens["noOrg"]: true}, MaxOrglessRefusals: 3,
 		OnOrglessRefused: func(request venueoracle.Request) {
 			refusedNames = append(refusedNames, request.Name)
@@ -945,7 +942,7 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 		},
 		NormalizePython: func(request venueoracle.Request, body string) string {
 			shifted := shiftSessionNumbers(body, refusedCheckouts+claimCheckouts)
-			if claimRetired[request.Name] && request.Method == "POST" && strings.HasSuffix(request.Path, "/checkout") {
+			if notUUIDClaim[request.Name] && request.Method == "POST" && strings.HasSuffix(request.Path, "/checkout") {
 				claimCheckouts++
 			}
 			return shifted
@@ -1028,12 +1025,9 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
-	venueoracle.FinishPins(t, pin, claimPin)
+	venueoracle.FinishPins(t, pin)
 	golden.Finish(t)
 }
-
-// plansCheckoutOrgClaimPinSHA256 is the digest of testdata/orgclaim/billing-plans-checkout.go-pin.json.
-const plansCheckoutOrgClaimPinSHA256 = "f4d0d2a344ae6fd8b2434f60a419791cf6dad96bbef66430c93d07a5e03952c0"
 
 // plansCheckoutPinSHA256 is the digest of testdata/billing-plans-checkout.go-pin.json.
 const plansCheckoutPinSHA256 = "e20c8364febd8df034c2768ee4dcd2a3972db8d7867ca1448b146fce1ed805d8"

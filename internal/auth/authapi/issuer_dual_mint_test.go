@@ -21,17 +21,16 @@ func newDualMintFixture(t *testing.T) *accessFixture {
 	t.Helper()
 	signer, dir, _ := fileSigner(t)
 	issuer := newEdDSAIssuer(t, signer, contracts.PlatformAPIAudience)
-	f := newFixtureWith(t, issuer)
 	rows, err := AuthServiceAccessRows()
 	if err != nil {
 		t.Fatal(err)
 	}
 	reader, provider := accessMeter()
-	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer, Legacy: issuer, Rows: rows, Meter: provider.Meter("test")})
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer, Rows: rows, Meter: provider.Meter("test")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuer.WithAccessCheck(check)
+	f := newFixtureWith(t, issuer.WithAccessCheck(check))
 	return &accessFixture{fixture: f, signer: signer, dir: dir, reader: reader, check: check}
 }
 
@@ -167,7 +166,7 @@ func compatFixtureWith(t *testing.T, issuer *Issuer) *compatFixture {
 func issueAnswerFor(t *testing.T, issuer *Issuer) []byte {
 	t.Helper()
 	f := compatFixtureWith(t, issuer)
-	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer)
+	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer())
 	if response.Code != http.StatusOK {
 		t.Fatalf("issue status %d: %s", response.Code, response.Body)
 	}

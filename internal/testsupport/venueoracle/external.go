@@ -2,6 +2,9 @@ package venueoracle
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net/url"
 	"os"
@@ -14,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	valkeygo "github.com/valkey-io/valkey-go"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
@@ -29,7 +33,59 @@ const (
 	EnvExternalPostgres   = "DEVHEALTH_AUTH_ORACLE_POSTGRES_URI"
 	EnvExternalClickHouse = "DEVHEALTH_AUTH_ORACLE_CLICKHOUSE_URI"
 	EnvExternalValkey     = "DEVHEALTH_AUTH_ORACLE_VALKEY_URI"
+	// The token issuer the target trusts (its AUTH_ACCESS_TOKEN_ISSUER, auth-service's AUTH_TOKEN_ISSUER_URL; the same
+	// name as authrows.EnvSessionIssuer), the path of its Ed25519 signing key (PKCS#8 PEM, a mode 0600 file) and its key id.
+	EnvExternalIssuer         = "DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER"
+	EnvExternalSigningKeyFile = "DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_FILE"
+	EnvExternalSigningKeyID   = "DEVHEALTH_AUTH_ORACLE_SIGNING_KEY_ID"
 )
+
+// externalTokenIssuer is the issuer of the venue's tokens on an external target: the target's own token issuer, by
+// the key file the environment names. The target verifies user access tokens (EdDSA) only, so the venue mints them
+// under that issuer's key; the key never leaves the file and the process.
+func externalTokenIssuer() (*edtokens.Issuer, error) {
+	issuer, path, kid := os.Getenv(EnvExternalIssuer), os.Getenv(EnvExternalSigningKeyFile), os.Getenv(EnvExternalSigningKeyID)
+	if issuer == "" || path == "" || kid == "" {
+		return nil, fmt.Errorf("an external target needs its token issuer: set %s, %s and %s", EnvExternalIssuer, EnvExternalSigningKeyFile, EnvExternalSigningKeyID)
+	}
+	key, err := readSigningKey(path)
+	if err != nil {
+		return nil, err
+	}
+	return edtokens.FromKey(key, kid, issuer)
+}
+
+// readSigningKey reads an Ed25519 private key (PKCS#8 PEM) from path, which must be a regular file of mode 0600.
+// No error carries the file's content.
+func readSigningKey(path string) (ed25519.PrivateKey, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("signing key file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("signing key file %s is not a regular file", path)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		return nil, fmt.Errorf("signing key file %s has mode %04o, want 0600", path, perm)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("signing key file: %w", err)
+	}
+	block, rest := pem.Decode(raw)
+	if block == nil || block.Type != "PRIVATE KEY" || len(strings.TrimSpace(string(rest))) != 0 {
+		return nil, fmt.Errorf("signing key file %s is not one PKCS#8 PEM block", path)
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("signing key file %s is not PKCS#8", path)
+	}
+	key, ok := parsed.(ed25519.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("signing key file %s is not an Ed25519 key", path)
+	}
+	return key, nil
+}
 
 // Validate is an error unless the stores can stand in for the venue's Go side. frozen is false for a venue
 // that runs Python: the Python plane needs its own copy of the stores, which an external target cannot give.
@@ -129,9 +185,15 @@ func startExternal(t *testing.T, ctx context.Context, options Options, v *Venue)
 		specs = options.Seed(t, ctx, admin, v)
 	}
 	if len(specs) > 0 {
-		// An external target holds no key of the venue's own issuer: it verifies HS256 tokens under its JWT key.
-		v.legacyTokenKey = options.JWTKey
+		// The target verifies user access tokens of its own issuer only and checks each token's session live: mint
+		// under that issuer's key and write the sessions into the target's auth schema.
+		issuer, err := externalTokenIssuer()
+		if err != nil {
+			t.Fatalf("venue: %v", err)
+		}
+		v.TokenIssuer = issuer
 		v.Tokens = v.mintGo(t, specs)
+		writeSessions(t, ctx, admin, v.TokenIssuer)
 	}
 	return v
 }
@@ -193,6 +255,9 @@ func ExternalRequired(baseURL string) (ExternalStores, bool, error) {
 		return ExternalStores{}, false, fmt.Errorf("base URL %q is not an http(s) URL with a host", baseURL)
 	}
 	if err := checkTargetEnvScript(); err != nil {
+		return ExternalStores{}, false, err
+	}
+	if _, err := externalTokenIssuer(); err != nil {
 		return ExternalStores{}, false, err
 	}
 	return stores, true, nil

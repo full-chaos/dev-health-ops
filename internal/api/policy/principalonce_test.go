@@ -269,92 +269,9 @@ func TestRefusalPrefixesNeverVerify(t *testing.T) {
 	}
 }
 
-// TestImpersonationGateReadsTheVerifiedClaimOnly: the impersonation check runs
-// for a legacy token only when its VERIFIED is_superuser claim is truthy. A
-// unverifiable superuser claim (a token that does not verify) gets no impersonation
-// path: no session read, and one authenticate for the whole scope.
-func TestImpersonationGateReadsTheVerifiedClaimOnly(t *testing.T) {
-	unverifiable, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims(func(c jwt.MapClaims) { c["is_superuser"] = true })).SignedString([]byte(strings.Repeat("other-key-", 4)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cases := []struct {
-		name         string
-		token        func(t *testing.T) string
-		impersonated bool
-		sessionReads int
-	}{
-		{name: "unverifiable superuser claim", token: func(*testing.T) string { return unverifiable }},
-		{name: "verified claim false, superuser row", token: func(t *testing.T) string { return sign(t, claims(nil)) }},
-		{name: "verified claim true", token: superuserToken, impersonated: true, sessionReads: 1},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rig := newScopeRig(t, false, nil)
-			rig.store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
-			rig.store.sessions[userID] = &Impersonation{AdminUserID: userID, TargetUserID: targetUserID, TargetOrgID: targetOrgID}
-			got := serveRaw(rig.chain(echo), "Bearer "+tc.token(t), nil)
-			if impersonated := got.header.Get("X-Impersonating") == "true"; impersonated != tc.impersonated || got.status != http.StatusOK {
-				t.Fatalf("%d %q impersonated=%v, want %v", got.status, got.body, impersonated, tc.impersonated)
-			}
-			if rig.store.sessionCalls != tc.sessionReads || len(rig.tokens) != 1 {
-				t.Fatalf("session reads %d (want %d), authenticated %d (want 1)", rig.store.sessionCalls, tc.sessionReads, len(rig.tokens))
-			}
-		})
-	}
-}
-
-// TestImpersonationGateReadsTheLiveRoleWhileOwned: while the platform roles
-// switch is owned, a legacy token whose verified is_superuser claim is false
-// still gets the full impersonation check when the live read says superuser
-// (a newly granted admin is not held back until token renewal). A true claim
-// with no live role reads the session of nobody.
-func TestImpersonationGateReadsTheLiveRoleWhileOwned(t *testing.T) {
-	unverifiable, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims(func(c jwt.MapClaims) { c["is_superuser"] = true })).SignedString([]byte(strings.Repeat("other-key-", 4)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cases := []struct {
-		name         string
-		token        func(t *testing.T) string
-		live         bool
-		impersonated bool
-		sessionReads int
-	}{
-		{name: "unverifiable superuser claim, live role", token: func(*testing.T) string { return unverifiable }, live: true},
-		{name: "verified claim false, live role", token: func(t *testing.T) string { return sign(t, claims(nil)) }, live: true, impersonated: true, sessionReads: 1},
-		{name: "verified claim true, live role", token: superuserToken, live: true, impersonated: true, sessionReads: 1},
-		{name: "verified claim true, no live role", token: superuserToken},
-		{name: "verified claim false, no live role", token: func(t *testing.T) string { return sign(t, claims(nil)) }},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rig := newScopeRig(t, false, nil, func(store *countedStore) { store.platformRolesOwned = true })
-			rig.store.users[userID] = UserState{IsActive: true, IsSuperuser: tc.live}
-			rig.store.sessions[userID] = &Impersonation{AdminUserID: userID, TargetUserID: targetUserID, TargetOrgID: targetOrgID}
-			got := serveRaw(rig.chain(echo), "Bearer "+tc.token(t), nil)
-			if impersonated := got.header.Get("X-Impersonating") == "true"; impersonated != tc.impersonated || got.status != http.StatusOK {
-				t.Fatalf("%d %q impersonated=%v, want %v", got.status, got.body, impersonated, tc.impersonated)
-			}
-			if rig.store.sessionCalls != tc.sessionReads || len(rig.tokens) != 1 {
-				t.Fatalf("session reads %d (want %d), authenticated %d (want 1)", rig.store.sessionCalls, tc.sessionReads, len(rig.tokens))
-			}
-		})
-	}
-}
-
 // TestPrincipalIsAuthenticatedOnceForTheScope: OrgScope and Impersonation
-// share one authenticate of the request's bearer, in both modes.
+// share one authenticate of the request's bearer.
 func TestPrincipalIsAuthenticatedOnceForTheScope(t *testing.T) {
-	t.Run("legacy", func(t *testing.T) {
-		rig := newScopeRig(t, false, &BearerRow{AccessToken: true})
-		rig.store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
-		rig.store.sessions[userID] = &Impersonation{AdminUserID: userID, TargetUserID: targetUserID, TargetOrgID: targetOrgID}
-		got := serveRaw(rig.chain(echo), "Bearer "+superuserToken(t), map[string]string{"X-Org-Id": strangerOrg})
-		if got.header.Get("X-Impersonating") != "true" || len(rig.tokens) != 1 || rig.store.userCalls != 1 {
-			t.Fatalf("%d %q authenticated %d users reads %d", got.status, got.body, len(rig.tokens), rig.store.userCalls)
-		}
-	})
 	t.Run("routed user access token", func(t *testing.T) {
 		rig := newScopeRig(t, true, &BearerRow{AccessToken: true})
 		rig.store.users[userID] = UserState{IsActive: true, IsSuperuser: true}

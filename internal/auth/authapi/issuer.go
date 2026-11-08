@@ -149,6 +149,9 @@ var errBearerShape = errors.New("authapi: access token has no usable sub, sid or
 // reads the claims the session routes need. It returns the auth-outcome.v1
 // reason code of a refusal.
 func (i *Issuer) Verify(token string) (Bearer, string, error) {
+	if i.verifier == nil {
+		return Bearer{}, edgetoken.ReasonBadSignature, errLegacyKeyAbsent
+	}
 	claims, err := i.verifier.Verify(token)
 	if err != nil {
 		return Bearer{}, edgetoken.ReasonOf(err), err

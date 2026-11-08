@@ -112,15 +112,15 @@ func edgeSettings(kv map[string]string) getenvFunc {
 	return func(key string) string { return kv[key] }
 }
 
-// The edge secret without a users store is a build error, never a JWT-only
+// The issuer without a users store is a build error, never a JWT-only
 // verifier (CHAOS-6290 fail closed): there is no registry pool when the /query
 // route is not configured.
 func TestNewEdgeUserStoreFailsClosedWithoutPool(t *testing.T) {
-	store, err := newEdgeUserStore(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}), nil)
+	store, err := newEdgeUserStore(edgeSettings(map[string]string{accessTokenIssuerEnvVar: accessTestIssuer}), nil)
 	if err == nil {
 		t.Fatalf("newEdgeUserStore = (%v, nil), want an error when there is no registry pool", store)
 	}
-	if _, err := buildEdgeVerifierFromEnv(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}), nil); err == nil {
+	if _, err := buildEdgeVerifierFromEnv(edgeSettings(map[string]string{accessTokenIssuerEnvVar: accessTestIssuer}), nil); err == nil {
 		t.Fatal("buildEdgeVerifierFromEnv built a verifier with a nil users store")
 	}
 }
@@ -144,7 +144,7 @@ func TestNewEdgeUserStoreReusesTheGivenPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := newEdgeUserStore(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}), pool)
+	store, err := newEdgeUserStore(edgeSettings(map[string]string{accessTokenIssuerEnvVar: accessTestIssuer}), pool)
 	if err != nil {
 		t.Fatalf("newEdgeUserStore: %v", err)
 	}

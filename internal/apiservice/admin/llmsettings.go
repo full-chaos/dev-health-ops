@@ -220,11 +220,7 @@ func (h *handlers) llmSettingsResponse(ctx context.Context, db pgExecer, orgID s
 	values := make(map[string]*string, len(llmSettingKeys))
 	var unreadable []string
 	for _, key := range llmSettingKeys {
-		row, err := settingByKeyOn(ctx, db, orgID, llmCategory, key)
-		if err != nil {
-			return nil, err
-		}
-		value, err := h.settingValue(row)
+		value, err := h.llmSettingValue(ctx, db, orgID, "", key)
 		if collectUndecryptable(err, &unreadable) {
 			continue
 		}
@@ -309,6 +305,62 @@ func llmDetail(status int, w http.ResponseWriter, pairs ...string) {
 	policy.WriteDetail(w, status, detail, nil)
 }
 
+// llmPut is the PUT body's fields as putLLMSettings reads them.
+type llmPut struct {
+	provider                   *string
+	model, apiKey, baseURL     *string
+	baseURLKey                 bool
+	concurrency, budgetLimitMu *big.Int
+	purposeRaw                 *string
+	purposeModel               string
+	categorizeBYO              *bool
+}
+
+// readLLMPut reads the PUT body object; its validation errors go to errs.
+func readLLMPut(errs *pybody.Errors, object *pyjson.Object) llmPut {
+	var put llmPut
+	if v, present := errs.RequiredString(object, "provider", 1, 0); present {
+		put.provider = &v
+	}
+	if v, present := errs.OptionalString(object, "model", 0, 0); present {
+		put.model = &v
+	}
+	if v, present := errs.OptionalString(object, "api_key", 0, 0); present {
+		put.apiKey = &v
+	}
+	if v, present := errs.OptionalString(object, "base_url", 0, 0); present {
+		put.baseURL = &v
+	}
+	put.baseURLKey = bodyHasKeyFold(object, "base_url")
+	if v, present := errs.OptionalString(object, "purpose", 0, 0); present {
+		put.purposeRaw = &v
+		if v != "" {
+			if v, present := errs.RequiredString(object, "model", 1, 0); present {
+				put.purposeModel = v
+			}
+		}
+	}
+	if v, present := errs.OptionalBool(object, "categorize_byo"); present {
+		put.categorizeBYO = &v
+	}
+	if v, present := errs.OptionalBoundedInt(object, "concurrency", 1, 32); present {
+		put.concurrency = big.NewInt(v)
+	}
+	if v, present := errs.OptionalMinInt(object, "budget_limit_micro_usd", 0); present {
+		put.budgetLimitMu = v
+	}
+	return put
+}
+
+// purposeUpsert is the purpose override write the body asks for; the provider
+// was checked present. inTx is the caller's.
+func (put llmPut) purposeUpsert(purpose llmorgsettings.Purpose) llmPurposeUpsert {
+	return llmPurposeUpsert{
+		purpose: purpose, provider: *put.provider, model: put.purposeModel, apiKey: put.apiKey, baseURL: put.baseURL,
+		baseURLKey: put.baseURLKey,
+	}
+}
+
 // putLLMSettings is settings.py's upsert_llm_settings with llm_settings.py's
 // upsert_llm_settings: every write and the budget limit share one transaction
 // that a refusal or a failed response rolls back.
@@ -317,45 +369,13 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
-	var (
-		provider                   *string
-		model, apiKey, baseURL     *string
-		concurrency, budgetLimitMu *big.Int
-		purposeRaw                 *string
-		purposeModel               string
-		categorizeBYO              *bool
-	)
+	var put llmPut
 	if ok {
-		if v, present := errs.RequiredString(object, "provider", 1, 0); present {
-			provider = &v
-		}
-		if v, present := errs.OptionalString(object, "model", 0, 0); present {
-			model = &v
-		}
-		if v, present := errs.OptionalString(object, "api_key", 0, 0); present {
-			apiKey = &v
-		}
-		if v, present := errs.OptionalString(object, "base_url", 0, 0); present {
-			baseURL = &v
-		}
-		if v, present := errs.OptionalString(object, "purpose", 0, 0); present {
-			purposeRaw = &v
-			if v != "" {
-				if v, present := errs.RequiredString(object, "model", 1, 0); present {
-					purposeModel = v
-				}
-			}
-		}
-		if v, present := errs.OptionalBool(object, "categorize_byo"); present {
-			categorizeBYO = &v
-		}
-		if v, present := errs.OptionalBoundedInt(object, "concurrency", 1, 32); present {
-			concurrency = big.NewInt(v)
-		}
-		if v, present := errs.OptionalMinInt(object, "budget_limit_micro_usd", 0); present {
-			budgetLimitMu = v
-		}
+		put = readLLMPut(&errs, object)
 	}
+	provider, model, apiKey, baseURL := put.provider, put.model, put.apiKey, put.baseURL
+	concurrency, budgetLimitMu := put.concurrency, put.budgetLimitMu
+	purposeRaw, categorizeBYO := put.purposeRaw, put.categorizeBYO
 	user := policy.UserFrom(ctx)
 	orgID, ok := adminOrgID(w, user)
 	if !ok {
@@ -386,7 +406,11 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if apiKey == nil || *apiKey == "" {
-			need, err := h.purposeNeedsKey(ctx, orgID, purpose, *provider)
+			next := keyTarget{provider: *provider}
+			if baseURL != nil {
+				next.baseURL = *baseURL
+			}
+			need, err := h.purposeNeedsKey(ctx, orgID, purpose, next)
 			if err != nil {
 				h.internalError(ctx, w, "check llm purpose key", err)
 				return
@@ -397,10 +421,9 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		out, refusal, err := h.applyLLMPurpose(ctx, orgID, llmPurposeUpsert{
-			purpose: purpose, provider: *provider, model: purposeModel, apiKey: apiKey, baseURL: baseURL,
-			inTx: h.categorizeOptInStep(r, orgID, categorizeBYO),
-		})
+		upsert := put.purposeUpsert(purpose)
+		upsert.inTx = h.categorizeOptInStep(r, orgID, categorizeBYO)
+		out, refusal, err := h.applyLLMPurpose(ctx, orgID, upsert)
 		if err != nil {
 			if h.writeUndecryptable(ctx, w, "write llm purpose override", err) {
 				return
@@ -478,7 +501,7 @@ func byoProviderNeedsModel(in llmUpsert) bool {
 // transaction that a refusal or a failed response rolls back. The route and the
 // operator verb both run it.
 func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUpsert) (*pyjson.Object, *llmRefusal, error) {
-	if refusal := clefRefusal(in.provider, "", false, "", nil); refusal != nil {
+	if refusal := decisionProviderRefusal(in.provider, "", false, "", nil, false); refusal != nil {
 		return nil, refusal, nil
 	}
 	baseURLText := ""
@@ -529,6 +552,13 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		_, err := h.upsertSetting(ctx, tx, orgID, llmCategory, key, value, encrypt, &description)
 		return err
 	}
+	keyStep, err := h.keyStepFor(ctx, tx, orgID, "", keyTarget{in.provider, baseURLText}, in.apiKey)
+	if err != nil {
+		return nil, nil, &llmStepError{"read llm key binding", err}
+	}
+	if keyStep == keyStepRefuse {
+		return nil, targetChangeRefusal(), nil
+	}
 	normalized := pythonparity.Lower(pythonparity.Strip(in.provider))
 	steps := []struct {
 		run func() error
@@ -536,14 +566,19 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		{func() error { return set("provider", &normalized, false, "BYO LLM provider for this organization") }},
 		{func() error { return set("model", in.model, false, "BYO LLM model for this organization") }},
 	}
-	if in.apiKey != nil {
-		steps = append(steps, struct{ run func() error }{func() error {
-			return set("api_key", in.apiKey, true, "Encrypted BYO LLM API key for this organization")
-		}})
-	}
 	steps = append(steps, struct{ run func() error }{func() error {
 		return set("base_url", in.baseURL, false, "BYO LLM base URL for this organization")
 	}})
+	// The key is written after the provider and base_url rows: it is bound to them.
+	if keyStep == keyStepWrite {
+		steps = append(steps, struct{ run func() error }{func() error {
+			return set("api_key", in.apiKey, true, "Encrypted BYO LLM API key for this organization")
+		}})
+	} else {
+		steps = append(steps, struct{ run func() error }{func() error {
+			return h.applyKeyStep(ctx, tx, orgID, "", keyStep)
+		}})
+	}
 	if in.concurrency != nil {
 		text := in.concurrency.String()
 		steps = append(steps, struct{ run func() error }{func() error {

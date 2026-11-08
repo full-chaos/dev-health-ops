@@ -187,8 +187,8 @@ func TestReadRoutesNotMountedWithoutRow(t *testing.T) {
 			t.Errorf("%s without its row: %d, want 404", c.op, response.Code)
 		}
 	}
-	if f.reads.calls+f.grantReads.calls != 0 || len(f.creds.scopes) != 0 {
-		t.Fatal("an unmounted route reached a store or the credential check")
+	if f.reads.calls+f.grantReads.calls != 0 || f.w.keys.reads != 0 {
+		t.Fatal("an unmounted route reached a store or the key set")
 	}
 	one := newProvFixtureWith(t, dropReadRows(t, docWithRows(t, PatternPrincipalsGet, PatternOrgSuspend, PatternOrgRename), PatternPrincipalsGet))
 	seedReads(one)
@@ -202,8 +202,7 @@ func TestReadRoutesNotMountedWithoutRow(t *testing.T) {
 
 func TestReadRoutesNotMountedWithoutStore(t *testing.T) {
 	t.Parallel()
-	f := newReadFixture(t)
-	routes, err := ReadRoutes(ReadDeps{Credentials: f.creds, ProfileRows: docWithRows(t, readPatterns()...)})
+	routes, err := ReadRoutes(ReadDeps{ProfileRows: docWithRows(t, readPatterns()...)})
 	if err != nil || len(routes) != 0 {
 		t.Fatalf("read routes with no store: %d, %v", len(routes), err)
 	}
@@ -213,7 +212,7 @@ func TestReadRoutesNotMountedWithoutStore(t *testing.T) {
 func TestProvisioningRoutesNeverServeReads(t *testing.T) {
 	t.Parallel()
 	f := newReadFixture(t)
-	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+	routes, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
 		ProfileRows: docWithRows(t, append(readPatterns(), PatternOrgSuspend, PatternOrgRename)...)})
 	if err != nil {
@@ -226,27 +225,23 @@ func TestProvisioningRoutesNeverServeReads(t *testing.T) {
 	}
 }
 
-func TestReadScopeRequired(t *testing.T) {
+// The session issuer credential is retired on the read routes: with every scope it could hold, it is the one 401 from
+// the bearer text alone, before any store or key-set read. An empty or malformed bearer is the same 401.
+func TestReadRoutesRefuseTheRetiredServiceCredential(t *testing.T) {
 	for _, c := range readCases() {
 		t.Run(c.op, func(t *testing.T) {
 			t.Parallel()
 			f := newReadFixture(t)
-			f.creds.held = []string{"memberships:write", "sessions:issue"}
-			expectRefusal(t, f.post(c.path, c.body(f), nil), http.StatusUnauthorized, reasonInvalidCredentials)
-			if f.reads.calls+f.grantReads.calls != 0 {
-				t.Errorf("%s: a credential without the read scope reached a store", c.op)
+			expectRefusal(t, f.post(c.path, c.body(f), map[string]string{"Authorization": "Bearer " + provisioningToken}),
+				http.StatusUnauthorized, reasonInvalidCredentials)
+			if f.reads.calls+f.grantReads.calls != 0 || f.w.keys.reads != 0 {
+				t.Errorf("%s: the retired credential reached a store (%d) or the key set (%d)", c.op, f.reads.calls+f.grantReads.calls, f.w.keys.reads)
 			}
-			if !reflect.DeepEqual(f.creds.scopes, []string{c.scope}) {
-				t.Errorf("%s asked for scopes %v, want [%s]", c.op, f.creds.scopes, c.scope)
+			if !strings.Contains(f.logs.String(), "retired_credential_class") {
+				t.Errorf("%s: no retired_credential_class refusal in the log:\n%s", c.op, f.logs.String())
 			}
-			other := newReadFixture(t)
-			other.creds.held = []string{"principals:read", "organizations:read", "memberships:read", "grants:read"}
-			other.creds.held = slices.DeleteFunc(other.creds.held, func(s string) bool { return s == c.scope })
-			expectRefusal(t, other.post(c.path, c.body(other), nil), http.StatusUnauthorized, reasonInvalidCredentials)
-			held := newReadFixture(t)
-			held.creds.held = []string{c.scope}
-			if got := held.post(c.path, c.body(held), nil); got.Code != http.StatusOK {
-				t.Errorf("%s with its scope: %d %s", c.op, got.Code, got.Body)
+			if got := f.post(c.path, c.body(f), nil); got.Code != http.StatusOK {
+				t.Errorf("%s with the workload token: %d %s", c.op, got.Code, got.Body)
 			}
 		})
 	}
@@ -272,8 +267,8 @@ func TestReadRoutesAnswerWithoutWriting(t *testing.T) {
 		if f.storeCalls() != 0 || f.users.reads != 0 {
 			t.Errorf("%s wrote or read an actor (store calls %d, user reads %d)", c.op, f.storeCalls(), f.users.reads)
 		}
-		if n, ok := f.uses(c.op); ok && n != 0 {
-			t.Errorf("%s counted as a compat credential use", c.op)
+		if n, ok := f.refusals(c.op); ok && n != 0 {
+			t.Errorf("%s counted as a retired credential refusal", c.op)
 		}
 		if ct := got.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 			t.Errorf("%s content type %q", c.op, ct)

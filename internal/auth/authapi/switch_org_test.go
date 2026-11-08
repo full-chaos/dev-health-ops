@@ -142,16 +142,22 @@ type switchFixture struct {
 	store                 *fakeSwitchSessions
 	projector             *fakeProjector
 	issuer                *Issuer
+	bearerIssuer          *Issuer
 	logs                  *bytes.Buffer
 	counters              httpapi.CounterStore
 	document              []byte
 	server                http.Handler
 }
 
+// newSwitchFixture serves switch-org with the hs256_compat mint and the access
+// check over a key set (without the check the route is not mounted); the
+// bearer is the EdDSA session-route token of that key set.
 func newSwitchFixture(t *testing.T) *switchFixture {
 	t.Helper()
-	issuer := newTestIssuer(t)
-	return newSwitchFixtureWith(t, issuer)
+	issuer, minter := withSessionBearer(t, newTestIssuer(t))
+	f := newSwitchFixtureWith(t, issuer)
+	f.bearerIssuer = minter
+	return f
 }
 
 func newSwitchFixtureWith(t *testing.T, issuer *Issuer) *switchFixture {
@@ -224,7 +230,15 @@ func (f *switchFixture) grant() Grant {
 
 func (f *switchFixture) bearerOf(grant Grant) map[string]string {
 	f.t.Helper()
-	return map[string]string{"Authorization": "Bearer " + legacyAccess(f.t, grant)}
+	minter := f.issuer
+	if f.bearerIssuer != nil {
+		minter = f.bearerIssuer
+	}
+	compact, err := minter.Access(grant)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return map[string]string{"Authorization": "Bearer " + compact}
 }
 
 func (f *switchFixture) bearer() map[string]string { return f.bearerOf(f.grant()) }
@@ -507,10 +521,12 @@ func TestSwitchOrgRefusalTable(t *testing.T) {
 			f.store.before = session.ErrPredecessorNotLive
 			return f.bearer()
 		}, http.StatusUnauthorized, switchBadToken, reasonSessionRevoked},
-		{"stale token version (bearer)", func(f *switchFixture) map[string]string {
-			grant := f.grant()
-			grant.User.TokenVersion = 3
-			return f.bearerOf(grant)
+		{"stale session pin (bearer)", func(f *switchFixture) map[string]string {
+			record := f.sessions.records[f.record.ID]
+			stale := int64(3)
+			record.LegacyTokenVersion = &stale
+			f.sessions.records[f.record.ID] = record
+			return f.bearer()
 		}, http.StatusUnauthorized, switchBadToken, reasonRevisionStale},
 		{"stale pin (in the transaction)", func(f *switchFixture) map[string]string {
 			user := f.reads.users[f.principal]
@@ -524,12 +540,12 @@ func TestSwitchOrgRefusalTable(t *testing.T) {
 			f.sessions.records[f.record.ID] = record
 			return f.bearer()
 		}, http.StatusForbidden, switchNotAllowed, reasonNotEntitled},
-		{"impersonation bearer", func(f *switchFixture) map[string]string {
+		{"HS256 impersonation bearer (class retired)", func(f *switchFixture) map[string]string {
 			grant := f.grant()
 			actor := uuid.New()
 			grant.Actor = &actor
-			return f.bearerOf(grant)
-		}, http.StatusForbidden, switchNotAllowed, reasonNotEntitled},
+			return map[string]string{"Authorization": "Bearer " + legacyAccess(f.t, grant)}
+		}, http.StatusUnauthorized, switchBadToken, reasonMalformed},
 		{"service account user", func(f *switchFixture) map[string]string {
 			user := f.reads.users[f.principal]
 			provider := "service"

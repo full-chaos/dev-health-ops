@@ -40,7 +40,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/idpstub"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -132,16 +131,12 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 	t.Cleanup(pool.Close)
 	pgschema.Apply(ctx, t, pool)
 
-	verifier, err := edgetoken.New(testJWTKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	if issuer == nil {
 		issuer = stubIssuer{}
 	}
 	logs := &syncBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

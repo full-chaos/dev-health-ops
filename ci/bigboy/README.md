@@ -74,6 +74,7 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
   -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-deps --no-build <service>
 ```
 
+- `acr-db-init` and `acr-db-acl` run `acr-db-init.sh` of the acr commit in `ci/bigboy/acr-db-init.pin` (ops `ci/bigboy/images.env` `BIGBOY_ACR_COMMIT`, the acr of the acr-api pin). Before any compose command that names them, and after every acr repin, run `bash ops/ci/bigboy/acr-db-init-fetch.sh`: it fetches the file at that commit, refuses a sha256 other than the pin's, and writes it to the path `ACR_DB_INIT_SCRIPT` of the pins file (`/var/lib/oci-cache/mcp-venue/acr-db-init/acr-db-init.sh`). A host's `_records/images.env` must hold the `ACR_DB_INIT_SCRIPT` and `BIGBOY_ACR_COMMIT` lines, or compose fails and names the variable. An acr repin updates the pin file (both lines) and `BIGBOY_ACR_COMMIT` together; a gate test compares the two commits.
 - `--profile acr` holds every acr service. `--profile acr-venue` holds only what must exist before acr-api: `acr-postgres`, `acr-db-init`
   (roles), `acr-migrate` and `acr-db-acl` (grants). Pass both when you want to name no service.
   Services do not clash with the dev-health ones: the database and the graph are `acr-postgres` and `acr-falkordb`, answering to the
@@ -153,13 +154,13 @@ Bring-up, in this order (every command names its services; `-p dev-health ... --
 5. Once: `--profile auth run --rm acr-workload-bootstrap` (runs `acr-workload-volume` first). It prints the credential id and its
    `expires_at`; re-create before that time (a second `run` refuses while a credential is live: revoke it first with
    `auth-migrate workloads bootstrap-revoke -credential <id> -reason owner_request -apply`, or rotate with `bootstrap-rotate`). It is never a `depends_on`.
-6. The subject: read the principal of the workload acr-api,
-   `docker exec dev-health-postgres-1 psql -U devhealth -d devhealth -Atc "SELECT 'prn_' || rtrim(translate(encode(uuid_send(principal_id), 'base64'), '+/', '-_'), '=') FROM auth.workloads WHERE name = 'acr-api'"`,
-   and write it to `ops/.env` as `AUTH_ACR_WORKLOAD_SUBJECT=prn_...` (an id, not a secret). Unset, go-api refuses every workload token as
-   not configured.
+6. The subject: nothing to write. go-api reads the principal of the workload acr-api from the workload registry (the row `auth.workloads`
+   `name = 'acr-api'`); the venue grants its role that read (`AUTH_WORKLOAD_READER_ROLES=devhealth_api` on auth-migrate and auth-grants).
+   No live acr-api row, or an unreadable registry, and go-api refuses every workload token on the internal acr routes.
 7. Once: `--profile auth run --rm go-api-workload-bootstrap` (runs `go-api-workload-volume` first), then read the principal of the workload `api` as in step 6
    (`WHERE name = 'api'`) and write it to `ops/.env` as `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_...`. Recreate auth-service (`--profile auth up -d --no-deps --no-build auth-service`).
 8. Recreate go-api (`up -d --no-deps --no-build go-api`; it needs the api bootstrap file from step 7 to start), query-api and web, then acr-api (`--profile acr up -d --no-deps --no-build acr-api`).
+9. Platform roles (CHAOS-13282): auth-service has `AUTH_PLATFORM_ROLES_OWNED=true` in `compose.bigboy.yml` (the prod form: the PDP reads the role from `auth.platform_role_assignments`, not `users.is_superuser`), so a plain `up` keeps it. go-api stays not owned (the drift-S controls need legacy to read the flag), and `AUTH_USERS_OWNED` stays `false` (the venue has no mail settings: `auth_mail_config_invalid`). Before the first start with the setting on, run `BIGBOY_DRIFT_S_ID=<uuid> BIGBOY_ADMIN_AUTH_HDR=<0600 header file> ci/bigboy/bigboy-platform-admin-fixture.sh`: it runs `dho auth users-backfill` with the drift-S `is_superuser` flag off, puts the flag back, and reads back that the active platform_admin set is the flagged superusers other than drift-S and that `users-reconcile -platform-roles-gate` shows only the drift-S `platform_role_diff`. It is idempotent.
 
 ## Go-only stack (CHAOS-8361)
 

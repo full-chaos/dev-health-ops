@@ -10,6 +10,7 @@ import (
 	"context"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 type contextKey struct{}
@@ -39,6 +40,10 @@ type Claims struct {
 	// Platform is the platform action set held when it is not the one
 	// IsSuperuser means; nil carries only the flag.
 	Platform *rule.Platform
+	// Scope is what a REST read may serve: the enforced PDP decision's
+	// organization and repository ceiling, or the legacy path's organization.
+	// Only the REST authenticator sets it; the zero value serves nothing.
+	Scope pepgate.Scope
 }
 
 // Holds reports whether the caller holds the platform action now.

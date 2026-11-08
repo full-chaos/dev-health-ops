@@ -151,14 +151,31 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		if g.pdp.shadow != nil || g.pdp.enforcer != nil {
 			bearer, _ = BearerToken(r.Header.Get("Authorization"))
 		}
+		// With the admin cell on, the handler's platform questions go to the decision point too (HoldsPlatform).
+		platform := g.pdp.enforcer.platformDecisionsFor(r, bearer, user)
+		if platform != nil {
+			r = r.WithContext(context.WithValue(r.Context(), platformDecisionsKey, platform))
+		}
 		// A route whose namespace is switched on is decided by the decision point, not by the legacy checks below.
-		switch verdict := g.enforceVerdict(r, user, bearer); verdict {
-		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused:
+		switch verdict := g.enforceVerdict(r, user, bearer, level == Superuser && gt.kind == gatePlatform, gt, platform); verdict {
+		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused, enforceSessionRowUnavailable:
 			writeEnforceRefusal(w, level, verdict)
 			return
 		case enforceAllow:
 			next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
 			return
+		}
+		// With the admin cell on, the action of an admin-or or platform wrap is the decision point's answer for a caller
+		// it can judge, and go-api's own set otherwise; every other check is main's.
+		holds := func(action string) (bool, error) {
+			if platform == nil {
+				return user.Holds(action), nil
+			}
+			return platform.holds(r.Context(), action)
+		}
+		refuse := func(err error) {
+			g.observeShadow(r, caller, bearer, false)
+			WritePlatformDecisionRefusal(w, err)
 		}
 		if user.OrgID == "" && !user.Holds(gt.orglessAction()) && !OrglessMayReach(r.Method, r.URL.Path) {
 			g.observeShadow(r, caller, bearer, false)
@@ -175,7 +192,16 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				acting.OrgID = org
 				user = &acting
 			}
-			if !user.IsAdmin() && !(gt.kind == gateAdminOr && user.Holds(gt.action)) {
+			admitted := user.IsAdmin()
+			if !admitted && gt.kind == gateAdminOr {
+				held, err := holds(gt.action)
+				if err != nil {
+					refuse(err)
+					return
+				}
+				admitted = held
+			}
+			if !admitted {
 				g.observeShadow(r, caller, bearer, false)
 				WriteDetail(w, http.StatusForbidden, "Admin access required", nil)
 				return
@@ -186,17 +212,33 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				return
 			}
 		case Superuser:
-			if gt.kind != gatePlatform || !user.Holds(gt.action) {
+			held := false
+			if gt.kind == gatePlatform {
+				var err error
+				if held, err = holds(gt.action); err != nil {
+					refuse(err)
+					return
+				}
+			}
+			if !held {
 				g.observeShadow(r, caller, bearer, false)
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
 			}
-			if r.Pattern != stopImpersonationPattern && ImpersonationFrom(r.Context()) != nil {
-				g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
-					slog.String("path", r.Pattern), slog.String("action", gt.action))
-				g.observeShadow(r, caller, bearer, false)
-				WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
-				return
+			if !liveRowExempt(r.Pattern) {
+				session, err := g.sessionRow(r, user.ID)
+				if err != nil {
+					// The session state is unknown: the shadow is not asked.
+					g.writeSessionRowFailure(w, r, err)
+					return
+				}
+				if session != nil {
+					g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
+						slog.String("path", r.Pattern), slog.String("action", gt.action))
+					g.observeShadowAs(r, caller, bearer, false, true)
+					WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
+					return
+				}
 			}
 		}
 		g.observeShadow(r, caller, bearer, true)
@@ -313,6 +355,18 @@ func (g *Guard) optionalUser(w http.ResponseWriter, r *http.Request) (*User, boo
 // request that holds an impersonation session.
 const msgImpersonationDenied = "Not allowed in an impersonation session"
 
-// stopImpersonationPattern is the one platform route that stays reachable in
-// an impersonation session: it ends the session.
+// stopImpersonationPattern is the platform route that ends an impersonation
+// session.
 const stopImpersonationPattern = "POST /api/v1/admin/impersonate/stop"
+
+// ImpersonationHandoffConsumePattern is the platform route that admits the
+// start handoff of the caller's own impersonation session, once. The session
+// row is live when it is called.
+const ImpersonationHandoffConsumePattern = "POST /api/v1/admin/impersonate/handoff/consume"
+
+// liveRowExemptPatterns are the platform routes that stay reachable while the
+// caller's impersonation row is live. Every live-row refusal reads this set
+// through liveRowExempt.
+var liveRowExemptPatterns = map[string]bool{stopImpersonationPattern: true, ImpersonationHandoffConsumePattern: true}
+
+func liveRowExempt(pattern string) bool { return liveRowExemptPatterns[pattern] }

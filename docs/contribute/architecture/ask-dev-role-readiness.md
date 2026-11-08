@@ -7,7 +7,7 @@ source_of_truth:
   - internal/apiservice/admin/llmsettingsreadiness.go
   - internal/apiservice/admin/llmreadinessprobe.go
   - internal/apiservice/admin/settings.go
-  - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
+  - Amendment TRD v2 -- Ask Dev (Linear, project Ask Dev)
 applicability: current
 lifecycle: deprecated
 deprecated_by: /admin/ask-dev/
@@ -167,7 +167,7 @@ otherwise read as coverage it no longer provides.
 The probe runs **two fully independent, complete two-round chains** -- four
 provider calls total -- because `PromptComposer` composes two distinct
 prompt shapes (`PROMPT_VERSION`, committed subject; `LEGACY_PROMPT_VERSION`,
-uncommitted subject / the Wave 3.1 flag off) and a real run can select
+uncommitted subject / the v2 flag off) and a real run can select
 either one. Each chain's own round one produces the tool request/result its
 own round two uses -- never borrowed from the other chain -- so a provider
 that fails only on one specific shape (e.g. the uncommitted-subject prompt
@@ -214,7 +214,7 @@ certified reads as visibly distinct from `stale_readiness` (was certified,
 now invalidated) and from any failure-derived state. No prompt text, tool
 text, or provider payload is ever included.
 
-The existing CHAOS-3265 boundary applies unchanged: an organization relying
+The existing boundary applies unchanged: an organization relying
 on platform fallback sees the platform role's *state* (it carries no
 identity) but never the platform's specific remediation text, which is
 replaced with the same generic message the single-readiness field already
@@ -257,7 +257,7 @@ the live provider, not only the transport echo -- previously the explicit
 live gate exercised the echo alone. The resulting state is not forced to
 `compatible`: a live provider genuinely hitting the 4,096-token envelope is
 an expected, not a failing, outcome. Whether CI sets `ASK_DEV_LIVE_GATE=1`
-for the Wave 3.1 convergence gate is a separate workflow change, not
+for the v2 convergence gate is a separate workflow change, not
 implemented here.
 
 ## What is not built yet

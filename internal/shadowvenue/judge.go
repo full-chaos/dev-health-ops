@@ -177,6 +177,10 @@ type JudgeOptions struct {
 	NoOrg NoOrgEvidence
 	// Outbound is the venue stub's evidence of outside calls (checkOutbound).
 	Outbound Outbound
+	// Strict holds every sent slot to its claim read-back and body digest (a missing one voids the run) and the
+	// superuser-O slots to the membership snapshots. The command always sets it; a run without it judges as before.
+	Strict     bool
+	Membership Membership
 }
 
 // SlotVerdict is one slot and what its evidence says.
@@ -191,7 +195,7 @@ type SlotVerdict struct {
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard:
 		return true
 	}
 	return false
@@ -283,6 +287,7 @@ func Judge(slots []Slot, ev Evidence, rulings []Ruling, o JudgeOptions) Report {
 		}
 		report.Slots = append(report.Slots, sv)
 	}
+	applyStrict(&report, o.Strict, o.Membership, void)
 	relabelNoOrgSkips(report.Slots, o.NoOrg)
 	outbound := checkOutbound(slots, o.Outbound, byRow, o.Grace, []string{"before", "between"})
 	for i := range report.Slots {
@@ -373,7 +378,7 @@ func judgeSlot(sv *SlotVerdict, results []resultLine, ev Evidence, rulings []Rul
 	from, to := sv.Start.Add(-windowSkew), sv.End.Add(grace)
 	var hits []int
 	for i, line := range results {
-		if line.route == sv.Key() && line.caller == sv.Caller && !line.at.Before(from) && !line.at.After(to) {
+		if line.route == sv.Key() && line.caller == callerKind(sv.Caller) && !line.at.Before(from) && !line.at.After(to) {
 			hits = append(hits, i)
 		}
 	}
@@ -544,7 +549,7 @@ func cellPasses(counts map[string]int, row string) bool {
 // WriteTable writes the per-row match table: one line per row and control, a cell per caller kind.
 func (r Report) WriteTable(w io.Writer) error {
 	var b strings.Builder
-	b.WriteString("row\tkey\t" + strings.Join(callerOrder, "\t") + "\tverdict\tnotes\n")
+	b.WriteString("row\tkey\t" + strings.Join(cellCallers, "\t") + "\tverdict\tnotes\n")
 	for _, rv := range r.Rows {
 		verdict := "PASS"
 		switch {
@@ -556,7 +561,7 @@ func (r Report) WriteTable(w io.Writer) error {
 			verdict = "FAIL"
 		}
 		fields := []string{rv.Row, rv.Key}
-		for _, caller := range callerOrder {
+		for _, caller := range cellCallers {
 			cell := rv.Cells[caller]
 			if cell == "" {
 				cell = none

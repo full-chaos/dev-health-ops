@@ -10,7 +10,10 @@ const throwawayHeader = "kind\tlabel\tuuid"
 
 // ThrowawayIDs are the ids of the throwaway pool, frozen before the run: its orgs and their principals. A destructive
 // slot may send no other id.
-type ThrowawayIDs struct{ ids map[string]bool }
+type ThrowawayIDs struct {
+	ids   map[string]bool
+	kinds map[string]string
+}
 
 // ParseThrowawayIDs reads the frozen throwaway ids file: a header, then one "org" or "user" line per id.
 func ParseThrowawayIDs(raw []byte) (ThrowawayIDs, error) {
@@ -18,7 +21,7 @@ func ParseThrowawayIDs(raw []byte) (ThrowawayIDs, error) {
 	if len(lines) == 0 || lines[0] != throwawayHeader {
 		return ThrowawayIDs{}, fmt.Errorf("throwaway ids: the first line is not %q", throwawayHeader)
 	}
-	out := ThrowawayIDs{ids: map[string]bool{}}
+	out := ThrowawayIDs{ids: map[string]bool{}, kinds: map[string]string{}}
 	orgs := 0
 	for n, line := range lines[1:] {
 		f := strings.Split(line, "\t")
@@ -30,6 +33,7 @@ func ParseThrowawayIDs(raw []byte) (ThrowawayIDs, error) {
 			return ThrowawayIDs{}, fmt.Errorf("throwaway ids: line %d: id %s twice or the missing id", n+2, id)
 		}
 		out.ids[id] = true
+		out.kinds[id] = f[0]
 		if f[0] == "org" {
 			orgs++
 		}
@@ -53,4 +57,21 @@ func (t ThrowawayIDs) Holds(texts ...string) error {
 		}
 	}
 	return nil
+}
+
+// replaceIDs replaces every frozen id in text with the placeholder of its kind ({T_ORG} or {T_USER}), whatever its case,
+// so the same body of two pools of one run compares equal.
+func (t ThrowawayIDs) replaceIDs(text string) string {
+	if len(t.kinds) == 0 {
+		return text
+	}
+	return anyUUID.ReplaceAllStringFunc(text, func(id string) string {
+		switch t.kinds[strings.ToLower(id)] {
+		case "org":
+			return "{T_ORG}"
+		case "user":
+			return "{T_USER}"
+		}
+		return id
+	})
 }

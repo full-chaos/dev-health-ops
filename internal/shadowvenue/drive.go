@@ -156,10 +156,18 @@ func (d *Driver) Login(ctx context.Context, p Principal, orgID string) (string, 
 }
 
 // Drive sends every slot of plan in order with its principal's token, waits Gap after each answer, and writes the
-// slots file to w. A gap slot is written, not sent. Answer bodies are read and dropped.
+// slots file to w. A gap slot is written, not sent. Each slot records the claims its token carries (read locally, never
+// sent) and the digest of the answer; a token with less than MinTokenLife left stops the drive before its slot. Answer
+// bodies are digested and dropped.
 func (d *Driver) Drive(ctx context.Context, plan Plan, tokens map[string]string, w io.Writer) error {
 	if d.Gap < MinGap {
 		return fmt.Errorf("drive: gap %s is below %s (the shadow decision timeout plus a margin)", d.Gap, MinGap)
+	}
+	claims := map[string]TokenClaims{}
+	for name, token := range tokens {
+		if c, err := DecodeClaims(token); err == nil {
+			claims[name] = c
+		}
 	}
 	for _, slot := range plan.Slots {
 		if !slot.Gap() && tokens[slot.Principal] == "" {
@@ -167,6 +175,9 @@ func (d *Driver) Drive(ctx context.Context, plan Plan, tokens map[string]string,
 		}
 		if slot.Gap() {
 			continue
+		}
+		if c, ok := claims[slot.Principal]; ok && c.Exp.Sub(d.now()) < MinTokenLife {
+			return fmt.Errorf("drive: the token of principal %s expires in %s (less than %s): refused before any request", slot.Principal, c.Exp.Sub(d.now()).Round(time.Second), MinTokenLife)
 		}
 		c, ok := classOf(slot.Key())
 		switch {
@@ -188,6 +199,12 @@ func (d *Driver) Drive(ctx context.Context, plan Plan, tokens map[string]string,
 	}
 	for _, slot := range plan.Slots {
 		if !slot.Gap() {
+			if c, ok := claims[slot.Principal]; ok {
+				if left := c.Exp.Sub(d.now()); left < MinTokenLife {
+					return fmt.Errorf("drive: slot %d row %s stopped before its request: the token of principal %s expires in %s (less than %s)", slot.Seq, slot.Row, slot.Principal, left.Round(time.Second), MinTokenLife)
+				}
+				slot.ClaimSub, slot.ClaimOrg, slot.ClaimExp = c.Sub, c.Org, c.Exp
+			}
 			if err := d.send(ctx, &slot, tokens[slot.Principal]); err != nil {
 				return err
 			}
@@ -227,13 +244,21 @@ func (d *Driver) send(ctx context.Context, slot *Slot, token string) error {
 		slot.End, slot.Status, slot.Note = d.now(), 0, "transport failure"
 		return ctx.Err()
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<20))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, bodyLimit+1))
 	_ = resp.Body.Close()
 	slot.End, slot.Status = d.now(), resp.StatusCode
+	if len(raw) > bodyLimit {
+		return fmt.Errorf("drive: slot %d: the answer is over 4 MiB: it would be digested cut", slot.Seq)
+	}
+	digest := DigestBody(slot.Key(), raw, d.Frozen, PinnedVolatile)
+	slot.BodyLen, slot.BodySHA, slot.BodyNormSHA = digest.Len, digest.SHA, digest.Norm
 	return nil
 }
 
-const slotsHeader = "seq\trow\tcaller\tprincipal\tcross_org\texpect\tk\tmethod\troute\tpath\tt_start\tt_end\tstatus\tnote"
+const slotsHeaderV1 = "seq\trow\tcaller\tprincipal\tcross_org\texpect\tk\tmethod\troute\tpath\tt_start\tt_end\tstatus\tnote"
+
+// slotsHeader is the v2 header: v1 plus the claims the plan wants, the claims the token carried, and the answer digests.
+const slotsHeader = slotsHeaderV1 + "\twant_sub\twant_org\tclaim_sub\tclaim_org\tclaim_exp\tbody_len\tbody_sha\tbody_norm_sha"
 
 func (s Slot) line() string {
 	stamp := func(t time.Time) string {
@@ -246,21 +271,35 @@ func (s Slot) line() string {
 	if note == "" {
 		note = none
 	}
+	text := func(v string) string {
+		if v == "" {
+			return none
+		}
+		return v
+	}
+	bodyLen := none
+	if s.BodySHA != "" {
+		bodyLen = strconv.Itoa(s.BodyLen)
+	}
 	return strings.Join([]string{strconv.Itoa(s.Seq), s.Row, s.Caller, s.Principal, strconv.FormatBool(s.CrossOrg), s.Expect,
-		strconv.Itoa(s.K), s.Method, s.Route, s.Path, stamp(s.Start), stamp(s.End), strconv.Itoa(s.Status), note}, "\t")
+		strconv.Itoa(s.K), s.Method, s.Route, s.Path, stamp(s.Start), stamp(s.End), strconv.Itoa(s.Status), note,
+		text(s.WantSub), text(s.WantOrg), text(s.ClaimSub), text(s.ClaimOrg), stamp(s.ClaimExp), bodyLen, text(s.BodySHA), text(s.BodyNormSHA)}, "\t")
 }
 
 // ParseSlots reads a slots file Drive wrote.
 func ParseSlots(raw []byte) ([]Slot, error) {
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) > 0 && lines[0] == slotsHeaderV1 {
+		return nil, errors.New("slots: header v1 refused: the file has no claim read-back and no body digests (rerun the drive)")
+	}
 	if len(lines) == 0 || lines[0] != slotsHeader {
 		return nil, errors.New("slots: the first line is not the slots header")
 	}
 	var slots []Slot
 	for n, line := range lines[1:] {
 		f := strings.Split(line, "\t")
-		if len(f) != 14 {
-			return nil, fmt.Errorf("slots: line %d has %d columns, want 14", n+2, len(f))
+		if len(f) != 22 {
+			return nil, fmt.Errorf("slots: line %d has %d columns, want 22", n+2, len(f))
 		}
 		s := Slot{Row: f[1], Caller: f[2], Principal: f[3], Expect: f[5], Method: f[7], Route: f[8], Path: f[9]}
 		var err1, err2, err3, err4, err5 error
@@ -271,12 +310,27 @@ func ParseSlots(raw []byte) ([]Slot, error) {
 		if f[13] != none {
 			s.Note = f[13]
 		}
+		orNone := func(v string) string {
+			if v == none {
+				return ""
+			}
+			return v
+		}
+		s.WantSub, s.WantOrg, s.ClaimSub, s.ClaimOrg = orNone(f[14]), orNone(f[15]), orNone(f[16]), orNone(f[17])
+		s.BodySHA, s.BodyNormSHA = orNone(f[20]), orNone(f[21])
+		var err6, err7 error
+		if f[18] != none {
+			s.ClaimExp, err6 = time.Parse(time.RFC3339Nano, f[18])
+		}
+		if f[19] != none {
+			s.BodyLen, err7 = strconv.Atoi(f[19])
+		}
 		if !s.Gap() {
 			if s.Start, err5 = time.Parse(time.RFC3339Nano, f[10]); err5 == nil {
 				s.End, err5 = time.Parse(time.RFC3339Nano, f[11])
 			}
 		}
-		if err := errors.Join(err1, err2, err3, err4, err5); err != nil {
+		if err := errors.Join(err1, err2, err3, err4, err5, err6, err7); err != nil {
 			return nil, fmt.Errorf("slots: line %d: %w", n+2, err)
 		}
 		slots = append(slots, s)

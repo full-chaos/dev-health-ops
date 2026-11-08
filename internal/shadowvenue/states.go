@@ -30,7 +30,7 @@ func ParseStates(raw []byte) (States, error) {
 	used := map[string]bool{}
 	for n, line := range lines[1:] {
 		f := strings.Split(line, "\t")
-		if len(f) != 4 || f[0] == "" || !slices.Contains(callerOrder, f[1]) || f[3] == "" {
+		if len(f) != 4 || f[0] == "" || !slices.Contains(cellCallers, f[1]) || f[3] == "" {
 			return States{}, fmt.Errorf("states: line %d: want row, caller, k and a state", n+2)
 		}
 		k, err := strconv.Atoi(f[2])

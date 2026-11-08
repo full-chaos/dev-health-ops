@@ -22,6 +22,17 @@ const (
 	VerdictUnevidencedNoOrg = "UNEVIDENCED_NOORG"
 	VerdictUnevidencedSeam  = "UNEVIDENCED_SEAM"
 	VerdictControlNotDenied = "CONTROL_NOT_ENFORCED"
+	// VerdictMismatchCaller: the slot's token is not the one the plan wanted (sub or org claim).
+	VerdictMismatchCaller = "MISMATCH_CALLER"
+	// VerdictMismatchBody: the status is equal but the normalized answer differs between the two runs.
+	VerdictMismatchBody = "MISMATCH_BODY"
+	// VerdictEqualPastGuard: an equal 5xx answer with equal bodies, and the go-api log shows the decision point allowed
+	// the request, so the 5xx is the handler's after the guard.
+	VerdictEqualPastGuard = "EQUAL_PAST_GUARD"
+	// VerdictVoidParity: an equal 5xx answer with no log proof that it is past the guard; the cell is no evidence.
+	VerdictVoidParity = "VOID_PARITY"
+	// VerdictPDPUnavailable: the go-api log shows the decision point gave no verdict for the request.
+	VerdictPDPUnavailable = "PDP_UNAVAILABLE"
 )
 
 // YardSlot is a slot of the yardstick run: its cell, its legacy HTTP status and the verdict that run gave it.
@@ -30,7 +41,9 @@ type YardSlot struct {
 	K           int
 	Key         string
 	Status      int
-	Verdict     string
+	// BodyNorm is the normalized body digest of the yardstick slot.
+	BodyNorm string
+	Verdict  string
 }
 
 // EnforcedInput is everything an enforced judgement reads.
@@ -53,6 +66,12 @@ type EnforcedInput struct {
 	Outbound          Outbound
 	YardOutbound      []OutboundSlot
 	YardOutboundGiven bool
+	// Strict holds the run to claim read-back, body digests and body parity (the command always sets it); Membership
+	// is the two snapshots of the superuser-O pairs; Log is the go-api log of the run, the proof that an equal 5xx cell is
+	// past the guard (nil = none given).
+	Strict     bool
+	Membership Membership
+	Log        *Evidence
 }
 
 // liveEnforcement is what one /metrics scrape of the running go-api says: the namespaces whose enforcement gauge is 1,
@@ -196,6 +215,17 @@ func JudgeEnforced(in EnforcedInput) Report {
 	for _, y := range in.Yard {
 		yard[cell{y.Row, y.Caller, y.K}] = y
 	}
+	// A route whose decision point was not asked for another reason (a legacy HS256 caller, an impersonation read) has
+	// no allow proof in the log.
+	unjudgedRoutes := map[string]bool{}
+	for route, byReason := range reasons {
+		for reason, n := range byReason {
+			if n > 0 && reason != "no_org" && reason != "served_org" {
+				unjudgedRoutes[route] = true
+			}
+		}
+	}
+	bodyMissing := 0
 	for _, slot := range in.Slots {
 		sv := SlotVerdict{Slot: slot}
 		y, found := yard[cell{slot.Row, slot.Caller, slot.K}]
@@ -217,6 +247,13 @@ func JudgeEnforced(in EnforcedInput) Report {
 			case VerdictSkippedSeam:
 				sv.Verdict = VerdictUnevidencedSeam
 			}
+			if in.Strict {
+				if y.BodyNorm == "" || slot.BodyNormSHA == "" {
+					bodyMissing++
+				} else {
+					sv.Verdict = bodyVerdict(in, slot, y, sv.Verdict, unjudgedRoutes[slot.Key()])
+				}
+			}
 		case slot.Status == 403:
 			sv.Verdict = VerdictStricter
 		case y.Status == 403 && slot.Status < 400:
@@ -226,6 +263,10 @@ func JudgeEnforced(in EnforcedInput) Report {
 		}
 		report.Slots = append(report.Slots, sv)
 	}
+	if bodyMissing > 0 {
+		void("%d cells have no body digest in the slots or in the yardstick: the answers cannot be compared", bodyMissing)
+	}
+	applyStrict(&report, in.Strict, in.Membership, void)
 	// The superuser's skips and the seam rows pass on the counter, per route.
 	if err == nil {
 		perKey := map[string][]int{}
@@ -307,7 +348,10 @@ func RowNamespaces(profiles []byte) (map[string]string, error) {
 	return out, nil
 }
 
-const verdictsHeader = "seq\trow\tcaller\tk\tkey\tstatus\tverdict"
+const verdictsHeaderV1 = "seq\trow\tcaller\tk\tkey\tstatus\tverdict"
+
+// verdictsHeader is the v2 header: v1 plus the normalized body digest of the slot.
+const verdictsHeader = "seq\trow\tcaller\tk\tkey\tstatus\tbody_norm_sha\tverdict"
 
 // WriteVerdicts writes one line per slot: its cell, its route key, its HTTP status and its verdict. The file of a run
 // with enforcement off is the yardstick of an enforced run.
@@ -315,7 +359,11 @@ func (r Report) WriteVerdicts(w io.Writer) error {
 	var b strings.Builder
 	b.WriteString(verdictsHeader + "\n")
 	for _, sv := range r.Slots {
-		fmt.Fprintf(&b, "%d\t%s\t%s\t%d\t%s\t%d\t%s\n", sv.Seq, sv.Row, sv.Caller, sv.K, sv.Key(), sv.Status, sv.Verdict)
+		norm := sv.BodyNormSHA
+		if norm == "" {
+			norm = none
+		}
+		fmt.Fprintf(&b, "%d\t%s\t%s\t%d\t%s\t%d\t%s\t%s\n", sv.Seq, sv.Row, sv.Caller, sv.K, sv.Key(), sv.Status, norm, sv.Verdict)
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
@@ -324,24 +372,31 @@ func (r Report) WriteVerdicts(w io.Writer) error {
 // ParseYardstick reads a verdicts file written by WriteVerdicts. A gap slot has no status and is left out.
 func ParseYardstick(raw []byte) ([]YardSlot, error) {
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) > 0 && lines[0] == verdictsHeaderV1 {
+		return nil, errors.New("yardstick: header v1 refused: the file has no body digests (judge the yardstick run again)")
+	}
 	if len(lines) == 0 || lines[0] != verdictsHeader {
 		return nil, errors.New("yardstick: the first line is not the verdicts header")
 	}
 	var out []YardSlot
 	for n, line := range lines[1:] {
 		f := strings.Split(line, "\t")
-		if len(f) != 7 {
-			return nil, fmt.Errorf("yardstick: line %d has %d columns, want 7", n+2, len(f))
+		if len(f) != 8 {
+			return nil, fmt.Errorf("yardstick: line %d has %d columns, want 8", n+2, len(f))
 		}
 		k, err1 := strconv.Atoi(f[3])
 		status, err2 := strconv.Atoi(f[5])
 		if err := errors.Join(err1, err2); err != nil {
 			return nil, fmt.Errorf("yardstick: line %d: %w", n+2, err)
 		}
-		if f[6] == VerdictGap {
+		if f[7] == VerdictGap {
 			continue
 		}
-		out = append(out, YardSlot{Row: f[1], Caller: f[2], K: k, Key: f[4], Status: status, Verdict: f[6]})
+		norm := f[6]
+		if norm == none {
+			norm = ""
+		}
+		out = append(out, YardSlot{Row: f[1], Caller: f[2], K: k, Key: f[4], Status: status, BodyNorm: norm, Verdict: f[7]})
 	}
 	if len(out) == 0 {
 		return nil, errors.New("yardstick: no slot")
@@ -443,4 +498,59 @@ func keyOfYard(yard []OutboundSlot, row string) string {
 		}
 	}
 	return ""
+}
+
+// bodyVerdict gives a status-equal cell its body verdict: a differing normalized body is MISMATCH_BODY; an equal 5xx
+// is EQUAL_PAST_GUARD only with the log proof that the decision point allowed the request, PDP_UNAVAILABLE when the log
+// shows no verdict, else VOID_PARITY (also when the route has an unjudged count for another reason than no_org or
+// served_org). A cell the yardstick skipped (the counter decides it) needs no proof.
+func bodyVerdict(in EnforcedInput, slot Slot, y YardSlot, verdict string, unjudged bool) string {
+	switch {
+	case slot.BodyNormSHA != y.BodyNorm:
+		return VerdictMismatchBody
+	case slot.Status < 500 || y.Verdict == VerdictSkipped || y.Verdict == VerdictSkippedSeam:
+		return verdict
+	}
+	switch pastGuard(in.Log, slot, in.Grace) {
+	case proofAllow:
+		if unjudged {
+			return VerdictVoidParity
+		}
+		return VerdictEqualPastGuard
+	case proofUnavailable:
+		return VerdictPDPUnavailable
+	}
+	return VerdictVoidParity
+}
+
+type guardProof int
+
+const (
+	proofNone guardProof = iota
+	proofAllow
+	proofUnavailable
+)
+
+// pastGuard reads the go-api log for slot: exactly one result line of its route and caller kind in its window, a match
+// with a decision id, is the proof that the decision point allowed the request; an error or dropped line is no verdict.
+func pastGuard(ev *Evidence, slot Slot, grace time.Duration) guardProof {
+	if ev == nil {
+		return proofNone
+	}
+	from, to := slot.Start.Add(-windowSkew), slot.End.Add(grace)
+	var lines []resultLine
+	for _, l := range ev.results {
+		if l.route == slot.Key() && l.caller == callerKind(slot.Caller) && !l.at.Before(from) && !l.at.After(to) {
+			lines = append(lines, l)
+		}
+	}
+	for _, l := range lines {
+		if l.result == "error" || l.result == "dropped" {
+			return proofUnavailable
+		}
+	}
+	if len(lines) == 1 && lines[0].result == "match" && lines[0].decision != "" {
+		return proofAllow
+	}
+	return proofNone
 }

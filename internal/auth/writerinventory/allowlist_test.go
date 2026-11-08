@@ -296,6 +296,7 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/store.go", Func: "Store.rotate", Table: "auth.refresh_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/session/store.go", Func: "Store.rotate", Table: "auth.sessions", Verb: "UPDATE"},
 	{File: "internal/maintenancecli/maintenance.go", Func: "CleanupExpiredTokens", Table: "public.refresh_tokens", Verb: "DELETE"},
+	{File: "internal/testsupport/authplane/authplane.go", Func: "Start", Table: "auth.principals", Verb: "INSERT"}, // test support: the venue auth plane's go-api workload principal, the issue route's audit actor
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "ImpersonationSession", Table: "public.impersonation_sessions", Verb: "INSERT"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "Membership", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "Org", Table: "public.organizations", Verb: "INSERT"},

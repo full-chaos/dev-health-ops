@@ -25,3 +25,5 @@ internal/llmorgsettings/keybinding_test.go:generic-api-key:65
 internal/jobs/investment/categorize/orgtypesafeclient_test.go:generic-api-key:13
 internal/llmorgsettings/typesafe_config_test.go:generic-api-key:11
 internal/jobs/investment/typesafebyo_test.go:generic-api-key:24
+# test constant, not a secret: the unaccepted-bearer fixture (base64 of "not", "a token", "sig") of the envelope-key cells; it sits in an earlier commit of this branch on the same line (commit-less form).
+internal/queryapi/server/envelope_key_absent_test.go:generic-api-key:26

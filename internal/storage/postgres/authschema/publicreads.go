@@ -54,10 +54,6 @@ func PublicReadColumns() []ColumnGrant {
 		// impersonation. Its reader arrives in O3b (CHAOS-12399), the grant first.
 		// id: a delegated session's end finds its row by id (ImpersonationEndColumns).
 		{Table: "impersonation_sessions", Columns: []string{"id", "admin_user_id", "ended_at", "expires_at"}},
-		// The session issue route checks go-api's auth-session-issuer
-		// service credential by its hash (last_used_at is not read or
-		// stamped).
-		{Table: "internal_service_credentials", Columns: []string{"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"}},
 	}
 }
 

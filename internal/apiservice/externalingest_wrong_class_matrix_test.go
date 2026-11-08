@@ -154,7 +154,7 @@ func newPushRig(t *testing.T, pool *pgxpool.Pool) *pushRig {
 	scope.DeclaredRows(scopeRows)
 	limiter := &pushLimiterStore{}
 	limiter.reset()
-	routes := externalingest.Routes(externalingest.Deps{Pool: pool, Logger: logger, Counters: limiter})
+	routes := markResponseModels(externalingest.Routes(externalingest.Deps{Pool: pool, Logger: logger, Counters: limiter}))
 	if len(routes) != 7 {
 		t.Fatalf("externalingest mounts %d routes, want 7", len(routes))
 	}
@@ -434,6 +434,10 @@ func TestExternalIngestWrongClassMatrixControls(t *testing.T) {
 // The two schema routes are public: any wrong credential answers what an
 // anonymous caller gets, reads nothing, and counts no auth-limiter hit.
 func TestExternalIngestWrongClassMatrixPublicSchemaRows(t *testing.T) {
+	var policyLogs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&policyLogs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
 	pg, pool := ingestpg.Start(t)
 	rig := newPushRig(t, pool)
 	cells := pushWrongClassCells(t, rig)
@@ -464,6 +468,9 @@ func TestExternalIngestWrongClassMatrixPublicSchemaRows(t *testing.T) {
 	}
 	if pg.Connects() != 0 || len(pg.AuditRows()) != 0 {
 		t.Errorf("schema discovery touched the database: %d connect(s), %d audit row(s)", pg.Connects(), len(pg.AuditRows()))
+	}
+	if strings.Contains(policyLogs.String(), "wrong body writer") {
+		t.Errorf("policy logged a wrong-body-writer line:\n%s", policyLogs.String())
 	}
 	usertokens.NoLeak(t, "the logs", rig.logs.String(), tokens)
 }

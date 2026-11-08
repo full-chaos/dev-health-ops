@@ -378,11 +378,18 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if claims.OrgID != org.String() {
 		t.Fatalf("org_id = %q, want %s", claims.OrgID, org)
 	}
+	// The access token is access-token.v1 (EdDSA): the wire principal and session, the organization, the
+	// issuer and the dev-health-api audience; none of the retired HS256 claims.
 	payload := decodePayload(t, rotated.AccessToken.Reveal())
-	for key, want := range map[string]any{"sub": user.String(), "role": "owner", "tv": float64(2), "is_superuser": false,
-		"username": "routes-" + user.String()[:8], "full_name": "Routes User", "sid": rotated.SessionID, "type": "access"} {
+	for key, want := range map[string]any{"sub": session.WirePrincipalID(user), "sid": rotated.SessionID, "org_id": org.String(),
+		"iss": "https://auth.example.test", "aud": "dev-health-api"} {
 		if payload[key] != want {
 			t.Errorf("claim %s = %v, want %v", key, payload[key], want)
+		}
+	}
+	for _, retired := range []string{"role", "tv", "is_superuser", "username", "full_name", "type"} {
+		if value, present := payload[retired]; present {
+			t.Errorf("retired HS256 claim %s = %v is present", retired, value)
 		}
 	}
 

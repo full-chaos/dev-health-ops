@@ -7,11 +7,12 @@
 //	                   [-bodykeys-key <0600 key> -bodykeys-out <new side file>]
 //	shadow-venue mint  -base http://127.0.0.1:8093 -principals <tsv> -names a,b -out-dir <0700 dir> [-egress <txt> -run-id <id>]
 //	shadow-venue bodykey -out <new 0600 key file>
-//	shadow-venue bodydiff -a <slots> -b <slots> [-keys-a <side> -keys-b <side>]
+//	shadow-venue bodydiff -a <slots> -b <slots> [-keys-a <side> -keys-b <side> [-paths]]
 //	shadow-venue judge -slots <slots.tsv> -log <go-api log> -out <table.tsv> [-k 3] [-grace 2.2s] [-rulings <tsv>]
 //	                   [-rows <tsv>] [-stub-log <jsonl>] [-outbound-out <tsv>] [-egress-before <txt> -egress-between <txt>]
 //	                   [-membership-before <tsv> -membership-after <tsv>]
 //	shadow-venue judge-enforced ... [-stub-log <jsonl> -yardstick-outbound <tsv>] [-egress-before -egress-between -egress-after]
+//	                       [-volatile-keys <frozen 0600> -keys-yardstick <side> -keys-enforced <side>]
 //	                   [-log <go-api log>] [-membership-before <tsv> -membership-after <tsv>]
 //
 // Exit: 0 every row passes (judge) or the step finished; 1 a row fails; 2 usage or input; 3 the run is void.
@@ -19,6 +20,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -580,6 +583,9 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 	egressAfter := fs.String("egress-after", "", "egress record read after this run")
 	seedLog := fs.String("seed-log", "", "the stub's seed-mode log (required when an external row was sent; an empty file is a log)")
 	logPath := fs.String("log", "", "go-api JSON log of this run: the proof that an equal 5xx cell is past the guard")
+	volatilePath := fs.String("volatile-keys", "", "owner-only frozen file of the volatile leaf paths per row (bodydiff -paths of legacy-vs-legacy pairs); with -keys-yardstick and -keys-enforced")
+	keysYard := fs.String("keys-yardstick", "", "side file of the yardstick drive (the leaves of its answers by slot seq)")
+	keysEnf := fs.String("keys-enforced", "", "side file of this run's drive")
 	membershipBefore := fs.String("membership-before", "", "membership snapshot taken at most 5 minutes before the drive (required when a superuser-O slot ran)")
 	membershipAfter := fs.String("membership-after", "", "membership snapshot taken right after the drive")
 	if err := fs.Parse(args); err != nil {
@@ -671,7 +677,15 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	report := shadowvenue.JudgeEnforced(shadowvenue.EnforcedInput{Strict: true, Membership: membership, Log: evidence, Slots: slots, Yard: yard, K: *k, Namespaces: namespaces,
+	leafParity, err := readLeafParity(*volatilePath, *keysYard, *keysEnf)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	if leafParity != nil {
+		fmt.Fprintf(stdout, "judge-enforced: volatile keys sha12 %s, paths per row: %s\n", leafParity.Volatile.SHA12, leafParity.Volatile.PathsPerRow())
+	}
+	report := shadowvenue.JudgeEnforced(shadowvenue.EnforcedInput{Strict: true, Membership: membership, Leaves: leafParity, Log: evidence, Slots: slots, Yard: yard, K: *k, Namespaces: namespaces,
 		Grace: *grace, Outbound: outbound, YardOutbound: yardOut, YardOutboundGiven: *yardOutbound != "",
 		YardDigest: strings.TrimSpace(string(files["yardstick-digest"])), YardDigestAfter: strings.TrimSpace(string(files["yardstick-digest-after"])), DigestBefore: strings.TrimSpace(string(files["digest-before"])),
 		DigestAfter: strings.TrimSpace(string(files["digest-after"])), MetricsBefore: files["metrics-before"], MetricsAfter: files["metrics-after"]})
@@ -706,6 +720,48 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 
 // readMembership reads the two membership snapshots; "" is a snapshot not given (the judge voids when a superuser-O
 // slot ran without it).
+// readLeafParity reads the frozen volatile file and the two side files; "" for all three gives none, any other mix is an
+// error. The frozen file must be an owner-only regular file; its sha12 goes to the record line.
+func readLeafParity(volatile, yard, enforced string) (*shadowvenue.LeafParity, error) {
+	if volatile == "" && yard == "" && enforced == "" {
+		return nil, nil
+	}
+	if volatile == "" || yard == "" || enforced == "" {
+		return nil, errors.New("judge-enforced: -volatile-keys, -keys-yardstick and -keys-enforced go together")
+	}
+	info, err := os.Stat(volatile)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("-volatile-keys %s: want an owner-only (0600) regular file", volatile)
+	}
+	raw, err := os.ReadFile(volatile)
+	if err != nil {
+		return nil, fmt.Errorf("-volatile-keys: %v", errors.Unwrap(err))
+	}
+	frozen, err := shadowvenue.ParseFrozenVolatile(raw)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(raw)
+	frozen.SHA12 = hex.EncodeToString(sum[:])[:12]
+	out := &shadowvenue.LeafParity{Volatile: frozen}
+	for i, path := range []string{yard, enforced} {
+		side, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("side file %s: %v", path, errors.Unwrap(err))
+		}
+		leaves, err := shadowvenue.ParseKeysFile(side)
+		if err != nil {
+			return nil, err
+		}
+		if i == 0 {
+			out.Yard = leaves
+		} else {
+			out.Enforced = leaves
+		}
+	}
+	return out, nil
+}
+
 func readMembership(before, after string) (shadowvenue.Membership, error) {
 	var out shadowvenue.Membership
 	for flag, target := range map[string]struct {
@@ -780,11 +836,16 @@ func bodydiff(args []string, stdout, stderr io.Writer) int {
 	b := fs.String("b", "", "second slots file")
 	keysA := fs.String("keys-a", "", "side file of the first drive (with -keys-b: name the differing leaf paths)")
 	keysB := fs.String("keys-b", "", "side file of the second drive")
+	pathsOnly := fs.Bool("paths", false, "print only the differing leaf paths as row<TAB>path lines, sorted and unique, for the frozen volatile file (needs -keys-a and -keys-b); the summary goes to stderr")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if (*keysA == "") != (*keysB == "") {
 		fmt.Fprintln(stderr, "bodydiff: -keys-a and -keys-b go together")
+		return exitUsage
+	}
+	if *pathsOnly && *keysA == "" {
+		fmt.Fprintln(stderr, "bodydiff: -paths needs -keys-a and -keys-b")
 		return exitUsage
 	}
 	var sets [2][]shadowvenue.Slot
@@ -798,6 +859,21 @@ func bodydiff(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return exitUsage
 		}
+	}
+	if *pathsOnly {
+		lines, err := leafPathLines(sets, *keysA, *keysB)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+		for _, l := range lines {
+			fmt.Fprintln(stdout, l)
+		}
+		fmt.Fprintf(stderr, "bodydiff: %d differing leaf paths\n", len(lines))
+		if len(lines) > 0 {
+			return exitFail
+		}
+		return exitOK
 	}
 	diffs, err := shadowvenue.BodyDiff(sets[0], sets[1])
 	if err != nil {
@@ -847,6 +923,21 @@ func bodykey(args []string, stderr io.Writer) int {
 }
 
 // leafDiff lists, per cell of the pair, the leaf paths whose HMACs differ or that one side lacks: paths only.
+// leafPathLines reads the two side files and gives the differing leaf paths of the cells as row<TAB>path lines.
+func leafPathLines(sets [2][]shadowvenue.Slot, pathA, pathB string) ([]string, error) {
+	var leaves [2]map[int][]shadowvenue.Leaf
+	for i, path := range []string{pathA, pathB} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("bodydiff: %v", errors.Unwrap(err))
+		}
+		if leaves[i], err = shadowvenue.ParseKeysFile(raw); err != nil {
+			return nil, err
+		}
+	}
+	return shadowvenue.DiffPathLines(sets[0], sets[1], leaves[0], leaves[1]), nil
+}
+
 func leafDiff(sets [2][]shadowvenue.Slot, pathA, pathB string) ([]string, error) {
 	var leaves [2]map[int][]shadowvenue.Leaf
 	for i, path := range []string{pathA, pathB} {

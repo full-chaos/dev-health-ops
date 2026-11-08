@@ -38,9 +38,11 @@ const (
 // YardSlot is a slot of the yardstick run: its cell, its legacy HTTP status and the verdict that run gave it.
 type YardSlot struct {
 	Row, Caller string
-	K           int
-	Key         string
-	Status      int
+	// Seq is the slot seq in the yardstick run's own slots file (the join key of its side file).
+	Seq    int
+	K      int
+	Key    string
+	Status int
 	// BodyNorm is the normalized body digest of the yardstick slot.
 	BodyNorm string
 	Verdict  string
@@ -72,6 +74,8 @@ type EnforcedInput struct {
 	Strict     bool
 	Membership Membership
 	Log        *Evidence
+	// Leaves, when set, replaces the body_norm_sha comparison with the per-leaf parity after the frozen volatile set.
+	Leaves *LeafParity
 }
 
 // liveEnforcement is what one /metrics scrape of the running go-api says: the namespaces whose enforcement gauge is 1,
@@ -225,7 +229,7 @@ func JudgeEnforced(in EnforcedInput) Report {
 			}
 		}
 	}
-	bodyMissing := 0
+	bodyMissing, leafMissing := 0, 0
 	for _, slot := range in.Slots {
 		sv := SlotVerdict{Slot: slot}
 		y, found := yard[cell{slot.Row, slot.Caller, slot.K}]
@@ -248,10 +252,18 @@ func JudgeEnforced(in EnforcedInput) Report {
 				sv.Verdict = VerdictUnevidencedSeam
 			}
 			if in.Strict {
+				differs := slot.BodyNormSHA != y.BodyNorm
+				if in.Leaves != nil {
+					var missing bool
+					if differs, missing = in.Leaves.differs(slot, y); missing {
+						leafMissing++
+						differs = false
+					}
+				}
 				if y.BodyNorm == "" || slot.BodyNormSHA == "" {
 					bodyMissing++
 				} else {
-					sv.Verdict = bodyVerdict(in, slot, y, sv.Verdict, unjudgedRoutes[slot.Key()])
+					sv.Verdict = bodyVerdict(in, slot, y, sv.Verdict, unjudgedRoutes[slot.Key()], differs)
 				}
 			}
 		case slot.Status == 403:
@@ -262,6 +274,9 @@ func JudgeEnforced(in EnforcedInput) Report {
 			sv.Verdict = VerdictStatusDiffers
 		}
 		report.Slots = append(report.Slots, sv)
+	}
+	if leafMissing > 0 {
+		void("%d sent cells have no line in a side file: the leaves of the answers cannot be compared", leafMissing)
 	}
 	if bodyMissing > 0 {
 		void("%d cells have no body digest in the slots or in the yardstick: the answers cannot be compared", bodyMissing)
@@ -396,7 +411,11 @@ func ParseYardstick(raw []byte) ([]YardSlot, error) {
 		if norm == none {
 			norm = ""
 		}
-		out = append(out, YardSlot{Row: f[1], Caller: f[2], K: k, Key: f[4], Status: status, BodyNorm: norm, Verdict: f[7]})
+		seq, err := strconv.Atoi(f[0])
+		if err != nil {
+			return nil, fmt.Errorf("yardstick: line %d: %w", n+2, err)
+		}
+		out = append(out, YardSlot{Row: f[1], Caller: f[2], Seq: seq, K: k, Key: f[4], Status: status, BodyNorm: norm, Verdict: f[7]})
 	}
 	if len(out) == 0 {
 		return nil, errors.New("yardstick: no slot")
@@ -504,9 +523,9 @@ func keyOfYard(yard []OutboundSlot, row string) string {
 // is EQUAL_PAST_GUARD only with the log proof that the decision point allowed the request, PDP_UNAVAILABLE when the log
 // shows no verdict, else VOID_PARITY (also when the route has an unjudged count for another reason than no_org or
 // served_org). A cell the yardstick skipped (the counter decides it) needs no proof.
-func bodyVerdict(in EnforcedInput, slot Slot, y YardSlot, verdict string, unjudged bool) string {
+func bodyVerdict(in EnforcedInput, slot Slot, y YardSlot, verdict string, unjudged, differs bool) string {
 	switch {
-	case slot.BodyNormSHA != y.BodyNorm:
+	case differs:
 		return VerdictMismatchBody
 	case slot.Status < 500 || y.Verdict == VerdictSkipped || y.Verdict == VerdictSkippedSeam:
 		return verdict

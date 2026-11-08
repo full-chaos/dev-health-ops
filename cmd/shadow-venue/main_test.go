@@ -578,3 +578,59 @@ func TestBodydiffWithKeysFailsOnADifferingLeafEvenWhenTheNormalizedDigestsAreEqu
 		t.Fatalf("code %d out %q", code, out.String())
 	}
 }
+
+const sideHeaderForTest = "seq\tpath\thmac12"
+
+func writeOwnerOnly(t *testing.T, name, content string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestReadLeafParityTakesThreeFilesTogetherAndAnOwnerOnlyFrozenFile(t *testing.T) {
+	side := writeOwnerOnly(t, "side.tsv", sideHeaderForTest+"\n1\t$.a\taaaaaaaaaaaa\n", 0o600)
+	frozen := writeOwnerOnly(t, "frozen.tsv", "1\t$.ts\n", 0o600)
+	if p, err := readLeafParity("", "", ""); p != nil || err != nil {
+		t.Fatalf("no flags: %v %v", p, err)
+	}
+	for name, args := range map[string][3]string{
+		"only the frozen file":       {frozen, "", ""},
+		"only the yardstick side":    {"", side, ""},
+		"no enforced side":           {frozen, side, ""},
+		"no frozen file":             {"", side, side},
+		"a frozen file mode 0644":    {writeOwnerOnly(t, "f.tsv", "1\t$.ts\n", 0o644), side, side},
+		"a frozen file with a junk":  {writeOwnerOnly(t, "g.tsv", "1\t$.ts\n# note\n", 0o600), side, side},
+		"a frozen file not a file":   {t.TempDir(), side, side},
+		"a side file that is absent": {frozen, side, filepath.Join(t.TempDir(), "none")},
+	} {
+		if p, err := readLeafParity(args[0], args[1], args[2]); err == nil || p != nil {
+			t.Errorf("%s: accepted (%v)", name, err)
+		}
+	}
+	p, err := readLeafParity(frozen, side, side)
+	if err != nil || p == nil || len(p.Volatile.SHA12) != 12 || !p.Volatile.ByRow["1"]["$.ts"] {
+		t.Fatalf("a good set: %+v %v", p, err)
+	}
+}
+
+func TestBodydiffPathsNeedsTheSideFiles(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"bodydiff", "-a", "x", "-b", "y", "-paths"}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "-paths needs") {
+		t.Fatalf("code %d stderr %q", code, errOut.String())
+	}
+}
+
+func TestLeafPathLinesAreRowTabPathAndNothingElse(t *testing.T) {
+	a := writeOwnerOnly(t, "a.tsv", sideHeaderForTest+"\n1\t$.ts\taaaaaaaaaaaa\n1\t$.id\tbbbbbbbbbbbb\n", 0o600)
+	b := writeOwnerOnly(t, "b.tsv", sideHeaderForTest+"\n5\t$.ts\tcccccccccccc\n5\t$.id\tbbbbbbbbbbbb\n", 0o600)
+	lines, err := leafPathLines([2][]shadowvenue.Slot{{{Seq: 1, Row: "7", Caller: "admin", K: 1}}, {{Seq: 5, Row: "7", Caller: "admin", K: 1}}}, a, b)
+	if err != nil || len(lines) != 1 || lines[0] != "7\t$.ts" {
+		t.Fatalf("%q %v", lines, err)
+	}
+}

@@ -4,6 +4,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 )
 
 const (
@@ -38,8 +42,10 @@ func TestMembershipRoutesSwitch(t *testing.T) {
 		{name: "true with both keys", env: merge(both, map[string]string{EnvMembershipRoutes: "true"}), want: true},
 		{name: "true without the signing key", env: map[string]string{EnvMembershipRoutes: "true", EnvInviteTokenSecretPrevious: testInvitePrevious},
 			wantErr: EnvMembershipRoutes + "=true needs " + EnvInviteTokenSecret},
-		{name: "true without the previous key", env: map[string]string{EnvMembershipRoutes: "true", EnvInviteTokenSecret: testInviteSecret},
-			wantErr: EnvMembershipRoutes + "=true needs " + EnvInviteTokenSecretPrevious},
+		{name: "true without the previous key", env: map[string]string{EnvMembershipRoutes: "true", EnvInviteTokenSecret: testInviteSecret}, want: true},
+		{name: "true with a blank previous key", env: merge(both, map[string]string{EnvMembershipRoutes: "true", EnvInviteTokenSecretPrevious: ""}), want: true},
+		{name: "true with neither key", env: map[string]string{EnvMembershipRoutes: "true"},
+			wantErr: EnvMembershipRoutes + "=true needs " + EnvInviteTokenSecret},
 		{name: "true with a blank signing key", env: merge(both, map[string]string{EnvMembershipRoutes: "true", EnvInviteTokenSecret: ""}),
 			wantErr: EnvMembershipRoutes + "=true needs " + EnvInviteTokenSecret},
 		{name: "true without the session secrets", env: merge(both, map[string]string{EnvMembershipRoutes: "true",
@@ -147,5 +153,36 @@ func TestInviteAcceptSecretsNeverHoldTheAccessSecret(t *testing.T) {
 	}
 	if got := cfg.InviteAcceptSecrets(); slices.Contains(got, testAccessSecret) || len(got) != 2 {
 		t.Fatalf("accept list holds %d keys, access secret among them: %v", len(got), slices.Contains(got, testAccessSecret))
+	}
+}
+
+// With no previous key the signing key is the only accept key: a token signed
+// with a retired key is refused, one signed with the signing key accepted.
+func TestInviteAcceptSecretsWithoutAPreviousKey(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		env  map[string]string
+	}{
+		{"previous unset", map[string]string{EnvMembershipRoutes: "true", EnvInviteTokenSecret: testInviteSecret}},
+		{"previous blank", map[string]string{EnvMembershipRoutes: "true", EnvInviteTokenSecret: testInviteSecret, EnvInviteTokenSecretPrevious: ""}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := Load(Spec{LookupEnv: lookupFrom(provisioningEnv(c.env))})
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			got := cfg.InviteAcceptSecrets()
+			if !slices.Equal(got, []string{testInviteSecret}) {
+				t.Fatalf("accept keys: %d, want the signing key only", len(got))
+			}
+			current, _ := signedtoken.Build(uuid.New(), testInviteSecret)
+			if ok, err := signedtoken.ValidAny(current, got); err != nil || !ok {
+				t.Fatalf("a token signed with the signing key is refused (ok=%v err=%v)", ok, err)
+			}
+			retired, _ := signedtoken.Build(uuid.New(), testInvitePrevious)
+			if ok, _ := signedtoken.ValidAny(retired, got); ok {
+				t.Fatal("a token signed with a retired key is accepted with no previous key set")
+			}
+		})
 	}
 }

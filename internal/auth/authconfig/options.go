@@ -324,7 +324,7 @@ var optionRegistry = []Option{
 	{
 		Flag: "membership-routes", Env: EnvMembershipRoutes, Kind: KindString, Group: GroupSession, Default: "false",
 		Usage: "\"true\" mounts the internal membership, invite and organization deprovision routes go-api calls with its service credential; needs " +
-			EnvInviteTokenSecret + " and " + EnvInviteTokenSecretPrevious,
+			EnvInviteTokenSecret + " (" + EnvInviteTokenSecretPrevious + " is optional)",
 	},
 	{
 		Env: EnvInviteTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
@@ -334,7 +334,7 @@ var optionRegistry = []Option{
 	{
 		Env: EnvInviteTokenSecretPrevious, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "retired invite token key, accepted and never used to sign (go-api's LINK_TOKEN_SECRET_PREVIOUS); " +
-			EnvInviteTokenSecretPrevious + "_FILE reads it from a mounted file instead. Required while " + EnvMembershipRoutes + " is true",
+			EnvInviteTokenSecretPrevious + "_FILE reads it from a mounted file instead. Optional: unset or empty, no previous key is accepted",
 	},
 	{
 		Flag: "social-github-client-id", Env: "SOCIAL_GITHUB_CLIENT_ID", Kind: KindString, Group: GroupSession,

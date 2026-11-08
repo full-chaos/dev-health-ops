@@ -16,8 +16,8 @@ const (
 	// or _FILE only. Required while the membership routes mount.
 	EnvInviteTokenSecret = "AUTH_INVITE_TOKEN_SECRET"
 	// EnvInviteTokenSecretPrevious verifies invite tokens only, never signs:
-	// go-api's LINK_TOKEN_SECRET_PREVIOUS. Secret. Required while the
-	// membership routes mount.
+	// go-api's LINK_TOKEN_SECRET_PREVIOUS. Secret. Optional: unset or empty,
+	// no previous key is accepted.
 	EnvInviteTokenSecretPrevious = "AUTH_INVITE_TOKEN_SECRET_PREVIOUS"
 )
 
@@ -26,7 +26,8 @@ type Provisioning struct {
 	// Routes is AUTH_MEMBERSHIP_ROUTES.
 	Routes bool
 	// InviteSecret signs new invite tokens; InviteSecretPrevious only
-	// verifies them. Both are set exactly when Routes is.
+	// verifies them. InviteSecret is set exactly when Routes is;
+	// InviteSecretPrevious may be empty.
 	InviteSecret         secrets.Value
 	InviteSecretPrevious secrets.Value
 }
@@ -68,13 +69,12 @@ func provisioning(lookup secrets.LookupEnv, session SessionTokens) (Provisioning
 	if !session.Enabled {
 		return Provisioning{}, fmt.Errorf("%s needs the session secrets (%s)", EnvMembershipRoutes, sessionSecretNames(session.AccessClass))
 	}
-	for _, need := range []struct {
-		name string
-		set  bool
-	}{{EnvInviteTokenSecret, hasSecret && secret.Reveal() != ""}, {EnvInviteTokenSecretPrevious, hasPrevious && previous.Reveal() != ""}} {
-		if !need.set {
-			return Provisioning{}, fmt.Errorf("%s=true needs %s", EnvMembershipRoutes, need.name)
-		}
+	if !hasSecret || secret.Reveal() == "" {
+		return Provisioning{}, fmt.Errorf("%s=true needs %s", EnvMembershipRoutes, EnvInviteTokenSecret)
 	}
-	return Provisioning{Routes: true, InviteSecret: secret, InviteSecretPrevious: previous}, nil
+	out := Provisioning{Routes: true, InviteSecret: secret}
+	if hasPrevious {
+		out.InviteSecretPrevious = previous
+	}
+	return out, nil
 }

@@ -102,9 +102,10 @@ func TestProvisioningMembershipRoutesThroughConfigure(t *testing.T) {
 	// memberships:write alone does not issue sessions.
 	writeOnly, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write"]`, false, false)
 	issue := `{"principal_id":"` + owner.String() + `","organization_id":null,"amr":["pwd"]}`
-	// Without the go-api workload binding the session issue route is not mounted at all: it takes no service credential.
-	if got := e.doWith(t, "/internal/v1/sessions", issue, map[string]string{"Authorization": "Bearer " + writeOnly}); got.status != http.StatusNotFound {
-		t.Fatalf("session issue with memberships:write only: %d, want 404 (the route takes only the workload token)", got.status)
+	// The workload binding mounts the session issue route here; it takes only the workload token and refuses the retired
+	// credential from the bearer text.
+	if got := e.doWith(t, "/internal/v1/sessions", issue, map[string]string{"Authorization": "Bearer " + writeOnly}); got.status != http.StatusUnauthorized {
+		t.Fatalf("session issue with memberships:write only: %d, want 401 (the route takes only the workload token)", got.status)
 	}
 	if pub, auth := e.memberRows(t, ctx, org, member); pub != "" || auth != "" {
 		t.Fatalf("refused credentials wrote rows: %q %q", pub, auth)
@@ -412,10 +413,10 @@ func TestDeprovisionedOrganizationStaysSuspendedOnSignIn(t *testing.T) {
 	}
 	issuer, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["sessions:issue"]`, false, false)
 	issue := `{"principal_id":"` + member.String() + `","organization_id":"` + org.String() + `","amr":["pwd"]}`
-	// The session issue route takes only the go-api workload token (not configured here), so the retired
-	// credential reaches no route; the former-member refusal is pinned by authapi's issue tests.
-	if got := e.doWith(t, "/internal/v1/sessions", issue, map[string]string{"Authorization": "Bearer " + issuer}); got.status != http.StatusNotFound {
-		t.Fatalf("session issue for a former member: %d %s, want 404", got.status, got.body)
+	// The session issue route takes only the go-api workload token, so it refuses the retired credential from the bearer
+	// text before any read; the former-member refusal is pinned by authapi's issue tests.
+	if got := e.doWith(t, "/internal/v1/sessions", issue, map[string]string{"Authorization": "Bearer " + issuer}); got.status != http.StatusUnauthorized {
+		t.Fatalf("session issue for a former member: %d %s, want 401", got.status, got.body)
 	}
 	suspended("a session issue")
 }

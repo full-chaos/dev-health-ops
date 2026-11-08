@@ -7,8 +7,6 @@ internal/api/pytime
 internal/api/restcore
 internal/apiservice/accessrouting
 internal/auth/accessverify
-internal/auth/acraudience
-internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
 internal/auth/platformrole/rule

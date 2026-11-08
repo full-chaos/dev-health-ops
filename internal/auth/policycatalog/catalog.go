@@ -226,7 +226,9 @@ func Load(actionsJSON, rolesJSON []byte) (*Catalog, error) {
 		switch a.PlatformAdmin {
 		case "", PlatformAdminDenied:
 		case PlatformAdminAllowed:
-			if a.Scope != ScopeOrganization || a.ResourceKind != ScopeOrganization {
+			// An organization action (organization or repository resource) may take the flag; a platform
+			// action or any other kind may not.
+			if a.Scope != ScopeOrganization || (a.ResourceKind != ScopeOrganization && a.ResourceKind != "repository") {
 				return nil, invalid("action %q is not an organization action and cannot allow platform_admin", a.Action)
 			}
 		default:

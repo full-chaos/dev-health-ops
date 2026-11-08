@@ -26,6 +26,8 @@ var rrTransient = map[string]string{
 	"docker media":   strings.Replace(rrConfig, "application/vnd.oci.image.config.v1+json", "application/vnd.docker.container.image.v1+json", 1),
 	"429":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd: unexpected status from GET request to https://mirror.gcr.io/v2/library/golang/manifests/sha256:f2c872bc: 429 Too Many Requests`,
 	"503":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.3-alpine: unexpected status from HEAD request to https://mirror.gcr.io/v2/library/golang/manifests/1.27.3-alpine: 503 Service Unavailable`,
+	"500":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.3-alpine: unexpected status from HEAD request to https://mirror.gcr.io/v2/library/golang/manifests/1.27.3-alpine: 500 Internal Server Error`,
+	"520":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.3-alpine: unexpected status from GET request to https://mirror.gcr.io/v2/library/golang/manifests/1.27.3-alpine: 520 Unknown Error`,
 	"tls handshake":  `#4 ERROR: failed to do request: Head "https://mirror.gcr.io/v2/library/golang/manifests/1.27.3-alpine": net/http: TLS handshake timeout`,
 	"connection rst": `#4 ERROR: failed to copy: read tcp 10.0.0.1:1234->74.125.1.1:443: read: connection reset by peer`,
 }
@@ -34,11 +36,20 @@ var rrPermanent = map[string]string{
 	"manifest unknown": `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:9.9: manifest unknown`,
 	"manifest not found": `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:9.9: mirror.gcr.io/library/golang:9.9: not found` + "\n" +
 		`manifest sha256:0000 not found`,
-	"denied":       `#4 ERROR: failed to resolve source metadata for ghcr.io/full-chaos/x:1: denied`,
-	"unauthorized": `#4 ERROR: failed to resolve source metadata for ghcr.io/full-chaos/x:1: unauthorized: authentication required`,
-	"no platform":  `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1: no match for platform in manifest: not found`,
-	"compile":      `#12 ERROR: process "/bin/sh -c go build ./..." did not complete successfully: exit code: 1`,
-	"product":      rrProduct,
+	"buildkit manifest not found": `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:9.9: mirror.gcr.io/library/golang:9.9: not found` + "\n" +
+		`#4 ERROR: manifest sha256:0000 not found`,
+	"buildkit manifest not found, same line": `#4 ERROR: failed to solve: manifest sha256:0000 not found`,
+	"denied":                                 `#4 ERROR: failed to resolve source metadata for ghcr.io/full-chaos/x:1: denied`,
+	"unauthorized":                           `#4 ERROR: failed to resolve source metadata for ghcr.io/full-chaos/x:1: unauthorized: authentication required`,
+	"no platform":                            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1: no match for platform in manifest: not found`,
+	"compile":                                `#12 ERROR: process "/bin/sh -c go build ./..." did not complete successfully: exit code: 1`,
+	"product":                                rrProduct,
+}
+
+var rrLocal = map[string]string{
+	"local eof (daemon)":     `#7 ERROR: failed to receive status: rpc error: code = Unavailable desc = error reading from server: unexpected EOF`,
+	"local eof (dockerfile)": `#3 ERROR: failed to solve: failed to read dockerfile: unexpected EOF`,
+	"local eof (copy)":       `#9 ERROR: failed to copy: unexpected EOF`,
 }
 
 type rrBox struct {
@@ -336,5 +347,56 @@ func TestEveryBuildSiteInCIScriptsIsRetriedOrNamed(t *testing.T) {
 		if !seen[key] {
 			t.Errorf("allowlist entry %s matches no build call: remove it", key)
 		}
+	}
+}
+
+func TestRegistryRetryT3NeedsARegistrySignature(t *testing.T) {
+	for name, text := range rrLocal {
+		t.Run(name, func(t *testing.T) {
+			r := runRRLib(t, 1, text)
+			if r.rc != 1 || r.builds != 1 || r.sleeps != "" {
+				t.Errorf("a local-context EOF must not be retried: rc=%d builds=%d sleeps=%q\n%s", r.rc, r.builds, r.sleeps, r.out)
+			}
+		})
+	}
+}
+
+// docker/build-push-action has no retry input and its log is not visible to a shell, so each build step in
+// docker-images.yml is continue-on-error with an id, and the next step repeats it once when the first failed.
+func TestDockerImagesBuildPushStepsRetryOnce(t *testing.T) {
+	doc := loadWf(t, rootOf(t), "docker-images.yml")
+	jobs := jobsAsMaps(doc)
+	seen := 0
+	for _, jn := range sortedKeysOf(jobs) {
+		steps := stepsOf(jobs[jn])
+		for i, s := range steps {
+			if !strings.HasPrefix(asString(s["uses"]), "docker/build-push-action@") || strings.Contains(asString(s["if"]), ".outcome == 'failure'") {
+				continue
+			}
+			seen++
+			id := asString(s["id"])
+			if id == "" || !boolish(s["continue-on-error"]) {
+				t.Errorf("%s step %q: first try needs an id and continue-on-error", jn, asString(s["name"]))
+				continue
+			}
+			if i+1 >= len(steps) {
+				t.Errorf("%s step %q: no retry step after it", jn, asString(s["name"]))
+				continue
+			}
+			n := steps[i+1]
+			if !strings.HasPrefix(asString(n["uses"]), "docker/build-push-action@") || asString(n["uses"]) != asString(s["uses"]) ||
+				!strings.HasPrefix(squash(asString(n["if"])), "steps."+id+".outcome == 'failure'") || boolish(n["continue-on-error"]) {
+				t.Errorf("%s step %q: the next step is not the same action gated on steps.%s.outcome == 'failure' without continue-on-error", jn, asString(s["name"]), id)
+				continue
+			}
+			for _, k := range []string{"file", "target", "platforms", "tags", "outputs", "build-args"} {
+				if withString(s, k) != withString(n, k) {
+					t.Errorf("%s step %q: retry input %q differs from the first try", jn, asString(s["name"]), k)
+				}
+			}
+		}
+	}
+	if seen != 4 {
+		t.Errorf("want 4 docker/build-push-action first tries in docker-images.yml, found %d", seen)
 	}
 }

@@ -14,7 +14,7 @@ const (
 )
 
 func exchangeSets(extra ...string) []string {
-	return append(append(issuerSets("hs256_compat", hs256Issuer), exchangeInputs()...), extra...)
+	return append(append(issuerSets("eddsa", hs256Issuer), exchangeInputs()...), extra...)
 }
 
 func exchangeInputs() []string {
@@ -37,7 +37,7 @@ func kindDocs(docs []map[string]any, kind string) []map[string]any {
 }
 
 func TestWorkloadExchangeOffRendersNothing(t *testing.T) {
-	docs := renderPhase(t, 2, issuerSets("hs256_compat", hs256Issuer)...)
+	docs := renderPhase(t, 2, issuerSets("eddsa", hs256Issuer)...)
 	for _, kind := range []string{"ClusterRole", "ClusterRoleBinding"} {
 		if n := len(kindDocs(docs, kind)); n != 0 {
 			t.Errorf("exchange off renders %d %s", n, kind)
@@ -152,7 +152,7 @@ func hasPortRule(rules []any, port int) bool {
 
 // The Kubernetes API is reachable only while the exchange is on, and only at the listed peers; go-api reaches the API port.
 func TestWorkloadExchangeNetworkPolicy(t *testing.T) {
-	off := npDoc(renderPhase(t, 2, issuerSets("hs256_compat", hs256Issuer)...))
+	off := npDoc(renderPhase(t, 2, issuerSets("eddsa", hs256Issuer)...))
 	on := npDoc(renderPhase(t, 2, exchangeSets()...))
 	if hasPortRule(npRules(t, off, "egress"), 443) {
 		t.Error("exchange off opens egress on 443")

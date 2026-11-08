@@ -118,6 +118,10 @@ func (h compatHandlers) withSwitchOrgRoute(routes []httpapi.Route, rows []byte) 
 	if h.SwitchOrg.Sessions == nil || h.SwitchOrg.Reads == nil {
 		return nil, errors.New("authapi: the switch-org route needs its sessions and its reads")
 	}
+	if h.Issuer == nil || h.Issuer.access == nil {
+		h.rec.logger.Info("auth switch-org route not mounted: AUTH_TOKEN_ISSUER_URL is unset (no access-token verifier)", "route", PatternCompatSwitchOrg)
+		return routes, nil
+	}
 	if rowsAcceptFor(rows, []string{PatternCompatSwitchOrg}, []string{accessverify.ClassUser}) != nil {
 		h.rec.logger.Info("auth switch-org route not mounted: no endpoint-profile row", "route", PatternCompatSwitchOrg)
 		return routes, nil

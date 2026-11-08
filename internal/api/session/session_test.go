@@ -144,24 +144,6 @@ func TestClaimHelpers(t *testing.T) {
 	}
 }
 
-func TestUnverifiedOrgAndSubject(t *testing.T) {
-	org := uuid.New()
-	token := encodeClaims(`{"alg":"HS256","typ":"JWT"}`) + "." + encodeClaims(`{"sub":"s","org_id":"`+org.String()+`"}`) + ".c2ln"
-	got, subject, err := unverifiedOrgAndSubject(token)
-	if err != nil || got == nil || *got != org || subject != "s" {
-		t.Fatalf("got %v %v %v", got, subject, err)
-	}
-	if got, _, _ := unverifiedOrgAndSubject("garbage"); got != nil {
-		t.Fatal("a malformed token has no org")
-	}
-	if _, _, err := unverifiedOrgAndSubject(encodeClaims(`{"alg":"HS256"}`) + "." + encodeClaims(`{"org_id":7}`) + ".c2ln"); err == nil {
-		t.Fatal("a truthy non-str org claim must fail")
-	}
-	if got, _, err := unverifiedOrgAndSubject(encodeClaims(`{"alg":"HS256"}`) + "." + encodeClaims(`{"org_id":0}`) + ".c2ln"); got != nil || err != nil {
-		t.Fatal("a falsy org claim is no org")
-	}
-}
-
 // The timing hash costs what login.py's DUMMY_PASSWORD_HASH costs (bcrypt,
 // cost 12) and is one hash for the process, so every login without a usable
 // user hash spends the same bcrypt work.

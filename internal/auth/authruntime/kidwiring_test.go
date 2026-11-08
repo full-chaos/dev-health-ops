@@ -27,10 +27,9 @@ func (s *kidSpy) RecordSigningKid(_ context.Context, id uuid.UUID, kid string) e
 	return nil
 }
 
-// The production builder wires the kid recorder for both classes: a mint
-// through it records on the session (hs256_compat: the empty kid).
+// The production builder wires the kid recorder: a mint through it records on the session.
 func TestTheProductionIssuerBuilderRecordsTheSigningKid(t *testing.T) {
-	for class, wantKid := range map[string]string{"hs256_compat": "", "eddsa": "kid-1"} {
+	for class, wantKid := range map[string]string{"eddsa": "kid-1"} {
 		t.Run(class, func(t *testing.T) {
 			spy := &kidSpy{}
 			issuer, err := newRecordingIssuer(classConfig(t, class), recordingSigner{}, spy)

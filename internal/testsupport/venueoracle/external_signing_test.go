@@ -117,10 +117,21 @@ func TestExternalSigningKeyFileIsRefusedUnlessPrivateAndEd25519(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readSigningKey(link); err == nil {
-		t.Error("a symlink to a key file was accepted")
+	if _, err := readSigningKey(link); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("a symlink to a key file: err %v, want the not-a-regular-file refusal", err)
 	} else {
 		assertNoKeyIn(t, err.Error(), priv, raw)
+	}
+	keyDir := filepath.Join(dir, "dir.pem")
+	if err := os.Mkdir(keyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(keyDir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(keyDir, 0o700) })
+	if _, err := readSigningKey(keyDir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("a mode 0600 directory: err %v, want the not-a-regular-file refusal", err)
 	}
 	marker := "MARKER-not-a-key-0123456789"
 	for name, content := range map[string]string{

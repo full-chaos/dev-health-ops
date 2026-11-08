@@ -23,7 +23,7 @@ func TestDHOAPICorpusEntriesAreMountedRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
+	auth, err := policy.NewAuthenticator(scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,10 +34,6 @@ func TestDHOAPICorpusEntriesAreMountedRoutes(t *testing.T) {
 	// one of its routes, which is what exposed this fixture gap: every
 	// entry before it happened to live in an area this test's Deps already
 	// made mount for an unrelated reason (Pool/ClickHouse).
-	signer, err := edgetoken.NewSigner(strings.Repeat("fixture-key-", 3), "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	// A Pool that never connects (pgxpool dials lazily) makes the pool-backed
 	// areas (billing, admin) mount, exactly as in a configured service.
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable")
@@ -54,7 +50,7 @@ func TestDHOAPICorpusEntriesAreMountedRoutes(t *testing.T) {
 	}
 	defer func() { _ = clickHouse.Close() }()
 	mounted := map[string]bool{}
-	for _, route := range Routes(Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}, quietLogger()) {
+	for _, route := range Routes(Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier}, quietLogger()) {
 		mounted[route.Method+" "+route.Pattern] = true
 	}
 

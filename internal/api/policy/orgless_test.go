@@ -49,17 +49,19 @@ func TestOrglessNonSuperuserReachesOnlyTheListedRoutes(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(level.String()+" "+tc.method+" "+tc.path, func(t *testing.T) {
 				store := newStore()
-				headers := map[string]string{"Authorization": "Bearer " + sign(t, claims(func(c jwt.MapClaims) { orglessClaims(c); c["role"] = "admin" }))}
+				headers := map[string]string{"Authorization": "Bearer " + sign(t, claims(orglessClaims))}
 				got := serve(wrapLevel(NewGuard(authenticator(t, store), quiet()), level, echo), tc.method, tc.path, headers)
-				want := tc.want
-				if level == AdminOrg && want == 200 {
-					want = 403
+				// An orgless caller holds no org role: at an admin level a listed
+				// route passes the orgless gate and meets the admin refusal.
+				want, body := tc.want, orglessRefusal
+				if level != Authenticated && want == 200 {
+					want, body = 403, `{"detail":"Admin access required"}`
 				}
 				if got.status != want {
 					t.Fatalf("status %d %s, want %d", got.status, got.body, want)
 				}
-				if want == 403 && got.body != orglessRefusal {
-					t.Fatalf("body %s", got.body)
+				if want == 403 && got.body != body {
+					t.Fatalf("body %s, want %s", got.body, body)
 				}
 			})
 		}

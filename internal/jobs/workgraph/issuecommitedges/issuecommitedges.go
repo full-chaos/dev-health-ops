@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/textrefs"
 )
 
@@ -88,6 +89,11 @@ func buildProviderLookup(workItems []WorkItemRow) providerLookup {
 		gitlab:  make(map[[2]string]string),
 	}
 	for _, item := range workItems {
+		// A pull or merge request work item is never the issue side: "#N" shares
+		// the number space of issues and would otherwise resolve onto it.
+		if issueprlinks.IsPullRequestWorkItem(item.WorkItemID) {
+			continue
+		}
 		switch item.Provider {
 		case "jira":
 			// builder.py:1088-1090: `if str(work_item_id).startswith("jira:")`.

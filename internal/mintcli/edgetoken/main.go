@@ -1,9 +1,9 @@
 // Command mint-edge-token is the tools image's `-edge-bearer-exec` helper
 // for go-api-prove: it mints a fresh edge ACCESS TOKEN for the dedicated
-// proof service principal, locally, with the same signing key the api
-// pod's environment holds (JWT_SECRET_KEY), reached the same way (a Secret
-// key mounted into this process's environment via secretKeyRef). It is the
-// sibling of cmd/mint-envelope; internal/edgetokenmint has the design.
+// proof service principal, locally, with the Ed25519 key file named by
+// EDGE_TOKEN_SIGNING_KEY_FILE (an access-token.v1 token for a live session).
+// It is the sibling of cmd/mint-envelope; internal/edgetokenmint has the
+// design.
 //
 // It reads the principal row and its org membership from POSTGRES_URI
 // before signing, so the token carries the row's current token_version and
@@ -130,24 +130,12 @@ func run(ctx context.Context, args []string, stdout, flagErrOutput io.Writer, op
 		return fmt.Errorf("-ttl must be greater than 0 and at most %s", edgetokenmint.MaxTTL)
 	}
 
-	// The key is checked before the database is opened, so a pod missing
-	// its key fails without a connection attempt. A key file selects the
-	// EdDSA mode (CI, no HS256 secret read); without one the HS256 mode
-	// runs, for the bigboy prover until the HS256 verifier is removed.
-	var (
-		signingKey []byte
-		signer     edgetokenmint.EdDSASigner
-		eddsa      bool
-		err        error
-	)
-	if keyFile, _ := envsecrets.ProcessLookup(edgetokenmint.SigningKeyFileEnvVar); strings.TrimSpace(keyFile) != "" {
-		eddsa = true
-		signer, err = edgetokenmint.EdDSASignerFromEnv(envsecrets.ProcessLookup)
-	} else {
-		signingKey, err = edgetokenmint.LoadSigningKeyFromEnv()
-	}
+	// The key file is checked before the database is opened, so a pod
+	// missing its key fails without a connection attempt. There is no
+	// HS256 mode: without a key file the verb refuses.
+	signer, err := edgetokenmint.EdDSASignerFromEnv(envsecrets.ProcessLookup)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", edgetokenmint.SigningKeyFileEnvVar, err)
 	}
 
 	// The platform roles switch is read before the database is opened, so a
@@ -168,15 +156,10 @@ func run(ctx context.Context, args []string, stdout, flagErrOutput io.Writer, op
 
 	opts := edgetokenmint.Options{TTL: *ttl, PlatformRolesOwned: platformRolesOwned, AuthSchema: strings.TrimSpace(authSchema)}
 	var token string
-	switch {
-	case eddsa && *principal == principalAdminProof:
+	if *principal == principalAdminProof {
 		token, err = edgetokenmint.MintForAdminProveEdDSA(ctx, db, signer, *org, opts)
-	case eddsa:
+	} else {
 		token, err = edgetokenmint.MintForProveEdDSA(ctx, db, signer, *org, opts)
-	case *principal == principalAdminProof:
-		token, err = edgetokenmint.MintForAdminProve(ctx, db, signingKey, *org, opts)
-	default:
-		token, err = edgetokenmint.MintForProve(ctx, db, signingKey, *org, opts)
 	}
 	if err != nil {
 		return err

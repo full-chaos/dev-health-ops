@@ -25,7 +25,7 @@ func TestTheAcrEventsWorkloadSubjectLoadsAndNeedsTheTokenIssuer(t *testing.T) {
 	}
 	env[EnvAcrEventsWorkloadSubject] = issueWorkloadSubject
 	delete(env, EnvTokenIssuerURL)
-	if _, err = Load(Spec{LookupEnv: lookupFrom(env)}); err == nil || !strings.Contains(err.Error(), EnvAcrEventsWorkloadSubject) {
+	if _, err = Load(Spec{LookupEnv: lookupFrom(env)}); err == nil || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
 		t.Fatalf("a subject with no issuer: %v", err)
 	}
 }

@@ -2,19 +2,18 @@ package apiservice
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 const exemptPath = "/api/v1/billing/webhooks/stripe"
@@ -40,52 +39,43 @@ func (s *countingStore) ActiveImpersonation(ctx context.Context, admin uuid.UUID
 }
 
 func TestSignatureOnlyRouteSkipsScopeOnlyForExactRoute(t *testing.T) {
-	key := strings.Repeat("fixture-key-", 3)
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
+	refusals := &refusalLog{}
 	store := &countingStore{scopeStore: scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.AuthenticatorOver(t, store, slog.New(refusals))
 	scope := policy.NewScope(auth, quietLogger())
 	reached := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+	// stripeSeen is the mux pattern and the route profile the stripe handler saw on its last request.
+	var stripeSeen [2]string
+	stripe := func(w http.ResponseWriter, r *http.Request) {
+		stripeSeen = [2]string{r.Pattern, policy.RouteProfileFrom(r.Context())}
+		w.WriteHeader(http.StatusNoContent)
+	}
 	routes := []httpapi.Route{
-		{Method: http.MethodPost, Pattern: exemptPath, Handler: http.HandlerFunc(reached)},
+		{Method: http.MethodPost, Pattern: exemptPath, Handler: http.HandlerFunc(stripe)},
 		{Method: http.MethodPost, Pattern: "/api/v1/billing/other", Handler: http.HandlerFunc(reached)},
 	}
 	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sign := func(sub uuid.UUID, superuser bool) string {
-		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub": sub.String(), "type": "access", "org_id": uuid.NewString(), "is_superuser": superuser,
-			"exp": time.Now().Add(time.Hour).Unix(),
-		}).SignedString([]byte(key))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return token
-	}
-	send := func(method, target string, superuser bool) (int, int64) {
-		before := store.calls.Load()
+	// send returns the status, the policy-store calls and the bearers the access check refused. The superuser's users row says superuser (scopeStore.admin).
+	send := func(method, target string, superuser bool) (int, int64, int) {
+		before, judged := store.calls.Load(), refusals.count("")
 		sub := uuid.New()
 		if superuser {
 			sub = store.admin
 		}
 		request := httptest.NewRequest(method, target, nil)
-		request.Header.Set("Authorization", "Bearer "+sign(sub, superuser))
+		request.Header.Set("Authorization", "Bearer "+tokens.MustMint(t, edtokens.Claims{UserID: sub}))
 		request.Header.Set("X-Org-Id", uuid.NewString())
 		recorder := httptest.NewRecorder()
 		server.Handler().ServeHTTP(recorder, request)
-		return recorder.Code, store.calls.Load() - before
+		return recorder.Code, store.calls.Load() - before, refusals.count("") - judged
 	}
 
 	for _, superuser := range []bool{false, true} {
-		code, calls := send(http.MethodPost, exemptPath, superuser)
+		code, calls, _ := send(http.MethodPost, exemptPath, superuser)
 		if code != http.StatusNoContent || calls != 0 {
 			t.Errorf("exact route (superuser=%v): status %d, %d auth calls; want 204 and 0", superuser, code, calls)
 		}
@@ -96,9 +86,20 @@ func TestSignatureOnlyRouteSkipsScopeOnlyForExactRoute(t *testing.T) {
 		"encoded slash":  {http.MethodPost, "/api/v1/billing/webhooks%2Fstripe"},
 		"other route":    {http.MethodPost, "/api/v1/billing/other"},
 	} {
-		if _, calls := send(target[0], target[1], false); calls == 0 {
-			t.Errorf("%s: scope middlewares made no auth call", name)
+		// A variant is no exempt route: the scope judges its bearer once (refused there: no route row, or a
+		// row that takes no user token), where the exact route skips the scope.
+		if code, _, judged := send(target[0], target[1], false); judged != 1 {
+			t.Errorf("%s: the scope judged the bearer %d times (status %d), want 1", name, judged, code)
 		}
+	}
+	// The exemption reads the escaped target; the profile is the mux's own match on the decoded path. So an
+	// encoded slash is not exempt, reaches the handler the mux picks, and is judged against that handler's row.
+	stripeSeen = [2]string{}
+	before := refusals.profileCount("POST " + exemptPath)
+	if code, _, judged := send(http.MethodPost, "/api/v1/billing/webhooks%2Fstripe", false); judged != 1 ||
+		stripeSeen != [2]string{"POST " + exemptPath, "POST " + exemptPath} || refusals.profileCount("POST "+exemptPath)-before != 1 {
+		t.Errorf("encoded slash: status %d, judged %d, stripe handler saw pattern+profile %q, refusals on the stripe row %d; want judged 1 on the stripe row and the stripe handler",
+			code, judged, stripeSeen, refusals.profileCount("POST "+exemptPath)-before)
 	}
 }
 
@@ -106,4 +107,58 @@ func TestNewServerRefusesANilScopeLayerWithoutPanicking(t *testing.T) {
 	if _, err := NewServer(apiTestConfig(), quietLogger(), nil, nil); err == nil {
 		t.Fatal("a nil scope layer was accepted")
 	}
+}
+
+// refusalLog is a slog handler that keeps the reason of every "access token refused" record.
+type refusalLog struct {
+	mu       sync.Mutex
+	reasons  []string
+	profiles []string
+}
+
+func (l *refusalLog) Enabled(context.Context, slog.Level) bool { return true }
+func (l *refusalLog) WithAttrs([]slog.Attr) slog.Handler       { return l }
+func (l *refusalLog) WithGroup(string) slog.Handler            { return l }
+func (l *refusalLog) Handle(_ context.Context, r slog.Record) error {
+	if r.Message != "access token refused" {
+		return nil
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		l.mu.Lock()
+		switch a.Key {
+		case "reason":
+			l.reasons = append(l.reasons, a.Value.String())
+		case "profile":
+			l.profiles = append(l.profiles, a.Value.String())
+		}
+		l.mu.Unlock()
+		return true
+	})
+	return nil
+}
+
+// count is the refusals with reason ("" counts every reason).
+func (l *refusalLog) count(reason string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, got := range l.reasons {
+		if reason == "" || got == reason {
+			n++
+		}
+	}
+	return n
+}
+
+// profileCount is the refusals judged against the route profile.
+func (l *refusalLog) profileCount(profile string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, got := range l.profiles {
+		if got == profile {
+			n++
+		}
+	}
+	return n
 }

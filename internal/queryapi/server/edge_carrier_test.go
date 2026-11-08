@@ -11,6 +11,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,12 +20,14 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 const (
@@ -83,47 +86,89 @@ func (f *fakeEdgeStore) ActiveImpersonation(_ context.Context, adminID uuid.UUID
 	return f.sessions[adminID], nil
 }
 
-// ecEdgeAuth builds a real edgetoken.Verifier (so ecMintEdgeToken's real
-// signatures verify) wired to store via policy.NewAuthenticator -- the same
-// construction buildQueryEdgeAuthenticatorFromEnv does.
+// ecTokens mints the routed EdDSA access tokens the edge authenticator verifies.
+var ecTokens = edtokens.Fresh()
+
+// ecEdgeAuth is the /query edge authenticator over store, routed by query-api's
+// endpoint-profile rows with ecTokens' key as the only key (routeAuthenticator's
+// construction): a bearer ecTokens did not mint is refused.
 func ecEdgeAuth(t *testing.T, store policy.Store) *policy.Authenticator {
 	t.Helper()
-	verifier, err := edgetoken.New(ecSecret, ecIssuer, ecAudience)
+	auth, err := policy.NewAuthenticator(ecSessionStore{store}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, store, nil)
+	rows, err := queryAPIAccessRows()
 	if err != nil {
+		t.Fatal(err)
+	}
+	validator, err := accessverify.New(accessverify.Config{Rows: rows, EdDSA: ecTokens.Verifier(t), Meter: noop.NewMeterProvider().Meter("edge-carrier"), Logger: slog.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.RouteAccess(principal.RoutedAccess(validator), queryAPIAccessService); err != nil {
 		t.Fatal(err)
 	}
 	return auth
 }
 
-// ecEdgeClaims is ecMintEdgeToken's input -- every field Python's
-// create_access_token puts in a real edge access token that this path
-// reads (services/auth.py).
+// ecSessionStore is a test store with ecTokens' sessions first, then the store's own; the users row is the
+// store's own AccessUser, else its UserState.
+type ecSessionStore struct{ policy.Store }
+
+func (s ecSessionStore) SessionState(ctx context.Context, id uuid.UUID) (policy.SessionRow, bool, error) {
+	for _, minted := range ecTokens.Sessions() {
+		if minted.ID == id {
+			version := minted.TokenVersion
+			return policy.SessionRow{PrincipalID: minted.Principal, LegacyTokenVersion: &version}, true, nil
+		}
+	}
+	if own, ok := s.Store.(policy.SessionStore); ok {
+		return own.SessionState(ctx, id)
+	}
+	return policy.SessionRow{}, false, nil
+}
+
+func (s ecSessionStore) AccessUser(ctx context.Context, id uuid.UUID) (policy.AccessUserRow, bool, error) {
+	if own, ok := s.Store.(policy.AccessUserStore); ok {
+		return own.AccessUser(ctx, id)
+	}
+	state, found, err := s.UserState(ctx, id)
+	return policy.AccessUserRow{State: state}, found, err
+}
+
+// ecEdgeClaims is a routed token's input. Role and superuser are never claims:
+// the role is the membership row's, superuser the users row's.
 type ecEdgeClaims struct {
 	sub                 string
 	orgID               string
-	role                string
-	isSuperuser         bool
 	tokenVersion        int
 	impersonatingUserID string
 }
 
+// ecMintEdgeToken mints a routed EdDSA access token; impersonatingUserID is the act claim.
 func ecMintEdgeToken(t *testing.T, c ecEdgeClaims) string {
 	t.Helper()
+	claims := edtokens.Claims{UserID: uuid.MustParse(c.sub), OrgID: c.orgID, TokenVersion: int64(c.tokenVersion)}
+	if c.impersonatingUserID != "" {
+		actor := uuid.MustParse(c.impersonatingUserID)
+		claims.Actor = &actor
+	}
+	return ecTokens.MustMint(t, claims)
+}
+
+// ecMintHS256Token signs the retired HS256 edge token shape, for cells that pin its refusal.
+func ecMintHS256Token(t *testing.T, c ecEdgeClaims) string {
+	t.Helper()
 	claims := jwt.MapClaims{
-		"sub": c.sub, "org_id": c.orgID, "role": c.role,
-		"is_superuser": c.isSuperuser, "tv": c.tokenVersion,
+		"sub": c.sub, "org_id": c.orgID, "tv": c.tokenVersion,
 		"type": "access", "iss": ecIssuer, "aud": ecAudience,
 		"exp": time.Now().Add(time.Hour).Unix(),
 	}
 	if c.impersonatingUserID != "" {
 		claims["impersonating_user_id"] = c.impersonatingUserID
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(ecSecret))
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(ecSecret))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +203,7 @@ func TestEdgeCarrier_AcceptedMemberIsServedAndScoped(t *testing.T) {
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 
 	rec := ecPost(handler, token)
 	if rec.Code != http.StatusOK {
@@ -186,7 +231,7 @@ func TestEdgeCarrier_RevokedTokenVersionIsRefused(t *testing.T) {
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 
 	rec := ecPost(handler, token)
 	if rec.Code != http.StatusUnauthorized {
@@ -206,7 +251,7 @@ func TestEdgeCarrier_InactiveUserIsRefused(t *testing.T) {
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 
 	rec := ecPost(handler, token)
 	if rec.Code != http.StatusUnauthorized {
@@ -231,7 +276,7 @@ func TestEdgeCarrier_MembershipRemovedIsRefused(t *testing.T) {
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 
 	rec := ecPost(handler, token)
 	if rec.Code != http.StatusUnauthorized {
@@ -257,7 +302,7 @@ func TestEdgeCarrier_SuperuserFlagClearedInDatabaseOverridesAStaleToken(t *testi
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: true, tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 
 	rec := ecPost(handler, token)
 	if rec.Code != http.StatusOK {
@@ -275,6 +320,8 @@ func TestEdgeCarrier_SuperuserFlagClearedInDatabaseOverridesAStaleToken(t *testi
 // then denies it, matching D2905's explicit "impersonating superuser ->
 // platform dashboard 403" case one layer down (the claim this test pins).
 func TestEdgeCarrier_ImpersonatingSuperuserSetsImpersonationActive(t *testing.T) {
+	// D6773 (product rule 1): no membership row in the token org, as on the legacy path; its answer, executed on
+	// origin/main ad73c1cc1, is this test there (200, ImpersonationActive, the target org and role).
 	store := &fakeEdgeStore{
 		states:   map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
 		found:    map[uuid.UUID]bool{ecUser: true},
@@ -282,7 +329,39 @@ func TestEdgeCarrier_ImpersonatingSuperuserSetsImpersonationActive(t *testing.T)
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: "99999999-9999-9999-9999-999999999999", role: "owner", isSuperuser: true, tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: "99999999-9999-9999-9999-999999999999", tokenVersion: 5})
+
+	rec := ecPost(handler, token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(*seen) != 1 {
+		t.Fatalf("resolver ran %d times, want 1", len(*seen))
+	}
+	got := (*seen)[0]
+	if !got.ImpersonationActive {
+		t.Fatalf("claims = %+v, want ImpersonationActive=true", got)
+	}
+	if got.OrgID != ecOrg.String() {
+		t.Fatalf("OrgID = %q, want the impersonation session's target org %q (never the token's own org_id claim while impersonating)", got.OrgID, ecOrg.String())
+	}
+	if got.Role != "viewer" {
+		t.Fatalf("Role = %q, want the impersonation session's target role %q (the effective principal is the target's, as the Python edge stated it)", got.Role, "viewer")
+	}
+}
+
+// TestEdgeCarrier_ImpersonatingSuperuserWhoIsAMemberSetsImpersonationActive is the same with a membership row in the
+// token's own org: the routed check admits it today.
+func TestEdgeCarrier_ImpersonatingSuperuserWhoIsAMemberSetsImpersonationActive(t *testing.T) {
+	store := &fakeEdgeStore{
+		states:   map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
+		found:    map[uuid.UUID]bool{ecUser: true},
+		members:  map[[2]uuid.UUID]bool{{ecUser, uuid.MustParse("99999999-9999-9999-9999-999999999999")}: true},
+		sessions: map[uuid.UUID]*policy.Impersonation{ecUser: {TargetUserID: ecTarget, TargetOrgID: ecOrg, TargetRole: "viewer"}},
+	}
+	auth := ecEdgeAuth(t, store)
+	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: "99999999-9999-9999-9999-999999999999", tokenVersion: 5})
 
 	rec := ecPost(handler, token)
 	if rec.Code != http.StatusOK {
@@ -317,7 +396,7 @@ func TestEdgeCarrier_SessionOfAUserTheRowSaysIsNotASuperuserIsIgnored(t *testing
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: true, tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 
 	rec := ecPost(handler, token)
 	want := authctx.Claims{OrgID: ecOrg.String(), Role: "admin", Scope: pepgate.Legacy(ecOrg.String())}
@@ -338,7 +417,7 @@ func TestEdgeCarrier_TwoAuthorizationHeadersAreAmbiguous(t *testing.T) {
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 
 	req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query":"`+iaDocument+`"}`))
 	req.Header.Add("Authorization", "Bearer "+token)
@@ -361,7 +440,7 @@ func TestEdgeCarrier_StoreUnavailableIsRefused(t *testing.T) {
 	store := &fakeEdgeStore{errUserState: errors.Join(policy.ErrUnavailable, errors.New("connection reset"))}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 
 	rec := ecPost(handler, token)
 	if rec.Code != http.StatusUnauthorized {
@@ -390,7 +469,7 @@ func TestEdgeCarrier_ImpersonationLookupFailureFailsClosed(t *testing.T) {
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 
 	rec := ecPost(handler, token)
 	if rec.Code != http.StatusUnauthorized {
@@ -413,7 +492,7 @@ func TestEdgeCarrier_PlatformWideOrgSkipsMembershipCheck(t *testing.T) {
 	}
 	auth := ecEdgeAuth(t, store)
 	handler, seen := iaDispatchWithEdge(t, nil, auth, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: "", role: "owner", isSuperuser: true, tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: "", tokenVersion: 5})
 
 	rec := ecPost(handler, token)
 	if rec.Code != http.StatusOK {
@@ -443,7 +522,7 @@ func TestEdgeCarrier_ClaimsMatchTheEnvelopeCarrierForTheSameIdentity(t *testing.
 	}
 	auth := ecEdgeAuth(t, store)
 	edgeHandler, edgeSeen := iaDispatchWithEdge(t, nil, auth, store)
-	edgeToken := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: true, tokenVersion: 5})
+	edgeToken := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	if rec := ecPost(edgeHandler, edgeToken); rec.Code != http.StatusOK {
 		t.Fatalf("edge carrier: %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -475,7 +554,7 @@ func TestEdgeCarrier_OrglessTokenNeedsALiveSuperuserRow(t *testing.T) {
 				members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
 			}
 			handler, seen := iaDispatchWithEdge(t, nil, ecEdgeAuth(t, store), store)
-			token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: tc.org, role: "member", isSuperuser: true, tokenVersion: 5})
+			token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: tc.org, tokenVersion: 5})
 			rec := ecPost(handler, token)
 			if rec.Code != tc.code || len(*seen) != tc.ran {
 				t.Fatalf("status=%d ran=%d body=%q, want %d/%d", rec.Code, len(*seen), rec.Body.String(), tc.code, tc.ran)

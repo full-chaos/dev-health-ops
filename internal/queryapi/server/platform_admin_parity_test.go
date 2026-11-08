@@ -165,11 +165,11 @@ func (p *paPDP) take() []string {
 // paRows are real query-api REST rows, one per action of the sweep.
 var paRows = []string{"/api/v1/home", "/api/v1/flame", "/api/v1/drilldown/prs", "/api/v1/drilldown/issues"}
 
-// paHandler is the routed REST authentication (authenticateRESTRequest, the edge verifier routed by row with the
-// HS256 leg on) in front of each row, behind the plane handler carrying gate. The handler past authentication is a
-// stub: it echoes the organization and the scope the request may serve, its organization and repository ceiling (no
-// ClickHouse read). The scope kind is left out: an enforced allow is KindOrganization where legacy is KindLegacy, and
-// both serve every repository of the organization.
+// paHandler is the routed REST authentication (authenticateRESTRequest, the edge verifier routed by row) in front of
+// each row, behind the plane handler carrying gate. The handler past authentication is a stub: it echoes the
+// organization and the scope the request may serve, its organization and repository ceiling (no ClickHouse read). The
+// scope kind is left out: an enforced allow is KindOrganization where legacy is KindLegacy, and both serve every
+// repository of the organization.
 func paHandler(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.Gate) http.Handler {
 	t.Helper()
 	verifier, _ := iaVerifier(t)
@@ -178,7 +178,7 @@ func paHandler(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.Gate
 		t.Fatal(err)
 	}
 	setup := testAccess(m.keys, nil, accessTestNow)
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()

@@ -105,8 +105,9 @@ func TestMCPClassParityVenueOracle(t *testing.T) {
 		tokenOrg: mcpParityOrg, tokenRole: "admin", memberships: map[string]string{mcpParityOrg: "admin"},
 	}
 	schemaDigest := digest.Schema(schemav1.SDL)
+	issuer := startEdgeIssuer(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, GoOnly: true, JWTKey: edgeOracleJWTKey,
+		Root: root, GoOnly: true, JWTKey: edgeOracleJWTKey, TokenIssuer: issuer.tokens,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -153,11 +154,18 @@ VALUES ($1, 'primary', 'parity-oracle', $2, 'mcp-class-parity-oracle')`, mcpclas
 	t.Logf("world rows by table: %v", loaded)
 	t.Logf("generated rows by table: %v", generated)
 
-	settings, goBase, mcpBase, leave := mcpParityStartPlane(t, ctx, venue, root, chURI)
+	// The /graphql reference is called with the live class: a user access token of the in-test issuer, its
+	// auth-service session written.
+	token := issuer.tokens.MustMint(t, edgeUserClaims(user))
+	venue.WriteAuthSessions(t, ctx)
+	settings, goBase, mcpBase, leave := mcpParityStartPlane(t, ctx, venue, root, chURI, issuer.url)
 	_ = settings
 	defer leave()
-	token := edgeOracleToken(t, edgeOracleJWTKey, user, time.Now().Add(time.Hour))
 	shapes, excludedAtSource := mcpParityShapes(ctx, t, conn, root, now)
+	if len(shapes) > 0 { // no shape fails below: no root is measured
+		retiredClassCell(t, goBase, urqlBody(t, documentOperationName(shapes[0].document), shapes[0].document, shapes[0].variables),
+			edgeFixedToken(t, edgeOracleJWTKey, user, false))
+	}
 
 	type tally struct {
 		executed, nonEmpty, excluded int
@@ -429,7 +437,7 @@ func mcpParityValue(name, typ, org, repo, teamArray string) (string, bool) {
 
 // mcpParityStartPlane builds query-api as prod does (the real Build over the real settings) with the MCP listener on
 // its own port, and returns the bases of the public and the MCP listener.
-func mcpParityStartPlane(t *testing.T, ctx context.Context, venue *venueoracle.Venue, root, chURI string) (map[string]string, string, string, func()) {
+func mcpParityStartPlane(t *testing.T, ctx context.Context, venue *venueoracle.Venue, root, chURI, issuerURL string) (map[string]string, string, string, func()) {
 	t.Helper()
 	jwksPath, _ := edgeOracleJWKS(t)
 	settings := map[string]string{
@@ -438,7 +446,7 @@ func mcpParityStartPlane(t *testing.T, ctx context.Context, venue *venueoracle.V
 		"GO_API_ENVELOPE_JWKS_PATH":    jwksPath,
 		"GO_API_ENVELOPE_ISSUER":       "mcp-parity-issuer",
 		"GO_API_ENVELOPE_AUDIENCE":     "mcp-parity-audience",
-		edgeJWTSecretEnvVar:            edgeOracleJWTKey,
+		accessTokenIssuerEnvVar:        issuerURL,
 	}
 	leave := enterRepositoryRoot(t, root)
 	plane, err := Build(func(key string) string { return settings[key] })

@@ -36,7 +36,7 @@ func enforceAllowlistRunsNoOrgWideRead(t *testing.T, allowlist []string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	client := &teamScopeReachClient{}

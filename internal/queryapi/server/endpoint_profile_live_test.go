@@ -138,7 +138,7 @@ func liveStack(t *testing.T, shape func(*accessStore)) *behaviourStack {
 	if shape != nil {
 		shape(store)
 	}
-	stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow), true)
+	stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow))
 	stack.user = minter.mint(ecUser, nil, nil)
 	return stack
 }
@@ -147,7 +147,7 @@ func liveStack(t *testing.T, shape func(*accessStore)) *behaviourStack {
 func liveStackKeyDown(t *testing.T) *behaviourStack {
 	t.Helper()
 	minter := newAccessMinter(t)
-	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow), true)
+	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow))
 	stack.user = minter.mint(ecUser, nil, nil)
 	return stack
 }
@@ -162,7 +162,7 @@ func withSession(s *accessStore) {
 
 func edgeBearer(t *testing.T, orgID string) string {
 	t.Helper()
-	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: orgID, role: "admin", tokenVersion: 5})
+	return ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: orgID, tokenVersion: 5})
 }
 
 type liveObs struct {
@@ -320,7 +320,7 @@ func newLiveREST(t *testing.T, pattern string, shape func(*accessStore)) *liveRE
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
@@ -802,7 +802,7 @@ func buildInfoUserTokenCells(t *testing.T, o *liveObs, listener string, q liveRe
 		if shape != nil {
 			shape(store)
 		}
-		stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow), true)
+		stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow))
 		q2 := q
 		q2.bearer = minter.mint(ecUser, extra, nil)
 		return stack.live(q2)

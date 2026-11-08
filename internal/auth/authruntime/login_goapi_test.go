@@ -71,7 +71,7 @@ func goAPIFront(t *testing.T, upstream string) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, goAPIScopeStore{}, logger)
+	auth, err := policy.NewAuthenticator(goAPIScopeStore{}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

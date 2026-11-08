@@ -1206,7 +1206,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1238,8 +1238,8 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 }
 
 // routeVenueTokens routes auth by the go-api endpoint-profile rows: the venue's tokens verify as user access
-// tokens of its issuer (their sessions live in the Go copy's auth schema, venueoracle.WriteAuthSessions), and the
-// HS256 tokens the go-api session routes mint in this flow verify on the rows that list legacy_hs256.
+// tokens of its issuer (their sessions live in the Go copy's auth schema, venueoracle.WriteAuthSessions); an HS256
+// token is refused on every row (its class is retired).
 func routeVenueTokens(t *testing.T, ctx context.Context, venue *venueoracle.Venue, auth *policy.Authenticator, logger *slog.Logger) {
 	t.Helper()
 	venue.WriteAuthSessions(t, ctx)
@@ -1247,18 +1247,7 @@ func routeVenueTokens(t *testing.T, ctx context.Context, venue *venueoracle.Venu
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := func(ctx context.Context, token string) (any, error) {
-		user, err := auth.AuthenticateLegacy(ctx, token)
-		switch {
-		case err == nil:
-			return user, nil
-		case policy.IsRefusal(err), policy.IsClaimTypeError(err):
-			return nil, err
-		default:
-			return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
-		}
-	}
-	validator, err := accessverify.New(accessverify.Config{Rows: rows, EdDSA: venue.TokenIssuer.Verifier(t), Legacy: legacy,
+	validator, err := accessverify.New(accessverify.Config{Rows: rows, EdDSA: venue.TokenIssuer.Verifier(t),
 		Meter: noop.NewMeterProvider().Meter("venue"), Logger: logger})
 	if err != nil {
 		t.Fatal(err)

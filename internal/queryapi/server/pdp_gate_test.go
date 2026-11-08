@@ -38,7 +38,7 @@ func newGatedREST(t *testing.T, mode, cellList, base string, routed bool) *gated
 	if !routed {
 		setup = nil
 	}
-	f := newRESTFixture(t, newAccessStore(), setup, true)
+	f := newRESTFixture(t, newAccessStore(), setup)
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -58,7 +58,7 @@ func newGatedREST(t *testing.T, mode, cellList, base string, routed bool) *gated
 func (g *gatedREST) userToken() string { return g.minter.mint(ecUser, nil, nil) }
 
 func (g *gatedREST) edgeToken(t *testing.T) string {
-	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	return ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 }
 
 func (g *gatedREST) do(method, bearer string) answer {

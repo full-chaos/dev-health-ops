@@ -162,8 +162,8 @@ func (p *dlpPDP) take() []string {
 // dlpRows are real query-api REST read rows, one per action of the delegated chain.
 var dlpRows = []string{"/api/v1/home", "/api/v1/flame", "/api/v1/drilldown/prs", "/api/v1/drilldown/issues"}
 
-// dlpHandler is the routed REST authentication (authenticateRESTRequest, the edge verifier routed by row with the
-// HS256 leg on) in front of each row, behind the plane handler carrying gate. The handler past authentication is a
+// dlpHandler is the routed REST authentication (authenticateRESTRequest, the edge verifier routed by row) in front of
+// each row, behind the plane handler carrying gate. The handler past authentication is a
 // stub: it echoes the organization and the scope kind the request may serve (no ClickHouse read).
 func dlpHandler(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.Gate) http.Handler {
 	t.Helper()
@@ -179,7 +179,7 @@ func dlpHandlerFor(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.
 		t.Fatal(err)
 	}
 	setup := testAccess(m.keys, nil, accessTestNow)
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()

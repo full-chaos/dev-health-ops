@@ -8,13 +8,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
 )
 
@@ -46,35 +45,20 @@ func (s *orgScopeStore) ActiveImpersonation(context.Context, uuid.UUID) (*policy
 // The two External Push schema routes are public: the handler's answer is the same for every caller. On the
 // REAL listener chain (NewServer with the org-scope and impersonation middlewares, as configureWith builds it)
 // an anonymous request, every kind of user token with no organisation header, and the token's own
-// organisation give the same status, body bytes and validator, with no database attempt in the handler. The
-// request-wide org-scope middleware still applies when a bearer and an X-Org-Id are sent: a user token with
-// an organisation it is not a member of is refused 403 by the middleware, before the handler, with a pinned
-// number of policy-store calls (as on every route).
+// organisation give the same status, body bytes and validator, with no database attempt in the handler. A
+// public row ignores the bearer: a valid user token with an organisation it is not a member of gets the
+// anonymous answer, with no policy-store call.
 func TestExternalPushSchemaRoutesAreGlobalOnTheRealListenerChain(t *testing.T) {
 	tokens := usertokens.All(t)
 	pool, connects := usertokens.CountingPool(t)
-	verifier, err := edgetoken.New(usertokens.Secret, usertokens.LegacyIssuer, usertokens.Audience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The middleware verifies go-api's own HS256 access token (no session claim): mint one the way go-api
-	// does, with a fresh organisation. The shared tokens (with a session claim, as auth-service issues them)
-	// are sent too; the middleware treats a token it does not accept as no credential.
-	signer, err := edgetoken.NewSigner(usertokens.Secret, usertokens.LegacyIssuer, usertokens.Audience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The middleware verifies a routed user access token with a fresh organisation. The shared tokens are
+	// sent too; the middleware treats a token it does not accept as no credential.
+	ed := edtokens.New(t)
 	orgClaim := uuid.NewString()
-	access, err := signer.Access(edgetoken.AccessClaims{UserID: uuid.NewString(), Email: "ada@example.com", OrgID: orgClaim, Role: "member", TokenVersion: 1}, time.Now().UTC(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
 	claims := struct{ Org string }{Org: orgClaim}
 	store := &orgScopeStore{member: uuid.MustParse(claims.Org)}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := ed.AuthenticatorOver(t, store, quietLogger())
+	access := ed.MustMint(t, edtokens.Claims{UserID: uuid.New(), OrgID: orgClaim})
 	scope := policy.NewScope(auth, quietLogger())
 	routes := markResponseModels(externalingest.Routes(externalingest.Deps{Pool: pool, Logger: quietLogger()}))
 	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.Layers()...)
@@ -121,21 +105,20 @@ func TestExternalPushSchemaRoutesAreGlobalOnTheRealListenerChain(t *testing.T) {
 		got, _ := do(path, "", foreign)
 		same("anonymous with a foreign organisation header", got)
 
-		// A valid user token and an organisation it is not a member of: the middleware refuses (403),
-		// before the handler, after exactly the pinned policy-store calls (user row, then membership).
-		refused, calls := do(path, "Bearer "+access, foreign)
-		if refused.Code != http.StatusForbidden || !strings.Contains(refused.Body.String(), "X-Org-Id not permitted") {
-			t.Errorf("%s: a foreign organisation was answered %d %s, want the middleware's 403", path, refused.Code, refused.Body.String())
+		// A valid user token and an organisation it is not a member of: the public row does not judge the
+		// bearer, so the answer is the anonymous one, with no policy-store call and no organisation data.
+		foreignOrg, calls := do(path, "Bearer "+access, foreign)
+		same("a valid user token with a foreign organisation", foreignOrg)
+		if calls != 0 {
+			t.Errorf("%s: the foreign-organisation request made %d policy-store calls, want 0", path, calls)
 		}
-		if calls != 2 {
-			t.Errorf("%s: the foreign-organisation refusal made %d policy-store calls, want 2 (user row, membership)", path, calls)
+		if strings.Contains(foreignOrg.Body.String(), foreign) || strings.Contains(foreignOrg.Body.String(), claims.Org) {
+			t.Errorf("%s: the foreign-organisation answer carries organisation data", path)
 		}
-		usertokens.NoLeak(t, path+" refusal body", refused.Body.String(), tokens)
-		// The member organisation is a single policy-store call (the user row) and the handler's answer.
 		member, calls := do(path, "Bearer "+access, claims.Org)
-		same("the HS256 access token with its own organisation (recheck)", member)
-		if calls != 1 {
-			t.Errorf("%s: the member-organisation request made %d policy-store calls, want 1", path, calls)
+		same("the routed access token with its own organisation (recheck)", member)
+		if calls != 0 {
+			t.Errorf("%s: the member-organisation request made %d policy-store calls, want 0", path, calls)
 		}
 	}
 	if got := connects.Count(); got != 0 {

@@ -86,7 +86,7 @@ func NewEdgeVerifier(secret, issuer, audience string, users policy.Store) (*Edge
 	if err != nil {
 		return nil, fmt.Errorf("principal: edge access-token verifier: %w", err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, users, edgeLogger())
+	auth, err := policy.NewAuthenticator(users, edgeLogger())
 	if err != nil {
 		return nil, fmt.Errorf("principal: edge access-token verifier: %w", err)
 	}

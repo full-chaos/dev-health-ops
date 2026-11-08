@@ -393,7 +393,7 @@ func TestFeatureFlagsRoute_IsServedByTheCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _, _, _, _ := newQueryHandler(&fakeCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(&fakeCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -466,7 +466,7 @@ func TestReviewEdgesRoute_IsServedByTheCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _, _, _, _ := newQueryHandler(&fakeReviewEdgesCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(&fakeReviewEdgesCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -545,7 +545,7 @@ func TestCognitiveLoadRoute_IsServedByTheCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _, _, _, _ := newQueryHandler(&fakeCognitiveLoadCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(&fakeCognitiveLoadCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -615,7 +615,7 @@ func TestComplexityTimeseriesRoute_IsServedByTheCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _, _, _, _ := newQueryHandler(&fakeComplexityTimeseriesCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(&fakeComplexityTimeseriesCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -690,7 +690,7 @@ func TestHotspotsRoute_IsServedByTheCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -798,7 +798,7 @@ func TestOperatingReviewRoute_IsServedByTheCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _, _, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -857,7 +857,7 @@ func TestOperatingReviewRoute_CurrentTeamIDsPreservesLegacyOneTeam(t *testing.T)
 		t.Fatal(err)
 	}
 
-	handler, _, _, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := iaHeaders("org-1", "admin", false, false)
 
 	legacy := postGraphQLWithVariables(t, handler, registeredOperatingReviewV2Document, token, operatingReviewTeamVariables("team-a", false))
@@ -925,7 +925,7 @@ func TestHomeRoute_IsServedByTheCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _, _, _, _ := newQueryHandler(emptyHomeCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(emptyHomeCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -1109,7 +1109,7 @@ func TestFlowMatrixRoute_IsServedByTheCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _, _, _, _ := newQueryHandler(&fakeFlowMatrixCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(&fakeFlowMatrixCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := iaHeaders("org-1", "admin", false, false)
 
 	// CHAOS-8517: this subtest was "disabled_by_default" and pinned 404 for an operation with no
@@ -1200,7 +1200,7 @@ func TestInvestmentEvidenceQualityRoute_IsServedByTheCatalogAndPreservesNullZero
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, _ := newQueryHandler(fakeInvestmentEvidenceQualityCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(fakeInvestmentEvidenceQualityCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 
 	rec := postGraphQLWithVariables(t, handler, registeredInvestmentEvidenceQualityDocument, iaHeaders("org-1", "admin", false, false), investmentEvidenceQualityVariables())
 	if rec.Code != http.StatusOK {

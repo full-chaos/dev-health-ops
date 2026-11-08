@@ -87,8 +87,9 @@ func hs256Answers(t *testing.T) map[string]hs256Answer {
 	socialLogin.buildCompat()
 	record("POST /api/v1/auth/social-login", socialLogin.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"tok"}`, nil), compatIDs(socialLogin))
 
-	change := newCredFixtureOn(t, httpapi.NewMemoryCounters(nil), newFixtureWith(t, hs256Issuer(t)))
-	bearer, err := hs256Issuer(t).Access(change.grant())
+	changeIssuer, minter := hs256WithAccessCheck(t)
+	change := newCredFixtureOn(t, httpapi.NewMemoryCounters(nil), newFixtureWith(t, changeIssuer))
+	bearer, err := minter.Access(change.grant())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -227,6 +227,9 @@ type Deps struct {
 	// ServiceAccountKeys sends the admin service account key verbs to auth-service; nil
 	// (AUTH_PROXY_SERVICE_ACCOUNT_KEYS off) answers the key routes 503 config_missing.
 	ServiceAccountKeys authprovision.ServiceAccountKeys
+	// ServiceAccounts sends the admin service account lifecycle verbs to auth-service; nil
+	// (AUTH_PROXY_SERVICE_ACCOUNT_KEYS off) leaves the lifecycle routes unmounted.
+	ServiceAccounts authprovision.ServiceAccounts
 	// OrgSuspender suspends an organization in auth-service before the admin PATCH writes is_active=false; nil with
 	// AUTH_PROXY_ORG_PROVISIONING off.
 	OrgSuspender orgreactivate.Suspender

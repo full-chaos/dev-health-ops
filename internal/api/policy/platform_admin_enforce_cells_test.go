@@ -57,6 +57,10 @@ var platformAdminGapRoutes = map[string]Authz{
 	"POST /api/v1/admin/service-accounts/{service_account_id}/keys":        Superuser,
 	"POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate": Superuser,
 	"POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke":      Superuser,
+	"POST /api/v1/admin/service-accounts":                                  Superuser,
+	"POST /api/v1/admin/service-accounts/{service_account_id}/disable":     Superuser,
+	"POST /api/v1/admin/service-accounts/{service_account_id}/enable":      Superuser,
+	"POST /api/v1/admin/service-accounts/{service_account_id}/owner":       Superuser,
 }
 
 // productionGoAPIRows is the guard's action map as go-api builds it (apiservice/enforcer.go).
@@ -125,7 +129,8 @@ func platformAdminMux(guard *Guard) *http.ServeMux {
 		case Admin:
 			mux.Handle(pattern, guard.WrapAdminOr(rule.ActionAdminUsers, echo))
 		case Superuser:
-			// The service account key rows: WrapPlatform(admin.users), as admin/serviceaccount_keys.go mounts them.
+			// The service account key and lifecycle rows: WrapPlatform(admin.users), as admin/serviceaccount_keys.go and
+			// admin/serviceaccounts.go mount them.
 			mux.Handle(pattern, guard.WrapPlatform(rule.ActionAdminUsers, echo))
 		default:
 			mux.Handle(pattern, guard.Wrap(level, echo))
@@ -403,7 +408,7 @@ func TestPlatformAdminGapRowsKeepMainsAnswerAndAskTheWrapAction(t *testing.T) {
 			pdp := newTestPDP(t, denyWith("platform_role_absent"))
 			got := serveCell(cellHandler(t, legacyStore(true, "member"), userClaims(nil), productionEnforcer(t, pdp, "admin", "members")), pattern, cellBearer())
 			if level == Superuser {
-				// A WrapPlatform gap row (the service account key rows): no route question, but the platform gate asks
+				// A WrapPlatform gap row (the service account key and lifecycle rows): no route question, but the platform gate asks
 				// the decision point its own admin.users once, so a decision point that denies refuses a local superuser.
 				// The guard obeys a PDP deny (no fall-through). See
 				// TestServiceAccountKeyRowsAdminCellOnSuperuserWithoutMembershipIs200: the real evaluator allows superusers.

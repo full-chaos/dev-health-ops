@@ -122,3 +122,33 @@ func TestImpersonatingPlatformAdminGetsNoRepositoryAllow(t *testing.T) {
 		t.Errorf("acr.credential.issue delegated: %+v, want deny (impersonation denied)", got)
 	}
 }
+
+// The flag is opt-in per repository action: with only acr.context.read flagged, the same caller is still
+// denied no_membership on acr.evidence.read.
+func TestPlatformAdminRepositoryRuleNeedsTheFlagPerAction(t *testing.T) {
+	var actions map[string]any
+	if err := json.Unmarshal(vocabulary.ActionsV1, &actions); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range actions["actions"].([]any) {
+		if a := raw.(map[string]any); a["action"] == "acr.context.read" {
+			a["platform_admin"] = "allowed"
+		}
+	}
+	b, err := json.Marshal(actions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := policycatalog.Load(b, vocabulary.RolesV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newEvaluator(c)
+	if got := e.Evaluate(repositoryRequestFor("acr.context.read"), platformAdminRepoSnapshot("platform_admin", StatusActive)); !got.Allowed {
+		t.Errorf("flagged acr.context.read: %+v, want allow", got)
+	}
+	if got := e.Evaluate(repositoryRequestFor("acr.evidence.read"), platformAdminRepoSnapshot("platform_admin", StatusActive)); got.Allowed ||
+		got.Reason != ReasonNoMembership {
+		t.Errorf("unflagged acr.evidence.read: %+v, want deny no_membership", got)
+	}
+}

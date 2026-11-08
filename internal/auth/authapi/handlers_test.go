@@ -611,9 +611,9 @@ func TestSessionRoutesRefuseEveryBearerTheyCannotTrust(t *testing.T) {
 	foreignGrant.SessionID = uuid.New()
 	otherGrant := f.grant()
 	otherGrant.PrincipalID = uuid.New()
-	// The retired HS256 class is the plane's one generic-401 cell
-	// (TestEveryHS256TokenIsRefusedOnTheSessionRows); the EdDSA rows keep their
-	// own reasons.
+	// The retired HS256 class is the plane's one generic-401 cell (authruntime
+	// TestHS256WebTokenIsRefusedOnEveryAccessRowWithAnIssuerURL); the EdDSA rows
+	// keep their own reasons.
 	cases := map[string]struct {
 		header map[string]string
 		reason string

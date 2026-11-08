@@ -10,9 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-go/authverify"
@@ -157,29 +155,22 @@ func TestQueryAPIRESTUserTokenPath(t *testing.T) {
 	}
 }
 
-// T8: the organization rule applies to the user token as to the edge token.
+// T8: the organization rule of the user token.
 func TestQueryAPIRESTOrgMissingIs403ForNonSuperuser(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
 	orgless := m.mint(ecUser, map[string]any{"org_id": nil}, nil)
-	edgeOrgless := ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5})
 	forbidden := answer{http.StatusForbidden, `{"detail":"Organization context required"}`}
 	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	const userCarrier = "user token"
 	if got := f.do(http.MethodGet, orgless); got != forbidden {
 		t.Errorf("%s with no org: got %+v, want %+v", userCarrier, got, forbidden)
 	}
-	if got := f.do(http.MethodGet, edgeOrgless); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
-		t.Errorf("edge token (retired HS256 class) with no org: got %+v, want 401", got)
-	}
 	super := newAccessStore()
 	super.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
 	f = newRESTFixture(t, super, testAccess(m.keys, nil, accessTestNow))
 	if got := f.do(http.MethodGet, orgless); got.Status != http.StatusOK || got.Body != `{"org":""}` {
 		t.Errorf("superuser %s with no org: got %+v, want 200 with no org", userCarrier, got)
-	}
-	if got := f.do(http.MethodGet, edgeOrgless); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
-		t.Errorf("superuser edge token (retired HS256 class) with no org: got %+v, want 401", got)
 	}
 }
 
@@ -248,35 +239,12 @@ func (downKeys) ResolveKey(string) (ed25519.PublicKey, error) {
 	return nil, authverify.ErrKeySourceUnavailable
 }
 
-// ecMintEdgeTokenRaw signs an edge token with claims as given (iss, aud and
-// exp added), so a claim can carry a JSON type a real minter never writes.
-func ecMintEdgeTokenRaw(t *testing.T, claims map[string]any) string {
-	t.Helper()
-	all := jwt.MapClaims{"iss": ecIssuer, "aud": ecAudience, "exp": time.Now().Add(time.Hour).Unix()}
-	for name, value := range claims {
-		all[name] = value
-	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, all).SignedString([]byte(ecSecret))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return signed
-}
-
-// Q5: the issuer alone builds the verifier; the edge token is refused the same
-// 401 an unconfigured pod gave it (alg_not_allowed: no row opts into HS256),
-// and the user token is served.
+// Q5: the issuer alone builds the verifier and the user token is served.
 func TestQueryAPIRESTIssuerAloneServesOnlyTheUserToken(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
 	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	if got := f.do(http.MethodGet, m.mint(ecUser, nil, nil)); got.Status != http.StatusOK {
 		t.Fatalf("user token: %+v", got)
-	}
-	if got := f.do(http.MethodGet, ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
-		t.Fatalf("edge token with no edge secret: got %+v, want 401", got)
-	}
-	if got := f.reader.counts(t)[accessverify.RefusedMetric+"|profile=GET /api/v1/home,reason=alg_not_allowed,service=dev-health-query-api"]; got != 1 {
-		t.Fatalf("the HS256 refusal is not counted alg_not_allowed: %d", got)
 	}
 }

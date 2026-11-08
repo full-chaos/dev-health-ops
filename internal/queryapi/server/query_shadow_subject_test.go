@@ -65,7 +65,7 @@ func TestQueryHandsTheOperationItsBearer(t *testing.T) {
 
 // CHAOS-13126: ops_access_token_hs256 is retired. An HS256 edge token on /query, served by the routed authenticator
 // as production builds it, is the generic 401 and runs no operation; the REST edge is the same class's 401 in
-// TestRule1RoutedEdgeTokenIsTheRetiredClass and TestSeamRESTRoutedHS256EdgeTokenIsTheRetiredClass.
+// TestRule1RoutedEdgeTokenIsTheRetiredClass.
 func TestQueryRoutedHS256EdgeTokenIsTheRetiredClass(t *testing.T) {
 	store := newAccessStore()
 	m := newAccessMinter(t)

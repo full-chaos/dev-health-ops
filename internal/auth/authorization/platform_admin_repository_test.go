@@ -62,8 +62,13 @@ func TestPlatformAdminReadsAFlaggedRepositoryActionOrgWide(t *testing.T) {
 				t.Errorf("%s org %v: %+v (obligations %+v), want allow %s with %+v", action, org, got, got.Obligations,
 					ReasonAllowedByPlatformAdmin, want)
 			}
-			if got.Allowed && (got.CacheClass != CacheResourceRevisionBound || got.ExpiresAtUnixNano == 0) {
-				t.Errorf("%s org %v: cache %s expires %d, want the repository read class", action, org, got.CacheClass, got.ExpiresAtUnixNano)
+			// acp A: the stricter of the organization-branch platform-admin allow and the action's own class. The
+			// organization-branch allow leaves the class to the catalog and sets no expiry; for a resource_revision_bound
+			// action that is never cached (authapi decisionBound is false, expires_at = the decision time), which is
+			// stricter than the 30 s repository class. So a platform-role revoke ends the allow at the next decision.
+			if got.Allowed && (got.CacheClass != "" || got.ExpiresAtUnixNano != 0) {
+				t.Errorf("%s org %v: cache %q expires %d, want the organization-branch shape (no class, no expiry)", action, org,
+					got.CacheClass, got.ExpiresAtUnixNano)
 			}
 		}
 	}
@@ -150,5 +155,38 @@ func TestPlatformAdminRepositoryRuleNeedsTheFlagPerAction(t *testing.T) {
 	if got := e.Evaluate(repositoryRequestFor("acr.evidence.read"), platformAdminRepoSnapshot("platform_admin", StatusActive)); got.Allowed ||
 		got.Reason != ReasonNoMembership {
 		t.Errorf("unflagged acr.evidence.read: %+v, want deny no_membership", got)
+	}
+}
+
+// The repository allow has the cache fields of the organization-branch platform-admin allow of an organization
+// action with the same catalog class (git.read, resource_revision_bound).
+func TestPlatformAdminRepositoryAllowCachesLikeTheOrganizationBranchAllow(t *testing.T) {
+	e := newEvaluator(catalogWithRepositoryFlags(t))
+	org := e.Evaluate(orgRequest("git.read"), platformAdminSnapshot("platform_admin", "", StatusActive))
+	if !org.Allowed || org.Reason != ReasonAllowedByPlatformAdmin {
+		t.Fatalf("organization branch git.read: %+v, want allowed_by_platform_admin", org)
+	}
+	for _, action := range platformAdminRepositoryActions {
+		got := e.Evaluate(repositoryRequestFor(action), platformAdminRepoSnapshot("platform_admin", StatusActive))
+		if got.CacheClass != org.CacheClass || got.ExpiresAtUnixNano != org.ExpiresAtUnixNano {
+			t.Errorf("%s: cache %q expires %d, organization branch %q %d", action, got.CacheClass, got.ExpiresAtUnixNano,
+				org.CacheClass, org.ExpiresAtUnixNano)
+		}
+	}
+}
+
+// A platform-role revoke ends the allow: the next decision of the same caller denies, and the allow it replaces
+// carried no expiry, so no consumer may serve it from a cache.
+func TestPlatformAdminRepositoryAllowEndsAtThePlatformRoleRevoke(t *testing.T) {
+	e := newEvaluator(catalogWithRepositoryFlags(t))
+	for _, action := range platformAdminRepositoryActions {
+		before := e.Evaluate(repositoryRequestFor(action), platformAdminRepoSnapshot("platform_admin", StatusActive))
+		if !before.Allowed || before.ExpiresAtUnixNano != 0 {
+			t.Errorf("%s before the revoke: %+v, want an allow with no expiry", action, before)
+		}
+		after := e.Evaluate(repositoryRequestFor(action), platformAdminRepoSnapshot("", StatusActive))
+		if after.Allowed || after.Reason != ReasonNoMembership || after.CacheClass != CacheNone {
+			t.Errorf("%s after the revoke: %+v, want deny no_membership, not cacheable", action, after)
+		}
 	}
 }

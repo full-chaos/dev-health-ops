@@ -111,6 +111,9 @@ type Slot struct {
 	Start, End                     time.Time
 	Status                         int
 	Note                           string
+	// Destructive marks a slot of a destructive row; the driver holds it to the frozen throwaway ids before it sends.
+	// The slots file does not carry it.
+	Destructive bool
 }
 
 // Gap reports whether s was not sent.
@@ -126,87 +129,209 @@ var callerOrder = []string{policy.ShadowCallerMember, policy.ShadowCallerAdmin, 
 
 var placeholder = regexp.MustCompile(`\{([a-z_]+)(?::([A-Za-z0-9_-]+))?\}`)
 
-// PlanOptions: Throwaway is the org label destructive rows act in; AllowExternal the outside services a request may
-// reach; K the requests per cell; Destructive sends the destructive rows, which are gaps without it.
+// anyUUID finds every UUID in a text, wherever it stands.
+var anyUUID = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+
+// PlanOptions: Throwaway is the row-table org label of the destructive rows, a pool label and never an org of the
+// principals file. Pool names, with Destructive, the K principals-file orgs destructive slot k acts in (Pool[k-1]), and
+// Frozen the throwaway ids (ParseThrowawayIDs) frozen before the run: every pool org and its principals must be in it,
+// no other org or principal may be, and every UUID a destructive slot sends must be in it. OnlyRows, when set, names
+// the rows the run sends (the controls always run); AllowExternal the outside services a request may reach; K the
+// requests per cell; Destructive sends the destructive rows, which are gaps without it. States holds the minted
+// single-use state of each slot of a row whose body names {state}.
 type PlanOptions struct {
 	Throwaway     string
+	Pool          []string
+	Frozen        ThrowawayIDs
+	States        States
+	OnlyRows      []string
 	AllowExternal []string
 	K             int
 	Destructive   bool
 }
 
-// MakePlan orders rows into slots, K per cell: the controls first, then the rows, then the destructive rows, each in
-// table order, with the callers member, admin, superuser inside a row. A destructive row must act in the throwaway
-// org only, by its org and by every org or user it names; a row with an outside service not allowed is a gap.
+// MakePlan orders rows into slots, K per cell: the controls first, then the rows, each in table order with the callers
+// member, admin, superuser inside a row; then the destructive rows k-major: for each k, every destructive row in table
+// order, in pool org Pool[k-1], so each pool org sees the destructive rows once, from its seeded state. A row with an
+// outside service not allowed is a gap.
 func MakePlan(rows []Row, v Venue, o PlanOptions) (Plan, error) {
-	throwaway, allowExternal, k := o.Throwaway, o.AllowExternal, o.K
-	if _, ok := v.Orgs[throwaway]; !ok || throwaway == "" {
-		return Plan{}, fmt.Errorf("plan: the throwaway org %q is not in the principals file", throwaway)
+	if _, err := CheckRowClasses(rows); err != nil {
+		return Plan{}, fmt.Errorf("plan: %w", err)
 	}
-	if k < 1 {
+	if o.K < 1 {
 		return Plan{}, errors.New("plan: k must be at least 1")
 	}
-	var ordered []Row
+	if o.Throwaway == "" {
+		return Plan{}, errors.New("plan: no throwaway label")
+	}
+	if _, clash := v.Orgs[o.Throwaway]; clash {
+		return Plan{}, fmt.Errorf("plan: the throwaway label %q is an org of the principals file; it must be a pool label only", o.Throwaway)
+	}
+	only, err := onlyRows(rows, o.OnlyRows)
+	if err != nil {
+		return Plan{}, err
+	}
+	if o.Destructive {
+		if err := v.checkPool(o); err != nil {
+			return Plan{}, err
+		}
+	}
+	var plain, destructive []Row
 	for _, phase := range []func(Row) bool{
 		func(r Row) bool { return r.Control() },
 		func(r Row) bool { return !r.Control() && !r.Destructive },
-		func(r Row) bool { return r.Destructive },
 	} {
 		for _, row := range rows {
-			if phase(row) {
-				ordered = append(ordered, row)
+			if phase(row) && (row.Control() || only == nil || only[row.ID]) {
+				plain = append(plain, row)
 			}
 		}
 	}
-	var plan Plan
-	for _, row := range ordered {
-		if _, ok := v.Orgs[row.Org]; !ok {
-			return Plan{}, fmt.Errorf("plan: row %s: org %q is not in the principals file", row.ID, row.Org)
-		}
-		if row.Destructive {
-			if err := v.throwawayOnly(row, throwaway); err != nil {
+	for _, row := range rows {
+		if row.Destructive && (only == nil || only[row.ID]) {
+			if err := throwawayOnly(row, o.Throwaway); err != nil {
 				return Plan{}, err
 			}
+			destructive = append(destructive, row)
 		}
-		path, err := v.resolve(row, row.Path)
+	}
+	var plan Plan
+	add := func(s Slot) {
+		s.Seq = len(plan.Slots) + 1
+		plan.Slots = append(plan.Slots, s)
+	}
+	extGap := func(row Row) string {
+		if row.Ext != none && !slices.Contains(o.AllowExternal, row.Ext) {
+			return "gap: ext " + row.Ext + " not allowed (-allow-external " + row.Ext + ")"
+		}
+		return ""
+	}
+	for _, row := range plain {
+		path, body, err := v.resolveRow(row, row.Org)
 		if err != nil {
 			return Plan{}, err
 		}
-		if !pathFits(row.Route, path) {
-			return Plan{}, fmt.Errorf("plan: row %s: path %q does not fit route %q", row.ID, path, row.Route)
-		}
-		body := none
-		if row.Body != none {
-			if body, err = v.resolve(row, row.Body); err != nil {
-				return Plan{}, err
-			}
-			if !validJSON(body) {
-				return Plan{}, fmt.Errorf("plan: row %s: the body is not JSON", row.ID)
-			}
-		}
-		for _, cell := range v.cells(row) {
+		for _, cell := range v.cells(row, row.Org, true) {
 			base := Slot{Row: row.ID, Caller: cell.caller, Principal: cell.principal, Expect: row.Expect, CrossOrg: cell.crossOrg,
 				Method: row.Method, Route: row.Route, Path: path, Body: body}
 			gap := cell.gap
-			if gap == "" && row.Destructive && !o.Destructive {
-				gap = "gap: destructive rows off (-destructive)"
-			}
-			if gap == "" && row.Ext != none && !slices.Contains(allowExternal, row.Ext) {
-				gap = "gap: ext " + row.Ext + " not allowed (-allow-external " + row.Ext + ")"
+			if gap == "" {
+				gap = extGap(row)
 			}
 			if gap != "" {
-				base.Seq, base.Note = len(plan.Slots)+1, gap
-				plan.Slots = append(plan.Slots, base)
+				base.Note = gap
+				add(base)
 				continue
 			}
-			for i := 1; i <= k; i++ {
+			for i := 1; i <= o.K; i++ {
 				slot := base
-				slot.K, slot.Seq = i, len(plan.Slots)+1
-				plan.Slots = append(plan.Slots, slot)
+				slot.K = i
+				if slot.Body, err = o.States.fill(body, row.ID, cell.caller, i); err != nil {
+					return Plan{}, err
+				}
+				add(slot)
+			}
+		}
+	}
+	var live []Row
+	for _, row := range destructive {
+		gap := extGap(row)
+		if !o.Destructive {
+			gap = "gap: destructive rows off (-destructive)"
+		}
+		if gap == "" {
+			live = append(live, row)
+			continue
+		}
+		for _, caller := range callerOrder {
+			add(Slot{Row: row.ID, Caller: caller, Principal: none, Expect: row.Expect, Method: row.Method, Route: row.Route,
+				Path: row.Path, Body: row.Body, Note: gap})
+		}
+	}
+	for k := 1; k <= o.K && len(live) > 0; k++ {
+		org := o.Pool[k-1]
+		for _, row := range live {
+			path, body, err := v.resolveRow(row, org)
+			if err != nil {
+				return Plan{}, err
+			}
+			for _, cell := range v.cells(row, org, false) {
+				if cell.gap != "" {
+					return Plan{}, fmt.Errorf("plan: destructive row %s: %s", row.ID, strings.TrimPrefix(cell.gap, "gap: "))
+				}
+				add(Slot{Row: row.ID, Caller: cell.caller, Principal: cell.principal, Expect: row.Expect, K: k, Method: row.Method,
+					Route: row.Route, Path: path, Body: body, Destructive: true})
 			}
 		}
 	}
 	return plan, nil
+}
+
+// onlyRows is the set of row ids the run sends, nil for every row. An id that is no row of the table, a control (the
+// controls always run) or an id named twice is refused.
+func onlyRows(rows []Row, ids []string) (map[string]bool, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	table := map[string]Row{}
+	for _, row := range rows {
+		table[row.ID] = row
+	}
+	out := map[string]bool{}
+	for _, id := range ids {
+		row, ok := table[id]
+		switch {
+		case !ok:
+			return nil, fmt.Errorf("plan: -only-rows names %q, which is no row of the table", id)
+		case row.Control():
+			return nil, fmt.Errorf("plan: -only-rows names control %s; the controls always run", id)
+		case out[id]:
+			return nil, fmt.Errorf("plan: -only-rows names %s twice", id)
+		}
+		out[id] = true
+	}
+	return out, nil
+}
+
+// checkPool holds the pool to the frozen throwaway ids: K distinct pool labels, each an org of the principals file;
+// every pool org and every principal of a pool org frozen; no other org and no other principal frozen, so a pool org
+// can be no alias of a seeded org.
+func (v Venue) checkPool(o PlanOptions) error {
+	if len(o.Pool) != o.K {
+		return fmt.Errorf("plan: the throwaway pool has %d orgs, want one per k (%d)", len(o.Pool), o.K)
+	}
+	pool := map[string]bool{}
+	for _, label := range o.Pool {
+		id, ok := v.Orgs[label]
+		switch {
+		case !ok:
+			return fmt.Errorf("plan: pool org %q is not in the principals file", label)
+		case pool[label]:
+			return fmt.Errorf("plan: pool org %s twice", label)
+		case !o.Frozen.ids[id]:
+			return fmt.Errorf("plan: pool org %s (%s) is not in the frozen throwaway ids (-throwaway-ids)", label, id)
+		}
+		pool[label] = true
+	}
+	labels := make([]string, 0, len(v.Orgs))
+	for label := range v.Orgs {
+		labels = append(labels, label)
+	}
+	slices.Sort(labels)
+	for _, label := range labels {
+		if !pool[label] && o.Frozen.ids[v.Orgs[label]] {
+			return fmt.Errorf("plan: org %s is not in the pool but its id is in the frozen throwaway ids", label)
+		}
+	}
+	for _, p := range v.Principals {
+		switch {
+		case pool[p.Org] && !o.Frozen.ids[p.UUID]:
+			return fmt.Errorf("plan: principal %s of pool org %s is not in the frozen throwaway ids", p.Name, p.Org)
+		case !pool[p.Org] && o.Frozen.ids[p.UUID]:
+			return fmt.Errorf("plan: principal %s is not of a pool org but its id is in the frozen throwaway ids", p.Name)
+		}
+	}
+	return nil
 }
 
 type cell struct {
@@ -214,9 +339,9 @@ type cell struct {
 	crossOrg               bool
 }
 
-// cells are the callers of row: the control's principal, or one principal per caller kind. A row whose org has no
-// member borrows another org's member as a cross-org caller; a missing admin or superuser is a gap.
-func (v Venue) cells(row Row) []cell {
+// cells are the callers of row in org: the control's principal, or one principal per caller kind. With borrow, an
+// org with no member borrows another org's member as a cross-org caller; a missing admin or superuser is a gap.
+func (v Venue) cells(row Row, org string, borrow bool) []cell {
 	if row.Control() {
 		p, _ := v.Principal(row.Principal)
 		return []cell{{caller: p.Caller(), principal: p.Name}}
@@ -229,11 +354,11 @@ func (v Venue) cells(row Row) []cell {
 			if p.Caller() != kind {
 				continue
 			}
-			if kind == policy.ShadowCallerSuperuser || p.Org == row.Org {
+			if kind == policy.ShadowCallerSuperuser || p.Org == org {
 				same = p
 				break
 			}
-			if other == nil && kind == policy.ShadowCallerMember {
+			if other == nil && borrow && kind == policy.ShadowCallerMember {
 				other = p
 			}
 		}
@@ -243,19 +368,45 @@ func (v Venue) cells(row Row) []cell {
 		case other != nil:
 			out = append(out, cell{caller: kind, principal: other.Name, crossOrg: true})
 		default:
-			out = append(out, cell{caller: kind, principal: none, gap: "gap: no " + kind + " principal for org " + row.Org})
+			out = append(out, cell{caller: kind, principal: none, gap: "gap: no " + kind + " principal for org " + org})
 		}
 	}
 	return out
 }
 
-// resolve fills the placeholders of text: {org} (the row's org), {org:<label>}, {user:<principal>},
-// {uuid:<seed kind>}, {name:<seed kind>} and {missing}.
-func (v Venue) resolve(row Row, text string) (string, error) {
+// resolveRow resolves row's path and body in org and holds them to the route and to JSON.
+func (v Venue) resolveRow(row Row, org string) (path, body string, err error) {
+	if _, ok := v.Orgs[org]; !ok {
+		return "", "", fmt.Errorf("plan: row %s: org %q is not in the principals file", row.ID, org)
+	}
+	if path, err = v.resolve(row, org, row.Path); err != nil {
+		return "", "", err
+	}
+	if strings.Contains(path, statePlaceholder) {
+		return "", "", fmt.Errorf("plan: row %s: {state} may stand in the body only", row.ID)
+	}
+	if !pathFits(row.Route, path) {
+		return "", "", fmt.Errorf("plan: row %s: path %q does not fit route %q", row.ID, path, row.Route)
+	}
+	body = none
+	if row.Body != none {
+		if body, err = v.resolve(row, org, row.Body); err != nil {
+			return "", "", err
+		}
+		if !validJSON(body) {
+			return "", "", fmt.Errorf("plan: row %s: the body is not JSON", row.ID)
+		}
+	}
+	return path, body, nil
+}
+
+// resolve fills the placeholders of text: {org} (org), {org:<label>}, {owner} (the one owner of org),
+// {user:<principal>}, {uuid:<seed kind>}, {name:<seed kind>} and {missing}; {state} stays for the slot (States.fill).
+func (v Venue) resolve(row Row, org, text string) (string, error) {
 	var failure error
 	out := placeholder.ReplaceAllStringFunc(text, func(match string) string {
 		m := placeholder.FindStringSubmatch(match)
-		value, err := v.value(row, m[1], m[2])
+		value, err := v.value(org, m[1], m[2])
 		if err != nil && failure == nil {
 			failure = fmt.Errorf("plan: row %s: %s: %w", row.ID, match, err)
 		}
@@ -267,15 +418,26 @@ func (v Venue) resolve(row Row, text string) (string, error) {
 	return out, nil
 }
 
-func (v Venue) value(row Row, name, arg string) (string, error) {
+func (v Venue) value(org, name, arg string) (string, error) {
 	switch {
 	case name == "org" && arg == "":
-		return v.Orgs[row.Org], nil
+		return v.Orgs[org], nil
 	case name == "org":
 		if id, ok := v.Orgs[arg]; ok {
 			return id, nil
 		}
 		return "", errors.New("no such org label")
+	case name == "owner" && arg == "":
+		var owners []string
+		for _, p := range v.Principals {
+			if p.Org == org && p.Role == "owner" {
+				owners = append(owners, p.UUID)
+			}
+		}
+		if len(owners) != 1 {
+			return "", fmt.Errorf("org %s has %d owner principals, want 1", org, len(owners))
+		}
+		return owners[0], nil
 	case name == "user":
 		if p, ok := v.Principal(arg); ok {
 			return p.UUID, nil
@@ -293,31 +455,26 @@ func (v Venue) value(row Row, name, arg string) (string, error) {
 		return "", errors.New("no seed of that kind with a name")
 	case name == "missing" && arg == "":
 		return MissingID, nil
+	case name == "state" && arg == "":
+		return statePlaceholder, nil
 	}
 	return "", errors.New("unknown placeholder")
 }
 
-// throwawayOnly refuses a destructive row that acts outside the throwaway org: its own org, an {org:<label>} or a
-// {user:<principal>} of another org.
-func (v Venue) throwawayOnly(row Row, throwaway string) error {
+// throwawayOnly refuses a destructive row that could act outside its pool org: its org must be the throwaway label,
+// and its path and body may hold no literal UUID and no placeholder but {org}, {owner} and {missing}, which resolve
+// in the slot's pool org (or to MissingID, which no row has).
+func throwawayOnly(row Row, throwaway string) error {
 	if row.Org != throwaway {
-		return fmt.Errorf("plan: destructive row %s acts in org %s, not in the throwaway org %s", row.ID, row.Org, throwaway)
+		return fmt.Errorf("plan: destructive row %s acts in org %s, not in the throwaway pool %s", row.ID, row.Org, throwaway)
 	}
 	for _, text := range []string{row.Path, row.Body} {
+		if anyUUID.MatchString(text) {
+			return fmt.Errorf("plan: destructive row %s holds a literal UUID; only {org}, {owner} and {missing} may name an id in the throwaway pool", row.ID)
+		}
 		for _, m := range placeholder.FindAllStringSubmatch(text, -1) {
-			switch m[1] {
-			case "org":
-				if m[2] != "" && m[2] != throwaway {
-					return fmt.Errorf("plan: destructive row %s names org %s, not the throwaway org %s", row.ID, m[2], throwaway)
-				}
-			case "user":
-				if p, ok := v.Principal(m[2]); !ok || p.Org != throwaway {
-					return fmt.Errorf("plan: destructive row %s names user %s, who is not in the throwaway org %s", row.ID, m[2], throwaway)
-				}
-			case "uuid", "name":
-				if s, ok := v.seeds[m[2]]; !ok || s.Org != throwaway {
-					return fmt.Errorf("plan: destructive row %s names seed %s, which is not a seed of the throwaway org %s", row.ID, m[2], throwaway)
-				}
+			if !slices.Contains([]string{"{org}", "{owner}", "{missing}"}, m[0]) {
+				return fmt.Errorf("plan: destructive row %s names %s; only {org}, {owner} and {missing} may name an id in the throwaway pool", row.ID, m[0])
 			}
 		}
 	}

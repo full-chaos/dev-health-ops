@@ -219,7 +219,7 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 		internalidentity.RecordOutcome("edge", "invalid")
 		if errors.Is(err, policy.ErrUnavailable) || policy.MissingGrant(err) != "" {
 			log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
-				storeFailureReason("edge_store_unavailable", err), r.URL.Path, envelopeRequestID(r))
+				storeFailureReason("edge_store_unavailable", err), r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
 			return authctx.Claims{}, edgeUnavailable
 		}
 		noteRefusal(r, "edge_rejected", "edge")
@@ -245,7 +245,7 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 			reason = "edge_impersonation_undecided"
 		}
 		log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
-			storeFailureReason(reason, scopeErr), r.URL.Path, envelopeRequestID(r))
+			storeFailureReason(reason, scopeErr), r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
 		return authctx.Claims{}, edgeUnavailable
 	}
 
@@ -270,7 +270,7 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 			// The role could not be read, so there is no role: the request
 			// is refused, never served with a default one.
 			log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
-				storeFailureReason("edge_membership_lookup_failed", memberErr), r.URL.Path, envelopeRequestID(r))
+				storeFailureReason("edge_membership_lookup_failed", memberErr), r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
 			return authctx.Claims{}, edgeUnavailable
 		}
 		orgRole, allowed := roleInOrg(user, orgID, memberRole, member)
@@ -331,7 +331,7 @@ func authenticateEdgeTokenOnly(r *http.Request, edgeAuth *policy.Authenticator) 
 		// decided with the answers the middleware saw, so it is refused as a
 		// check that could not be made.
 		log.Printf("query-api: internal request refused: reason=edge_not_bound carrier=edge path=%s request_id=%s",
-			r.URL.Path, envelopeRequestID(r))
+			r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
 		return authctx.Claims{}, edgeUnavailable
 	}
 	if !edgeCarrierToken(edgeAuth, token) {
@@ -373,5 +373,5 @@ func refuseInternal(w http.ResponseWriter, r *http.Request, reason, carrier stri
 func noteRefusal(r *http.Request, reason, carrier string) {
 	internalidentity.RecordOutcome(carrier, reason)
 	log.Printf("query-api: internal request refused: reason=%s carrier=%s path=%s request_id=%s",
-		reason, carrier, r.URL.Path, envelopeRequestID(r))
+		reason, carrier, r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
 }

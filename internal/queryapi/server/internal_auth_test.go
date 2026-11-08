@@ -232,7 +232,7 @@ func TestQueryRefusesEveryAmbiguousOrMalformedCarrier(t *testing.T) {
 
 func TestBuildInfoTakesEitherCarrierAndRefusesBoth(t *testing.T) {
 	verifier, priv := iaVerifier(t)
-	handler := newBuildInfoHandler(verifier)
+	handler := newBuildInfoHandler(verifier, nil, nil)
 	get := func(mutate func(*http.Request)) int {
 		req := httptest.NewRequest(http.MethodGet, "/buildinfo", nil)
 		mutate(req)

@@ -39,7 +39,7 @@ var restValidatorClaim = rowClaim{value: "authenticateRESTRequest: bearer user a
 
 var stateCellsProof = claimProof{file: "endpoint_profile_live_test.go", decl: "userStateCells", needles: []string{"\"users row deactivated after the first request\"", "\"session revoked after the first request\"", "\"token version moved after the first request\"", "\"membership removed after the first request\"", "http.StatusUnauthorized"}}
 
-var stackStateCellsProof = claimProof{file: "endpoint_profile_live_test.go", decl: "stackStateCells", needles: []string{"range userStateCells", "cell.change(store)", "cell.after"}}
+var stackStateCellsProof = claimProof{file: "endpoint_profile_live_test.go", decl: "stackStateCellsAs", needles: []string{"range userStateCells", "cell.change(store)", "cell.after"}}
 
 var internalCacheProofs = []claimProof{
 	stateCellsProof, stackStateCellsProof,
@@ -140,19 +140,23 @@ var rowClaims = map[string]map[string]rowClaim{
 		}},
 	},
 	"build": {
-		"current_state_cache_behavior": {value: "none: no state read: the effective-principal envelope's signature and exp are checked; its claims are not read and nothing is cached", proofs: []claimProof{
-			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"authenticateInternalRequest(w, r, verifier, nil, nil)"}},
-			{file: "endpoint_profile_live_test.go", decl: "driveBuildInfo", needles: []string{"liveStack(t, noStateRead)", "\": envelope past its exp\""}},
+		"current_state_cache_behavior": {value: "none: per-request read: a user access token's users row, session, token version and organization membership, and the impersonation session, are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked; its claims are not read", proofs: []claimProof{
+			stateCellsProof,
+			{file: "buildinfo_route.go", decl: "authenticateBuildInfo", needles: []string{"authenticateInternalRequest(w, r, verifier, nil, nil)", "authenticateEdgeCarrier(w, r, edgeAuth, edgeStore, token)"}},
+			{file: "endpoint_profile_live_test.go", decl: "driveBuildInfo", needles: []string{"liveStack(t, noStateRead)", "\": envelope past its exp\"", "stackStateCellsAs(t, o, listener+\": platform admin, \", q, asSuperuser)"}},
 		}},
 		"resource_resolver": {value: "none: the response is the process's build identity; the credential's organization is not read", proofs: []claimProof{
-			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if _, ok := authenticateInternalRequest(w, r, verifier, nil, nil); !ok {", "json.NewEncoder(w).Encode(json.RawMessage(body))"}, anyOf: []string{}},
+			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if !authenticateBuildInfo(w, r, verifier, edgeAuth, edgeStore) {", "json.NewEncoder(w).Encode(json.RawMessage(body))"}, anyOf: []string{}},
 		}},
 		"impersonation_policy": {value: "exempt_no_org_context", proofs: []claimProof{
-			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if _, ok := authenticateInternalRequest(w, r, verifier, nil, nil); !ok {"}, anyOf: []string{}},
+			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if !authenticateBuildInfo(w, r, verifier, edgeAuth, edgeStore) {"}, anyOf: []string{}},
+			{file: "buildinfo_route.go", decl: "authenticateBuildInfo", needles: []string{"claims.ImpersonationActive || claims.Delegated"}},
 		}},
-		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateInternalRequest); any verified credential receives the same process build identity", proofs: []claimProof{
+		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateInternalRequest), and for a user access token whose live users row is not a platform admin (admin.orgs), that has an active impersonation session or that is delegated (authenticateBuildInfo); any accepted credential receives the same process build identity", proofs: []claimProof{
 			{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"http.Error(w, \"unauthorized\", http.StatusUnauthorized)"}, anyOf: []string{}},
-			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if _, ok := authenticateInternalRequest(w, r, verifier, nil, nil); !ok {", "json.NewEncoder(w).Encode(json.RawMessage(body))"}, anyOf: []string{}},
+			{file: "buildinfo_route.go", decl: "authenticateBuildInfo", needles: []string{"!claims.Holds(rule.ActionAdminOrgs) || claims.ImpersonationActive || claims.Delegated", "refuseInternal(w, r, \"buildinfo_not_platform_admin\", \"edge\")"}},
+			{file: "endpoint_profile_live_test.go", decl: "buildInfoUserTokenCells", needles: []string{"\"platform-admin user token\"", "\"delegated platform-admin user token\"", "\"viewer\", \"member\", \"admin\", \"owner\""}},
+			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if !authenticateBuildInfo(w, r, verifier, edgeAuth, edgeStore) {", "json.NewEncoder(w).Encode(json.RawMessage(body))"}, anyOf: []string{}},
 		}},
 	},
 	"mcp": {

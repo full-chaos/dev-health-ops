@@ -131,12 +131,20 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 				t.Fatalf("role %s has scope %q", r.Role, r.Scope)
 			}
 			want := r.Scope == a.Scope && contains(r.Actions, a.Action)
+			// A platform snapshot names no organization (unknown), where the platform_admin rule still admits a
+			// holder of admin.orgs to a flagged action (TestEvaluate_PlatformRoleSatisfiesOnlyFlaggedOrgActions).
+			byPlatformAdmin := r.Scope == "platform" && a.Scope == "organization" && a.PlatformAdmin == "allowed" &&
+				contains(r.Actions, "admin.orgs")
 			got := e.Evaluate(req, snap)
 			cells++
-			if got.Allowed != want {
-				t.Errorf("role %s action %s: allowed=%v want %v (%s)", r.Role, a.Action, got.Allowed, want, got.Reason)
+			if got.Allowed != (want || byPlatformAdmin) {
+				t.Errorf("role %s action %s: allowed=%v want %v (%s)", r.Role, a.Action, got.Allowed, want || byPlatformAdmin, got.Reason)
 			}
-			if got.Allowed {
+			if got.Allowed && byPlatformAdmin {
+				if got.Reason != ReasonAllowedByPlatformAdmin {
+					t.Errorf("role %s action %s: allow reason %s, want allowed_by_platform_admin", r.Role, a.Action, got.Reason)
+				}
+			} else if got.Allowed {
 				allowed++
 				if got.Reason != ReasonAllowedByRole {
 					t.Errorf("role %s action %s: allow reason %s", r.Role, a.Action, got.Reason)

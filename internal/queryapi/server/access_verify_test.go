@@ -229,7 +229,7 @@ func TestQueryAPIAccessRowsAreTheQueryAndInternalListenerInventory(t *testing.T)
 		"POST /query/run-operation":             true,
 		"GET /graphql":                          true,
 		"POST /graphql":                         true,
-		"GET /buildinfo":                        false,
+		"GET /buildinfo":                        true,
 		"GET /api/v1/meta":                      false,
 		"GET /metrics":                          false,
 		"POST /api/v1/sankey":                   true,
@@ -256,8 +256,8 @@ func TestQueryAPIAccessRowsAreTheQueryAndInternalListenerInventory(t *testing.T)
 			users++
 		}
 	}
-	if users != 35 {
-		t.Errorf("%d rows accept user_access_token, want 35", users)
+	if users != 36 {
+		t.Errorf("%d rows accept user_access_token, want 36", users)
 	}
 }
 
@@ -352,7 +352,8 @@ func TestQueryAPIRouteProfileIsMethodAndPattern(t *testing.T) {
 }
 
 // T6: an HS256 token is refused on every row (its class is retired), and the
-// user token is refused where the row does not accept it.
+// user token is refused where the row does not accept it (GET /buildinfo
+// accepts it; authenticateBuildInfo bounds it to a platform admin).
 func TestQueryAPIHS256IsRefusedOnEveryRow(t *testing.T) {
 	m := newAccessMinter(t)
 	setup := testAccess(m.keys, nil, accessTestNow)
@@ -366,7 +367,11 @@ func TestQueryAPIHS256IsRefusedOnEveryRow(t *testing.T) {
 		if _, err := validator.Validate(context.Background(), queryAPIAccessService, profile, edge); !errors.Is(err, accessverify.ErrRefused) {
 			t.Errorf("%s: HS256 err = %v, want a refusal", profile, err)
 		}
-		if _, err := validator.Validate(context.Background(), queryAPIAccessService, profile, m.mint(ecUser, nil, nil)); !errors.Is(err, accessverify.ErrRefused) {
+		_, err := validator.Validate(context.Background(), queryAPIAccessService, profile, m.mint(ecUser, nil, nil))
+		switch {
+		case profile == "GET /buildinfo" && err != nil:
+			t.Errorf("%s: user token err = %v, want it validated (the row accepts the class)", profile, err)
+		case profile != "GET /buildinfo" && !errors.Is(err, accessverify.ErrRefused):
 			t.Errorf("%s: user token err = %v, want a refusal", profile, err)
 		}
 	}

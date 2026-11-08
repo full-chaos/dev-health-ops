@@ -355,7 +355,7 @@ func writeKeepAliveJSON(ctx context.Context, w http.ResponseWriter, work func(co
 				// hand-written literal is safe and exact, not a shortcut.
 				writeStreamErrorChunks(w, flusher)
 				slog.Default().ErrorContext(ctx, "query-api: investment/explain streaming error",
-					slog.String("request_id", w.Header().Get("X-Request-Id")), slog.String("error", result.err.Error()))
+					slog.String("request_id", logSafeRequestID(w.Header().Get("X-Request-Id"))), slog.String("error", result.err.Error()))
 				return
 			}
 			// result.body is EncodeInvestmentMixExplanation's own JSON

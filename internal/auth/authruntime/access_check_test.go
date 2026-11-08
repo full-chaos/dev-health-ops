@@ -177,11 +177,11 @@ func TestCredentialIssuerFollowsTheConfiguredAccessClass(t *testing.T) {
 	}
 }
 
-// The production builder: the legacy HS256 verifier checks go-api's audience.
+// The production builder: the legacy HS256 refresh verifier (logout) checks go-api's audience.
 func TestTheLegacyAudienceOfTheProductionIssuerFollowsTheClass(t *testing.T) {
 	cfg := classConfig(t, "eddsa")
 	mint := func(audience string) string {
-		return legacyAccess(t, cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, audience,
+		return legacyRefresh(t, cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, audience,
 			authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
 	}
 	signer := &stubSigner{}
@@ -189,31 +189,31 @@ func TestTheLegacyAudienceOfTheProductionIssuerFollowsTheClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := eddsa.Verify(mint(contracts.PlatformAPIAudience)); err != nil {
-		t.Errorf("eddsa class: a go-api HS256 token is refused: %v", err)
+	if _, err := eddsa.VerifyLegacyRefresh(mint(contracts.PlatformAPIAudience)); err != nil {
+		t.Errorf("eddsa class: a go-api HS256 refresh token is refused: %v", err)
 	}
-	if _, _, err := eddsa.Verify(mint("auth-service")); err == nil {
-		t.Error("eddsa class: an HS256 token of the EdDSA audience is accepted")
+	if _, err := eddsa.VerifyLegacyRefresh(mint("auth-service")); err == nil {
+		t.Error("eddsa class: an HS256 refresh token of the EdDSA audience is accepted")
 	}
 }
 
-// AUTH_LEGACY_JWT_AUDIENCE is the audience the legacy verifier checks; without it, go-api's default.
+// AUTH_LEGACY_JWT_AUDIENCE is the audience the legacy refresh verifier checks; without it, go-api's default.
 func TestTheLegacyAudienceKeyReachesTheEdDSAClassVerifier(t *testing.T) {
 	const custom = "go-api-custom"
 	cfg := classConfigWith(t, "eddsa", map[string]string{authconfig.EnvLegacyJWTAudience: custom})
 	mint := func(audience string) string {
-		return legacyAccess(t, cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, audience,
+		return legacyRefresh(t, cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, audience,
 			authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
 	}
 	issuer, err := newAccessIssuer(cfg, &stubSigner{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := issuer.Verify(mint(custom)); err != nil {
+	if _, err := issuer.VerifyLegacyRefresh(mint(custom)); err != nil {
 		t.Errorf("a token of the legacy audience %q is refused: %v", custom, err)
 	}
 	for _, audience := range []string{contracts.PlatformAPIAudience, "auth-service"} {
-		if _, _, err := issuer.Verify(mint(audience)); err == nil {
+		if _, err := issuer.VerifyLegacyRefresh(mint(audience)); err == nil {
 			t.Errorf("a token of audience %q is accepted while the legacy audience is %q", audience, custom)
 		}
 	}

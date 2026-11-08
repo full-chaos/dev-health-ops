@@ -76,7 +76,7 @@ VALUES ($1, $2, $3, 'viewer', now(), now(), now())`, uuid.New(), org, viewer); e
 	rig := pinrig.NewPinRig(t, ctx, pool, pg)
 	sessionOf := map[uuid.UUID]uuid.UUID{superuser: rig.SignIn(t, ctx, superuser), viewer: rig.SignIn(t, ctx, viewer)}
 	verifier, _ := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStore(policy.PGStore{Pool: pool}))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStore(policy.PGStore{Pool: pool}))
 	if err != nil {
 		t.Fatal(err)
 	}

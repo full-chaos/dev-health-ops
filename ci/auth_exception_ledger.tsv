@@ -5,7 +5,6 @@
 # needle: a substring of the anchor file, or an exact key (count:, ExemptClasses:, divergent:, vuln:) the census computes.
 # Linear-only items (no code anchor) stay on CHAOS-11258: the platform admin no-membership rule (D6773), the external
 # venue HS256 mode (CHAOS-12646), the Sentry e-mail decision (CHAOS-10767), superuser impersonation (CHAOS-13106).
-pdp-exempt-hs256	temporary	internal/queryapi/pdp/pdp.go	ExemptClasses:ClassHS256	CHAOS-12646	open	query-api HS256 callers never ask the PDP; goes with the HS256 deletion (D2 PR-1)
 pdp-exempt-envelope	temporary	internal/queryapi/pdp/pdp.go	ExemptClasses:ClassEnvelope	CHAOS-13173	open	query-api envelope callers never ask the PDP; the W11 envelope retirement named on CHAOS-12658
 envelope-entitlement-claims	temporary	internal/queryapi/principal/claims.go	json:"licensed_features"	CHAOS-13173	open	the envelope carries tier and licensed_features; ACP-ADR-07 decision 2 removes them at the next envelope version (60 s TTL is the compensating control)
 compat-logout-legacy-refresh	temporary	internal/auth/authapi/compat.go	func (h compatHandlers) revokeLegacy(	CHAOS-12981	open	compat logout verifies an HS256 refresh JWT with JWT_SECRET_KEY (10457 census, executed repro); CHAOS-13131 counts it, CHAOS-12981 deletes the legacy refresh path

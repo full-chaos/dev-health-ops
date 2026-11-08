@@ -97,11 +97,6 @@ type Options struct {
 	// JWTKey is JWT_SECRET_KEY on the Python plane; the Go api must be given
 	// the same key.
 	JWTKey string
-	// LegacyHS256Tokens mints the seed's tokens as HS256 access tokens under
-	// JWTKey, as the recording's were, for a Go plane that still verifies only
-	// that class (the query-api edge). Unset, they are user access tokens of
-	// TokenIssuer.
-	LegacyHS256Tokens bool
 	// TokenIssuer, when set, mints the seed's tokens (unset: a new edtokens.New issuer): a plane that fetches its
 	// keys from an issuer URL verifies them against that issuer.
 	TokenIssuer *edtokens.Issuer
@@ -162,8 +157,6 @@ type Venue struct {
 
 	// authRuntimeRole is the auth runtime role name WriteAuthSessions provisions.
 	authRuntimeRole string
-	// legacyTokenKey, when set, is the key mintGo signs HS256 tokens under (Options.LegacyHS256Tokens).
-	legacyTokenKey string
 	// orglessSuperusers are Options.OrglessSuperusers.
 	orglessSuperusers map[string]bool
 
@@ -199,9 +192,6 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		t.Fatal("venue: a venue needs its golden (Options.Golden) or Options.GoOnly: no Python plane can be served")
 	}
 	v := &Venue{Root: options.Root, Tokens: map[string]string{}, Roles: map[string]string{}, frozen: true, pythonEnv: planeEnv(options), TokenIssuer: options.TokenIssuer}
-	if options.LegacyHS256Tokens {
-		v.legacyTokenKey = options.JWTKey
-	}
 	for _, name := range options.OrglessSuperusers {
 		if v.orglessSuperusers == nil {
 			v.orglessSuperusers = map[string]bool{}

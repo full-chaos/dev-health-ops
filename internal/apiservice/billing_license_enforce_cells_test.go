@@ -506,28 +506,6 @@ func TestBillingClassARowsRefuseWithNoDecisionPoint(t *testing.T) {
 	}
 }
 
-// Class A with its namespace on: a retired HS256 caller is refused at the token contract (401), the same answer as
-// with the switch off, and the PDP is never asked.
-func TestBillingClassARowsRefuseAnHS256CallerBeforeThePDP(t *testing.T) {
-	hs256 := bearer(probeHS256(t, probeKey, map[string]any{"sub": probeUser.String(), "org_id": probeOrg.String(), "role": "admin", "tv": 3}))
-	off := newCellRig(t, "", nil, false)
-	pdp := newBillingCellPDP(t, "deny")
-	on := newCellRig(t, cellAllNamespaces, pdp.client(t), false)
-	for _, key := range classAKeys() {
-		offStatus, offBody, _ := off.serve(key, hs256)
-		onStatus, onBody, _ := on.serve(key, hs256)
-		if onStatus != offStatus || onBody != offBody {
-			t.Errorf("%s: on %d %s, off %d %s; want the same answer", key, onStatus, onBody, offStatus, offBody)
-		}
-		if onStatus != http.StatusUnauthorized || onBody != `{"detail":{"message":"Invalid or expired token"}}` {
-			t.Errorf("%s: %d %s, want the 401 token refusal", key, onStatus, onBody)
-		}
-	}
-	if n := len(pdp.calls()); n != 0 {
-		t.Errorf("%d PDP calls for an HS256 caller, want 0", n)
-	}
-}
-
 // Classes B to F with every namespace on: no PDP call, and the answer is the switch-off answer. B and C keep their
 // legacy checks until their rows name an action; D, E and F are never PDP rows.
 func TestBillingRowsWithoutAnActionAreNeverDecidedByThePDP(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -16,16 +17,15 @@ import (
 // legacyMinter mints go-api's HS256 access token for a test that needs a bearer of the retired class. No
 // production code mints one.
 type legacyMinter struct {
-	signer *edgetoken.Signer
-	now    func() time.Time
+	secret, issuer, audience string
+	now                      func() time.Time
 }
 
 func newLegacyMinter(secret, issuer, audience string) (*legacyMinter, error) {
-	signer, err := edgetoken.NewSigner(secret, issuer, audience)
-	if err != nil {
+	if _, err := edgetoken.New(secret, issuer, audience); err != nil {
 		return nil, err
 	}
-	return &legacyMinter{signer: signer, now: time.Now}, nil
+	return &legacyMinter{secret: secret, issuer: issuer, audience: audience, now: time.Now}, nil
 }
 
 func (m *legacyMinter) Access(grant Grant) (string, error) {
@@ -38,17 +38,16 @@ func (m *legacyMinter) Access(grant Grant) (string, error) {
 	if grant.OrganizationID != nil {
 		org = grant.OrganizationID.String()
 	}
-	sid := session.WireSessionID(grant.SessionID)
-	var actor *string
-	if grant.Actor != nil {
-		text := grant.Actor.String()
-		actor = &text
+	claims := jwt.MapClaims{
+		"sub": grant.PrincipalID.String(), "email": grant.User.Email, "org_id": org, "role": grant.Role,
+		"is_superuser": grant.User.IsSuperuser, "type": "access", "iss": m.issuer, "aud": m.audience,
+		"exp": expires.Unix(), "iat": now.Unix(), "jti": uuid.NewString(), "tv": grant.User.TokenVersion,
+		"sid": session.WireSessionID(grant.SessionID),
 	}
-	token, err := m.signer.AccessUntil(edgetoken.AccessClaims{
-		UserID: grant.PrincipalID.String(), Email: grant.User.Email, OrgID: org, Role: grant.Role,
-		IsSuperuser: grant.User.IsSuperuser, Username: grant.User.Username, FullName: grant.User.FullName,
-		TokenVersion: grant.User.TokenVersion, ImpersonatingUserID: actor, SessionID: &sid,
-	}, now, expires, uuid.NewString())
+	if grant.Actor != nil {
+		claims["impersonating_user_id"] = grant.Actor.String()
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(m.secret))
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errIssue, err)
 	}

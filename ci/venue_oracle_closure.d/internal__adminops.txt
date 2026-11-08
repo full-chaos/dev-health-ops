@@ -33,7 +33,6 @@ internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/copyproject
 internal/auth/delegationend
-internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/identity
 internal/auth/passwordhash

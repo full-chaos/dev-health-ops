@@ -15,19 +15,11 @@ import (
 // (warnUnusedEdgeSecret).
 const edgeJWTSecretEnvVar = "GO_API_EDGE_JWT_SECRET"
 
-// defaultEdgeJWTIssuer and defaultEdgeJWTAudience key the HS256 half of an
-// edge verifier, which no token reaches: every row refuses HS256 first.
-const (
-	defaultEdgeJWTIssuer   = "dev-health-ops"
-	defaultEdgeJWTAudience = "dev-health-api"
-)
-
 // buildEdgeVerifierFromEnv builds the access-token verifier every REST route
 // in this binary shares, or (nil, nil) when AUTH_ACCESS_TOKEN_ISSUER is unset:
 // the route then accepts the envelope alone. With the issuer set it routes
-// every token by the request's endpoint-profile row (routeEdgeVerifier); its
-// validator has no HS256 verifier, so an HS256 token is refused
-// alg_not_allowed.
+// every token by the request's endpoint-profile row (routeEdgeVerifier); the
+// validator verifies EdDSA only, so an HS256 token is refused alg_not_allowed.
 func buildEdgeVerifierFromEnv(getenv getenvFunc, users edgeUserStore) (*principal.EdgeVerifier, error) {
 	access, routed, err := accessFromEnv(getenv)
 	if err != nil {
@@ -36,18 +28,15 @@ func buildEdgeVerifierFromEnv(getenv getenvFunc, users edgeUserStore) (*principa
 	if !routed {
 		return nil, nil
 	}
-	secret, issuer, audience := unusedEdgeSecret(), defaultEdgeJWTIssuer, defaultEdgeJWTAudience
 	// CHAOS-6290: an edge verifier that cannot read the live users row would
-	// accept the token of a deactivated user, so the secret without a store is
-	// a build error (newEdgeUserStore refuses first when there is no registry pool), never a silent JWT-only verifier.
-	edgeVerifier, err := principal.NewEdgeVerifier(secret, issuer, audience, users)
+	// accept the token of a deactivated user, so a verifier without a store is
+	// a build error (newEdgeUserStore refuses first when there is no registry pool).
+	edgeVerifier, err := principal.NewEdgeVerifier(users)
 	if err != nil {
 		return nil, fmt.Errorf("build edge access-token verifier: %w", err)
 	}
-	if routed {
-		if err := routeEdgeVerifier(edgeVerifier, access); err != nil {
-			return nil, fmt.Errorf("build edge access-token verifier: %w", err)
-		}
+	if err := routeEdgeVerifier(edgeVerifier, access); err != nil {
+		return nil, fmt.Errorf("build edge access-token verifier: %w", err)
 	}
 	return edgeVerifier, nil
 }
@@ -61,8 +50,8 @@ type edgeUserStore = policy.Store
 // REST route's check (CHAOS-6290): policy.PGStore, the Go api's own reader, over
 // registryPool -- the process's ONE registry Postgres pool that /query already
 // opens (queryRouteHandlers.RegistryPool). It opens no pool of its own. It
-// returns (nil, nil) when GO_API_EDGE_JWT_SECRET is absent (no edge verifier is
-// built, so nothing reads users). With the secret set and no registryPool -- the
+// returns (nil, nil) when AUTH_ACCESS_TOKEN_ISSUER is unset (no edge verifier is
+// built, so nothing reads users). With the issuer set and no registryPool -- the
 // /query route is not configured, so there is no pool to read users through --
 // it returns an error: fail closed, never a verifier that skips the check.
 // PGStore.UserState selects is_active, is_superuser and token_version only,
@@ -95,20 +84,18 @@ func warnUnusedEdgeSecret(getenv getenvFunc, logger *slog.Logger) {
 }
 
 // buildQueryEdgeAuthenticatorFromEnv builds /query's edge-carrier
-// authenticator (CHAOS-6263 PR (a)) -- the SAME GO_API_EDGE_JWT_* trio
-// buildEdgeVerifierFromEnv reads (so a pod that already accepts the edge
-// token on its REST routes needs no new config to also accept it on
-// /query), but wired to internal/api/policy.Authenticator instead of
-// principal.EdgeVerifier: go-api's OWN component, reused by import, that
-// resolves is_active/is_superuser/token_version LIVE from Postgres per
-// request rather than trusting the token's own claims for them (see
-// query_api_authorization.go's queryAPIPosture doc comment for why this
-// needs new grants). pool is query-api's existing registry Postgres pool
-// (RegistryPostgresURI) -- the same connection every other /query Postgres
-// read already uses, not a new dependency.
+// authenticator (CHAOS-6263 PR (a)): internal/api/policy.Authenticator, go-api's
+// OWN component reused by import, that resolves is_active/is_superuser/
+// token_version LIVE from Postgres per request rather than trusting the token's
+// own claims for them (see query_api_authorization.go's queryAPIPosture doc
+// comment for why this needs new grants). pool is query-api's existing registry
+// Postgres pool (RegistryPostgresURI) -- the same connection every other /query
+// Postgres read already uses, not a new dependency.
 //
-// Returns (nil, nil, nil), the same "not configured" contract as
-// buildEdgeVerifierFromEnv, when GO_API_EDGE_JWT_SECRET is absent.
+// It routes every token by the request's endpoint-profile row
+// (routeAuthenticator). It returns (nil, nil, nil) when AUTH_ACCESS_TOKEN_ISSUER
+// is unset and no pool is configured, and an error when the pool is configured
+// without the issuer: the issuer is the only user access-token verifier.
 //
 // Returns the store alongside the Authenticator (not just the
 // Authenticator) because policy.Authenticator.Authenticate does not itself
@@ -117,10 +104,6 @@ func warnUnusedEdgeSecret(getenv getenvFunc, logger *slog.Logger) {
 // caller needs the same store value to do the same two checks after
 // Authenticate succeeds, without a second Postgres pool or a new exported
 // accessor on Authenticator.
-//
-// With AUTH_ACCESS_TOKEN_ISSUER set, the Authenticator routes every token by
-// the request's endpoint-profile row (routeAuthenticator), and the issuer
-// alone, with no edge secret, builds it.
 func buildQueryEdgeAuthenticatorFromEnv(getenv getenvFunc, pool *pgxpool.Pool) (*policy.Authenticator, policy.Store, error) {
 	access, routed, err := accessFromEnv(getenv)
 	if err != nil {
@@ -145,10 +128,8 @@ func buildQueryEdgeAuthenticatorFromEnv(getenv getenvFunc, pool *pgxpool.Pool) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
 	}
-	if routed {
-		if err := routeAuthenticator(auth, access); err != nil {
-			return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
-		}
+	if err := routeAuthenticator(auth, access); err != nil {
+		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
 	}
 	return auth, store, nil
 }

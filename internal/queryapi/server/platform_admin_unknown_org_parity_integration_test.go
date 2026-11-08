@@ -193,7 +193,7 @@ func (p *msqPDP) take() []string {
 func msqHandler(t *testing.T, store queryAPIUserStore, m *accessMinter, gate *pdp.Gate) http.Handler {
 	t.Helper()
 	verifier, _ := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, store)
+	edge, err := principal.NewEdgeVerifier(store)
 	if err != nil {
 		t.Fatal(err)
 	}

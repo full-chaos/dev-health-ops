@@ -104,6 +104,10 @@ type ShadowRow struct {
 	OrgFromQuery bool
 }
 
+// NeverDecided is true for a row whose action is not organization-scoped: the decision gate never decides it. A copy of
+// the gate's orgScoped rule over a shadow row, pinned to it by a test in the pdp package.
+func (row ShadowRow) NeverDecided() bool { return row.ResourceType != policycatalog.ScopeOrganization }
+
 func (row ShadowRow) valid() bool {
 	return row.Action != "" && slices.Contains(shadowNamespaces, row.Namespace) &&
 		(row.ResourceType == policycatalog.ScopeOrganization || row.ResourceType == policycatalog.ScopePlatform)
@@ -393,7 +397,7 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 		reason := shadowReasonOf(o.SkipReason)
 		if reason == ShadowReasonNone {
 			reason = ShadowReasonHighRiskOff
-			if row.ResourceType != policycatalog.ScopeOrganization {
+			if row.NeverDecided() {
 				reason = ShadowReasonNeverDecided
 			}
 		}

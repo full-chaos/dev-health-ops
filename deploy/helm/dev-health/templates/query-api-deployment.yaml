@@ -60,6 +60,9 @@ the release-wide policy admits every pod in the namespace).
 {{- if eq (upper (trim (toString .name))) "AUTH_PLATFORM_ROLES_OWNED" }}
 {{- fail "queryApi.extraEnv must not set AUTH_PLATFORM_ROLES_OWNED: authService.platformRolesOwned renders it, for auth-service, go-api and the auth Jobs too" }}
 {{- end }}
+{{- if has (upper (trim (toString .name))) (list "QUERY_API_PDP_MODE" "QUERY_API_AUTHZ_ENFORCE" "QUERY_API_HEADERS_AUTHZ_ENFORCE") }}
+{{- fail (printf "queryApi.extraEnv must not set %s: authService.enforce.queryApiPdpMode, queryApi and queryApiHeaders render it, and a later entry would shadow the rendered value" (upper (trim (toString .name)))) }}
+{{- end }}
 {{- if eq (upper (trim (toString .name))) "AUTH_ACCESS_TOKEN_ISSUER" }}
 {{- fail "queryApi.extraEnv must not set AUTH_ACCESS_TOKEN_ISSUER: authService.accessToken.issuerURL renders it, for auth-service and go-api too" }}
 {{- end }}
@@ -184,6 +187,18 @@ spec:
             {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
             - name: AUTH_PLATFORM_ROLES_OWNED
               value: "true"
+            {{- end }}
+            {{- with (include "dev-health.queryApiPdpMode" .) }}
+            - name: QUERY_API_PDP_MODE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (include "dev-health.authzEnforceQueryApi" (dict "key" "queryApi" "context" .)) }}
+            - name: QUERY_API_AUTHZ_ENFORCE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (include "dev-health.authzEnforceQueryApi" (dict "key" "queryApiHeaders" "context" .)) }}
+            - name: QUERY_API_HEADERS_AUTHZ_ENFORCE
+              value: {{ . | quote }}
             {{- end }}
             {{- if .Values.queryApi.internal.enabled }}
             {{- /*

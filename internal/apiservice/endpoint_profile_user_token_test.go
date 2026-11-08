@@ -127,7 +127,6 @@ func realValidator(t *testing.T) (*accessverify.Validator, *eddsaMinter) {
 	validator, err := accessverify.New(accessverify.Config{
 		Rows:   realRows(t),
 		EdDSA:  verifier,
-		Legacy: func(context.Context, string) (any, error) { return nil, errors.New("hs256 not used here") },
 		Meter:  sdkmetric.NewMeterProvider().Meter("test"),
 		Logger: quietLogger(),
 		Now:    func() time.Time { return probeNow },

@@ -11,15 +11,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 const impersonationRefusalBody = `{"detail":"Not allowed in an impersonation session"}`
@@ -59,46 +59,41 @@ func (s *sessionStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (
 
 func (*sessionStore) ReadsPlatformRoles() bool { return false }
 
-// routeRig serves the billing Routes behind the real Principal, OrgScope and Impersonation scope and the real
-// Guard, with the go-api delegated_bearer rows of the contract and a fake Stripe. It has no pool: a request
-// that reaches a handler's database read answers 500.
+// routeRig serves the billing Routes behind the route profiles, the real Principal, OrgScope and Impersonation
+// scope and the real Guard, routed by the go-api endpoint-profile rows (EdDSA user access tokens), with the
+// go-api delegated_bearer rows of the contract and a fake Stripe. It has no pool: a request that reaches a
+// handler's database read answers 500.
 type routeRig struct {
 	store  *sessionStore
 	stripe *fakeStripeAPI
-	signer *edgetoken.Signer
+	tokens *edtokens.Issuer
 	server *httptest.Server
 }
 
 func newRouteRig(t *testing.T) *routeRig {
 	t.Helper()
-	const key = "billing-impersonation-route-test-key-32b!"
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	logger := slog.New(slog.DiscardHandler)
 	store := &sessionStore{states: map[uuid.UUID]policy.UserState{}, roles: map[[2]uuid.UUID]string{}, sessions: map[uuid.UUID]*policy.Impersonation{}}
-	auth, err := policy.NewAuthenticator(verifier, store, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.AuthenticatorOver(t, store, logger)
 	auth.DelegatedRows(contractDelegatedRows(t))
 	fake := &fakeStripeAPI{}
 	stripeServer := httptest.NewServer(fake)
 	t.Cleanup(stripeServer.Close)
 	mux := http.NewServeMux()
-	for _, route := range Routes(Deps{Guard: policy.NewGuard(auth, logger), Logger: logger,
-		Stripe: stripeclient.New(stripeclient.Options{Key: "sk_test_unit", BaseURL: stripeServer.URL, HTTPClient: stripeServer.Client()})}) {
+	routes := Routes(Deps{Guard: policy.NewGuard(auth, logger), Logger: logger,
+		Stripe: stripeclient.New(stripeclient.Options{Key: "sk_test_unit", BaseURL: stripeServer.URL, HTTPClient: stripeServer.Client()})})
+	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
+	templates, err := httpapi.NewRouteTemplates(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	scope := policy.NewScope(auth, logger)
-	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(mux))))
+	server := httptest.NewServer(policy.RouteProfiles(templates.Match)(scope.Principal(scope.OrgScope(scope.Impersonation(mux)))))
 	t.Cleanup(server.Close)
-	return &routeRig{store: store, stripe: fake, signer: signer, server: server}
+	return &routeRig{store: store, stripe: fake, tokens: tokens, server: server}
 }
 
 // contractDelegatedRows is the go-api rows' delegated_bearer lookup, read from the contract as go-api reads it.
@@ -215,16 +210,14 @@ func (rig *routeRig) impersonator(t *testing.T, platform *rule.Platform, targetR
 		rig.store.sessions[p.id] = &policy.Impersonation{ID: uuid.New(), AdminUserID: p.id, TargetUserID: uuid.New(),
 			TargetOrgID: p.target, TargetRole: targetRole}
 	}
-	claims := edgetoken.AccessClaims{UserID: p.id.String(), Email: "admin@example.test", OrgID: p.own.String(), Role: "admin", IsSuperuser: true}
+	// The superuser, the platform set and the org role are the users and memberships rows above; the token
+	// names only the subject, the own org and, for a delegated session, its actor.
+	claims := edtokens.Claims{UserID: p.id, OrgID: p.own.String()}
 	if delegated {
-		by := uuid.NewString()
-		claims.ImpersonatingUserID = &by
+		by := uuid.New()
+		claims.Actor = &by
 	}
-	bearer, err := rig.signer.Access(claims, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.bearer = bearer
+	p.bearer = rig.tokens.MustMint(t, claims)
 	return p
 }
 

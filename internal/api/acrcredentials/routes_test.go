@@ -12,21 +12,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrlisting"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrrevoke"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
-const unitKey = "acr-credentials-unit-test-key-acr-credentials-unit-key"
+var tokens = edtokens.Fresh()
 
 // users is the policy store: every user exists and is active; superusers and live impersonation sessions are
-// planted per test. The route's own membership read goes to members, never to this store.
+// planted per test, and role is the membership the access check reads for the principal ("member" when unset).
+// The route's own membership read goes to members, never to this store.
 type users struct {
 	mu         sync.Mutex
+	role       string
 	superusers map[uuid.UUID]bool
 	sessions   map[uuid.UUID]*policy.Impersonation
 }
@@ -36,8 +37,13 @@ func (u *users) UserState(_ context.Context, id uuid.UUID) (policy.UserState, bo
 	defer u.mu.Unlock()
 	return policy.UserState{IsActive: true, IsSuperuser: u.superusers[id]}, true, nil
 }
-func (*users) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
-	return "member", true, nil
+func (u *users) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.role == "" {
+		return "member", true, nil
+	}
+	return u.role, true, nil
 }
 func (*users) OrgMembership(context.Context, uuid.UUID, uuid.UUID) (string, bool, bool, error) {
 	return "member", true, true, nil
@@ -98,22 +104,15 @@ type fixture struct {
 
 func newFixture(t *testing.T, scopeRun bool) *fixture {
 	t.Helper()
-	verifier, err := edgetoken.New(unitKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	f := &fixture{t: t, store: &users{superusers: map[uuid.UUID]bool{}, sessions: map[uuid.UUID]*policy.Impersonation{}},
 		members: &members{rows: map[[2]uuid.UUID]memberRow{}}, revoker: &revoker{}, scopeRun: scopeRun}
-	f.auth, err = policy.NewAuthenticator(verifier, f.store, quiet())
-	if err != nil {
-		t.Fatal(err)
-	}
+	f.auth = tokens.AuthenticatorOver(t, f.store, quiet())
 	f.build(Deps{Guard: policy.NewGuard(f.auth, quiet()), Members: f.members, Revoker: f.revoker, Logger: quiet()})
 	return f
 }
 
 // build mounts Routes on a mux behind the api listener's request-wide Scope layers (Principal, OrgScope,
-// Impersonation), as apiservice composes them.
+// Impersonation) and, outermost, the route-row match, as apiservice composes them.
 func (f *fixture) build(deps Deps) {
 	routes := Routes(deps)
 	if len(routes) != 1 || routes[0].Method != http.MethodPost || routes[0].Pattern != RevokePattern || !routes[0].EmptyBody {
@@ -127,24 +126,18 @@ func (f *fixture) build(deps Deps) {
 		for i := len(layers) - 1; i >= 0; i-- {
 			handler = layers[i](handler)
 		}
+		handler = policy.RouteProfiles(func(r *http.Request) (string, bool) {
+			_, pattern := mux.Handler(r)
+			return pattern, pattern != ""
+		})(handler)
 	}
 	f.handler = handler
 }
 
-func (f *fixture) sign(user uuid.UUID, org string, extra jwt.MapClaims) string {
+// sign mints a routed access token for user in org; a non-nil actor makes it a delegated bearer.
+func (f *fixture) sign(user uuid.UUID, org string, actor *uuid.UUID) string {
 	f.t.Helper()
-	claims := jwt.MapClaims{
-		"sub": user.String(), "type": "access", "org_id": org, "role": "member", "is_superuser": false,
-		"iss": "dev-health-ops", "aud": "dev-health-api", "exp": time.Now().Add(time.Hour).Unix(), "tv": 0,
-	}
-	for k, v := range extra {
-		claims[k] = v
-	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(unitKey))
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	return token
+	return tokens.MustMint(f.t, edtokens.Claims{UserID: user, OrgID: org, Actor: actor})
 }
 
 func (f *fixture) post(token, credential string) *httptest.ResponseRecorder {
@@ -172,25 +165,29 @@ const (
 	bodyUnavail    = `{"detail":"Credential service unavailable"}`
 	bodyNotMember  = `{"detail":"Organization access denied"}`
 	bodyImpersonal = `{"detail":"Not allowed in an impersonation session"}`
+	bodyRefused    = `{"detail":{"message":"Invalid or expired token"}}`
 )
 
-func TestTheActorIsTheLiveMembershipRowNeverTheRoleClaim(t *testing.T) {
+// The principal's role (the access check's membership read) never picks the actor: the route's own live
+// membership row does.
+func TestTheActorIsTheLiveMembershipRowNeverThePrincipalRole(t *testing.T) {
 	cases := []struct {
-		name, claimRole, rowRole, wantActor string
+		name, principalRole, rowRole, wantActor string
 	}{
 		{"member", "member", "member", acrrevoke.ActorUser},
 		{"admin row", "member", "admin", acrrevoke.ActorAdmin},
 		{"owner row", "member", "owner", acrrevoke.ActorAdmin},
-		{"admin claim, member row", "admin", "member", acrrevoke.ActorUser},
-		{"owner claim, viewer row", "owner", "viewer", acrrevoke.ActorUser},
-		{"admin claim, empty row role", "admin", "", acrrevoke.ActorUser},
+		{"admin principal, member row", "admin", "member", acrrevoke.ActorUser},
+		{"owner principal, viewer row", "owner", "viewer", acrrevoke.ActorUser},
+		{"admin principal, empty row role", "admin", "", acrrevoke.ActorUser},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t, true)
 			user, org := uuid.New(), uuid.New()
+			f.store.role = tc.principalRole
 			f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: tc.rowRole, found: true}
-			got := f.post(f.sign(user, org.String(), jwt.MapClaims{"role": tc.claimRole}), credOne)
+			got := f.post(f.sign(user, org.String(), nil), credOne)
 			if got.Code != http.StatusNoContent || got.Body.Len() != 0 || got.Header().Get("Cache-Control") != "no-store" {
 				t.Fatalf("answer %d %q %v", got.Code, got.Body.String(), got.Header())
 			}
@@ -202,21 +199,27 @@ func TestTheActorIsTheLiveMembershipRowNeverTheRoleClaim(t *testing.T) {
 	}
 }
 
-func TestTheOrganizationAndActorAreCanonical(t *testing.T) {
-	f := newFixture(t, true)
+// A non-canonical organization or subject is refused at the access-token contract (401): the route is not
+// reached, so no membership is read and no revoke is sent. (The HS256 path folded both to canonical form.)
+func TestANonCanonicalOrganizationOrSubjectIsRefusedAtTheContract(t *testing.T) {
 	user, org := uuid.New(), uuid.New()
-	f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "member", found: true}
-	got := f.post(f.sign(user, strings.ToUpper(org.String()), jwt.MapClaims{"sub": strings.ToUpper(user.String())}), credOne)
-	if got.Code != http.StatusNoContent {
-		t.Fatalf("answer %d %s", got.Code, got.Body.String())
-	}
-	if call := f.revoker.calls[0]; call.org != org.String() || call.actorID != user.String() {
-		t.Fatalf("call = %+v", call)
+	for name, claims := range map[string]edtokens.Claims{
+		"upper-case org_id": {UserID: user, OrgID: strings.ToUpper(org.String())},
+		"upper-case sub":    {UserID: user, OrgID: org.String(), Subject: strings.ToUpper(edtokens.PrincipalID(user))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, true)
+			f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "member", found: true}
+			expect(t, f.post(tokens.MustMint(t, claims), credOne), http.StatusUnauthorized, bodyRefused)
+			if len(f.revoker.calls) != 0 || f.members.calls != 0 {
+				t.Fatalf("revoke %+v, %d reads", f.revoker.calls, f.members.calls)
+			}
+		})
 	}
 }
 
 func TestRefusalsSendNoRevoke(t *testing.T) {
-	user, org := uuid.New(), uuid.New()
+	user, org, actor := uuid.New(), uuid.New(), uuid.New()
 	cases := []struct {
 		name   string
 		plant  func(*fixture) (token, credential string)
@@ -226,9 +229,10 @@ func TestRefusalsSendNoRevoke(t *testing.T) {
 	}{
 		{"no token", func(*fixture) (string, string) { return "", credOne }, http.StatusUnauthorized, `{"detail":{"message":"Not authenticated"}}`, 0},
 		{"no org claim", func(f *fixture) (string, string) { return f.sign(user, "", nil), credOne }, http.StatusForbidden, `{"detail":"Organization context required"}`, 0},
-		{"org claim not a uuid", func(f *fixture) (string, string) { return f.sign(user, "not-a-uuid", nil), credOne }, http.StatusForbidden, bodyNotMember, 0},
+		{"org claim not a uuid", func(f *fixture) (string, string) { return f.sign(user, "not-a-uuid", nil), credOne }, http.StatusUnauthorized, bodyRefused, 0},
 		{"no membership row", func(f *fixture) (string, string) {
-			return f.sign(user, org.String(), jwt.MapClaims{"role": "admin"}), credOne
+			f.store.role = "admin"
+			return f.sign(user, org.String(), nil), credOne
 		}, http.StatusForbidden, bodyNotMember, 1},
 		{"membership read fails", func(f *fixture) (string, string) {
 			f.members.rows[[2]uuid.UUID{user, org}] = memberRow{err: errors.New("db down")}
@@ -246,11 +250,11 @@ func TestRefusalsSendNoRevoke(t *testing.T) {
 			f.store.superusers[user] = true
 			f.store.sessions[user] = &policy.Impersonation{ID: uuid.New(), AdminUserID: user, TargetUserID: uuid.New(), TargetOrgID: org, TargetRole: "member", ExpiresAt: time.Now().Add(time.Hour)}
 			f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "admin", found: true}
-			return f.sign(user, org.String(), jwt.MapClaims{"is_superuser": true}), credOne
+			return f.sign(user, org.String(), nil), credOne
 		}, http.StatusForbidden, bodyImpersonal, 0},
 		{"delegated bearer", func(f *fixture) (string, string) {
 			f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "admin", found: true}
-			return f.sign(user, org.String(), jwt.MapClaims{"impersonating_user_id": uuid.NewString()}), credOne
+			return f.sign(user, org.String(), &actor), credOne
 		}, http.StatusForbidden, bodyImpersonal, 0},
 	}
 	for _, tc := range cases {
@@ -273,9 +277,9 @@ func TestRefusalsSendNoRevoke(t *testing.T) {
 func TestADelegatedBearerIsRefusedEvenWhenItsRowAdmitsIt(t *testing.T) {
 	f := newFixture(t, true)
 	f.auth.DelegatedRows(func(string) bool { return true })
-	user, org := uuid.New(), uuid.New()
+	user, org, actor := uuid.New(), uuid.New(), uuid.New()
 	f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "admin", found: true}
-	expect(t, f.post(f.sign(user, org.String(), jwt.MapClaims{"impersonating_user_id": uuid.NewString()}), credOne), http.StatusForbidden, bodyImpersonal)
+	expect(t, f.post(f.sign(user, org.String(), &actor), credOne), http.StatusForbidden, bodyImpersonal)
 	if len(f.revoker.calls) != 0 || f.members.calls != 0 {
 		t.Fatalf("revoke %+v, %d reads", f.revoker.calls, f.members.calls)
 	}
@@ -375,7 +379,8 @@ func TestAPlatformSuperuserGetsNoBypass(t *testing.T) {
 	user, org := uuid.New(), uuid.New()
 	f := newFixture(t, true)
 	f.store.superusers[user] = true
-	token := f.sign(user, org.String(), jwt.MapClaims{"is_superuser": true, "role": "admin"})
+	f.store.role = "admin"
+	token := f.sign(user, org.String(), nil)
 	expect(t, f.post(token, credOne), http.StatusForbidden, bodyNotMember)
 	f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "member", found: true}
 	if got := f.post(token, credOne); got.Code != http.StatusNoContent {

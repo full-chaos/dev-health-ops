@@ -145,19 +145,15 @@ func logAPIRoutes(ctx context.Context, logger *slog.Logger, cfg authconfig.Confi
 		"sessions_stub", !cfg.Session.Enabled, "discovery_mounted", cfg.TokenIssuerURL != "")
 }
 
-// newAccessIssuer builds the one issuer of cfg's access token class: the HS256
-// compatibility issuer, or the EdDSA one over signer. Never both.
+// newAccessIssuer builds the EdDSA issuer over signer. The retired hs256_compat class and an empty one are refused.
 func newAccessIssuer(cfg authconfig.Config, signer authapi.AccessSigner) (*authapi.Issuer, error) {
-	switch cfg.Session.AccessClass {
-	case "", authconfig.AccessClassHS256Compat:
-		return authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience)
-	case authconfig.AccessClassEdDSA:
-		return authapi.NewEdDSAIssuer(
-			cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience,
-			signer, cfg.TokenIssuerURL, authapi.WithLegacyAudience(cfg.Session.LegacyAudience), authapi.WithAccessLifetime(cfg.Session.AccessLifetime),
-		)
+	if cfg.Session.AccessClass != authconfig.AccessClassEdDSA {
+		return nil, fmt.Errorf("authruntime: unknown access token class %q", cfg.Session.AccessClass)
 	}
-	return nil, fmt.Errorf("authruntime: unknown access token class %q", cfg.Session.AccessClass)
+	return authapi.NewEdDSAIssuer(
+		cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience,
+		signer, cfg.TokenIssuerURL, authapi.WithLegacyAudience(cfg.Session.LegacyAudience), authapi.WithAccessLifetime(cfg.Session.AccessLifetime),
+	)
 }
 
 // compatRoutes builds go-api's compatibility routes over the identity store,

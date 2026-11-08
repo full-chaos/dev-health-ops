@@ -21,7 +21,6 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
@@ -173,11 +172,7 @@ func (r iprValuesRow) Scan(dest ...any) error {
 func iprRig(t *testing.T, live, enforce bool) (http.Handler, *iprPDP) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	verifier, err := edgetoken.New("impersonation-read-parity-key-32-bytes!!", "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, iprStore{live: live}, logger)
+	auth, err := policy.NewAuthenticator(iprStore{live: live}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

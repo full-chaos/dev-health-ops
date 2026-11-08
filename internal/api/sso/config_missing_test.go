@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 const configMissingProvider = "00000000-0000-4000-8000-000000000001"
@@ -19,7 +18,7 @@ const configMissingProvider = "00000000-0000-4000-8000-000000000001"
 func TestSignInRoutesAnswer503ConfigMissingWithoutTheSSOStateKey(t *testing.T) {
 	routes := Routes(Deps{
 		Pool: &pgxpool.Pool{}, Guard: policy.NewGuard(&policy.Authenticator{}, slog.New(slog.DiscardHandler)),
-		Logger: slog.New(slog.DiscardHandler), Signer: &edgetoken.Signer{},
+		Logger: slog.New(slog.DiscardHandler), Issuer: okIssuer{},
 	})
 	cases := []struct {
 		method, pattern, path, first, second string

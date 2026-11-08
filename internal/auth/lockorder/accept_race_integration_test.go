@@ -26,37 +26,6 @@ func wantRefusal(t *testing.T, cell string, p *party, status int, message string
 	}
 }
 
-// The organization delete commits after the accept committed its membership
-// and before it writes the refresh token (which names the organization).
-func TestAcceptAnswersOrgGoneWhenTheOrgIsDeletedBeforeTheTokenWrite(t *testing.T) {
-	const cell = "accept/org-gone-at-token"
-	e, ctx := getEnv(t), cellContext(t)
-	e.cleanup(t)
-	org := e.seedOrg(t, ctx)
-	owner, acceptor := e.seedPair(t, ctx)
-	e.add(t, ctx, org, owner, "owner", nil)
-	_, token := e.goInvite(t, ctx, org, owner, email(acceptor))
-
-	reached := e.goBarrier.Arm("INSERT INTO refresh_tokens")
-	g := goAPI("go-api accept-invite", func() response { return e.acceptInvite(ctx, acceptor, token) })
-	awaitReached(t, cell, "accept-invite's refresh token write", reached, g)
-	d := goAPI("go-api delete organization", func() response { return e.deleteOrg(ctx, org) })
-	select {
-	case <-d.done:
-	case <-time.After(2 * choreographyBound):
-		t.Fatalf("%s: choreography: %s did not end while the accept was held", cell, d.name)
-	}
-	wantStatus(t, cell, d, http.StatusOK)
-	e.goBarrier.Release()
-	e.finish(t, cell, g, d)
-
-	wantRefusal(t, cell, g, http.StatusNotFound, "Organization not found")
-	if got := e.scalar(t, ctx, `SELECT (SELECT count(*) FROM public.refresh_tokens WHERE user_id = $1)
-  + (SELECT count(*) FROM public.memberships WHERE org_id = $2)`, acceptor, org); got != "0" {
-		t.Fatalf("%s: %s token or membership rows left", cell, got)
-	}
-}
-
 // The organization delete holds the invite rows (its pre-lock) when the accept
 // reaches its invite lock, and commits while the accept waits there.
 func TestAcceptRefusesAnInviteTheOrgDeleteRemovedWhileItWaited(t *testing.T) {

@@ -68,8 +68,8 @@ func routeAnswer(t *testing.T, h http.Handler, method, path, body, bearer string
 // The production constructors (sessionRoutes, credentialRoutes) build the
 // access check from the signer's key set when the token issuer is set: an
 // auth-service EdDSA token passes validation and reaches the session store,
-// which the test leaves unreachable (503); without the check the same token is
-// a 401 at validation.
+// which the test leaves unreachable (503); without the check the bearer routes
+// are not mounted (404).
 func TestProductionRoutesConstructTheAccessCheck(t *testing.T) {
 	dir := t.TempDir()
 	writeSigningKey(t, dir, "k1.pem")
@@ -97,7 +97,7 @@ func TestProductionRoutesConstructTheAccessCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for name, issuerURL := range map[string]string{"issuer set": accessCheckIssuer, "issuer unset": ""} {
+	for name, issuerURL := range map[string]string{"issuer set": accessCheckIssuer} {
 		cfg := accessCheckConfig(t, issuerURL)
 		sessionSet, err := sessionRoutes(cfg, logger, pool, schema, signer, mustLimits(t), nil)
 		if err != nil {
@@ -108,9 +108,6 @@ func TestProductionRoutesConstructTheAccessCheck(t *testing.T) {
 			t.Fatal(err)
 		}
 		wantStatus, wantReason := http.StatusServiceUnavailable, "store_unavailable"
-		if issuerURL == "" {
-			wantStatus, wantReason = http.StatusUnauthorized, ""
-		}
 		for route, call := range map[string]func() (int, string){
 			"session current": func() (int, string) {
 				return routeAnswer(t, mountRoutes(sessionSet), http.MethodGet, authapi.PatternCurrent, "", bearer)
@@ -161,7 +158,7 @@ func TestCredentialIssuerFollowsTheConfiguredAccessClass(t *testing.T) {
 	writeSigningKey(t, dir, "k1.pem")
 	signer := token.NewFileSigner(token.FileConfig{KeyPath: filepath.Join(dir, "k1.pem"), KeyID: "k1"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	for class, want := range map[string]struct{ alg, kid string }{"hs256_compat": {"HS256", ""}, "eddsa": {"EdDSA", "k1"}} {
+	for class, want := range map[string]struct{ alg, kid string }{"eddsa": {"EdDSA", "k1"}} {
 		kids := &kidLog{}
 		issuer, err := credentialIssuer(classConfig(t, class), logger, signer, kids)
 		if err != nil {
@@ -180,82 +177,44 @@ func TestCredentialIssuerFollowsTheConfiguredAccessClass(t *testing.T) {
 	}
 }
 
-// The production builder: under the eddsa class (audience auth-service) the legacy
-// HS256 verifier checks go-api's audience; under hs256_compat it checks the
-// configured audience, as before.
+// The production builder: the legacy HS256 refresh verifier (logout) checks go-api's audience.
 func TestTheLegacyAudienceOfTheProductionIssuerFollowsTheClass(t *testing.T) {
 	cfg := classConfig(t, "eddsa")
 	mint := func(audience string) string {
-		hs, err := authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, audience)
-		if err != nil {
-			t.Fatal(err)
-		}
-		compact, err := hs.Access(authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return compact
+		return legacyRefresh(t, cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, audience,
+			authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
 	}
 	signer := &stubSigner{}
 	eddsa, err := newAccessIssuer(cfg, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := eddsa.Verify(mint(contracts.PlatformAPIAudience)); err != nil {
-		t.Errorf("eddsa class: a go-api HS256 token is refused: %v", err)
+	if _, err := eddsa.VerifyLegacyRefresh(mint(contracts.PlatformAPIAudience)); err != nil {
+		t.Errorf("eddsa class: a go-api HS256 refresh token is refused: %v", err)
 	}
-	if _, _, err := eddsa.Verify(mint("auth-service")); err == nil {
-		t.Error("eddsa class: an HS256 token of the EdDSA audience is accepted")
-	}
-	hs, err := newAccessIssuer(classConfig(t, "hs256_compat"), signer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := hs.Verify(mint("auth-service")); err != nil {
-		t.Errorf("hs256_compat: the configured audience is refused: %v", err)
-	}
-	if _, _, err := hs.Verify(mint(contracts.PlatformAPIAudience)); err == nil {
-		t.Error("hs256_compat: a token of another audience is accepted")
+	if _, err := eddsa.VerifyLegacyRefresh(mint("auth-service")); err == nil {
+		t.Error("eddsa class: an HS256 refresh token of the EdDSA audience is accepted")
 	}
 }
 
-// AUTH_LEGACY_JWT_AUDIENCE is the audience the eddsa-class legacy verifier checks;
-// without it, go-api's default. hs256_compat keeps AUTH_JWT_AUDIENCE.
+// AUTH_LEGACY_JWT_AUDIENCE is the audience the legacy refresh verifier checks; without it, go-api's default.
 func TestTheLegacyAudienceKeyReachesTheEdDSAClassVerifier(t *testing.T) {
 	const custom = "go-api-custom"
 	cfg := classConfigWith(t, "eddsa", map[string]string{authconfig.EnvLegacyJWTAudience: custom})
 	mint := func(audience string) string {
-		hs, err := authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, audience)
-		if err != nil {
-			t.Fatal(err)
-		}
-		compact, err := hs.Access(authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return compact
+		return legacyRefresh(t, cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, audience,
+			authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
 	}
 	issuer, err := newAccessIssuer(cfg, &stubSigner{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := issuer.Verify(mint(custom)); err != nil {
+	if _, err := issuer.VerifyLegacyRefresh(mint(custom)); err != nil {
 		t.Errorf("a token of the legacy audience %q is refused: %v", custom, err)
 	}
 	for _, audience := range []string{contracts.PlatformAPIAudience, "auth-service"} {
-		if _, _, err := issuer.Verify(mint(audience)); err == nil {
+		if _, err := issuer.VerifyLegacyRefresh(mint(audience)); err == nil {
 			t.Errorf("a token of audience %q is accepted while the legacy audience is %q", audience, custom)
 		}
-	}
-	hsCfg := classConfigWith(t, "hs256_compat", map[string]string{authconfig.EnvLegacyJWTAudience: custom})
-	hsIssuer, err := newAccessIssuer(hsCfg, &stubSigner{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := hsIssuer.Verify(mint("auth-service")); err != nil {
-		t.Errorf("hs256_compat ignores AUTH_JWT_AUDIENCE: %v", err)
-	}
-	if _, _, err := hsIssuer.Verify(mint(custom)); err == nil {
-		t.Error("hs256_compat reads the legacy key")
 	}
 }

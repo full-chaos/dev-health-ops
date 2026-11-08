@@ -623,3 +623,21 @@ What it shows:
 Not covered, because the service emits no metric for it: the JWKS cache age at the verifiers, a PDP outage seen at the caller, and revocation lag in seconds.
 
 The labels are the closed set in `internal/platform/otlpmetrics/labels.tsv`; the dashboard filters on `deployment.environment`, `service.name`, `listener` and `route` and groups only by labels listed there. `auth.*` metric names can land underscored in SigNoz: the owner checks the names at import (auth-service scrape runbook, Step 3). The import is a separate step from the merged JSON.
+
+## query-api PDP gate
+
+query-api builds one PDP gate from `QUERY_API_PDP_MODE` and decides the routes and GraphQL root fields of the namespaces in `QUERY_API_AUTHZ_ENFORCE` and `QUERY_API_HEADERS_AUTHZ_ENFORCE`. The runbook is [Auth PDP outage and rollback](../runbooks/auth-pdp-outage-and-rollback.md#query-api). Two rules in `alerts/rules.yml`, group `query_api_pdp`, read it. No dashboard source file exists for this gate yet; the rows below are the panels to build, and each reads a series named here.
+
+The series are lazy: an OpenTelemetry counter has no series until its first `Add`, so an absent series means nothing happened. Both rules are inert while the gate is off and no namespace is on. They are PromQL rules in `alerts/rules.yml` and are not yet created in SigNoz (PromQL does not evaluate there; a builder threshold rule is a separate step).
+
+Labels are a closed set: `mode` (`enforce`, `invalid`), `result` and `action` on `dev_health_query_api_pdp_results_total`; `class` and `action` on `dev_health_query_api_pdp_exempt_total`. `result` is allow, deny, unavailable, not_configured, not_carried_out, no_decision_point or no_org. `action` is a catalog action, bounded by the catalog. No organization, user, repository or route is ever a label.
+
+What to read:
+
+- `QueryAPIPDPConfigInvalid`: `dev_health_query_api_pdp_config_invalid` is above 0 on any pod for five minutes, severity critical. The reasons are a bad `QUERY_API_PDP_MODE`, a mode that is on with a missing input, and a namespace listed with no PDP client.
+- `QueryAPIPDPRefusing`: any increase in fifteen minutes of `dev_health_query_api_pdp_results_total` with `result` unavailable, no_decision_point, not_carried_out or not_configured, held for five minutes, grouped by `result`, severity warning. A deny is a `403`, not an outage, and is not counted. The five minutes are a noise window for a restart or one PDP blip. They are not a wait before a flip.
+- Row: `dev_health_query_api_pdp_enabled` (1 while the gate is built in shadow or enforce) and `dev_health_query_api_pdp_config_invalid`, as status panels.
+- Row: results by `result`, then by `action`, to see which namespace refuses.
+- Row: `dev_health_query_api_pdp_exempt_total` by `class`, the callers that never ask the PDP.
+- Row: `dev_health_authz_enforcement_enabled{service="query-api"}` by `namespace`, the cells that are on.
+- In shadow mode the PDP asks count on `dev_health_api_shadow_results_total` and `dev_health_api_shadow_mismatch_total`, not on the `pdp_results_total` counter.

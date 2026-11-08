@@ -8,7 +8,7 @@ import (
 )
 
 // KidRecorder records, on the session row, the kid that signed an access
-// token of the session. An empty kid records an hs256_compat mint: the set
+// token of the session. An empty kid records a mint with no key set: the set
 // becomes '{}', not NULL, so a compromise of an EdDSA kid leaves the session
 // alone. It reports an error for a session that has no row.
 type KidRecorder interface {

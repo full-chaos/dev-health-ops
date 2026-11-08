@@ -65,7 +65,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
-	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
@@ -80,7 +79,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.opentelemetry.io/otel"
 )
 
 const (
@@ -206,7 +204,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	// behind go-api's guard, validator and rate limiter.
 	proxy := newAuthProxy(deps.AuthProxy, logger)
 	routes = append(routes, session.Routes(session.Deps{
-		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier, Signer: deps.Signer,
+		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier,
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
 		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit, Inner: proxy.inner, Issuer: deps.SessionIssuer,
@@ -245,7 +243,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// in this process already uses. StateSecret is
 			// SSO_STATE_SECRET only (statePurposeSecrets);
 			// HKDF derives one key per protocol from it (state.go).
-			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, Signer: deps.Signer, Inner: proxy.inner,
+			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, Inner: proxy.inner,
 			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
@@ -481,7 +479,7 @@ func configureWith(
 		}
 		protected.guard.SetEnforcer(enforcer)
 		protected.guard.SetShadow(newShadow(decisionPoint, envsecrets.ProcessLookup, logger))
-		deps.Verifier, deps.Signer = protected.verifier, protected.signer
+		deps.Verifier = protected.verifier
 		// ReadOnce first: the org scope and the route's guard read the token
 		// org's membership once per request.
 		scope = []func(http.Handler) http.Handler{protected.auth.ReadOnce, protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
@@ -538,12 +536,6 @@ func configureWith(
 	if deps.GitHubStateSigner.Secret == "" {
 		logger.Warn("config_missing: GITHUB_APP_STATE_SECRET is not set; the GitHub App install routes answer 503")
 	}
-	refreshAccepted, err := accessverify.NewRefreshCounter(otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"), goAPIAccessService)
-	if err != nil {
-		closeComponents(depComponents)
-		return nil, dependencyFailure(ctx, logger, "api_refresh_counter", "api_refresh_counter_invalid", err)
-	}
-	session.SetRefreshAccepted(refreshAccepted)
 	deps.RegisterLimit, err = registerLimit(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
@@ -705,14 +697,14 @@ type protection struct {
 	scope    *policy.Scope
 	guard    *policy.Guard
 	verifier *edgetoken.Verifier
-	signer   *edgetoken.Signer
 	// authSchema is AUTH_DATABASE_SCHEMA, as the users store reads it.
 	authSchema string
 }
 
-// newProtection builds the principal service. The api verifies the access
-// token the Python api mints, so with a database it needs the same key:
-// JWT_SECRET_KEY is required, and a missing or short key stops startup.
+// newProtection builds the principal service. Access tokens are verified by
+// the endpoint-profile row only (buildAccessVerify); JWT_SECRET_KEY keys the
+// local session signer and its refresh-token verifier, so with a database it
+// is required, and a missing or short key stops startup.
 func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, logger *slog.Logger) (protection, error) {
 	if !cfg.APIJWTSecret.Configured() {
 		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
@@ -721,15 +713,11 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	if err != nil {
 		return protection{}, fmt.Errorf("access-token verifier: %w", err)
 	}
-	signer, err := edgetoken.NewSigner(cfg.APIJWTSecret.Reveal(), cfg.APIJWTIssuer, cfg.APIJWTAudience)
-	if err != nil {
-		return protection{}, fmt.Errorf("access-token signer: %w", err)
-	}
 	authSchema, err := policy.AuthSchemaFromEnv(envsecrets.ProcessGetenv)
 	if err != nil {
 		return protection{}, err
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}, logger)
 	if err != nil {
 		return protection{}, err
 	}
@@ -745,7 +733,7 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
 	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger), authSchema: authSchema,
-		verifier: verifier, signer: signer}, nil
+		verifier: verifier}, nil
 }
 
 // closeComponents releases what buildDeps opened when startup fails later.

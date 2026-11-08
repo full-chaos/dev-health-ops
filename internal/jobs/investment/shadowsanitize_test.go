@@ -493,7 +493,7 @@ func TestAnAttemptWithAnInvalidRequestIDSourceGivesARowWithNoSource(t *testing.T
 		{StatusCode: 200, RequestID: "req-1", RequestIDSource: "ray"},
 		{StatusCode: 200, RequestID: "req-2", RequestIDSource: "not a source"},
 	}}
-	rows := attemptRecords(shadowTestConfig(), "served", decision.Identity{}, "cfg", "u1", exchange, "ok", "clef")
+	rows := attemptRecords(shadowTestConfig(), "served", attemptBackend{}, decision.Identity{}, "cfg", "u1", exchange, "ok", "clef")
 	if len(rows) != 2 || rows[0].RequestIDSource != "ray" || rows[1].RequestIDSource != "" || rows[1].RequestID != "req-2" {
 		t.Fatalf("rows = %+v", rows)
 	}

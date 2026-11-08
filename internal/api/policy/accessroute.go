@@ -15,11 +15,8 @@ type RoutedValidator interface {
 	Validate(ctx context.Context, service, profile, bearer string) (*RoutedResult, error)
 }
 
-// RoutedResult is an accepted token: Legacy for an HS256 ops access token
-// (AuthenticateLegacy's user), Claims for a user access token. Exactly one is
-// set.
+// RoutedResult is an accepted user access token.
 type RoutedResult struct {
-	Legacy *User
 	Claims *AccessTokenClaims
 }
 
@@ -41,8 +38,7 @@ type routedAccess struct {
 
 // RouteAccess makes Authenticate pick the access-token validator from the
 // request's endpoint-profile row (service, route template). Call it once,
-// before the Authenticator serves. Its validator's legacy verifier must be
-// AuthenticateLegacy, never Authenticate.
+// before the Authenticator serves.
 func (a *Authenticator) RouteAccess(validator RoutedValidator, service string) error {
 	if validator == nil || service == "" {
 		return errors.New("policy: routed access needs a validator and a service")
@@ -97,31 +93,22 @@ func (a *Authenticator) authenticateRouted(ctx context.Context, token string) (*
 	switch {
 	case errors.Is(err, ErrUnavailable):
 		return nil, err
-	case err != nil, result == nil:
+	case err != nil, result == nil, result.Claims == nil:
 		return nil, errRejected
-	case result.Legacy != nil && result.Claims == nil:
-		return result.Legacy, nil
-	case result.Claims != nil && result.Legacy == nil:
-		return a.accessTokenUser(ctx, result.Claims)
 	default:
-		return nil, errRejected
+		return a.accessTokenUser(ctx, result.Claims)
 	}
 }
 
-// IsClaimTypeError reports a legacy token claim whose JSON type the Python
-// api raised on (a 500 there).
-func IsClaimTypeError(err error) bool { return errors.Is(err, errClaimType) }
-
 // mayImpersonate decides whether Impersonation runs its full check, from the
 // Principal decision alone: a user access token (it carries no is_superuser
-// claim), or a legacy token whose verified is_superuser claim is truthy, or,
-// while the platform roles switch is owned, a legacy token whose live read
-// says superuser (a newly granted admin's claim is stale until renewal). With
-// no decision, or a failed lookup, the check runs and refuses (fail closed).
+// claim), or, while the platform roles switch is owned, a caller whose live
+// read says superuser. With no decision, or a failed lookup, the check runs
+// and refuses (fail closed).
 func (s *Scope) mayImpersonate(r *http.Request) bool {
 	decision, ok := decisionFrom(r.Context())
 	if !ok || decision.err != nil {
 		return true
 	}
-	return decision.user != nil && (decision.user.accessToken || decision.user.superuserClaim || (decision.user.IsSuperuser && s.ReadsPlatformRoles()))
+	return decision.user != nil && (decision.user.accessToken || (decision.user.IsSuperuser && s.ReadsPlatformRoles()))
 }

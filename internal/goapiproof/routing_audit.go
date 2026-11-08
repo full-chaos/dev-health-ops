@@ -96,6 +96,10 @@ var ErrAuditRowRefused = errors.New("goapiproof: the routing audit row was refus
 // presented when one was.
 var ErrTokenSubjectMissing = errors.New("goapiproof: the user access token carries no subject, so no audit row can name who acted")
 
+// ErrTokenSubjectNotAccepted reports that no /buildinfo read accepted the credential, so no verifier has vouched for
+// the subject an audit row would name.
+var ErrTokenSubjectNotAccepted = errors.New("goapiproof: no /buildinfo read accepted this user access token, so no audit row can name who acted")
+
 // auditReviewEvidenceMax mirrors alembic 0130's CHECK. Bounded rather
 // than truncated: this table is append-only, so a silently trimmed
 // explanation has no later remedy.
@@ -310,22 +314,26 @@ func TokenSubject(bearer string) (string, error) {
 	return claims.Subject, nil
 }
 
-// TokenSubject reads the `sub` claim out of the user access token this
-// Credential carries, for an audit row's principal_id.
+// TokenSubject reads the `sub` claim out of the user access token the last
+// accepted /buildinfo read of this Credential sent, for an audit row's
+// principal_id.
 //
 // This is a method rather than a caller reaching for the raw bearer,
 // because Credential's whole design (credential.go) is that its value is
 // asked for per request and never handed back -- adding a second way out
-// of the type would undo that. The value never leaves this package: it is
-// read here, fed straight into the package-level TokenSubject above,
-// and discarded.
+// of the type would undo that. The value never leaves this package.
 //
-// The same verification-order requirement applies: call this only after
-// the credential has already been accepted by /buildinfo.
-func (c *Credential) TokenSubject(ctx context.Context) (string, error) {
-	bearer, err := c.value(ctx)
-	if err != nil {
-		return "", err
+// It reads the value FetchBuildIdentity recorded, never the source again: a
+// file-fed credential re-reads its file on each use, and a file rotated to
+// another admin's token between the two reads would name a subject the
+// verifier never saw. With no accepted read it refuses
+// (ErrTokenSubjectNotAccepted).
+func (c *Credential) TokenSubject(context.Context) (string, error) {
+	c.state.mu.Lock()
+	accepted := c.state.accepted
+	c.state.mu.Unlock()
+	if accepted == "" {
+		return "", ErrTokenSubjectNotAccepted
 	}
-	return TokenSubject(bearer)
+	return TokenSubject(accepted)
 }

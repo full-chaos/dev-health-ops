@@ -388,6 +388,28 @@ func TestSeamRESTExemptCallersStayOnTodaysPath(t *testing.T) {
 	}
 }
 
+// The effective-principal envelope is retired. With every cell on and a PDP that denies, a validly signed envelope is
+// the generic 401: no read, no handler, no PDP call, no exempt count.
+func TestSeamRESTEnvelopeIsTheRetiredClass(t *testing.T) {
+	for _, route := range seamRoutes() {
+		t.Run(route.name, func(t *testing.T) {
+			decider := seamDenier(t)
+			gate, reader := seamGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
+			s := newSeamStack(t, route)
+			got := s.run(gate, s.envelope)
+			if got.status != http.StatusUnauthorized || strings.TrimSpace(got.body) != restRefusal || len(got.statements) != 0 {
+				t.Fatalf("envelope: %d %q with %d statements, want 401 %s and none", got.status, got.body, len(got.statements), restRefusal)
+			}
+			if len(s.seen) != 0 || decider.calls.Load() != 0 {
+				t.Fatalf("handler saw %+v, PDP asked %d times, want neither", s.seen, decider.calls.Load())
+			}
+			if counts := (&gatedREST{reader: reader}).counter(t, "dev_health_query_api_pdp_exempt_total"); len(counts) != 0 {
+				t.Fatalf("exempt counts %v, want none", counts)
+			}
+		})
+	}
+}
+
 // CHAOS-13126: ops_access_token_hs256 is retired. On the routed stack, with every cell on and a PDP that denies, the
 // HS256 edge token is the generic 401: no read, no handler, no PDP call, no exempt count.
 func TestSeamRESTRoutedHS256EdgeTokenIsTheRetiredClass(t *testing.T) {

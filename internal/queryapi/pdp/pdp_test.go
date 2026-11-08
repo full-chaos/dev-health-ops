@@ -365,9 +365,10 @@ func TestPDPEnforceUnknownRowFailsClosed(t *testing.T) {
 	}
 }
 
-// The exempt list is exactly the two legacy classes; each accepted caller counts in every mode, a user token never.
-func TestPDPExemptListAndCounter(t *testing.T) {
-	if !slices.Equal(ExemptClasses, []string{"ops_access_token_hs256", "effective_principal_envelope"}) {
+// The exempt list is the HS256 class alone: the effective-principal envelope is retired. An accepted HS256 caller counts
+// in every mode; the envelope class and a user token never count.
+func TestPDPExemptListIsHS256Only(t *testing.T) {
+	if !slices.Equal(ExemptClasses, []string{"ops_access_token_hs256"}) {
 		t.Fatalf("exempt list %v", ExemptClasses)
 	}
 	for _, mode := range []string{ModeOff, ModeShadow, ModeEnforce, "banana"} {
@@ -379,9 +380,9 @@ func TestPDPExemptListAndCounter(t *testing.T) {
 			}
 			g := New(cfg)
 			g.CountExempt(context.Background(), ClassHS256, testProfile)
-			g.CountExempt(context.Background(), ClassEnvelope, "POST /api/v1/drilldown/prs")
+			g.CountExempt(context.Background(), "effective_principal_envelope", "POST /api/v1/drilldown/prs")
 			g.CountExempt(context.Background(), "user_access_token", testProfile)
-			want := map[string]int64{"action=analytics.read,class=ops_access_token_hs256": 1, "action=git.read,class=effective_principal_envelope": 1}
+			want := map[string]int64{"action=analytics.read,class=ops_access_token_hs256": 1}
 			if got := m.points(t, exemptMetric); !mapsEqual(got, want) {
 				t.Fatalf("exempt %v, want %v", got, want)
 			}

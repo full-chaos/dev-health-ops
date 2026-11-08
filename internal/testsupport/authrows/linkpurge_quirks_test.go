@@ -110,3 +110,25 @@ func TestRetiredUsersPathQuirksAreGone(t *testing.T) {
 		}
 	}
 }
+
+// Dead's "covered no row" case is the only dead report of a quirk that is not Exact: the table's own login-organization
+// rewrite quirk, live on a sessions leg, covers no row when the target's refresh rows equal the golden's, and is reported.
+func TestARealNonExactQuirkThatCoversNoRowIsDead(t *testing.T) {
+	const id = "login-organization-chosen-without-activity"
+	for _, q := range Quirks {
+		if q.ID == id && (q.Exact || q.Max != 0) {
+			t.Fatalf("%s is Exact or bounded (exact %v, max %d): the cell needs a quirk with no Max", id, q.Exact, q.Max)
+		}
+	}
+	golden := goldenRows(t)[TableRefreshTokens]
+	l, err := NewLedger(forwarded(t, "sessions,local_login"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := l.Compare(TableRefreshTokens, golden, golden); len(problems) != 0 {
+		t.Fatalf("refresh rows equal to the golden's: %v", problems)
+	}
+	if dead := deadOf(l, id); len(dead) != 1 || !strings.Contains(dead[0], "covered no row") {
+		t.Fatalf("Dead for %s = %v, want one covered-no-row report", id, dead)
+	}
+}

@@ -87,7 +87,7 @@ func text(p *string) string {
 func TestCompatRoutesThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	e := newRoutesEnv(t, ctx)
+	e := newEdDSARoutesEnv(t, ctx)
 	user, org := e.seed(t, ctx)
 	hash, err := passwordhash.Hash("compat-route-password")
 	if err != nil {
@@ -121,6 +121,10 @@ func TestCompatRoutesThroughConfigure(t *testing.T) {
 	userInfo := login["user"].(map[string]any)
 	if userInfo["org_id"] != org.String() || userInfo["role"] != "owner" || login["needs_onboarding"] != false || login["token_type"] != "bearer" {
 		t.Fatalf("login body %s", got.body)
+	}
+	claims, err := e.queryAPIAccepts(ctx, login["access_token"].(string))
+	if err != nil || claims.OrgID != org.String() {
+		t.Fatalf("query-api's routed verifier: %+v %v", claims, err)
 	}
 	succeeded := e.auditOf(t, ctx, "auth.login.succeeded", got.header.Get("X-Auth-Request-ID"))
 	if text(succeeded.clientIP) != "198.51.100.7" || text(succeeded.org) != org.String() || text(succeeded.subject) != user.String() {

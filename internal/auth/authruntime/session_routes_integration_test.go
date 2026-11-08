@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
@@ -29,6 +30,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -58,7 +60,9 @@ type routesEnv struct {
 	front    *httptest.Server
 	client   *http.Client
 	root     string
-	logs     *safeBuffer
+	// edge is query-api's REST access check over this stack (queryAPIVerifier); nil without an issuer URL.
+	edge *principal.EdgeVerifier
+	logs *safeBuffer
 	// components are what configure built, for a test that stops them itself.
 	components []lifecycle.Component
 }
@@ -225,7 +229,11 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front,
+	var edge *principal.EdgeVerifier
+	if cfg.TokenIssuerURL != "" {
+		edge = queryAPIVerifier(t, cfg, policy.PGStore{Pool: admin, AuthSchema: "auth"})
+	}
+	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front, edge: edge,
 		client: &http.Client{Timeout: 10 * time.Second}, root: wd, logs: logs, components: components}
 }
 
@@ -347,10 +355,11 @@ func (e *routesEnv) revokedAt(t *testing.T, ctx context.Context, wireID string) 
 func TestSessionRoutesThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	e := newRoutesEnv(t, ctx)
+	e := newEdDSARoutesEnv(t, ctx)
 	user, org := e.seed(t, ctx)
 
-	// Refresh: a rotated credential within the session.
+	// Refresh: a rotated credential within the session and an access token that
+	// query-api's routed verifier accepts against the live users row and session.
 	first := e.start(t, ctx, user, &org)
 	rotated, got := e.refresh(t, first.Credential.Reveal())
 	if rotated == nil {
@@ -361,6 +370,13 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	}
 	if got.header.Get("Cache-Control") != "no-store" {
 		t.Fatal("token response is cacheable")
+	}
+	claims, err := e.queryAPIAccepts(ctx, rotated.AccessToken.Reveal())
+	if err != nil {
+		t.Fatalf("query-api's routed verifier refused the access token: %v", err)
+	}
+	if claims.OrgID != org.String() {
+		t.Fatalf("org_id = %q, want %s", claims.OrgID, org)
 	}
 	payload := decodePayload(t, rotated.AccessToken.Reveal())
 	for key, want := range map[string]any{"sub": user.String(), "role": "owner", "tv": float64(2), "is_superuser": false,
@@ -396,9 +412,12 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if _, err := e.admin.Exec(ctx, `UPDATE users SET token_version = token_version + 1 WHERE id = $1`, user); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := e.queryAPIAccepts(ctx, fifthTokens.AccessToken.Reveal()); err == nil || !policy.IsRefusal(err) {
+		t.Fatalf("query-api accepted a stale token (err %v): the two checks disagree", err)
+	}
 	// The session was pinned to the old token_version: a refresh after the
 	// bump is refused and ends it. A session started after the bump is pinned
-	// to the new version and refreshes.
+	// to the new version and mints tokens query-api accepts.
 	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(fifthTokens.RefreshCredential.Reveal()), ""), 401, "revision_stale")
 	if e.revokedAt(t, ctx, fifthTokens.SessionID) == nil {
 		t.Fatal("a session pinned to the old token_version stayed live after the bump")
@@ -407,6 +426,9 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	renewed, got := e.refresh(t, sixth.Credential.Reveal())
 	if renewed == nil {
 		t.Fatalf("refresh of a session started after the bump = %d %s", got.status, got.body)
+	}
+	if _, err := e.queryAPIAccepts(ctx, renewed.AccessToken.Reveal()); err != nil {
+		t.Fatalf("query-api refused the renewed token: %v", err)
 	}
 
 	// Deactivation: refresh mints nothing and the session is revoked.

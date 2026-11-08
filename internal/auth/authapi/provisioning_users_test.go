@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 )
 
 // A create with grant_platform_admin grants platform_admin to the new principal inside the create (the store's
@@ -62,4 +64,15 @@ func TestUsersUpdateSuperuserGrantsAndRevokesOnlyOnAChange(t *testing.T) {
 	if len(f.roles.grants) != 1 || f.roles.grants[0] != f.target || len(f.roles.revokes) != 1 || f.roles.revokes[0] != f.super {
 		t.Fatalf("grants %v revokes %v, want a grant to the target and a revoke of the superuser", f.roles.grants, f.roles.revokes)
 	}
+}
+
+// A revoke that would leave no active platform administrator is refused 409 last_platform_admin. go-api's own guard
+// (guards.go refuseSuperuserWrite) has no such refusal: this answer is stricter than go-api's, a known divergence
+// (ci/auth_exception_ledger.tsv known-stricter-last-platform-admin) pm keeps or drops.
+func TestUsersUpdateRevokeOfTheLastPlatformAdminIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newUsersAdminFixture(t)
+	f.roles.revokeErr = platformrole.ErrLastPlatformAdmin
+	body := map[string]any{"actor_principal_id": f.super.String(), "principal_id": f.super.String(), "is_superuser": false}
+	expectRefusal(t, f.post(usersUpdatePath, encode(body), nil), http.StatusConflict, reasonLastPlatformAdmin)
 }

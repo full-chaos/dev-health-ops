@@ -3,10 +3,14 @@ package authapi
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
@@ -41,7 +45,7 @@ const (
 	reasonLastPlatformAdmin    = "last_platform_admin"
 )
 
-// usersAdminPatterns are the user-admin routes; they mount together, only when each has its row.
+// usersAdminPatterns are the user-admin routes; they mount together, only when each has its row (UsersAdminRoutes).
 var usersAdminPatterns = []string{PatternUsersCreate, PatternUsersUpdate, PatternUsersPassword, PatternUsersDelete}
 
 // maxUsersAdminBody bounds a user-admin body: a create carries a verifier and request metadata.
@@ -90,17 +94,44 @@ func (PlatformRoleStore) LockWritesShared(ctx context.Context, tx audit.TxOps) e
 	return platformrole.LockWritesShared(ctx, tx)
 }
 
-// withUsersAdminRoutes adds the user-admin routes when the store is wired and the document has their rows.
-func (h provisioningHandlers) withUsersAdminRoutes(routes []httpapi.Route, rows []byte) []httpapi.Route {
-	if h.UsersAdmin == nil || h.PlatformRoles == nil || rowsExactFor(rows, usersAdminPatterns, []string{workloadTokenClass}) != nil {
-		return routes
+// UsersAdminRoutes returns the user-admin routes, apart from ProvisioningRoutes and its AUTH_MEMBERSHIP_ROUTES switch:
+// auth-service mounts them while it owns users. They take the go-api workload token on the provisioning routes'
+// workload path. With no endpoint-profile row for any one of them, none is built and nothing is refused: the routes
+// stay dark until their rows ship. deps needs Users, Reader, Organizations and both UsersAdminStores.
+func UsersAdminRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
+	if deps.Users == nil || deps.Reader == nil || deps.Organizations == nil || deps.UsersAdmin == nil || deps.PlatformRoles == nil {
+		return nil, errors.New("authapi: the user-admin routes need users, a reader, organizations, the user-admin store and the platform role store")
 	}
-	return append(routes,
-		httpapi.Route{Method: http.MethodPost, Pattern: PatternUsersCreate, Handler: http.HandlerFunc(h.usersCreate)},
-		httpapi.Route{Method: http.MethodPost, Pattern: PatternUsersUpdate, Handler: http.HandlerFunc(h.usersUpdate)},
-		httpapi.Route{Method: http.MethodPost, Pattern: PatternUsersPassword, Handler: http.HandlerFunc(h.usersPassword)},
-		httpapi.Route{Method: http.MethodPost, Pattern: PatternUsersDelete, Handler: http.HandlerFunc(h.usersDelete)},
-	)
+	rows := deps.ProfileRows
+	if rows == nil {
+		rows = authv1.AuthServiceEndpointProfiles
+	}
+	if rowsExactFor(rows, usersAdminPatterns, []string{workloadTokenClass}) != nil {
+		return nil, nil
+	}
+	if deps.Logger == nil {
+		deps.Logger = slog.Default()
+	}
+	meter := deps.Meter
+	if meter == nil {
+		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/authapi")
+	}
+	rec, err := newRecorder(deps.Logger, meter)
+	if err != nil {
+		return nil, err
+	}
+	retired, err := meter.Int64Counter("auth.provisioning.retired_credential_refusals",
+		metric.WithDescription("Provisioning route requests refused because they presented the retired session issuer credential, by operation."))
+	if err != nil {
+		return nil, err
+	}
+	h := provisioningHandlers{ProvisioningDeps: deps, rec: rec, retiredRefusals: retired}
+	return []httpapi.Route{
+		{Method: http.MethodPost, Pattern: PatternUsersCreate, Handler: http.HandlerFunc(h.usersCreate)},
+		{Method: http.MethodPost, Pattern: PatternUsersUpdate, Handler: http.HandlerFunc(h.usersUpdate)},
+		{Method: http.MethodPost, Pattern: PatternUsersPassword, Handler: http.HandlerFunc(h.usersPassword)},
+		{Method: http.MethodPost, Pattern: PatternUsersDelete, Handler: http.HandlerFunc(h.usersDelete)},
+	}, nil
 }
 
 // usersActorRule is go-api's guard of an admin users write, read live on q: an active actor holding admin.users

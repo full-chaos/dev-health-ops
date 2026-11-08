@@ -141,7 +141,7 @@ type ProvisioningDeps struct {
 	Meter    metric.Meter
 	// ProfileRows is the endpoint-profile document the routes are checked against; nil is the one the binary embeds. Tests plant others.
 	ProfileRows []byte
-	// UsersAdminStores are the user-admin routes' stores (provisioning_users.go).
+	// UsersAdminStores are the user-admin routes' stores: UsersAdminRoutes reads them, ProvisioningRoutes does not.
 	UsersAdminStores
 }
 
@@ -212,7 +212,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternGrantUpdate, Handler: http.HandlerFunc(h.grantUpdate)},
 		{Method: http.MethodPost, Pattern: PatternGrantRevoke, Handler: http.HandlerFunc(h.grantRevoke)},
 	}
-	routes = h.withUsersAdminRoutes(h.withOrgRenameRoute(h.withStateRoute(routes)), rows)
+	routes = h.withOrgRenameRoute(h.withStateRoute(routes))
 	return routes, nil
 }
 

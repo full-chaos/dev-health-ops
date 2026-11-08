@@ -399,8 +399,15 @@ func buildProvFixture(t *testing.T, profileRows []byte, w *workloadIssueFixture)
 	if err != nil {
 		t.Fatal(err)
 	}
+	usersRoutes, err := UsersAdminRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs, ProfileRows: profileRows,
+		UsersAdminStores: UsersAdminStores{UsersAdmin: f.usersAdmin, PlatformRoles: f.roles}, Workload: workload,
+		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.mux = http.NewServeMux()
-	for _, route := range append(routes, readRoutes...) {
+	for _, route := range append(append(routes, readRoutes...), usersRoutes...) {
 		f.mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
 	}
 	return f

@@ -427,6 +427,7 @@
               "subcommand": { "type": "string", "enum": ["reconciler", "scheduler", "stream-runner", "worker"] },
               "runtimeProfile": { "type": "string", "enum": ["ingest", "external", "pagerduty"] },
               "extraEnv": { "type": "array", "items": { "type": "object", "required": ["name"] } },
+              "valkey": { "type": "boolean" },
               "autoscaling": {
                 "type": "object",
                 "required": ["enabled"],

@@ -29,6 +29,9 @@ spec:
     {{- if .Values.authService.migrate.enabled }}{{- $excluded = concat $excluded (list "auth-migrate") }}{{- end }}
     {{- if eq (include "dev-health.authBool" (dict "value" .Values.authService.backfill.enabled "key" "authService.backfill.enabled")) "true" }}{{- $excluded = concat $excluded (list "auth-backfill") }}{{- end }}
     {{- end }}
+    {{- if include "dev-health.valkeyOwnNetworkPolicy" . }}
+    {{- $excluded = append $excluded "valkey" }}
+    {{- end }}
     {{- if $excluded }}
     {{- /*
     CHAOS-7181: NetworkPolicies are additive, and this policy's "pod-to-pod within namespace" rule
@@ -131,5 +134,46 @@ spec:
     - Egress
   egress:
     {{- include "dev-health.networkPolicyEgress" . | trim | nindent 4 }}
+{{- end }}
+{{- if include "dev-health.valkeyOwnNetworkPolicy" . }}
+---
+{{- /*
+CHAOS-13346: Valkey admits TCP 6379 from its real clients only (dev-health.valkeyClients) and sends nothing. The release-wide policy above
+excludes the valkey pods, since its in-namespace rule would otherwise still admit every pod: NetworkPolicies add up. An empty egress list
+under policyTypes Egress is deny-all (Valkey is a leaf; the exclusion would otherwise leave its egress open).
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" . }}-valkey
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "valkey" "context" $) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "valkey" "context" $) | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  egress: []
+  {{- $valkeyClients := include "dev-health.valkeyClients" . | fromJsonArray }}
+  {{- if $valkeyClients }}
+  ingress:
+    - from:
+        {{- range $client := $valkeyClients }}
+        - podSelector:
+            matchLabels:
+              {{- include "dev-health.componentSelectorLabels" (dict "component" $client.component "context" $) | nindent 14 }}
+              {{- if $client.group }}
+              dev-health.io/worker-group: {{ $client.group }}
+              {{- end }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 6379
+  {{- else }}
+  ingress: []
+  {{- end }}
 {{- end }}
 {{- end }}

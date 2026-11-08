@@ -1215,6 +1215,8 @@ goWorkers:
       # trickle.
       autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 5, cooldownPeriod: 300, pollingInterval: 30}
     - name: sync
+      # CHAOS-13346: opens a Valkey client; admitted by the Valkey NetworkPolicy and given VALKEY_URI.
+      valkey: true
       subcommand: worker
       queues: [sync]
       queueConcurrency: {sync: 4}
@@ -1249,6 +1251,8 @@ goWorkers:
     # cannot start while provider routes are default-off: selected queues must
     # equal constructed queues, and no provider handler is built (CHAOS-3926).
     - name: sync-provider
+      # CHAOS-13346: opens a Valkey client; admitted by the Valkey NetworkPolicy and given VALKEY_URI.
+      valkey: true
       subcommand: worker
       queues: [sync_provider]
       queueConcurrency: {sync_provider: 2}
@@ -1279,6 +1283,8 @@ goWorkers:
     # group with no stream profile omits `runtimeProfile` (never `""`, which the
     # values schema refuses).
     - name: stream-external
+      # CHAOS-13346: opens a Valkey client; admitted by the Valkey NetworkPolicy and given VALKEY_URI.
+      valkey: true
       subcommand: stream-runner
       runtimeProfile: external
       replicas: 1
@@ -1286,6 +1292,8 @@ goWorkers:
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: false}
     - name: stream-ingest
+      # CHAOS-13346: opens a Valkey client; admitted by the Valkey NetworkPolicy and given VALKEY_URI.
+      valkey: true
       subcommand: stream-runner
       runtimeProfile: ingest
       replicas: 1
@@ -1295,6 +1303,8 @@ goWorkers:
     # Not a singleton: PagerDuty entries are exclusive per consumer through the
     # group PEL and duplicates are fenced by the receipt claim token.
     - name: stream-pagerduty
+      # CHAOS-13346: opens a Valkey client; admitted by the Valkey NetworkPolicy and given VALKEY_URI.
+      valkey: true
       subcommand: stream-runner
       runtimeProfile: pagerduty
       replicas: 1
@@ -1971,6 +1981,11 @@ valkey:
     enabled: false
     secretName: ""
     secretKey: users.acl
+  # -- CHAOS-13346: with networkPolicy.enabled, the in-chart Valkey gets its own NetworkPolicy: TCP 6379 from its real clients only
+  #    (dev-health.valkeyClients: go-api, web, auth-service, and each goWorkers group with `valkey: true`), no egress, and it leaves the
+  #    release-wide policy (whose in-namespace rule admits every pod). false puts Valkey back under the release-wide policy.
+  networkPolicy:
+    enabled: true
 
 # =============================================================================
 # In-cluster ClickHouse (optional — disable for managed ClickHouse)

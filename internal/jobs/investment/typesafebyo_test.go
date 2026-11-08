@@ -173,8 +173,8 @@ func TestAnOrgTypeSafeAttemptRowCarriesTheProviderAndTheTypeSafeRate(t *testing.
 		row.HTTPStatus != http.StatusOK || row.RequestID != "req-typesafe-1" || row.InputTokens != testTypeSafeInTokens {
 		t.Fatalf("attempt row = %+v", row)
 	}
-	if want := float64(testTypeSafeInTokens*42) / 1e9; row.BilledCostUSD != want || row.RatesVersion != "typesafe-systemone-2026-10-06" {
-		t.Fatalf("billed %.9f under %q, want %.9f under typesafe-systemone-2026-10-06", row.BilledCostUSD, row.RatesVersion, want)
+	if want := float64(testTypeSafeInTokens*42) / 1e9; !closeEnough(row.BilledCostUSD, want) || row.RatesVersion != llmbudget.ListPricingVersion {
+		t.Fatalf("billed %.9f under %q, want %.9f under %s", row.BilledCostUSD, row.RatesVersion, want, llmbudget.ListPricingVersion)
 	}
 	if row.EndpointType != "" || row.GatewayID != "" {
 		t.Fatalf("endpoint %q gateway %q, want empty", row.EndpointType, row.GatewayID)

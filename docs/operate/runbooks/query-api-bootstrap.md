@@ -127,7 +127,7 @@ Or use `--patch-file` to avoid credential exposure.
 
 **Roll sheet: make no routing writes during the roll.** Do not run `enable`, `disable` or `seed` between the migration and the new query-api serving: an old tools image writes the old table.
 
-`seed`, `enable` and `disable` take the roots by name (`-operations mcp:<root>`, or `all-mcp`): `seed` writes a shadow decision, `enable` a canary decision, `disable` any other mode. They refuse a catalog operation: it has no routing state to write. Nothing is typed but the root names; the schema digest and the build come from the running query-api's `/registry` and `/buildinfo`. Run from the tools image of the same cut, with the Postgres DSN and the envelope key in the environment (never argv):
+`seed`, `enable` and `disable` take the roots by name (`-operations mcp:<root>`, or `all-mcp`): `seed` writes a shadow decision, `enable` a canary decision, `disable` any other mode. They refuse a catalog operation: it has no routing state to write. Nothing is typed but the root names; the schema digest and the build come from the running query-api's `/registry` and `/buildinfo`. Run from the tools image of the same cut, with the Postgres DSN and `GO_API_ROUTING_ACCESS_TOKEN_FILE` in the environment (never argv). That variable names a 0600 file holding a platform admin's user access token: `/buildinfo` serves a platform admin only. `seed` and `enable` record that token's subject and the class `user_access_token` on each audit row (revision 0164 admits the class; older rows keep `effective_principal_envelope`). `disable` presents no credential and records `operator_direct`. Never stage a production token outside the cluster:
 
 ```bash
 dho goapi routing seed -operations mcp:hotspots \
@@ -166,14 +166,13 @@ set `users.is_active = false` to revoke it everywhere.
 Real proof run after the metrics drain completes. Tools image carries the `dho` operator binary built from the same `dev-health-api` digest.
 
 ```bash
-# From tools Pod. GO_API_ENVELOPE_PRIVATE_KEY reaches this Pod's own
-# environment via secretKeyRef (same Secret/key the api Deployment reads),
-# and `dho goapi prove` mints the envelope IN PROCESS from it -- calling
-# internal/mintcli/envelope directly, no subprocess. JWT_SECRET_KEY and
-# POSTGRES_URI reach it the same way, and the edge access token for the
-# proof service principal is minted in process too
-# (internal/mintcli/edgetoken).
+# From tools Pod. The proof credential is a platform admin's user access
+# token in a 0600 file (-proof-access-token-file, or
+# GO_API_PROVE_PROOF_ACCESS_TOKEN_FILE), read on each use. JWT_SECRET_KEY and
+# POSTGRES_URI reach the Pod via secretKeyRef, and the edge access token for
+# the proof service principal is minted in process (internal/mintcli/edgetoken).
 dho goapi prove \
+  -proof-access-token-file=/run/proof/access-token \
   -registry-url=http://dev-health-query-api:8000/registry \
   -buildinfo-url=http://dev-health-query-api:8000/buildinfo \
   -edge-url=http://dev-health-ops.default.svc.cluster.local:8000/graphql \
@@ -184,7 +183,7 @@ dho goapi prove \
   -since-utc=<baseline-start RFC3339> -until-utc=<proof-end RFC3339>
 ```
 
-Both credentials are minted automatically, in process -- no flag names a helper or a path. `-documents` is the registry dump baked into the tools image at the same commit as the binary.
+The edge credential is minted in process; the proof credential is read from the file, never from argv. `-documents` is the registry dump baked into the tools image at the same commit as the binary.
 
 The REST routes are proven the same way from the same Pod:
 
@@ -192,14 +191,14 @@ The REST routes are proven the same way from the same Pod:
 dho goapi rest-prove \
   -query-api-url=http://dev-health-query-api:8000 \
   -python-api-url=http://dev-health-ops.default.svc.cluster.local:8000 \
-  -candidate-bearer-exec='["mint-envelope","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
+  -candidate-access-token-file=/run/proof/access-token \
   -baseline-bearer-exec='["mint-edge-token","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
   -org=c6a38355-dad6-42e4-8cc9-4c712450827d \
   -recorded-by=<operator> -review-evidence="<why this run>" \
   -artifact-dir=/tmp/proof/artifacts -report=/tmp/proof/rest-report.json
 ```
 
-`dho goapi rest-prove`'s `-candidate-bearer-exec`/`-baseline-bearer-exec` still name an ALLOWLISTED HELPER NAME (`mint-envelope`, `mint-edge-token`), never a path -- these mint the credential IN PROCESS, calling `internal/mintcli`'s own packages directly rather than exec'ing a subprocess, so no secret ever crosses a process boundary at all.
+`dho goapi rest-prove` reads the query-api candidate with the platform admin's user access token of `-candidate-access-token-file`. `-baseline-bearer-exec` (and `-candidate-bearer-exec` under `-service=dho-api`) names the ALLOWLISTED HELPER `mint-edge-token`, never a path; it mints IN PROCESS, so no secret crosses a process boundary.
 
 **Prover build.** `dho goapi prove` and `dho goapi rest-prove` carry every declaration, shape and corpus entry they apply compiled in, so both print `prover_build=<own commit> ... candidate_build=<commit /buildinfo names> prover_build_skew=<bool>` first and refuse to measure when the two commits differ or the prover carries no commit. A released image is built with `-buildvcs=false` and takes its commit from `-ldflags`, so it reports `prover_build_modified=false`; the modified arm names a locally built, VCS-stamped prover, and the commit comparison is what guards a released one. Run the tools image tagged with the candidate's own commit (`sha-<first 7>`). `-allow-prover-build-skew` measures anyway; the report then records `prover_build_skew_allowed: true` beside both commits.
 
@@ -254,7 +253,7 @@ response carries the candidate build. A match removes its dataset; anything else
 Only an MCP class operation (`mcp:<root>`) is enabled, with no proof run in front of it. A catalog operation is served by query-api whenever it is registered, and `enable` refuses it. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Roots are one comma-separated value (or `all-mcp`):
 
 ```bash
-GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
+GO_API_ROUTING_ACCESS_TOKEN_FILE=<path of a 0600 platform-admin token file> dho goapi routing enable \
   -registry-url  http://dev-health-query-api:8000/registry \
   -buildinfo-url http://dev-health-query-api:8000/buildinfo \
   -operations mcp:<root1>,mcp:<root2> \

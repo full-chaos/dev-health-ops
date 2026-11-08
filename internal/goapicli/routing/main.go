@@ -70,19 +70,13 @@ import (
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
-// bearerEnvVar names the environment variable carrying the effective-
-// principal envelope /buildinfo checks. The VALUE never appears in
-// output.
+// accessTokenFileEnvVar names the environment variable holding the PATH of the file the operator stages with a
+// platform admin's user access token (typ at+jwt), the credential seed and enable present to /buildinfo, which
+// serves a platform admin only. The token's VALUE never appears in output; the file is read on each use.
 //
-// It is the ENVELOPE, not the edge access token: measured on the deployed
-// stack, an access token gets 401 on /buildinfo and 200 on the Python
-// edge, and the envelope gets the reverse. They are different credential
-// kinds checked by different verifiers.
-//
-// It is an environment variable and not a flag because a flag value
-// reaches `ps`, /proc/<pid>/cmdline and shell history (the class
-// CHAOS-5511 tracks for the prover).
-const bearerEnvVar = "GO_API_ROUTING_BEARER"
+// An environment variable and not a flag, as the bearer before it: a credential path on argv reaches `ps` and shell
+// history next to every other flag, and keeping it beside the DSN keeps one place for an operator's secrets.
+const accessTokenFileEnvVar = "GO_API_ROUTING_ACCESS_TOKEN_FILE"
 
 const usage = `dho goapi routing <verb> [flags]
 
@@ -344,27 +338,11 @@ type commonFlags struct {
 	timeout        time.Duration
 }
 
-// buildInfoCredential is the credential this command presents to
-// /buildinfo, in one place so a test can exercise the PRODUCTION
-// construction rather than rebuild it and prove only that it agrees with
-// itself.
-//
-// A Credential rather than a header map: FetchBuildIdentity's parameter
-// changed in CHAOS-5479, because one credential cannot satisfy both
-// planes -- an access token gets 200 on the Python edge and 401 on
-// /buildinfo, and the envelope gets the reverse. This command already
-// documents that at bearerEnvVar and already carries the ENVELOPE, so
-// this is the same value in the type the function now takes.
-//
-// Three things must all be right and each is independently wrong-able:
-// the header NAME (/buildinfo reads Authorization), the `Bearer ` scheme
-// prefix (without it the value is not a bearer credential at all), and
-// the `kind` string, which is what names the credential in a 401 without
-// printing it. StaticCredential also refuses an empty or whitespace-only
-// value at the moment of use, so the flag check above gains a second
-// floor rather than losing one.
-func buildInfoCredential(bearer string) *goapiproof.Credential {
-	return goapiproof.StaticCredential("Authorization", "effective-principal envelope", "Bearer "+bearer)
+// buildInfoCredential is the credential this command presents to /buildinfo, in one place so a test can exercise the
+// PRODUCTION construction: the user access token of the file at path, read on each use, installed as `Authorization:
+// Bearer`, and named by its kind (never its value) in a refusal.
+func buildInfoCredential(path string) *goapiproof.Credential {
+	return goapiproof.UserAccessTokenFileCredential("platform-admin user access token", "routing access token", path)
 }
 
 // requireProvenance refuses a WRITE with no durable who/why, and
@@ -420,7 +398,7 @@ const postgresURIEnvVar = "POSTGRES_URI"
 //
 // A password reaching stderr is a password reaching CI logs, scrollback
 // and anything that scrapes them. It is the same class as the -bearer
-// flag this command already refuses to have (see bearerEnvVar) and the
+// flag this command already refuses to have (see accessTokenFileEnvVar) and the
 // same class as the URL leaks r3/r4 found in the endpoint sanitiser: a
 // value nobody chose to print, printed by a helper that does not know
 // what it is holding.
@@ -457,7 +435,7 @@ const queryAPIURLEnvVar = "GO_API_QUERY_API_URL"
 // default to a HARDCODED `http://localhost:8090/...`, INDEPENDENTLY of
 // each other -- an operator who forgets just ONE of the two flags would
 // otherwise silently send that half of the preflight, and for
-// `-buildinfo-url` specifically the effective-principal envelope too, to
+// `-buildinfo-url` specifically the routing credential too, to
 // whatever happens to be listening on localhost:8090 (a port-forward to
 // another environment, a stray local process, or on a shared host any
 // unprivileged process bound to 127.0.0.1:8090) rather than a refusal.
@@ -470,8 +448,8 @@ const queryAPIURLEnvVar = "GO_API_QUERY_API_URL"
 // hardcoded localhost:8090 default (build cccc..., nothing "deployed"
 // there). `enable` with no URL flags at all wrote `flowMatrix|cccc...`,
 // mode=canary, exit=0 -- the row named a build the deployed process never
-// ran, and the 8090 stub's log showed the effective-principal envelope
-// reached IT (`/buildinfo auth=yes`), not the process
+// ran, and the 8090 stub's log showed the routing credential (then the
+// effective-principal envelope) reached IT (`/buildinfo auth=yes`), not the process
 // GO_API_QUERY_API_URL pointed at.
 //
 // Deriving BOTH routes from the SAME env-var base closes the silent-
@@ -480,7 +458,7 @@ const queryAPIURLEnvVar = "GO_API_QUERY_API_URL"
 // two routes across different processes, silently, with no second flag
 // named on the command line at all. Executed: `-registry-url <A>` with
 // GO_API_QUERY_API_URL=<B> read the registry from A and sent the
-// effective-principal envelope to, and took the build from, B -- `enable`
+// routing credential to, and took the build from, B -- `enable`
 // wrote a row naming B's build under A's digests, exit 0. This low-level
 // function is called ONLY through resolveQueryAPIEndpoints (below),
 // which refuses that exact mix; it is kept as the single-route primitive
@@ -669,33 +647,27 @@ func (c *commonFlags) requirePostgres() error {
 	return nil
 }
 
-// envelopeCredential reads the ENVELOPE from its named environment
-// variable and hands back the credential every /buildinfo read carries.
+// accessTokenCredential reads the path from accessTokenFileEnvVar, checks once that the file holds a user access
+// token, and hands back the credential every /buildinfo read carries. The checks stay here rather than being left to
+// the credential's refusal at the moment of use, because "you never set the file" is a setup mistake with a named fix
+// where a refusal at use reads as a transport problem. Both floors are kept.
 //
-// The env-var check stays here rather than being left to the credential's
-// own empty-value refusal, because the two failures are different
-// sentences to an operator: "you never set GO_API_ROUTING_BEARER" is a
-// setup mistake with a named fix, where the credential's refusal at the
-// moment of use reads as a transport problem. Both floors are kept.
-//
-// STATIC rather than minted, and that is a CONDITION on this file: each
-// verb reads /buildinfo exactly ONCE, before it opens Postgres, so a
-// value captured here cannot go stale mid-run. If a second /buildinfo
-// read is ever added to `enable` or `repoint`, this must become a minted
-// credential with a refresh, and a static one becomes a defect.
-//
-// CHAOS-5505 does NOT widen this to also return the raw bearer: the
-// credential's whole design (internal/goapiproof/credential.go) is that
-// its value is asked for per request and never handed back to a caller.
-// A verb that needs the envelope's `sub` for its audit row calls
-// Credential.EnvelopeSubject, which stays inside package goapiproof --
-// the raw token still never reaches cmd/go-api-routing.
-func envelopeCredential() (*goapiproof.Credential, error) {
-	bearer := envsecrets.GetenvNamed(bearerEnvVar)
-	if bearer == "" {
-		return nil, refuse("no credential: set %s to an effective-principal ENVELOPE, which is what /buildinfo checks (the VALUE is never printed by this command)", bearerEnvVar)
+// The credential's value is asked for per request and never handed back to a caller (internal/goapiproof
+// credential.go): a verb that needs the token's `sub` for its audit row calls Credential.TokenSubject, inside package
+// goapiproof.
+func accessTokenCredential() (*goapiproof.Credential, error) {
+	path := strings.TrimSpace(envsecrets.GetenvNamed(accessTokenFileEnvVar))
+	if path == "" {
+		return nil, refuse("no credential: set %s to the path of a 0600 file holding a platform admin's user access token, which is what /buildinfo serves (the VALUE is never printed by this command)", accessTokenFileEnvVar)
 	}
-	return buildInfoCredential(bearer), nil
+	raw, err := os.ReadFile(path) // #nosec G304 -- operator-supplied token file path, by design
+	if err != nil {
+		return nil, refuse("no credential: the file %s names cannot be read", accessTokenFileEnvVar)
+	}
+	if err := goapiproof.ValidateUserAccessTokenShape(strings.TrimSpace(string(raw))); err != nil {
+		return nil, refuse("the file %s names is %v; /buildinfo serves a platform admin's user access token", accessTokenFileEnvVar, err)
+	}
+	return buildInfoCredential(path), nil
 }
 
 // httpClient is the goapiproof leg client: it refuses redirects and never
@@ -749,8 +721,8 @@ func sanitizeEndpointURL(flagName, raw string) (string, error) {
 		authority = authority[:slash]
 	}
 	if strings.Contains(authority, "@") {
-		return "", refuse("%w: %s carries userinfo. These routes authenticate with the effective-principal envelope in %s, and a URL credential would be printed verbatim by any transport error on the way out",
-			ErrURLCarriesCredentials, flagName, bearerEnvVar)
+		return "", refuse("%w: %s carries userinfo. These routes authenticate with the user access token of the file in %s, and a URL credential would be printed verbatim by any transport error on the way out",
+			ErrURLCarriesCredentials, flagName, accessTokenFileEnvVar)
 	}
 
 	parsed, err := url.Parse(trimmed)
@@ -767,8 +739,8 @@ func sanitizeEndpointURL(flagName, raw string) (string, error) {
 	case parsed.Host == "":
 		return "", refuse("%s names no host", flagName)
 	case parsed.User != nil:
-		return "", refuse("%w: %s carries userinfo. These routes authenticate with the effective-principal envelope in %s",
-			ErrURLCarriesCredentials, flagName, bearerEnvVar)
+		return "", refuse("%w: %s carries userinfo. These routes authenticate with the user access token of the file in %s",
+			ErrURLCarriesCredentials, flagName, accessTokenFileEnvVar)
 	case parsed.RawQuery != "" || parsed.ForceQuery:
 		return "", refuse("%w: %s carries a query string. GET /registry and GET /buildinfo take no parameters, so a query can only be carrying something -- and it would be printed verbatim by any transport error",
 			ErrURLCarriesCredentials, flagName)

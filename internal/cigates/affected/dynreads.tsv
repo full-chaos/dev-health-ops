@@ -364,12 +364,15 @@ internal/goapicli/prove	dryrun_help_test.go
 internal/goapicli/prove	e2e_test.go
 internal/goapicli/prove	goedge_e2e_test.go
 internal/goapicli/prove	legcontract_test.go
+internal/goapicli/prove	main.go
 internal/goapicli/restprove	credentialecho_test.go
 internal/goapicli/restprove	iterating_produces_test.go
+internal/goapicli/restprove	main.go
 internal/goapicli/restprove	main_test.go
 internal/goapicli/restprove	persondrilldownprs_capture_test.go
 internal/goapicli/restprove	rundeadline_test.go
 internal/goapicli/routing	docs_guards_test.go
+internal/goapicli/routing	main.go
 internal/goapiproof	artifact.go
 internal/goapiproof	catalog_path_wiring_test.go
 internal/goapiproof	credentialecho_test.go

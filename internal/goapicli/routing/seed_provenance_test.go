@@ -10,7 +10,7 @@ import (
 // write verb that calls requireProvenance must refuse it, before anything else
 // (no database, no credential) is consulted.
 func TestEveryWriteVerbRefusesAControlCharacterInRecordedBy(t *testing.T) {
-	t.Setenv(bearerEnvVar, "")
+	t.Setenv(accessTokenFileEnvVar, "")
 	t.Setenv("POSTGRES_URI", "")
 	forged := "lane\ngo_api_routing.seeded operation=forged mode_after=primary"
 	for name, argv := range map[string][]string{

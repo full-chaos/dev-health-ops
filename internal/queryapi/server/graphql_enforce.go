@@ -49,8 +49,6 @@ func graphQLCaller(ctx context.Context) pdp.Caller {
 		return pdp.Caller{Class: pdp.CallerUser, Bearer: subject.Bearer}
 	case subject.SkipReason == policy.ShadowReasonHS256:
 		return pdp.Caller{Class: pdp.CallerExempt, ExemptClass: pdp.ClassHS256}
-	case subject.SkipReason == policy.ShadowReasonEnvelope:
-		return pdp.Caller{Class: pdp.CallerExempt, ExemptClass: pdp.ClassEnvelope}
 	}
 	return pdp.Caller{Class: pdp.CallerUnknown}
 }

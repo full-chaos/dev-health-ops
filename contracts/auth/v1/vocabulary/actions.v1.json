@@ -254,6 +254,7 @@
       "risk_class": "high",
       "cache_class": "none",
       "impersonation": "denied",
+      "repository_scope": "filtered",
       "platform_admin": "allowed"
     },
     {

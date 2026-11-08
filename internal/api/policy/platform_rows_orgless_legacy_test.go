@@ -116,3 +116,28 @@ func TestEveryPlatformRowKeepsTheLegacyOrglessAnswerWithTheAdminCellOn(t *testin
 		}
 	}
 }
+
+// Known stricter (ci/auth_exception_ledger.tsv orgless-local-flag-pdp-deny): with the admin cell on, the decision
+// point's platform roles are the authority. A caller with no organization whose local superuser flag is set but whom
+// the decision point refuses gets the legacy orgless 403; with the cell off the local flag serves it.
+func TestOrglessLocalFlagRefusedByTheDecisionPointIsKnownStricter(t *testing.T) {
+	for _, pattern := range profilePlatformRows(t) {
+		t.Run(pattern, func(t *testing.T) {
+			serve := func(enf *Enforcer) response {
+				guard := NewGuard(routed(t, legacyStore(true, ""), &fakeValidator{result: orglessAccessClaims()}), quiet())
+				guard.SetEnforcer(enf)
+				return serveCell(platformRowsMux(guard), pattern, cellBearer())
+			}
+			base := serve(nil)
+			off := serve(seamEnforcer(t, newDenyingFake(t), productionGoAPIRows(t), "teams"))
+			on := serve(seamEnforcer(t, newDenyingFake(t), productionGoAPIRows(t), "admin"))
+			equalToMain(t, off, base)
+			if off.status != http.StatusOK {
+				t.Fatalf("cell off %d %q, want the local flag's 200", off.status, off.body)
+			}
+			if on.status != http.StatusForbidden || on.body != `{"detail":"Organization context required"}` {
+				t.Fatalf("cell on %d %q, want 403 Organization context required", on.status, on.body)
+			}
+		})
+	}
+}

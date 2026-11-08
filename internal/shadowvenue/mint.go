@@ -61,8 +61,8 @@ func Mint(ctx context.Context, d *Driver, venue Venue, names []string, outDir st
 		if err != nil {
 			return nil, fmt.Errorf("mint: the token of %s: %w", name, err)
 		}
-		if claims.Sub != WirePrincipal(p.UUID) || claims.Org != venue.Orgs[p.Org] {
-			return nil, fmt.Errorf("mint: the token of %s carries sub %s and org %s, not the principal's %s and %s", name, claims.Sub, claims.Org, WirePrincipal(p.UUID), venue.Orgs[p.Org])
+		if claims.Sub != WirePrincipal(p.UUID) || claims.Org != venue.orgClaim(p.Org) {
+			return nil, fmt.Errorf("mint: the token of %s carries sub %s and org %s, not the principal's %s and %s", name, claims.Sub, claims.Org, WirePrincipal(p.UUID), venue.orgClaim(p.Org))
 		}
 		tokens[name] = token
 		results = append(results, MintResult{Name: name, Sub: claims.Sub, Org: claims.Org, Exp: claims.Exp})

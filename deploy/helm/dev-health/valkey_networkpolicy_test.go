@@ -233,7 +233,7 @@ func TestValkeyPolicyOffChangesNothing(t *testing.T) {
 
 // valkeyBaseSha is the ops main commit this change started from. The gate renders NetworkPolicy objects only, so against that
 // chart: gate off is byte-equal, and gate on differs in NetworkPolicy manifests alone (no env, no checksum/config, no ConfigMap).
-const valkeyBaseSha = "5b57fe79f46531f4e25cefbd056454df218c0778"
+const valkeyBaseSha = "5b57fe79f46531f4e25cefbd056454df218c0778" // gitleaks:allow
 
 func TestValkeyGateRendersNetworkPolicyObjectsOnly(t *testing.T) {
 	ci := os.Getenv("CI") != ""

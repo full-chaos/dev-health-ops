@@ -158,7 +158,7 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		}
 		// A route whose namespace is switched on is decided by the decision point, not by the legacy checks below.
 		switch verdict := g.enforceVerdict(r, user, bearer, level == Superuser && gt.kind == gatePlatform, gt, platform); verdict {
-		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused, enforceSessionRowUnavailable:
+		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused, enforceSessionRowUnavailable, enforceDenyNoOrg:
 			writeEnforceRefusal(w, level, verdict)
 			return
 		case enforceAllow:
@@ -174,12 +174,12 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			return platform.holds(r.Context(), action)
 		}
 		refuse := func(err error) {
-			g.observeShadow(r, caller, bearer, false)
+			g.observeShadow(r, caller, bearer, false, gt)
 			WritePlatformDecisionRefusal(w, err)
 		}
 		if user.OrgID == "" && !user.Holds(gt.orglessAction()) && !OrglessMayReach(r.Method, r.URL.Path) {
-			g.observeShadow(r, caller, bearer, false)
-			WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
+			g.observeShadow(r, caller, bearer, false, gt)
+			WriteDetail(w, http.StatusForbidden, msgOrgContextRequired, nil)
 			return
 		}
 		switch level {
@@ -202,13 +202,13 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				admitted = held
 			}
 			if !admitted {
-				g.observeShadow(r, caller, bearer, false)
+				g.observeShadow(r, caller, bearer, false, gt)
 				WriteDetail(w, http.StatusForbidden, "Admin access required", nil)
 				return
 			}
 			if level == AdminOrg && user.OrgID == "" {
-				g.observeShadow(r, caller, bearer, false)
-				WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
+				g.observeShadow(r, caller, bearer, false, gt)
+				WriteDetail(w, http.StatusForbidden, msgOrgContextRequired, nil)
 				return
 			}
 		case Superuser:
@@ -221,7 +221,7 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				}
 			}
 			if !held {
-				g.observeShadow(r, caller, bearer, false)
+				g.observeShadow(r, caller, bearer, false, gt)
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
 			}
@@ -235,13 +235,13 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				if session != nil {
 					g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
 						slog.String("path", r.Pattern), slog.String("action", gt.action))
-					g.observeShadowAs(r, caller, bearer, false, true)
+					g.observeShadowAs(r, caller, bearer, false, true, gt)
 					WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
 					return
 				}
 			}
 		}
-		g.observeShadow(r, caller, bearer, true)
+		g.observeShadow(r, caller, bearer, true, gt)
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
 	}))
 }

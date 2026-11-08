@@ -341,14 +341,20 @@ type ShadowObservation struct {
 	SkipReason string
 	// LegacyAllowed is the legacy check's answer.
 	LegacyAllowed bool
+	// AdminOr: the route is mounted admin-or (an organization admin of the token's organization passes too). Its
+	// platform row is judged as the Enforcer decides it: one batch, adminOrRequests read by adminOrAnswer.
+	AdminOr bool
 	// served: the organization a go-api path or query parameter names for the handler to serve (servedOrgOf).
 	served servedOrg
 }
 
 // shadowCall is everything the goroutine needs: values only, no request.
 type shadowCall struct {
-	ctx           context.Context
-	request       pep.Request
+	ctx     context.Context
+	request pep.Request
+	// adminOr, when set, is the admin-or batch asked instead of request; read is the request's method class.
+	adminOr       []pep.Request
+	read          bool
 	row           ShadowRow
 	pattern       string
 	caller        string
@@ -404,7 +410,11 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 		s.record(ctx, o.Pattern, row, caller, resultDropped, ShadowReasonNone, "")
 		return
 	}
-	call := shadowCall{ctx: context.WithoutCancel(ctx), request: request, row: row, pattern: o.Pattern, caller: caller, legacyAllowed: o.LegacyAllowed}
+	call := shadowCall{ctx: context.WithoutCancel(ctx), request: request, row: row, pattern: o.Pattern, caller: caller, legacyAllowed: o.LegacyAllowed,
+		read: o.Read}
+	if o.AdminOr && row.ResourceType == policycatalog.ScopePlatform {
+		call.adminOr = adminOrRequests(o.Bearer, row.Action, org)
+	}
 	s.wg.Add(1)
 	go s.run(call)
 }
@@ -434,8 +444,8 @@ func (s *Shadow) run(call shadowCall) {
 	}()
 	ctx, cancel := context.WithTimeout(call.ctx, s.timeout)
 	defer cancel()
-	decision := s.decider.Decide(ctx, call.request)
-	if decision.Local() {
+	decision, allowed, verdict := s.ask(ctx, call)
+	if !verdict {
 		s.record(call.ctx, call.pattern, call.row, call.caller, resultError, ShadowReasonNone, "")
 		if s.logAllowed(len(shadowClasses)) {
 			s.logger.WarnContext(call.ctx, "api shadow pdp: no verdict", slog.String("namespace", call.row.Namespace),
@@ -443,7 +453,7 @@ func (s *Shadow) run(call shadowCall) {
 		}
 		return
 	}
-	if decision.Allowed() == call.legacyAllowed {
+	if allowed == call.legacyAllowed {
 		s.record(call.ctx, call.pattern, call.row, call.caller, resultMatch, ShadowReasonNone, decision.DecisionID())
 		return
 	}
@@ -454,9 +464,21 @@ func (s *Shadow) run(call shadowCall) {
 		s.logger.WarnContext(call.ctx, "api shadow pdp: mismatch with the legacy guard",
 			slog.String("namespace", call.row.Namespace), slog.String("caller", call.caller), slog.String("class", class),
 			slog.String("action", call.row.Action), slog.String("route", call.pattern),
-			slog.String("legacy", verdictWord(call.legacyAllowed)), slog.String("shadow", verdictWord(decision.Allowed())),
+			slog.String("legacy", verdictWord(call.legacyAllowed)), slog.String("shadow", verdictWord(allowed)),
 			slog.String("reason_code", string(decision.Reason())), slog.String("decision_id", decision.DecisionID()))
 	}
+}
+
+// ask asks the decision point the call's question: the admin-or batch when the call has one, else its one request.
+// decision is the answer that decides; verdict is false when there is none.
+func (s *Shadow) ask(ctx context.Context, call shadowCall) (decision pep.Decision, allowed, verdict bool) {
+	if len(call.adminOr) > 0 {
+		decisions := s.decider.DecideBatch(ctx, call.adminOr)
+		allowed, decision, verdict = adminOrAnswer(call.adminOr, decisions, goAPIRoutesWithoutRepositoryDimension[call.pattern], call.read)
+		return decision, allowed, verdict
+	}
+	decision = s.decider.Decide(ctx, call.request)
+	return decision, decision.Allowed(), !decision.Local()
 }
 
 // shadowResultLine: one INFO line per shadowed request; decision_id only when the decision point answered.

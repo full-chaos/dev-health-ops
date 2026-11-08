@@ -285,7 +285,7 @@ func newOpportunitiesPostHandler(client home.QueryClient) http.HandlerFunc {
 func writeOpportunitiesResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *opportunities.Response) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: opportunities: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }

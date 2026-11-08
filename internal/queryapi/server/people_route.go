@@ -152,7 +152,7 @@ func buildPeopleSearchRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler
 func writePeopleSearchResponse(w http.ResponseWriter, r *http.Request, orgID string, resp []people.SearchResult) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: people: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }

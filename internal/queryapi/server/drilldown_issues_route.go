@@ -145,7 +145,7 @@ func buildDrilldownIssuesRoute(getenv getenvFunc, edgeUsers edgeUserStore) (hand
 func writeDrilldownIssuesResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *drilldown.IssuesResponse) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: drilldown: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }

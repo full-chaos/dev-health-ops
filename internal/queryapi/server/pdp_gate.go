@@ -4,7 +4,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
@@ -42,7 +41,7 @@ func writePDPDenied(w http.ResponseWriter, r *http.Request, component string, er
 	if !acceptableCorrelationID(requestID) {
 		requestID = ""
 	}
-	rid := strings.ReplaceAll(strings.ReplaceAll(requestID, "\n", ""), "\r", "")
+	rid := logSafeRequestID(requestID)
 	slog.WarnContext(r.Context(), "query-api: the PDP refused the request", slog.String("component", component),
 		slog.String("request_id", rid), slog.String("reason", reason), slog.String("route_class", class), slog.Bool("unavailable", local))
 	if local {

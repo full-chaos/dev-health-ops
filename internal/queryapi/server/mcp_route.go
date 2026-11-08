@@ -619,7 +619,7 @@ func mcpAuthenticate(r *http.Request) (authctx.Claims, int, string) {
 			"caller_class", mcpCallerClass, "claims", strings.Join(elevated, ","), "remote_addr", r.RemoteAddr)
 		return authctx.Claims{}, http.StatusForbidden, mcpReasonElevatedClaim
 	}
-	return authctx.Claims{OrgID: claims.OrgID}, 0, ""
+	return legacyClaims(claims.OrgID), 0, ""
 }
 
 // mcpRootFields lists the operation's root field names in order, following
@@ -1096,7 +1096,7 @@ func (req *mcpRequest) emit(r *http.Request) {
 	mcpRequestDuration.Record(r.Context(), duration.Seconds(), attrs)
 	log.Printf("query-api: mcp request: caller_class=%s outcome=%s reason=%s status=%d document_digest=%s root_fields=%s aliases=%d depth=%d complexity=%d clickhouse_queries=%d duration_ms=%d request_id=%s",
 		mcpCallerClass, req.outcome, req.reason, req.status, req.documentDigest, strings.Join(roots, ","),
-		req.aliases, req.depth, req.complexity, req.clickHouse, duration.Milliseconds(), envelopeRequestID(r))
+		req.aliases, req.depth, req.complexity, req.clickHouse, duration.Milliseconds(), logSafeRequestID(envelopeRequestID(r)))
 }
 
 var (

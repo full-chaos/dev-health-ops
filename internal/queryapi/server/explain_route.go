@@ -172,7 +172,7 @@ func buildExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http
 // bytes, matching writeDrilldownPRsResponse's own established path.
 func writeExplainResponse(w http.ResponseWriter, orgID, requestID string, resp *explain.Response) {
 	if err := writeModelResponse(w, resp); err != nil {
-		log.Printf("query-api: explain: encode response failed: org_id=%s request_id=%s err=%v", orgID, requestID, err)
+		log.Printf("query-api: explain: encode response failed: org_id=%s request_id=%s err=%v", orgID, logSafeRequestID(requestID), err)
 		writeModelFailure(w)
 	}
 }
@@ -222,6 +222,10 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 			// this handler -- see authenticateRESTRequest's own doc
 			// comment for the three real 401 shapes this route answers.
 			writeRESTUnauthorized(w, r, "explain", "Not authenticated")
+			return
+		}
+		org, ok := restScopeOrg(w, r, "explain", claims)
+		if !ok {
 			return
 		}
 
@@ -281,7 +285,7 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -295,7 +299,7 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 
 		startDay, endDay, compareStart, compareEnd, windowErr := explainTimeWindow(explainTimeFilterMap(rangeDays, compareDays, startDatePtr, endDatePtr))
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "explain", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "explain", org)
 			return
 		}
 
@@ -318,15 +322,15 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 			WhatRepos: nil,
 		}
 
-		resp, err := explain.BuildExplainResponse(r.Context(), reader, claims.OrgID, params)
+		resp, err := explain.BuildExplainResponse(r.Context(), reader, org, params)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "explain", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "explain", org, err)
 			return
 		}
 
 		// Python sets this header only on the GET route (main.py:562-563).
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
-		writeExplainResponse(w, claims.OrgID, envelopeRequestID(r), resp)
+		writeExplainResponse(w, org, envelopeRequestID(r), resp)
 	}
 }
 
@@ -344,6 +348,10 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "explain", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "explain", claims)
+		if !ok {
+			return
+		}
 
 		bodyBytes, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
@@ -351,7 +359,7 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 			// mid-upload) has no Python counterpart to match -- see this
 			// file's sibling REST routes for the same reasoning. Status
 			// unchanged, only the wire body's encoding.
-			writeRESTError(w, r, "explain", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "explain", org, http.StatusBadRequest, "bad request")
 			return
 		}
 
@@ -362,17 +370,17 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 		// whole-model-missing case (loc ["body"]).
 		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
 		if syntaxDetail != nil {
-			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			writePydanticValidationError(w, r, org, *syntaxDetail)
 			return
 		}
 		if bodyIsEmptyOrNull {
-			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
+			writePydanticValidationError(w, r, org, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
 		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
-			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
+			writePydanticValidationError(w, r, org, modelAttributesTypeError([]any{"body"}, decoded))
 			return
 		}
 
@@ -402,7 +410,7 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -418,7 +426,7 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 
 		startDay, endDay, compareStart, compareEnd, windowErr := explainTimeWindow(filters)
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "explain", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "explain", org)
 			return
 		}
 
@@ -433,11 +441,11 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 			WhatRepos:    whatRepos,
 		}
 
-		resp, err := explain.BuildExplainResponse(r.Context(), reader, claims.OrgID, params)
+		resp, err := explain.BuildExplainResponse(r.Context(), reader, org, params)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "explain", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "explain", org, err)
 			return
 		}
-		writeExplainResponse(w, claims.OrgID, envelopeRequestID(r), resp)
+		writeExplainResponse(w, org, envelopeRequestID(r), resp)
 	}
 }

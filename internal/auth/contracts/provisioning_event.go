@@ -170,6 +170,7 @@ type AuditAttributes struct {
 	CredentialClass               string    `json:"credential_class,omitempty"`
 	DecisionID                    string    `json:"decision_id,omitempty"`
 	DecisionReasonCode            string    `json:"decision_reason_code,omitempty"`
+	DecisionInternalReason        string    `json:"decision_internal_reason,omitempty"`
 	ActionKey                     string    `json:"action_key,omitempty"`
 	Actions                       []string  `json:"actions,omitempty"`
 	Amr                           []string  `json:"amr,omitempty"`

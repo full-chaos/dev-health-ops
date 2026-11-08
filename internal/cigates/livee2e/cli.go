@@ -15,9 +15,13 @@ import (
 
 const usage = `usage: cigate live-e2e <verb>
   assert-health FILE | assert-meta FILE | assert-home FILE
+  assert-login-token FILE ISSUER KID     (FILE holds the login answer; prints one proof line)
   edge-request DOCUMENTS OPERATION ORG
   mint-token                             (env E2E_SESSION_ID, E2E_ISSUER_URL, E2E_ISSUER_KEY_FILE; optional E2E_USER_ID, E2E_ORG_ID, E2E_ISSUER_KID)
   valkey-ping                            (env REDIS_URL)
+  subject-jws FILE                       (test subject token for the fake TokenReview; FILE must not exist)
+  reviewer-token FILE                    (random reviewer bearer for the fake TokenReview; FILE must not exist)
+  tokenreview-serve ADDR CERT KEY SUBJECT_FILE REVIEWER_FILE   (env TR_NAMESPACE, TR_SERVICE_ACCOUNT, TR_UID; blocks)
 `
 
 // Run is `cigate live-e2e`. Exit codes: 0 ok, 1 a check or step failed, 2 usage.
@@ -26,7 +30,11 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	timeout := 2 * time.Minute
+	if args[0] == "tokenreview-serve" {
+		timeout = 24 * time.Hour
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "live-e2e %s: %s\n", args[0], err)
@@ -59,6 +67,20 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		if err != nil {
 			return fail(err)
 		}
+		return 0
+	case "assert-login-token":
+		if !need(3) {
+			return 2
+		}
+		payload, err := os.ReadFile(args[1])
+		if err != nil {
+			return fail(err)
+		}
+		line, err := AssertLoginToken(payload, args[2], args[3], time.Now())
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Fprintln(stdout, line)
 		return 0
 	case "edge-request":
 		if !need(3) {
@@ -107,6 +129,32 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 			return fail(err)
 		}
 		fmt.Fprintln(stdout, token)
+		return 0
+	case "subject-jws", "reviewer-token":
+		if !need(1) {
+			return 2
+		}
+		value, err := newTestSecret(args[0])
+		if err != nil {
+			return fail(err)
+		}
+		if err := WriteNewFile(args[1], value); err != nil {
+			return fail(err)
+		}
+		return 0
+	case "tokenreview-serve":
+		if !need(5) {
+			return 2
+		}
+		cfg := TokenReviewConfig{
+			Audience: ReviewAudience, Namespace: getenv("TR_NAMESPACE"), ServiceAccount: getenv("TR_SERVICE_ACCOUNT"), UID: getenv("TR_UID"),
+		}
+		if cfg.Namespace == "" || cfg.ServiceAccount == "" || cfg.UID == "" {
+			return fail(errors.New("TR_NAMESPACE, TR_SERVICE_ACCOUNT and TR_UID are required"))
+		}
+		if err := ServeTokenReview(ctx, args[1], args[2], args[3], args[4], args[5], cfg); err != nil {
+			return fail(err)
+		}
 		return 0
 	case "valkey-ping":
 		if !need(0) {

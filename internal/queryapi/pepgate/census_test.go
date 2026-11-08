@@ -17,16 +17,18 @@ import (
 const importPath = "github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 
 // constructorSites are the only production files that may build a scope, by constructor. An enforced scope
-// (Organization, Allowlist) comes from the PDP decision alone; a Legacy scope from the gate's not-enforced answer and
-// legacyClaims (the exempt credential classes). The census checks both ways: a call outside the list fails, and an
+// (Organization, Allowlist) comes from the PDP decision alone; a Legacy scope from the gate's not-enforced answer,
+// legacyClaims (the exempt credential classes), withLegacyScope (the GraphQL ingresses) and the superuser org rebind,
+// which moves a Legacy scope to the rebound org. The census checks both ways: a call outside the list fails, and an
 // entry no call matches fails.
 var constructorSites = map[string][]string{
 	"Organization": {"internal/queryapi/pdp/pdp.go"},
 	"Allowlist":    {"internal/queryapi/pdp/operation.go", "internal/queryapi/pdp/pdp.go"},
 	"Legacy": {
+		"internal/queryapi/graph/operation_org_guard.go",
 		"internal/queryapi/pdp/operation.go",
 		"internal/queryapi/pdp/pdp.go",
-		"internal/queryapi/server/graphql_enforce.go",
+		"internal/queryapi/server/ingress_scope.go",
 		"internal/queryapi/server/rest_access.go",
 	},
 }

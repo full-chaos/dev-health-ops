@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 const driverText = "code: 60, message: Table dev_health.secret_table does not exist on store-host.internal"
@@ -63,7 +64,7 @@ func TestGraphQLResolverStoreFailureKeepsDriverTextOutOfTheResponse(t *testing.T
 		strings.NewReader(`{"query":"{ securityOverview(orgId: \"org-1\") { __typename } }"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Request-Id", "req-gql-1")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	gql.ServeHTTP(rec, req)
 	body := rec.Body.String()
@@ -168,7 +169,7 @@ func TestGraphQLEdgeGeneratedRequestIDReachesTheErrorExtension(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/query",
 		strings.NewReader(`{"query":"{ securityOverview(orgId: \"org-1\") { __typename } }"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	id := rec.Header().Get("X-Request-ID")
@@ -182,7 +183,7 @@ func TestGraphQLResolverPanicIsMaskedEndToEnd(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/query",
 		strings.NewReader(`{"query":"{ securityOverview(orgId: \"org-1\") { __typename } }"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	gql.ServeHTTP(rec, req)
 	if strings.Contains(rec.Body.String(), "internal system error") || strings.Contains(rec.Body.String(), "secret") ||

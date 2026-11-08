@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // emptyRowsPeopleClient answers every ClickHouse call with zero rows --
@@ -97,7 +98,7 @@ func TestNewPeopleSearchHandlerRequiresAuthContext(t *testing.T) {
 func TestNewPeopleSearchHandlerHappyPathEmptyResult(t *testing.T) {
 	handler := newPeopleSearchHandler(newEmptyRowsPeopleReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people?q=ali", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -123,7 +124,7 @@ func TestNewPeopleSearchHandlerHappyPathEmptyResult(t *testing.T) {
 func TestNewPeopleSearchHandlerEmptyQueryNeverTouchesClickHouse(t *testing.T) {
 	handler := newPeopleSearchHandler(newFailingPeopleReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -142,7 +143,7 @@ func TestNewPeopleSearchHandlerEmptyQueryNeverTouchesClickHouse(t *testing.T) {
 func TestNewPeopleSearchHandlerDataUnavailable(t *testing.T) {
 	handler := newPeopleSearchHandler(newFailingPeopleReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people?q=ali", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -171,7 +172,7 @@ func TestNewPeopleSearchHandlerRejectsComparativeParams(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			handler := newPeopleSearchHandler(newFailingPeopleReader(t))
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/people?q=ali&"+key+"=x", nil)
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			serveRoute(t, handler, rec, req)
 			if rec.Code != http.StatusBadRequest {
@@ -200,7 +201,7 @@ func TestNewPeopleSearchHandlerRejectsComparativeParams(t *testing.T) {
 func TestNewPeopleSearchHandlerLimitValidationBeatsComparativeParamRejection(t *testing.T) {
 	handler := newPeopleSearchHandler(newFailingPeopleReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people?limit=not-a-number&compare_to=x", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -237,7 +238,7 @@ func TestNewPeopleSearchHandlerLimitValidationBeatsComparativeParamRejection(t *
 func TestNewPeopleSearchHandlerNonNumericLimitValidationError(t *testing.T) {
 	handler := newPeopleSearchHandler(newFailingPeopleReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people?limit=not-a-number", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {

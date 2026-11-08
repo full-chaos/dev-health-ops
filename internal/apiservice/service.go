@@ -243,9 +243,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// comment). Cipher is the same FernetDecryptor
 			// (SETTINGS_ENCRYPTION_KEY) every other stored-secret decrypt
 			// in this process already uses. StateSecret is
-			// SSO_STATE_SECRET, else JWT_SECRET_KEY (statePurposeSecrets);
+			// SSO_STATE_SECRET only (statePurposeSecrets);
 			// HKDF derives one key per protocol from it (state.go).
-			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, StateSecretFallback: deps.SSOStateSecretFallback, Signer: deps.Signer, Inner: proxy.inner,
+			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, Signer: deps.Signer, Inner: proxy.inner,
 			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
@@ -439,13 +439,13 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_workload_credential", "api_workload_credential_config_invalid", err)
 	}
-	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup, sessionCred)
+	deps.SessionIssuer, err = sessionIssuer(authProxy, sessionCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
 	}
 	deps.Delegator = impersonationDelegator(ctx, authProxy, deps.SessionIssuer, logger)
-	orgClient, err := orgLifecycleClient(authProxy, envsecrets.ProcessLookup, provisioningCred)
+	orgClient, err := orgLifecycleClient(authProxy, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
@@ -454,7 +454,7 @@ func configureWith(
 		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState = orgClient, orgClient, orgClient
 	}
 	depComponents = append(depComponents, orgStateReconciler(deps, logger)...)
-	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup, provisioningCred)
+	deps.OrgProvisioner, err = orgProvisioner(authProxy, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
@@ -486,7 +486,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 	}
-	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, logger)
+	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, acrSubjectSourceOf(deps.Pool, deps.AuthSchema))
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_acr_workload", "api_acr_workload_config_invalid", err)
@@ -525,7 +525,13 @@ func configureWith(
 	}
 	deps.Invites = inviteConfig(cfg, logger, envsecrets.ProcessLookup)
 	deps.GitHubApp = GitHubAppConfig(envsecrets.ProcessLookup)
-	deps.SSOStateSecret, deps.SSOStateSecretFallback, deps.GitHubStateSigner = statePurposeSecrets(cfg)
+	deps.SSOStateSecret, deps.GitHubStateSigner = statePurposeSecrets(cfg)
+	if deps.SSOStateSecret == "" {
+		logger.Warn("config_missing: SSO_STATE_SECRET is not set; the OIDC, SAML and OAuth sign-in routes answer 503")
+	}
+	if deps.GitHubStateSigner.Secret == "" {
+		logger.Warn("config_missing: GITHUB_APP_STATE_SECRET is not set; the GitHub App install routes answer 503")
+	}
 	refreshAccepted, err := accessverify.NewRefreshCounter(otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"), goAPIAccessService)
 	if err != nil {
 		closeComponents(depComponents)
@@ -607,18 +613,16 @@ func configureWith(
 // /api/v1/internal/* routes. They are NOT part of Routes, so the public
 // listener has no handler for them; only the listener bound to
 // APIInternalAddress serves them. The network boundary (the chart's
-// NetworkPolicy, no Ingress) is the first control; every route also checks a
-// svc_acr_ bearer (CHAOS-9993).
+// NetworkPolicy, no Ingress) is the first control; every route also checks
+// the acr-api workload token, the only bearer it accepts.
 func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var store acr.EntitlementStore
 	var llmConfig acr.LLMConfigSource
-	var credentials acr.CredentialVerifier
 	var auth acr.CredentialStore
 	var access acr.PrincipalAccessStore
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
 		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeInvestigate)
-		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
 		auth = acr.PostgresCredentialStore{Pool: deps.Pool, Now: deps.Now}
 		// The users, membership and impersonation reads run on go-api's pool
 		// (policy.PGStore with the auth schema, as the authenticator reads it).
@@ -649,7 +653,7 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		counters = httpapi.NewMemoryCounters(deps.Now)
 	}
 	return internalRoutesWith(acr.Deps{
-		Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials,
+		Store: store, Logger: logger, LLMConfig: llmConfig,
 		Auth: auth, Limiter: httpapi.NewKeyedLimiter(counters, acr.AuthAttemptLimit),
 		Workload: deps.ACRWorkload,
 		Access:   access, AccessLimiter: httpapi.NewKeyedLimiter(counters, acr.AccessAttemptLimit),

@@ -96,7 +96,7 @@ func TestRepoIdentity_R8_OtherOrgIdentityNotUsed(t *testing.T) {
 
 func idOrgObligations(t *testing.T, s identityFake) *Obligations {
 	t.Helper()
-	d := NewEvaluator().Evaluate(orgRequest(filteredOrgAction), s)
+	d := filteredOrgEvaluator().Evaluate(orgRequest(filteredOrgAction), s)
 	if !d.Allowed || d.Obligations == nil {
 		t.Fatalf("org allow: %+v", d)
 	}
@@ -178,6 +178,6 @@ func TestRepoIdentity_12851_TheBoundCountsAfterResolutionAndDedupe(t *testing.T)
 	}
 	// 257 id grants resolving to 257 distinct live paths: the bound trips
 	ids, grants = idsFor(MaxRepositoryAllowlist+1, MaxRepositoryAllowlist+1)
-	d := NewEvaluator().Evaluate(orgRequest(filteredOrgAction), idSnapshot(ids, grants...))
+	d := filteredOrgEvaluator().Evaluate(orgRequest(filteredOrgAction), idSnapshot(ids, grants...))
 	wantDeny(t, "257 distinct live paths", d, ReasonRepositoryAllowlistTooLarge)
 }

@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "db9a151ef763a02d4d8e0e2a3cd070841d93630a2269069eb753ca1ae981fd2f"
-	rolesSHA   = "00a5bec4fffed8e56e7918727d3521efed8aa1c0fb7fc4d3dae60895904ba485"
+	actionsSHA = "df1ad046e82988a16574a35fb91f7a63caf6bd6d0f27b60eba675b3729bf3b54"
+	rolesSHA   = "e3356d86831a4f95f4029f493bc59a6c3fb549500b661e5e4b83804d50ade03d"
 )
 
 func repoRoot(t *testing.T) string {
@@ -663,5 +663,49 @@ func TestNoRoleHoldsAcrEvidenceReadOrCredentialIssue(t *testing.T) {
 				t.Errorf("role %s holds %s", r.ID, id)
 			}
 		}
+	}
+}
+
+func TestLoadReadsPlatformAdminOnlyOnAnOrganizationAction(t *testing.T) {
+	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
+	load := func(scope, kind, member string) (*Catalog, error) {
+		actions := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[` +
+			`{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"none","impersonation":"denied"},` +
+			`{"action":"a.c","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"none","impersonation":"denied"` + member + `}]}`
+		return Load([]byte(actions), []byte(roles))
+	}
+	for member, want := range map[string]bool{``: false, `,"platform_admin":"denied"`: false, `,"platform_admin":"allowed"`: true} {
+		c, err := load("organization", "organization", member)
+		if err != nil {
+			t.Fatalf("%q: %v", member, err)
+		}
+		if a, _ := c.Action("a.c"); a.PlatformAdmin != want {
+			t.Errorf("%q: PlatformAdmin %v, want %v", member, a.PlatformAdmin, want)
+		}
+	}
+	for name, c := range map[string][3]string{
+		"unknown value":       {"organization", "organization", `,"platform_admin":"maybe"`},
+		"platform action":     {"platform", "platform", `,"platform_admin":"allowed"`},
+		"repository resource": {"organization", "repository", `,"platform_admin":"allowed"`},
+	} {
+		if _, err := load(c[0], c[1], c[2]); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Load = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
+func TestThePlatformAdminActionsAreTheAdminGuardAndTheLegacyQueryAPIAndBillingActions(t *testing.T) {
+	var got []string
+	for _, a := range Default().Actions() {
+		if a.PlatformAdmin {
+			got = append(got, a.ID)
+		}
+	}
+	sort.Strings(got)
+	want := []string{"analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read",
+		"integrations.write", "license.read", "members.invite", "members.manage", "metrics.read", "reports.write",
+		"settings.write", "teams.write", "work_items.read"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("platform_admin actions %v, want %v", got, want)
 	}
 }

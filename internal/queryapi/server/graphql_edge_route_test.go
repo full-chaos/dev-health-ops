@@ -817,7 +817,6 @@ func edgePostAs(t *testing.T, handler http.Handler, token string) *httptest.Resp
 func TestGraphQLEdgeReadsTheImpersonationSessionOnce(t *testing.T) {
 	targetOrg := uuid.MustParse("44444444-4444-4444-4444-444444444444")
 	session := &policy.Impersonation{AdminUserID: ecUser, TargetUserID: ecTarget, TargetOrgID: targetOrg, TargetRole: "viewer"}
-	// The /graphql ingress sets today's scope for the org it serves (CHAOS-10865).
 	admin := authctx.Claims{OrgID: ecOrg.String(), Role: "owner", IsSuperuser: true, Scope: pepgate.Legacy(ecOrg.String())}
 	target := authctx.Claims{OrgID: targetOrg.String(), Role: "viewer", IsSuperuser: true, ImpersonationActive: true, Scope: pepgate.Legacy(targetOrg.String())}
 	claimsSuper := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
@@ -895,7 +894,8 @@ func TestGraphQLEdgeRefusesARequestNoMiddlewareDecided(t *testing.T) {
 }
 
 // TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead: the middleware's session
-// read failing refuses with the unhandled 500 before anything runs.
+// read failing refuses with 503 Database temporarily unavailable before
+// anything runs.
 func TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead(t *testing.T) {
 	store := &fakeEdgeStore{
 		states:     map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
@@ -906,8 +906,8 @@ func TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead(t *testing.T) {
 	handler, seen := edgeClaimsHarness(t, store)
 	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
 	recorder := edgePostAs(t, handler, token)
-	if recorder.Code != http.StatusInternalServerError || recorder.Body.String() != `{"detail":"Internal Server Error"}` || len(*seen) != 0 {
-		t.Fatalf("%d %q ran=%v, want the unhandled 500 and nothing run", recorder.Code, recorder.Body.String(), *seen)
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != restUnavailable || len(*seen) != 0 {
+		t.Fatalf("%d %q ran=%v, want the 503 and nothing run", recorder.Code, recorder.Body.String(), *seen)
 	}
 }
 

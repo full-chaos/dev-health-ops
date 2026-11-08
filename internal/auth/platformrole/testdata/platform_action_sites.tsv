@@ -16,6 +16,7 @@ internal/api/billing/refunds.go	handlers.getRefund	admin.billing	handler
 internal/api/billing/refunds.go	handlers.listRefunds	admin.billing	handler
 internal/api/billing/routes.go	Routes	admin.billing	route
 internal/api/billing/subscriptions.go	handlers.resolveOrg	admin.billing	handler
+internal/api/billing/subscriptions.go	handlers.servedOrgWriteRefusal	admin.billing	handler
 internal/api/orgs/orgs.go	handlers.entitlements	admin.billing	7
 internal/api/policy/guard.go	Guard.currentUser	admin.orgs	4
 internal/api/policy/principal.go	User.IsAdmin	admin.orgs	1
@@ -38,6 +39,7 @@ internal/apiservice/admin/guards.go	handlers.ensureUserInScope	admin.users	3
 internal/apiservice/admin/guards.go	orgIDForNonSuperuser	admin.users	3
 internal/apiservice/admin/impersonation.go	handlers.impersonationRoutes	admin.impersonate	route
 internal/apiservice/admin/impersonation.go	handlers.impersonationStatus	admin.impersonate	handler
+internal/apiservice/admin/impersonation_handoff.go	handlers.handoffRoutes	admin.impersonate	route
 internal/apiservice/admin/orgs.go	handlers.orgRoutes	admin.orgs	route
 internal/apiservice/admin/platformstats.go	handlers.platformRoutes	admin.stats	route
 internal/apiservice/admin/users.go	handlers.createUserOrg	admin.users	8
@@ -52,4 +54,5 @@ internal/queryapi/datahealth/datahealth.go	RequireOperator	admin.stats	6
 internal/queryapi/graph/operation_org_guard.go	operationOrgDecision	admin.orgs	handler
 internal/queryapi/graph/operation_shadow.go	OperationShadow.observe	admin.orgs	handler
 internal/queryapi/producttelemetry/platform.go	RequirePlatformAdmin	admin.telemetry	handler
+internal/queryapi/server/buildinfo_route.go	authenticateBuildInfo	admin.orgs	handler
 internal/queryapi/server/internal_auth.go	roleInOrg	admin.orgs	5

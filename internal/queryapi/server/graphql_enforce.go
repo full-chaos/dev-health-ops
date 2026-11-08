@@ -86,13 +86,6 @@ func withRefusalStatus(w http.ResponseWriter, r *http.Request) (http.ResponseWri
 	return &refusalStatusWriter{ResponseWriter: w, status: status}, r.WithContext(graph.WithRefusalStatus(r.Context(), status))
 }
 
-// withIngressScope is the scope /graphql's ingress sets: today's path, until the decision replaces it for an enforced
-// root.
-func withIngressScope(claims authctx.Claims) authctx.Claims {
-	claims.Scope = pepgate.Legacy(claims.OrgID)
-	return claims
-}
-
 // serveMCPGraphQL runs the MCP listener's operation into buffered; an operation the decision refused answers with its
 // typed status (S4): 503 unavailable, 403 a deny. The body is the refusal.
 func serveMCPGraphQL(gql http.Handler, buffered *mcpBufferedResponse, r *http.Request) {

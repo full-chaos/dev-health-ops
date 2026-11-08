@@ -111,6 +111,7 @@ var AdminRoutes = []string{
 	"POST /api/v1/admin/customer-push/tokens/{token_id}/rotate",
 	"POST /api/v1/admin/identities",
 	"POST /api/v1/admin/impersonate",
+	"POST /api/v1/admin/impersonate/handoff/consume",
 	"POST /api/v1/admin/impersonate/stop",
 	"POST /api/v1/admin/integrations",
 	"POST /api/v1/admin/integrations/github/install-callback",

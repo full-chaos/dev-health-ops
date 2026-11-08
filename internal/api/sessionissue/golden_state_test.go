@@ -24,10 +24,12 @@ func stateRequestOf(t *testing.T, s *issueServer, client *sessionissue.Client) g
 	return got
 }
 
-// The outgoing state request, with the session credential, is pinned by testdata/outgoing_state.golden.json.
+// The outgoing state request, with the workload token, is pinned by testdata/outgoing_state.golden.json.
 func TestOutgoingStateRequestMatchesTheGolden(t *testing.T) {
 	s := newIssueServer(t)
-	client, err := sessionissue.New(s.URL, goldenToken, time.Second)
+	token := mintWorkloadToken(t)
+	s.exchange = issuedAnswer(token)
+	client, err := sessionissue.NewWorkload(s.URL, newWorkloadClient(t, s), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,10 +48,10 @@ func TestOutgoingStateRequestMatchesTheGolden(t *testing.T) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.states) != 1 || len(s.states[0].Auth) != 1 || s.states[0].Auth[0] != "Bearer "+goldenToken {
-		t.Errorf("the state request does not carry exactly the session credential")
+	if len(s.states) != 1 || len(s.states[0].Auth) != 1 || s.states[0].Auth[0] != "Bearer "+token {
+		t.Errorf("the state request does not carry exactly the workload token")
 	}
-	if s.exchanges != 0 {
-		t.Errorf("%d exchanges, want 0", s.exchanges)
+	if s.exchanges != 1 {
+		t.Errorf("%d exchanges, want 1", s.exchanges)
 	}
 }

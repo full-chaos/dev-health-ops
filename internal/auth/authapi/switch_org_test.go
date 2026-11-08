@@ -180,7 +180,7 @@ func newSwitchFixtureWith(t *testing.T, issuer *Issuer) *switchFixture {
 		store:     &fakeSwitchSessions{records: sessions},
 		projector: &fakeProjector{orgs: map[uuid.UUID]bool{orgA: true, orgB: true}, gone: map[uuid.UUID]bool{}},
 		issuer:    issuer, logs: &bytes.Buffer{}, counters: httpapi.NewMemoryCounters(nil),
-		document: switchRows("ops_access_token_hs256"),
+		document: switchRows("user_access_token"),
 	}
 	f.build()
 	return f
@@ -832,9 +832,9 @@ func TestSwitchOrgNotMountedWithoutRow(t *testing.T) {
 		t.Fatalf("not-mounted line with the embedded row present: %s", f.logs)
 	}
 	for name, document := range map[string][]byte{
-		"empty":                   []byte(`{"rows":[]}`),
-		"another route's row":     validateRowsHS256,
-		"a row of no HS256 class": switchRows("user_access_token"),
+		"empty":                                 []byte(`{"rows":[]}`),
+		"another route's row":                   validateRowsUser,
+		"a row of only the retired HS256 class": switchRows("ops_access_token_hs256"),
 	} {
 		f.document = document
 		f.build()
@@ -844,7 +844,7 @@ func TestSwitchOrgNotMountedWithoutRow(t *testing.T) {
 	}
 	deps := f.deps()
 	deps.SwitchOrg = &SwitchOrgConfig{Sessions: f.store}
-	if _, err := compatRoutes(deps, switchRows("ops_access_token_hs256")); err == nil {
+	if _, err := compatRoutes(deps, switchRows("user_access_token")); err == nil {
 		t.Fatal("a switch-org config without its reads built")
 	}
 }

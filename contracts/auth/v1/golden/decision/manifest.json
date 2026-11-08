@@ -19,6 +19,36 @@
       "layer": "pdp"
     },
     {
+      "file": "allow-platform-admin-member-writes-org-settings.json",
+      "id": "allow-platform-admin-member-writes-org-settings",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-no-membership-reads-analytics.json",
+      "id": "allow-platform-admin-no-membership-reads-analytics",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-no-membership-reads-billing.json",
+      "id": "allow-platform-admin-no-membership-reads-billing",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-no-membership-reads-org-integrations.json",
+      "id": "allow-platform-admin-no-membership-reads-org-integrations",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-suspended-org-reads-org-integrations.json",
+      "id": "allow-platform-admin-suspended-org-reads-org-integrations",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-unknown-org-reads-org-integrations.json",
+      "id": "allow-platform-admin-unknown-org-reads-org-integrations",
+      "layer": "pdp"
+    },
+    {
       "file": "cross-org-grant-in-a-leaves-b-on-the-default.json",
       "id": "cross-org-grant-in-a-leaves-b-on-the-default",
       "layer": "pdp"
@@ -134,48 +164,48 @@
       "layer": "pdp"
     },
     {
-      "file": "org-filtered-all-grants-dead-is-none.json",
-      "id": "org-filtered-all-grants-dead-is-none",
-      "layer": "pdp"
-    },
-    {
-      "file": "org-filtered-allowlist-over-the-bound-is-denied.json",
-      "id": "org-filtered-allowlist-over-the-bound-is-denied",
-      "layer": "pdp"
-    },
-    {
-      "file": "org-filtered-grant-role-lacks-the-action-is-left-out.json",
-      "id": "org-filtered-grant-role-lacks-the-action-is-left-out",
-      "layer": "pdp"
-    },
-    {
-      "file": "org-filtered-member-default-is-organization-scope.json",
-      "id": "org-filtered-member-default-is-organization-scope",
-      "layer": "pdp"
-    },
-    {
-      "file": "org-filtered-owner-with-a-grant-row-is-narrowed.json",
-      "id": "org-filtered-owner-with-a-grant-row-is-narrowed",
-      "layer": "pdp"
-    },
-    {
-      "file": "org-filtered-plain-snapshot-denies.json",
-      "id": "org-filtered-plain-snapshot-denies",
-      "layer": "pdp"
-    },
-    {
-      "file": "org-filtered-two-live-grants-sorted.json",
-      "id": "org-filtered-two-live-grants-sorted",
-      "layer": "pdp"
-    },
-    {
-      "file": "org-filtered-wildcard-grant-is-organization-scope.json",
-      "id": "org-filtered-wildcard-grant-is-organization-scope",
-      "layer": "pdp"
-    },
-    {
       "file": "org-unfiltered-allow-carries-only-the-tenant-scope.json",
       "id": "org-unfiltered-allow-carries-only-the-tenant-scope",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-all-grants-dead-reads-org-wide.json",
+      "id": "org-wide-all-grants-dead-reads-org-wide",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-grant-role-lacks-the-action-reads-org-wide.json",
+      "id": "org-wide-grant-role-lacks-the-action-reads-org-wide",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-grants-over-the-old-bound-read-org-wide.json",
+      "id": "org-wide-grants-over-the-old-bound-read-org-wide",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-member-without-grants-carries-the-tenant-scope-only.json",
+      "id": "org-wide-member-without-grants-carries-the-tenant-scope-only",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-owner-with-a-grant-row-reads-org-wide.json",
+      "id": "org-wide-owner-with-a-grant-row-reads-org-wide",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-plain-snapshot-allows.json",
+      "id": "org-wide-plain-snapshot-allows",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-two-live-grants-read-org-wide.json",
+      "id": "org-wide-two-live-grants-read-org-wide",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-wide-wildcard-grant-carries-the-tenant-scope-only.json",
+      "id": "org-wide-wildcard-grant-carries-the-tenant-scope-only",
       "layer": "pdp"
     },
     {

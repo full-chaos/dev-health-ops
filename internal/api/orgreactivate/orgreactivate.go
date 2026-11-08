@@ -22,7 +22,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
-	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 )
 
 const (
@@ -88,22 +87,6 @@ type StateReader interface {
 type Client struct {
 	core *authprovision.Core
 	http *http.Client
-}
-
-// New builds a Client for base (AUTH_PROXY_URL's origin) and token. It refuses
-// a token that is not an auth-session-issuer credential, and never prints it.
-func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
-	if base == nil {
-		return nil, errors.New("orgreactivate: no auth-service URL")
-	}
-	if !sessionissue.ValidToken(token) {
-		return nil, fmt.Errorf("%s must be an auth-session-issuer service credential (svc_authsess_...)", sessionissue.EnvToken)
-	}
-	core, err := authprovision.NewCore(base, token, timeout)
-	if err != nil {
-		return nil, err
-	}
-	return &Client{core: core, http: core.HTTP()}, nil
 }
 
 // NewWorkload builds a Client for base that presents the workload token of

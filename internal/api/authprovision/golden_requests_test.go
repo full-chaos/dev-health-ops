@@ -23,8 +23,6 @@ import (
 
 const goldenPath = "testdata/outgoing_requests.golden.json"
 
-const goldenToken = "svc_authsess_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-
 var (
 	goldenOrg       = uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	goldenPrincipal = uuid.MustParse("22222222-2222-4222-8222-222222222222")
@@ -35,7 +33,7 @@ var (
 )
 
 // goldenRequest is one outgoing request as the server saw it, with the bearer
-// replaced by a placeholder that keeps its credential class prefix.
+// (the go-api workload token) replaced by a placeholder.
 type goldenRequest struct {
 	Verb    string              `json:"verb"`
 	Method  string              `json:"method"`
@@ -45,10 +43,10 @@ type goldenRequest struct {
 }
 
 func bearerPlaceholder(value string) string {
-	if strings.HasPrefix(value, "Bearer svc_authsess_") {
-		return "Bearer svc_authsess_<PLACEHOLDER>"
+	if strings.HasPrefix(value, "Bearer svc_") {
+		return "Bearer <A-SERVICE-CREDENTIAL>"
 	}
-	return "Bearer <NOT-svc_authsess_>"
+	return "Bearer <WORKLOAD-TOKEN>"
 }
 
 func goldenAnswer(path string) string {
@@ -238,18 +236,12 @@ func renderGolden(requests []goldenRequest) []byte {
 	return append(raw, '\n')
 }
 
-// The outgoing request bytes of every verb, with the selector unset (the
-// session credential), are pinned by testdata/outgoing_requests.golden.json.
+// The outgoing request bytes of every verb, with the workload credential, are
+// pinned by testdata/outgoing_requests.golden.json.
 func TestOutgoingRequestsMatchTheGolden(t *testing.T) {
 	g := newGoldenServer(t)
-	prov, err := authprovision.New(g.URL, goldenToken, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	life, err := orgreactivate.New(g.URL, goldenToken, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	g.exchange = issuedAnswer(mintWorkloadToken(t))
+	prov, life := newWorkloadClients(t, g)
 	got := renderGolden(goldenVerbs(t, g, prov, life))
 	if os.Getenv("AUTHPROVISION_WRITE_GOLDEN") == "1" {
 		if err := os.WriteFile(goldenPath, got, 0o644); err != nil {

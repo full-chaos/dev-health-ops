@@ -68,11 +68,6 @@ const (
 	configInvalidMetric = "dev_health_query_api_pdp_config_invalid"
 )
 
-// allowlistCutOver is the cut-over registry: the row profiles ("METHOD /route") whose handlers narrow every read to
-// a scope's repository allowlist. An allowlist decision on a route not listed is not carried out (503), so a caller
-// with a repository ceiling never reaches an unfiltered read. Empty until the per-handler cutover lists its routes.
-var allowlistCutOver = map[string]bool{}
-
 // ExemptClasses is the explicit exempt list.
 var ExemptClasses = []string{ClassHS256, ClassEnvelope}
 
@@ -84,6 +79,9 @@ const (
 	ResultNotConfigured = "not_configured"
 	ResultNotCarriedOut = "not_carried_out"
 	ResultNoPDP         = "no_decision_point"
+	// ResultNoOrg: an enforced row asked with no organization; the PDP cannot judge an organization action without
+	// one, so today's answer stands.
+	ResultNoOrg = "no_org"
 )
 
 // The closed local reasons of a 503 the gate makes itself on an enforced route.
@@ -101,6 +99,8 @@ const (
 type DenyError struct {
 	Reason pep.Reason
 	Local  bool
+	// Class is the route class of a refused allowlist decision (a log field, never a metric label).
+	Class string
 }
 
 func (e *DenyError) Error() string { return "pdp: denied: " + string(e.Reason) }
@@ -385,7 +385,8 @@ func shadowRowsOf(actions map[string]string) (map[string]policy.ShadowRow, error
 // pepgate.Legacy(orgID) (today's path) and a gate built in shadow or enforce mode asks in the background, never
 // changing the answer. Enforced: a PDP deny is a *DenyError (403); no verdict, no client, or an allow whose
 // obligations query-api does not carry out is a local *DenyError (503); an allow is the scope scopeOf builds. A
-// misconfigured gate refuses every row with a local *DenyError. Every refusal carries the zero Scope.
+// misconfigured gate refuses every row with a local *DenyError. Every refusal carries the zero Scope. An enforced row
+// asked with no organization is pepgate.Legacy(""), with no PDP call.
 func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) (pepgate.Scope, error) {
 	if g == nil {
 		return pepgate.Legacy(orgID), nil
@@ -418,14 +419,19 @@ func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) (pe
 	case g.decider == nil:
 		g.count(ctx, ModeEnforce, ResultNoPDP, label)
 		return pepgate.Scope{}, &DenyError{Reason: ReasonNoDecisionPoint, Local: true}
+	case orgID == "":
+		// Only a superuser passes the verifier with no organization (principal.OrgRequiredError otherwise); its HS256
+		// token gets the same Legacy scope (product rule 1, D6773).
+		g.count(ctx, ModeEnforce, ResultNoOrg, label)
+		return pepgate.Legacy(orgID), nil
 	}
 	decision := g.decider.Decide(ctx, g.request(action, bearer, orgID))
 	switch {
 	case decision.Allowed():
-		scope, refused := g.scopeOf(decision, profile, action, orgID)
+		scope, refused, class := g.scopeOf(decision, profile, action, orgID)
 		if refused != "" {
 			g.count(ctx, ModeEnforce, ResultNotCarriedOut, label)
-			return pepgate.Scope{}, &DenyError{Reason: refused, Local: true}
+			return pepgate.Scope{}, &DenyError{Reason: refused, Local: true, Class: class}
 		}
 		g.count(ctx, ModeEnforce, ResultAllow, label)
 		return scope, nil
@@ -444,42 +450,43 @@ func (g *Gate) request(action, bearer, orgID string) pep.Request {
 
 // scopeOf is the scope of an allow, or the closed reason it is not carried out. Fail-closed order: the decision and
 // its tenant_scope must both name the request's organization, compared as UUIDs (the scope carries the canonical
-// form); redaction,
-// minimum_assurance and step_up are not carried out; repository_scope organization, or an allowlist holding "*", is
-// every repository; any other allowlist is a ceiling only on a route the cut-over registry lists; neither repository
-// member is the tenant alone for an action the catalog marks repository_scope none, and no repository otherwise.
-func (g *Gate) scopeOf(d pep.Decision, profile, action, orgID string) (pepgate.Scope, pep.Reason) {
+// form); redaction, a minimum_assurance above aal1 and step_up are not carried out; repository_scope organization,
+// or an allowlist holding "*", is every repository; any other allowlist is a ceiling only on a route whose class the
+// registry narrows; neither repository member is the tenant alone for an action the catalog marks repository_scope none, and no repository otherwise.
+func (g *Gate) scopeOf(d pep.Decision, profile, action, orgID string) (pepgate.Scope, pep.Reason, string) {
 	org, ok := canonicalUUID(orgID)
 	if !ok {
-		return pepgate.Scope{}, ReasonTenantMismatch
+		return pepgate.Scope{}, ReasonTenantMismatch, ""
 	}
 	if decided, ok := d.OrganizationID(); !ok || !sameUUID(decided, org) {
-		return pepgate.Scope{}, ReasonTenantMismatch
+		return pepgate.Scope{}, ReasonTenantMismatch, ""
 	}
 	o := d.Obligations()
 	if tenant, ok := o.TenantScope(); !ok || !sameUUID(tenant, org) {
-		return pepgate.Scope{}, ReasonTenantMismatch
+		return pepgate.Scope{}, ReasonTenantMismatch, ""
 	}
-	if _, ok := o.MinimumAssurance(); ok || len(o.Redaction()) != 0 || o.StepUpRequired() {
-		return pepgate.Scope{}, ReasonNotCarriedOut
+	// Every session query-api accepts is aal1 (session.AssuranceOf), so that level is met; a higher one is not.
+	if level, ok := o.MinimumAssurance(); (ok && level != pep.AssuranceAAL1) || len(o.Redaction()) != 0 || o.StepUpRequired() {
+		return pepgate.Scope{}, ReasonNotCarriedOut, ""
 	}
 	switch {
 	case o.RepositoryScopeOrganization():
-		return pepgate.Organization(org), ""
+		return pepgate.Organization(org), "", ""
 	case o.RepositoryRestricted():
 		keys := o.RepositoryAllowlist()
 		if slices.Contains(keys, "*") {
-			return pepgate.Organization(org), ""
+			return pepgate.Organization(org), "", ""
 		}
 		if !g.carries(profile) {
-			return pepgate.Scope{}, ReasonNotCarriedOut
+			reason, class := allowlistRefusal(profile)
+			return pepgate.Scope{}, reason, class
 		}
-		return pepgate.Allowlist(org, keys), ""
+		return pepgate.Allowlist(org, keys), "", ""
 	}
 	if catalogued, err := policycatalog.Default().Action(action); err == nil && catalogued.RepositoryScope == policycatalog.RepositoryScopeNone {
-		return pepgate.Organization(org), ""
+		return pepgate.Organization(org), "", ""
 	}
-	return pepgate.Scope{}, ReasonNoRepositoryRule
+	return pepgate.Scope{}, ReasonNoRepositoryRule, ""
 }
 
 // Wait blocks until every shadow call in flight has ended.

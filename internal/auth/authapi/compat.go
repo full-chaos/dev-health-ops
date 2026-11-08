@@ -94,11 +94,9 @@ type CompatDeps struct {
 	Login *LoginConfig
 	// Social mounts POST /api/v1/auth/social-login; nil leaves it unmounted.
 	Social SocialExchange
-	// ServiceCredentials mounts POST /internal/v1/sessions, the session issue
-	// route go-api calls; nil leaves it unmounted.
-	ServiceCredentials ServiceCredentials
-	// IssueWorkload lets that route accept the go-api workload token, and
-	// mounts it alone when ServiceCredentials is nil; nil refuses the token.
+	// IssueWorkload mounts POST /internal/v1/sessions, the session issue route
+	// go-api calls with its workload token, and the session state and
+	// delegated routes; nil leaves them unmounted.
 	IssueWorkload *SessionIssueWorkload
 	// Limits holds the limits' windows and the digest key; required while Login is set.
 	Limits *Limits
@@ -161,14 +159,14 @@ func compatRoutes(deps CompatDeps, rows []byte) ([]httpapi.Route, error) {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatLogin, Handler: http.HandlerFunc(h.compatLogin),
 			ErrorWriter: h.signInTransportRefusal(providerLocal)})
 	}
-	if deps.ServiceCredentials != nil || deps.IssueWorkload != nil {
+	if deps.IssueWorkload != nil {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternIssueSession, Handler: http.HandlerFunc(h.issueSession)})
 	}
 	if deps.Social != nil {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(h.compatSocialLogin),
 			ErrorWriter: h.signInTransportRefusal("")})
 	}
-	if deps.ServiceCredentials != nil || deps.IssueWorkload != nil {
+	if deps.IssueWorkload != nil {
 		routes = h.withSessionStateRoute(routes)
 		routes = h.withDelegatedRoutes(routes)
 	}
@@ -603,8 +601,9 @@ func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 // revokeLegacy verifies a go-api refresh JWT and ends its lineage. A token that
-// does not verify revokes nothing, as an unknown opaque credential does; no
-// principal is projected, since the go-api rows exist without it.
+// does not verify revokes nothing, as an unknown opaque credential does, and so
+// does every such token once the Issuer holds no legacy key: an unverified jti
+// never revokes. No principal is projected, since the go-api rows exist without it.
 func (h compatHandlers) revokeLegacy(r *http.Request, token string, actor session.Actor) (bool, error) {
 	ctx := r.Context()
 	legacy, err := h.Issuer.VerifyLegacyRefresh(token)
@@ -612,6 +611,7 @@ func (h compatHandlers) revokeLegacy(r *http.Request, token string, actor sessio
 		h.rec.logger.DebugContext(ctx, "legacy refresh token refused at logout", "reason", edgetoken.ReasonOf(err))
 		return false, nil
 	}
+	legacyLogoutAccepted.Load().Accepted(ctx)
 	return h.Sessions.RevokeLegacy(ctx, legacy, actor)
 }
 

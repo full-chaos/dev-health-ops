@@ -5,12 +5,23 @@
 # The default network of the project, with a pinned subnet: a request from the runner reaches go-api through this
 # network's gateway, which go-api must trust (TRUSTED_PROXIES below) to read the client IP from X-Forwarded-For, as
 # the frozen golden's audit rows expect. The subnet is outside compose.yml's planes network (10.199.81.0/28).
+#
+# CHAOS-13107: compose.yml has go-api forward production's aggregates to auth-service (sessions, local login,
+# credentials, social) with users owned, so both legs talk to auth-service. go-api also joins the auth network, and a
+# request from the runner may reach it through either network's gateway: the auth network's subnet is pinned too
+# (outside the default network's and the planes network's) and go-api trusts both gateways. auth-service gets what
+# the corpus's rows need on both legs: go-api's forwarded client address, the corpus mail sink and the provider stub.
 networks:
   default:
     ipam:
       config:
         - subnet: 10.199.90.0/24
           gateway: 10.199.90.1
+  auth_plane:
+    ipam:
+      config:
+        - subnet: 10.199.91.0/24
+          gateway: 10.199.91.1
 
 services:
   postgres:
@@ -36,13 +47,18 @@ services:
     # chosen once by ci/auth_corpus_external.sh and kept in the project state: ci/auth_corpus_set_env.sh recreates
     # this container, and an ephemeral port would change with it.
     ports: !override ["127.0.0.1:${AUTH_CORPUS_API_PORT}:8000", "127.0.0.1:${AUTH_CORPUS_OPERATOR_PORT}:8080"]
+    networks:
+      default:
+      planes:
+      auth_plane:
+        ipv4_address: 10.199.91.20
     environment:
       # The corpus's mail sink is the smtpsink service of this project (below), reached by its service name on the
       # project network; the invite and verification mail of go-api goes there. The links it mails use this base.
       - SMTP_HOST=smtpsink
       - SMTP_PORT=2525
       - APP_BASE_URL=https://app.example.test/
-      - TRUSTED_PROXIES=10.199.90.1
+      - TRUSTED_PROXIES=10.199.90.1,10.199.91.1
       # Pass-throughs: set only when ci/auth_corpus_set_env.sh put them in the project state, so an unset
       # variable stays unset (an empty value is not the same as unset for these readers).
       - AUTH_AUTO_CREATE_ORG_ON_REGISTER
@@ -64,6 +80,42 @@ services:
       - ${AUTH_CORPUS_STUB_DIR}:/run/corpus-stub:ro
   auth-service:
     ports: !override ["127.0.0.1::8096"]
+    # auth-service reaches the provider hostnames at the stub on its own network and trusts the stub's CA; the corpus's
+    # throwaway social client settings let it serve social sign-in.
+    depends_on:
+      providerstub:
+        condition: service_started
+      smtpsink:
+        condition: service_started
+      valkey:
+        condition: service_healthy
+    extra_hosts:
+      - "api.github.com:10.199.91.10"
+      - "github.com:10.199.91.10"
+    environment:
+      - SSL_CERT_FILE=/run/corpus-stub/ca.pem
+      # auth-service reads it on every register request, as go-api does; ci/auth_corpus_set_env.sh recreates it on a change.
+      - AUTH_AUTO_CREATE_ORG_ON_REGISTER
+      # The login's rate limits live in the same Valkey database as go-api's (/1; authconfig requires it), under the
+      # auth_svc_ key prefix. The venue's Valkey has no ACL users, so the URI carries none.
+      - AUTH_VALKEY_URI=redis://valkey:6379/1
+      # go-api forwards the client address; auth-service trusts X-Forwarded-For from go-api's pinned address only.
+      - AUTH_SERVICE_TRUSTED_PROXIES=10.199.91.20/32
+      - SOCIAL_GITHUB_CLIENT_ID=gh-client
+      - SOCIAL_GITHUB_CLIENT_SECRET=gh-secret
+      # The credentials flows of auth-service mail through the corpus's sink, the smtpsink service of this project,
+      # which joins auth_plane below and is reached by its service name.
+      # EMAIL_FROM_ADDRESS comes from the project state file, the value go-api's mail carries.
+      - EMAIL_PROVIDER=smtp
+      - EMAIL_FROM_ADDRESS
+      - SMTP_HOST=smtpsink
+      - SMTP_PORT=2525
+      - APP_BASE_URL=https://app.example.test/
+    volumes:
+      - ${AUTH_CORPUS_STUB_DIR}:/run/corpus-stub:ro
+  # CHAOS-13107: the local token issuer is a dependency of go-api; its fixed loopback port 8443 is host-global.
+  auth-issuer:
+    ports: !reset []
   # The corpus provider stub (docker/providerstub.Dockerfile; corpus only, never a release image): answers the provider
   # requests of the social-login row from ci/auth_corpus_stub and records every request on its recorder port. Its
   # certificate and CA are made at run time by ci/auth_corpus_external.sh.
@@ -88,6 +140,8 @@ services:
     networks:
       default:
         ipv4_address: 10.199.90.10
+      auth_plane:
+        ipv4_address: 10.199.91.10
   # The corpus mail sink (docker/smtpsink.Dockerfile; corpus only, never a release image): records every message the
   # planes send on :2525, byte for byte, and serves the capture to the test on :9090, published on loopback only.
   smtpsink:
@@ -103,3 +157,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     ports: ["127.0.0.1::9090"]
+    # The sink is on both networks: go-api reaches it on the project's default network, auth-service on auth_plane.
+    networks:
+      default:
+      auth_plane:

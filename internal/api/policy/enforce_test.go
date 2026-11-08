@@ -247,6 +247,7 @@ func hs256Handler(t *testing.T, enf *Enforcer) http.Handler {
 	guard.SetEnforcer(enf)
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/admin/teams", guard.Wrap(AdminOrg, echo))
+	mux.Handle("POST /api/v1/admin/teams", guard.Wrap(AdminOrg, echo))
 	return mux
 }
 
@@ -275,22 +276,22 @@ func impersonating(next http.Handler) http.Handler {
 
 const impersonationRefusalBody = `{"detail":"Not allowed in an impersonation session"}`
 
-// An enforced row refuses a caller with a live go-api impersonation row before any decision point call: the bearer
-// is the actor's own, so the decision point would judge the actor in the actor's organization, not the delegation.
+// An enforced write row, or a platform wrap, refuses a caller with a live go-api impersonation row before any decision
+// point call: the bearer is the actor's own, so the decision point would judge the actor in the actor's organization,
+// not the delegation. Its reads of other rows keep the legacy answer (impersonation_read_parity_test.go).
 func TestAnImpersonatingAdminOnAnEnforcedRowIsRefusedBeforeThePDP(t *testing.T) {
 	for _, cell := range []struct {
-		namespace, path string
-		who             persona
+		namespace, method, path string
+		who                     persona
 	}{
-		{"teams", "/api/v1/admin/teams", personaAdmin},
-		{"billing", "/api/v1/billing/invoices", personaAdmin},
-		{"admin", "/api/v1/admin/orgs", personaSuperuser},
+		{"teams", http.MethodPost, "/api/v1/admin/teams", personaAdmin},
+		{"admin", http.MethodGet, "/api/v1/admin/orgs", personaSuperuser},
 	} {
 		t.Run(cell.namespace, func(t *testing.T) {
 			rec := recordEnforce(t)
 			pdp := newTestPDP(t, allowAll)
 			h := impersonating(enforceHandler(t, personaStore(cell.who), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor(cell.namespace))))
-			got := enforceRequest(h, http.MethodGet, cell.path)
+			got := enforceRequest(h, cell.method, cell.path)
 			if got.status != http.StatusForbidden || got.body != impersonationRefusalBody {
 				t.Errorf("impersonating caller on an enforced row: %d %q, want 403 %q", got.status, got.body, impersonationRefusalBody)
 			}
@@ -304,12 +305,12 @@ func TestAnImpersonatingAdminOnAnEnforcedRowIsRefusedBeforeThePDP(t *testing.T) 
 	}
 }
 
-// A legacy HS256 bearer with a live go-api impersonation row is refused too: the row, not the token class, makes the
-// caller one the decision point cannot judge as the delegation.
+// A legacy HS256 bearer with a live go-api impersonation row is refused on a write too: the row, not the token class,
+// makes the caller one the decision point cannot judge as the delegation.
 func TestAnImpersonatingHS256CallerOnAnEnforcedRowIsRefused(t *testing.T) {
 	rec := recordEnforce(t)
 	pdp := newTestPDP(t, allowAll)
-	got := serve(impersonating(hs256Handler(t, newEnforcerFor(t, pdp.client(t), onFor("teams")))), http.MethodGet, "/api/v1/admin/teams",
+	got := serve(impersonating(hs256Handler(t, newEnforcerFor(t, pdp.client(t), onFor("teams")))), http.MethodPost, "/api/v1/admin/teams",
 		validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 	if got.status != http.StatusForbidden || got.body != impersonationRefusalBody || len(pdp.calls()) != 0 {
 		t.Fatalf("impersonating HS256 caller: %d %q, %d PDP calls, want 403 %q and 0", got.status, got.body, len(pdp.calls()), impersonationRefusalBody)
@@ -516,8 +517,8 @@ func profilePath(route string) string {
 }
 
 // With enforcement and the shadow both on, as go-api installs them on one guard, every non-stop go-api profile row
-// refuses an impersonating caller with the 403 and counts it once in each: the enforcement outcome and the shadow
-// result impersonation_refused, with no decision point call.
+// that is not a read refuses an impersonating caller with the 403 and counts it once in each: the enforcement outcome
+// and the shadow result impersonation_refused, with no decision point call.
 func TestAnEnforcedImpersonationRefusalIsAlsoAShadowResultOnEveryProfileRow(t *testing.T) {
 	rows, err := ParseShadowRows(authv1.GoAPIEndpointProfiles, "dev-health-ops-api")
 	if err != nil {
@@ -525,7 +526,7 @@ func TestAnEnforcedImpersonationRefusalIsAlsoAShadowResultOnEveryProfileRow(t *t
 	}
 	cells := 0
 	for pattern, row := range rows {
-		if pattern == stopImpersonationPattern {
+		if method, _, _ := strings.Cut(pattern, " "); liveRowExempt(pattern) || readMethod(method) {
 			continue
 		}
 		cells++
@@ -557,10 +558,10 @@ func TestAnEnforcedImpersonationRefusalIsAlsoAShadowResultOnEveryProfileRow(t *t
 			}
 		})
 	}
-	if cells < 60 {
-		t.Fatalf("%d non-stop profile rows, want the go-api profile's (60 or more)", cells)
+	if cells < 30 {
+		t.Fatalf("%d non-stop write profile rows, want the go-api profile's (30 or more)", cells)
 	}
-	t.Logf("non-stop profile rows: %d", cells)
+	t.Logf("non-stop write profile rows: %d", cells)
 }
 
 var delegatedActorWire = "prn_" + wireID(uuid.MustParse("77777777-7777-4777-8777-777777777777"))
@@ -638,7 +639,8 @@ func collectSum(t *testing.T, reader *sdkmetric.ManualReader, name, label string
 	return description, values
 }
 
-// No caller gives the unjudged counter a "delegated" reason: its closed reason set is hs256 and no_org.
+// No caller gives the unjudged counter a "delegated" reason: its closed reason set is hs256, no_org, served_org and
+// impersonation (a live-row read; the live-row platform wrap is refused, not unjudged).
 func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	recordEnforce(t)
 	reader := sdkmetric.NewManualReader()
@@ -651,16 +653,16 @@ func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	enforceRequest(delegatedBearerHandler(t, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams")
 	serve(hs256Handler(t, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 	description, reasons := collectSum(t, reader, enforceUnjudgedMetric, "reason")
-	if !slices.Equal(reasons, []string{"hs256"}) {
-		t.Errorf("unjudged reasons %v, want [hs256] (no delegated point)", reasons)
+	if !slices.Equal(reasons, []string{"hs256", "impersonation"}) {
+		t.Errorf("unjudged reasons %v, want [hs256 impersonation] (no delegated point)", reasons)
 	}
-	if want := "by route row and reason: hs256, no_org"; !strings.HasSuffix(description, want) {
+	if want := "by route row and reason: hs256, no_org, served_org, impersonation"; !strings.HasSuffix(description, want) {
 		t.Errorf("unjudged description %q, want it to end %q", description, want)
 	}
 }
 
-// The decision counter's outcome set is closed: allow, deny, error_deny, impersonation_refused and org_mismatch, each
-// reached, and the description names exactly those.
+// The decision counter's outcome set is closed: allow, deny, error_deny and impersonation_refused, each reached, and
+// the description names exactly those. A request that serves another organization counts no outcome (it is unjudged).
 func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	previous := enforceDecisionAdd
@@ -673,18 +675,19 @@ func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 		enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, allow.client(t), onFor("teams"))),
 		enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, deny.client(t), onFor("teams"))),
 		enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, deadClient, onFor("teams"))),
-		impersonating(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, allow.client(t), onFor("teams")))),
 	} {
 		enforceRequest(h, http.MethodGet, "/api/v1/admin/teams")
 	}
+	enforceRequest(impersonating(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, allow.client(t), onFor("teams")))),
+		http.MethodPost, "/api/v1/admin/teams")
 	members := servedOrgCensusRow{"GET /api/v1/admin/orgs/{org_id}/members", Admin, false}
 	servedOrgServe(t, members, servedOrgSetup{who: personaAdmin, enforcer: servedOrgEnforcer(t, allow, "members")}, strangerOrg)
 	description, outcomes := collectSum(t, reader, enforceDecisionMetric, "outcome")
-	want := []string{"allow", "deny", "error_deny", "impersonation_refused", "org_mismatch"}
+	want := []string{"allow", "deny", "error_deny", "impersonation_refused"}
 	if !slices.Equal(outcomes, want) {
 		t.Errorf("outcomes %v, want %v", outcomes, want)
 	}
-	if suffix := "outcome: allow, deny, error_deny, impersonation_refused, org_mismatch"; !strings.HasSuffix(description, suffix) {
+	if suffix := "outcome: allow, deny, error_deny, impersonation_refused"; !strings.HasSuffix(description, suffix) {
 		t.Errorf("decision description %q, want it to end %q", description, suffix)
 	}
 }

@@ -21,7 +21,7 @@ Define the recovery point and time objectives, then cover:
 
 Test restore in isolation. Verify schema, API health, worker progress, source coverage, and a representative product query before declaring recovery complete.
 
-## Local standing-stack backup (CHAOS-4084)
+## Local standing-stack backup
 
 For the local/dev standing stack (the `compose.yml` Postgres and ClickHouse
 containers most day-to-day work runs against), use
@@ -61,7 +61,7 @@ already has content (a stale `--out-dir`, or a same-second re-run). Run
 reference (container names, credentials, and the output root are all
 overridable; defaults match `compose.yml`/`ops/.env`).
 
-**Purpose and posture (per chris, 2026-08-20/23):** these backups exist
+**Purpose and posture:** these backups exist
 primarily to FRONT-LOAD test/trial environments with realistic captured
 state instead of building fixtures from scratch, and secondarily as
 disaster recovery if a local Docker VM resize or restart clobbers the
@@ -72,8 +72,7 @@ an old dump can predate schema/data writes a newer restore target expects
 restoring, and never compare measurement runs taken against two different
 restored datasets as though they were the same baseline.
 
-Restore is manual (not yet scripted, see CHAOS-4091 for a future
-ephemeral-cluster snapshot-restore path). **Restore into an isolated
+Restore is manual (not yet scripted). **Restore into an isolated
 target (a scratch/ephemeral stack), never back onto the live standing
 stack** — matches the general "Test restore in isolation" guidance above
 and the isolation posture in
@@ -118,10 +117,10 @@ docker exec dev-health-clickhouse-1 clickhouse-client \
 Verify with a real query per store, not by inference — see "Test restore
 in isolation" above.
 
-## After any Postgres restore: ANALYZE `river.river_job` (CHAOS-5615)
+## After any Postgres restore: ANALYZE `river.river_job`
 
 A restore leaves Postgres's planner statistics stale for the restored
-tables, `river.river_job` included. On 2026-09-11, a restore left 11,428
+tables, `river.river_job` included. In one case a restore left 11,428
 `available` `metrics` rows queued; the Go worker's queued-contract-version
 startup check queries this table on every restart, and against stale
 statistics it chose a plan that missed its own timeout budget, aborting
@@ -139,7 +138,7 @@ cheap (a statistics-only pass, no table rewrite or lock beyond a normal
 `ANALYZE`) and is not optional when the restored table has a
 nontrivial backlog.
 
-## Auth schema backup, restore and PITR drill (CHAOS-11232)
+## Auth schema backup, restore and PITR drill
 
 `scripts/drill-auth-pitr.sh` rehearses backup, restore and point-in-time
 recovery of the `auth` schema on a throwaway compose project
@@ -167,7 +166,7 @@ Checks and result line (`DRILL RESULT: PASS|GAP|FAIL`):
   published.
 - PASS when all of those counts are zero.
 
-Result of the 2026-10-24 run on the dev stack: restore to the end of the WAL
+Result of a run on the dev stack: restore to the end of the WAL
 = PASS (row counts and the compared digests equal to the source). PITR to T = GAP:
 revisions never went below T and no duplicate key appeared, new writes
 continued at exactly revision + 1, and every credential revoked before T
@@ -190,7 +189,7 @@ only rows that are present on the copy and still active count; the absent ones a
 The drill also revokes a credential and disables a principal that were created before T, so the `apply` must re-apply at
 least one revocation (`revocations_reapplied`), which proves the re-apply path and not only the rows the copy lacks.
 
-From CHAOS-11889 the drill also proves the effect, not only the markers. Before T it creates two workloads, each with a live
+The drill also proves the effect, not only the markers. Before T it creates two workloads, each with a live
 bootstrap credential; after T it revokes the credential of one and disables the principal of the other. On each restored copy
 it then presents both secrets to `workload.Store.ResolveBootstrap`, the verifier the auth service uses at the workload-token
 exchange, as the unprivileged runtime role: the end-of-WAL copy and the fenced PITR copy must refuse both (`revoked`,
@@ -198,10 +197,10 @@ exchange, as the unprivileged runtime role: the end-of-WAL copy and the fenced P
 (`attempt-T-pitr.json`, `revoked_access_accepted`). The drill also creates one row in each of `public.refresh_tokens`,
 `public.internal_service_credentials` and `public.external_ingest_tokens` before T and revokes it after T: those come back
 unfenced (`legacy_revokes_after_target_that_came_back` is 3, and they count in `b`) and stay revoked after the fenced apply.
-So the unfenced baseline `b` is larger than in the 2026-10-29 run below. The attempt secrets live in
+So the unfenced baseline `b` is larger than in the fenced-drill run below. The attempt secrets live in
 `attempt-secrets.json` of the evidence directory (mode 0600, values made for the drill; nothing prints or passes them as an argument).
 
-From CHAOS-11834 the drill also proves the password reset. Before T it creates two users with a password: one through the
+The drill also proves the password reset. Before T it creates two users with a password: one through the
 auth-service identity store (`ProvisionLocal`: `auth.users` and its `public.users` row) and one go-api-only user
 (`public.users` only). After T both change the password: the first through `SetPasswordHashFor` (the real write:
 `password_updated_at`, `legacy_token_version` and the `public.users` row's `token_version`), the second with the statement of go-api's
@@ -217,24 +216,22 @@ that `force_password_reset` names for the sections `auth.users.password` and `pu
 two users. In the result line `p` is the number of users whose old password still logs in on the PITR copy (GAP unfenced,
 must be 0 fenced) and `r` is the number of users named for a reset (2 fenced). The passwords live in
 `drill-password-secrets.json` of the evidence directory (mode 0600, made at run time; nothing prints or passes them as an
-argument). Results of the 2026-10-29 runs below were made before this check: their result line has two counts.
+argument). The fenced-drill run below was made before this check: their result line has two counts.
 
-Result of the password drill (CHAOS-11834), 2026-10-31 on bigboy at 319214a4: fenced `DRILL RESULT: PASS (b
+Result of the password drill: fenced `DRILL RESULT: PASS (b
 revokes-after-T-back=0, c reissued-different=0, p passwords-after-T-back=0, r reset-required=2)`; the fenced PITR copy
 refused all four password tries as `password_unavailable` (`old_password_accepted` = 0, `new_password_accepted` = 0,
 `hash_null_rows` = 3), refused both revoked or disabled workload secrets, and post-T.json had absent_after_restore=2 and
 fence_rows_for_live_timeline=1. The unfenced baseline of the same tip: `DRILL RESULT: GAP (b revokes-after-T-back=9,
 c reissued-different=6, p passwords-after-T-back=2, r reset-required=0)`, with the old password accepted 2 of 2, the new one
 0 of 2 and both revoked or disabled workload secrets accepted. On both runs the end-of-WAL copy accepted the new and refused
-the old password. Evidence: /var/lib/oci-cache/lane-scratch/fcsup/11834/drill-11834-fenced-2/evidence (fenced) and
-drill-11834-base-2/evidence (baseline).
+the old password.
 
-Result of the fenced drill (CHAOS-11271), 2026-10-29 on bigboy at e86f591c: `DRILL RESULT: PASS (b revokes-after-T-back=0,
+Result of the fenced drill: `DRILL RESULT: PASS (b revokes-after-T-back=0,
 c reissued-different=0)` (the two-count form of that date); post-T.json keys_reissued_with_different_content=0, revokes_after_target_that_came_back=0,
 absent_after_restore=2 (equal to the apply's absent count), fence_rows_for_live_timeline=1; the apply raised 6 floors and
 re-applied 2 revocations. The unfenced baseline of the same tip: `DRILL RESULT: GAP (b revokes-after-T-back=4,
-c reissued-different=6)`. Evidence: /var/lib/oci-cache/lane-scratch/fcdev/drill-11271b-d/evidence (fenced) and
-drill-11271b-c/evidence (baseline).
+c reissued-different=6)`.
 
 Without the fence a PITR to an earlier time is a rollback of the auth plane: every credential revoked after the target
 time is live again and revisions above the restored value are re-issued with other content. The fence below removes
@@ -269,7 +266,7 @@ Order (nothing serves traffic until the last step):
    only: a restored lock is never shortened. Without it no lockout moves; a lock set after the target has usually
    expired by the time a restore finishes anyway.
    **Gate: no `-apply` run until go-api and the sync worker run a build that decodes revocation rows by
-   `token_key_version`** (the build of ticket 12035 or later; roll go-api and the sync worker first, then auth-migrate).
+   `token_key_version`** (roll go-api and the sync worker first, then auth-migrate).
    The apply queues the stored token of some deleted provider credentials with key version `oauth-v1` (the sealed
    OAuthTokens JSON, not the token). An older sender sends that JSON as the token: PagerDuty can answer 200 to the
    revoke of an invalid token (RFC 7009 allows it; not verified against PagerDuty), the sender then deletes the row,
@@ -287,8 +284,7 @@ Order (nothing serves traffic until the last step):
    keeps its created_at and sets attempts to 0, and the route skips a younger one, so it stays pending until then);
    `provider_revocation_requeued_blocked`:
    the credential was connected after the target, so the restored copy has no credential row; a disconnect of the name
-   still sends them (ticket 12011), and the revocation worker sends them (the ticket the line
-   names); `provider_revocation_queued_from_credential`: bound PagerDuty credentials the apply deleted because the
+   still sends them, and the revocation worker sends them; `provider_revocation_queued_from_credential`: bound PagerDuty credentials the apply deleted because the
    source no longer holds them (a disconnect after the target) or holds them under another binding (a reconnect after
    the target); the same statement queued the stored token of each as a pending revocation row (`disconnect` or
    `replacement`, key version `oauth-v1`, attempts 0), which the revocation worker sends at its next run: nothing to do.
@@ -340,14 +336,12 @@ Which command, when:
 | A restored volume that is on timeline 1 (a file copy of an old volume) | `apply`, never `init`: init cannot detect it. |
 | The WAL after the target time is gone (no shadow copy possible) | `apply -blind-margin N` (instead of `-manifest`). It raises every revision by N, which consumers read as a gap, and it is fail closed: it removes EVERY legacy reset and verification token, EVERY unconsumed link credential and EVERY pending invite (users ask for a new link, admins re-invite) because there is no proof of what was consumed after the target. The apply prints the counts. It cannot redo revocations: redo them by hand. A service account key revoked or shortened after the target is live again until its expiry, up to 365 d, so the apply names the count of live keys in `rotate_keys_after_blind_margin` (a count, no ids): rotate or revoke every key. |
 
-Known gaps (follow-up 11878 and the tickets it names): an unlink of an external identity, login lockout counters
-(11848), a revoked platform role assignment (11846) and the legacy organization, IP allowlist and integration flags
-(11872) are not carried; and the legacy invite table, the margin-specific blind-margin idempotency and a strict
-manifest parse are open (11878). Until those ship, redo such changes by hand after a restore and check them.
+Known gaps: an unlink of an external identity, login lockout counters,
+a revoked platform role assignment and the legacy organization, IP allowlist and integration flags
+are not carried; and the legacy invite table, the margin-specific blind-margin idempotency and a strict
+manifest parse are open. Until those ship, redo such changes by hand after a restore and check them.
 
-First roll of the fence (D6466), in this order: (1) the auth-migrate Job (migration 0035), (2) a one-off
+First roll of the fence, in this order: (1) the auth-migrate Job (migration 0035), (2) a one-off
 `restore-fence init` Job against the live database (it writes the first fence row for the live timeline; run it once
 and read `status`), (3) the auth-service image. If the image lands before the init, the new pods stay not ready and
 the old pods keep serving; that is fail closed.
-
-Interim rule (D6323, CHAOS-11271), verbatim: "until 11271 rolls, no PITR of the auth/identity DB to any point before end of WAL without acp attest + chris's word; end-of-WAL restore is safe."

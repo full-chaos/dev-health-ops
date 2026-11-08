@@ -12,8 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/workloadtoken"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/workloadclient"
 )
 
 // fakeActor is the --actor the harness gives every verb that needs one. The
@@ -21,7 +24,12 @@ import (
 // has its own cells.
 const fakeActor = "0f000000-0000-4000-8000-00000000000f"
 
-const fakeToken = "svc_authsess_" + "0123456789abcdef0123456789abcdef0123456789a"
+// fakeWorkloadEnv is the CLI's workload token inputs: a bootstrap credential file and the issuer the fake
+// auth-service's tokens carry. With AUTH_PROXY_URL set to the fake, the CLI exchanges there for its workload token.
+func fakeWorkloadEnv(t *testing.T) map[string]string {
+	t.Helper()
+	return map[string]string{"AUTH_WORKLOAD_BOOTSTRAP_FILE": workloadclient.BootstrapFile(t), "AUTH_WORKLOAD_ISSUER": workloadclient.Issuer}
+}
 
 // needsProvisioning reports whether args is a verb that goes through
 // auth-service's provisioning routes: a membership change or a real delete.
@@ -50,7 +58,8 @@ func needsProvisioning(args []string) bool {
 // startFakeAuthService is a test-only stand-in for auth-service's provisioning
 // routes (the real route behaviour is covered by the auth-service tests). It
 // fails the test on a call that carries a wrong bearer token or an actor other
-// than fakeActor, and returns the paths it served. It serves the routes the CLI
+// than fakeActor, and returns the paths it served. Its workload exchange answers one go-api workload token, the only
+// bearer its routes take. It serves the routes the CLI
 // calls over the database at uri, doing what the in-process membership writes did before the
 // CLI went through auth-service, so every verb's stdout and rows stay the
 // ones the frozen Python session recorded.
@@ -58,6 +67,11 @@ func startFakeAuthService(t *testing.T, uri string) (string, *fakeCalls) {
 	t.Helper()
 	mux := http.NewServeMux()
 	calls := &fakeCalls{}
+	workloadToken := workloadclient.Token(t)
+	mux.HandleFunc(workloadtoken.ExchangePath, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": workloadToken, "issued_token_type": workloadtoken.TokenTypeJWT, "token_type": "Bearer", "expires_in": 300})
+	})
 	answer := func(w http.ResponseWriter, status int, body any) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -68,8 +82,8 @@ func startFakeAuthService(t *testing.T, uri string) (string, *fakeCalls) {
 	}
 	handle := func(path string, run func(ctx context.Context, conn *pgx.Conn, in map[string]string) (int, any)) {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer "+fakeToken {
-				t.Errorf("%s %s: method or bearer token is not the CLI's own service credential", r.Method, path)
+			if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer "+workloadToken {
+				t.Errorf("%s %s: method or bearer token is not the CLI's workload token", r.Method, path)
 				refuse(w, http.StatusUnauthorized, "invalid_credentials")
 				return
 			}

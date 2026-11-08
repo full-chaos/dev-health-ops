@@ -50,7 +50,7 @@ goApi:
   #    create (admin, onboard create_org) and its organization delete go to auth-service first; go-api writes none of those rows itself (503 and no write when auth-service
   #    refuses for a reason go-api has no answer for, or is down). Needs authService.phase 4 (the routes refuse until
   #    auth-service owns users), auth-service's AUTH_MEMBERSHIP_ROUTES on (authService.extraEnv, name AUTH_MEMBERSHIP_ROUTES, value "true": the render refuses the switch without it),
-  #    and a go-api credential (goApi.sessionIssue) minted with the memberships:write scope. Off renders nothing.
+  #    and go-api's workload token (auth-service's AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT names go-api's workload principal). Off renders nothing.
   #    The key is absent by default (an empty goApi.authProxy map is refused like any other hand-set flag map):
   #    authProxy:
   #      orgProvisioning: true
@@ -316,14 +316,14 @@ authService:
   #    points. It trusts no forwarded address (authService.trustedProxies is the API port's alone): each caller is
   #    identified by its own token. Off by default. On, the chart renders the arg, a named `internal` containerPort,
   #    a ClusterIP Service `<fullname>-auth-service-internal` and a NetworkPolicy of the same name that admits the
-  #    pods of the listed peers on this port and nothing else. The API port, its Service and its policy do not
+  #    pods of the listed peers and of authService.networkPolicy.workloadClients on this port and nothing else. The API port, its Service and its policy do not
   #    change. Needs authService.phase >= 1 and authService.networkPolicy.enabled.
   internal:
     enabled: false
     # -- A whole number from 1 to 65535, not port or operatorPort.
     port: 8097
     # -- The workloads of this release admitted on the internal port, by name: web, query-api, go-api. Each name
-    #    once; at least one while enabled.
+    #    once. While enabled, this list or authService.networkPolicy.workloadClients must be non-empty.
     peers: []
   image:
     # -- docker/go-worker.Dockerfile target `auth-service`. Non-local profiles
@@ -529,6 +529,12 @@ authService:
     #    (AUTH_SESSION_READER_ROLES). Each must already exist. Empty grants none:
     #    a token auth-service issued is then refused by go-api and query-api.
     sessionReaderRoles: []
+    # -- CHAOS-13063: the logins granted SELECT on the External Push credential projection (auth.credential_projection:
+    #    domain_owner, organization_id, external_reference, revision, status, expires_at, scopes, source_id), for the worker
+    #    reconcile drift probe (PUSH_RECONCILE_PROBE=on reads it through the worker's domain login). Rendered as
+    #    AUTH_PROJECTION_READER_ROLES on the auth-migrate and auth-grants Jobs, only when listed. Each must already exist and
+    #    must differ from the migration login and runtimeRole. Empty grants none: the probe then logs SQLSTATE 42501.
+    projectionReaderRoles: []
     # -- CHAOS-10895: the External Push lifecycle append function. writerRole is a
     #    NOLOGIN role that owns it (AUTH_PUSH_LIFECYCLE_WRITER_ROLE) and
     #    callerRoles the logins that may execute it (go-api's API_DATABASE_ROLE and
@@ -557,6 +563,13 @@ authService:
     sessionReaders:
       goApi: ""
       queryApi: ""
+    # -- The session reader roles that also read the workload registry row of the acr-api workload
+    #    (AUTH_WORKLOAD_READER_ROLES): go-api's API_DATABASE_ROLE, so its internal acr routes resolve the
+    #    acr principal from the registry. Each must also be a session reader (sessionReaders or
+    #    sessionReaderRoles); query-api's login must never be listed. Empty grants the read to nobody and
+    #    go-api's internal acr routes answer 503. Set it before the auth-grants step of the go-api release
+    #    that reads the registry.
+    workloadReaderRoles: []
     # -- Acknowledges ONE deliberate narrowing of the runtime role's grants: the
     #    16-hex digest a refused auth-migrate run prints. Rendered as
     #    `-ack-grant-narrowing=<digest>` into the auth-migrate Job and the
@@ -632,6 +645,15 @@ authService:
     # -- Pod selectors allowed to scrape the operator port (/metrics). Empty admits
     #    nobody (kubelet probes are not subject to NetworkPolicy).
     metricsFrom: []
+    # -- CHAOS-13130: workloads outside this release admitted on the INTERNAL port (authService.internal.port) alone,
+    #    as more `from` entries of the <fullname>-auth-service-internal policy; needs authService.internal.enabled.
+    #    The API port is not opened. Each entry: `podSelector` (required, a non-empty matchLabels or
+    #    matchExpressions) and an optional `namespaceSelector` (non-empty; omit it for this release's namespace).
+    #    Any other key (a port, an ipBlock) fails the render. For acr-api:
+    #    `[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"acr","app.kubernetes.io/component":"api"}},`
+    #    `"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"<acr namespace>"}}}]`.
+    #    A pod admitted here still gets a workload token only when its ServiceAccount is registered for the exchange.
+    workloadClients: []
     # -- Labels of the ingress controller pods admitted to the API port, only while an ingress.hosts entry routes
     #    to `service: auth-service` (the issuer's two public documents; CHAOS-12359). The namespace is
     #    networkPolicy.ingressControllerNamespace. No such host renders no rule for the controller.

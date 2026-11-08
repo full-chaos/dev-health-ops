@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // emptyScanner answers Next() false unconditionally -- safe as a stand-in
@@ -129,7 +130,7 @@ func TestNewPeopleSummaryHandlerHappyPath(t *testing.T) {
 	handler := newPeopleSummaryHandler(newPeopleDetailFoundReader(t, "alice@example.com"))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anything/summary", nil)
 	req.SetPathValue("person_id", "anything")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -156,7 +157,7 @@ func TestNewPeopleSummaryHandlerPersonNotFound(t *testing.T) {
 	handler := newPeopleSummaryHandler(newPeopleDetailNotFoundReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/nobody/summary", nil)
 	req.SetPathValue("person_id", "nobody")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -178,7 +179,7 @@ func TestNewPeopleSummaryHandlerDataUnavailable(t *testing.T) {
 	handler := newPeopleSummaryHandler(newPeopleDetailFailingReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/summary", nil)
 	req.SetPathValue("person_id", "anyone")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -201,7 +202,7 @@ func TestNewPeopleSummaryHandlerRejectsComparativeParams(t *testing.T) {
 			handler := newPeopleSummaryHandler(newPeopleDetailFailingReader(t))
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/summary?"+key+"=x", nil)
 			req.SetPathValue("person_id", "anyone")
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			serveRoute(t, handler, rec, req)
 			if rec.Code != http.StatusBadRequest {
@@ -226,7 +227,7 @@ func TestNewPeopleSummaryHandlerNonNumericRangeDaysValidationError(t *testing.T)
 	handler := newPeopleSummaryHandler(newPeopleDetailFailingReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/summary?range_days=not-a-number&compare_to=x", nil)
 	req.SetPathValue("person_id", "anyone")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {

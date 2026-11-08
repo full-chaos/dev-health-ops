@@ -1,4 +1,0 @@
-{
-  "org missing": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
-  "org not a uuid": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}"
-}

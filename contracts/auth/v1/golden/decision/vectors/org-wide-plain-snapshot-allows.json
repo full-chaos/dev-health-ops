@@ -1,0 +1,43 @@
+{
+  "expect": {
+    "allowed": true,
+    "cache_class": "",
+    "expires_in_seconds": null,
+    "obligations": {
+      "tenant_scope": "org-a"
+    },
+    "policy_revision": 16,
+    "reason": "allowed_by_role",
+    "wire_reason_code": "allowed_by_role"
+  },
+  "id": "org-wide-plain-snapshot-allows",
+  "layer": "pdp",
+  "request": {
+    "action": "analytics.read",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "member",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "plain",
+    "workload": null
+  },
+  "why": "the read needs no grant rows: a snapshot that cannot report grants is allowed, with the tenant scope alone."
+}

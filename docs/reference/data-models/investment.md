@@ -50,8 +50,7 @@ This repository inheritance does not change the
 
 There is no team-ownership fallback. A work unit whose edges, pull requests,
 commits and issue hierarchy name no repository is **unattributed**: it gets no
-repository share, and a team's repositories are never a unit's repository (chris,
-CHAOS-12949: "Drop fallback"). The unit keeps its categorization, identity and
+repository share, and a team's repositories are never a unit's repository ("Drop fallback"). The unit keeps its categorization, identity and
 total effort, and its effort is shown as a separate unattributed share:
 
 - zero effort: one allocation row with `allocation_source=empty`, `repo_id` NULL;
@@ -86,7 +85,7 @@ repository row keeps weight 1.
 
 ## Measure: work-unit count or issue size
 
-Investment measures effort, and effort is the size of the issues a unit worked on (D5999). Lines of code are never an
+Investment measures effort, and effort is the size of the issues a unit worked on. Lines of code are never an
 Investment measure. Two measures read the same rows:
 
 | Measure | What a unit weighs |
@@ -94,26 +93,25 @@ Investment measure. Two measures read the same rows:
 | `COUNT` (and `THROUGHPUT`, the same) | 1 work unit |
 | `ISSUE_SIZE` | The unit's newest issue size (`work_unit_issue_size`): the sum of the story points of its issues. A unit with no size weighs 1 work unit, so it is never dropped from the mix. |
 
-Windows are additive (CHAOS-9016, D6022). Every Investment read dates a work unit by its END day: the unit belongs to
+Windows are additive. Every Investment read dates a work unit by its END day: the unit belongs to
 the window `[start, end)` that holds its `to_ts`, whole, in exactly one window. A unit that spans a boundary is not
 counted in both windows and is not split pro rata, so the breakdowns of adjacent windows add up to the breakdown of the
 whole period. The REST `/investment` body, the sunburst, the quality counts, the Home tile and the Operating Review
 share the one predicate (`analytics.InvestmentWindowClause`).
 
-One window, one end (CHAOS-10118, D6083, D6101). Every reader takes its window from `timewindow`: a window names its
+One window, one end. Every reader takes its window from `timewindow`: a window names its
 last day, that day counts (the end is inclusive), and a day that is not over is in no window, even when it is named. A
 window with no end date, and one whose end date is today or later, is the trailing window `[today-N, today)`, the last
 day yesterday. The GraphQL `dateRange`, the explain `date_range` and the `end_date` of every REST read bind the same
 exclusive end, `timewindow.ExclusiveEnd`: the day after the last named day, never later than today. The daily tables
 are read with `day < end`, the work units with `to_ts < end`: one bound, one reading. The clock is UTC: no org
-timezone is read yet (TODO: the org's own timezone, where an org sets one, is the one clock D6083 names).
+timezone is read yet (the org's own timezone, where an org sets one, is planned as the one clock).
 
-`ISSUE_SIZE` is served only where its sizing coverage rides in the same answer (D6027). It is the default of the
+`ISSUE_SIZE` is served only where its sizing coverage rides in the same answer. It is the default of the
 REST `/investment` response, which then carries `sizing_coverage`, `unsized_unit_count` and, when fewer than half of
 the units carry a size, `sizing_note`, and of the explanation, which carries the same three fields on each finding's
-evidence (CHAOS-9809). The sunburst, the Home tile "Investment by theme" and the Operating Review investment section
-stay on `COUNT` unless the caller asks for `ISSUE_SIZE` in a way that brings the coverage with it (CHAOS-9624,
-CHAOS-9873, D6032): see below.
+evidence. The sunburst, the Home tile "Investment by theme" and the Operating Review investment section
+stay on `COUNT` unless the caller asks for `ISSUE_SIZE` in a way that brings the coverage with it: see below.
 
 In both, a unit's weight is spread over its subcategories by their probabilities and over its repositories by their
 allocation weights, and a team scope takes each repository at the share the teams in view hold, so the sum of a
@@ -158,10 +156,10 @@ the unit's repositories (the same ownership rule the team scope uses). It no lon
 vote, so a unit in an owned repository counts as assigned even when no linked work item names a team, and a unit in an
 unowned repository counts as unassigned even when a work item names one. A unit counts once, however many owning teams
 it reaches. The denominator is unchanged. The TEAM grouping of the Investment flow, breakdown, timeseries and the flow matrix reads the same ownership
-(CHAOS-9297): each effort row takes the owner of its repository, a co-owned repository is shared among its
+: each effort row takes the owner of its repository, a co-owned repository is shared among its
 owners by their linked share (the main owner by its share, each lesser owner by its own lesser share; equally only on a tie or when no share is measured), and a repository with no owner is `unassigned`, so the unassigned share of the flow is `1 - teamCoverage`
 except for a unit that spans an owned and an unowned repository (the coverage assigns it whole, the flow splits its
-effort). The owners are those at the present, by the one ownership rule of `internal/ownershipwindow` (D5987 option C): a repository whose
+effort). The owners are those at the present, by the one ownership rule of `internal/ownershipwindow` (option C): a repository whose
 first recorded ownership starts later has its first recorded owners now, and a team that is inactive owns nothing. Only the work-unit team list still shows the vote.
 
 ## Repository coverage: two numbers, not one
@@ -170,7 +168,7 @@ Repository coverage is the share of attributed effort that resolves to a
 repository. While older allocation generations written by the removed
 team-ownership fallback remain (`repo_source` starting with `team:`), that single
 share answers two different questions at once, and the API reports them
-separately. A unit recomputed after CHAOS-12949 never adds to the team-fallback
+separately. A unit recomputed now never adds to the team-fallback
 share.
 
 `repoCoverage` is unchanged: all effort that reached any repository, over all
@@ -190,7 +188,7 @@ counted twice and none is lost. A row that reached a repository with no recorded
 
 Both counts are of DISTINCT keys -- `(work unit, repository)` pairs on top, work units below -- never of query rows. Two things make a row count unusable here. A filtered view of the same window joins more rows per unit than an unfiltered one, so a row-based width would report a wider fallback for the same data simply because a filter was applied. And the underlying table is a ReplacingMergeTree, so a raw row count also moves with background merge state: 5310, then 10626, then 3612 rows were observed for unchanged logical content, the last two twenty minutes apart. Any census of that table should count units or distinct keys, never rows.
 
-**A work-category filter selects work units; it does not weight them.** Filtering to a category changes which units are counted and nothing else, so a unit that matches the filter in two ways counts exactly as much as one that matches in a single way. This was not always true: until CHAOS-5498 the filter re-weighted units by their number of matching subcategories, which moved `repoCoverage` and `teamCoverage` as well as the split -- measured at 0.5 unfiltered against 0.333 filtered on identical data. Coverage figures taken from a filtered view before that fix are not comparable with ones taken after it.
+**A work-category filter selects work units; it does not weight them.** Filtering to a category changes which units are counted and nothing else, so a unit that matches the filter in two ways counts exactly as much as one that matches in a single way. This was not always true: earlier the filter re-weighted units by their number of matching subcategories, which moved `repoCoverage` and `teamCoverage` as well as the split -- measured at 0.5 unfiltered against 0.333 filtered on identical data. Coverage figures taken from a filtered view before that fix are not comparable with ones taken after it.
 
 A work unit is in scope for a category when it carries POSITIVE weight in that category, not merely a subcategory entry for it. Distributions are dense -- every unit carries an entry for every subcategory, weight zero where it does not apply -- so selecting on the presence of an entry would put every unit in scope and the filter would never remove anything. On the reference organization, all units carry a `feature_delivery` entry while about 71 percent carry positive `feature_delivery` weight.
 
@@ -216,13 +214,13 @@ measured here"; zero would mean "measured, and none of it is team fallback".
 ## Explain request fields
 
 `POST /api/v1/investment/explain` explains what the Investment page shows: every share, and the sum behind it,
-equals what `InvestmentBreakdown` reads for the same request (CHAOS-9555). The request body takes the page's own fields
+equals what `InvestmentBreakdown` reads for the same request. The request body takes the page's own fields
 next to `filters`:
 
 | Field | Meaning | Default |
 |---|---|---|
 | `measure` | `ISSUE_SIZE` (the page's measure: each unit weighs its issue size, 1 when unsized), `COUNT` or `THROUGHPUT` (same as `COUNT`); any other name, `CHURN_LOC` included, is refused. The explanation never weighs by a unit's `effort_value` | `ISSUE_SIZE` |
-| `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is the days `start_date` to `end_date`, both counted (D6101), the end never later than yesterday. It replaces `filters.time`. | `filters.time`: a relative `range_days` is the trailing window `[today-N, today)`, its last day is yesterday (D6083), the same window every ops reader takes from `timewindow.Compute`; an explicit `end_date` in `filters.time` is inclusive too and never later than yesterday (D6101) |
+| `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is the days `start_date` to `end_date`, both counted, the end never later than yesterday. It replaces `filters.time`. | `filters.time`: a relative `range_days` is the trailing window `[today-N, today)`, its last day is yesterday, the same window every ops reader takes from `timewindow.Compute`; an explicit `end_date` in `filters.time` is inclusive too and never later than yesterday |
 | `use_investment` | Accepted for parity with the page; no effect, because theme and subcategory always use the canonical categorization on both surfaces | none |
 
 `filters.scope.level` keeps its lowercase values. Scope `org` and scope `team` with no ids cover the same rows, as on the page.
@@ -233,10 +231,10 @@ finding names what the share counts ("of work").
 
 ## Deprecated: `investment_metrics_daily` / `investment_areas.yaml`
 
-> **Removed (CHAOS-9200, chris 2026-10-11).** The rule classifier, `investment_areas.yaml` and the Go and Python
+> **Removed.** The rule classifier, `investment_areas.yaml` and the Go and Python
 > code that loaded it are deleted: no rule-based investment classification is computed or stored. The daily
 > family `work_item_investment` writes `work_item_completion_daily` (see above); `investment_metrics_daily` and
-> `investment_classifications_daily` were dropped by ClickHouse migration 120 (CHAOS-9302): the tables and their rows
+> `investment_classifications_daily` were dropped by ClickHouse migration 120: the tables and their rows
 > are gone. The migrations that created them stay in the chain. The paragraphs below describe how those tables were written and read BEFORE this change (the
 > daily writer and the newest-row-per-key read rule): history for reading old rows, not current behaviour.
 
@@ -266,18 +264,18 @@ that the newest row is the true one. A day with no data gets no row.
 `issue_type_metrics_daily.lead_p50_hours` is the upper median of `completed_at - created_at`, in hours, over the items
 completed on the day (the same bucketing as the cycle p50). An item with no `created_at`, or created after its
 completion, is left out of the median. A key with no such item holds NULL (the column is `Nullable(Float64)`, migration
-135, CHAOS-9920): NULL is "no lead time", a stored 0 is a lead time of 0 hours. Readers average the column as it is;
+135): NULL is "no lead time", a stored 0 is a lead time of 0 hours. Readers average the column as it is;
 `avg()` leaves NULL out. Migration 135 only changes the type: a row written before it keeps its stored 0 until the day is recomputed.
 
 `work_item_completion_daily.churn_loc` is the sum of `additions + deletions` of the pull requests linked to the items
 completed on the day, once per pull request for each (repository, team) row. The link is a `work_graph_issue_pr` row
 of any tier (native, explicit_text, heuristic), found by the item's id and read at the pull request's own repository
 and number; an issue-key prefix or the item's own repository column is never the relation. Each stored part (additions,
-deletions) counts on its own; a pull request with neither adds 0. The column is `Nullable(UInt64)` (migration 135,
-CHAOS-9920): NULL means no pull request linked to the key's completed items has a size, a stored 0 means the sized
+deletions) counts on its own; a pull request with neither adds 0. The column is `Nullable(UInt64)` (migration 135):
+NULL means no pull request linked to the key's completed items has a size, a stored 0 means the sized
 pull requests changed 0 lines. A retraction row holds NULL. Migration 135 only changes the type: a row written before it keeps its stored 0 until the day is recomputed.
 
-**`work_item_completion_daily` replaces `investment_metrics_daily` as the daily completion source (CHAOS-9264).** The
+**`work_item_completion_daily` replaces `investment_metrics_daily` as the daily completion source.** The
 analytics measures that count or time completed work by team, repository or work type (count, throughput,
 cycle time) read `work_item_completion_daily`: one row per (organization, repository, team, day) with the delivery
 units, the completed items and one cycle p50 for the whole key. It has no `investment_area` or `project_stream`
@@ -296,7 +294,7 @@ persisted table — it is a query-time CTE (`LATEST_WORK_UNIT_INVESTMENTS_CTE`,
 `work_item_team_attributions` through the shared `build_unit_team_subquery` helper (also in
 `api/queries/investment.py`) — a `PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE` subquery selecting
 `is_primary = 1`, latest `computed_at` per work item, which already carries ownership precedence
-(CHAOS-2600). `fetch_investment_team_edges` is the reference caller of this join shape; there is no
+. `fetch_investment_team_edges` is the reference caller of this join shape; there is no
 `fetch_investment_breakdown(include_team_id=...)` parameter — that phrasing describes the pattern,
 not a real function signature.
 
@@ -320,8 +318,8 @@ complete. No reader selects it, no read model joins it, and the recorded Python 
 (`internal/jobs/investment/materialize_frozen_python_golden_test.go` pins the outcome, rollup and gate decisions, not a
 whole row). See the operator runbook note "Quotes of a crashed rewrite".
 
-**`work_unit_issue_size` (migration 130, CHAOS-9619)** holds the issue size of each work unit: Investment measures
-effort, and effort is the size of the issues a unit worked on (D5999); lines of code are never a size. One row per
+**`work_unit_issue_size` (migration 130)** holds the issue size of each work unit: Investment measures
+effort, and effort is the size of the issues a unit worked on; lines of code are never a size. One row per
 unit and materialization run: `issue_size` is the sum of the positive `work_items.story_points` of the unit's distinct
 issues, `sized_issue_count` how many of them carry one and `issue_count` how many issues the unit has. Every provider
 writes its size to that one column (Jira story points from the configured field, GitLab weight, Linear estimate, GitHub
@@ -332,10 +330,9 @@ in the provider reaches the next run. Readers take the newest row per `(org_id, 
 `computed_at`; a unit with no row is unsized. The operator rollback is `internal/chmigrate/rollback/130_*.down.sql`.
 
 **Consumers outside this repo must read the canonical join, never `investment_metrics_daily`.**
-CHAOS-4398 found that `dev-health-acr`'s `FactInvestment` producer (CHAOS-4363/#308) reads
+The `dev-health-acr` `FactInvestment` producer reads
 `investment_metrics_daily` and therefore surfaces the deprecated legacy taxonomy, not the
-canonical one — the same class of gap CHAOS-4347 named for repository status and CHAOS-4365 named
-for cognitive load: a real, existing, deterministic metric with no producer reading the correct
+canonical one — the same class of gap as for repository status and cognitive load: a real, existing, deterministic metric with no producer reading the correct
 source. A new acr producer reading `latest_work_unit_investments` LEFT JOIN
 `work_item_team_attributions` (via `build_unit_team_subquery`, as `fetch_investment_team_edges`
 does) is required before any team-scoped investment-mix consumer (e.g. cohort ranking) can trust

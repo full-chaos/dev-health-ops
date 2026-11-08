@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -191,26 +193,35 @@ func TestPDPEnforceDenyIsATypedDeny(t *testing.T) {
 	}
 }
 
+// refusedTransport refuses every dial. A closed httptest port is not a refusal: another listener can take the freed
+// port and answer.
+type refusedTransport struct{}
+
+func (refusedTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+}
+
 // Enforce (the cell on): PDP down (refused connection, 503, timeout) is a typed local deny, never a pass.
 func TestPDPEnforceDownIsATypedLocalDeny(t *testing.T) {
-	closed := httptest.NewServer(http.NotFoundHandler())
-	closedURL := closed.URL
-	closed.Close()
+	refused, err := pep.New(pep.Config{BaseURL: "http://pdp.invalid", AllowPlainHTTP: true, HTTPClient: &http.Client{Transport: refusedTransport{}}, ClientService: ClientService, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
 	failing := pdptest.New(t)
 	failing.Fail(http.StatusServiceUnavailable)
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { time.Sleep(1500 * time.Millisecond) }))
 	t.Cleanup(slow.Close)
 	for name, tc := range map[string]struct {
-		base   string
-		reason pep.Reason
+		decider pep.Decider
+		reason  pep.Reason
 	}{
-		"refused": {closedURL, pep.ReasonUnreachable},
-		"503":     {failing.URL, pep.ReasonUnavailable},
-		"timeout": {slow.URL, pep.ReasonTimeout},
+		"refused": {refused, pep.ReasonUnreachable},
+		"503":     {pepClient(t, failing.URL), pep.ReasonUnavailable},
+		"timeout": {pepClient(t, slow.URL), pep.ReasonTimeout},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, cfg := newMeter(t)
-			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, tc.base), cells("analytics")
+			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, tc.decider, cells("analytics")
 			_, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
 			denied, ok := err.(*DenyError)
 			if !ok || !denied.Local || denied.Reason != tc.reason {
@@ -467,14 +478,18 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 	}{
 		"organization scope, tenant match":     {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization"}, true, "", ResultAllow},
 		"scope none action, tenant only":       {"GET /buildinfo", map[string]any{"tenant_scope": org}, true, "", ResultAllow},
-		"empty allowlist":                      {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
-		"allowlist of one":                     {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"empty allowlist":                      {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{}}, false, ReasonAllowlistRouteUnsupported, ResultNotCarriedOut},
+		"allowlist of one":                     {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonAllowlistRouteUnsupported, ResultNotCarriedOut},
 		"allowlist on a scope none action":     {"GET /buildinfo", map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"redaction class":                      {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "redaction": []string{"free_text"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"tenant mismatch":                      {testProfile, map[string]any{"tenant_scope": "other-org", "repository_scope": "organization"}, false, ReasonTenantMismatch, ResultNotCarriedOut},
 		"no tenant scope":                      {testProfile, map[string]any{"repository_scope": "organization"}, false, ReasonTenantMismatch, ResultNotCarriedOut},
-		"no repository member on filtered one": {testProfile, map[string]any{"tenant_scope": org}, false, ReasonNoRepositoryRule, ResultNotCarriedOut},
+		"no repository member on filtered one": {acrTestProfile, map[string]any{"tenant_scope": org}, false, ReasonNoRepositoryRule, ResultNotCarriedOut},
+		"tenant only on a metrics read":        {testProfile, map[string]any{"tenant_scope": org}, true, "", ResultAllow},
 		"minimum assurance":                    {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal2"}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"minimum assurance aal1":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal1"}, true, "", ResultAllow},
+		"minimum assurance aal3":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal3"}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"minimum assurance unknown":            {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal9"}, false, pep.ReasonUnknownObligation, ResultUnavailable},
 		"step up":                              {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "step_up": true}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"unknown obligation key":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "audit": true}, false, pep.ReasonUnknownObligation, ResultUnavailable},
 		"unknown repository scope":             {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "everything"}, false, pep.ReasonUnknownObligation, ResultUnavailable},
@@ -485,8 +500,10 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 			srv := pdptest.New(t)
 			srv.Obligations(tc.obligation)
 			m, cfg := newMeter(t)
-			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics,org")
-			_, err := New(cfg).Authorize(context.Background(), tc.profile, testBearer, org)
+			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics,org,acr")
+			g := New(cfg)
+			g.actions[acrTestProfile] = "acr.context.read"
+			_, err := g.Authorize(context.Background(), tc.profile, testBearer, org)
 			got := m.points(t, resultMetric)
 			if len(got) != 1 || got["action="+actionOf(tc.profile)+",mode=enforce,result="+tc.result] != 1 {
 				t.Fatalf("results %v, want one %s", got, tc.result)
@@ -505,15 +522,23 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 	}
 }
 
+// acrTestProfile is a test-only row of a filtered action: catalog version 14 keeps only the ACR reads filtered, and no
+// query-api row asks one.
+const acrTestProfile = "GET /acr-test"
+
 func actionOf(profile string) string {
 	if profile == "GET /buildinfo" {
 		return "org.read"
+	}
+	if profile == acrTestProfile {
+		return "acr.context.read"
 	}
 	return testAction
 }
 
 // A hand-built allow (the fake gives the default organization allow) with a repository allowlist on a route not cut
-// over is the case the reason is pinned to: the gate's own refusal, not the client's, names unknown_obligation.
+// over is the case the reason is pinned to: the gate's own refusal, not the client's. testProfile is an M route, so
+// it names allowlist_route_unsupported.
 func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
@@ -521,7 +546,7 @@ func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) 
 	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics")
 	_, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, strings.ToLower(testOrg))
 	denied, ok := err.(*DenyError)
-	if !ok || !denied.Local || denied.Reason != pep.ReasonUnknownObligation {
-		t.Fatalf("answered %#v, want a local DenyError unknown_obligation", err)
+	if !ok || !denied.Local || denied.Reason != ReasonAllowlistRouteUnsupported {
+		t.Fatalf("answered %#v, want a local DenyError allowlist_route_unsupported", err)
 	}
 }

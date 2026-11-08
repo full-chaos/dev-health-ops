@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -522,7 +523,8 @@ func TestReadAPIResourceKeyNeverAppearsInARefusalOrAnErrorBody(t *testing.T) {
 	}
 }
 
-func TestReadScopesAreReadOnlyAndTheSessionIssuerClassNamesThem(t *testing.T) {
+// The read routes take only the go-api workload token: the session issuer class, retired on them, names no read scope.
+func TestReadScopesAreReadOnlyAndTheSessionIssuerClassHoldsNone(t *testing.T) {
 	want := []string{ScopeGrantsRead, ScopeMembershipsRead, ScopeOrganizationsRead, ScopePrincipalsRead}
 	sort.Strings(want)
 	if got := ReadScopes(); !equalLists(got, want) {
@@ -577,11 +579,12 @@ func TestReadScopesAreReadOnlyAndTheSessionIssuerClassNamesThem(t *testing.T) {
 			held = class.Auth.Scopes
 		}
 	}
-	sort.Strings(held)
+	if len(held) == 0 {
+		t.Fatal("credential-classes.json: internal_svc_authsess_token names no scope")
+	}
 	for _, scope := range ReadScopes() {
-		i := sort.SearchStrings(held, scope)
-		if i == len(held) || held[i] != scope {
-			t.Errorf("credential-classes.json: internal_svc_authsess_token does not name %s (has %v)", scope, held)
+		if slices.Contains(held, scope) {
+			t.Errorf("credential-classes.json: internal_svc_authsess_token still names %s (has %v)", scope, held)
 		}
 	}
 }

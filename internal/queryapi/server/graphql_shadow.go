@@ -60,7 +60,8 @@ func graphQLShadowSubject(token string) graph.ShadowSubject {
 	return graph.ShadowSubject{Bearer: token, UserAccessToken: class == principal.AccessClassUser, SkipReason: shadowSkipReason(class)}
 }
 
-// withGate carries gate on each request's context, for a listener the plane handler does not wrap (the MCP one).
+// withGate carries gate on each request's context, for a listener the plane handler does not wrap (the internal and
+// MCP ones).
 func withGate(next http.Handler, gate *pdp.Gate) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gated := r.WithContext(pdp.WithGate(r.Context(), gate))

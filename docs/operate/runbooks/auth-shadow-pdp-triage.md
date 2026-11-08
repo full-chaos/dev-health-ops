@@ -30,7 +30,7 @@ For a go-api route whose profile row names a catalog action (see the [action map
 
 A call is **skipped** (counted, never asked) when the caller cannot be judged: the token is not a user access token (a legacy HS256 token), the route is organization-scoped and the caller has no organization, or the row is high risk while `AUTH_SHADOW_PDP_HIGH_RISK` is off. Routes with no catalog action are not counted at all.
 
-A call is counted **impersonation_refused** (never asked) when a live go-api impersonation row is in force for the caller's own bearer, as enforcement refuses it; the stop route is asked. A delegated session's own bearer is asked like any other caller.
+A call is counted **impersonation_refused** (never asked) when a live go-api impersonation row is in force for the caller's own bearer and enforcement refuses it (a write, or a platform wrap); its read that the legacy check admits is counted **skipped**, as enforcement keeps the legacy answer; the stop route is asked. A delegated session's own bearer is asked like any other caller.
 
 ## Switches
 
@@ -59,6 +59,8 @@ A bad value never stops the service. The shadow stays off, the log has an ERROR 
 | `skipped` | A covered request the shadow cannot ask. | only to judge coverage |
 
 Zero mismatches is not "good" on its own. Read the results panel first: `error`, `dropped` and `skipped` calls produce no mismatch.
+
+For a count per route, read the go-api INFO log `api shadow pdp: result`. Each shadowed request writes one line with `route` (the row key, `METHOD /route`), `namespace`, `caller` and `result`. The line also carries `decision_id` when the decision point answered. A `match` with no `decision_id` was decided without a decision point call (the request names another organization), so it is not PDP evidence for the row.
 
 The `AuthShadowMismatchUnresolved` alert (`alerts/rules.yml`, group `auth_shadow`) fires on any increase of `class="unresolved"` within one hour. The dashboard "Dev Health - Auth Shadow Mismatch (production)" (`deploy/signoz/dashboards/auth-shadow-mismatch.json`) shows mismatches by namespace, caller and class. Setup and labels are in [Auth shadow mismatch](../observe/dashboards-and-alerts.md#auth-shadow-mismatch).
 

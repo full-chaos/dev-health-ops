@@ -58,7 +58,7 @@ func TestRateLimitPathCardinalityVenueOracle(t *testing.T) {
 		}
 	}
 
-	replica, _ := startGoServer(t, ctx, venue, jwtKey)
+	replica, _ := startGoServer(t, ctx, venue, jwtKey, withLinkSecret(jwtKey))
 	receipt := venueoracle.Diff(t, replica, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 	golden.Finish(t)

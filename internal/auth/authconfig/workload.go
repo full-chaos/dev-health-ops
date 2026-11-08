@@ -159,9 +159,17 @@ const EnvSessionIssueWorkloadSubject = "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"
 var sessionIssueWorkloadSubjectPattern = regexp.MustCompile(`^prn_[A-Za-z0-9_-]{22}$`)
 
 // sessionIssueWorkloadSubject reads the session issue route's workload
-// subject. Errors name the variable, never its value.
+// subject, from the variable or from the file its _FILE companion names (the two are mutually exclusive).
+// Errors name the variable, never its value.
 func sessionIssueWorkloadSubject(lookup secrets.LookupEnv, tokenIssuerURL string) (string, error) {
-	return workloadSubject(lookup, EnvSessionIssueWorkloadSubject, tokenIssuerURL)
+	resolved, present, err := secrets.Resolve(EnvSessionIssueWorkloadSubject, lookup)
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		return "", nil
+	}
+	return workloadSubject(func(string) (string, bool) { return resolved.Reveal(), true }, EnvSessionIssueWorkloadSubject, tokenIssuerURL)
 }
 
 // EnvAcrEventsWorkloadSubject is the acr-api workload principal (prn_) whose

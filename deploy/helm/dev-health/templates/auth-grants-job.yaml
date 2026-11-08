@@ -72,6 +72,22 @@ spec:
             - name: AUTH_SESSION_READER_ROLES
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- with $m.projectionReaderRoles }}
+            - name: AUTH_PROJECTION_READER_ROLES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- /* auth-migrate refuses a workload reader that is not a session reader of the same run: this Job passes only sessionReaderRoles as session readers (auth-migrate-job.yaml holds the union with sessionReaders), so it passes only the workload readers among them. */}}
+            {{- $sessionReaders := list }}
+            {{- range (default (list) $m.sessionReaderRoles) }}{{- $sessionReaders = append $sessionReaders (trim (toString .)) }}{{- end }}
+            {{- $workloadReaders := list }}
+            {{- range $m.workloadReaderRoles }}
+            {{- $role := trim (toString .) }}
+            {{- if has $role $sessionReaders }}{{- $workloadReaders = append $workloadReaders $role }}{{- end }}
+            {{- end }}
+            {{- with $workloadReaders }}
+            - name: AUTH_WORKLOAD_READER_ROLES
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- with include "dev-health.authSchemaOwnerRole" . }}
             - name: AUTH_SCHEMA_OWNER_ROLE
               value: {{ . | quote }}

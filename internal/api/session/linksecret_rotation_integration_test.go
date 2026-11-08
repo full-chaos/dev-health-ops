@@ -26,7 +26,7 @@ type rotationCase struct {
 }
 
 var rotationCases = []rotationCase{
-	{"signed with the access key before the roll", authmail.Config{TokenSecret: "access-key-before-roll", LinkSecret: "link-new"}, "access-key-before-roll", true},
+	{"signed with the former chain key", authmail.Config{LinkSecret: "link-new"}, "access-key-before-roll", false},
 	{"signed with the retired link secret during the overlap", authmail.Config{LinkSecret: "link-new", PreviousLinkSecret: "link-old"}, "link-old", true},
 	{"signed with the retired link secret after the overlap", authmail.Config{LinkSecret: "link-new"}, "link-old", false},
 }

@@ -83,9 +83,9 @@ func (s pgStore) settingByKey(ctx context.Context, orgID, category, key string) 
 	return settingByKeyOn(ctx, s.Pool, orgID, category, key)
 }
 
-// settingByKeyOn reads one settings row over db (the pool or an open
-// transaction).
-func settingByKeyOn(ctx context.Context, db pgExecer, orgID, category, key string) (*setting, error) {
+// settingRowForWrite reads one settings row over db (the pool or an open
+// transaction), any key; readers go through settingByKeyOn (llmkeybinding.go).
+func settingRowForWrite(ctx context.Context, db pgExecer, orgID, category, key string) (*setting, error) {
 	var row setting
 	err := db.QueryRow(ctx,
 		`SELECT id, key, value, is_encrypted, description FROM settings WHERE org_id = $1 AND category = $2 AND key = $3`,
@@ -244,7 +244,7 @@ func (h *handlers) upsertSetting(ctx context.Context, db pgExecer, orgID, catego
 		text := revealSecret(sealed)
 		stored = &text
 	}
-	existing, err := settingByKeyOn(ctx, db, orgID, category, key)
+	existing, err := settingRowForWrite(ctx, db, orgID, category, key)
 	if err != nil {
 		return nil, err
 	}

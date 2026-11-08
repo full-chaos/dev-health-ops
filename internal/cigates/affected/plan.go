@@ -14,15 +14,22 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode"
 )
 
 var (
@@ -174,10 +181,13 @@ type planInput struct {
 	keys        []string
 	root        string
 	goFilesFull bool
-	always      []string
-	tables      *tables                  // the read tables; nil plans every non-Go path FULL
-	guard       []string                 // defects of the read tables against the code (plan-reads): any one plans FULL
-	guardFn     func() ([]string, error) // computes guard when the verdict reaches it; nil keeps guard
+	// tagged: the build tag of the planned test binaries (the integration plan). A shard runs only the tests of the files
+	// that need the tag, so a test-scope row that only an untagged test reaches is the go-quality legs' (unitOnlySites).
+	tagged  string
+	always  []string
+	tables  *tables                  // the read tables; nil plans every non-Go path FULL
+	guard   []string                 // defects of the read tables against the code (plan-reads): any one plans FULL
+	guardFn func() ([]string, error) // computes guard when the verdict reaches it; nil keeps guard
 	// mdBounded: a pull request whose every changed path is a Markdown file outside testdata and no go:embed target
 	// plans its bounded readers: reads.tsv readers by the exact paths their code names (markdownOnly, boundedReads), walks
 	// and edges that cover the files, and the unbounded sites with Markdown evidence (a walk gate, patterns.tsv)
@@ -364,6 +374,13 @@ func plan(in planInput) (Verdict, error) {
 	// selected (and every key that runs one). A site reach.tsv does not place selects its reverse import closure.
 	// A Markdown-only pull request drops the unbounded sites (the merge queue runs the full plan) but keeps those
 	// with positive Markdown evidence: a walk whose gate passes a changed file, a pattern that matches one (patterns.tsv).
+	unitOnly := func(siteRow) bool { return false }
+	if in.tagged != "" && !in.goFilesFull && !markdownOnly(in.changed, packages) && in.scanned != nil {
+		var err error
+		if unitOnly, err = unitOnlySites(in.root, in.tagged, *in.scanned); err != nil {
+			return Verdict{}, err
+		}
+	}
 	var unboundedAll func(r siteRow, why string)
 	unbounded := func(r siteRow, why string) {
 		if !mdOnly {
@@ -372,7 +389,9 @@ func plan(in planInput) (Verdict, error) {
 	}
 	unboundedAll = func(r siteRow, why string) {
 		if r.test() {
-			sel.only(importPath(r.pkg), why)
+			if !unitOnly(r) {
+				sel.only(importPath(r.pkg), why)
+			}
 			return
 		}
 		rs, ok := t.reachOf(r.pkg, r.site)
@@ -402,6 +421,9 @@ func plan(in planInput) (Verdict, error) {
 		}
 		for _, p := range changedPaths {
 			if w.covers(p) {
+				if w.test() && unitOnly(w.siteRow) {
+					break
+				}
 				sel.reader(importPath(w.pkg), w.test(), "walks.tsv "+w.pkg+" "+w.site+" walks "+w.root+" ("+p+")")
 				break
 			}
@@ -593,6 +615,7 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 	root := fs.String("root", "", "repository root (the head tree: its Go sources are scanned for reads)")
 	fs.String("base", "", "base sha of the change set (kept for the callers; the verdict reads no file at the base)")
 	goFilesFull := fs.Bool("go-files-full", false, "a change set with any .go file is FULL (the go-quality legs then run no package subset)")
+	tagged := fs.String("tagged", "", "build tag of the planned test binaries (the integration plan): a test-scope row whose every read is in the body of a top-level test of a file with no build constraint selects nothing, unless a file of the package needs the tag and holds init, TestMain or a package variable, a file of the package names the test, the file names a container helper, DOCKER_HOST or docker, a non-test file needs the tag, or the change set is Markdown-only")
 	mdBounded := fs.Bool("md-bounded", false, "a pull_request whose every changed path is a Markdown file (no testdata, no go:embed target) plans only the bounded readers of those files and the unbounded sites with Markdown evidence")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -626,7 +649,7 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	in := planInput{event: *event, changed: changed, golist: golist, keys: keys, root: *root, goFilesFull: *goFilesFull,
+	in := planInput{event: *event, changed: changed, golist: golist, keys: keys, root: *root, goFilesFull: *goFilesFull, tagged: *tagged,
 		always: alwaysList(), log: stderr, mdBounded: *mdBounded}
 	// A root that does not exist (a synthetic go list) has no code to scan: no tables, so every non-Go path is FULL and
 	// a .go plan is the import closure and always.tsv.
@@ -737,4 +760,220 @@ func isBookkeepingTable(raw, p string) bool {
 		}
 	}
 	return false
+}
+
+// unitOnlySites returns whether a test-scope site of the read tables runs only in tests that a shard built with tag never
+// runs (the go-quality legs run them, CHAOS-11407): the site file has no build constraint; every unbounded read of it
+// lies in the body of a top-level Test, Fuzz, Benchmark or Example function that no file of the package names; and the
+// package is not in tagHooks (a shard runs such a package unfiltered). A non-test file that names tag keeps every site.
+func unitOnlySites(root, tag string, scanned []Read) (func(siteRow) bool, error) {
+	th, err := tagHooks(root, tag)
+	if err != nil {
+		return nil, err
+	}
+	if th.nonTest {
+		return func(siteRow) bool { return false }, nil
+	}
+	reads := map[string][]Read{}
+	for _, r := range scanned {
+		if r.Test && r.Kind != ReadPath {
+			k := r.Package + "\t" + path.Base(r.File)
+			reads[k] = append(reads[k], r)
+		}
+	}
+	memo := map[string]bool{}
+	return func(r siteRow) bool {
+		k := r.pkg + "\t" + r.site
+		if v, ok := memo[k]; ok {
+			return v
+		}
+		src := th.files[path.Join(r.pkg, r.site)]
+		v := !th.hooks[r.pkg] && len(reads[k]) > 0 && src.file != nil && !constraintLine.Match(src.src) &&
+			readsInUnitTests(src.fset, src.file, reads[k], func(name string) bool {
+				for _, rel := range th.byDir[r.pkg] {
+					if namesIdent(th.files[rel].file, name) {
+						return true
+					}
+				}
+				return false
+			})
+		memo[k] = v
+		return v
+	}, nil
+}
+
+type parsedGo struct {
+	fset *token.FileSet
+	file *ast.File
+	src  []byte
+}
+
+// tagHookSet is what tagHooks found under root.
+type tagHookSet struct {
+	files   map[string]parsedGo // every Go source of the scan, by repository path
+	byDir   map[string][]string
+	tagged  []string        // the _test.go files a build constraint line of which names the tag
+	hooks   map[string]bool // package directories a shard may run unfiltered
+	nonTest bool            // a non-test file names the tag
+}
+
+// tagHooks is a superset of the packages ci/check_go.sh runs unfiltered in a shard (ci/tools/gotestfuncs H records over
+// the tag-only test files, before reviewed rows): a directory with a _test.go file whose build constraint names tag and
+// that declares init or TestMain, declares a package-level var, has a blank or dot import or an import of a
+// registering path (hookImports, gotestfuncs denyImports), or that sits in a directory one Go file of which declares a
+// predeclared name at package level.
+func tagHooks(root, tag string) (tagHookSet, error) {
+	th := tagHookSet{files: map[string]parsedGo{}, byDir: map[string][]string{}, hooks: map[string]bool{}}
+	files, err := goSources(root, repoFiles(root))
+	if err != nil {
+		return th, err
+	}
+	shadows := map[string]bool{}
+	for _, rel := range files {
+		src, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			return th, err
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, rel, src, parser.SkipObjectResolution|parser.ParseComments)
+		if err != nil {
+			return th, err
+		}
+		dir := path.Dir(rel)
+		th.files[rel] = parsedGo{fset, f, src}
+		th.byDir[dir] = append(th.byDir[dir], rel)
+		for _, d := range f.Decls {
+			for _, name := range declNames(d) {
+				if types.Universe.Lookup(name) != nil {
+					shadows[dir] = true
+				}
+			}
+		}
+		if !namesTag(src, tag) {
+			continue
+		}
+		if !strings.HasSuffix(rel, "_test.go") {
+			th.nonTest = true
+			continue
+		}
+		th.tagged = append(th.tagged, rel)
+		for _, d := range f.Decls {
+			switch d := d.(type) {
+			case *ast.FuncDecl:
+				if d.Recv == nil && (d.Name.Name == "init" || d.Name.Name == "TestMain") {
+					th.hooks[dir] = true
+				}
+			case *ast.GenDecl:
+				if d.Tok == token.VAR {
+					th.hooks[dir] = true
+				}
+			}
+		}
+		for _, im := range f.Imports {
+			p, err := strconv.Unquote(im.Path.Value)
+			if err != nil || hookImports[p] || im.Name != nil && (im.Name.Name == "_" || im.Name.Name == ".") {
+				th.hooks[dir] = true
+			}
+		}
+	}
+	for _, rel := range th.tagged {
+		if shadows[path.Dir(rel)] {
+			th.hooks[path.Dir(rel)] = true
+		}
+	}
+	return th, nil
+}
+
+// hookImports is ci/tools/gotestfuncs denyImports (paths whose init registers into a process-wide registry); a cell pins
+// the two lists equal.
+var hookImports = map[string]bool{
+	"net/http/pprof": true, "expvar": true, "image/png": true, "image/jpeg": true, "image/gif": true,
+	"github.com/jackc/pgx/v5/stdlib": true, "github.com/ClickHouse/clickhouse-go/v2": true,
+	"github.com/prometheus/client_golang/prometheus": true,
+}
+
+// declNames is the names a top-level declaration declares (functions without a receiver, vars, consts and types).
+func declNames(d ast.Decl) []string {
+	var out []string
+	switch d := d.(type) {
+	case *ast.FuncDecl:
+		if d.Recv == nil {
+			out = append(out, d.Name.Name)
+		}
+	case *ast.GenDecl:
+		for _, spec := range d.Specs {
+			switch spec := spec.(type) {
+			case *ast.ValueSpec:
+				for _, n := range spec.Names {
+					out = append(out, n.Name)
+				}
+			case *ast.TypeSpec:
+				out = append(out, spec.Name.Name)
+			}
+		}
+	}
+	return out
+}
+
+// readsInUnitTests: every read lies in the body of a top-level test function that named does not report as used.
+func readsInUnitTests(fset *token.FileSet, f *ast.File, reads []Read, named func(string) bool) bool {
+	for _, r := range reads {
+		in := false
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Body == nil || !testFuncName(fn.Name.Name) {
+				continue
+			}
+			if start, end := fset.Position(fn.Body.Pos()).Line, fset.Position(fn.Body.End()).Line; start <= r.Line && r.Line <= end {
+				in = !named(fn.Name.Name)
+				break
+			}
+		}
+		if !in {
+			return false
+		}
+	}
+	return true
+}
+
+func testFuncName(name string) bool {
+	for _, p := range []string{"Test", "Fuzz", "Benchmark", "Example"} {
+		if strings.HasPrefix(name, p) && name != "TestMain" {
+			return true
+		}
+	}
+	return false
+}
+
+// constraintLine matches a build constraint line of either form.
+var constraintLine = regexp.MustCompile(`(?m)^//(go:build|\s*\+build)\s(.*)$`)
+
+// namesTag reports whether a build constraint line of the file names tag.
+func namesTag(src []byte, tag string) bool {
+	for _, m := range constraintLine.FindAllSubmatch(src, -1) {
+		if slices.Contains(strings.FieldsFunc(string(m[2]), func(r rune) bool {
+			return !(r == '_' || r == '.' || unicode.IsLetter(r) || unicode.IsDigit(r))
+		}), tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// namesIdent reports whether the file uses name other than as the name of a top-level function declaration.
+func namesIdent(f *ast.File, name string) bool {
+	decl := map[*ast.Ident]bool{}
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil {
+			decl[fn.Name] = true
+		}
+	}
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name && !decl[id] {
+			found = true
+		}
+		return !found
+	})
+	return found
 }

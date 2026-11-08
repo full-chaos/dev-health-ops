@@ -75,7 +75,7 @@ func TestIntegrationPlanJobRunsThePlanVerdict(t *testing.T) {
 	if !ok {
 		t.Fatal("go-storage-integration-plan runs no `cigate plan-verdict`")
 	}
-	for _, want := range []string{`--event "${EVENT_NAME}"`, `--base "${BASE_SHA}"`} {
+	for _, want := range []string{`--event "${EVENT_NAME}" --tagged integration`, `--base "${BASE_SHA}"`} {
 		if !strings.Contains(s.Run, want) {
 			t.Errorf("the integration plan step does not pass %s", want)
 		}
@@ -85,6 +85,9 @@ func TestIntegrationPlanJobRunsThePlanVerdict(t *testing.T) {
 	}
 	if strings.Contains(s.Run, "--go-files-full") {
 		t.Error("the integration plan must not pass --go-files-full: a Go change selects its reverse closure")
+	}
+	if strings.Count(s.Run, "--tagged") != 1 {
+		t.Error("the integration plan passes --tagged once: its shards run only the integration-tagged tests")
 	}
 	if strings.Contains(s.Run, "--md-bounded") {
 		t.Error("the integration plan must not pass --md-bounded: only the go-quality legs plan Markdown-only pull requests by bounded readers")
@@ -111,6 +114,9 @@ func TestGoQualityLegsRunThePlanVerdict(t *testing.T) {
 	}
 	if s.Env["EVENT_NAME"] != eventExpr {
 		t.Errorf("the go-quality plan step's EVENT_NAME is %q, want %q: a push to main, a merge group or a schedule must read FULL", s.Env["EVENT_NAME"], eventExpr)
+	}
+	if strings.Contains(s.Run, "--tagged") {
+		t.Error("the go-quality plan must not pass --tagged: its legs run the untagged tests")
 	}
 	// --md-bounded only on pull_request: the flag is set in a branch on EVENT_NAME, never passed bare.
 	var trimmed []string

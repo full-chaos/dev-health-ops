@@ -543,7 +543,8 @@ jobs:
       # ci:full label; a draft without one runs none, and the aggregate reports that as INTEGRATION NOT RUN): `cmd/cigate plan-verdict` (one verdict with
       # go-quality.yml) selects the changed Go packages' reverse closure plus the packages that
       # read a changed non-Go path (NONE when none does). A path in no declared class, a shared
-      # change or any failure here selects the FULL suite;
+      # change or any failure here selects the FULL suite. `--tagged integration`: a shard runs only the integration-tagged
+      # tests (CHAOS-11407), so a read that only an untagged top-level test makes selects nothing here (go-quality runs it);
       # main, merge_group and manual runs never run this step. The cigate binary is built
       # from the merge base, so a pull request cannot change that binary; this step's text,
       # ci/go_relevant_diff.sh, ci/check_go.sh and go list still run from the PR tree.
@@ -579,7 +580,7 @@ jobs:
             || ! git worktree add --detach "${RUNNER_TEMP}/planbase" "${mb}" \
             || ! go -C "${RUNNER_TEMP}/planbase" build -trimpath -mod=readonly -o "${RUNNER_TEMP}/cigate-base" ./cmd/cigate; then
             full "could not build the planner at the merge base"
-          elif ! "${RUNNER_TEMP}/cigate-base" plan-verdict --event "${EVENT_NAME}" \
+          elif ! "${RUNNER_TEMP}/cigate-base" plan-verdict --event "${EVENT_NAME}" --tagged integration \
             --changed "${RUNNER_TEMP}/changed.txt" --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
             --root "${GITHUB_WORKSPACE}" --base "${BASE_SHA}" > "${out}"; then
             full "selection program failed"

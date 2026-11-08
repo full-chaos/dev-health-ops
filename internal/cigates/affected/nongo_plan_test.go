@@ -24,6 +24,8 @@ type nongoCase struct {
 	keys      []string // keys after an AFFECTED line
 	readsCode int      // plan-reads exit code over the same tree
 	readsWant []string // lines plan-reads must print
+	event     string   // plan-verdict --event; "" is pull_request
+	extra     []string // more plan-verdict arguments
 }
 
 func (c nongoCase) run(t *testing.T) {
@@ -47,7 +49,11 @@ func (c nongoCase) run(t *testing.T) {
 			t.Errorf("plan-reads output does not hold %q:\n%s", w, out)
 		}
 	}
-	first, keys, err := f.verdict(t, work, "pull_request", nil, c.changed...)
+	event := c.event
+	if event == "" {
+		event = "pull_request"
+	}
+	first, keys, err := f.verdict(t, work, event, c.extra, c.changed...)
 	if err != nil {
 		t.Fatal(err)
 	}

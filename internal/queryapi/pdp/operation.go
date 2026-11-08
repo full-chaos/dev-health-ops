@@ -232,13 +232,11 @@ func LegacyRefusalRoots() map[string][]string {
 	return out
 }
 
-// legacyRefusesAll reports whether action is in the legacy-refusal registry and every root of it is listed there and
-// has a legacy check that refuses the caller.
+// legacyRefusesAll reports whether every root of action in roots (the caller passes at least one) is listed in the
+// legacy-refusal registry entry of action and has a legacy check that refuses the caller. An action not in the
+// registry has no entry, so none of its roots is listed: false.
 func legacyRefusesAll(roots []Root, action string) bool {
-	keys, registered := legacyRefusalRoots[action]
-	if !registered {
-		return false
-	}
+	keys := legacyRefusalRoots[action]
 	for _, root := range roots {
 		if root.Action == action && (!root.LegacyRefuses || !slices.Contains(keys, root.Key)) {
 			return false

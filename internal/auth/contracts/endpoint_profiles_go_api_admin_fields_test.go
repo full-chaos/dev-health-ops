@@ -125,7 +125,13 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 			bad("action %q is not in the actions catalog", action)
 		}
 		tenancy, _ := row["tenant_requirement"].(string)
-		if known && (scope == "platform") != (tenancy == "cross_org_superuser_only") {
+		// A platform action sits on a cross-org superuser row, or on an org_scoped row mounted admin-or (an org owner or
+		// admin of the token's organization passes too); a platform action on any other org_scoped row fails.
+		adminOr := false
+		if known && scope == "platform" && tenancy == "org_scoped" {
+			adminOr, _ = registeredAdminOr(row, root)
+		}
+		if known && (scope == "platform") != (tenancy == "cross_org_superuser_only") && !adminOr {
 			bad("action %q has scope %q but the row's tenant_requirement is %q", action, scope, tenancy)
 		}
 	case nil:
@@ -258,23 +264,44 @@ var bodyFirstClosures = map[string]string{"internal/api/integrationsadmin/routes
 
 // registeredBodyFirst reports whether the registration entry at the row's source line wraps its handler in bodyFirst.
 func registeredBodyFirst(row map[string]any, root string) (registered, found bool) {
-	source, _ := row["source"].(map[string]any)
-	file, _ := source["file"].(string)
-	line, _ := source["line"].(float64)
-	raw, err := os.ReadFile(filepath.Join(root, file))
-	if err != nil || int(line) < 1 {
+	file, entry, found := registrationEntry(row, root)
+	if !found {
 		return false, false
-	}
-	lines := strings.Split(string(raw), "\n")
-	if int(line) > len(lines) {
-		return false, false
-	}
-	entry := lines[int(line)-1]
-	for i := int(line); i < len(lines) && i < int(line)+3 && !strings.Contains(lines[i], "Method:"); i++ {
-		entry += "\n" + lines[i]
 	}
 	closure, named := bodyFirstClosures[file]
 	return bodyFirstPattern.MatchString(entry) || (named && strings.Contains(entry, closure)), true
+}
+
+// adminOrPattern names the registration wrappers of an admin-or mount: Guard.WrapAdminOr and Guard.BodyFirstAdminOr
+// (the admin package's bodyFirstAdminOr).
+var adminOrPattern = regexp.MustCompile(`\b(WrapAdminOr|[bB]odyFirstAdminOr)\(`)
+
+// registeredAdminOr reports whether the row's registration mounts it admin-or; found is false when the source anchor
+// does not resolve.
+func registeredAdminOr(row map[string]any, root string) (adminOr, found bool) {
+	_, entry, found := registrationEntry(row, root)
+	return found && adminOrPattern.MatchString(entry), found
+}
+
+// registrationEntry is the row's registration as the source holds it: the anchored line and the lines after it up to
+// the next route (at most three).
+func registrationEntry(row map[string]any, root string) (file, entry string, found bool) {
+	source, _ := row["source"].(map[string]any)
+	file, _ = source["file"].(string)
+	line, _ := source["line"].(float64)
+	raw, err := os.ReadFile(filepath.Join(root, file))
+	if err != nil || int(line) < 1 {
+		return file, "", false
+	}
+	lines := strings.Split(string(raw), "\n")
+	if int(line) > len(lines) {
+		return file, "", false
+	}
+	entry = lines[int(line)-1]
+	for i := int(line); i < len(lines) && i < int(line)+3 && !strings.Contains(lines[i], "Method:"); i++ {
+		entry += "\n" + lines[i]
+	}
+	return file, entry, true
 }
 
 func anchorProblem(root, rel string, line int) string {

@@ -43,9 +43,92 @@ func TestEnforceListRendersOnGoAPIAsOneCommaList(t *testing.T) {
 	if value, set := goAPIEnforceEnv(t, docs, enforceEnvName); !set || value != "billing,teams" {
 		t.Fatalf("%s=%q set=%v; want billing,teams", enforceEnvName, value, set)
 	}
-	for _, name := range []string{"QUERY_API_AUTHZ_ENFORCE", "QUERY_API_HEADERS_AUTHZ_ENFORCE"} {
+	for _, name := range []string{"QUERY_API_AUTHZ_ENFORCE", "QUERY_API_HEADERS_AUTHZ_ENFORCE", "QUERY_API_PDP_MODE"} {
 		if strings.Contains(out, name) {
-			t.Fatalf("the render names %s: query-api has no cell wiring yet", name)
+			t.Fatalf("a go-api list render names %s: the query-api keys are unset", name)
+		}
+	}
+}
+
+var queryAPIEnforceNames = []string{"QUERY_API_PDP_MODE", "QUERY_API_AUTHZ_ENFORCE", "QUERY_API_HEADERS_AUTHZ_ENFORCE"}
+
+func queryAPIEnv(t *testing.T, extra ...string) map[string]string {
+	t.Helper()
+	docs, out, err := renderAuth(t, phaseArgs(2, extra...)...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	doc := authDoc(docs, "Deployment", "a-dev-health-query-api")
+	got := map[string]string{}
+	for _, name := range queryAPIEnforceNames {
+		if v, set := containerEnvValue(t, doc, name); set {
+			got[name] = v
+		}
+	}
+	return got
+}
+
+func TestQueryAPIEnforceUnsetRendersNothing(t *testing.T) {
+	if got := queryAPIEnv(t); len(got) != 0 {
+		t.Fatalf("unset keys render %v; want none", got)
+	}
+	if got := queryAPIEnv(t, "--set-json", `authService.enforce.queryApi=[]`, "--set-json", `authService.enforce.queryApiHeaders=[]`, "--set", "authService.enforce.queryApiPdpMode="); len(got) != 0 {
+		t.Fatalf("empty keys render %v; want none", got)
+	}
+}
+
+func TestQueryAPIEnforceCells(t *testing.T) {
+	for name, tc := range map[string]struct {
+		extra []string
+		want  map[string]string
+	}{
+		"shadow": {[]string{"--set", "authService.enforce.queryApiPdpMode=shadow"},
+			map[string]string{"QUERY_API_PDP_MODE": "shadow"}},
+		"off": {[]string{"--set", "authService.enforce.queryApiPdpMode=off"},
+			map[string]string{"QUERY_API_PDP_MODE": "off"}},
+		"enforce plus list": {[]string{"--set", "authService.enforce.queryApiPdpMode=enforce", "--set-json", `authService.enforce.queryApi=["analytics","work_items"]`},
+			map[string]string{"QUERY_API_PDP_MODE": "enforce", "QUERY_API_AUTHZ_ENFORCE": "analytics,work_items"}},
+		"headers list": {[]string{"--set", "authService.enforce.queryApiPdpMode=shadow", "--set-json", `authService.enforce.queryApiHeaders=["git"]`},
+			map[string]string{"QUERY_API_PDP_MODE": "shadow", "QUERY_API_HEADERS_AUTHZ_ENFORCE": "git"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := queryAPIEnv(t, tc.extra...)
+			if len(got) != len(tc.want) {
+				t.Fatalf("env %v; want %v", got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Fatalf("env %v; want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestQueryAPIEnforceRefusals(t *testing.T) {
+	mode := func(m string) []string { return []string{"--set", "authService.enforce.queryApiPdpMode=" + m} }
+	for name, tc := range map[string]struct {
+		extra []string
+		want  string
+	}{
+		"unknown namespace":         {append(mode("shadow"), "--set-json", `authService.enforce.queryApi=["nope"]`), "enforce"},
+		"go-api-only namespace":     {append(mode("shadow"), "--set-json", `authService.enforce.queryApi=["billing"]`), "enforce"},
+		"unknown headers namespace": {append(mode("shadow"), "--set-json", `authService.enforce.queryApiHeaders=["nope"]`), "enforce"},
+		"bad mode":                  {mode("on"), "queryApiPdpMode"},
+		"list without mode":         {[]string{"--set-json", `authService.enforce.queryApi=["git"]`}, "authService.enforce.queryApi needs"},
+		"list with mode off":        {append(mode("off"), "--set-json", `authService.enforce.queryApi=["git"]`), "authService.enforce.queryApi needs"},
+		"headers without mode":      {[]string{"--set-json", `authService.enforce.queryApiHeaders=["git"]`}, "authService.enforce.queryApiHeaders needs"},
+		"extraEnv mode":             {[]string{"--set-json", `queryApi.extraEnv=[{"name":"QUERY_API_DATABASE_ROLE","value":"devhealth_query"},{"name":"QUERY_API_PDP_MODE","value":"shadow"}]`}, "queryApi.extraEnv must not set QUERY_API_PDP_MODE"},
+		"extraEnv list":             {[]string{"--set-json", `queryApi.extraEnv=[{"name":"QUERY_API_DATABASE_ROLE","value":"devhealth_query"},{"name":"QUERY_API_AUTHZ_ENFORCE","value":"git"}]`}, "queryApi.extraEnv must not set QUERY_API_AUTHZ_ENFORCE"},
+		"extraEnv headers":          {[]string{"--set-json", `queryApi.extraEnv=[{"name":"QUERY_API_DATABASE_ROLE","value":"devhealth_query"},{"name":"QUERY_API_HEADERS_AUTHZ_ENFORCE","value":"git"}]`}, "queryApi.extraEnv must not set QUERY_API_HEADERS_AUTHZ_ENFORCE"},
+	} {
+		for _, enabled := range []string{"true", "false"} {
+			t.Run(name+"/queryApi.enabled="+enabled, func(t *testing.T) {
+				_, out, err := renderAuth(t, phaseArgs(2, append(append([]string{}, tc.extra...), "--set", "queryApi.enabled="+enabled)...)...)
+				if err == nil || !strings.Contains(out, tc.want) {
+					t.Fatalf("rendered: err=%v out=%.300s; want a refusal containing %q", err, out, tc.want)
+				}
+			})
 		}
 	}
 }

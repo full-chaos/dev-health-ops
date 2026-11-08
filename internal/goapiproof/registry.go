@@ -598,6 +598,7 @@ func FetchBuildIdentity(ctx context.Context, client *LegClient, buildInfoURL str
 	if err := credential.Apply(ctx, request); err != nil {
 		return "", err
 	}
+	sent := request.Header.Get(credential.header)
 	sentSecrets := SecretsOnRequest(request.Header)
 	legResponse, err := client.Do(request)
 	response := legResponse.Response
@@ -675,6 +676,7 @@ func FetchBuildIdentity(ctx context.Context, client *LegClient, buildInfoURL str
 	case modified:
 		return "", fmt.Errorf("%w: it reports a MODIFIED working tree, so its commit does not identify the source it was built from", ErrNoBuildIdentity)
 	}
+	credential.accept(sent)
 	return commit, nil
 }
 

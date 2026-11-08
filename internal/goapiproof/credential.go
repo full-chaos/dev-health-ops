@@ -96,6 +96,10 @@ type credentialState struct {
 	cached   string
 	mintedAt time.Time
 	mints    int
+	// accepted is the exact value of the last /buildinfo request that FetchBuildIdentity accepted. TokenSubject
+	// reads it, so the audit subject is the subject the verifier accepted, not a fresh read of a file that may
+	// have rotated since.
+	accepted string
 }
 
 // StaticCredential is a value that does not expire within a run -- the
@@ -354,6 +358,13 @@ func (c *Credential) Apply(ctx context.Context, request *http.Request) error {
 	}
 	request.Header.Set(c.header, value)
 	return nil
+}
+
+// accept records value as the one a /buildinfo read accepted.
+func (c *Credential) accept(value string) {
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+	c.state.accepted = value
 }
 
 // isEmptyCredential reports whether a header value carries no actual

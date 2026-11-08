@@ -355,7 +355,7 @@ when its secret is unset.
 
 ## Retired credential: `svc_worker_*`
 
-**Retired.** The mint was retired first (CHAOS-10044), and the `service-credentials`
+**Retired.** The mint was retired first, and the `service-credentials`
 verbs that listed and revoked the stored rows are gone; `dho service-credentials` is an
 unknown command. No row was migrated or deleted: the rows stay until a later migration
 drops `internal_service_credentials`.

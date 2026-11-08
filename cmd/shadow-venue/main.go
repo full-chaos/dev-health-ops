@@ -93,7 +93,7 @@ func (t tokenFiles) Set(value string) error {
 	return nil
 }
 
-func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr io.Writer) int {
+func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr io.Writer) (code int) {
 	fs := flag.NewFlagSet(step, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	principals := fs.String("principals", "", "venue principals file (kind name email uuid org role password_file)")
@@ -185,7 +185,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 			fmt.Fprintln(stderr, err)
 			return finish(file, exitUsage, stderr)
 		}
-		defer side.Close()
+		defer func() { code = finish(side, code, stderr) }()
 		driver.BodyKey, driver.KeysOut = bodyKey, side
 	}
 	tokens := map[string]string{}

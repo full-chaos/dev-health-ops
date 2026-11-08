@@ -802,7 +802,7 @@ func buildInfoUserTokenCells(t *testing.T, o *liveObs, listener string, q liveRe
 		if shape != nil {
 			shape(store)
 		}
-		stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow), true)
+		stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow))
 		q2 := q
 		q2.bearer = minter.mint(ecUser, extra, nil)
 		return stack.live(q2)

@@ -105,8 +105,11 @@ func (l *switchOrgLive) signIn(t *testing.T, ctx context.Context, user, org uuid
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	compact := legacyAccess(t, Grant{PrincipalID: user, OrganizationID: &org, Role: "admin", SessionID: issued.Session.ID,
+	compact, err := l.issuer.Access(Grant{PrincipalID: user, OrganizationID: &org, Role: "admin", SessionID: issued.Session.ID,
 		User: UserState{Email: "x@example.test", IsActive: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return issued, map[string]string{"Authorization": "Bearer " + compact}
 }
 

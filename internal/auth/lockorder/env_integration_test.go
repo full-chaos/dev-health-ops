@@ -232,10 +232,19 @@ func newEnv(t *testing.T) (*env, error) {
 			mounted = append(mounted, route)
 		}
 	}
+	// go-api mints no pair of its own: both servers' accept and onboard take theirs from auth-service's issue route
+	// (the auth plane starts first).
+	if err := e.startAuthPlane(ctx, schema, logger, jwtKey); err != nil {
+		return nil, err
+	}
+	issuer, err := e.seedIssueClient(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier,
-		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger}) {
+		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger, Issuer: issuer}) {
 		switch route.Pattern {
-		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard", "/api/v1/auth/refresh":
+		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard":
 			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 			mounted = append(mounted, route)
 		}
@@ -254,13 +263,6 @@ func newEnv(t *testing.T) (*env, error) {
 	}
 	e.server = httptest.NewServer(profiled)
 	closers = append(closers, e.server.Close)
-	if err := e.startAuthPlane(ctx, schema, logger, jwtKey); err != nil {
-		return nil, err
-	}
-	issuer, err := e.seedIssueClient(ctx)
-	if err != nil {
-		return nil, err
-	}
 	issuerMux := http.NewServeMux()
 	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier,
 		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger, Issuer: issuer}) {

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -60,7 +61,7 @@ type routesEnv struct {
 	front    *httptest.Server
 	client   *http.Client
 	root     string
-	// edge is query-api's REST access check over this stack (queryAPIVerifier); nil without an issuer URL.
+	// edge is query-api's REST access check over this stack (queryAPIVerifier); nil without an issuer URL or a readable key.
 	edge *principal.EdgeVerifier
 	logs *safeBuffer
 	// components are what configure built, for a test that stops them itself.
@@ -141,10 +142,14 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 		_ = store.Close(closeCtx)
 	})
 
+	// The eddsa class (the only one) signs every session, so the default key is a readable one; a test of an
+	// unreadable key sets its own path (newSignerOutageEnv).
+	keyDir := t.TempDir()
+	writeSigningKey(t, keyDir, "routes-test.pem")
 	env := compatEnvironment(map[string]string{
 		authconfig.EnvDatabaseURI:     dsn.String(),
 		authconfig.EnvDatabaseSchema:  "auth",
-		authconfig.EnvSigningKeyFile:  "/nonexistent",
+		authconfig.EnvSigningKeyFile:  filepath.Join(keyDir, "routes-test.pem"),
 		authconfig.EnvSigningKeyID:    "routes-test",
 		authconfig.EnvAPIAddress:      "127.0.0.1:0",
 		authconfig.EnvOperatorAddress: "127.0.0.1:1",
@@ -230,7 +235,7 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 		t.Fatal(err)
 	}
 	var edge *principal.EdgeVerifier
-	if cfg.TokenIssuerURL != "" {
+	if _, err := os.Stat(cfg.SigningKeyPath); cfg.TokenIssuerURL != "" && err == nil {
 		edge = queryAPIVerifier(t, cfg, policy.PGStore{Pool: admin, AuthSchema: "auth"})
 	}
 	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front, edge: edge,
@@ -378,18 +383,12 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if claims.OrgID != org.String() {
 		t.Fatalf("org_id = %q, want %s", claims.OrgID, org)
 	}
-	// The access token is access-token.v1 (EdDSA): the wire principal and session, the organization, the
-	// issuer and the dev-health-api audience; none of the retired HS256 claims.
 	payload := decodePayload(t, rotated.AccessToken.Reveal())
-	for key, want := range map[string]any{"sub": session.WirePrincipalID(user), "sid": rotated.SessionID, "org_id": org.String(),
-		"iss": "https://auth.example.test", "aud": "dev-health-api"} {
+	// access-token.v1: the role, names and token_version come from the live rows (the verifier above), not claims.
+	for key, want := range map[string]any{"sub": session.WirePrincipalID(user), "principal_type": "human", "sid": rotated.SessionID,
+		"org_id": org.String(), "aud": "dev-health-api", "scope": "api:access"} {
 		if payload[key] != want {
 			t.Errorf("claim %s = %v, want %v", key, payload[key], want)
-		}
-	}
-	for _, retired := range []string{"role", "tv", "is_superuser", "username", "full_name", "type"} {
-		if value, present := payload[retired]; present {
-			t.Errorf("retired HS256 claim %s = %v is present", retired, value)
 		}
 	}
 

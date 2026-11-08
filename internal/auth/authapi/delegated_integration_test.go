@@ -143,14 +143,6 @@ func (l *delegatedLive) bearerRoutes(t *testing.T) http.Handler {
 	return serveRoutes(routes)
 }
 
-// legacyToken is go-api's retired HS256 token for the delegated session id: the bearer the session routes and go-api's
-// authenticator still verify.
-func (l *delegatedLive) legacyToken(t *testing.T, id uuid.UUID) string {
-	t.Helper()
-	return legacyAccess(t, Grant{PrincipalID: l.target, OrganizationID: &l.org, Role: "member", SessionID: id, Actor: &l.actor,
-		User: UserState{Email: "d-" + l.target.String()[:8] + "@example.test", IsActive: true, TokenVersion: delegatedTokenVersion}})
-}
-
 func (l *delegatedLive) body() string {
 	return `{"base_session_id":"` + l.base.String() + `","target_principal_id":"` + l.target.String() +
 		`","organization_id":"` + l.org.String() + `","reason":"support ticket"}`

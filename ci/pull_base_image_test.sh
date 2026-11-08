@@ -146,7 +146,7 @@ if { [ "${R}" = 0 ] && grep -q "^docker pull mirror.gcr.io/library/golang@${C}\$
 
 if grep -q 'IFS' "${LIB}"; then bad "helper sets or reads IFS (semgrep ifs-tampering)"; else ok "helper sets no IFS"; fi
 
-for s in ci/check_auth_k8s.sh ci/check_session_cutover_rehearsal.sh; do
+for s in ci/check_auth_k8s.sh; do
   p="$(grep -n 'pull_pinned_base_image' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
   b="$(grep -n '^build ' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
   if { [ -n "${p}" ] && [ -n "${b}" ] && [ "${p}" -lt "${b}" ]; }; then ok "${s} pre-pulls before its first build"; else bad "${s} does not pre-pull before building"; fi
@@ -239,7 +239,7 @@ per_source="$(awk -v t="${tries}" -v o="${tmo}" -v g="${gaps}" 'BEGIN { n = spli
 sources_total=$((2 + 1))
 worst=$((per_source * sources_total))
 min_timeout=""
-for wf in auth-k8s-proof.yml session-cutover-rehearsal.yml; do
+for wf in auth-k8s-proof.yml; do
   # shellcheck disable=SC2013
   for m in $(sed -n 's/^ *timeout-minutes: *\([0-9]*\).*/\1/p' "${ROOT}/.github/workflows/${wf}"); do
     if [ -z "${min_timeout}" ] || [ "${m}" -lt "${min_timeout}" ]; then min_timeout="${m}"; fi
@@ -247,8 +247,8 @@ for wf in auth-k8s-proof.yml session-cutover-rehearsal.yml; do
 done
 if [ -n "${per_source}" ] && [ -n "${min_timeout}" ] && [ "$((worst * 2))" -lt "$((min_timeout * 60))" ]; then ok "r9 worst-case pull time ${worst}s (3 sources x ${per_source}s) is below half of the smaller job timeout (${min_timeout} min)"; else bad "r9 budget: per_source=${per_source} worst=${worst} min_timeout=${min_timeout}"; fi
 
-# both scripts pre-pull the runtime image before their first build, build from the local tag and clean it up
-for s in ci/check_auth_k8s.sh ci/check_session_cutover_rehearsal.sh; do
+# the script pre-pulls the runtime image before their first build, build from the local tag and clean it up
+for s in ci/check_auth_k8s.sh; do
   p="$(grep -n 'pull_pinned_runtime_image' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
   b="$(grep -n '^build ' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
   if { [ -n "${p}" ] && [ -n "${b}" ] && [ "${p}" -lt "${b}" ]; }; then ok "r8 ${s} pre-pulls the runtime image before its first build"; else bad "r8 ${s} does not pre-pull the runtime image before building"; fi

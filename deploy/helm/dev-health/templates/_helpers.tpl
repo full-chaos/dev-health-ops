@@ -933,6 +933,30 @@ AUTH_PROXY_URL on go-api, so it is refused unless go-api reaches auth-service. R
 {{- end -}}
 
 {{/*
+query-api's PDP mode (authService.enforce.queryApiPdpMode), "" when unset. Rendered as QUERY_API_PDP_MODE.
+*/}}
+{{- define "dev-health.queryApiPdpMode" -}}
+{{- $m := toString (default "" (default dict .Values.authService.enforce).queryApiPdpMode) -}}
+{{- if not (has $m (list "" "off" "shadow" "enforce")) }}{{- fail "authService.enforce.queryApiPdpMode must be off, shadow or enforce" }}{{- end -}}
+{{- $m -}}
+{{- end -}}
+
+{{/*
+A query-api enforcement list as one comma list, "" when empty. Call with (dict "key" "queryApi"|"queryApiHeaders" "context" $).
+A non-empty list needs the PDP mode shadow or enforce: the binary answers 503 for a listed namespace without a client, and
+mode off builds none. The chart refuses it at render. Names are checked against the namespaces query-api decides.
+*/}}
+{{- define "dev-health.authzEnforceQueryApi" -}}
+{{- $list := default (list) (index (default dict .context.Values.authService.enforce) .key) -}}
+{{- if $list -}}
+{{- $key := printf "authService.enforce.%s" .key -}}
+{{- range $list }}{{- if not (has . (list "analytics" "metrics" "git" "work_items" "integrations" "reports" "org")) }}{{- fail (printf "%s: %v is not a namespace query-api enforces (analytics, metrics, git, work_items, integrations, reports, org)" $key .) }}{{- end }}{{- end -}}
+{{- if not (has (include "dev-health.queryApiPdpMode" .context) (list "shadow" "enforce")) }}{{- fail (printf "%s needs authService.enforce.queryApiPdpMode shadow or enforce: without a decision point client the listed namespaces answer 503" $key) }}{{- end -}}
+{{- join "," $list -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 "true" when authService.revisionFeed.enabled renders AUTH_REVISION_FEED=on on auth-service, else "". templates/auth-revision-feed-guard.yaml
 runs it on every render, so a switch that auth-service would not carry (phase 0 renders no auth-service) fails instead of being dropped.
 */}}

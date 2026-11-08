@@ -654,15 +654,34 @@ func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing
 	}
 }
 
-// No role holds the two new actions until a roles change grants them.
-func TestNoRoleHoldsAcrEvidenceReadOrCredentialIssue(t *testing.T) {
+// D6849 (legacy parity): every organization role reads ACR evidence and issues an ACR credential, as
+// any org session may today (rule 2 for the evidence read). No platform role holds either action.
+func TestEveryOrganizationRoleHoldsAcrEvidenceReadAndCredentialIssue(t *testing.T) {
 	c := Default()
+	org := map[string]bool{"viewer": true, "member": true, "admin": true, "owner": true}
 	for _, r := range c.Roles() {
 		for _, id := range []string{"acr.evidence.read", "acr.credential.issue"} {
-			if c.Allows(r.ID, id) {
-				t.Errorf("role %s holds %s", r.ID, id)
+			if got, want := c.Allows(r.ID, id), org[r.ID]; got != want {
+				t.Errorf("role %s holds %s = %v, want %v", r.ID, id, got, want)
 			}
 		}
+	}
+	for id := range org {
+		if _, err := c.Role(id); err != nil {
+			t.Errorf("organization role %s is missing: %v", id, err)
+		}
+	}
+}
+
+// D6854 (rule 1): a platform admin with no membership row may issue an ACR credential, as legacy web
+// lets any org session issue one. The two repository reads cannot carry the flag (organization actions only).
+func TestAcrCredentialIssueAllowsAPlatformAdminWithNoMembership(t *testing.T) {
+	a, err := Default().Action("acr.credential.issue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.PlatformAdmin {
+		t.Fatalf("acr.credential.issue PlatformAdmin = false, want true")
 	}
 }
 
@@ -702,7 +721,7 @@ func TestThePlatformAdminActionsAreTheAdminGuardAndTheLegacyQueryAPIAndBillingAc
 		}
 	}
 	sort.Strings(got)
-	want := []string{"analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read",
+	want := []string{"acr.credential.issue", "analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read",
 		"integrations.write", "license.read", "members.invite", "members.manage", "metrics.read", "reports.write",
 		"settings.write", "teams.write", "work_items.read"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {

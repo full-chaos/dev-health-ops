@@ -121,11 +121,14 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 			return deny(ReasonPlatformRoleAbsent)
 		}
 	case policycatalog.ScopeOrganization:
-		if e.platformAdminAdmits(r, act, s) {
+		// The legacy paths admit a holder of admin.orgs before they read the membership row, in an active,
+		// suspended or unknown organization (no organization row); a removed organization still denies.
+		orgStatus := s.OrganizationStatus(r.OrganizationID)
+		if (orgStatus == StatusActive || orgStatus == StatusSuspended || orgStatus == StatusUnknown) && act.PlatformAdmin &&
+			e.cat.Allows(s.PlatformRole(), platformAdminAction) {
 			return Decision{Allowed: true, Reason: ReasonAllowedByPlatformAdmin, PolicyRevision: rev,
 				Obligations: &Obligations{TenantScope: r.OrganizationID}}
 		}
-		orgStatus := s.OrganizationStatus(r.OrganizationID)
 		if orgStatus != StatusActive {
 			return deny(ReasonOrganizationInactive)
 		}
@@ -158,13 +161,4 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 		return Decision{Allowed: true, Reason: ReasonAllowedByRole, PolicyRevision: rev}
 	}
 	return e.organizationAllow(r, act, s, roleID, rev)
-}
-
-// platformAdminAdmits is the one platform-admin rule of both branches. The legacy paths admit a holder of
-// admin.orgs before they read the membership row, in an active, suspended or unknown organization (no
-// organization row), on an action the catalog flags platform_admin allowed; a removed organization still denies.
-func (e *Evaluator) platformAdminAdmits(r Request, act policycatalog.Action, s Snapshot) bool {
-	orgStatus := s.OrganizationStatus(r.OrganizationID)
-	return (orgStatus == StatusActive || orgStatus == StatusSuspended || orgStatus == StatusUnknown) && act.PlatformAdmin &&
-		e.cat.Allows(s.PlatformRole(), platformAdminAction)
 }

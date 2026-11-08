@@ -188,14 +188,6 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 	if !ok {
 		return deny(ReasonGrantAbsent)
 	}
-	// The organization branch's platform-admin rule and allow, unchanged: a flagged repository read is org-wide
-	// for a holder of admin.orgs with no membership row. Like the organization-branch allow it sets no class and
-	// no expiry (the catalog class applies), so it is never cached as a repository allow and a platform-role
-	// revoke ends it at the next decision.
-	if e.platformAdminAdmits(r, act, s) {
-		return Decision{Allowed: true, Reason: ReasonAllowedByPlatformAdmin, PolicyRevision: rev,
-			Obligations: &Obligations{TenantScope: r.OrganizationID, RepositoryScope: RepositoryScopeOrganization}}
-	}
 	if gs.OrganizationStatus(r.OrganizationID) != StatusActive {
 		return deny(ReasonOrganizationInactive)
 	}

@@ -690,16 +690,10 @@ func TestLoadReadsPlatformAdminOnlyOnAnOrganizationAction(t *testing.T) {
 			t.Errorf("%q: PlatformAdmin %v, want %v", member, a.PlatformAdmin, want)
 		}
 	}
-	// An organization-scope repository action may take the flag (the ACR repository reads); a platform action
-	// and an unknown value may not.
-	if c, err := load("organization", "repository", `,"platform_admin":"allowed","repository_scope":"filtered"`); err != nil {
-		t.Errorf("repository resource: Load = %v, want accepted", err)
-	} else if a, _ := c.Action("a.c"); !a.PlatformAdmin {
-		t.Errorf("repository resource: PlatformAdmin false, want true")
-	}
 	for name, c := range map[string][3]string{
-		"unknown value":   {"organization", "organization", `,"platform_admin":"maybe"`},
-		"platform action": {"platform", "platform", `,"platform_admin":"allowed"`},
+		"unknown value":       {"organization", "organization", `,"platform_admin":"maybe"`},
+		"platform action":     {"platform", "platform", `,"platform_admin":"allowed"`},
+		"repository resource": {"organization", "repository", `,"platform_admin":"allowed"`},
 	} {
 		if _, err := load(c[0], c[1], c[2]); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: Load = %v, want ErrInvalid", name, err)

@@ -23,17 +23,19 @@ const EnvServiceAccountKeys = "AUTH_PROXY_SERVICE_ACCOUNT_KEYS"
 // auth-service, which runs its actor rule, writes the key, the audit row and
 // the outbox event in one commit, and answers its wire body. go-api passes
 // that body through; an issue or rotate receipt carries the key's secret, so
-// the answer is never logged and never cached (no-store).
+// the answer is never logged and never cached (no-store). The routes are
+// Go-only (no FastAPI order to keep): the platform gate answers first, then
+// the switch, and only then is a body read.
 func (h *handlers) serviceAccountKeyRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: usersPrefix + "/service-accounts/{service_account_id}/keys",
-			Handler: h.guard.WrapPlatform(policy.ActionAdminUsers, http.HandlerFunc(h.listServiceAccountKeys))},
+			Handler: h.guard.WrapPlatform(policy.ActionAdminUsers, h.serviceAccountKeysOn(http.HandlerFunc(h.listServiceAccountKeys)))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/service-accounts/{service_account_id}/keys",
-			Handler: h.bodyFirstPlatform(policy.ActionAdminUsers, http.HandlerFunc(h.issueServiceAccountKey))},
+			Handler: h.guard.WrapPlatform(policy.ActionAdminUsers, h.serviceAccountKeysOn(h.guard.BodyAfter(http.HandlerFunc(h.issueServiceAccountKey))))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/service-accounts/{service_account_id}/keys/rotate",
-			Handler: h.bodyFirstPlatform(policy.ActionAdminUsers, http.HandlerFunc(h.rotateServiceAccountKey))},
+			Handler: h.guard.WrapPlatform(policy.ActionAdminUsers, h.serviceAccountKeysOn(h.guard.BodyAfter(http.HandlerFunc(h.rotateServiceAccountKey))))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/service-accounts/keys/{credential_id}/revoke",
-			Handler: h.bodyFirstPlatform(policy.ActionAdminUsers, http.HandlerFunc(h.revokeServiceAccountKey))},
+			Handler: h.guard.WrapPlatform(policy.ActionAdminUsers, h.serviceAccountKeysOn(h.guard.BodyAfter(http.HandlerFunc(h.revokeServiceAccountKey))))},
 	}
 }
 
@@ -46,7 +48,7 @@ const (
 // serviceAccountKeyAnswers are the go-api answers of the key routes' auth
 // refusals. A legacy users row (auth_provider "service") is no service
 // account: auth-service answers service_account_not_found for its id.
-var serviceAccountKeyAnswers = map[string]provisionAnswer{
+var serviceAccountKeyAnswers = withDeactivated(map[string]provisionAnswer{
 	"service_account_not_found": {http.StatusNotFound, "Service account not found"},
 	"key_not_found":             {http.StatusNotFound, "Key not found"},
 	"organization_not_found":    {http.StatusNotFound, "Organization not found"},
@@ -58,15 +60,18 @@ var serviceAccountKeyAnswers = map[string]provisionAnswer{
 	"overlap_invalid":           {http.StatusBadRequest, "Invalid key overlap"},
 	"reason_invalid":            {http.StatusBadRequest, "Invalid revoke reason"},
 	"malformed":                 {http.StatusBadRequest, "Invalid key request"},
-}
+})
 
-// serviceAccountKeysReady answers 503 config_missing when the switch is off.
-func (h *handlers) serviceAccountKeysReady(w http.ResponseWriter) bool {
-	if h.serviceAccountKeys == nil {
-		policy.WriteConfigMissing(w, EnvServiceAccountKeys)
-		return false
-	}
-	return true
+// serviceAccountKeysOn answers 503 config_missing when the switch is off, and
+// runs next when it is on.
+func (h *handlers) serviceAccountKeysOn(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.serviceAccountKeys == nil {
+			policy.WriteConfigMissing(w, EnvServiceAccountKeys)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func serviceAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -94,9 +99,6 @@ func (h *handlers) writeServiceAccountKeyAnswer(ctx context.Context, w http.Resp
 
 func (h *handlers) listServiceAccountKeys(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !h.serviceAccountKeysReady(w) {
-		return
-	}
 	account, ok := serviceAccountID(w, r)
 	if !ok {
 		return
@@ -132,7 +134,7 @@ func (h *handlers) issueServiceAccountKey(w http.ResponseWriter, r *http.Request
 	var expires *int64
 	if !keyBody(w, ctx, func(errs *pybody.Errors, object *pyjson.Object) {
 		expires = optionalSeconds(errs, object, "expires_in_seconds", 1)
-	}) || !h.serviceAccountKeysReady(w) {
+	}) {
 		return
 	}
 	account, ok := serviceAccountID(w, r)
@@ -153,7 +155,7 @@ func (h *handlers) rotateServiceAccountKey(w http.ResponseWriter, r *http.Reques
 			*errs = append(*errs, pybody.Error{Type: "int_type", Loc: []pyjson.Value{"body", "overlap_seconds"}, Msg: "Input should be a valid integer", Input: nil})
 		}
 		expires = optionalSeconds(errs, object, "expires_in_seconds", 1)
-	}) || !h.serviceAccountKeysReady(w) {
+	}) {
 		return
 	}
 	account, ok := serviceAccountID(w, r)
@@ -169,7 +171,7 @@ func (h *handlers) revokeServiceAccountKey(w http.ResponseWriter, r *http.Reques
 	var reason string
 	if !keyBody(w, ctx, func(errs *pybody.Errors, object *pyjson.Object) {
 		reason, _ = errs.RequiredString(object, "reason", 1, maxRevokeReasonLength)
-	}) || !h.serviceAccountKeysReady(w) {
+	}) {
 		return
 	}
 	credential := r.PathValue("credential_id")

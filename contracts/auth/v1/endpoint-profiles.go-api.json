@@ -3830,7 +3830,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/serviceaccount_keys.go",
-        "line": 29
+        "line": 31
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only",
@@ -11065,7 +11065,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)"
       ],
@@ -11109,7 +11109,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/serviceaccount_keys.go",
-        "line": 35
+        "line": 37
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only",
@@ -11131,7 +11131,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)"
       ],
@@ -11175,7 +11175,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/serviceaccount_keys.go",
-        "line": 31
+        "line": 33
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only",
@@ -11197,7 +11197,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)"
       ],
@@ -11241,7 +11241,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/serviceaccount_keys.go",
-        "line": 33
+        "line": 35
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only",

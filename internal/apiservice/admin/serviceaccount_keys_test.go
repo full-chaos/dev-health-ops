@@ -362,3 +362,76 @@ func TestServiceAccountKeyMalformedInput(t *testing.T) {
 		t.Fatalf("malformed input reached auth-service: %q", got)
 	}
 }
+
+// saKeyBrokenBody is each write route with a body that does not decode.
+func saKeyBrokenBody() []saKeyRoute {
+	var out []saKeyRoute
+	for _, route := range saKeyRoutes[1:] {
+		route.body = "{"
+		out = append(out, route)
+	}
+	return out
+}
+
+// The platform gate answers before the body is read: an org admin with a
+// body that does not decode gets 403, not 422, and reaches no auth call.
+func TestServiceAccountKeyGateBeforeBody(t *testing.T) {
+	for _, route := range saKeyBrokenBody() {
+		t.Run(route.name, func(t *testing.T) {
+			keys := &fakeKeys{}
+			server, bearer, _, _, _ := mountedKeyRoutes(t, saKeyStore{admin: true}, keys)
+			if code, body, _ := sendKeyRoute(t, server, bearer, route); code != http.StatusForbidden {
+				t.Fatalf("status %d %s, want 403", code, body)
+			}
+			if got := keys.taken(); len(got) != 0 {
+				t.Fatalf("auth calls %q, want none", got)
+			}
+		})
+	}
+}
+
+// With the switch off, a superuser with a body that does not decode gets 503
+// config_missing, not 422: the switch answers before the body is read.
+func TestServiceAccountKeySwitchBeforeBody(t *testing.T) {
+	want := `{"detail":{"message":"AUTH_PROXY_SERVICE_ACCOUNT_KEYS is not set","reason_code":"config_missing"}}`
+	for _, route := range saKeyBrokenBody() {
+		t.Run(route.name, func(t *testing.T) {
+			server, bearer, _, _, _ := mountedKeyRoutes(t, saKeyStore{superuser: true}, nil)
+			if code, body, _ := sendKeyRoute(t, server, bearer, route); code != http.StatusServiceUnavailable || body != want {
+				t.Fatalf("status %d %s, want 503 %s", code, body, want)
+			}
+		})
+	}
+}
+
+// A superuser with the switch on and a body that does not decode gets 422,
+// and no call reaches auth-service.
+func TestServiceAccountKeyBrokenBodyAuthorized(t *testing.T) {
+	for _, route := range saKeyBrokenBody() {
+		t.Run(route.name, func(t *testing.T) {
+			keys := &fakeKeys{}
+			server, bearer, _, _, _ := mountedKeyRoutes(t, saKeyStore{superuser: true}, keys)
+			if code, body, _ := sendKeyRoute(t, server, bearer, route); code != http.StatusUnprocessableEntity || !strings.Contains(body, "json_invalid") {
+				t.Fatalf("status %d %s, want 422 json_invalid", code, body)
+			}
+			if got := keys.taken(); len(got) != 0 {
+				t.Fatalf("auth calls %q, want none", got)
+			}
+		})
+	}
+}
+
+// auth-service's principal_deactivated refusal (an actor deactivated after
+// go-api's check) is the 403 the member and invite routes answer, on all four
+// routes.
+func TestServiceAccountKeyDeactivatedActor(t *testing.T) {
+	for _, route := range saKeyRoutes {
+		t.Run(route.name, func(t *testing.T) {
+			keys := &fakeKeys{err: &authprovision.Refused{Status: http.StatusForbidden, Reason: "principal_deactivated"}}
+			server, bearer, _, _, _ := mountedKeyRoutes(t, saKeyStore{superuser: true}, keys)
+			if code, body, _ := sendKeyRoute(t, server, bearer, route); code != http.StatusForbidden || body != `{"detail":"Account is deactivated"}` {
+				t.Fatalf("status %d %s, want 403 Account is deactivated", code, body)
+			}
+		})
+	}
+}

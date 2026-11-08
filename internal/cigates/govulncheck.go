@@ -52,7 +52,23 @@ func ReadVulnExceptions(r io.Reader) ([]VulnException, error) {
 	return out, sc.Err()
 }
 
-type vulnFinding struct{ osv, module, version, fixed string }
+// vulnFinding is one distinct reachable record. hasFixed says the record carries a fixed_version key at all; fixed is its value
+// then (any value, "" and "?" included), and is "" when the key is absent, so presence is never read from the value.
+type vulnFinding struct {
+	osv, module, version, fixed string
+	hasFixed                    bool
+}
+
+// fixedLabel is the text a refusal shows for the fixed version: "?" when the record has none.
+func (f vulnFinding) fixedLabel() string {
+	if !f.hasFixed {
+		return "?"
+	}
+	if f.fixed == "" {
+		return `""`
+	}
+	return f.fixed
+}
 
 // jsonStream decodes a concatenated JSON value stream into maps.
 func jsonStream(r io.Reader) ([]map[string]any, error) {
@@ -133,7 +149,12 @@ func AuthGovulncheck(in io.Reader, exceptions []VulnException, stdout, stderr io
 			fmt.Fprintln(stderr, "auth govulncheck: finding without an osv id")
 			return 1
 		}
-		reachable[vulnFinding{osv, str(first, "module", "?"), str(first, "version", "?"), str(finding, "fixed_version", "?")}] = true
+		_, hasFixed := finding["fixed_version"]
+		fixed := ""
+		if hasFixed {
+			fixed = str(finding, "fixed_version", "")
+		}
+		reachable[vulnFinding{osv, str(first, "module", "?"), str(first, "version", "?"), fixed, hasFixed}] = true
 	}
 	if !sawConfig {
 		fmt.Fprintln(stderr, "auth govulncheck: no scan configuration in the output; the scan did not run")
@@ -154,6 +175,9 @@ func AuthGovulncheck(in io.Reader, exceptions []VulnException, stdout, stderr io
 		if a.version != b.version {
 			return a.version < b.version
 		}
+		if a.hasFixed != b.hasFixed {
+			return !a.hasFixed
+		}
 		return a.fixed < b.fixed
 	})
 	failing, excepted := 0, 0
@@ -169,10 +193,10 @@ func AuthGovulncheck(in io.Reader, exceptions []VulnException, stdout, stderr io
 		switch {
 		case row == nil:
 			failing++
-			fmt.Fprintf(stderr, "auth govulncheck: reachable %s %s@%s fixed in %s\n", id, f.module, f.version, f.fixed)
-		case f.fixed != "?" && f.fixed != "":
+			fmt.Fprintf(stderr, "auth govulncheck: reachable %s %s@%s fixed in %s\n", id, f.module, f.version, f.fixedLabel())
+		case f.hasFixed:
 			failing++
-			fmt.Fprintf(stderr, "auth govulncheck: reachable %s %s@%s fixed in %s: the exception (%s) ends now that a fixed version exists; remove its row from ci/auth-vuln-exceptions.tsv and bump\n", id, f.module, f.version, f.fixed, row.Ticket)
+			fmt.Fprintf(stderr, "auth govulncheck: reachable %s %s@%s fixed in %s: the exception (%s) ends now that a fixed version exists; remove its row from ci/auth-vuln-exceptions.tsv and bump\n", id, f.module, f.version, f.fixedLabel(), row.Ticket)
 		default:
 			excepted++
 			fmt.Fprintf(stderr, "auth govulncheck: WARN excepted %s %s@%s (%s): %s\n", id, f.module, f.version, row.Ticket, row.Reason)

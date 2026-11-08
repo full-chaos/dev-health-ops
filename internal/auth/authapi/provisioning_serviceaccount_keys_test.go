@@ -518,7 +518,7 @@ func TestKeyRouteStatusFollowsTheTimestamps(t *testing.T) {
 func TestKeyRoutesTakeTheGoAPIWorkloadTokenAndNoOtherSubject(t *testing.T) {
 	t.Parallel()
 	w := newWorkloadIssueFixture(t)
-	f := &provWorkloadFixture{provFixture: newProvFixtureFor(t, docWithRow(t, PatternOrgSuspend), w.workload), w: w}
+	f := &provWorkloadFixture{provFixture: newProvFixtureFor(t, docWithRow(t, PatternOrgSuspend), w), w: w}
 	want := uuidOfWire(t, f.w.subject)
 	for _, c := range keyCases() {
 		if !workloadOperations[c.op] {

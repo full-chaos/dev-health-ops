@@ -109,14 +109,14 @@ func TestGrantRoutesAreOnTheStartupGate(t *testing.T) {
 		if !slices.Contains(provisioningPatterns, c.path) || provisioningRouteOps[c.op] != c.path {
 			t.Fatalf("%s is not in the provisioning patterns or route operations", c.path)
 		}
-		routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+		routes, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 			Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
 			ProfileRows: embeddedDocWithoutRow(t, c.path)})
 		if !errors.Is(err, errProvisioningRows) || routes != nil || !strings.Contains(err.Error(), "POST "+c.path+" ") {
 			t.Fatalf("a document without the %s row built %d routes, err %v; want none and a refusal naming it", c.path, len(routes), err)
 		}
 	}
-	if _, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+	if _, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa}); err == nil {
 		t.Fatal("routes were built with no grant store")
 	}
@@ -265,7 +265,7 @@ func TestGrantRoutesTakeTheWorkloadToken(t *testing.T) {
 		}
 	}
 	w := newWorkloadIssueFixture(t)
-	f := newProvFixtureFor(t, nil, w.workload)
+	f := newProvFixtureFor(t, nil, w)
 	f.grants.principal = f.target
 	f.grants.out = grant.Grant{ID: uuid.New(), OrgID: f.org, PrincipalID: f.target, Role: "viewer", Key: "acme/api", Origin: grant.OriginAPI, Revision: 1}
 	header, _ := w.mint("workload+jwt", nil)

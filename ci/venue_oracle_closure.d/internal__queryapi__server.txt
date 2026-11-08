@@ -3,7 +3,6 @@ contracts/auth/v1/vocabulary
 contracts/graphql/v1
 internal/aftercommit
 internal/api/authprovision
-internal/api/clientip
 internal/api/externalurl
 internal/api/licensing
 internal/api/policy
@@ -12,7 +11,6 @@ internal/api/pyheaders
 internal/api/pyjson
 internal/api/pytime
 internal/api/registerorg
-internal/api/sessionissue
 internal/apiservice/accessrouting
 internal/audit
 internal/auth/accessverify
@@ -60,7 +58,6 @@ internal/auth/repokey
 internal/auth/requestid
 internal/auth/restorefence
 internal/auth/serviceaccount
-internal/auth/servicecred
 internal/auth/session
 internal/auth/sessionevent
 internal/auth/sessionid

@@ -3,6 +3,7 @@
 package session_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"

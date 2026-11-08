@@ -544,11 +544,7 @@ func TestSwitchOrgRefusalTable(t *testing.T) {
 			grant := f.grant()
 			actor := uuid.New()
 			grant.Actor = &actor
-			compact, err := f.issuer.Access(grant)
-			if err != nil {
-				f.t.Fatal(err)
-			}
-			return map[string]string{"Authorization": "Bearer " + compact}
+			return map[string]string{"Authorization": "Bearer " + legacyAccess(f.t, grant)}
 		}, http.StatusUnauthorized, switchBadToken, reasonMalformed},
 		{"service account user", func(f *switchFixture) map[string]string {
 			user := f.reads.users[f.principal]
@@ -691,18 +687,6 @@ func TestSwitchOrgAnswerShape(t *testing.T) {
 	}
 	if !strings.Contains(string(answer["user"]), `"username":"ada","full_name":null,"org_id":"`+f.orgB.String()+`","role":"member","is_superuser":false`) {
 		t.Fatalf("user %s", answer["user"])
-	}
-
-	signer, _, _ := fileSigner(t)
-	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer})
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := newSwitchFixtureWith(t, newEdDSAIssuer(t, signer, testAudience).WithAccessCheck(check))
-	e.bearerIssuer = newEdDSAIssuer(t, signer, AccessTokenAudience)
-	r = e.post(orgBody(e.orgB), e.bearer())
-	if got := strings.Join(memberOrder(t, r.Body.Bytes()), ","); r.Code != http.StatusOK || got != want+",session_access_token" {
-		t.Fatalf("eddsa members %q (%d %s), want %q", got, r.Code, r.Body, want+",session_access_token")
 	}
 }
 

@@ -311,7 +311,7 @@ const (
 
 func newCompatFixture(t *testing.T) *compatFixture {
 	t.Helper()
-	f := &compatFixture{fixture: newHS256Fixture(t), attempts: &fakeAttempts{}, orgB: uuid.New(), orgD: uuid.New(),
+	f := &compatFixture{fixture: newUncheckedFixture(t), attempts: &fakeAttempts{}, orgB: uuid.New(), orgD: uuid.New(),
 		counters: httpapi.NewMemoryCounters(nil), workload: testIssueWorkload()}
 	hash := "hash:" + compatPassword
 	f.loginUsers = &fakeLoginUsers{byEmail: map[string]*local.User{

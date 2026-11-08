@@ -18,11 +18,7 @@ func TestCompatValidateAndSwitchOrgNotMountedWithoutTheIssuer(t *testing.T) {
 	if got := v.logs.String(); strings.Count(got, "auth validate route not mounted") != 1 || !strings.Contains(got, "AUTH_TOKEN_ISSUER_URL") {
 		t.Errorf("validate not-mounted line: %s", got)
 	}
-	hs256, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := newSwitchFixtureWith(t, hs256)
+	s := newSwitchFixtureWith(t, newTestIssuer(t))
 	s.logs.Reset()
 	s.build()
 	if r := s.post(`{"org_id":"`+s.orgB.String()+`"}`, map[string]string{"Authorization": "Bearer any"}); r.Code != http.StatusNotFound {

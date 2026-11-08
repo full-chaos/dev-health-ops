@@ -40,7 +40,7 @@ func TestIssuerWithoutLegacyKeyRefusesAnHS256BearerWithoutReadingIt(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
+	hs, err := newLegacyMinter(testSecret, testIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		t.Fatal(err)
 	}

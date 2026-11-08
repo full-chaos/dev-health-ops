@@ -380,14 +380,6 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, platf
 	return verdict
 }
 
-// WriteConfigMissing answers 503 {"detail":{"message":message,"reason_code":"config_missing"}}: the route needs a setting
-// the process does not have. It is the enforce refusal's shape.
-func WriteConfigMissing(w http.ResponseWriter, message string) {
-	detail := ErrorDetail(message)
-	detail.Set("reason_code", "config_missing")
-	WriteDetail(w, http.StatusServiceUnavailable, detail, nil)
-}
-
 // writeEnforceRefusal answers a request the decision point refused or could not judge, or that no decision point can.
 func writeEnforceRefusal(w http.ResponseWriter, level Authz, verdict enforceVerdict) {
 	switch verdict {

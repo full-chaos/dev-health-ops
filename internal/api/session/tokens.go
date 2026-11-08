@@ -100,7 +100,7 @@ func (h handlers) refreshNotLocal(w http.ResponseWriter, r *http.Request) {
 // sessionsOff answers 503 config_missing naming AUTH_PROXY_SESSIONS.
 func (h handlers) sessionsOff(w http.ResponseWriter, r *http.Request) {
 	h.Logger.ErrorContext(r.Context(), "session route refused: AUTH_PROXY_SESSIONS is not on", "path", r.Pattern)
-	policy.WriteConfigMissing(w, sessionissue.SessionsOffText)
+	policy.WriteConfigMissing(w, "AUTH_PROXY_SESSIONS")
 }
 
 // amr of the sessions go-api's routes ask auth-service for: a password

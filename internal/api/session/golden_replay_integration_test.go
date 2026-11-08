@@ -269,10 +269,6 @@ func startStackRouted(t *testing.T, ctx context.Context, mail authmail.Config, i
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(sessionscenario.Key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	routesPool := pool
 	if routePool != nil {
 		routesPool = routePool(t, ctx, pool, pg.URI)

@@ -39,7 +39,7 @@ type delegatedLive struct {
 
 func newDelegatedLive(t *testing.T, ctx context.Context) *delegatedLive {
 	t.Helper()
-	return newDelegatedLiveWith(t, ctx, hs256Issuer(t))
+	return newDelegatedLiveWith(t, ctx, newTestIssuer(t))
 }
 
 // newGoAPIDelegatedLive is newDelegatedLive whose issuer mints go-api's EdDSA access token (audience

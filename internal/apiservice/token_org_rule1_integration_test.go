@@ -34,10 +34,6 @@ func rule1EdTokensServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, auth 
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(ruleOneKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	delegated, err := goAPIDelegatedRows()
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +45,7 @@ func rule1EdTokensServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, auth 
 	}
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
-	deps := Deps{Pool: pool, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier, Signer: signer}
+	deps := Deps{Pool: pool, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier}
 	server, err := NewServer(apiTestConfig(), logger, Routes(deps, logger), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)

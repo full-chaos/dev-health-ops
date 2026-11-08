@@ -168,9 +168,15 @@ func TestPlatformAdminFlagIsExactlyTheAdminGuardOrganizationActions(t *testing.T
 			t.Errorf("flagged action %s is repository_scope filtered", a.Action)
 		}
 	}
+	filtered := map[string]bool{}
+	for _, a := range catalog.Actions {
+		if a.RepositoryScope == "filtered" {
+			filtered[a.Action] = true
+		}
+	}
 	for a := range platformAdminFilteredActions {
-		if !flagged[a] {
-			t.Errorf("listed filtered action %s is not flagged platform_admin allowed", a)
+		if !flagged[a] || !filtered[a] {
+			t.Errorf("listed filtered action %s is not a flagged, repository_scope filtered action", a)
 		}
 	}
 	var redaction struct {

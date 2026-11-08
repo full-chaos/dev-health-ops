@@ -61,6 +61,31 @@ var UsersGuardRows = []UsersGuardRow{
 		Exempt: "test-database fixture rows, not a product writer"},
 }
 
+// UsersCallerRow is one call site of a writer func (or of the func a guard sits before) in the writer's own package.
+// A guard that lives in a caller covers only the callers listed here; an unlisted caller fails. Kind:
+//   - "guard":         Func holds a guard call before its call to Callee (checked like a GuardFunc);
+//   - "pass":          Func only forwards to Callee; its own callers are listed under Callee == bare name of Func;
+//   - "ctor":          Func calls Arg (a listed GuardFunc, which builds the row) before it calls Callee;
+//   - "local-literal": Func calls Callee with a literal that names no provider id and a provider that is absent or the
+//     string "local" (a literal, or a variable only ever assigned "local"). Reason quotes the line.
+type UsersCallerRow struct {
+	Callee, File, Func, Kind, Arg, Reason string
+}
+
+func (r UsersCallerRow) Key() string { return r.Callee + "|" + r.File + "|" + r.Func }
+
+var UsersCallerRows = []UsersCallerRow{
+	{Callee: "insertUserWithMembership", File: "internal/apiservice/admin/users.go", Func: "handlers.createUser", Kind: "guard"},
+	{Callee: "insertUser", File: "internal/apiservice/admin/users.go", Func: "handlers.insertUserWithMembership", Kind: "pass"},
+	{Callee: "insertUser", File: "internal/apiservice/admin/operator.go", Func: "Operator.CreateUser", Kind: "local-literal",
+		Reason: "operator.go:204 store.insertUser(ctx, userCreateInput{Email, Username, FullName, PasswordHash, IsVerified, IsSuperuser}): no AuthProvider, so insertUser stores 'local'"},
+	{Callee: "insertPublicUser", File: "internal/auth/identity/identities.go", Func: "Store.provisionFederated", Kind: "ctor", Arg: "federatedPublicUser"},
+	{Callee: "insertPublicUser", File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Kind: "local-literal",
+		Reason: `local.go:99-100 provider := "local"; insertPublicUser(ctx, tx, publicUser{..., AuthProvider: provider})`},
+	{Callee: "insertPublicUser", File: "internal/auth/identity/cliuser.go", Func: "Store.ProvisionCLIUser", Kind: "local-literal",
+		Reason: `cliuser.go:57 insertPublicUser(ctx, tx, publicUser{..., AuthProvider: "local", Verified: true})`},
+}
+
 var providerColumns = map[string]bool{"auth_provider": true, "auth_provider_id": true, "sso_provider_id": true}
 
 // setsProviderColumn reports whether sql holds an UPDATE of public.users whose SET list assigns a provider column.
@@ -448,5 +473,274 @@ func TestUsersGuardCensusPlantedCells(t *testing.T) {
 		if got := plantedCensus(t, guarded, []UsersGuardRow{plantedRow("")}); len(got) != 0 {
 			t.Fatalf("unexpected problems: %q", got)
 		}
+	})
+}
+
+type callSite struct {
+	key  string
+	file string
+	fn   string
+	call *ast.CallExpr
+	decl *ast.FuncDecl
+}
+
+// callersIn returns every call to a func named callee in the non-test .go files of dir (slash path under root).
+func callersIn(root, dir, callee string) ([]callSite, error) {
+	entries, err := os.ReadDir(filepath.Join(root, filepath.FromSlash(dir)))
+	if err != nil {
+		return nil, err
+	}
+	var out []callSite
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		af, err := parser.ParseFile(fset, filepath.Join(root, filepath.FromSlash(dir), e.Name()), nil, 0)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range af.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if c, ok := n.(*ast.CallExpr); ok && calleeName(c) == callee {
+					file := dir + "/" + e.Name()
+					out = append(out, callSite{key: callee + "|" + file + "|" + funcName(fd), file: file, fn: funcName(fd), call: c, decl: fd})
+				}
+				return true
+			})
+		}
+	}
+	return out, nil
+}
+
+func bareName(fn string) string {
+	if i := strings.LastIndex(fn, "."); i >= 0 {
+		return fn[i+1:]
+	}
+	return fn
+}
+
+func firstCallPos(fd *ast.FuncDecl, names ...string) token.Pos {
+	pos := token.NoPos
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok {
+			for _, nm := range names {
+				if calleeName(c) == nm && (pos == token.NoPos || c.Pos() < pos) {
+					pos = c.Pos()
+				}
+			}
+		}
+		return true
+	})
+	return pos
+}
+
+func isLocalString(e ast.Expr) bool {
+	bl, ok := e.(*ast.BasicLit)
+	return ok && bl.Kind == token.STRING && (bl.Value == `"local"` || bl.Value == "`local`")
+}
+
+// localLiteralProblem checks a "local-literal" call: every composite literal argument names no auth_provider_id and an
+// auth_provider that is absent or "local".
+func localLiteralProblem(site callSite) string {
+	checked := false
+	for _, a := range site.call.Args {
+		cl, ok := a.(*ast.CompositeLit)
+		if !ok {
+			continue
+		}
+		checked = true
+		for _, el := range cl.Elts {
+			kv, ok := el.(*ast.KeyValueExpr)
+			if !ok {
+				return "unkeyed literal argument"
+			}
+			k, _ := kv.Key.(*ast.Ident)
+			if k == nil {
+				continue
+			}
+			switch k.Name {
+			case "AuthProviderID":
+				return "the literal sets AuthProviderID"
+			case "AuthProvider":
+				if isLocalString(kv.Value) {
+					continue
+				}
+				id, ok := kv.Value.(*ast.Ident)
+				if !ok {
+					return "AuthProvider is not the literal \"local\""
+				}
+				assigns := 0
+				bad := false
+				ast.Inspect(site.decl.Body, func(n ast.Node) bool {
+					if as, ok := n.(*ast.AssignStmt); ok {
+						for i, l := range as.Lhs {
+							if li, ok := l.(*ast.Ident); ok && li.Name == id.Name {
+								assigns++
+								if len(as.Lhs) != len(as.Rhs) || !isLocalString(as.Rhs[i]) {
+									bad = true
+								}
+							}
+						}
+					}
+					return true
+				})
+				if assigns == 0 || bad {
+					return "AuthProvider " + id.Name + " is not only ever assigned \"local\""
+				}
+			}
+		}
+	}
+	if !checked {
+		return "no composite literal argument to check"
+	}
+	return ""
+}
+
+// usersCallerCensus returns one line per problem among the callers of the guarded writers: a call site with no row, a
+// row with no call site, a guarded row whose callee has no caller rows, and a row whose Kind check fails.
+func usersCallerCensus(root string, guards []UsersGuardRow, callers []UsersCallerRow) ([]string, error) {
+	var out []string
+	callees := map[string]bool{}
+	dirs := map[string]map[string]bool{}
+	addDir := func(callee, file string) {
+		if dirs[callee] == nil {
+			dirs[callee] = map[string]bool{}
+		}
+		dirs[callee][filepath.ToSlash(filepath.Dir(file))] = true
+	}
+	for _, c := range callers {
+		callees[c.Callee] = true
+		addDir(c.Callee, c.File)
+	}
+	for _, g := range guards {
+		if g.Exempt != "" || g.Then == "" {
+			continue
+		}
+		need := []string{bareName(g.Func)}
+		if g.Then != thenLastReturn {
+			need = append(need, g.Then)
+		}
+		for _, n := range need {
+			if !callees[n] {
+				out = append(out, "a writer guarded in its callers has no caller rows: "+n+" ("+g.Key()+")")
+			}
+			addDir(n, g.File)
+			addDir(n, g.GuardFile)
+		}
+	}
+	listed := map[string]UsersCallerRow{}
+	for _, c := range callers {
+		listed[c.Key()] = c
+	}
+	found := map[string]callSite{}
+	for callee := range callees {
+		for dir := range dirs[callee] {
+			sites, err := callersIn(root, dir, callee)
+			if err != nil {
+				return nil, err
+			}
+			for _, site := range sites {
+				if bareName(site.fn) == callee {
+					continue
+				}
+				if _, dup := found[site.key]; !dup {
+					found[site.key] = site
+				}
+				if _, ok := listed[site.key]; !ok {
+					out = append(out, "unlisted caller of a guarded users writer (add a UsersCallerRow, or guard it): "+site.key)
+				}
+			}
+		}
+	}
+	for _, c := range callers {
+		site, ok := found[c.Key()]
+		if !ok {
+			out = append(out, "stale caller row, no such call: "+c.Key())
+			continue
+		}
+		switch c.Kind {
+		case "guard":
+			g := UsersGuardRow{GuardFile: c.File, GuardFunc: c.Func, Guards: providerGuards, Then: c.Callee}
+			if p := guardProblem(root, g); p != "" {
+				out = append(out, c.Key()+": "+p)
+			}
+		case "pass":
+			if !callees[bareName(c.Func)] {
+				out = append(out, c.Key()+": a pass-through func needs caller rows of its own")
+			}
+		case "ctor":
+			ctor := firstCallPos(site.decl, c.Arg)
+			if ctor == token.NoPos || ctor >= firstCallPos(site.decl, c.Callee) {
+				out = append(out, c.Key()+": no call to "+c.Arg+" before the call to "+c.Callee)
+			}
+			isGuardFunc := false
+			for _, g := range guards {
+				isGuardFunc = isGuardFunc || g.GuardFunc == c.Arg
+			}
+			if !isGuardFunc {
+				out = append(out, c.Key()+": "+c.Arg+" is not a listed guard func")
+			}
+		case "local-literal":
+			if c.Reason == "" {
+				out = append(out, c.Key()+": a local-literal row needs the quoted line as Reason")
+			}
+			if p := localLiteralProblem(site); p != "" {
+				out = append(out, c.Key()+": "+p)
+			}
+		default:
+			out = append(out, c.Key()+": unknown Kind "+c.Kind)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func TestUsersWriterCallerCensus(t *testing.T) {
+	problems, err := usersCallerCensus(repoRoot(t), UsersGuardRows, UsersCallerRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range problems {
+		t.Error(p)
+	}
+}
+
+func TestUsersCallerCensusPlantedCells(t *testing.T) {
+	head := "package planted\n\ntype in struct{ AuthProvider *string; AuthProviderID *string }\n\nfunc insertUser(x in) {}\n"
+	guards := []UsersGuardRow{{File: "planted/w.go", Func: "s.insertUser", Verb: "INSERT", GuardFile: "planted/w.go", GuardFunc: "Create", Guards: providerGuards, Then: "insertUser"}}
+	good := UsersCallerRow{Callee: "insertUser", File: "planted/w.go", Func: "Create", Kind: "guard"}
+	createSrc := "func Create(p string, id *string) { if identity.RefuseInvalidProviderID(p, id) != nil { return }; insertUser(in{}) }\n"
+	run := func(src string, callers []UsersCallerRow) []string {
+		dir := writePlanted(t, head+src)
+		got, err := usersCallerCensus(dir, guards, callers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	t.Run("a guarded caller alone is clean", func(t *testing.T) {
+		if got := run(createSrc, []UsersCallerRow{good}); len(got) != 0 {
+			t.Fatalf("unexpected problems: %q", got)
+		}
+	})
+	t.Run("an unlisted caller of the writer is red", func(t *testing.T) {
+		mustContain(t, run(createSrc+"func Sneak() { insertUser(in{}) }\n", []UsersCallerRow{good}), "unlisted caller of a guarded users writer")
+	})
+	t.Run("a stale caller row is red", func(t *testing.T) {
+		stale := UsersCallerRow{Callee: "insertUser", File: "planted/w.go", Func: "Gone", Kind: "pass"}
+		mustContain(t, run(createSrc, []UsersCallerRow{good, stale}), "stale caller row")
+	})
+	t.Run("a local-literal row whose literal names a provider id is red", func(t *testing.T) {
+		src := "func Loc() { id := \"x\"; insertUser(in{AuthProviderID: &id}) }\n"
+		row := UsersCallerRow{Callee: "insertUser", File: "planted/w.go", Func: "Loc", Kind: "local-literal", Reason: "q"}
+		mustContain(t, run(createSrc+src, []UsersCallerRow{good, row}), "sets AuthProviderID")
+	})
+	t.Run("a guarded writer with no caller rows is red", func(t *testing.T) {
+		mustContain(t, run(createSrc, nil), "has no caller rows")
 	})
 }

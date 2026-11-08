@@ -86,7 +86,7 @@ func TestUsersCreateKeepsGoAPIEmailForm(t *testing.T) {
 	t.Parallel()
 	f := newUsersAdminFixture(t)
 	for raw, want := range map[string]string{
-		"  New.User@Example.COM ":           "new.user@example.com",
+		"  New.User@Example.COM ":          "new.user@example.com",
 		"Bot-1@service.dev-health.invalid": "bot-1@service.dev-health.invalid",
 	} {
 		body := map[string]any{"actor_principal_id": f.super.String(), "email": raw, "auth_provider": "service",

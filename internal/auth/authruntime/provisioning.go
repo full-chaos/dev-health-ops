@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/orgdeprovision"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/publicread"
 	"github.com/full-chaos/dev-health-ops/internal/auth/serviceaccount"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -63,9 +64,15 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 	if err != nil {
 		return nil, err
 	}
+	roles, err := platformrole.New(platformrole.Config{Pool: pool, Schema: schema, Logger: logger})
+	if err != nil {
+		return nil, err
+	}
 	routes, err := authapi.ProvisioningRoutes(authapi.ProvisioningDeps{
 		Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities,
-		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, ServiceAccounts: accounts, Grants: grants, Workload: workload, Logger: logger, ProfileRows: provisioningProfileRows,
+		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, ServiceAccounts: accounts, Grants: grants,
+		UsersAdminStores: authapi.UsersAdminStores{UsersAdmin: identities, PlatformRoles: authapi.PlatformRoleStore{Store: roles}},
+		Workload:         workload, Logger: logger, ProfileRows: provisioningProfileRows,
 	})
 	if err != nil {
 		return nil, err

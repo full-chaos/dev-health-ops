@@ -364,8 +364,8 @@ func TestServiceAccountRoutesTakeTheGoAPIWorkloadTokenAndNoOtherSubject(t *testi
 		if !workloadOperations[c.op] {
 			t.Fatalf("%s is not a workload operation", c.op)
 		}
-		if classes := admittedClasses(c.path); !slices.Equal(slices.Sorted(slices.Values(classes)), []string{serviceSessionIssuerClass, workloadTokenClass}) {
-			t.Fatalf("%s admits %v, want the session issuer credential and the workload token", c.op, classes)
+		if classes := admittedClasses(c.path); !slices.Equal(classes, []string{workloadTokenClass}) {
+			t.Fatalf("%s admits %v, want the workload token only", c.op, classes)
 		}
 		header, jti := f.w.mint("workload+jwt", nil)
 		if response := f.post(c.path, encode(c.body(f.provFixture, f.super)), header); response.Code != http.StatusOK {
@@ -394,7 +394,7 @@ func TestServiceAccountRoutesAreOnTheStartupGate(t *testing.T) {
 		if !slices.Contains(provisioningPatterns, c.path) || provisioningRouteOps[c.op] != c.path {
 			t.Fatalf("%s is not in the provisioning patterns or route operations", c.path)
 		}
-		routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+		routes, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 			Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
 			ProfileRows: embeddedDocWithoutRow(t, c.path)})
 		if !errors.Is(err, errProvisioningRows) || routes != nil || !strings.Contains(err.Error(), "POST "+c.path+" ") {

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,17 +15,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
+// serviceArgs is a parseable argv; the candidate credential follows the service: the edge token helper under
+// -service=dho-api, the platform admin's user access token file otherwise.
 func serviceArgs(extra ...string) []string {
-	return append([]string{
+	candidate := []string{"-candidate-access-token-file", "/run/proof/access-token"}
+	if slices.Contains(extra, "dho-api") {
+		candidate = []string{"-candidate-bearer-exec", `["mint-edge-token"]`}
+	}
+	return append(append(append([]string{}, candidate...), []string{
 		"-python-api-url", "http://api:8000",
-		"-candidate-bearer-exec", `["mint-edge-token"]`,
 		"-baseline-bearer-exec", `["mint-edge-token"]`,
 		"-org", "org-1",
 		"-recorded-by", "chris",
 		"-review-evidence", "test",
 		"-artifact-dir", os.TempDir() + "/rest-prove-service-test-unused",
 		"-dry-run",
-	}, extra...)
+	}...), extra...)
 }
 
 func TestParseFlags_DefaultServiceIsQueryAPI(t *testing.T) {

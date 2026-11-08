@@ -82,7 +82,8 @@ auth-service accepts for it, with four one-shot services. Every `up` runs them, 
   atomically (a 0600 temporary file in the same directory, renamed over it): a restart after the credential expired
   leaves go-api with the new file, not the dead one. Without `-if-absent` an existing file is refused.
 - go-api mounts the volume read-only at `/run/workload` and reads the file for its session issue call
-  (`AUTH_SESSION_ISSUE_CREDENTIAL=workload`). auth-service never mounts it. To accept the value, auth-service has
+  (`AUTH_SESSION_ISSUE_CREDENTIAL=workload`) and whenever `AUTH_PROXY_ORG_PROVISIONING` is on (the provisioning
+  clients always use it). auth-service never mounts it. To accept the value, auth-service has
   `AUTH_WORKLOAD_BOOTSTRAP=true` and `AUTH_TOKEN_ISSUER_URL` (go-api's `AUTH_WORKLOAD_ISSUER` follows it).
 - `workloads subject` writes the wire principal id of the workload (`prn_` and 22 characters, not a secret, mode 0644)
   to `/run/workload-subject/api.subject`, replacing the file atomically. auth-service mounts that volume read-only and

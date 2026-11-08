@@ -6,10 +6,11 @@
 #
 # What it proves. go-api-prove runs against a real query-api, whose own
 # /graphql is the product edge (CHAOS-6263: no Python process is involved),
-# with NOTHING hand-minted: the proof envelope comes from mint-envelope and
-# the edge access token from mint-edge-token, both signed locally from keys
-# in their own environment, the edge token for the dedicated proof service
-# principal. The prover runs in Go-edge mode (-go-edge), measuring through
+# with NOTHING hand-minted: the proof credential is the e2e platform admin's
+# user access token in a 0600 file (generate_platform_admin_token,
+# ci/lib/e2e_fixture.sh, signed by the CI issuer stub's key), and the edge
+# access token comes from mint-edge-token, signed locally from keys in its own
+# environment, for the dedicated proof service principal. The prover runs in Go-edge mode (-go-edge), measuring through
 # /graphql itself (query-api serves every registered operation: no routing row
 # decides it, CHAOS-8702). Then the edge's own per-request checks
 # run against that principal, with the registered document: a bumped
@@ -22,7 +23,7 @@
 # it and stops it with stop_service). Requires the cigate and dho binaries in BIN_DIR, e2e_psql and e2e_dho_admin (ci/lib/e2e_fixture.sh) and
 # wait_for_http_ready to be defined.
 #
-# CHAOS-6241: query_api_e2e_start/query_api_e2e_mint_envelope_token are also
+# CHAOS-6241: query_api_e2e_start is also
 # called directly by the caller (ci/run_live_backend_e2e.sh) BEFORE
 # run_go_api_prove_e2e, to validate the two REST routes (/api/v1/meta,
 # /api/v1/home) query-api now serves against the SAME query-api process
@@ -33,8 +34,8 @@ GO_API_PROVE_E2E_OPERATION="featureFlags"
 # Must match internal/edgetokenmint.ProvePrincipalID.
 GO_API_PROVE_E2E_PRINCIPAL_ID="00000000-0000-4000-8000-00000000e0e1"
 
-# Set by query_api_e2e_start; read by it, by run_go_api_prove_e2e, and by
-# query_api_e2e_mint_envelope_token.
+# Set by query_api_e2e_start; read by it and by run_go_api_prove_e2e. The envelope key pair stays only because
+# query-api still checks its JWKS at start; the prove tools present no envelope.
 GO_API_PROVE_E2E_DIR=""
 GO_API_PROVE_E2E_ENVELOPE_PEM=""
 GO_API_PROVE_E2E_JWKS=""
@@ -213,16 +214,6 @@ query_api_e2e_start() {
   wait_for_http_ready "query-api" "http://127.0.0.1:${QUERY_API_PORT}/readyz" "${dir}/query-api.log" QUERY_API_PID
 }
 
-# query_api_e2e_mint_envelope_token ORG_ID -- prints an envelope bearer
-# token minted with query_api_e2e_start's throwaway key, the same auth
-# query-api's REST routes (home_route.go's doc comment: "the same
-# bearer-envelope verifier every other REST route in this binary uses")
-# and run_go_api_prove_e2e's own dho goapi prove invocation mints
-# in process, from the same key.
-query_api_e2e_mint_envelope_token() {
-  "${BIN_DIR}/dho" mint envelope -org "$1" -key-file "${GO_API_PROVE_E2E_ENVELOPE_PEM}"
-}
-
 # go_api_prove_e2e_prove LOG -- runs dho goapi prove in Go-edge mode against
 # the running query-api (its /registry, /buildinfo, /query/proof and its own
 # /graphql as the edge), writes the output to LOG and prints it. Returns the
@@ -232,9 +223,10 @@ go_api_prove_e2e_prove() {
   set +e
   (
     cd "${ROOT_DIR}"
-    unset GO_API_PROVE_PROOF_BEARER
-    POSTGRES_URI="$(go_api_prove_e2e_pgx_uri)" GO_API_ENVELOPE_PRIVATE_KEY="$(cat "${GO_API_PROVE_E2E_ENVELOPE_PEM}")" \
+    unset GO_API_PROVE_PROOF_ACCESS_TOKEN_FILE
+    POSTGRES_URI="$(go_api_prove_e2e_pgx_uri)" \
       "${BIN_DIR}/dho" goapi prove \
+      -proof-access-token-file "${GO_API_PROVE_E2E_DIR}/platform-admin-token" \
       -go-edge \
       -registry-url "${query_api}/registry" \
       -buildinfo-url "${query_api}/buildinfo" \
@@ -244,7 +236,7 @@ go_api_prove_e2e_prove() {
       -org "${E2E_ORG_ID}" \
       -artifact-dir "${GO_API_PROVE_E2E_DIR}/artifacts" \
       -recorded-by live-e2e \
-      -review-evidence "live-e2e: go-api-prove -go-edge with the envelope and the edge access token minted in process"
+      -review-evidence "live-e2e: go-api-prove -go-edge with the platform admin's user access token file and the edge access token minted in process"
   ) > "${log}" 2>&1
   rc=$?
   set -e
@@ -263,8 +255,8 @@ go_api_prove_e2e_assert_run() {
     || go_api_prove_e2e_fail "no operation was executed"
   grep -Eq '^go-api-prove:   edge access token mints = [1-9][0-9]*$' "${log}" \
     || go_api_prove_e2e_fail "the edge access token was not minted in process"
-  grep -Eq '^go-api-prove:   envelope mints = [1-9][0-9]*$' "${log}" \
-    || go_api_prove_e2e_fail "the envelope was not minted in process"
+  grep -Eq '^go-api-prove:   proof access token reads = [1-9][0-9]*$' "${log}" \
+    || go_api_prove_e2e_fail "the proof access token file was not read"
 }
 
 run_go_api_prove_e2e() {

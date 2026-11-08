@@ -82,11 +82,12 @@ auth-service:
 
 | Class | Rows |
 | --- | --- |
-| `workload_token` | 11 |
-| `user_access_token` | 6 |
+| `workload_token` | 39 |
+| `user_access_token` | 9 |
 | `refresh_credential` | 3 |
 | `sso_oidc_exchange` | 2 |
 | `kubernetes_sa_token_exchange` | 1 |
+| `ops_refresh_token` | 1 |
 | `social_oauth_exchange` | 1 |
 | `sso_saml_exchange` | 1 |
 | `workload_bootstrap_credential` | 1 |
@@ -225,37 +226,37 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | `POST /internal/v1/sessions/state` | protected | `workload_token` | `none` |
 | `POST /internal/v1/sessions/delegated` | protected | `workload_token` | `none` |
 | `POST /internal/v1/sessions/delegated/end` | protected | `workload_token` | `none` |
-| `POST /internal/v1/memberships/add` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/memberships/role` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/memberships/remove` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/memberships/transfer` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/invites/create` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/invites/accept` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
-| `POST /internal/v1/invites/revoke` | protected | `internal_svc_authsess_token` | `org_scoped` |
-| `POST /internal/v1/organizations/deprovision` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/organizations/reactivate` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/organizations/suspend` | protected | `internal_svc_authsess_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/organizations/state` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/principals/get` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/principals/list` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/organizations/get` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/organizations/list` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/memberships/get` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/memberships/list` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/grants/get` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/grants/list` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
-| `POST /internal/v1/organizations/rename` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/service-accounts/create` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/service-accounts/disable` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/service-accounts/enable` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/service-accounts/owner` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/service-accounts/keys/issue` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/service-accounts/keys/rotate` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/service-accounts/keys/revoke` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/service-accounts/keys/list` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/grants/create` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/grants/update` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
-| `POST /internal/v1/grants/revoke` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
+| `POST /internal/v1/memberships/add` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/memberships/role` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/memberships/remove` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/memberships/transfer` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/invites/create` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/invites/accept` | protected | `workload_token` | `none` |
+| `POST /internal/v1/invites/revoke` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/organizations/deprovision` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/organizations/reactivate` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/organizations/suspend` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/organizations/state` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/principals/get` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/principals/list` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/organizations/get` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/organizations/list` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/memberships/get` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/memberships/list` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/grants/get` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/grants/list` | protected | `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/organizations/rename` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/service-accounts/create` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/service-accounts/disable` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/service-accounts/enable` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/service-accounts/owner` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/service-accounts/keys/issue` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/service-accounts/keys/rotate` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/service-accounts/keys/revoke` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/service-accounts/keys/list` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/grants/create` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/grants/update` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/grants/revoke` | protected | `workload_token` | `org_scoped` |
 | `POST /internal/v1/token/exchange` | protected | `kubernetes_sa_token_exchange`, `workload_bootstrap_credential` | `none` |
 | `GET /api/v1/auth/verify` | public | none | `none` |
 | `POST /api/v1/auth/register` | public | none | `none` |

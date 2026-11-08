@@ -4,7 +4,7 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "obligations": null,
-    "policy_revision": 15,
+    "policy_revision": 16,
     "reason": "organization_inactive",
     "wire_reason_code": "organization_inactive"
   },

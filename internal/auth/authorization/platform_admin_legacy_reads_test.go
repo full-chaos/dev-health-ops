@@ -12,8 +12,8 @@ import (
 var platformAdminLegacyReads = []string{"analytics.read", "git.read", "metrics.read", "reports.write", "work_items.read"}
 
 // Product rule 1: a platform admin with no membership row gets the legacy answer on these actions, an allow with the
-// tenant scope only, in an active or a suspended organization. A member keeps the suspended-organization deny, an
-// unknown organization denies, and a platform role without admin.orgs gets nothing.
+// tenant scope only, in an active, a suspended or an unknown organization. A member keeps the suspended-organization
+// deny, and a platform role without admin.orgs gets nothing.
 func TestPlatformAdminNoMembershipGetsTheLegacyQueryAPIActions(t *testing.T) {
 	e := NewEvaluator()
 	for _, a := range platformAdminLegacyReads {
@@ -25,14 +25,11 @@ func TestPlatformAdminNoMembershipGetsTheLegacyQueryAPIActions(t *testing.T) {
 			t.Errorf("%s is repository_scope filtered", a)
 		}
 		req := orgRequest(a)
-		for _, org := range []Status{StatusActive, StatusSuspended} {
+		for _, org := range []Status{StatusActive, StatusSuspended, StatusUnknown} {
 			for _, member := range []string{"", "viewer"} {
 				wantOwnerShapeAllow(t, a+" platform_admin + "+member+" in org "+statusName(org),
 					e.Evaluate(req, platformAdminSnapshot("platform_admin", member, org)), ReasonAllowedByPlatformAdmin)
 			}
-		}
-		if d := e.Evaluate(req, platformAdminSnapshot("platform_admin", "", StatusUnknown)); d.Allowed || d.Reason != ReasonOrganizationInactive {
-			t.Errorf("%s platform_admin, unknown org: %+v, want deny organization_inactive", a, d)
 		}
 		for _, member := range []string{"viewer", "owner"} {
 			if d := e.Evaluate(req, platformAdminSnapshot("", member, StatusSuspended)); d.Allowed || d.Reason != ReasonOrganizationInactive {
@@ -46,8 +43,11 @@ func TestPlatformAdminNoMembershipGetsTheLegacyQueryAPIActions(t *testing.T) {
 }
 
 func statusName(s Status) string {
-	if s == StatusSuspended {
+	switch s {
+	case StatusSuspended:
 		return "suspended"
+	case StatusUnknown:
+		return "unknown"
 	}
 	return "active"
 }

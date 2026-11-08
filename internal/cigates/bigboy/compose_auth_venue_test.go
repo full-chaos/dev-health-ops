@@ -16,8 +16,8 @@ const (
 )
 
 var (
-	composeAuthAll      = []string{"acr-workload-bootstrap", "acr-workload-volume", "auth-fence-init", "auth-grants", "auth-issuer", "auth-keys-init", "auth-migrate", "auth-owner-grants", "auth-provision", "auth-service", "auth-session-keys-init", "auth-workload-seed", "go-api-workload-bootstrap", "go-api-workload-volume"}
-	composeAuthOneShots = []string{"acr-workload-bootstrap", "acr-workload-volume", "auth-fence-init", "auth-grants", "auth-keys-init", "auth-migrate", "auth-owner-grants", "auth-provision", "auth-session-keys-init", "auth-workload-seed", "go-api-workload-bootstrap", "go-api-workload-volume"}
+	composeAuthAll      = []string{"acr-workload-bootstrap", "acr-workload-volume", "auth-fence-init", "auth-grants", "auth-issuer", "auth-keys-init", "auth-migrate", "auth-owner-grants", "auth-provision", "auth-service", "auth-session-keys-init", "auth-users-backfill", "auth-workload-seed", "go-api-workload-bootstrap", "go-api-workload-volume"}
+	composeAuthOneShots = []string{"acr-workload-bootstrap", "acr-workload-volume", "auth-fence-init", "auth-grants", "auth-keys-init", "auth-migrate", "auth-owner-grants", "auth-provision", "auth-session-keys-init", "auth-users-backfill", "auth-workload-seed", "go-api-workload-bootstrap", "go-api-workload-volume"}
 	composeAuthPins     = []string{"BIGBOY_AUTH_MIGRATE_IMAGE", "BIGBOY_AUTH_SERVICE_IMAGE"}
 )
 
@@ -77,6 +77,7 @@ func composeAuthNetworks(g *guard) {
 		"auth-migrate":              {"auth_plane"},
 		"auth-grants":               {"auth_plane"},
 		"auth-fence-init":           {"auth_plane"},
+		"auth-users-backfill":       {"auth_plane"},
 		"auth-workload-seed":        {"auth_plane"},
 		"acr-workload-bootstrap":    {"auth_plane"},
 		"go-api-workload-bootstrap": {"auth_plane"},
@@ -95,7 +96,7 @@ func composeAuthNetworks(g *guard) {
 	}
 	for net, want := range map[string][]string{
 		"acr_auth_workload": {"acr-api", "auth-service"},
-		"auth_plane":        {"acr-workload-bootstrap", "auth-fence-init", "auth-grants", "auth-issuer", "auth-migrate", "auth-owner-grants", "auth-provision", "auth-service", "auth-workload-seed", "go-api-workload-bootstrap", "postgres"},
+		"auth_plane":        {"acr-workload-bootstrap", "auth-fence-init", "auth-grants", "auth-issuer", "auth-migrate", "auth-owner-grants", "auth-provision", "auth-service", "auth-users-backfill", "auth-workload-seed", "go-api-workload-bootstrap", "postgres"},
 	} {
 		got := composeSortedStrs(members[net])
 		g.expect(equal(got, want), "network %s has members %v, want %v", net, got, want)
@@ -163,7 +164,7 @@ func composeAuthImagesPinned(g *guard) {
 	for pin, names := range map[string][]string{
 		"BIGBOY_AUTH_SERVICE_IMAGE": {"auth-service"},
 		"BIGBOY_AUTH_MIGRATE_IMAGE": {"auth-owner-grants", "auth-migrate", "auth-grants", "auth-fence-init", "auth-workload-seed", "acr-workload-bootstrap", "go-api-workload-bootstrap"},
-		"BIGBOY_DHO_IMAGE":          {"auth-keys-init"},
+		"BIGBOY_DHO_IMAGE":          {"auth-keys-init", "auth-users-backfill"},
 		"BIGBOY_ACR_POSTGRES_IMAGE": {"auth-provision", "acr-workload-volume", "auth-session-keys-init", "go-api-workload-volume"},
 		"BIGBOY_ACR_NGINX_IMAGE":    {"auth-issuer"},
 	} {
@@ -410,6 +411,20 @@ func composeHas(list []string, want string) bool {
 	return false
 }
 
+func composeAuthPlatformRolesOwned(g *guard) {
+	r := composeAuth(g)
+	svc := mp(r.services["auth-service"]["environment"])
+	g.expect(str(svc["AUTH_PLATFORM_ROLES_OWNED"]) == "true", "auth-service AUTH_PLATFORM_ROLES_OWNED=%q, want true (the prod form: a plain up must keep it)", str(svc["AUTH_PLATFORM_ROLES_OWNED"]))
+	g.expect(str(svc["AUTH_USERS_OWNED"]) == "false", "auth-service AUTH_USERS_OWNED=%q, want false (the venue has no mail settings: auth_mail_config_invalid)", str(svc["AUTH_USERS_OWNED"]))
+	for _, name := range []string{"go-api", "query-api", "web"} {
+		env := mp(r.services[name]["environment"])
+		for _, key := range []string{"AUTH_PLATFORM_ROLES_OWNED", "AUTH_USERS_OWNED"} {
+			_, set := env[key]
+			g.expect(!set, "%s sets %s: only auth-service owns, go-api stays legacy for the drift-S controls", name, key)
+		}
+	}
+}
+
 func composeAuthReadme(g *guard) {
 	readme := g.read("ci/bigboy/README.md")
 	start := strings.Index(readme, "## auth venue")
@@ -421,7 +436,7 @@ func composeAuthReadme(g *guard) {
 	if end := strings.Index(section[3:], "\n## "); end >= 0 {
 		section = section[:end+3]
 	}
-	for _, want := range []string{"run --rm acr-workload-bootstrap", "AUTH_WORKLOAD_READER_ROLES", "openssl req", "/ca/issuer.pem", "/key/issuer.key", "expires_at"} {
+	for _, want := range []string{"run --rm acr-workload-bootstrap", "AUTH_WORKLOAD_READER_ROLES", "openssl req", "/ca/issuer.pem", "/key/issuer.key", "expires_at", "bigboy-platform-admin-fixture.sh", "AUTH_PLATFORM_ROLES_OWNED"} {
 		g.expect(strings.Contains(section, want), "README auth venue section lacks %q", want)
 	}
 	for _, m := range composeReadmeCmdRe.FindAllStringSubmatch(section, -1) {
@@ -440,6 +455,7 @@ var composeAuthChecks = []check{
 	{"a_chown_only_root_init_never_chmods_a_path_it_gave_away", composeAuthChownThenChmod},
 	{"the_auth_start_order_is_the_compose_yml_order", composeAuthStartOrder},
 	{"auth_service_mints_eddsa_and_the_verifiers_and_session_wiring_follow", composeAuthEddsaWiring},
+	{"auth_service_owns_platform_roles_by_default_and_go_api_does_not", composeAuthPlatformRolesOwned},
 	{"the_readme_holds_the_auth_venue_procedure", composeAuthReadme},
 }
 
@@ -538,6 +554,12 @@ func TestComposeAuthVenuePlanted(t *testing.T) {
 			check: composeAuthEddsaWiring, want: "AUTH_VALKEY_URI"},
 		{name: "auth-service jwt key dropped", mutate: mut(composeFile, "      AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY}\n", ""),
 			check: composeAuthEddsaWiring, want: "AUTH_JWT_SECRET_KEY"},
+		{name: "auth-service platform roles not owned", mutate: mut(composeFile, "      AUTH_PLATFORM_ROLES_OWNED: 'true'\n", ""),
+			check: composeAuthPlatformRolesOwned, want: "AUTH_PLATFORM_ROLES_OWNED"},
+		{name: "auth-service users owned", mutate: mut(composeFile, "      AUTH_SERVICE_HTTP_ADDR: :8095\n      AUTH_SERVICE_OPERATOR_HTTP_ADDR: :8096\n      AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s\n      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}\n      AUTH_SESSION_SUCCESSOR_KEY_FILE: /run/auth/session/successor-key\n      AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem\n      AUTH_SIGNING_KEY_ID: auth-signing-bigboy\n      AUTH_TOKEN_ISSUER_URL: https://auth.bigboy.internal:8443\n      AUTH_USERS_OWNED: 'false'\n", "      AUTH_SERVICE_HTTP_ADDR: :8095\n      AUTH_SERVICE_OPERATOR_HTTP_ADDR: :8096\n      AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s\n      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}\n      AUTH_SESSION_SUCCESSOR_KEY_FILE: /run/auth/session/successor-key\n      AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem\n      AUTH_SIGNING_KEY_ID: auth-signing-bigboy\n      AUTH_TOKEN_ISSUER_URL: https://auth.bigboy.internal:8443\n      AUTH_USERS_OWNED: 'true'\n"),
+			check: composeAuthPlatformRolesOwned, want: "AUTH_USERS_OWNED"},
+		{name: "go-api owns platform roles", mutate: mut(composeFile, "    - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443\n", "    - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443\n    - AUTH_PLATFORM_ROLES_OWNED=true\n"),
+			check: composeAuthPlatformRolesOwned, want: "go-api sets AUTH_PLATFORM_ROLES_OWNED"},
 		{name: "readme loses the bootstrap step", copy: readme, mutate: mut("ci/bigboy/README.md", "run --rm acr-workload-bootstrap", "up -d acr-workload-bootstrap"),
 			check: composeAuthReadme, want: "run --rm acr-workload-bootstrap"},
 	}

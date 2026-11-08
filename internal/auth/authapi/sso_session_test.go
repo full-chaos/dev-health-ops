@@ -137,7 +137,7 @@ func TestOIDCSessionStartsAFederatedSessionInTheSignInOrganization(t *testing.T)
 	if issued.ExpiresIn != int64(AccessExpiresIn) || issued.RefreshToken == "" {
 		t.Fatalf("tokens %+v", issued)
 	}
-	bearer, _, err := f.issuer.Verify(issued.AccessToken)
+	bearer, _, err := eddsaBearer(t, issued.AccessToken)
 	if err != nil || bearer.PrincipalID != f.principal {
 		t.Fatalf("access token: %+v, %v", bearer, err)
 	}

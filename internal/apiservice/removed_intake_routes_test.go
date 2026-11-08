@@ -5,39 +5,25 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 func TestRemovedSharedSecretIntakeRoutesAnswerNotFound(t *testing.T) {
-	key := strings.Repeat("fixture-key-", 3)
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	store := &countingStore{scopeStore: scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.AuthenticatorOver(t, store, quietLogger())
 	scope := policy.NewScope(auth, quietLogger())
 	routes := webhookintake.Routes(webhookintake.Deps{Secrets: webhookintake.Secrets{GitHub: "gh-" + uuid.NewString()}, Logger: quietLogger()})
 	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": uuid.NewString(), "type": "access", "org_id": uuid.NewString(), "exp": time.Now().Add(time.Hour).Unix(),
-	}).SignedString([]byte(key))
-	if err != nil {
-		t.Fatal(err)
-	}
+	signed := tokens.MustMint(t, edtokens.Claims{UserID: uuid.New()})
 	send := func(path string, headers map[string]string) int {
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"x":1}`))
 		for k, v := range headers {

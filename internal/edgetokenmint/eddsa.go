@@ -21,8 +21,7 @@ import (
 
 // The EdDSA mode signs an access-token.v1 user token with an Ed25519 key read from a file, the way envelopemint
 // reads its key. The token is accepted only for a live session of its principal, so the caller names a session
-// that already exists: this package reads it, never writes one. The HS256 mode (Mint) stays for the bigboy
-// prover until the HS256 verifier is removed.
+// that already exists: this package reads it, never writes one.
 const (
 	SigningKeyFileEnvVar = "EDGE_TOKEN_SIGNING_KEY_FILE"
 	KeyIDEnvVar          = "EDGE_TOKEN_KID"

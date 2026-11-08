@@ -10,6 +10,12 @@ source_of_truth:
   - internal/api/policy/enforce_test.go
   - internal/apiservice/enforcer.go
   - internal/authzenforce/authzenforce.go
+  - internal/queryapi/pdp/pdp.go
+  - internal/queryapi/pdp/operation.go
+  - internal/queryapi/server/pdp_gate.go
+  - internal/queryapi/server/graphql_enforce.go
+  - internal/queryapi/graph/operation_enforce.go
+  - alerts/rules.yml
   - deploy/helm/dev-health/values.yaml
   - deploy/helm/dev-health/templates/_helpers.tpl
   - deploy/helm/dev-health/templates/go-api-deployment.yaml
@@ -99,3 +105,70 @@ The test is `TestRollbackCannotReactivateRevokedAccess` (`internal/api/policy/en
 ## Before a turn-on: platform role parity read
 
 Before a go-api or query-api enforcement cell turns on (F7, F8, F9), run the read in `deploy/scripts/auth_preflip_platform_role_parity.sql` once, read-only, against the production database (`BEGIN TRANSACTION READ ONLY;`, the file, `ROLLBACK;`). Record its output on the flip ticket. The flip goes on only when every count except `superusers` is 0. A non-zero `superusers_without_platform_admin` or `platform_admin_not_superuser` means go-api's superuser flag and the decision point's platform role disagree for that user; a non-zero `platform_admin_on_disabled_copy_of_active_user` means the decision point would admit a platform admin that go-api refuses (product rule 1). Fix the data first, then read again. This is a point-in-time read, not a start refusal and not a wait. A cell in `internal/api/policy` runs the same file.
+
+## query-api
+
+query-api has its own PDP gate. It is separate from go-api: other variables, other metrics, and one more state (the mode). This switch gives no organization and no membership: a caller with no organization keeps the legacy answer.
+
+### The three switches
+
+| Variable | Values | What it does |
+| --- | --- | --- |
+| `QUERY_API_PDP_MODE` | `off`, `shadow`, `enforce`; unset or empty is `off` | Builds the PDP client. `off` builds none and asks nothing. `shadow` and `enforce` build it. |
+| `QUERY_API_AUTHZ_ENFORCE` | comma list of catalog action namespaces; unset is none | The cells of the REST routes and of the GraphQL root fields of a user access token. A route or root is enforced only while the cell of its action's namespace is on, whatever the mode. |
+| `QUERY_API_HEADERS_AUTHZ_ENFORCE` | the same list form; unset is none | The cells of the GraphQL operations of the `X-DH-Internal-*` header carrier (the MCP listener, `/query` on the internal listener). |
+
+Both lists are read once at start, so query-api must roll for any change. A bad list item (not a namespace, empty, repeat or `*`) is ignored, its namespace stays off, and one ERROR is logged. A bad `QUERY_API_PDP_MODE` value, or `shadow` or `enforce` with a missing input, never stops the start: one ERROR names the variable, `dev_health_query_api_pdp_config_invalid` is 1, and every request that would ask the PDP is refused as unavailable.
+
+The mode and the cells combine:
+
+| Mode | Cell on | Cell off |
+| --- | --- | --- |
+| `off` | `503` (log reason `authz_enforce_no_decision_point`): the cell has no client | legacy answer, nothing asked |
+| `shadow` | the PDP decision is the answer | legacy answer; the PDP is asked in the background and never changes the answer |
+| `enforce` | the PDP decision is the answer | `503` (log reason `authz_enforce_cell_off`), nothing asked |
+
+`enforce` never acts as `shadow`. A user caller's route or root whose cell is off is refused. Do not take a cell out while the mode is `enforce`, unless the same roll also lowers the mode.
+
+### What the caller sees
+
+| Plane | PDP deny | No verdict, or an obligation not carried out |
+| --- | --- | --- |
+| REST routes (`/api/v1/*`) | `403` `{"detail":"Not authorized"}` | `503` `{"detail":"Authorization unavailable"}` |
+| `/graphql` and `/query` | HTTP 200, one error, message `Not authorized`, `extensions.code` `FORBIDDEN` | HTTP `503`, one error, message `Authorization unavailable`, `extensions.code` `SERVICE_UNAVAILABLE`, `extensions.reason` the closed reason |
+| MCP listener | HTTP `403`, the same error body | HTTP `503`, the same error body |
+
+A refusal covers the whole GraphQL operation, with no data: one deny among the roots refuses all of them, before any resolver runs. The log line `query-api: the PDP refused the request` names the closed reason only, never a value. The closed reasons the gate makes itself are `authz_enforce_cell_off`, `authz_enforce_no_decision_point`, `authz_enforce_no_principal` (an enforced root of the header carrier, which has no principal the PDP can judge), `authz_enforce_no_scope` (an operation whose ingress set no scope, with the cell of one of its roots on), `tenant_scope_mismatch`, `repository_scope_absent`, `pdp_unknown_obligation` and `allowlist_route_unsupported`. Other reasons come from the PDP client, for example `pdp_unreachable` or `pdp_timeout`. A call has a 2 s timeout.
+
+An allow is served only if query-api carries out every obligation. A `redaction` or `step_up` obligation, a `minimum_assurance` above `aal1`, or a repository allowlist on a route or root with no narrowing is a `503`, however healthy the PDP is. That is a policy-data or code gap, not an outage.
+
+### What stays on the legacy path
+
+- The HS256 edge token (`ops_access_token_hs256`) and the effective-principal envelope (`effective_principal_envelope`) never ask the PDP in any mode. Each accepted call counts in `dev_health_query_api_pdp_exempt_total{class,action}`.
+- A go-api impersonation session carried by the admin's own token keeps the legacy answer on GraphQL.
+- A superuser with no organization keeps the legacy answer and asks nothing. It counts `result="no_org"`.
+- A root whose action is not organization-scoped (the platform actions) keeps its own legacy decision.
+- A GraphQL operation with every root cell off runs as before, in every mode except `enforce` for a user caller (see the table above).
+
+### Metrics to read
+
+- `dev_health_query_api_pdp_enabled`: 1 while the gate is built in `shadow` or `enforce`, else 0.
+- `dev_health_query_api_pdp_config_invalid`: 1 when the mode is bad, an input is missing, or a cell is on with no client. Set once at start.
+- `dev_health_query_api_pdp_results_total{mode,result,action}`: `mode` is `enforce` or `invalid`. `result` is `allow`, `deny`, `unavailable`, `not_configured`, `not_carried_out`, `no_decision_point` or `no_org`. The counter is lazy: no series means no event yet. In `shadow` mode the asks count on `dev_health_api_shadow_results_total` and `dev_health_api_shadow_mismatch_total`, not here.
+- `dev_health_query_api_pdp_exempt_total{class,action}`.
+- `dev_health_authz_enforcement_enabled{namespace,service="query-api"}`: one series per cell that is on. `dev_health_authz_enforcement_ignored_items{service="query-api"}`: items the list ignored.
+
+Reading the refusals: `result="unavailable"` is no verdict (PDP down, timeout, rate limit, or an operation with no scope or principal). `result="no_decision_point"` is a cell on with no client. `result="not_configured"` is a bad config (`mode="invalid"`) or, in `mode="enforce"`, a cell that is off. `result="not_carried_out"` is an allow with an obligation query-api does not carry out. `result="deny"` is a `403` and is not an outage. The alerts are `QueryAPIPDPConfigInvalid` and `QueryAPIPDPRefusing` in `alerts/rules.yml`; see [Dashboards and alerts](../observe/dashboards-and-alerts.md#query-api-pdp-gate).
+
+### Roll back
+
+Rollback returns the routes to the legacy guard. It does not touch policy data. Both lists and the mode are read once at start, so do all of these in one roll of query-api:
+
+1. Remove the namespaces from `QUERY_API_AUTHZ_ENFORCE` and from `QUERY_API_HEADERS_AUTHZ_ENFORCE`. An empty or unset list is no namespace.
+2. Set `QUERY_API_PDP_MODE=shadow`. Shadow asks beside the legacy answer and never changes it. Do not leave the mode at `enforce` with the cells off: that refuses every user caller's organization route with `503` (`authz_enforce_cell_off`).
+3. Roll query-api and wait for the rollout to finish.
+4. Read back: `dev_health_authz_enforcement_enabled{service="query-api"}` is 0 for each namespace you removed, `dev_health_query_api_pdp_config_invalid` is 0, and no new `result` of `unavailable`, `no_decision_point`, `not_carried_out` or `deny` counts.
+
+Setting only `QUERY_API_PDP_MODE=shadow` while a cell stays on does not roll back that namespace: a cell on is decided in every mode. Setting `QUERY_API_PDP_MODE=off` while a cell stays on refuses that namespace's routes with `503`.
+
+As for go-api, rollback cannot give back access removed while the cell was on: the enforced answer and the legacy answer rest on the same live rows.

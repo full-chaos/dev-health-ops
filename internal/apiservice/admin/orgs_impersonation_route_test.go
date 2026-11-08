@@ -8,12 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 type impersonatingStore struct {
@@ -32,32 +30,17 @@ const impersonationRefusal = `{"detail":"Not allowed in an impersonation session
 
 func serveOrgWrite(t *testing.T, active bool, method, path, body string) (status int, text string, touched bool) {
 	t.Helper()
-	const key = "route-order-test-signing-key-32-bytes!!!!"
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, impersonatingStore{active: active}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth, bearer := routedAuth(t, impersonatingStore{active: active})
 	scope := policy.NewScope(auth, logger)
-	bearer, err := signer.Access(edgetoken.AccessClaims{UserID: uuid.NewString(), Email: "root@example.test", IsSuperuser: true}, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
 	touchedFlag := new(bool)
-	h := &handlers{store: pgStore{Pool: touchedDB{touchedFlag}}, guard: policy.NewGuard(auth, logger), logger: logger, invites: InviteConfig{LinkSecret: key}}
+	h := &handlers{store: pgStore{Pool: touchedDB{touchedFlag}}, guard: policy.NewGuard(auth, logger), logger: logger, invites: InviteConfig{LinkSecret: "route-order-test-signing-key-32-bytes!!!!"}}
 	mux := http.NewServeMux()
-	for _, route := range append(h.orgRoutes(), h.impersonationRoutes()...) {
+	routes := append(h.orgRoutes(), h.impersonationRoutes()...)
+	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
-	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(mux))))
+	server := httptest.NewServer(profiled(t, routes, scope.Principal(scope.OrgScope(scope.Impersonation(mux)))))
 	defer server.Close()
 	req, _ := http.NewRequest(method, server.URL+path, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+bearer)

@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -58,9 +60,12 @@ type routesEnv struct {
 	identity *identity.Store
 	front    *httptest.Server
 	client   *http.Client
-	edge     *principal.EdgeVerifier
 	root     string
-	logs     *safeBuffer
+	// edge is query-api's REST access check over this stack (queryAPIVerifier); nil without an issuer URL or a readable key.
+	edge *principal.EdgeVerifier
+	// queryAuth is the routed authenticator under edge (queryAPIAuthenticator); nil when edge is.
+	queryAuth *policy.Authenticator
+	logs      *safeBuffer
 	// components are what configure built, for a test that stops them itself.
 	components []lifecycle.Component
 }
@@ -139,10 +144,14 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 		_ = store.Close(closeCtx)
 	})
 
+	// The eddsa class (the only one) signs every session, so the default key is a readable one; a test of an
+	// unreadable key sets its own path (newSignerOutageEnv).
+	keyDir := t.TempDir()
+	writeSigningKey(t, keyDir, "routes-test.pem")
 	env := compatEnvironment(map[string]string{
 		authconfig.EnvDatabaseURI:     dsn.String(),
 		authconfig.EnvDatabaseSchema:  "auth",
-		authconfig.EnvSigningKeyFile:  "/nonexistent",
+		authconfig.EnvSigningKeyFile:  filepath.Join(keyDir, "routes-test.pem"),
 		authconfig.EnvSigningKeyID:    "routes-test",
 		authconfig.EnvAPIAddress:      "127.0.0.1:0",
 		authconfig.EnvOperatorAddress: "127.0.0.1:1",
@@ -223,18 +232,18 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 	if err != nil {
 		t.Fatal(err)
 	}
-	// query-api's edge verifier over the go-api users table: the consumer
-	// that must keep accepting what auth-service mints.
-	edge, err := principal.NewEdgeVerifier(testAccessSecret, "dev-health-ops", "dev-health-api", policy.PGStore{Pool: admin})
-	if err != nil {
-		t.Fatal(err)
-	}
 	wd, err := contractsRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front,
-		client: &http.Client{Timeout: 10 * time.Second}, edge: edge, root: wd, logs: logs, components: components}
+	var edge *principal.EdgeVerifier
+	var queryAuth *policy.Authenticator
+	if _, err := os.Stat(cfg.SigningKeyPath); cfg.TokenIssuerURL != "" && err == nil {
+		edge = queryAPIVerifier(t, cfg, policy.PGStore{Pool: admin, AuthSchema: "auth"})
+		queryAuth = queryAPIAuthenticator(t, cfg, policy.PGStore{Pool: admin, AuthSchema: "auth"})
+	}
+	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front, edge: edge, queryAuth: queryAuth,
+		client: &http.Client{Timeout: 10 * time.Second}, root: wd, logs: logs, components: components}
 }
 
 func contractsRoot() (string, error) {
@@ -355,11 +364,11 @@ func (e *routesEnv) revokedAt(t *testing.T, ctx context.Context, wireID string) 
 func TestSessionRoutesThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	e := newRoutesEnv(t, ctx)
+	e := newEdDSARoutesEnv(t, ctx)
 	user, org := e.seed(t, ctx)
 
-	// Refresh: a rotated credential and a go-api access token that query-api's
-	// edge verifier accepts against the live users row.
+	// Refresh: a rotated credential within the session and an access token that
+	// query-api's routed verifier accepts against the live users row and session.
 	first := e.start(t, ctx, user, &org)
 	rotated, got := e.refresh(t, first.Credential.Reveal())
 	if rotated == nil {
@@ -371,16 +380,20 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if got.header.Get("Cache-Control") != "no-store" {
 		t.Fatal("token response is cacheable")
 	}
-	claims, err := e.edge.Verify(ctx, rotated.AccessToken.Reveal())
+	claims, err := e.queryAPIAccepts(ctx, rotated.AccessToken.Reveal())
 	if err != nil {
-		t.Fatalf("query-api's edge verifier refused the access token: %v", err)
+		t.Fatalf("query-api's routed verifier refused the access token: %v", err)
 	}
 	if claims.OrgID != org.String() {
 		t.Fatalf("org_id = %q, want %s", claims.OrgID, org)
 	}
 	payload := decodePayload(t, rotated.AccessToken.Reveal())
-	for key, want := range map[string]any{"sub": user.String(), "role": "owner", "tv": float64(2), "is_superuser": false,
-		"username": "routes-" + user.String()[:8], "full_name": "Routes User", "sid": rotated.SessionID, "type": "access"} {
+	// access-token.v1: the role, names and token_version come from the live rows (the verifier above), not claims.
+	if role, err := e.queryAPIRole(ctx, rotated.AccessToken.Reveal()); err != nil || role != "owner" {
+		t.Fatalf("query-api resolves role %q (%v) from the live rows, want owner", role, err)
+	}
+	for key, want := range map[string]any{"sub": session.WirePrincipalID(user), "principal_type": "human", "sid": rotated.SessionID,
+		"org_id": org.String(), "aud": "dev-health-api", "scope": "api:access"} {
 		if payload[key] != want {
 			t.Errorf("claim %s = %v, want %v", key, payload[key], want)
 		}
@@ -392,8 +405,94 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 		t.Fatalf("grace replay = %d %s, want the same successor", got.status, got.body)
 	}
 
+	// Reuse: rotate again, then present the first credential (its successor is
+	// now consumed): 401 refresh_reused and the session is revoked.
+	if next, got := e.refresh(t, rotated.RefreshCredential.Reveal()); next == nil {
+		t.Fatalf("second rotation = %d %s", got.status, got.body)
+	}
+	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(first.Credential.Reveal()), ""), 401, "refresh_reused")
+	if e.revokedAt(t, ctx, rotated.SessionID) == nil {
+		t.Fatal("reuse left the session live")
+	}
+
+	// token_version moves (go-api's reset or admin bump): query-api refuses the
+	// old token (the session routes' refusal: TestSessionRoutesThroughConfigureEdDSA).
+	fifth := e.start(t, ctx, user, &org)
+	fifthTokens, _ := e.refresh(t, fifth.Credential.Reveal())
+	if fifthTokens == nil {
+		t.Fatal("refresh failed")
+	}
+	if _, err := e.admin.Exec(ctx, `UPDATE users SET token_version = token_version + 1 WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.queryAPIAccepts(ctx, fifthTokens.AccessToken.Reveal()); err == nil || !policy.IsRefusal(err) {
+		t.Fatalf("query-api accepted a stale token (err %v): the two checks disagree", err)
+	}
+	// The session was pinned to the old token_version: a refresh after the
+	// bump is refused and ends it. A session started after the bump is pinned
+	// to the new version and mints tokens query-api accepts.
+	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(fifthTokens.RefreshCredential.Reveal()), ""), 401, "revision_stale")
+	if e.revokedAt(t, ctx, fifthTokens.SessionID) == nil {
+		t.Fatal("a session pinned to the old token_version stayed live after the bump")
+	}
+	sixth := e.start(t, ctx, user, &org)
+	renewed, got := e.refresh(t, sixth.Credential.Reveal())
+	if renewed == nil {
+		t.Fatalf("refresh of a session started after the bump = %d %s", got.status, got.body)
+	}
+	if _, err := e.queryAPIAccepts(ctx, renewed.AccessToken.Reveal()); err != nil {
+		t.Fatalf("query-api refused the renewed token: %v", err)
+	}
+
+	// Deactivation: refresh mints nothing and the session is revoked.
+	if _, err := e.admin.Exec(ctx, `UPDATE users SET is_active = false WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(renewed.RefreshCredential.Reveal()), ""), 401, "principal_deactivated")
+	if e.revokedAt(t, ctx, renewed.SessionID) == nil {
+		t.Fatal("a deactivated user's session stayed live")
+	}
+
+	// Malformed bodies never reach the store; a refresh JWT is not a credential.
+	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", `{}`, ""), 401, "malformed")
+	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJlc2lnbmF0dXJl"), ""), 401, "malformed")
+	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody("dhr1_"+base64.RawURLEncoding.EncodeToString(make([]byte, 32))), ""), 401, "refresh_unknown")
+
+}
+
+// newEdDSARoutesEnv is the routes environment as production runs auth-service: the eddsa class with a signing key
+// and AUTH_TOKEN_ISSUER_URL, so the session routes mount behind the access check.
+func newEdDSARoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
+	t.Helper()
+	useKeyStates(t, staticKeyStates(nil))
+	dir := t.TempDir()
+	writeSigningKey(t, dir, "k1.pem")
+	return newRoutesEnvWith(t, ctx, map[string]string{
+		authconfig.EnvSigningKeyFile:      filepath.Join(dir, "k1.pem"),
+		authconfig.EnvSigningKeyID:        "k1",
+		authconfig.EnvAccessTokenClass:    authconfig.AccessClassEdDSA,
+		authconfig.EnvAccessTokenAudience: "dev-health-api",
+		authconfig.EnvTokenIssuerURL:      "https://auth.example.test",
+	})
+}
+
+// TestSessionRoutesThroughConfigureEdDSA drives the session routes (current, revoke, revoke-all) through configure on
+// the eddsa class: they mount only with the access check, and their bearer is the refresh answer's
+// session_access_token. The refresh cells stay in TestSessionRoutesThroughConfigure.
+func TestSessionRoutesThroughConfigureEdDSA(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newEdDSARoutesEnv(t, ctx)
+	user, org := e.seed(t, ctx)
+
+	first := e.start(t, ctx, user, &org)
+	rotated, got := e.refresh(t, first.Credential.Reveal())
+	if rotated == nil || rotated.SessionAccessToken.Reveal() == "" {
+		t.Fatalf("refresh = %d %s, want a session_access_token", got.status, got.body)
+	}
+
 	// Current: the bearer's own session as session.v1.
-	bearer := rotated.AccessToken.Reveal()
+	bearer := rotated.SessionAccessToken.Reveal()
 	got = e.do(t, http.MethodGet, "/v1/sessions/current", "", bearer)
 	if got.status != http.StatusOK {
 		t.Fatalf("current = %d %s", got.status, got.body)
@@ -406,16 +505,11 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 		t.Fatalf("current = %+v", current)
 	}
 
-	// Reuse: rotate again, then present the first credential (its successor is
-	// now consumed): 401 refresh_reused, the session is revoked and its bearer
-	// is refused.
+	// Reuse: the first credential after a second rotation revokes the session and its bearer is refused.
 	if next, got := e.refresh(t, rotated.RefreshCredential.Reveal()); next == nil {
 		t.Fatalf("second rotation = %d %s", got.status, got.body)
 	}
 	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(first.Credential.Reveal()), ""), 401, "refresh_reused")
-	if e.revokedAt(t, ctx, rotated.SessionID) == nil {
-		t.Fatal("reuse left the session live")
-	}
 	e.refused(t, e.do(t, http.MethodGet, "/v1/sessions/current", "", bearer), 401, "session_revoked")
 
 	// Revoke: the bearer's own session ends; its credential is refused.
@@ -424,7 +518,7 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if tokens == nil {
 		t.Fatalf("refresh = %d %s", got.status, got.body)
 	}
-	if got := e.do(t, http.MethodPost, "/v1/sessions/revoke", "", tokens.AccessToken.Reveal()); got.status != http.StatusNoContent {
+	if got := e.do(t, http.MethodPost, "/v1/sessions/revoke", "", tokens.SessionAccessToken.Reveal()); got.status != http.StatusNoContent {
 		t.Fatalf("revoke = %d %s", got.status, got.body)
 	}
 	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(tokens.RefreshCredential.Reveal()), ""), 401, "session_revoked")
@@ -448,15 +542,14 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if thirdTokens == nil || fourthTokens == nil {
 		t.Fatal("refresh before revoke-all failed")
 	}
-	if got := e.do(t, http.MethodPost, "/v1/sessions/revoke-all", "", thirdTokens.AccessToken.Reveal()); got.status != http.StatusNoContent {
+	if got := e.do(t, http.MethodPost, "/v1/sessions/revoke-all", "", thirdTokens.SessionAccessToken.Reveal()); got.status != http.StatusNoContent {
 		t.Fatalf("revoke-all = %d %s", got.status, got.body)
 	}
 	for _, credential := range []string{thirdTokens.RefreshCredential.Reveal(), fourthTokens.RefreshCredential.Reveal()} {
 		e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(credential), ""), 401, "session_revoked")
 	}
 
-	// token_version moves (go-api's reset or admin bump): the old bearer is
-	// refused here exactly as query-api refuses it.
+	// token_version moves: the old bearer is refused.
 	fifth := e.start(t, ctx, user, &org)
 	fifthTokens, _ := e.refresh(t, fifth.Credential.Reveal())
 	if fifthTokens == nil {
@@ -465,41 +558,9 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if _, err := e.admin.Exec(ctx, `UPDATE users SET token_version = token_version + 1 WHERE id = $1`, user); err != nil {
 		t.Fatal(err)
 	}
-	e.refused(t, e.do(t, http.MethodGet, "/v1/sessions/current", "", fifthTokens.AccessToken.Reveal()), 401, "revision_stale")
-	if _, err := e.edge.Verify(ctx, fifthTokens.AccessToken.Reveal()); err == nil || !policy.IsRefusal(err) {
-		t.Fatalf("query-api accepted a stale token (err %v): the two checks disagree", err)
-	}
-	// The session was pinned to the old token_version: a refresh after the
-	// bump is refused and ends it. A session started after the bump is pinned
-	// to the new version and mints tokens query-api accepts.
-	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(fifthTokens.RefreshCredential.Reveal()), ""), 401, "revision_stale")
-	if e.revokedAt(t, ctx, fifthTokens.SessionID) == nil {
-		t.Fatal("a session pinned to the old token_version stayed live after the bump")
-	}
-	sixth := e.start(t, ctx, user, &org)
-	renewed, got := e.refresh(t, sixth.Credential.Reveal())
-	if renewed == nil {
-		t.Fatalf("refresh of a session started after the bump = %d %s", got.status, got.body)
-	}
-	if _, err := e.edge.Verify(ctx, renewed.AccessToken.Reveal()); err != nil {
-		t.Fatalf("query-api refused the renewed token: %v", err)
-	}
+	e.refused(t, e.do(t, http.MethodGet, "/v1/sessions/current", "", fifthTokens.SessionAccessToken.Reveal()), 401, "revision_stale")
 
-	// Deactivation: refresh mints nothing and the session is revoked.
-	if _, err := e.admin.Exec(ctx, `UPDATE users SET is_active = false WHERE id = $1`, user); err != nil {
-		t.Fatal(err)
-	}
-	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(renewed.RefreshCredential.Reveal()), ""), 401, "principal_deactivated")
-	if e.revokedAt(t, ctx, renewed.SessionID) == nil {
-		t.Fatal("a deactivated user's session stayed live")
-	}
-
-	// Malformed bodies never reach the store; a refresh JWT is not a credential.
-	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", `{}`, ""), 401, "malformed")
-	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJlc2lnbmF0dXJl"), ""), 401, "malformed")
-	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody("dhr1_"+base64.RawURLEncoding.EncodeToString(make([]byte, 32))), ""), 401, "refresh_unknown")
-
-	t.Logf("%s refresh=200 grace=same reuse=401 revoke=204 revoke_all=204 stale=401 deactivated=401 edge_verifier=accepts", sessionRoutesMarker)
+	t.Logf("%s current=200 reuse=401 revoke=204 revoke_all=204 stale=401", sessionRoutesMarker)
 }
 
 // TestASessionNamingAnOrganizationOnlyPublicHoldsProjectsTheCopy pins that the
@@ -609,7 +670,17 @@ func TestEveryAuditRowARouteWritesCarriesItsRequestID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	e := newRoutesEnv(t, ctx)
-	check := func(t *testing.T, got answer, eventType, targetID string) {
+	// The session routes mount only with the access check (eddsa class): the revoke rows run on that env.
+	var ed *routesEnv
+	eddsa := func() *routesEnv {
+		if ed == nil {
+			ed = newEdDSARoutesEnv(t, ctx)
+		}
+		return ed
+	}
+	var checkIn func(t *testing.T, e *routesEnv, got answer, eventType, targetID string)
+	check := func(t *testing.T, got answer, eventType, targetID string) { checkIn(t, e, got, eventType, targetID) }
+	checkIn = func(t *testing.T, e *routesEnv, got answer, eventType, targetID string) {
 		t.Helper()
 		wire := got.header.Get("X-Auth-Request-ID")
 		id := e.auditRequestIDOf(t, ctx, eventType, targetID)
@@ -660,28 +731,30 @@ func TestEveryAuditRowARouteWritesCarriesItsRequestID(t *testing.T) {
 		check(t, got, "auth.session.revoked", issued.Session.ID.String())
 	})
 	t.Run("revoke", func(t *testing.T) {
+		e := eddsa()
 		user, org := e.seed(t, ctx)
 		tokens, got := e.refresh(t, e.start(t, ctx, user, &org).Credential.Reveal())
 		if tokens == nil {
 			t.Fatalf("refresh = %d %s", got.status, got.body)
 		}
-		got = e.do(t, http.MethodPost, "/v1/sessions/revoke", "", tokens.AccessToken.Reveal())
+		got = e.do(t, http.MethodPost, "/v1/sessions/revoke", "", tokens.SessionAccessToken.Reveal())
 		if got.status != http.StatusNoContent {
 			t.Fatalf("revoke = %d %s", got.status, got.body)
 		}
-		check(t, got, "auth.session.revoked", mustSessionUUID(t, tokens.SessionID).String())
+		checkIn(t, e, got, "auth.session.revoked", mustSessionUUID(t, tokens.SessionID).String())
 	})
 	t.Run("revoke-all", func(t *testing.T) {
+		e := eddsa()
 		user, org := e.seed(t, ctx)
 		tokens, got := e.refresh(t, e.start(t, ctx, user, &org).Credential.Reveal())
 		if tokens == nil {
 			t.Fatalf("refresh = %d %s", got.status, got.body)
 		}
-		got = e.do(t, http.MethodPost, "/v1/sessions/revoke-all", "", tokens.AccessToken.Reveal())
+		got = e.do(t, http.MethodPost, "/v1/sessions/revoke-all", "", tokens.SessionAccessToken.Reveal())
 		if got.status != http.StatusNoContent {
 			t.Fatalf("revoke-all = %d %s", got.status, got.body)
 		}
-		check(t, got, "auth.session.revoked_all", user.String())
+		checkIn(t, e, got, "auth.session.revoked_all", user.String())
 	})
 }
 

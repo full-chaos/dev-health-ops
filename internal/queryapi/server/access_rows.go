@@ -33,14 +33,11 @@ func queryAPIAccessRows() ([]accessverify.Row, error) {
 func parseQueryAPIAccessRows(raw []byte) ([]accessverify.Row, error) {
 	var document struct {
 		Rows []struct {
-			ID                    string   `json:"id"`
-			Service               string   `json:"service"`
-			Method                string   `json:"method"`
-			Route                 string   `json:"route"`
-			AcceptedClasses       []string `json:"accepted_credential_classes"`
-			AccessTokenValidation *struct {
-				LegacyHS256 bool `json:"legacy_hs256"`
-			} `json:"access_token_validation"`
+			ID              string   `json:"id"`
+			Service         string   `json:"service"`
+			Method          string   `json:"method"`
+			Route           string   `json:"route"`
+			AcceptedClasses []string `json:"accepted_credential_classes"`
 		} `json:"rows"`
 	}
 	if err := json.Unmarshal(raw, &document); err != nil {
@@ -72,7 +69,6 @@ func parseQueryAPIAccessRows(raw []byte) ([]accessverify.Row, error) {
 			Service:     queryAPIAccessService,
 			Profile:     profile,
 			AcceptsUser: slices.Contains(entry.AcceptedClasses, accessverify.ClassUser),
-			LegacyHS256: entry.AccessTokenValidation != nil && entry.AccessTokenValidation.LegacyHS256,
 		})
 	}
 	if len(rows) == 0 {

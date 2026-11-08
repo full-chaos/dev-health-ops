@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
@@ -172,11 +171,7 @@ func probeRoutes(guard *policy.Guard) []httpapi.Route {
 // change the Authenticator before the server is built.
 func probeServer(t *testing.T, store policy.Store, adjust func(*policy.Authenticator)) http.Handler {
 	t.Helper()
-	verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
+	auth, err := policy.NewAuthenticator(store, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

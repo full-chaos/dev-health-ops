@@ -8,7 +8,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
@@ -27,7 +26,7 @@ func (i *Issuer) VerifyLegacyRefresh(token string) (session.LegacyRefresh, error
 	if i.verifier == nil {
 		return session.LegacyRefresh{}, errLegacyKeyAbsent
 	}
-	claims, err := i.verifier.VerifyType(token, edgetoken.RefreshType)
+	claims, err := i.verifier.VerifyRefresh(token)
 	if err != nil {
 		return session.LegacyRefresh{}, err
 	}

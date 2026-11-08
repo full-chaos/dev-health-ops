@@ -173,7 +173,7 @@ var paRows = []string{"/api/v1/home", "/api/v1/flame", "/api/v1/drilldown/prs", 
 func paHandler(t *testing.T, store *accessStore, m *accessMinter, gate *pdp.Gate) http.Handler {
 	t.Helper()
 	verifier, _ := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(store))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(store))
 	if err != nil {
 		t.Fatal(err)
 	}

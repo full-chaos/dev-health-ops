@@ -29,8 +29,7 @@ const queryAPIProfile = "GET /api/v1/home"
 // accept what auth-service mints.
 func queryAPIVerifier(t *testing.T, cfg authconfig.Config, store policy.Store) *principal.EdgeVerifier {
 	t.Helper()
-	// This branch's constructor still takes the HS256 secret; VerifyRouted never reads it (CHAOS-13197 removes it).
-	edge, err := principal.NewEdgeVerifier(testAccessSecret, "dev-health-ops", "dev-health-api", store)
+	edge, err := principal.NewEdgeVerifier(store)
 	if err != nil {
 		t.Fatal(err)
 	}

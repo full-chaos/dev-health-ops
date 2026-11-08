@@ -86,7 +86,7 @@ func TestSessionsOffRefreshAnswersAValidGoAPIRefreshJWTWith503(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := deps.Verifier.VerifyType(token, edgetoken.RefreshType); err != nil {
+	if _, err := deps.Verifier.VerifyRefresh(token); err != nil {
 		t.Fatalf("the planted token is not a valid go-api refresh JWT: %v", err)
 	}
 	var refresh http.Handler

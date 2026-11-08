@@ -20,7 +20,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
@@ -344,9 +343,6 @@ func TestAnIssuerMintsTheEdDSAClassOnly(t *testing.T) {
 		jwt.WithValidMethods([]string{"HS256"})); err == nil {
 		t.Fatal("the EdDSA issuer's token verifies as HS256")
 	}
-	if _, verifyErr := ed.verifier.Verify(compact); verifyErr == nil {
-		t.Fatal("go-api's HS256 verifier accepted the EdDSA token")
-	}
 
 	none := &Issuer{verifier: ed.verifier, now: time.Now}
 	if token, err := none.AccessContext(context.Background(), grant); err == nil || token != "" {
@@ -449,11 +445,8 @@ func TestRefreshRouteMintsOnlyTheSelectedClass(t *testing.T) {
 			if err := json.Unmarshal(header, &h); err != nil {
 				t.Fatal(err)
 			}
-			verifier, err := edgetoken.New(testSecret, testIssuer, testAudience)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, hsVerifyErr := verifier.Verify(compact)
+			_, hsVerifyErr := jwt.Parse(compact, func(*jwt.Token) (any, error) { return []byte(testSecret), nil },
+				jwt.WithValidMethods([]string{"HS256"}))
 			if h["alg"] != "EdDSA" || h["typ"] != "at+jwt" || h["kid"] != "k1" || hsVerifyErr == nil {
 				t.Fatalf("%s minted header %v, HS256 verify err %v", class, h, hsVerifyErr)
 			}

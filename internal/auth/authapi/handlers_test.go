@@ -21,7 +21,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -608,36 +607,13 @@ func TestRefreshRequestIsReadStrictly(t *testing.T) {
 
 func TestSessionRoutesRefuseEveryBearerTheyCannotTrust(t *testing.T) {
 	f := newFixture(t)
-	other, err := edgetoken.NewSigner("a-different-signing-key-0123456789abcdef", testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	goAPI, _ := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
-	now := time.Now()
-	sign := func(s *edgetoken.Signer, claims edgetoken.AccessClaims) string {
-		token, err := s.Access(claims, now, uuid.NewString())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return token
-	}
-	sid := session.WireSessionID(f.record.ID)
-	base := edgetoken.AccessClaims{UserID: f.principal.String(), Email: "ada@example.com", Role: "admin", TokenVersion: 4, SessionID: &sid}
-	refresh, _ := goAPI.Refresh(edgetoken.RefreshClaims{UserID: f.principal.String()}, now, uuid.NewString())
-	foreignSession := session.WireSessionID(uuid.New())
-	withForeign := base
-	withForeign.SessionID = &foreignSession
-	noSID := base
-	noSID.SessionID = nil
-	otherUser := base
-	otherUser.UserID = uuid.NewString()
-
 	foreignGrant := f.grant()
 	foreignGrant.SessionID = uuid.New()
 	otherGrant := f.grant()
 	otherGrant.PrincipalID = uuid.New()
-	// Every HS256 token is refused before any read (ops_access_token_hs256 is
-	// retired); the EdDSA rows keep their own reasons.
+	// The retired HS256 class is the plane's one generic-401 cell (authruntime
+	// TestHS256WebTokenIsRefusedOnEveryAccessRowWithAnIssuerURL); the EdDSA rows
+	// keep their own reasons.
 	cases := map[string]struct {
 		header map[string]string
 		reason string
@@ -645,12 +621,6 @@ func TestSessionRoutesRefuseEveryBearerTheyCannotTrust(t *testing.T) {
 		"no header":                    {nil, "malformed"},
 		"basic scheme":                 {map[string]string{"Authorization": "Basic eDp5"}, "malformed"},
 		"alg none":                     {map[string]string{"Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ4In0."}, "malformed"},
-		"HS256, another key":           {map[string]string{"Authorization": "Bearer " + sign(other, base)}, "malformed"},
-		"HS256 refresh JWT":            {map[string]string{"Authorization": "Bearer " + refresh}, "malformed"},
-		"HS256 go-api token, no sid":   {map[string]string{"Authorization": "Bearer " + sign(goAPI, noSID)}, "malformed"},
-		"HS256 unknown session":        {map[string]string{"Authorization": "Bearer " + sign(goAPI, withForeign)}, "malformed"},
-		"HS256 another user's session": {map[string]string{"Authorization": "Bearer " + sign(goAPI, otherUser)}, "malformed"},
-		"HS256 live session":           {map[string]string{"Authorization": "Bearer " + sign(goAPI, base)}, "malformed"},
 		"EdDSA unknown session":        {f.bearer(foreignGrant), "session_revoked"},
 		"EdDSA another user's session": {f.bearer(otherGrant), "malformed"},
 	}

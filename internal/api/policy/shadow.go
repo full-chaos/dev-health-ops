@@ -40,7 +40,7 @@ var (
 	shadowClasses    = []string{"legacy_bug", "new_bug", "unresolved", "intentional"}
 	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"}
 	shadowReasons    = []string{ShadowReasonNone, ShadowReasonHS256, ShadowReasonEnvelope, ShadowReasonNoUserBearer, ShadowReasonCap,
-		ShadowReasonUnmapped, ShadowReasonOpRefused}
+		ShadowReasonUnmapped, ShadowReasonOpRefused, ShadowReasonNeverDecided, ShadowReasonHighRiskOff}
 )
 
 // The closed values of the reason label on the results counter. "none" is every result that has no skip reason,
@@ -55,6 +55,10 @@ const (
 	ShadowReasonCap          = "cap"
 	ShadowReasonUnmapped     = "unmapped"
 	ShadowReasonOpRefused    = "op_refused"
+	// A row the decision gate never decides (its action is not organization-scoped) skipped by the high-risk switch,
+	// against any other high-risk row skipped by it.
+	ShadowReasonNeverDecided = "never_decided"
+	ShadowReasonHighRiskOff  = "high_risk_off"
 )
 
 // ShadowReasons is the one closed list of reason label values.
@@ -99,6 +103,10 @@ type ShadowRow struct {
 	// last org_id query value names, else the session's.
 	OrgFromQuery bool
 }
+
+// NeverDecided is true for a row whose action is not organization-scoped: the decision gate never decides it. A copy of
+// the gate's orgScoped rule over a shadow row, pinned to it by a test in the pdp package.
+func (row ShadowRow) NeverDecided() bool { return row.ResourceType != policycatalog.ScopeOrganization }
 
 func (row ShadowRow) valid() bool {
 	return row.Action != "" && slices.Contains(shadowNamespaces, row.Namespace) &&
@@ -392,7 +400,14 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 		return
 	}
 	if row.HighRisk && !s.highRisk {
-		s.record(ctx, o.Pattern, row, caller, resultSkipped, shadowReasonOf(o.SkipReason), "")
+		reason := shadowReasonOf(o.SkipReason)
+		if reason == ShadowReasonNone {
+			reason = ShadowReasonHighRiskOff
+			if row.NeverDecided() {
+				reason = ShadowReasonNeverDecided
+			}
+		}
+		s.record(ctx, o.Pattern, row, caller, resultSkipped, reason, "")
 		return
 	}
 	org := strings.ToLower(o.OrgID)

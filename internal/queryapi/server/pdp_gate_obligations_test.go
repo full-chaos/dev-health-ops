@@ -32,7 +32,7 @@ func enforceAllowlistRunsNoOrgWideRead(t *testing.T, allowlist []string) {
 	m := newAccessMinter(t)
 	setup := testAccess(m.keys, nil, accessTestNow)
 	verifier, _ := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(newAccessStore()))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(newAccessStore()))
 	if err != nil {
 		t.Fatal(err)
 	}

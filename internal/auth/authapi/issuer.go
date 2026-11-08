@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
-	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 // Issuer mints the EdDSA access token and verifies the HS256 legacy refresh token.
@@ -132,47 +131,17 @@ type Bearer struct {
 	PrincipalID  uuid.UUID
 	SessionID    uuid.UUID
 	TokenVersion int64
-	// Impersonated is set when the token carries impersonating_user_id, and by
-	// authenticateWith when the session row is delegated: an EdDSA token's act
-	// is not read here, the row decides.
+	// Impersonated is set by authenticateWith when the session row is
+	// delegated: the token's act is not read here, the row decides.
 	Impersonated bool
 	// sessionPinned is set for an EdDSA token, which has no tv: the session's
 	// legacy_token_version pin takes its place.
 	sessionPinned bool
 }
 
-// errBearerShape is a verified token whose sub, sid or tv this service cannot
-// use: a go-api token (no sid) or one minted with a foreign shape.
+// errBearerShape is a verified token whose sub or sid this service cannot use:
+// one minted with a foreign shape.
 var errBearerShape = errors.New("authapi: access token has no usable sub, sid or tv")
-
-// Verify checks token as go-api's validate_token(token, "access") does and
-// reads the claims the session routes need. It returns the auth-outcome.v1
-// reason code of a refusal.
-func (i *Issuer) Verify(token string) (Bearer, string, error) {
-	if i.verifier == nil {
-		return Bearer{}, edgetoken.ReasonBadSignature, errLegacyKeyAbsent
-	}
-	claims, err := i.verifier.Verify(token)
-	if err != nil {
-		return Bearer{}, edgetoken.ReasonOf(err), err
-	}
-	sub, _ := claims["sub"].(string)
-	principal, err := uuid.Parse(sub)
-	if err != nil {
-		return Bearer{}, reasonMalformed, errBearerShape
-	}
-	sid, _ := claims["sid"].(string)
-	sessionID, err := session.ParseWireSessionID(sid)
-	if err != nil {
-		return Bearer{}, reasonMalformed, errBearerShape
-	}
-	tv, ok := claims["tv"].(float64)
-	if !ok || tv != float64(int64(tv)) {
-		return Bearer{}, reasonMalformed, errBearerShape
-	}
-	_, impersonated := claims["impersonating_user_id"].(string)
-	return Bearer{PrincipalID: principal, SessionID: sessionID, TokenVersion: int64(tv), Impersonated: impersonated}, "", nil
-}
 
 // roleText is go-api's role claim for a membership lookup: "member" without
 // an organization or a membership, the text "None" for a NULL role

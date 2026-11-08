@@ -75,7 +75,7 @@ if [ "${PRINT_PLAN}" = 1 ]; then
     '                Window a (no restart): literal WINDOW_A lines, seconds go-api and query-api keep accepting a b-token (bound 330 s).' \
     '                Window b (pm): compromise c -successor d, then restart go-api and query-api one at a time right after the key' \
     '                drop: literal WINDOW_B lines; a verifier that still accepts the old kid is a FINDING (exit 1 at the end).' \
-    'S3 rollback:    auth-service, go-api and query-api recreated on the previous image (no class flip): new tokens are HS256, go-api accepts them, the' \
+    'S3 rollback:    auth-service, go-api and query-api recreated on the previous image (no class flip): new tokens are EdDSA under the active kid, go-api accepts them, the' \
     '                compromised kid stays out of the JWKS and denied, the revoked sessions stay refused, a b-token is refused;' \
     '                back to eddsa: c signs, b is still absent.' \
     'stage drill:    smoke, then S2 window a on key a (successor b), S2 window b on key b (successor c), S3; no S1; about 20 minutes.' \
@@ -523,8 +523,9 @@ scenario_issuer_rollback() {
   check s3-good-token-accepted-before-rollback me_accepts "${pre}"
   roll_images previous
   login_or_die
-  check s3-new-token-is-hs256 alg_is "${L_ACCESS}" HS256
-  check s3-go-api-accepts-the-hs256-token me_accepts "${L_ACCESS}"
+  check s3-new-token-is-eddsa alg_is "${L_ACCESS}" EdDSA
+  check "s3-new-token-signed-by-${good}" kid_is "${L_ACCESS}" "${good}"
+  check s3-go-api-accepts-the-eddsa-token me_accepts "${L_ACCESS}"
   check s3-compromised-kid-token-refused me_refuses "${COMPROMISED_ACCESS}"
   refresh_with "${COMPROMISED_REFRESH}"
   check s3-revoked-session-still-refused verdict_is "${R_CODE}" refused
@@ -552,8 +553,9 @@ if [ "${STAGE}" = smoke ]; then
   say "smoke: roll to the previous image and forward again before any floor"
   roll_images previous
   login_or_die
-  check smoke-roll-token-is-hs256 alg_is "${L_ACCESS}" HS256
-  check smoke-roll-go-api-accepts-hs256 me_accepts "${L_ACCESS}"
+  check smoke-roll-token-is-eddsa alg_is "${L_ACCESS}" EdDSA
+  check smoke-roll-token-signed-by-a kid_is "${L_ACCESS}" a
+  check smoke-roll-go-api-accepts-eddsa me_accepts "${L_ACCESS}"
   check smoke-roll-jwks-still-served jwks_lacks b
   roll_images current
   login_or_die

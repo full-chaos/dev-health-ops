@@ -623,7 +623,7 @@ func TestShadowCounterLabelSetsAreClosed(t *testing.T) {
 // The skipped counter carries one reason label from one closed list: go-api never sets one, so every go-api skip and
 // every non-skip result is "none"; a caller-supplied reason outside the list is "none", never a new value.
 func TestShadowResultReasonIsFromTheClosedList(t *testing.T) {
-	if got := ShadowReasons(); !slices.Equal(got, []string{"none", "hs256", "envelope", "no_user_bearer", "cap", "unmapped", "op_refused"}) {
+	if got := ShadowReasons(); !slices.Equal(got, []string{"none", "hs256", "envelope", "no_user_bearer", "cap", "unmapped", "op_refused", "never_decided", "high_risk_off"}) {
 		t.Fatalf("closed reasons %v, want [none hs256 envelope no_user_bearer cap unmapped op_refused]", got)
 	}
 	rec := recordShadow(t)

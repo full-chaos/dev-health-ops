@@ -679,6 +679,27 @@ func TestGraphQLEnforceReadsTheScopeOrganization(t *testing.T) {
 	}
 }
 
+// Product rule 1 (D6773): a platform admin with no organization (only a superuser passes the verifier with none)
+// answers as main does with every cell on and the PDP is never asked, as on the REST rows.
+func TestGraphQLEnforceSuperuserWithNoOrgAnswersAsMain(t *testing.T) {
+	claims := authctx.Claims{IsSuperuser: true, Scope: pepgate.Legacy("")}
+	subject := graphQLShadowSubject(newAccessMinter(t).mint(ecUser, nil, nil))
+	for name, doc := range map[string]string{
+		"no org argument": `query Q { improveOpportunities(limit: 5, windowDays: 30) { __typename } }`,
+		"orgId argument":  `query Q { securityOverview(orgId: "` + ecOrg.String() + `") { __typename } }`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			legacy, _, legacyOrgs := runRootsAs(t, nil, nil, claims, subject, doc)
+			decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
+			gate, _ := enforceGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
+			got, asks, orgs := runRootsAs(t, gate, decider, claims, subject, doc)
+			if got != legacy || !reflect.DeepEqual(orgs, legacyOrgs) || asks != 0 {
+				t.Fatalf("enforced: %+v bound %v with %d asks, want main's %+v bound %v and no ask", got, orgs, asks, legacy, legacyOrgs)
+			}
+		})
+	}
+}
+
 // Q11-a: X-Org-Id B (a member of B) with an orgId argument A is two organizations: the org guard refuses, and the PDP
 // is never asked.
 func TestGraphQLEnforceHeaderOrgAndArgumentOrgDifferIsTheGuardsRefusal(t *testing.T) {

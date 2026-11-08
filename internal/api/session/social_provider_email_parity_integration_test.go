@@ -185,9 +185,10 @@ is_verified, is_superuser, token_version, created_at, updated_at) VALUES ($1, $2
 							users, count("users"), tokens, count("refresh_tokens"), want)
 					}
 				case linked:
-					if w.Code != http.StatusOK || count("refresh_tokens") != tokens+1 || count("users") != users {
-						t.Fatalf("linked: %d with body keys %v, refresh tokens %d -> %d; want the sign-in", w.Code, bodyKeys(w.Body.Bytes()),
-							tokens, count("refresh_tokens"))
+					// The pair comes from auth-service's issue route: go-api writes no refresh_tokens row.
+					if w.Code != http.StatusOK || count("refresh_tokens") != tokens || count("users") != users {
+						t.Fatalf("linked: %d with body keys %v, refresh tokens %d -> %d; want the sign-in and no go-api refresh row", w.Code,
+							bodyKeys(w.Body.Bytes()), tokens, count("refresh_tokens"))
 					}
 				}
 			}

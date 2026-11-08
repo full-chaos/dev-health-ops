@@ -140,10 +140,14 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 		_ = store.Close(closeCtx)
 	})
 
+	// The eddsa class (the only one) signs every session, so the default key is a readable one; a test of an
+	// unreadable key sets its own path (newSignerOutageEnv).
+	keyDir := t.TempDir()
+	writeSigningKey(t, keyDir, "routes-test.pem")
 	env := compatEnvironment(map[string]string{
 		authconfig.EnvDatabaseURI:     dsn.String(),
 		authconfig.EnvDatabaseSchema:  "auth",
-		authconfig.EnvSigningKeyFile:  "/nonexistent",
+		authconfig.EnvSigningKeyFile:  filepath.Join(keyDir, "routes-test.pem"),
 		authconfig.EnvSigningKeyID:    "routes-test",
 		authconfig.EnvAPIAddress:      "127.0.0.1:0",
 		authconfig.EnvOperatorAddress: "127.0.0.1:1",

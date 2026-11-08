@@ -15,7 +15,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -468,8 +467,7 @@ func TestMintStepWritesTokenFilesAndPrintsNoToken(t *testing.T) {
 // Both judging commands set Strict on the options they build: a run without claim read-back and body digests is never
 // judged. The pin reads the source, so a command that drops the field fails here.
 func TestBothJudgingCommandsSetStrict(t *testing.T) {
-	_, self, _, _ := runtime.Caller(0)
-	file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(filepath.Dir(self), "main.go"), nil, 0)
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

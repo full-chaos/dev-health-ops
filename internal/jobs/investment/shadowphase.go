@@ -123,7 +123,7 @@ func (backend attemptBackend) price(model string, at time.Time, usage categorize
 		return 0, price.Version
 	}
 	// Rates are micro-USD for each million tokens: tokens x rate / 1e12 is USD.
-	return (float64(usage.InputTokens)*float64(price.Rates.Input) + float64(usage.OutputTokens)*float64(price.Rates.Output)) / 1e12, price.Version
+	return (float64(float64(usage.InputTokens)*float64(price.Rates.Input)) + float64(float64(usage.OutputTokens)*float64(price.Rates.Output))) / 1e12, price.Version
 }
 
 // shadowClassifier is the decision completer as the phase uses it.

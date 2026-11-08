@@ -9,8 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 )
 
-// The state route takes the go-api workload token beside the session issuer credential: the answer is the one the
-// credential gets, the workload principal and its jti are the caller, no credential check and no compat count run.
+// The state route takes the go-api workload token: the workload principal and its jti are the caller.
 func TestOrgStateAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 	t.Parallel()
 	f := newProvWorkloadFixture(t)
@@ -27,29 +26,22 @@ func TestOrgStateAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 	if f.reactivate.gets != 1 || f.reactivate.gid != f.org {
 		t.Fatalf("the route read the organization %d times", f.reactivate.gets)
 	}
-	if len(f.creds.scopes) != 0 {
-		t.Fatalf("a workload call reached the service credential check %d times", len(f.creds.scopes))
-	}
-	if got, _ := f.uses(opOrgState); got != 0 {
-		t.Fatalf("compat uses = %d after a workload call, want 0", got)
-	}
 	if f.users.reads != 0 || f.reactivate.calls+f.reactivate.suspends != 0 {
 		t.Fatal("the state route read an actor or wrote")
 	}
 }
 
-// The session issuer credential keeps working on the route; it never reads the key set and the compat counter counts it.
-func TestOrgStateKeepsTheServiceCredentialBesideTheWorkloadPath(t *testing.T) {
+// The retired session issuer credential is refused on the route with no read, and counted.
+func TestOrgStateRefusesTheRetiredServiceCredential(t *testing.T) {
 	t.Parallel()
 	f := newProvWorkloadFixture(t)
-	if got := f.post(stateRoute, f.stateBody(), nil); got.Code != http.StatusOK {
-		t.Fatalf("state with the service credential: %d %s", got.Code, got.Body)
+	expectRefusal(t, f.post(stateRoute, f.stateBody(), map[string]string{"Authorization": "Bearer " + provisioningToken}),
+		http.StatusUnauthorized, reasonInvalidCredentials)
+	if got, _ := f.refusals(opOrgState); got != 1 {
+		t.Fatalf("retired refusals = %d, want 1", got)
 	}
-	if got, _ := f.uses(opOrgState); got != 1 {
-		t.Fatalf("compat uses = %d, want 1", got)
-	}
-	if f.w.keys.reads != 0 {
-		t.Fatalf("a service credential call read the key set %d times", f.w.keys.reads)
+	if f.w.keys.reads != 0 || f.reactivate.gets != 0 {
+		t.Fatal("a retired credential read the key set or the store")
 	}
 }
 
@@ -61,7 +53,7 @@ func TestOrgStateRefusesWrongWorkloadCredentials(t *testing.T) {
 			t.Parallel()
 			f := newProvWorkloadFixture(t)
 			expectRefusal(t, f.post(stateRoute, f.stateBody(), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
-			if len(f.creds.scopes) != 0 || f.reactivate.gets != 0 || f.w.keys.reads != 0 {
+			if f.reactivate.gets != 0 || f.w.keys.reads != 0 {
 				t.Fatalf("%s: read before the verdict", name)
 			}
 		})
@@ -71,7 +63,7 @@ func TestOrgStateRefusesWrongWorkloadCredentials(t *testing.T) {
 			t.Parallel()
 			f := newProvWorkloadFixture(t)
 			expectRefusal(t, f.post(stateRoute, f.stateBody(), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
-			if len(f.creds.scopes) != 0 || f.reactivate.gets != 0 {
+			if f.reactivate.gets != 0 {
 				t.Fatalf("%s: a refused token reached a store", name)
 			}
 		})
@@ -84,7 +76,7 @@ func TestOrgStateRefusesWrongWorkloadCredentials(t *testing.T) {
 		t.Fatal("a key-set outage reached the store")
 	}
 	w := newWorkloadIssueFixture(t)
-	g := newProvFixture(t)
+	g := newProvFixtureOff(t, docWithRow(t, PatternOrgSuspend))
 	header, _ = w.mint("workload+jwt", nil)
 	expectRefusal(t, g.post(stateRoute, g.stateBody(), header), http.StatusUnauthorized, reasonInvalidCredentials)
 	if g.reactivate.gets != 0 || w.keys.reads != 0 {

@@ -14,7 +14,6 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
@@ -22,7 +21,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/orgdeprovision"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
@@ -84,12 +82,6 @@ const (
 	reasonStateChanged         = "state_changed"
 )
 
-// ProvisioningCredentials checks the bearer of the provisioning routes
-// (*servicecred.PG).
-type ProvisioningCredentials interface {
-	CheckScope(ctx context.Context, token contracts.SecretString, scope string) (servicecred.Credential, servicecred.Refusal, error)
-}
-
 // ProvisioningUsers reads live public.users and membership rows on the
 // caller's connection or transaction (PGUsers): the actor rule reads with it
 // before the verb and again inside the verb's transaction, after its locks.
@@ -134,7 +126,6 @@ type OrganizationEnsurer interface {
 
 // ProvisioningDeps are the provisioning routes' collaborators.
 type ProvisioningDeps struct {
-	Credentials     ProvisioningCredentials
 	Users           ProvisioningUsers
 	Reader          session.Queryer
 	Organizations   OrganizationEnsurer
@@ -157,18 +148,17 @@ type ProvisioningDeps struct {
 type provisioningHandlers struct {
 	ProvisioningDeps
 	rec recorder
-	// provisioningUses counts every request a session issuer credential with
-	// memberships:write was accepted on, by operation: the compatibility
-	// credential these routes take until it is retired; a workload call is not counted.
-	provisioningUses metric.Int64Counter
+	// retiredRefusals counts, by operation, the requests refused because they presented the session issuer
+	// credential, whose memberships:write scope is retired: a caller still on it shows here, never in the answer.
+	retiredRefusals metric.Int64Counter
 }
 
 // ProvisioningRoutes returns the internal membership, invite and organization
 // deprovision routes. Each registration is on a line of its own.
 func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
-	if deps.Credentials == nil || deps.Users == nil || deps.Reader == nil || deps.Organizations == nil ||
+	if deps.Users == nil || deps.Reader == nil || deps.Organizations == nil ||
 		deps.Memberships == nil || deps.Invites == nil || deps.Deprovision == nil || deps.Orgs == nil || deps.ServiceAccounts == nil || deps.Grants == nil {
-		return nil, errors.New("authapi: provisioning routes need credentials, users, a reader, organizations, memberships, invites, a deprovisioner, the organization reactivate and suspend verbs, the service account verbs and the grant verbs")
+		return nil, errors.New("authapi: provisioning routes need users, a reader, organizations, memberships, invites, a deprovisioner, the organization reactivate and suspend verbs, the service account verbs and the grant verbs")
 	}
 	rows := deps.ProfileRows
 	if rows == nil {
@@ -188,15 +178,15 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	if err != nil {
 		return nil, err
 	}
-	uses, err := meter.Int64Counter("auth.provisioning.compat_credential_uses",
-		metric.WithDescription("Provisioning route requests accepted on the session issuer credential's memberships:write scope, by operation."))
+	retired, err := meter.Int64Counter("auth.provisioning.retired_credential_refusals",
+		metric.WithDescription("Provisioning route requests refused because they presented the retired session issuer credential, by operation."))
 	if err != nil {
 		return nil, err
 	}
 	for _, op := range provisioningOperations {
-		uses.Add(context.Background(), 0, metric.WithAttributes(attribute.String("operation", op)))
+		retired.Add(context.Background(), 0, metric.WithAttributes(attribute.String("operation", op)))
 	}
-	h := provisioningHandlers{ProvisioningDeps: deps, rec: rec, provisioningUses: uses}
+	h := provisioningHandlers{ProvisioningDeps: deps, rec: rec, retiredRefusals: retired}
 	routes := []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternMembershipAdd, Handler: http.HandlerFunc(h.membershipAdd)},
 		{Method: http.MethodPost, Pattern: PatternMembershipRole, Handler: http.HandlerFunc(h.membershipRole)},
@@ -252,35 +242,27 @@ func (h provisioningHandlers) admitUpTo(w http.ResponseWriter, r *http.Request, 
 }
 
 // workloadOperations are the operations that take the go-api workload token. The
-// list is default-deny: any other operation (the invite revoke among them)
-// refuses a workload token before the key set is read.
+// list is default-deny: any other operation refuses a workload token before the
+// key set is read.
 var workloadOperations = map[string]bool{opMembershipAdd: true, opMembershipRole: true, opMembershipRemove: true,
-	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgSuspend: true, opOrgOnboard: true, opOrgCreate: true, opOrgState: true,
+	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgSuspend: true, opInviteRevoke: true, opOrgOnboard: true, opOrgCreate: true, opOrgState: true,
 	opServiceAccountCreate: true, opServiceAccountDisable: true, opServiceAccountEnable: true, opServiceAccountOwner: true,
 	opServiceAccountKeyIssue: true, opServiceAccountKeyRotate: true, opServiceAccountKeyRevoke: true, opServiceAccountKeyList: true,
 	opGrantCreate: true, opGrantUpdate: true, opGrantRevoke: true, opOrgRename: true}
 
 // caller authorizes the bearer, its class read from the text before any store
-// or key-set read: the session issuer credential holding memberships:write
-// (counted until it is retired), or, on workloadOperations only, the go-api
-// workload token (audience auth-service, the configured go-api subject). Every
-// refusal is the one 401; the reason is only logged. On a refusal it has
-// already answered.
+// or key-set read: only the go-api workload token (audience auth-service, the
+// configured go-api subject), on workloadOperations, is served. The session
+// issuer credential is refused without a read (its memberships:write scope is
+// retired) and counted by operation. Every refusal is the one 401; the reason
+// is only logged. On a refusal it has already answered.
 func (h provisioningHandlers) caller(w http.ResponseWriter, r *http.Request, op, bearer string) (audit.Caller, bool) {
 	ctx := r.Context()
 	class, reason := classifyIssueBearer(bearer)
 	switch class {
 	case issueClassCompat:
-		credential, refused, err := h.Credentials.CheckScope(ctx, contracts.NewSecretString(bearer), servicecred.ScopeMembershipsWrite)
-		if err != nil {
-			h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
-			return audit.Caller{}, false
-		}
-		if refused == "" {
-			h.provisioningUses.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", op)))
-			return audit.Caller{CredentialID: credential.ID}, true
-		}
-		h.rec.logger.WarnContext(ctx, "provisioning route refused: service credential", "operation", op, "refusal", string(refused))
+		h.retiredRefusals.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", op)))
+		h.rec.logger.WarnContext(ctx, "provisioning route refused: service credential", "operation", op, "refusal", "retired_credential_class")
 	case issueClassWorkload:
 		if !workloadOperations[op] {
 			h.rec.logger.WarnContext(ctx, "provisioning route refused: workload token", "operation", op, "refusal", "operation")

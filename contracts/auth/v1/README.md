@@ -49,9 +49,9 @@ has a request and a response for the get and the list of each aggregate: `princi
 `*-get-request.v1` and `*-list-request.v1` bodies. A list is paged by a keyset cursor on the item id
 (`k1_` and the unpadded base64url of the last id; `limit` 1 to 100, default 50; the last page has no
 `next_cursor`). A principal read holds an id, a kind, a status and a revision and no personal field. A grant read
-carries the repository `resource_key`; an error body never does. A read holds a read scope (`principals:read`,
-`organizations:read`, `memberships:read`, `grants:read`, on `internal_svc_authsess_token`); a write scope never
-satisfies one. The ids are the wire form of `provisioning-event.v1` (a prefix and 1 to 64 id characters). The
+carries the repository `resource_key`; an error body never does. The read routes take the go-api workload token only
+(`workload_token`); `internal_svc_authsess_token` is retired on them. Each operation still names a read scope
+(`principals:read`, `organizations:read`, `memberships:read`, `grants:read`); a write scope never satisfies one. The ids are the wire form of `provisioning-event.v1` (a prefix and 1 to 64 id characters). The
 rules a schema cannot say (the answer is the one asked for, ascending ids, a cursor that is the last item's) are
 `ParseReadRequest` and `ParseReadResponse`; their cells run on `golden/read-api`.
 

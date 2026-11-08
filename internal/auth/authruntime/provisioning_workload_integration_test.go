@@ -27,7 +27,6 @@ const workloadProvisioningIssuer = "https://auth.example.test"
 type workloadProvisioningEnv struct {
 	*routesEnv
 	svc      map[string]string
-	svcID    uuid.UUID
 	signer   *token.Signer
 	workload uuid.UUID
 	subject  string
@@ -35,12 +34,18 @@ type workloadProvisioningEnv struct {
 
 func newWorkloadProvisioningEnv(t *testing.T, ctx context.Context) *workloadProvisioningEnv {
 	t.Helper()
+	return newWorkloadProvisioningEnvWith(t, ctx, nil)
+}
+
+// newWorkloadProvisioningEnvWith is newWorkloadProvisioningEnv with edit applied to the environment first.
+func newWorkloadProvisioningEnvWith(t *testing.T, ctx context.Context, edit func(map[string]string)) *workloadProvisioningEnv {
+	t.Helper()
 	useKeyStates(t, staticKeyStates(nil))
 	dir := t.TempDir()
 	writeSigningKey(t, dir, "k1.pem")
 	workload := uuid.New()
 	subject := session.WirePrincipalID(workload)
-	e := newRoutesEnvWith(t, ctx, map[string]string{
+	env := map[string]string{
 		authconfig.EnvUsersOwned:                  "true",
 		authconfig.EnvMembershipRoutes:            "true",
 		authconfig.EnvInviteTokenSecret:           provisioningInviteSecret,
@@ -51,9 +56,13 @@ func newWorkloadProvisioningEnv(t *testing.T, ctx context.Context) *workloadProv
 		authconfig.EnvAccessTokenAudience:         "dev-health-api",
 		authconfig.EnvTokenIssuerURL:              workloadProvisioningIssuer,
 		authconfig.EnvSessionIssueWorkloadSubject: subject,
-	})
-	svc, svcID := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
-	return &workloadProvisioningEnv{routesEnv: e, svc: map[string]string{"Authorization": "Bearer " + svc}, svcID: svcID,
+	}
+	if edit != nil {
+		edit(env)
+	}
+	e := newRoutesEnvWith(t, ctx, env)
+	svc, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
+	return &workloadProvisioningEnv{routesEnv: e, svc: map[string]string{"Authorization": "Bearer " + svc},
 		signer: token.NewFileSigner(token.FileConfig{KeyPath: filepath.Join(dir, "k1.pem"), KeyID: "k1"}), workload: workload, subject: subject}
 }
 
@@ -78,10 +87,26 @@ func (w *workloadProvisioningEnv) mint(t *testing.T, ctx context.Context, mutate
 	return map[string]string{"Authorization": "Bearer " + compact}, claims.Jti
 }
 
+// auditRows counts the audit rows of eventType in org (with subject, when it
+// is not nil).
+func (w *workloadProvisioningEnv) auditRows(t *testing.T, ctx context.Context, eventType string, org uuid.UUID, subject *uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := w.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events
+WHERE event_type = $1 AND organization_id = $2 AND ($3::uuid IS NULL OR subject_principal_id = $3)`, eventType, org, subject).Scan(&n); err != nil {
+		t.Fatalf("%s audit rows: %v", eventType, err)
+	}
+	return n
+}
+
 // callerAttributes reads the caller attributes of the one audit row of
-// eventType in org (with subject, when it is not nil).
+// eventType in org (with subject, when it is not nil); a count other than one
+// fails the test.
 func (w *workloadProvisioningEnv) callerAttributes(t *testing.T, ctx context.Context, eventType string, org uuid.UUID, subject *uuid.UUID) map[string]string {
 	t.Helper()
+	if n := w.auditRows(t, ctx, eventType, org, subject); n != 1 {
+		t.Fatalf("%s: %d audit rows, want exactly 1", eventType, n)
+	}
 	var principal, jti, credential *string
 	if err := w.admin.QueryRow(ctx, `SELECT attributes->>'caller_principal_id', attributes->>'workload_jti', attributes->>'credential_id'
 FROM auth.security_audit_events WHERE event_type = $1 AND organization_id = $2 AND ($3::uuid IS NULL OR subject_principal_id = $3)`,
@@ -123,9 +148,10 @@ func TestProvisioningWorkloadTokenAddsAMember(t *testing.T) {
 		t.Fatalf("after add: public %q auth %q", pub, auth)
 	}
 	var actor string
-	if err := w.admin.QueryRow(ctx, `SELECT actor_principal_id::text FROM auth.security_audit_events
-WHERE event_type = 'auth.membership.added' AND organization_id = $1 AND subject_principal_id = $2`, org, member).Scan(&actor); err != nil || actor != owner.String() {
-		t.Fatalf("added audit actor = %q (%v), want the owner", actor, err)
+	var rows int
+	if err := w.admin.QueryRow(ctx, `SELECT count(*), min(actor_principal_id::text) FROM auth.security_audit_events
+WHERE event_type = 'auth.membership.added' AND organization_id = $1 AND subject_principal_id = $2`, org, member).Scan(&rows, &actor); err != nil || rows != 1 || actor != owner.String() {
+		t.Fatalf("added audit rows = %d, actor %q (%v), want one row naming the owner", rows, actor, err)
 	}
 	w.wantWorkloadCaller(t, ctx, "auth.membership.added", org, &member, jti)
 }
@@ -154,9 +180,9 @@ func TestProvisioningWorkloadTokenRefusals(t *testing.T) {
 	}
 }
 
-// I3: the session issuer credential holding memberships:write still works
-// beside the workload path, and its audit row names the credential row.
-func TestProvisioningServiceCredentialStillWorksBesideTheWorkloadPath(t *testing.T) {
+// I3: the session issuer credential holding memberships:write is refused: the
+// scope is retired, so the add is a 401 that writes no row and no audit row.
+func TestProvisioningRetiredServiceCredentialIsRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	w := newWorkloadProvisioningEnv(t, ctx)
@@ -164,11 +190,14 @@ func TestProvisioningServiceCredentialStillWorksBesideTheWorkloadPath(t *testing
 	member := w.account(t, ctx, acctMail(), false, true)
 	got := w.doWith(t, "/internal/v1/memberships/add", jsonBody(t, map[string]any{"organization_id": org.String(),
 		"principal_id": member.String(), "actor_principal_id": owner.String(), "role": "member"}), w.svc)
-	if got.status != http.StatusOK {
-		t.Fatalf("add: %d %s", got.status, got.body)
+	if got.status != http.StatusUnauthorized {
+		t.Fatalf("add with the retired credential: %d %s, want 401", got.status, got.body)
 	}
-	if attrs := w.callerAttributes(t, ctx, "auth.membership.added", org, &member); len(attrs) != 1 || attrs["credential_id"] != w.svcID.String() {
-		t.Fatalf("caller attributes = %v, want credential_id %s only", attrs, w.svcID)
+	if pub, auth := w.memberRows(t, ctx, org, member); pub != "" || auth != "" {
+		t.Fatalf("the refused add wrote rows: %q %q", pub, auth)
+	}
+	if n := w.auditRows(t, ctx, "auth.membership.added", org, &member); n != 0 {
+		t.Fatalf("the refused add wrote %d audit rows", n)
 	}
 }
 
@@ -227,7 +256,8 @@ func TestProvisioningWorkloadTokenReactivate(t *testing.T) {
 	_, org := w.seed(t, ctx)
 	super := w.account(t, ctx, acctMail(), true, true)
 	body := jsonBody(t, map[string]any{"organization_id": org.String(), "actor_principal_id": super.String()})
-	if got := w.doWith(t, "/internal/v1/organizations/deprovision", body, w.svc); got.status != http.StatusOK {
+	depHeader, _ := w.mint(t, ctx, nil)
+	if got := w.doWith(t, "/internal/v1/organizations/deprovision", body, depHeader); got.status != http.StatusOK {
 		t.Fatalf("deprovision: %d %s", got.status, got.body)
 	}
 	header, jti := w.mint(t, ctx, nil)
@@ -238,18 +268,17 @@ func TestProvisioningWorkloadTokenReactivate(t *testing.T) {
 	w.wantWorkloadCaller(t, ctx, "auth.organization.reactivated", org, nil, jti)
 }
 
-// I7: the invite revoke route takes no workload token: a valid one is a 401
-// that writes nothing (the invite stays pending, no revoke audit row), and the
-// session issuer credential still works on it.
-func TestProvisioningWorkloadTokenIsRefusedOnRevoke(t *testing.T) {
+// I7: the invite revoke route takes the go-api workload token, as every provisioning route does; the retired session
+// issuer credential is a 401 that writes nothing (the invite stays pending, no revoke audit row).
+func TestProvisioningWorkloadTokenRevokesAnInvite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	w := newWorkloadProvisioningEnv(t, ctx)
 	owner, org := w.seed(t, ctx)
-	id := w.createInvite(t, w.svc, org, owner)
-	header, _ := w.mint(t, ctx, nil)
-	if got := w.revokeVia(t, header, org, owner, id); got.status != http.StatusUnauthorized {
-		t.Fatalf("revoke on the workload token: %d %s, want 401", got.status, got.body)
+	create, _ := w.mint(t, ctx, nil)
+	id := w.createInvite(t, create, org, owner)
+	if got := w.revokeVia(t, w.svc, org, owner, id); got.status != http.StatusUnauthorized {
+		t.Fatalf("revoke on the retired service credential: %d %s, want 401", got.status, got.body)
 	}
 	if pub, auth := w.inviteStatuses(t, ctx, id); pub != "pending" || auth != "pending" {
 		t.Fatalf("after the refused revoke: public %q auth %q", pub, auth)
@@ -257,9 +286,14 @@ func TestProvisioningWorkloadTokenIsRefusedOnRevoke(t *testing.T) {
 	if n := w.revokeAudits(t, ctx, org); n != 0 {
 		t.Fatalf("revoke audit rows after the refused revoke = %d, want 0", n)
 	}
-	if got := w.revokeVia(t, w.svc, org, owner, id); got.status != http.StatusOK || object(t, got)["status"] != "revoked" {
-		t.Fatalf("revoke on the service credential: %d %s", got.status, got.body)
+	header, jti := w.mint(t, ctx, nil)
+	if got := w.revokeVia(t, header, org, owner, id); got.status != http.StatusOK || object(t, got)["status"] != "revoked" {
+		t.Fatalf("revoke on the workload token: %d %s", got.status, got.body)
 	}
+	if n := w.revokeAudits(t, ctx, org); n != 1 {
+		t.Fatalf("revoke audit rows after the workload revoke = %d, want 1", n)
+	}
+	w.wantWorkloadCaller(t, ctx, "auth.invite.revoked", org, nil, jti)
 }
 
 // I8: a superuser suspends on the workload token; the audit row names the

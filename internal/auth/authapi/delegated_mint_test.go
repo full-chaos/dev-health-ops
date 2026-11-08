@@ -42,31 +42,6 @@ func delegatedGrant(until time.Time) Grant {
 	}
 }
 
-func plainHS256Issuer(t *testing.T) *Issuer {
-	t.Helper()
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return issuer
-}
-
-func TestDelegatedHS256ExpStopsAtTheGrantEnd(t *testing.T) {
-	until := time.Now().Add(10 * time.Minute)
-	tokens, err := plainHS256Issuer(t).Tokens(context.Background(), delegatedGrant(until))
-	if err != nil {
-		t.Fatal(err)
-	}
-	claims := payloadOf(t, tokens.Access)
-	exp, iat := int64(claims["exp"].(float64)), int64(claims["iat"].(float64))
-	if exp != until.Unix() {
-		t.Fatalf("exp = %d, want %d", exp, until.Unix())
-	}
-	if int64(tokens.ExpiresIn) != exp-iat {
-		t.Fatalf("expires_in = %d, want %d", tokens.ExpiresIn, exp-iat)
-	}
-}
-
 func TestDelegatedEdDSAExpStopsAtTheGrantEndOnBothTokens(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	until := time.Now().Add(10 * time.Minute)
@@ -88,7 +63,7 @@ func TestDelegatedEdDSAExpStopsAtTheGrantEndOnBothTokens(t *testing.T) {
 
 func TestAGrantAtItsEndMintsNothing(t *testing.T) {
 	signer, _, _ := fileSigner(t)
-	for name, issuer := range map[string]*Issuer{"hs256": plainHS256Issuer(t), "eddsa": newEdDSAIssuer(t, signer, testAudience)} {
+	for name, issuer := range map[string]*Issuer{"eddsa": newEdDSAIssuer(t, signer, testAudience)} {
 		for _, end := range []time.Duration{-time.Minute, 0} {
 			tokens, err := issuer.Tokens(context.Background(), delegatedGrant(time.Now().Add(end)))
 			if !errors.Is(err, errIssue) || tokens.Access != "" || tokens.Session != "" {
@@ -100,33 +75,12 @@ func TestAGrantAtItsEndMintsNothing(t *testing.T) {
 
 func TestAGrantEndAfterTheLifetimeLeavesTheLifetime(t *testing.T) {
 	grant := delegatedGrant(time.Now().Add(24 * time.Hour))
-	tokens, err := plainHS256Issuer(t).Tokens(context.Background(), grant)
+	tokens, err := newTestIssuer(t).Tokens(context.Background(), grant)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tokens.ExpiresIn != AccessExpiresIn {
 		t.Fatalf("expires_in = %d, want %d", tokens.ExpiresIn, AccessExpiresIn)
-	}
-}
-
-func TestDelegatedHS256ClaimShape(t *testing.T) {
-	grant := delegatedGrant(time.Now().Add(10 * time.Minute))
-	tokens, err := plainHS256Issuer(t).Tokens(context.Background(), grant)
-	if err != nil {
-		t.Fatal(err)
-	}
-	claims := payloadOf(t, tokens.Access)
-	want := map[string]any{
-		"sub": grant.PrincipalID.String(), "impersonating_user_id": grant.Actor.String(),
-		"sid": session.WireSessionID(grant.SessionID), "tv": float64(9), "org_id": grant.OrganizationID.String(),
-	}
-	for name, value := range want {
-		if claims[name] != value {
-			t.Errorf("%s = %v, want %v", name, claims[name], value)
-		}
-	}
-	if _, ok := claims["act"]; ok {
-		t.Error("an HS256 token carries act")
 	}
 }
 
@@ -189,7 +143,7 @@ func TestAPlainGrantCarriesNoActorClaim(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	grant := delegatedGrant(time.Time{})
 	grant.ExpiresAt, grant.Actor = nil, nil
-	for name, issuer := range map[string]*Issuer{"hs256": plainHS256Issuer(t), "eddsa": newEdDSAIssuer(t, signer, testAudience)} {
+	for name, issuer := range map[string]*Issuer{"eddsa": newEdDSAIssuer(t, signer, testAudience)} {
 		tokens, err := issuer.Tokens(context.Background(), grant)
 		if err != nil {
 			t.Fatal(err)

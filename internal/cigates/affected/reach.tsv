@@ -117,7 +117,9 @@ internal/auth/contracts	contracts.go	internal/api/webhookintake
 internal/auth/contracts	contracts.go	internal/apiservice
 internal/auth/contracts	contracts.go	internal/apiservice/acr
 internal/auth/contracts	contracts.go	internal/apiservice/admin
+internal/auth/contracts	contracts.go	internal/apiservice/authflowvenue
 internal/auth/contracts	contracts.go	internal/apiservice/customerpush
+internal/auth/contracts	contracts.go	internal/apiservice/ssovenue
 internal/auth/contracts	contracts.go	internal/audit
 internal/auth/contracts	contracts.go	internal/auth/acrmint
 internal/auth/contracts	contracts.go	internal/auth/acrreconcile
@@ -206,6 +208,8 @@ internal/auth/keystore	open_unix.go	internal/api/externalingest
 internal/auth/keystore	open_unix.go	internal/api/webhookintake
 internal/auth/keystore	open_unix.go	internal/apiservice
 internal/auth/keystore	open_unix.go	internal/apiservice/acr
+internal/auth/keystore	open_unix.go	internal/apiservice/authflowvenue
+internal/auth/keystore	open_unix.go	internal/apiservice/ssovenue
 internal/auth/keystore	open_unix.go	internal/auth/acrmint
 internal/auth/keystore	open_unix.go	internal/auth/authapi
 internal/auth/keystore	open_unix.go	internal/auth/authruntime
@@ -905,7 +909,6 @@ internal/testsupport/venueoracle	golden.go	internal/auth/signedtoken
 internal/testsupport/venueoracle	golden.go	internal/backfillrun
 internal/testsupport/venueoracle	golden.go	internal/chmigrate
 internal/testsupport/venueoracle	golden.go	internal/cli
-internal/testsupport/venueoracle	golden.go	internal/edgetokenmint
 internal/testsupport/venueoracle	golden.go	internal/externalrecompute
 internal/testsupport/venueoracle	golden.go	internal/fixturescli
 internal/testsupport/venueoracle	golden.go	internal/fixturesgen
@@ -1043,6 +1046,7 @@ internal/testsupport/venueoracle	gopin.go	internal/apiservice/admin
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/authflowvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/billingvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/metricsvenue
+internal/testsupport/venueoracle	gopin.go	internal/apiservice/ssovenue
 internal/testsupport/venueoracle	gopin.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	opened.go	internal/admincli
 internal/testsupport/venueoracle	opened.go	internal/adminops

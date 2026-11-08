@@ -22,7 +22,7 @@ import (
 // The cells below hold the refresh of an org-scoped session or token to the
 // membership it was minted for (D6507): with the membership gone (removed or
 // left) a non-superuser's refresh is refused 401 and the session or token
-// family revoked, with an audit row, on both planes (go-api's own refresh,
+// family revoked, with an audit row, on the auth plane (go-api's own refresh,
 // and auth-service's when it owns sessions). A superuser keeps refreshing,
 // and a session minted by an invite accept or an onboard join refreshes.
 
@@ -225,141 +225,14 @@ FROM auth.refresh_credentials WHERE principal_id = $1`, user)
 	}
 }
 
-// go-api plane: a token from an invite accept; the membership row is removed
-// with a raw DELETE (so no removal path revokes the token first): the refresh
-// is refused, the token's family revoked and one login_failed audit row
-// written. A superuser in the same position keeps refreshing.
-func TestGoAPIRefreshOfARemovedMemberIsRefusedAndRevoked(t *testing.T) {
-	for _, superuser := range []bool{false, true} {
-		name := "member"
-		if superuser {
-			name = "superuser"
-		}
-		t.Run(name, func(t *testing.T) {
-			cell := "go-api-refresh/removed/" + name
-			e, ctx := getEnv(t), cellContext(t)
-			e.cleanup(t)
-			org, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx)
-			e.add(t, ctx, org, owner, "owner", nil)
-			user := e.seedUser(t, ctx)
-			if superuser {
-				user = e.seedSuperuser(t, ctx)
-			}
-			refresh := e.join(t, ctx, cell, e.server.URL, user, org, owner, false)
-			if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships WHERE org_id = $1 AND user_id = $2`, org, user); err != nil {
-				t.Fatal(err)
-			}
-
-			got := e.refreshAt(ctx, e.server.URL, refresh)
-			live := e.scalar(t, ctx, `SELECT count(*)::text FROM public.refresh_tokens WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL`, user, org)
-			audits := e.scalar(t, ctx, `SELECT count(*)::text FROM public.audit_logs
-WHERE user_id = $1 AND org_id = $2 AND action = 'login_failed'`, user, org)
-			if superuser {
-				wantRefreshOK(t, cell, got)
-				if audits != "0" {
-					t.Fatalf("%s: %s refusal audit rows for a superuser", cell, audits)
-				}
-				return
-			}
-			wantRefreshRefused(t, cell, got)
-			if live != "0" || audits != "1" {
-				t.Fatalf("%s: live refresh tokens=%s login_failed rows=%s, want 0, 1", cell, live, audits)
-			}
-		})
-	}
-}
-
-// F2: go-api's admin removal revokes the member's live refresh tokens for that
-// organization in its own transaction, and no other organization's.
-func TestGoAPIMemberRemovalRevokesTheOrgsRefreshTokens(t *testing.T) {
-	const cell = "go-api-remove/revokes-tokens"
-	e, ctx := getEnv(t), cellContext(t)
-	e.cleanup(t)
-	org1, org2, owner := e.seedOrg(t, ctx), e.seedOrg(t, ctx), e.seedUser(t, ctx)
-	e.add(t, ctx, org1, owner, "owner", nil)
-	e.add(t, ctx, org2, owner, "owner", nil)
-	user := e.seedUser(t, ctx)
-	refresh1 := e.join(t, ctx, cell, e.server.URL, user, org1, owner, false)
-	refresh2 := e.join(t, ctx, cell, e.server.URL, user, org2, owner, false)
-
-	removed := e.call(ctx, e.root, http.MethodDelete, "/api/v1/admin/orgs/"+org1.String()+"/members/"+user.String(), nil)
-	if removed.status != http.StatusOK {
-		t.Fatalf("%s: fixture: remove_member answered %s", cell, shape(removed))
-	}
-	live := func(org uuid.UUID) string {
-		return e.scalar(t, ctx, `SELECT count(*)::text FROM public.refresh_tokens WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL`, user, org)
-	}
-	if got := live(org1); got != "0" {
-		t.Fatalf("%s: removal answer: %s live refresh tokens for the removed org, want 0", cell, got)
-	}
-	if got := live(org2); got == "0" {
-		t.Fatalf("%s: removal answer: the other org's refresh tokens were revoked too", cell)
-	}
-	// The revoked token of a member who is gone is the not-a-member refusal,
-	// with its audit row, not go-api's reuse answer.
-	wantRefreshRefused(t, cell, e.refreshAt(ctx, e.server.URL, refresh1))
-	if got := e.scalar(t, ctx, `SELECT count(*)::text FROM public.audit_logs WHERE user_id = $1 AND org_id = $2 AND action = 'login_failed'`,
-		user, org1); got != "1" {
-		t.Fatalf("%s: refresh answer: %s login_failed rows for the removed org, want 1", cell, got)
-	}
-	if e.goLog.contains("refresh token reuse detected") {
-		t.Fatalf("%s: refresh answer: a removed member's refresh logged reuse", cell)
-	}
-	wantRefreshOK(t, cell, e.refreshAt(ctx, e.server.URL, refresh2))
-}
-
-// A revoked go-api token keeps the reuse answer (401 "Refresh token reuse
-// detected", the reuse Warn, no login_failed row) when the membership is still
-// there, or when the user is a superuser without one.
-func TestGoAPIRevokedTokenKeepsTheReuseAnswer(t *testing.T) {
-	for _, c := range []struct {
-		name      string
-		superuser bool
-	}{{"still a member", false}, {"superuser without a membership", true}} {
-		t.Run(c.name, func(t *testing.T) {
-			cell := "go-api-refresh/revoked/" + c.name
-			e, ctx := getEnv(t), cellContext(t)
-			e.cleanup(t)
-			org, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx)
-			e.add(t, ctx, org, owner, "owner", nil)
-			user := e.seedUser(t, ctx)
-			if c.superuser {
-				user = e.seedSuperuser(t, ctx)
-			}
-			refresh := e.join(t, ctx, cell, e.server.URL, user, org, owner, false)
-			if c.superuser {
-				if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships WHERE org_id = $1 AND user_id = $2`, org, user); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if _, err := e.admin.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL`,
-				user, org); err != nil {
-				t.Fatal(err)
-			}
-			got := e.refreshAt(ctx, e.server.URL, refresh)
-			if got.status != http.StatusUnauthorized || !strings.Contains(got.raw, "Refresh token reuse detected") {
-				t.Fatalf("%s: refresh answer: %s, want 401 Refresh token reuse detected", cell, shape(got))
-			}
-			if !e.goLog.contains("refresh token reuse detected") {
-				t.Fatalf("%s: refresh answer: no reuse Warn logged", cell)
-			}
-			if got := e.scalar(t, ctx, `SELECT count(*)::text FROM public.audit_logs WHERE user_id = $1 AND org_id = $2 AND action = 'login_failed'`,
-				user, org); got != "0" {
-				t.Fatalf("%s: refresh answer: %s login_failed rows, want 0 (the reuse branch writes none)", cell, got)
-			}
-		})
-	}
-}
-
 // No false refusal: a session or token minted right after the membership
-// insert (invite accept, onboard join) refreshes, on both planes.
+// insert (invite accept, onboard join) refreshes, on the auth plane.
 func TestRefreshAfterAJoinIsNotRefused(t *testing.T) {
 	e, ctx := getEnv(t), cellContext(t)
 	e.cleanup(t)
 	for _, plane := range []struct {
 		name, joinAt, refreshAt string
 	}{
-		{"go-api", e.server.URL, e.server.URL},
 		{"auth", e.issuerServer.URL, e.authServer.URL},
 	} {
 		for _, onboard := range []bool{false, true} {

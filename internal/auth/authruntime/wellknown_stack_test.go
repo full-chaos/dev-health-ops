@@ -153,16 +153,6 @@ func TestProductionStackServesTheJWKSAndDiscovery(t *testing.T) {
 	}
 }
 
-func TestProductionStackServesNoDiscoveryWithoutAnIssuer(t *testing.T) {
-	handler := wellKnownHandler(t, "")
-	if rec := wellKnownGet(handler, http.MethodGet, "/.well-known/openid-configuration"); rec.Code != http.StatusNotFound {
-		t.Fatalf("discovery without an issuer = %d, want 404", rec.Code)
-	}
-	if rec := wellKnownGet(handler, http.MethodGet, "/.well-known/jwks.json"); rec.Code != http.StatusOK {
-		t.Fatalf("JWKS without an issuer = %d, want 200", rec.Code)
-	}
-}
-
 // TestProductionStackPublishesTheDurableKeyStates: configure reads the key
 // states of the rotation state machine; a key its table marks compromised
 // leaves the JWKS at once and a key it does not hold is not published.

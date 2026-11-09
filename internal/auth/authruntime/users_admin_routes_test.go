@@ -1,12 +1,14 @@
 package authruntime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -135,10 +137,101 @@ func TestUsersAdminRoutesMountOnUsersOwnedApartFromTheProvisioningSwitch(t *test
 			t.Errorf("users not owned, rows: %s answered %d, want 404 (not mounted)", pattern, got)
 		}
 	}
-	provisioningProfileRows = nil
+	plantEmbeddedWithout(t, authapi.PatternUsersDelete)
 	for _, pattern := range usersAdminRoutePatterns {
 		if got := apiAnswers(t, usersAdminEnv(true), []string{pattern})[pattern]; got != http.StatusNotFound {
-			t.Errorf("owned, embedded document without the rows: %s answered %d, want 404 (not mounted)", pattern, got)
+			t.Errorf("owned, embedded document without the users/delete row: %s answered %d, want 404 (none mounts)", pattern, got)
 		}
+	}
+}
+
+// plantEmbeddedWithout plants the embedded endpoint-profile document without the rows for routes.
+func plantEmbeddedWithout(t *testing.T, routes ...string) {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	var kept []any
+	for _, item := range document["rows"].([]any) {
+		if !slices.Contains(routes, item.(map[string]any)["route"].(string)) {
+			kept = append(kept, item)
+		}
+	}
+	document["rows"] = kept
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provisioningProfileRows = raw
+	t.Cleanup(func() { provisioningProfileRows = nil })
+}
+
+// The embedded document holds the four rows: with users owned (prod) every user-admin route is mounted, and a POST
+// with no bearer is the credential gate's 401.
+func TestUsersAdminRoutesMountWithTheEmbeddedRows(t *testing.T) {
+	provisioningProfileRows = nil
+	answers := apiAnswers(t, usersAdminEnv(true), usersAdminRoutePatterns)
+	for _, pattern := range usersAdminRoutePatterns {
+		if answers[pattern] != http.StatusUnauthorized {
+			t.Errorf("owned, embedded document: %s answered %d, want 401 (mounted, no bearer)", pattern, answers[pattern])
+		}
+	}
+}
+
+// startLog configures auth-service from env and returns its start log (JSON lines).
+func startLog(t *testing.T, env map[string]string) string {
+	t.Helper()
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	var logs bytes.Buffer
+	components, err := configure(context.Background(), cfg, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	for _, component := range components {
+		_ = component.Shutdown(context.Background())
+	}
+	return logs.String()
+}
+
+// usersRoutesLine is the one INFO start line of the user-admin routes, decoded; it fails unless there is exactly one.
+func usersRoutesLine(t *testing.T, logs string) map[string]any {
+	t.Helper()
+	var found []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "users routes" {
+			found = append(found, record)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("%d \"users routes\" start lines, want 1:\n%s", len(found), logs)
+	}
+	if found[0]["level"] != "INFO" {
+		t.Fatalf("the users routes line is level %v, want INFO", found[0]["level"])
+	}
+	return found[0]
+}
+
+// The start log says how many user-admin routes are mounted and, when none is, why: users not owned, or the route
+// whose endpoint-profile row is missing. The gate is all or nothing, so the count is 4/4 or 0/4. There is no start
+// refusal (product rule 3).
+func TestUsersAdminStartLineNamesTheMountCountAndTheReason(t *testing.T) {
+	provisioningProfileRows = nil
+	mounted := usersRoutesLine(t, startLog(t, usersAdminEnv(true)))
+	if mounted["mounted"] != "4/4" || mounted["reason"] != nil {
+		t.Errorf("owned, embedded document: %v, want mounted 4/4 and no reason", mounted)
+	}
+	off := usersRoutesLine(t, startLog(t, usersAdminEnv(false)))
+	if off["mounted"] != "0/4" || off["reason"] != "users_not_owned" {
+		t.Errorf("not owned: %v, want mounted 0/4 reason users_not_owned", off)
+	}
+	plantEmbeddedWithout(t, authapi.PatternUsersDelete)
+	missing := usersRoutesLine(t, startLog(t, usersAdminEnv(true)))
+	if missing["mounted"] != "0/4" || missing["reason"] != authapi.ProvisioningRowReason || missing["route"] != "POST "+authapi.PatternUsersDelete {
+		t.Errorf("owned, no users/delete row: %v, want mounted 0/4 reason %s route POST %s", missing, authapi.ProvisioningRowReason, authapi.PatternUsersDelete)
 	}
 }

@@ -617,8 +617,8 @@ func TestGoAPIAccessRowsAreTheFullInventory(t *testing.T) {
 			user++
 		}
 	}
-	if user != 202 {
-		t.Errorf("%d user rows, want 202", user)
+	if user != 206 {
+		t.Errorf("%d user rows, want 206", user)
 	}
 }
 

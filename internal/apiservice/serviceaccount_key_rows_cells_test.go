@@ -21,8 +21,17 @@ var serviceAccountKeyKeys = []string{
 	"POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate",
 }
 
-// The profile names admin.users on exactly the four service account key rows, and the guard's action map reads each
-// as a platform row.
+// serviceAccountLifecycleKeys are the service account lifecycle rows (#5949), mounted WrapPlatform(admin.users) in
+// admin/serviceaccounts.go. Their profile rows name no action yet.
+var serviceAccountLifecycleKeys = []string{
+	"POST /api/v1/admin/service-accounts",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/disable",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/enable",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/owner",
+}
+
+// The profile names admin.users on exactly the four service account key rows (route segment /keys), and the guard's
+// action map reads each as a platform row. The lifecycle rows under the same path are pinned apart.
 func TestServiceAccountKeyRowsNameAdminUsers(t *testing.T) {
 	var document struct {
 		Rows []struct {
@@ -34,8 +43,16 @@ func TestServiceAccountKeyRowsNameAdminUsers(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := map[string]string{}
+	lifecycle := map[string]*string{}
 	for _, row := range document.Rows {
-		if row.Service != goAPIAccessService || !strings.HasPrefix(row.Route, "/api/v1/admin/service-accounts/") {
+		if row.Service != goAPIAccessService {
+			continue
+		}
+		if row.Route != "/api/v1/admin/service-accounts" && !strings.HasPrefix(row.Route, "/api/v1/admin/service-accounts/") {
+			continue
+		}
+		if !strings.Contains(row.Route, "/keys") {
+			lifecycle[row.Method+" "+row.Route] = row.Action
 			continue
 		}
 		action := ""
@@ -51,6 +68,18 @@ func TestServiceAccountKeyRowsNameAdminUsers(t *testing.T) {
 	sort.Strings(keys)
 	if !slices.Equal(keys, serviceAccountKeyKeys) {
 		t.Fatalf("service account key rows %v, want %v", keys, serviceAccountKeyKeys)
+	}
+	// The lifecycle rows stay the #5949 form until they move to the key rows' form: exactly these 4, action null.
+	lifecycleKeys := make([]string, 0, len(lifecycle))
+	for key, action := range lifecycle {
+		lifecycleKeys = append(lifecycleKeys, key)
+		if action != nil {
+			t.Errorf("%s: action %q, want null (the lifecycle rows name no action yet)", key, *action)
+		}
+	}
+	sort.Strings(lifecycleKeys)
+	if !slices.Equal(lifecycleKeys, serviceAccountLifecycleKeys) {
+		t.Fatalf("service account lifecycle rows %v, want %v", lifecycleKeys, serviceAccountLifecycleKeys)
 	}
 	rows, err := policy.ParseShadowRows(authv1.GoAPIEndpointProfiles, goAPIAccessService)
 	if err != nil {

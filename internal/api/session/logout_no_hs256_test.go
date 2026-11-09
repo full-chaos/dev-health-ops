@@ -10,19 +10,19 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/legacyjwt"
 )
 
 // TestLogoutVerifiesNoHS256RefreshToken: go-api holds no HS256 key, so logout never verifies a refresh JWT
 // and never opens a transaction to revoke its jti. A refresh token signed with the retired key answers the
 // plain 200, the same as any other refresh_token value.
 func TestLogoutVerifiesNoHS256RefreshToken(t *testing.T) {
-	signer, err := edgetoken.NewSigner("wiring-test-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
+	signer, err := legacyjwt.NewSigner("wiring-test-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
 	if err != nil {
 		t.Fatal(err)
 	}
-	refresh, err := signer.Refresh(edgetoken.RefreshClaims{UserID: uuid.NewString(), OrgID: uuid.NewString(), FamilyID: uuid.NewString()},
+	refresh, err := signer.Refresh(legacyjwt.RefreshClaims{UserID: uuid.NewString(), OrgID: uuid.NewString(), FamilyID: uuid.NewString()},
 		time.Now(), uuid.NewString())
 	if err != nil {
 		t.Fatal(err)

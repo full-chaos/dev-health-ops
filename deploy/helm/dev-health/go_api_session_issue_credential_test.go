@@ -180,3 +180,12 @@ func TestSessionIssueCredentialUnsetRendersTokenMode(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionIssueCredentialWorkloadAcceptsOtherCaseSpellings(t *testing.T) {
+	for _, name := range []string{"auth_session_issue_credential", "Auth_Session_Issue_Credential", " AUTH_SESSION_ISSUE_CREDENTIAL"} {
+		_, out, err := renderAuth(t, goAPIWithAuth(issueSets(append([]string{"--set-json", `goApi.extraEnv=[{"name":"` + name + `","value":"x"}]`}, issueWorkload...)...)...)...)
+		if err != nil {
+			t.Errorf("extraEnv %q is a different variable in a container and was refused: %v\n%.400s", name, err, out)
+		}
+	}
+}

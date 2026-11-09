@@ -52,7 +52,7 @@ func TestHS256WebTokenIsRefusedOnEveryAccessRowWithAnIssuerURL(t *testing.T) {
 		mounted[route.Method+" "+route.Pattern] = true
 	}
 
-	valid := legacyAccess(t, cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience,
+	valid := legacyAccess(t, testAccessSecret, "dev-health-ops", cfg.Session.AccessAudience,
 		authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
 	tampered := valid[:len(valid)-2] + "AA"
 	if tampered == valid {

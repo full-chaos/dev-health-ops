@@ -271,13 +271,16 @@ func TestWorkItemOrgWinnerReadIsOneMoreReadPerPartition(t *testing.T) {
 		t.Fatalf("org winner reads = %d, queries = %d; want 1 and 4 + 1", got, len(conn.queries))
 	}
 
-	// A partition whose every item is won in another scope reads no
-	// transition and no attribution: the scopes, the items and the org
-	// winner read.
+	// A partition whose every item is won in another scope still counts
+	// them in the scope view (CHAOS-10797), so it reads the transitions and
+	// the attributions too: the same five statements.
 	conn = orgWinnerStore()
 	read := readOrgWinnerScope(t, conn, false, orgWinnerRepoA)
-	if got := conn.orgWinnerReads(); got != 1 || len(conn.queries) != 3 {
-		t.Fatalf("org winner reads = %d, queries = %d; want 1 and 3", got, len(conn.queries))
+	if got := conn.orgWinnerReads(); got != 1 || len(conn.queries) != 5 {
+		t.Fatalf("org winner reads = %d, queries = %d; want 1 and 5", got, len(conn.queries))
+	}
+	if len(read.Items) != 0 || len(read.ScopeItems) != 1 {
+		t.Fatalf("org items = %d, scope items = %d; want 0 and 1", len(read.Items), len(read.ScopeItems))
 	}
 	if len(conn.idReads) != 1 || strings.Join(conn.idReads[0], ",") != "moved" {
 		t.Fatalf("the org winner read took ids %v, want the one item of the partition's scopes", conn.idReads)

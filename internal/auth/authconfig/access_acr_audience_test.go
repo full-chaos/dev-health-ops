@@ -6,21 +6,20 @@ import (
 )
 
 // No auth-service token carries an ACR audience. AUTH_JWT_AUDIENCE names the
-// one audience the session minter signs, , and
-// AUTH_LEGACY_JWT_AUDIENCE the one HS256 audience the eddsa class verifies.
-// acr-api and acr-mcp have a separate mint (ACP-ADR-13 decision 3,
-// CHAOS-12248), so Load refuses either value in either setting, with the session routes mounted or not.
+// one audience the session minter signs. acr-api and acr-mcp have a separate
+// mint (ACP-ADR-13 decision 3, CHAOS-12248), so Load refuses either value,
+// with the session routes mounted or not.
 func TestNoAuthServiceConfigurationMintsAnACRAudience(t *testing.T) {
 	classes := map[string]func() map[string]string{
 		"eddsa": eddsaEnv,
 	}
 	for _, audience := range []string{"acr-api", "acr-mcp"} {
 		for class, base := range classes {
-			for _, setting := range []string{EnvAccessTokenAudience, EnvLegacyJWTAudience} {
+			for _, setting := range []string{EnvAccessTokenAudience} {
 				mounted := base()
 				mounted[setting] = audience
 				unmounted := base()
-				delete(unmounted, EnvAccessTokenSecret)
+				delete(unmounted, EnvRateLimitKey)
 				delete(unmounted, EnvSessionSuccessorKey)
 				unmounted[setting] = audience
 				for routes, env := range map[string]map[string]string{"session routes": mounted, "no session routes": unmounted} {

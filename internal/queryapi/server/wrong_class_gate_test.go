@@ -525,7 +525,7 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 				errorf("%s @%s: wrong class %s made the shadow ask the PDP %d times", p.row.ID, p.listener, carrier.Class, got.decision)
 			}
 			if p.row.Protected() && got.answer.Status/100 != 4 {
-				if owner, known := divergences[profile]; known {
+				if owner, known := excusedBy(divergences, p.row); known {
 					divergent[profile]++
 					t.Logf("%s @%s: wrong class %s on a protected row answered %s: known divergence, ledger %s", p.row.ID, p.listener, carrier.Class, got.answer, owner)
 				} else {
@@ -537,7 +537,7 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 	// The accept controls run after every wrong-class cell: a valid user access token is told apart from a refusal.
 	// On A' its JWKS fetch cannot complete (the issuer's TLS is not trusted in this test binary), so it is told apart by
 	// its answer and by its key fetch; on B by its store read or its answer.
-	acceptCells, fetched, controlled := map[string]int{}, map[string]bool{}, map[string]bool{}
+	acceptCells, fetched, controlled, shadowAsked := map[string]int{}, map[string]bool{}, map[string]bool{}, 0
 	for _, p := range places {
 		if !p.row.Accepts(classUserToken) {
 			continue
@@ -547,6 +547,7 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 		control := accept[p.rig]
 		want := baselineOf(p, control)
 		got := rigs[p.rig].serve(p.listener, qGateRequest(p.row, control))
+		shadowAsked += got.decision
 		switch p.rig {
 		case rigA:
 			builder := a.mounted[p.row.Method+" "+p.row.Route]
@@ -558,8 +559,8 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 				errorf("%s @%s: accepted class %s answered %s, the garbage answer: the rig cannot tell accept from refuse", p.row.ID, p.listener, control.Class, got.answer)
 			}
 		case rigB:
-			if got.stores == 0 && sameAnswer(p, control, got.answer, want.answer) {
-				errorf("%s @%s: accepted class %s answered %s with no store read, the garbage answer: the rig cannot tell accept from refuse", p.row.ID, p.listener, control.Class, got.answer)
+			if got.stores == 0 {
+				errorf("%s @%s: accepted class %s answered %s with no store read: the rig cannot tell accept from refuse", p.row.ID, p.listener, control.Class, got.answer)
 			}
 		}
 	}
@@ -567,6 +568,9 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 		if !fetched[builder] {
 			errorf("A': no accept cell of %s fetched a key: the key-fetch count cannot see a wrong class there", builder)
 		}
+	}
+	if shadowAsked == 0 {
+		errorf("no accept cell made the shadow ask the PDP: the shadow seam is not live, so zero on a wrong cell proves nothing")
 	}
 	if acceptCells[rigA] == 0 || acceptCells[rigB] == 0 {
 		errorf("accept controls: A' %d, B %d: a rig with no control cell is not measured", acceptCells[rigA], acceptCells[rigB])
@@ -583,6 +587,29 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 		rigLines = append(rigLines, "volatile body, compared on status and headers: "+key)
 	}
 	return census, rigLines
+}
+
+// excusedBy is the ledger row that excuses the row's G3 cells: only a row the ledger names by method and route.
+func excusedBy(divergences map[string]string, row wrongclass.Row) (string, bool) {
+	owner, known := divergences[row.Method+" "+row.Route]
+	return owner, known
+}
+
+func TestWrongClassGateQueryAPIExcusalIsExact(t *testing.T) {
+	named := map[string]string{"GET /api/v1/home": "probe (CHAOS-0)"}
+	for _, c := range []struct {
+		row  wrongclass.Row
+		want bool
+	}{
+		{wrongclass.Row{Method: "GET", Route: "/api/v1/home"}, true},
+		{wrongclass.Row{Method: "POST", Route: "/api/v1/home"}, false},
+		{wrongclass.Row{Method: "GET", Route: "/api/v1/home/x"}, false},
+		{wrongclass.Row{Method: "GET", Route: "/api/v1/meta"}, false},
+	} {
+		if _, got := excusedBy(named, c.row); got != c.want {
+			t.Errorf("%s %s: excused %v, want %v", c.row.Method, c.row.Route, got, c.want)
+		}
+	}
 }
 
 func TestWrongClassGateQueryAPI(t *testing.T) {

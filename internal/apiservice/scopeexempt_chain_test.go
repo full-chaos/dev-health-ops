@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
@@ -23,10 +22,6 @@ func TestTheEncodedSlashStripeWebhookIsJudgedAndRefusedOnTheProductionChain(t *t
 	refusals := &refusalLog{}
 	store := memberScopeStore{scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, mountedUser, mountedOrg}
 	auth := mountedTokens.AuthenticatorOver(t, store, slog.New(refusals))
-	verifier, err := edgetoken.New(mountedKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +32,7 @@ func TestTheEncodedSlashStripeWebhookIsJudgedAndRefusedOnTheProductionChain(t *t
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = clickHouse.Close() })
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}
 	server, err := newServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), nil, deps.AuthProxy.ScopeExemptRoutes(),
 		policy.NewScope(auth, quietLogger()).Layers()...)
 	if err != nil {

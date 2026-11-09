@@ -72,7 +72,7 @@ func TestWithASessionIssuerNoRouteAnswersTheSessionsOffRefusal(t *testing.T) {
 }
 
 // The go-api plane of the retired HS256 refresh: with AUTH_PROXY_SESSIONS off, go-api's own /refresh answers a
-// valid go-api refresh JWT (signed with go-api's key) with the sessions-off 503 through the full route (guard,
+// refresh JWT signed with the retired HS256 key with the sessions-off 503 through the full route (guard,
 // body validation, limiter); it verifies nothing and mints nothing.
 func TestSessionsOffRefreshAnswersAValidGoAPIRefreshJWTWith503(t *testing.T) {
 	deps := completeDeps(t)
@@ -85,9 +85,6 @@ func TestSessionsOffRefreshAnswersAValidGoAPIRefreshJWTWith503(t *testing.T) {
 		time.Now(), uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, err := deps.Verifier.VerifyRefresh(token); err != nil {
-		t.Fatalf("the planted token is not a valid go-api refresh JWT: %v", err)
 	}
 	var refresh http.Handler
 	for _, route := range Routes(deps) {

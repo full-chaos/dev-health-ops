@@ -123,27 +123,6 @@ func TestValidateKey(t *testing.T) {
 	}
 }
 
-func TestClaimHelpers(t *testing.T) {
-	for value, want := range map[any]string{"s": "s", float64(5): "5", float64(1.5): "1.5", true: "True", nil: "None"} {
-		if got, err := pyStrClaim(value); err != nil || got != want {
-			t.Errorf("pyStrClaim(%#v) = %q %v", value, got, err)
-		}
-	}
-	if _, err := pyStrClaim(map[string]any{}); err == nil {
-		t.Error("a dict claim must fail")
-	}
-	for _, value := range []any{nil, false, "", float64(0), []any{}, map[string]any{}} {
-		if truthy(value) {
-			t.Errorf("truthy(%#v)", value)
-		}
-	}
-	for _, value := range []any{true, "x", float64(2), []any{1}, map[string]any{"a": 1}} {
-		if !truthy(value) {
-			t.Errorf("!truthy(%#v)", value)
-		}
-	}
-}
-
 // The timing hash costs what login.py's DUMMY_PASSWORD_HASH costs (bcrypt,
 // cost 12) and is one hash for the process, so every login without a usable
 // user hash spends the same bcrypt work.

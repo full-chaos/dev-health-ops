@@ -91,21 +91,6 @@ Roll back in the opposite order. auth-service stops owning users first, so no ow
    Any `true` means the narrowing did not run: STOP, keep the hook Job logs, and do not hand-run a REVOKE. Then clear `narrowAfterFlipBack` and the acknowledgement in the next change.
 5. Do the rollback with `helm upgrade`, not `helm rollback`: `helm rollback` runs no auth hooks.
 
-## SSO accounts across the flip (rehearsal step)
-
-With `AUTH_SSO_JIT` off (the default), phase 4 cannot provision a new OIDC or SAML account: go-api refuses `public.users` writes while users are owned. The phase 4 check is then on accounts that already exist. `authService.ssoJit=true` renders the sign-in join on auth-service at stage `owned` only. `ci/auth_flipback_sso_k3s.sh` rehearses it on k3s, in a namespace the operator owns, in this order:
-
-1. At phase 3, in the rehearsal namespace only, insert the SAML provider row with one `INSERT` through `kubectl exec ... psql` on stdin (go-api serves no provider create route; the integration tests seed the row the same way). The organization is enterprise tier, auto-provisioning is on and `allowed_domains` is set.
-2. At phase 3, sign in with a SAML identity through go-api: go-api writes the user (the SAML user created through go-api at phase 3), with `auth_provider` and `sso_provider_id` set.
-3. U1, the `up-go-api` barrier, the users-backfill, a `users-reconcile` that reads 0, the `up-owned` barrier, U3.
-4. Sign in again with the same identity under owned. It answers 200 as the same account, and no `public.users` row changes.
-5. D1, the `down-auth` barrier, D2 (the flip back 4 to 3 of the Rollback section).
-6. Then sign in through go-api with the same identity. It answers 200 as the same account: no new account, no `identity_conflict`, and the auth schema counts equal those before the flip back.
-
-**The live phase 4 step is read-only first.** Before the 11505 roll, count the SSO providers and the SSO-linked users with `ci/auth_flipback_sso_k3s.sh --print-live-count-sql` (it prints a read-only SQL block for `psql` on stdin; it touches no cluster and no row). If both counts are 0, the SSO flip-back leg is not applicable at 11505: record the two counts and go on. If any exists, the step uses those pre-existing users and creates nothing: no provider row and no user is written on prod, and there is no hand SQL on prod.
-
-The k3s rehearsal is SAML only: go-api refuses an OIDC issuer at a private address, so the OIDC leg stays in the integration tests (the OIDC leg stays in the integration tests of `internal/api/sso`). The case of an account that auth-service provisions through its own sign-in join under owned (`authService.ssoJit=true`, stage `owned`), and then a flip back, is not a step of the run yet. The script holds its JIT values layer, and `--print-plan` checks that the layer renders `AUTH_SSO_JIT` on auth-service only. The proof of the case stays `TestFlipBackSignInFindsAnAccountProvisionedUnderOwned`.
-
 ## If a barrier fails
 
 The script prints one line per failed check on stderr. Fix the cause (a stuck old pod, a stalled rollout) and run the same script again. If the cause is a go-api pod that cannot reach `AUTH_USERS_OWNED=true`, do not run the next step. A script that cannot reach the cluster exits non-zero too: it never reads a failed call as a pass.

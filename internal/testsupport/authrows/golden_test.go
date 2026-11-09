@@ -220,7 +220,7 @@ func TestScriptExportsTheForwardedSetTheTestReads(t *testing.T) {
 		t.Errorf("ci/auth_corpus_external.sh does not declare %q", want)
 	}
 	export := strings.Index(script, "export "+EnvForwarded+"\n")
-	run := strings.Index(script, "go test -trimpath -tags integration")
+	run := strings.Index(script, "go test -c -trimpath -tags integration")
 	if export < 0 || run < 0 || export > run {
 		t.Errorf("the script must export %s before the corpus runs (export at %d, go test at %d)", EnvForwarded, export, run)
 	}

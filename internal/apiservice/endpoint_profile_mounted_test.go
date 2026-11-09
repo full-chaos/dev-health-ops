@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/billing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
@@ -36,9 +34,6 @@ func mountedRoutes(t *testing.T) []mountedRoute {
 	return mountedRoutesWith(t, nil)
 }
 
-// mountedKey is the HS256 key of go-api's own refresh verifier and signer on the mounted routes.
-var mountedKey = strings.Repeat("fixture-key-", 3)
-
 // mountedTokens mints the access tokens the mounted routes verify; mountedUser is a member of mountedOrg.
 var (
 	mountedTokens           = edtokens.Fresh()
@@ -49,11 +44,6 @@ var (
 // Authenticator before the routes are built.
 func mountedRoutesWith(t *testing.T, configure func(*policy.Authenticator)) []mountedRoute {
 	t.Helper()
-	key := mountedKey
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth := mountedTokens.AuthenticatorOver(t, memberScopeStore{scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, mountedUser, mountedOrg}, quietLogger())
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable")
 	if err != nil {
@@ -68,7 +58,7 @@ func mountedRoutesWith(t *testing.T, configure func(*policy.Authenticator)) []mo
 	if configure != nil {
 		configure(auth)
 	}
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, ServiceAccounts: stubAccounts{}}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), ServiceAccounts: stubAccounts{}}
 	var out []mountedRoute
 	for _, route := range Routes(deps, quietLogger()) {
 		out = append(out, mountedRoute{"api", route.Method, route.Pattern, route.Handler})

@@ -19,7 +19,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
@@ -78,10 +77,6 @@ func TestSwitchOrgRefusesTheImpersonatingAdminBearer(t *testing.T) {
 	}
 	for _, state := range states {
 		t.Run(state.name, func(t *testing.T) {
-			verifier, err := edgetoken.New(strings.Repeat("fixture-key-", 3), "dev-health-ops", "dev-health-api")
-			if err != nil {
-				t.Fatal(err)
-			}
 			tokens := edtokens.New(t)
 			store := &endableSessionStore{legacySessionStore: legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}}
 			if state.revoked {
@@ -114,7 +109,7 @@ func TestSwitchOrgRefusesTheImpersonatingAdminBearer(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(pool.Close)
-			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
+			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 				AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 			server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 			if err != nil {
@@ -200,10 +195,6 @@ func TestSwitchOrgRefusesTheImpersonatingEdDSABearer(t *testing.T) {
 				probe.users[probeAdminUser] = admin
 			}
 			store := &eddsaAdminStore{probeStore: probe}
-			verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-			if err != nil {
-				t.Fatal(err)
-			}
 			auth, err := policy.NewAuthenticator(store, quietLogger())
 			if err != nil {
 				t.Fatal(err)
@@ -247,7 +238,7 @@ func TestSwitchOrgRefusesTheImpersonatingEdDSABearer(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(pool.Close)
-			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
+			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 				AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 			server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 			if err != nil {
@@ -323,10 +314,6 @@ func TestSwitchOrgAnswers503WhenACallerReadFails(t *testing.T) {
 	}
 	for name, fail := range cases {
 		t.Run(name, func(t *testing.T) {
-			verifier, err := edgetoken.New(strings.Repeat("fixture-key-", 3), "dev-health-ops", "dev-health-api")
-			if err != nil {
-				t.Fatal(err)
-			}
 			tokens := edtokens.New(t)
 			store := &failingReadStore{legacySessionStore: legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}}
 			fail(store)
@@ -354,7 +341,7 @@ func TestSwitchOrgAnswers503WhenACallerReadFails(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(pool.Close)
-			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
+			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 				AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 			server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 			if err != nil {
@@ -393,10 +380,6 @@ func TestSwitchOrgRetiredHS256Bearer(t *testing.T) {
 	}
 	for _, state := range states {
 		t.Run(state.name, func(t *testing.T) {
-			verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-			if err != nil {
-				t.Fatal(err)
-			}
 			store := &endableSessionStore{legacySessionStore: legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}}
 			auth := edtokens.New(t).AuthenticatorOver(t, store, quietLogger())
 			rows, err := goAPIScopeRows()
@@ -425,7 +408,7 @@ func TestSwitchOrgRetiredHS256Bearer(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(pool.Close)
-			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
+			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 				AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 			server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 			if err != nil {

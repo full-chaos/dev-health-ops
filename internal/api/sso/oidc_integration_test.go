@@ -147,10 +147,8 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 		Pool: pool, Guard: guard, Logger: logger, Now: clock.now,
 		// No Cipher: decryptProviderSecret's own legacy-plaintext fallback
 		// (oidc.go) covers a test provider's un-encrypted stored
-		// client_secret without one. StateSecret is the production
-		// wiring's actual secret (deps.GitHubStateSigner.Secret, itself
-		// cfg.APIJWTSecret.Reveal()): reusing testJWTKey here mirrors that
-		// exactly, rather than a second, differently-named test constant.
+		// client_secret without one. StateSecret is any fixed test key
+		// (production wires SSO_STATE_SECRET).
 		StateSecret: testJWTKey,
 		// The production default (defaultOIDCClient, oidc.go) dials over
 		// externalurl.GuardedTransport(), which -- correctly -- refuses a

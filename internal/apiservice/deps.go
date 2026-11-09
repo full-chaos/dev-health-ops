@@ -24,7 +24,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing/processlicense"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
@@ -119,10 +118,6 @@ type Deps struct {
 	// Guard to wrap a handler with its authorization level.
 	Auth  *policy.Authenticator
 	Guard *policy.Guard
-	// Verifier is the access/refresh token key (JWT_SECRET_KEY),
-	// nil without a pool: the session routes (internal/api/session) verify
-	// with it.
-	Verifier *edgetoken.Verifier
 	// AccessVerify is the profile-routed access-token validator; nil when
 	// AUTH_ACCESS_TOKEN_ISSUER is unset. When set, Auth routes through it.
 	AccessVerify *accessverify.Validator

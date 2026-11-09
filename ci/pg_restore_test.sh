@@ -92,7 +92,7 @@ dho_upgrade() {
 # The relations, columns and indexes of the non-system schemas, one normalised line each.
 schema_lines() {
   local db="$1" sys="n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\_%'"
-  psqlx -d "${db}" -c "SELECT 'relation ' || c.relkind || ' ' || n.nspname || '.' || c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r','p','v','m','S') AND ${sys}" &&
+  psqlx -d "${db}" -c "SELECT 'relation ' || c.relkind::text || ' ' || n.nspname || '.' || c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r','p','v','m','S') AND ${sys}" &&
     psqlx -d "${db}" -c "SELECT 'column ' || n.nspname || '.' || c.relname || '.' || a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE a.attnum > 0 AND NOT a.attisdropped AND c.relkind IN ('r','p','v','m') AND ${sys}" &&
     psqlx -d "${db}" -c "SELECT 'index ' || schemaname || '.' || indexname || ' ' || indexdef FROM pg_indexes n WHERE n.schemaname NOT IN ('pg_catalog','information_schema') AND n.schemaname NOT LIKE 'pg\_%'"
 }

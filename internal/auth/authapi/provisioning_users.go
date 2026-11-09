@@ -361,35 +361,25 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 		grantIt := *superuser
 		superuserWrite = func(ctx context.Context, tx audit.TxOps) error {
 			if grantIt {
-				_, err := h.PlatformRoles.GrantOn(ctx, tx, platformrole.GrantInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin})
+				_, err := h.PlatformRoles.GrantOn(ctx, tx, platformrole.GrantInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin,
+					AllowDisabledTarget: true})
 				return err
 			}
 			return h.PlatformRoles.RevokeOn(ctx, tx, platformrole.RevokeInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin})
 		}
 	}
-	switch {
-	case decided.Empty() && !roleChange:
-		h.rec.record(ctx, opUsersUpdate, "success", reasonAccepted, nil)
-		writeJSON(w, http.StatusOK, usersChangeAnswer{PrincipalID: target.String()})
-		return
-	case decided.Empty():
-		if *superuser {
-			_, err = h.PlatformRoles.Grant(ctx, platformrole.GrantInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin})
-		} else {
-			err = h.PlatformRoles.Revoke(ctx, platformrole.RevokeInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin})
-		}
-	default:
-		err = h.UsersAdmin.AdminUpdateUser(ctx, identity.AdminUpdateRequest{Principal: target, Email: email, Verified: verified,
-			Username: username, FullName: fullName, AvatarURL: avatarURL, Actor: actor,
-			RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, grantRequested, &target),
-			Superuser: superuserWrite}, cur)
-	}
+	// Every PATCH, a no-op and a platform role change only included, is one AdminUpdateUser: one lock order, and
+	// public.users.updated_at moves as go-api's PATCH moves it (pm D6915).
+	err = h.UsersAdmin.AdminUpdateUser(ctx, identity.AdminUpdateRequest{Principal: target, Email: email, Verified: verified,
+		Username: username, FullName: fullName, AvatarURL: avatarURL, Actor: actor,
+		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, grantRequested, &target),
+		Superuser: superuserWrite}, cur)
 	if err != nil {
 		h.answerUsersError(w, r, opUsersUpdate, err)
 		return
 	}
 	h.rec.record(ctx, opUsersUpdate, "success", reasonAccepted, nil)
-	writeJSON(w, http.StatusOK, usersChangeAnswer{PrincipalID: target.String(), Changed: true})
+	writeJSON(w, http.StatusOK, usersChangeAnswer{PrincipalID: target.String(), Changed: !decided.Empty() || roleChange})
 }
 
 // optionalBoolPointer reads an absent or null member as nil, else a JSON boolean.

@@ -89,6 +89,20 @@ type GrantInput struct {
 	Role      string
 	// ExpiresAt is nil for a permanent assignment.
 	ExpiresAt *time.Time
+	// AllowDisabledTarget lets the grant land on a disabled user principal, as go-api's admin user writes do (pm D6914):
+	// the assignment is stored and gives nothing while the principal is disabled (the active rule reads disabled_at).
+	AllowDisabledTarget bool
+}
+
+// grantTargetRefusal is the target check of a grant: a user principal, enabled unless the grant allows a disabled one.
+func grantTargetRefusal(kind string, enabled, allowDisabled bool) error {
+	switch {
+	case kind != "user":
+		return ErrNotHumanUser
+	case !enabled && !allowDisabled:
+		return ErrPrincipalOff
+	}
+	return nil
 }
 
 // RevokeInput is one revoke. Actor must hold GrantAction now.
@@ -195,10 +209,9 @@ func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 				return ErrPrincipalMissing
 			case err != nil:
 				return err
-			case kind != "user":
-				return ErrNotHumanUser
-			case !enabled:
-				return ErrPrincipalOff
+			}
+			if err := grantTargetRefusal(kind, enabled, in.AllowDisabledTarget); err != nil {
+				return err
 			}
 			if in.ExpiresAt != nil {
 				var future bool

@@ -120,6 +120,8 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminUpdate", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminUpdate", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminUpdate", Table: "public.users", Verb: "UPDATE"},
+	// acp accept of PLAN-13376-delta-v4 (pm D6915): an admin PATCH with no field change bumps public.users.updated_at.
+	{File: "internal/auth/identity/adminusers.go", Func: "touchPublicUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.SetEmailVerifiedWith", Table: "auth.users", Verb: "UPDATE"},

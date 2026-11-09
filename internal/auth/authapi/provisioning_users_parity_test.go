@@ -41,3 +41,16 @@ func TestUsersUpdateNoOpAndRoleOnlyGoThroughAdminUpdate(t *testing.T) {
 	}
 }
 
+// The update's platform role grant asks to land on a disabled principal, as go-api's admin update grants is_superuser
+// to an inactive user (pm D6914).
+func TestUsersUpdateGrantAllowsADisabledTarget(t *testing.T) {
+	t.Parallel()
+	f := newUsersAdminFixture(t)
+	body := map[string]any{"actor_principal_id": f.super.String(), "principal_id": f.target.String(), "is_superuser": true}
+	if response := f.post(usersUpdatePath, encode(body), nil); response.Code != http.StatusOK {
+		t.Fatalf("role-only update: %d %s", response.Code, response.Body)
+	}
+	if len(f.roles.grantInputs) != 1 || !f.roles.grantInputs[0].AllowDisabledTarget {
+		t.Fatalf("grant inputs %+v, want one with AllowDisabledTarget", f.roles.grantInputs)
+	}
+}

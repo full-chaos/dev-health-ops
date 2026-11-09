@@ -33,9 +33,10 @@ goApi:
   sessionIssue:
     secretName: ""
     secretKey: AUTH_SESSION_ISSUE_TOKEN
-    # -- Optional, absent by default. "workload" (the only value): go-api presents its workload token on the session issue route and
+    # -- Optional, absent by default. "workload" (the only mode; "" = absent): go-api presents its workload token on the session issue route and
     #    reads no AUTH_SESSION_ISSUE_TOKEN. The chart renders AUTH_SESSION_ISSUE_CREDENTIAL=workload, renders no token reference, and
     #    ignores secretName and secretKey. goApi.extraEnv cannot set AUTH_SESSION_ISSUE_CREDENTIAL while this is set. Absent = the token reference.
+    #    "" = absent (CHAOS-13467): a venue that layers values.prod.yaml sets credential: "" to keep the token reference.
     # credential: workload
     # -- CHAOS-13039: go-api presents its workload token on the session issue route instead of AUTH_SESSION_ISSUE_TOKEN. Off by
     #    default, and off renders nothing. On (sessions on, authService.accessToken.issuerURL set, secretName set) the chart renders

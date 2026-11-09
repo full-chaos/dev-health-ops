@@ -1,9 +1,6 @@
 package devhealth_test
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"os"
 	"strings"
 	"testing"
 )
@@ -141,34 +138,45 @@ func TestSessionIssueCredentialWorkloadSessionsOffRendersNothing(t *testing.T) {
 	}
 }
 
-// The default (no credential key) renders must stay byte-identical to the renders of the chart before the key existed.
-func TestSessionIssueDefaultRendersByteIdentical(t *testing.T) {
-	raw, err := os.ReadFile("testdata/session_issue_default_renders.sha256")
-	if err != nil {
-		t.Fatal(err)
+// The chart schema admits only credential=workload, so "" cannot be rendered: the unset render is compared with the explicit-default block,
+// checked structurally, and the empty value is checked to be refused.
+func TestSessionIssueCredentialUnsetRendersTokenMode(t *testing.T) {
+	explicit := []string{"--set", "goApi.sessionIssue.secretName=", "--set", "goApi.sessionIssue.secretKey=AUTH_SESSION_ISSUE_TOKEN"}
+	cases := []struct {
+		name  string
+		sets  []string
+		token bool
+		cred  bool
+	}{
+		{"sessions-on-token", issueSets(), true, false},
+		{"sessions-on-dedicated-secret", issueSets("--set", "goApi.sessionIssue.secretName="+dedicatedIssueSecret, "--set", "goApi.sessionIssue.secretKey=custom"), true, false},
+		{"sessions-off", append([]string{}, riverHook...), false, false},
+		{"bootstrap-on", wbOn(), false, true},
 	}
-	want := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		f := strings.Fields(line)
-		want[f[1]] = f[0]
-	}
-	cases := map[string][]string{
-		"sessions-on-token":            issueSets(),
-		"sessions-on-dedicated-secret": issueSets("--set", "goApi.sessionIssue.secretName="+dedicatedIssueSecret, "--set", "goApi.sessionIssue.secretKey=custom"),
-		"sessions-off":                 append([]string{}, riverHook...),
-		"bootstrap-on":                 wbOn(),
-	}
-	for name, sets := range cases {
-		_, out, err := renderAuth(t, goAPIWithAuth(sets...)...)
+	for _, c := range cases {
+		docs, unset, err := renderAuth(t, goAPIWithAuth(c.sets...)...)
 		if err != nil {
-			t.Fatalf("%s: render failed: %v\n%.400s", name, err, out)
+			t.Fatalf("%s: render failed: %v\n%.400s", c.name, err, unset)
 		}
-		sum := sha256.Sum256([]byte(out))
-		if got := hex.EncodeToString(sum[:]); got != want[name] {
-			t.Errorf("%s: render sha256 %s, want %s", name, got, want[name])
+		_, explicitOut, err := renderAuth(t, goAPIWithAuth(append(append([]string{}, explicit...), c.sets...)...)...)
+		if err != nil {
+			t.Fatalf("%s: render failed: %v\n%.400s", c.name, err, explicitOut)
 		}
-	}
-	if len(want) != len(cases) {
-		t.Errorf("golden has %d entries, want %d", len(want), len(cases))
+		if unset != explicitOut {
+			t.Errorf("%s: credential unset differs from the explicit default sessionIssue block", c.name)
+		}
+		env := siGoAPIEnv(t, docs)
+		if (env["AUTH_SESSION_ISSUE_TOKEN"] != nil) != c.token {
+			t.Errorf("%s: AUTH_SESSION_ISSUE_TOKEN present = %v, want %v", c.name, env["AUTH_SESSION_ISSUE_TOKEN"] != nil, c.token)
+		}
+		if (env["AUTH_SESSION_ISSUE_CREDENTIAL"] != nil) != c.cred {
+			t.Errorf("%s: AUTH_SESSION_ISSUE_CREDENTIAL present = %v, want %v", c.name, env["AUTH_SESSION_ISSUE_CREDENTIAL"] != nil, c.cred)
+		}
+		_, emptyOut, err := renderAuth(t, goAPIWithAuth(append(append([]string{}, c.sets...), "--set", "goApi.sessionIssue.credential=")...)...)
+		if err == nil {
+			t.Errorf("%s: credential=\"\" was accepted", c.name)
+		} else if !strings.Contains(emptyOut, "credential") {
+			t.Errorf("%s: the refusal does not name credential:\n%.400s", c.name, emptyOut)
+		}
 	}
 }

@@ -246,6 +246,20 @@ ticket. It excuses the 4xx rule on the rows that it names, and nothing else.
 When a named row no longer diverges, the gate fails until the ledger row is
 removed.
 
+`TestWrongClassGateAuthService` (`internal/auth/authruntime/wrong_class_gate_test.go`)
+does the same for every auth-service row, on the API, operator and internal
+listeners. The API and internal listeners are built with the route builders
+that `configureWithRoutes` calls, in its order, with in-memory rate-limit
+counters; `TestWrongClassGateAuthServiceRigMatchesConfigure` fails when the
+routes or the calls differ from the production build. The store is a listener
+that counts each connection. A wrong class must cause no store connection and
+no key-set read that a garbage credential does not cause, and none at all on a
+protected row. auth-service builds no shadow:
+`TestWrongClassGateAuthServiceHasNoShadow` fails when a package of the build
+other than `internal/api/policy` uses a policy shadow. Its ledger rows say
+which rule they excuse (the 4xx rule, or the 4xx rule and the protected-row
+read rule) on the rows that they name.
+
 ## `delegated_bearer`
 
 An auth-service row that `authenticateWith` gates has `delegated_bearer`:

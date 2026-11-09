@@ -941,7 +941,7 @@ func TestCheckGoDiscoversEveryTestName(t *testing.T) {
 
 // ---- authhistory vet positive control ---------------------------------------------------------------------------
 
-const authHistoryBroken = "//go:build authhistory\n\npackage scratchpkg\n\nfunc Broken() int {\n\treturn \"not an int\"\n}\n"
+const authHistoryBroken = "//go:build authhistory\n\npackage zpkg\n\nfunc Broken() int {\n\treturn \"not an int\"\n}\n"
 
 func authHistoryFixture(t *testing.T, tagged bool) (root string, vet func() cmdResult) {
 	t.Helper()
@@ -950,6 +950,7 @@ func authHistoryFixture(t *testing.T, tagged bool) (root string, vet func() cmdR
 		"go.mod":            "module scratchmod\n\ngo 1.27\n",
 		"scratchpkg/ok.go":  "package scratchpkg\n",
 		"scratchpkg/sub.go": "package scratchpkg\n",
+		"zpkg/ok.go":        "package zpkg\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {
 			t.Fatal(err)
@@ -967,7 +968,10 @@ func authHistoryFixture(t *testing.T, tagged bool) (root string, vet func() cmdR
 		}
 	}
 	if tagged {
-		if err := os.WriteFile(filepath.Join(root, "scratchpkg", "history_test.go"), []byte(authHistoryBroken), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, "scratchpkg", "a_history_test.go"), []byte("//go:build authhistory\n\npackage scratchpkg\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "zpkg", "history_test.go"), []byte(authHistoryBroken), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -983,7 +987,7 @@ func authHistoryFixture(t *testing.T, tagged bool) (root string, vet func() cmdR
 func TestAuthHistoryVetCatchesABrokenTaggedFile(t *testing.T) {
 	t.Parallel()
 	root, vet := authHistoryFixture(t, true)
-	fixture := filepath.Join(root, "scratchpkg", "history_test.go")
+	fixture := filepath.Join(root, "zpkg", "history_test.go")
 
 	broken := vet()
 	if broken.code == 0 {

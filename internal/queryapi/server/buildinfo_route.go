@@ -115,7 +115,7 @@ const (
 type buildInfoResponse = version.Info
 
 // newBuildInfoHandler serves GET /buildinfo behind the internal identity
-// headers, the envelope, or a platform admin's user access token
+// headers or a platform admin's user access token
 // (authenticateBuildInfo). edgeAuth/edgeStore are /query's edge carrier;
 // nil serves no user access token.
 //

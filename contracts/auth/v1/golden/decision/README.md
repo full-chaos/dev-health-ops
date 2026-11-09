@@ -72,9 +72,11 @@ sorted by relative path (slash form, byte order). For each file the hashed bytes
   `repository_allowlist`. A principal that reads every repository of the organization (no grant row of any state, or a live wildcard grant)
   has `repository_scope: organization` and no allowlist. Otherwise `repository_allowlist` is present; `[]` means none and is never left out.
   The string `*` never appears in an emitted allowlist, and a repository request for `*` is refused with `invalid_request`.
-- A repository-kind allow carries `[request key]`. An organization-scope filtered allow carries the keys of the principal's live grants whose
-  role holds the action, sorted and unique, at most 256; one more is the deny `repository_allowlist_too_large`.
-  Catalog version 17 holds no filtered organization action (product rule 2: `metrics.read`, `analytics.read`, `analytics.export`, `git.read` and
-  `work_items.read` are org-wide for every active member), so no vector reaches that deny; the runner leaves that one reason out of its coverage rule.
+- A repository-kind allow carries `[request key]` when it comes from exact grants and `repository_scope: organization` when it is org-wide in
+  fact (the membership default, a live wildcard grant); a delegated repository allow always carries `[request key]`. An organization-scope
+  filtered allow carries the keys of the principal's live grants whose role holds the action, sorted and unique, at most 256; one more is the deny
+  `repository_allowlist_too_large`. Catalog version 18 holds one filtered organization action, `acr.credential.issue` (device approval and consent
+  take their repository scopes from it); `metrics.read`, `analytics.read`, `analytics.export`, `git.read` and `work_items.read` are org-wide for every
+  active member (product rule 2). No vector reaches that deny; the runner leaves that one reason out of its coverage rule.
 - The rule equals `evaluateRepository`: a key is in the allowlist exactly when the repository decision of the same principal, action and key
   allows it. One row of any state ends the membership default, for an owner too.

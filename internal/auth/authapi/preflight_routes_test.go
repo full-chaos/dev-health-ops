@@ -50,7 +50,7 @@ func compatWrites(f *compatFixture) int {
 	projected := len(f.projector.userCalls) + len(f.projector.orgCalls)
 	f.projector.mu.Unlock()
 	f.sessions.mu.Lock()
-	sessions := len(f.sessions.created) + len(f.sessions.revoked) + len(f.sessions.revokedLegacy) + f.sessions.exchanges
+	sessions := len(f.sessions.created) + len(f.sessions.revoked) + f.sessions.exchanges
 	f.sessions.mu.Unlock()
 	return f.attempts.failures + len(f.loginUsers.projected) + len(f.appended) + projected + sessions
 }

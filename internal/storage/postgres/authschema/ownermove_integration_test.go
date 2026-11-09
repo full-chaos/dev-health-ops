@@ -167,7 +167,7 @@ func newOwnerMoveEnv(t *testing.T, ctx context.Context, kinds bool) *ownerMoveEn
 	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain); err != nil {
 		t.Fatalf("apply the ops schema: %v", err)
 	}
-	owned := []string{LegacyRefreshTokenGrant().Table, "email_verification_tokens", "password_reset_tokens", publicAuditTable, "memberships"}
+	owned := []string{retiredRefreshTokensTable, "email_verification_tokens", "password_reset_tokens", publicAuditTable, "memberships"}
 	for table := range publicReadOracle {
 		owned = append(owned, table)
 	}

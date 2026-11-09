@@ -290,6 +290,12 @@ func validJWKSKeyID(value string) bool {
 // devhealth_query_api_envelope_verify_total counter, unchanged by this
 // ticket.
 func (v *Verifier) Verify(ctx context.Context, tokenString string) (*Claims, error) {
+	// A nil *Verifier is a process with no envelope key: it refuses every
+	// token, counted as outcome "not_configured", and logs nothing per request.
+	if v == nil {
+		recordVerifyOutcome("not_configured")
+		return nil, errNotConfigured
+	}
 	claims := &Claims{}
 	meta := requestMetaFrom(ctx)
 

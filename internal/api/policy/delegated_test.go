@@ -210,6 +210,8 @@ var bearerReaders = map[string]bool{"Authenticate": true, "AuthenticateLegacy": 
 var namedBearerReaders = map[string]bool{
 	"internal/api/policy/guard.go:Guard.currentUser":  true,
 	"internal/api/policy/guard.go:Guard.optionalUser": true,
+	// switch-org under AUTH_PROXY_SESSIONS skips the scope: reads the bearer (the route row's classes) only to refuse an impersonating admin; it never serves a handler for it.
+	"internal/api/policy/guard.go:Guard.RefuseImpersonatingCaller": true,
 	// The shadow PDP's observation, after currentUser (and its deny) admitted the caller; it never changes the answer.
 	"internal/api/policy/guard.go:Guard.wrap":                           true,
 	"internal/api/policy/principal.go:Authenticator.Authenticate":       true,

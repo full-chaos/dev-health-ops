@@ -12,6 +12,14 @@ import (
 
 const handoffConsumeRoute = "/api/v1/admin/impersonate/handoff/consume"
 
+// statusPatternVariants are route templates that are not the status route's.
+var statusPatternVariants = []string{
+	"HEAD /api/v1/admin/impersonate/status",
+	"POST /api/v1/admin/impersonate/status",
+	"GET /api/v1/admin/impersonate/status/",
+	"GET /api/v1/admin/impersonate/statusx",
+}
+
 // handoffConsumePatternVariants are route templates that are not the consume route's.
 var handoffConsumePatternVariants = []string{
 	"POST /api/v1/admin/impersonate/handoff/consume/",
@@ -25,9 +33,9 @@ var handoffConsumePatternVariants = []string{
 	"DELETE /api/v1/admin/impersonate/handoff/consume",
 }
 
-func TestTheLiveRowExemptSetIsTheStopAndTheHandoffConsume(t *testing.T) {
+func TestTheLiveRowExemptSetIsStatusStopAndTheHandoffConsume(t *testing.T) {
 	got := slices.Sorted(maps.Keys(liveRowExemptPatterns))
-	want := []string{ImpersonationHandoffConsumePattern, stopImpersonationPattern}
+	want := []string{statusImpersonationPattern, ImpersonationHandoffConsumePattern, stopImpersonationPattern}
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Fatalf("live-row exempt set %v, want %v", got, want)
@@ -40,7 +48,7 @@ func TestTheLiveRowExemptSetIsTheStopAndTheHandoffConsume(t *testing.T) {
 			t.Fatalf("%q is in the set but not exempt", pattern)
 		}
 	}
-	for _, v := range append(slices.Clone(handoffConsumePatternVariants), stopPatternVariants...) {
+	for _, v := range append(append(slices.Clone(handoffConsumePatternVariants), stopPatternVariants...), statusPatternVariants...) {
 		if liveRowExempt(v) {
 			t.Fatalf("variant %q is exempt", v)
 		}

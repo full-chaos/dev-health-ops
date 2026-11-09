@@ -126,8 +126,12 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 		orgStatus := s.OrganizationStatus(r.OrganizationID)
 		if (orgStatus == StatusActive || orgStatus == StatusSuspended || orgStatus == StatusUnknown) && act.PlatformAdmin &&
 			e.cat.Allows(s.PlatformRole(), platformAdminAction) {
-			return Decision{Allowed: true, Reason: ReasonAllowedByPlatformAdmin, PolicyRevision: rev,
-				Obligations: &Obligations{TenantScope: r.OrganizationID}}
+			o := &Obligations{TenantScope: r.OrganizationID}
+			// A filtered action's allow names the repositories it covers; a platform admin reads them org-wide.
+			if act.RepositoryScope == policycatalog.RepositoryScopeFiltered {
+				o.RepositoryScope = RepositoryScopeOrganization
+			}
+			return Decision{Allowed: true, Reason: ReasonAllowedByPlatformAdmin, PolicyRevision: rev, Obligations: o}
 		}
 		if orgStatus != StatusActive {
 			return deny(ReasonOrganizationInactive)

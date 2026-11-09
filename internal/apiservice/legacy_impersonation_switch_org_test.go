@@ -376,3 +376,85 @@ func TestSwitchOrgAnswers503WhenACallerReadFails(t *testing.T) {
 		})
 	}
 }
+
+// TestSwitchOrgRetiredHS256Bearer pins main's answer to the admin's retired
+// HS256 access token beside a live impersonation row: go-api verifies no
+// HS256 token, so with the sessions flag on switch-org forwards it unread
+// once and the caller gets auth-service's answer; with the flag off go-api's
+// own route answers 401 and nothing is forwarded.
+func TestSwitchOrgRetiredHS256Bearer(t *testing.T) {
+	states := []struct {
+		name                 string
+		sessions, impersonat bool
+	}{
+		{"sessions on, impersonation on", true, true},
+		{"sessions on, impersonation off", true, false},
+		{"sessions off", false, false},
+	}
+	for _, state := range states {
+		t.Run(state.name, func(t *testing.T) {
+			verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &endableSessionStore{legacySessionStore: legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}}
+			auth := edtokens.New(t).AuthenticatorOver(t, store, quietLogger())
+			rows, err := goAPIScopeRows()
+			if err != nil {
+				t.Fatal(err)
+			}
+			stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTeapot)
+				_, _ = w.Write([]byte(ownerUpstreamBody))
+			})
+			upstream, _ := url.Parse(stub.URL)
+			proxy := AuthProxyConfig{Upstream: upstream, Impersonation: state.impersonat}
+			if state.sessions {
+				proxy.On = map[AuthAggregate]bool{AuthSessions: true}
+			}
+			protected, err := newProtection(apiTestConfig(), nil, false, proxy, quietLogger())
+			if err != nil {
+				t.Fatal(err)
+			}
+			scope := policy.NewScope(auth, quietLogger())
+			scope.DeclaredRows(rows)
+			scope.RefuseLegacyImpersonation(protected.scope.RefusesLegacyImpersonation())
+			pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable&connect_timeout=1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
+				AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
+			server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bearer := probeHS256(t, probeKey, map[string]any{"sub": store.admin.String(), "org_id": uuid.NewString(), "role": "member", "is_superuser": true, "tv": 1})
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/switch-org", strings.NewReader(switchOrgBody))
+			request.RemoteAddr = "192.0.2.10:4711"
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer "+bearer)
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			seen := stub.requests()
+			if state.sessions {
+				if recorder.Code != http.StatusTeapot || recorder.Body.String() != ownerUpstreamBody {
+					t.Errorf("sessions on: %d %s, want auth-service's 418", recorder.Code, recorder.Body.String())
+				}
+				if len(seen) != 1 || seen[0].header.Get("Authorization") != "Bearer "+bearer {
+					t.Errorf("sessions on: auth-service saw %d calls, want 1 carrying the bearer unchanged", len(seen))
+				}
+			} else {
+				if recorder.Code != http.StatusUnauthorized || strings.TrimSpace(recorder.Body.String()) != genericRefusal {
+					t.Errorf("sessions off: %d %s, want 401 %s", recorder.Code, recorder.Body.String(), genericRefusal)
+				}
+				if len(seen) != 0 {
+					t.Errorf("sessions off: auth-service saw %d calls, want 0", len(seen))
+				}
+			}
+			t.Logf("%s: %d %s", state.name, recorder.Code, strings.TrimSpace(recorder.Body.String()))
+		})
+	}
+}

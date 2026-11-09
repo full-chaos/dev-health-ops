@@ -1389,6 +1389,56 @@ groups:
             docs/operate/runbooks/auth-pdp-outage-and-rollback.md#query-api.
 
   # ---------------------------------------------------------------------------
+  # Nightly pg_dump of the bundled PostgreSQL (CHAOS-13373; chart value
+  # postgresql.backup.enabled, CronJob <fullname>-postgresql-backup). The series
+  # come from the collector's k8s_cluster receiver, which writes dotted names
+  # only (k8s.job.failed_pods, k8s.job.successful_pods, label k8s.job.name), so
+  # the rules select them by __name__. A finished Job is deleted
+  # postgresql.backup.ttlSecondsAfterFinished (43200 s) after it ends, so the
+  # successful_pods series of a good run lasts 12h and the stale window is
+  # 25h - 12h = 13h. Import both only where the CronJob is on: the stale rule
+  # fires wherever no backup Job runs. Created in SigNoz by hand as builder
+  # threshold rules (PromQL does not evaluate there), named
+  # prod-pg-backup-failed and prod-pg-backup-stale, channel accounts-email:
+  # docs/operate/maintain/backup-and-restore.md.
+  # ---------------------------------------------------------------------------
+  - name: postgres_backup
+    interval: 5m
+    rules:
+      - alert: PostgresBackupFailed
+        expr: |
+          max(max_over_time({__name__="k8s.job.failed_pods", "k8s.job.name"=~".+-postgresql-backup-.+"}[1h])) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "The nightly Postgres backup Job failed"
+          description: |
+            A <release>-postgresql-backup Job had a failed pod in the last hour:
+            pg_dump, the pg_restore --list check, the sha256 file or the rename
+            failed, or the Job ran past its 1h deadline. No new dump was kept;
+            the older dumps are not pruned. Next: the pod log (it is deleted
+            12h after the Job ends) and "Prod Postgres from the nightly dump" in
+            docs/operate/maintain/backup-and-restore.md.
+
+      # 43200 s ttlSecondsAfterFinished + 13h window = 25h since the last good dump; change both together
+      - alert: PostgresBackupStale
+        expr: |
+          (max(max_over_time({__name__="k8s.job.successful_pods", "k8s.job.name"=~".+-postgresql-backup-.+"}[13h])) or vector(0)) < 1
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "No good nightly Postgres backup for 25 hours"
+          description: |
+            No <release>-postgresql-backup Job succeeded in the last 25 hours
+            (a good Job's series lasts 12h, the window is 13h): the CronJob did
+            not run, was suspended, or every run failed. The newest dump on the
+            PVC is older than a day. Next: the CronJob and its Jobs, then "Prod
+            Postgres from the nightly dump" in
+            docs/operate/maintain/backup-and-restore.md.
+
+  # ---------------------------------------------------------------------------
   # In-chart Valkey (rate-limit counters, ingest streams). The series come from
   # the collector's redis receiver, which writes dotted names only
   # (redis.keys.evicted, redis.memory.used), so the rules select them by

@@ -282,6 +282,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgState:           deps.OrgState,
 			Delegator:          deps.Delegator,
 			ServiceAccountKeys: deps.ServiceAccountKeys,
+			ServiceAccounts:    deps.ServiceAccounts,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -461,6 +462,9 @@ func configureWith(
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	deps.ServiceAccountKeys, err = serviceAccountKeys(authProxy, provisioningCred)
+	if err == nil {
+		deps.ServiceAccounts, err = serviceAccounts(authProxy, provisioningCred)
+	}
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_service_account_keys", "api_service_account_keys_config_invalid", err)

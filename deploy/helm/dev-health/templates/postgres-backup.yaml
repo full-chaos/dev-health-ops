@@ -99,7 +99,8 @@ spec:
                   value: "30"
                 - name: BACKUP_KEEP
                   value: {{ int $b.keep | quote }}
-              # Every step must succeed or the Job fails (set -e): a dump that is
+              # Every step must succeed or the Job fails (set -e; no pipeline, so no
+              # step's failure is hidden): a dump that is
               # not complete and readable never gets the .dump name, and old
               # dumps are pruned only after a good one is in place.
               command:
@@ -113,15 +114,21 @@ spec:
                   part="$ts.dump.partial"
                   pg_dump --format=custom --file="$part"
                   pg_restore --list "$part" >/dev/null
-                  sum=$(sha256sum "$part" | cut -d ' ' -f 1)
+                  sha256sum "$part" > /tmp/sum
+                  read -r sum _ < /tmp/sum
+                  [ "${#sum}" -eq 64 ]
                   printf '%s  %s\n' "$sum" "$ts.dump" > "$ts.dump.sha256"
                   mv -- "$part" "$ts.dump"
-                  bytes=$(wc -c < "$ts.dump" | tr -d ' ')
-                  echo "pg-backup ok file=$ts.dump bytes=$bytes sha256=$(printf '%s' "$sum" | cut -c 1-12)"
-                  find . -maxdepth 1 -name '*.dump' | sort -r | tail -n "+$((BACKUP_KEEP + 1))" | while read -r old; do
+                  bytes=$(stat -c %s "$ts.dump")
+                  short=${sum%"${sum#????????????}"}
+                  echo "pg-backup ok file=$ts.dump bytes=$bytes sha256=$short"
+                  find . -maxdepth 1 -name '*.dump' > /tmp/dumps
+                  sort -r /tmp/dumps > /tmp/dumps.sorted
+                  tail -n "+$((BACKUP_KEEP + 1))" /tmp/dumps.sorted > /tmp/prune
+                  while read -r old; do
                     rm -f -- "$old" "$old.sha256"
                     echo "pg-backup pruned file=${old#./}"
-                  done
+                  done < /tmp/prune
                   find . -maxdepth 1 -name '*.partial' -mtime +0 -exec rm -f -- {} \;
               resources:
                 {{- toYaml $b.resources | nindent 16 }}

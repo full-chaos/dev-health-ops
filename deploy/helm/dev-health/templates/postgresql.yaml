@@ -80,7 +80,7 @@ spec:
             - name: POSTGRES_USER
               value: {{ .Values.postgresql.credentials.user | quote }}
             - name: POSTGRES_PASSWORD
-              {{- if or $existing.name .Values.postgresql.credentialsSecret.enabled }}
+              {{- if or $existing.name .Values.postgresql.credentialsSecret.enabled .Values.postgresql.backup.enabled }}
               valueFrom:
                 secretKeyRef:
                   {{- include "dev-health.postgresqlPasswordSecretKeyRef" . | nindent 18 }}

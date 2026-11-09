@@ -108,12 +108,23 @@ func TestPostgresBackupNeedsTheBundledPostgres(t *testing.T) {
 }
 
 // On: the switch adds exactly the CronJob and the PVC; no other document changes.
+// With the password already in a Secret (credentialsSecret.enabled or an existing Secret), the backup adds only the
+// CronJob and the PVC. With the plain-value mode (credentialsSecret.enabled=false) it also moves the StatefulSet's
+// POSTGRES_PASSWORD onto the chart Secret, which holds the same value, so both read one reference.
 func TestPostgresBackupAddsOnlyTheCronJobAndThePVC(t *testing.T) {
 	requireHelmUnderCI(t)
-	got := changedDocs(t, pgCredsOff, pgBackupOn)
-	want := []string{"CronJob/" + pgBackupCronJob, "PersistentVolumeClaim/" + pgBackupPVC}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("documents changed by postgresql.backup.enabled=true = %v, want %v", got, want)
+	only := []string{"CronJob/" + pgBackupCronJob, "PersistentVolumeClaim/" + pgBackupPVC}
+	for name, c := range map[string]struct{ off, on []string }{
+		"knob on":  {pgCredsOn, pgBackupKnobOn},
+		"existing": {pgExistingOff, pgBackupExisting},
+	} {
+		if got := changedDocs(t, c.off, c.on); !reflect.DeepEqual(got, only) {
+			t.Errorf("%s: documents changed by postgresql.backup.enabled=true = %v, want %v", name, got, only)
+		}
+	}
+	plain := append(append([]string{}, only...), "StatefulSet/a-dev-health-postgresql")
+	if got := changedDocs(t, pgCredsOff, pgBackupOn); !reflect.DeepEqual(got, plain) {
+		t.Errorf("knob off: documents changed by postgresql.backup.enabled=true = %v, want %v", got, plain)
 	}
 }
 

@@ -829,10 +829,9 @@ var billingActionRows = map[string]string{
 }
 
 // The billing rows no catalog role set fits: superuser-only handlers (org-scoped rows, which the shape test forbids a
-// platform action), the anonymous plan reads and the routes every organization role may call. They keep action null with a gap that says why.
+// platform action) and the routes every organization role may call. They keep action null with a gap that says why.
+// The anonymous plan reads are public rows, not covered here; apiservice's shadow-row cell holds their action null.
 var billingNullRows = []string{
-	"GET /api/v1/billing/plans [dev-health-ops-api @api]",
-	"GET /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",
 	"POST /api/v1/billing/plans [dev-health-ops-api @api]",
 	"PUT /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",
 	"DELETE /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",

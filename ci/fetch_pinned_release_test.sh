@@ -24,49 +24,48 @@ printf '%s\n' '#!/usr/bin/env bash' 'echo "$1" >> "${FAKE_SLEEP_LOG}"' 'exit 0' 
 # by its sha256, refuses an anonymous github.com release download (504, exit 22), answers the API only when the config
 # carries `Authorization: Bearer <token>`, and fails the asset call FAKE_ASSET_FAILS times.
 # shellcheck disable=SC2016
-cat > "${T}/bin/curl" <<'FAKE'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${FAKE_ARGV}"
-env >> "${FAKE_ENV}"
-out="" url="" cfg="" accept="" argv_bearer=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    -o | --output) out="$2"; shift 2 ;;
-    -K | --config) if [ "$2" = - ]; then cfg="$(cat)"; else cfg="$(cat "$2")"; fi; shift 2 ;;
-    -H | --header)
-      case "$2" in
-        [Aa]ccept:*application/octet-stream*) accept=1 ;;
-        [Aa]uthorization:\ [Bb]earer\ *) argv_bearer="${2#*earer }" ;;
-      esac
-      shift 2 ;;
-    http*) url="$1"; shift ;;
-    *) shift ;;
-  esac
-done
-case "${cfg}" in *'ccept: application/octet-stream'*) accept=1 ;; esac
-authed=""
-bearer="$(printf '%s\n' "${cfg}" | sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p' | head -1)"
-# A token on argv authenticates too, so a helper that leaks it there still downloads and is caught by t2, not by t1.
-[ -n "${bearer}" ] || bearer="${argv_bearer}"
-if [ -n "${bearer}" ] && [ "$(printf '%s' "${bearer}" | sha256sum | cut -d' ' -f1)" = "${FAKE_TOKEN_SHA}" ]; then authed=1; fi
-emit() { if [ -n "${out}" ]; then cat > "${out}"; else cat; fi; }
-case "${url}" in
-  https://github.com/*/releases/download/*)
-    if [ "${FAKE_ANON:-refuse}" = ok ]; then emit < "${FAKE_BYTES}"; exit 0; fi
-    echo "curl: (22) The requested URL returned error: 504" >&2; exit 22 ;;
-  https://api.github.com/repos/*/releases/tags/*)
-    [ -n "${authed}" ] || { echo "curl: (22) The requested URL returned error: 401" >&2; exit 22; }
-    printf '{"assets":[{"id":111,"name":"other.tar.gz"},{"id":4242,"name":"%s"}]}\n' "${FAKE_ASSET_NAME}" | emit; exit 0 ;;
-  https://api.github.com/repos/*/releases/assets/4242)
-    [ -n "${authed}" ] || { echo "curl: (22) The requested URL returned error: 401" >&2; exit 22; }
-    [ -n "${accept}" ] || { echo "curl: (22) the asset call has no octet-stream Accept header" >&2; exit 22; }
-    n=0; [ -f "${FAKE_COUNT}" ] && n="$(cat "${FAKE_COUNT}")"; n=$((n + 1)); echo "${n}" > "${FAKE_COUNT}"
-    if [ "${n}" -le "${FAKE_ASSET_FAILS:-0}" ]; then echo "curl: (22) The requested URL returned error: 504" >&2; exit 22; fi
-    emit < "${FAKE_BYTES}"; exit 0 ;;
-esac
-echo "curl: (6) fake curl: unknown url ${url}" >&2
-exit 6
-FAKE
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf '\''%s\n'\'' "$*" >> "${FAKE_ARGV}"' \
+  'env >> "${FAKE_ENV}"' \
+  'out="" url="" cfg="" accept="" argv_bearer=""' \
+  'while [ "$#" -gt 0 ]; do' \
+  '  case "$1" in' \
+  '    -o | --output) out="$2"; shift 2 ;;' \
+  '    -K | --config) if [ "$2" = - ]; then cfg="$(cat)"; else cfg="$(cat "$2")"; fi; shift 2 ;;' \
+  '    -H | --header)' \
+  '      case "$2" in' \
+  '        [Aa]ccept:*application/octet-stream*) accept=1 ;;' \
+  '        [Aa]uthorization:\ [Bb]earer\ *) argv_bearer="${2#*earer }" ;;' \
+  '      esac' \
+  '      shift 2 ;;' \
+  '    http*) url="$1"; shift ;;' \
+  '    *) shift ;;' \
+  '  esac' \
+  'done' \
+  'case "${cfg}" in *'\''ccept: application/octet-stream'\''*) accept=1 ;; esac' \
+  'authed=""' \
+  'bearer="$(printf '\''%s\n'\'' "${cfg}" | sed -n '\''s/^header = "Authorization: Bearer \(.*\)"$/\1/p'\'' | head -1)"' \
+  '# A token on argv authenticates too, so a helper that leaks it there still downloads and is caught by t2, not by t1.' \
+  '[ -n "${bearer}" ] || bearer="${argv_bearer}"' \
+  'if [ -n "${bearer}" ] && [ "$(printf '\''%s'\'' "${bearer}" | sha256sum | cut -d'\'' '\'' -f1)" = "${FAKE_TOKEN_SHA}" ]; then authed=1; fi' \
+  'emit() { if [ -n "${out}" ]; then cat > "${out}"; else cat; fi; }' \
+  'case "${url}" in' \
+  '  https://github.com/*/releases/download/*)' \
+  '    if [ "${FAKE_ANON:-refuse}" = ok ]; then emit < "${FAKE_BYTES}"; exit 0; fi' \
+  '    echo "curl: (22) The requested URL returned error: 504" >&2; exit 22 ;;' \
+  '  https://api.github.com/repos/*/releases/tags/*)' \
+  '    [ -n "${authed}" ] || { echo "curl: (22) The requested URL returned error: 401" >&2; exit 22; }' \
+  '    printf '\''{"assets":[{"id":111,"name":"other.tar.gz"},{"id":4242,"name":"%s"}]}\n'\'' "${FAKE_ASSET_NAME}" | emit; exit 0 ;;' \
+  '  https://api.github.com/repos/*/releases/assets/4242)' \
+  '    [ -n "${authed}" ] || { echo "curl: (22) The requested URL returned error: 401" >&2; exit 22; }' \
+  '    [ -n "${accept}" ] || { echo "curl: (22) the asset call has no octet-stream Accept header" >&2; exit 22; }' \
+  '    n=0; [ -f "${FAKE_COUNT}" ] && n="$(cat "${FAKE_COUNT}")"; n=$((n + 1)); echo "${n}" > "${FAKE_COUNT}"' \
+  '    if [ "${n}" -le "${FAKE_ASSET_FAILS:-0}" ]; then echo "curl: (22) The requested URL returned error: 504" >&2; exit 22; fi' \
+  '    emit < "${FAKE_BYTES}"; exit 0 ;;' \
+  'esac' \
+  'echo "curl: (6) fake curl: unknown url ${url}" >&2' \
+  'exit 6' > "${T}/bin/curl"
 chmod +x "${T}/bin/sleep" "${T}/bin/curl"
 
 fails=0

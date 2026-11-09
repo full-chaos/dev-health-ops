@@ -180,7 +180,7 @@ auth-service takes AUTH_WORKLOAD_BOOTSTRAP and AUTH_SESSION_ISSUE_WORKLOAD_SUBJE
 {{- if not (and (kindIs "string" $wbCfg.secretName) $wbCfg.secretName) }}{{- fail "goApi.sessionIssue.workloadBootstrap.secretName is required when goApi.sessionIssue.workloadBootstrap.enabled: the Secret that holds the bootstrap credential of the api workload" }}{{- end }}
 {{- if not (include "dev-health.validSecretKey" $wbKey) }}{{- fail "goApi.sessionIssue.workloadBootstrap.secretKey must be a valid Secret key" }}{{- end }}
 {{- range .Values.goApi.extraEnv }}
-{{- if has (upper (trim (toString .name))) (list "AUTH_SESSION_ISSUE_CREDENTIAL" "AUTH_WORKLOAD_BOOTSTRAP_FILE" "AUTH_WORKLOAD_ISSUER") }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.sessionIssue.workloadBootstrap renders it, and a later entry would shadow the rendered value" .name) }}{{- end }}
+{{- if has (toString .name) (list "AUTH_SESSION_ISSUE_CREDENTIAL" "AUTH_WORKLOAD_BOOTSTRAP_FILE" "AUTH_WORKLOAD_ISSUER") }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.sessionIssue.workloadBootstrap renders it, and a later entry would shadow the rendered value" .name) }}{{- end }}
 {{- end }}
 {{- end }}
 {{- /*
@@ -191,7 +191,7 @@ token reference, and ignores goApi.sessionIssue.secretName. Absent = token mode,
 {{- $siWorkload := eq (toString (default dict .Values.goApi.sessionIssue).credential) "workload" }}
 {{- if $siWorkload }}
 {{- range .Values.goApi.extraEnv }}
-{{- if eq (upper (trim (toString .name))) "AUTH_SESSION_ISSUE_CREDENTIAL" }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.sessionIssue.credential renders it, and a later entry would shadow the rendered value" .name) }}{{- end }}
+{{- if eq (toString .name) "AUTH_SESSION_ISSUE_CREDENTIAL" }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.sessionIssue.credential renders it, and a later entry would shadow the rendered value" .name) }}{{- end }}
 {{- end }}
 {{- end }}
 apiVersion: apps/v1

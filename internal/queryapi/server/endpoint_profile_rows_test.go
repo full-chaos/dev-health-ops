@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -219,54 +220,8 @@ func dedupSorted(in []string) []string {
 // source line holds a registration of its route (the pattern, or the constant
 // it is written as).
 func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
-	lineOf := func(path string, line int) string {
-		raw, err := os.ReadFile(filepath.Join("../../..", path))
-		if err != nil {
-			t.Fatalf("anchor file %s: %v", path, err)
-		}
-		lines := strings.Split(string(raw), "\n")
-		if line < 1 || line > len(lines) {
-			t.Fatalf("anchor %s:%d is outside the file (%d lines)", path, line, len(lines))
-		}
-		return lines[line-1]
-	}
-	checked := 0
-	var walk func(node any, where string)
-	walk = func(node any, where string) {
-		switch value := node.(type) {
-		case map[string]any:
-			path, hasPath := value["path"].(string)
-			line, hasLine := value["line"].(float64)
-			if hasPath && hasLine && (value["repo"] == nil || value["repo"] == "ops") {
-				note, _ := value["note"].(string)
-				if note == "" {
-					t.Errorf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(line))
-				} else if !strings.Contains(lineOf(path, int(line)), note) {
-					t.Errorf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(lineOf(path, int(line))))
-				}
-				checked++
-			}
-			for key, child := range value {
-				walk(child, where+"/"+key)
-			}
-		case []any:
-			for index, child := range value {
-				walk(child, where+"["+strconv.Itoa(index)+"]")
-			}
-		}
-	}
-	for _, row := range loadQueryAPIRows(t) {
-		id, _ := row["id"].(string)
-		route, _ := row["route"].(string)
-		source := row["source"].(map[string]any)
-		file, line := source["file"].(string), int(source["line"].(float64))
-		text := lineOf(file, line)
-		if !strings.Contains(text, route) && !strings.Contains(text, "Handle") && !strings.Contains(text, "Pattern:") {
-			t.Errorf("row %q: %s:%d holds no registration of %s: %q", id, file, line, route, strings.TrimSpace(text))
-		}
-		walk(row["primary_validator"], id+"/primary_validator")
-		checked++
-	}
+	problems, checked := queryRowAnchorProblems(t, "../../..", loadQueryAPIRows(t))
+	walk := anchorWalk(t, "../../..", &problems, &checked)
 	raw, err := os.ReadFile("../../../contracts/auth/v1/credential-classes.json")
 	if err != nil {
 		t.Fatal(err)
@@ -282,9 +237,74 @@ func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 			walk(class, "effective_principal_envelope")
 		}
 	}
+	for _, problem := range problems {
+		t.Error(problem)
+	}
 	if checked < 30 {
 		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
 	}
+}
+
+func anchorLineOf(t *testing.T, root, path string, line int) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, path))
+	if err != nil {
+		t.Fatalf("anchor file %s: %v", path, err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	if line < 1 || line > len(lines) {
+		t.Fatalf("anchor %s:%d is outside the file (%d lines)", path, line, len(lines))
+	}
+	return lines[line-1]
+}
+
+// anchorWalk checks every ops anchor under a node: it carries a note, and its line holds the note.
+func anchorWalk(t *testing.T, root string, problems *[]string, checked *int) func(node any, where string) {
+	var walk func(node any, where string)
+	walk = func(node any, where string) {
+		switch value := node.(type) {
+		case map[string]any:
+			path, hasPath := value["path"].(string)
+			line, hasLine := value["line"].(float64)
+			if hasPath && hasLine && (value["repo"] == nil || value["repo"] == "ops") {
+				note, _ := value["note"].(string)
+				if note == "" {
+					*problems = append(*problems, fmt.Sprintf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(line)))
+				} else if text := anchorLineOf(t, root, path, int(line)); !strings.Contains(text, note) {
+					*problems = append(*problems, fmt.Sprintf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(text)))
+				}
+				*checked++
+			}
+			for key, child := range value {
+				walk(child, where+"/"+key)
+			}
+		case []any:
+			for index, child := range value {
+				walk(child, where+"["+strconv.Itoa(index)+"]")
+			}
+		}
+	}
+	return walk
+}
+
+// queryRowAnchorProblems checks the query-api rows against the source under root: a row's source line holds a
+// registration of its route (the pattern, or the constant it is written as), and its validator anchors hold.
+func queryRowAnchorProblems(t *testing.T, root string, rows []map[string]any) (problems []string, checked int) {
+	t.Helper()
+	walk := anchorWalk(t, root, &problems, &checked)
+	for _, row := range rows {
+		id, _ := row["id"].(string)
+		route, _ := row["route"].(string)
+		source := row["source"].(map[string]any)
+		file, line := source["file"].(string), int(source["line"].(float64))
+		text := anchorLineOf(t, root, file, line)
+		if !strings.Contains(text, route) && !strings.Contains(text, "Handle") && !strings.Contains(text, "Pattern:") {
+			problems = append(problems, fmt.Sprintf("row %q: %s:%d holds no registration of %s: %q", id, file, line, route, strings.TrimSpace(text)))
+		}
+		walk(row["primary_validator"], id+"/primary_validator")
+		checked++
+	}
+	return problems, checked
 }
 
 // TestClassConsumersNameEveryQueryAPIRouteThatAcceptsThem keeps the credential

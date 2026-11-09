@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -143,29 +144,41 @@ var dispatchedLevels = map[string]string{
 // AdminOrg, Authenticated, Superuser or Optional accepts the user access token
 // with no HS256 opt-in; no row lists the retired ops access token.
 func TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard(t *testing.T) {
-	regs := scanRegistrations(t, "../api", ".")
+	problems, checked := rowRegistrationProblems(t, scanRegistrations(t, "../api", "."), loadGoAPIRows(t), mountedRoutes(t), treePath)
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	if checked < 200 {
+		t.Fatalf("only %d rows were checked against their registrations", checked)
+	}
+}
+
+// rowRegistrationProblems ties each mounted route's row to the registration that mounts it and to the guard level
+// that registration names. rel turns a scanned path into the repo-relative form rows carry.
+func rowRegistrationProblems(t *testing.T, regs []registration, rows []map[string]any, mounted []mountedRoute, rel func(string) string) (problems []string, checked int) {
+	t.Helper()
+	bad := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	byKey := map[string]map[string]any{}
-	for _, row := range loadGoAPIRows(t) {
+	for _, row := range rows {
 		byKey[rowKey(t, row)] = row
 	}
 	guarded := map[string]bool{"Admin": true, "AdminOrg": true, "Authenticated": true, "Superuser": true, "Optional": true}
-	checked := 0
-	for _, route := range mountedRoutes(t) {
+	for _, route := range mounted {
 		row := byKey[route.key()]
 		if row == nil {
 			continue
 		}
 		reg, ok := registrationFor(regs, route)
 		if !ok {
-			t.Errorf("%s: no registration found in the source", route.key())
+			bad("%s: no registration found in the source", route.key())
 			continue
 		}
 		source := row["source"].(map[string]any)
-		if got := source["file"].(string); got != treePath(reg.File) {
-			t.Errorf("%s: row source file %s, the registration is in %s", route.key(), got, treePath(reg.File))
+		if got := source["file"].(string); got != rel(reg.File) {
+			bad("%s: row source file %s, the registration is in %s", route.key(), got, rel(reg.File))
 		}
 		if got := int(source["line"].(float64)); got != reg.Line {
-			t.Errorf("%s: row source line %d, the registration is on line %d", route.key(), got, reg.Line)
+			bad("%s: row source line %d, the registration is on line %d", route.key(), got, reg.Line)
 		}
 		classes, _ := row["accepted_credential_classes"].([]any)
 		hs256, user := false, false
@@ -184,23 +197,33 @@ func TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard(t *testing.T
 			validator, _ := row["primary_validator"].(map[string]any)
 			description, _ := validator["description"].(string)
 			if row["classification"] != "protected" || hs256 || !user || validation["legacy_hs256"] != false || !strings.HasPrefix(description, "policy."+reg.Level+":") {
-				t.Errorf("%s: registered at policy.%s, row says %v %v %v %q", route.key(), reg.Level, row["classification"], classes, validation, description)
+				bad("%s: registered at policy.%s, row says %v %v %v %q", route.key(), reg.Level, row["classification"], classes, validation, description)
 			}
 		case hs256:
-			t.Errorf("%s: the row accepts the retired ops access token (registration level %q)", route.key(), reg.Level)
+			bad("%s: the row accepts the retired ops access token (registration level %q)", route.key(), reg.Level)
 		}
 		checked++
 	}
-	if checked < 200 {
-		t.Fatalf("only %d rows were checked against their registrations", checked)
-	}
+	return problems, checked
 }
 
 // TestEndpointProfileAnchorsStillPointAtTheirSymbols: every anchor carries
 // the text its line must still hold, so a pinned file:line cannot drift.
 func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
+	problems, checked := anchorNoteProblems(t, "../..", loadGoAPIRows(t))
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	if checked < 200 {
+		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
+	}
+}
+
+// anchorNoteProblems checks the validator anchors of rows against the source under root.
+func anchorNoteProblems(t *testing.T, root string, rows []map[string]any) (problems []string, checked int) {
+	t.Helper()
 	lineOf := func(path string, line int) string {
-		raw, err := os.ReadFile(filepath.Join("../..", path))
+		raw, err := os.ReadFile(filepath.Join(root, path))
 		if err != nil {
 			t.Fatalf("anchor file %s: %v", path, err)
 		}
@@ -210,7 +233,6 @@ func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		}
 		return lines[line-1]
 	}
-	checked := 0
 	var walk func(node any, where string)
 	walk = func(node any, where string) {
 		switch value := node.(type) {
@@ -220,9 +242,9 @@ func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 			if hasPath && hasLine {
 				note, _ := value["note"].(string)
 				if note == "" {
-					t.Errorf("%s: anchor %s:%d carries no note naming what its line holds", where, path, int(line))
+					problems = append(problems, fmt.Sprintf("%s: anchor %s:%d carries no note naming what its line holds", where, path, int(line)))
 				} else if !strings.Contains(lineOf(path, int(line)), note) {
-					t.Errorf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(lineOf(path, int(line))))
+					problems = append(problems, fmt.Sprintf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(lineOf(path, int(line)))))
 				}
 				checked++
 			}
@@ -235,13 +257,11 @@ func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 			}
 		}
 	}
-	for _, row := range loadGoAPIRows(t) {
+	for _, row := range rows {
 		walk(row["primary_validator"], rowKey(t, row)+"/primary_validator")
 		walk(row["reachable_validators"], rowKey(t, row)+"/reachable_validators")
 	}
-	if checked < 200 {
-		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
-	}
+	return problems, checked
 }
 
 // dispatchProbeValues give the wildcard values of the routes whose segment

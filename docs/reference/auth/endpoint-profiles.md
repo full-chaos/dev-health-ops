@@ -229,6 +229,23 @@ row that opts in, so it refuses an HS256 bearer on every row with reason
 `TestNoEndpointProfileRowAcceptsARetiredClass` refuses a row that lists a
 retired class or sets `legacy_hs256: true`.
 
+## Wrong-class gate
+
+`TestWrongClassGateGoAPI` (`internal/apiservice/wrong_class_gate_test.go`)
+sends every go-api row, on the listener that its row names, every credential
+class of `credential-classes.json` that the row does not accept. The requests
+go through the production listeners. The rows come from the embedded profile
+file. Each class's carrier (header or body field) comes from its markers. A
+row that is not mounted fails, and a marker kind with no carrier rule fails.
+A wrong class must give the same answer as a garbage credential in the same
+carrier (or no credential, when the carrier is not `Authorization`). It must
+cause no signing-key read and no store read. It must not make the shadow ask
+the PDP. On a protected row the answer must be a 4xx. A known divergence is
+one row of `ci/auth_exception_ledger.tsv`, anchored on the gate, with an open
+ticket. It excuses the 4xx rule on the rows that it names, and nothing else.
+When a named row no longer diverges, the gate fails until the ledger row is
+removed.
+
 ## `delegated_bearer`
 
 An auth-service row that `authenticateWith` gates has `delegated_bearer`:

@@ -63,6 +63,8 @@ func (e *orgDeletionIncompleteError) Unwrap() error { return e.err }
 type orgDeletionClickHouse struct {
 	conn   driver.Conn
 	tables []ChTable
+	// refreshRunning counts the views of a list whose refresh runs now.
+	refreshRunning func(context.Context, driver.Conn, []string) (uint64, error)
 }
 
 // orgDeletionClickHousePreflight connects (Open pings), checks the login's
@@ -88,7 +90,22 @@ func (h *handlers) orgDeletionClickHousePreflight(ctx context.Context) (*orgDele
 		_ = conn.Close()
 		return nil, &orgDeletionRefusedError{refusalCatalogEmpty, err}
 	}
-	return &orgDeletionClickHouse{conn: conn, tables: tables}, nil
+	running := h.readRefreshStates
+	if running == nil {
+		running = orgDeletionRefreshRunning
+	}
+	// The purge waits on the refreshes of the views that fill a discovered
+	// table (orgDeletionPurgeRefreshFed), so a login that cannot read their
+	// state is refused here, before any row is deleted. On a server where a
+	// system table needs a grant, the login needs GRANT SELECT ON
+	// system.view_refreshes.
+	if views := orgDeletionRefreshViews(tables); len(views) > 0 {
+		if _, err := running(ctx, conn, views); err != nil {
+			_ = conn.Close()
+			return nil, &orgDeletionRefusedError{refusalPrivilegeMissing, fmt.Errorf("read system.view_refreshes for %s: %w", strings.Join(views, ", "), err)}
+		}
+	}
+	return &orgDeletionClickHouse{conn: conn, tables: tables, refreshRunning: running}, nil
 }
 
 // OrgDeletionPreflight runs the org deletion's ClickHouse preflight once (go-api

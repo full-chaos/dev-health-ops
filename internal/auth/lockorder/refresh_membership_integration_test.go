@@ -23,8 +23,13 @@ import (
 // membership it was minted for (D6507): with the membership gone (removed or
 // left) a non-superuser's refresh is refused 401 and the session or token
 // family revoked, with an audit row, on the auth plane (go-api's own refresh,
-// and auth-service's when it owns sessions). A superuser keeps refreshing,
-// and a session minted by an invite accept or an onboard join refreshes.
+// and auth-service's when it owns sessions). A session minted by an invite
+// accept or an onboard join refreshes. The superuser cells pin today's answer
+// with AUTH_PROXY_ORG_PROVISIONING off, not a wanted one: the superuser keeps
+// refreshing on the auth plane, WIDER than the legacy go-api path, which
+// revokes the org's refresh tokens on removal (CHAOS-13212, parked under D6787
+// until the switch is on). With the switch on the removal ends the session:
+// authruntime TestProvisioningClientRemoveRefusesTheRemovedPrincipalsRefresh.
 
 // shape is a failure message's view of an answer: its status, the keys of
 // its JSON body and the refusal detail; never a token or other value.
@@ -127,7 +132,8 @@ func wantRefreshOK(t *testing.T, cell string, got response) {
 // Auth plane: a session issued by an invite accept refreshes while the
 // membership exists; once go-api's admin removed the member, the refresh is
 // refused, the session revoked (session_revoked) and one revoke audit row
-// written. A superuser in the same position keeps refreshing.
+// written. A superuser in the same position keeps refreshing: today's answer
+// with AUTH_PROXY_ORG_PROVISIONING off, WIDER than legacy (CHAOS-13212).
 func TestAuthRefreshOfARemovedMemberIsRefusedAndRevoked(t *testing.T) {
 	for _, superuser := range []bool{false, true} {
 		name := "member"
@@ -173,7 +179,8 @@ WHERE event_type = 'auth.session.revoked' AND subject_principal_id = $1`, user)
 // Auth plane, v1 refresh: once go-api's admin removed the member, the refresh
 // is refused before the credential rotates: no successor row, no presented
 // row consumed, and the session revoked (session_revoked). A superuser in the
-// same position rotates.
+// same position rotates: today's answer with AUTH_PROXY_ORG_PROVISIONING off,
+// WIDER than legacy (CHAOS-13212).
 func TestAuthV1RefreshOfARemovedMemberRotatesNothing(t *testing.T) {
 	for _, superuser := range []bool{false, true} {
 		name := "member"

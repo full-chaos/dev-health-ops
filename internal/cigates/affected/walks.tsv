@@ -114,7 +114,9 @@ internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/wo
 internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/workload-token	tree	*
 internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/workload-token/vectors	dir	*
 internal/auth/httpapi	accesslog_census_test.go	internal/auth	tree	*.go
+internal/auth/identity	adminusers_touch_test.go	internal/auth/platformrole	dir	*
 internal/auth/identity	externalkey_test.go	internal/auth/identity	dir	*
+internal/auth/identity	joinmembership_state_test.go	internal	tree	*
 internal/auth/identity	placeholder_copies_test.go	.	tree	*.go
 internal/auth/identity	placeholder_copies_test.go	internal/auth/authruntime	dir	*
 internal/auth/identity	placeholder_copies_test.go	internal/auth/usersbackfill	dir	*
@@ -122,10 +124,13 @@ internal/auth/identity/local	linkbind_census_test.go	.	tree	*.go
 internal/auth/keystore	custody_test.go	internal/auth/keystore	dir	*
 internal/auth/passwordpolicy	callers_test.go	internal/auth/passwordpolicy/testdata/hopfixture	tree	*
 internal/auth/passwordpolicy	callers_test.go	unexpressed	-	*.go
+internal/auth/platformrole	grant_target_test.go	internal	tree	*
+internal/auth/platformrole	heldon_callers_test.go	internal	tree	*
 internal/auth/platformrole	owned_parse_census_test.go	cmd	tree	*
 internal/auth/platformrole	owned_parse_census_test.go	internal	tree	*
 internal/auth/platformrole	platform_action_sites_census_test.go	cmd	tree	*
 internal/auth/platformrole	platform_action_sites_census_test.go	internal	tree	*
+internal/auth/platformrole	storedholds_callers_test.go	internal	tree	*
 internal/auth/platformrole	superuser_fills_census_test.go	cmd	tree	*
 internal/auth/platformrole	superuser_fills_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_literals_census_test.go	cmd	tree	*

@@ -39,8 +39,6 @@ var providerGuards = []string{"RefuseInvalidProviderID", "refuseUnusableSubject"
 // UsersGuardRows lists every public.users writer of a provider id in the tree. A new writer needs a row; a row that
 // loses its guard call (or has it after the write) fails.
 var UsersGuardRows = []UsersGuardRow{
-	{File: "internal/api/session/register.go", Func: "handlers.register", Verb: "INSERT",
-		Exempt: "password sign-up: auth_provider is the literal 'local' and auth_provider_id NULL", Literal: "'local', NULL"},
 	{File: "internal/api/session/social.go", Func: "handlers.createSocialUser", Verb: "INSERT",
 		GuardFile: "internal/api/session/social.go", GuardFunc: "handlers.createSocialUser", Guards: providerGuards},
 	{File: "internal/api/sso/provision.go", Func: "handlers.createAccountAndMembership", Verb: "INSERT",

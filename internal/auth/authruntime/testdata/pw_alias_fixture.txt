@@ -23,3 +23,14 @@ func runtimeBuilt(role string) string {
 }
 
 func build() string { return "" }
+
+const until = "2030-01-01"
+
+func laterVerb(role string) string {
+	return fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s' VALID UNTIL '%s'`, role, pw, build())
+}
+
+func laterVerbRuntimeBuilt(role string) string {
+	pass := build()
+	return fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s' VALID UNTIL '%s'`, role, pass, until)
+}

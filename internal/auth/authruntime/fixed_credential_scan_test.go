@@ -139,7 +139,7 @@ func TestAliasedPasswordConstIsFound(t *testing.T) {
 	if parsed != 1 {
 		t.Fatalf("parsed %d files, want 1", parsed)
 	}
-	want := map[int]bool{8: true, 13: true, 17: true}
+	want := map[int]bool{8: true, 13: true, 17: true, 30: true}
 	for _, line := range found {
 		var number int
 		if _, err := fmt.Sscanf(line, "%d", &number); err != nil {

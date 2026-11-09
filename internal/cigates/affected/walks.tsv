@@ -131,6 +131,7 @@ internal/auth/platformrole	owned_parse_census_test.go	cmd	tree	*
 internal/auth/platformrole	owned_parse_census_test.go	internal	tree	*
 internal/auth/platformrole	platform_action_sites_census_test.go	cmd	tree	*
 internal/auth/platformrole	platform_action_sites_census_test.go	internal	tree	*
+internal/auth/platformrole	storedholds_callers_test.go	internal	tree	*
 internal/auth/platformrole	superuser_fills_census_test.go	cmd	tree	*
 internal/auth/platformrole	superuser_fills_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_literals_census_test.go	cmd	tree	*

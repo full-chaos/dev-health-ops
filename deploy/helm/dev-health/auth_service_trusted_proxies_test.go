@@ -580,6 +580,9 @@ func TestAuthServiceAPIPortBoundaryCheckSeesASecondIngressRule(t *testing.T) {
 	rule := func(peers ...any) map[string]any {
 		return map[string]any{"from": peers, "ports": []any{map[string]any{"protocol": "TCP", "port": 8095}}}
 	}
+	other := map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "other"}}}
+	portless := func(peers ...any) map[string]any { return map[string]any{"from": peers} }
+	emptyPorts := func(peers ...any) map[string]any { return map[string]any{"from": peers, "ports": []any{}} }
 	policy := func(rules ...any) []map[string]any {
 		return []map[string]any{{"kind": "NetworkPolicy", "metadata": map[string]any{"name": "a-dev-health-auth-service"}, "spec": map[string]any{"ingress": rules}}}
 	}
@@ -587,13 +590,17 @@ func TestAuthServiceAPIPortBoundaryCheckSeesASecondIngressRule(t *testing.T) {
 		docs []map[string]any
 		ok   bool
 	}{
-		"one go-api rule":         {policy(rule(goAPI)), true},
-		"a second rule":           {policy(rule(goAPI), rule(map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "other"}}})), false},
-		"a second go-api rule":    {policy(rule(goAPI), rule(goAPI)), false},
-		"a second peer":           {policy(rule(goAPI, map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "other"}}})), false},
-		"an ipBlock":              {policy(rule(map[string]any{"ipBlock": map[string]any{"cidr": "10.42.0.0/24"}})), false},
-		"another selector":        {policy(rule(map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/component": "web"}}})), false},
-		"no rule on the API port": {policy(), false},
+		"one go-api rule":                 {policy(rule(goAPI)), true},
+		"a second rule":                   {policy(rule(goAPI), rule(map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "other"}}})), false},
+		"a second go-api rule":            {policy(rule(goAPI), rule(goAPI)), false},
+		"a second peer":                   {policy(rule(goAPI, map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "other"}}})), false},
+		"an ipBlock":                      {policy(rule(map[string]any{"ipBlock": map[string]any{"cidr": "10.42.0.0/24"}})), false},
+		"another selector":                {policy(rule(map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/component": "web"}}})), false},
+		"no rule on the API port":         {policy(), false},
+		"a second rule, no ports field":   {policy(rule(goAPI), portless(other)), false},
+		"a second rule, empty ports":      {policy(rule(goAPI), emptyPorts(other)), false},
+		"a lone go-api rule, no ports":    {policy(portless(goAPI)), true},
+		"a lone go-api rule, empty ports": {policy(emptyPorts(goAPI)), true},
 	} {
 		if got := goAPIOnlyProblem(authServiceAPIRules(t, tc.docs)) == ""; got != tc.ok {
 			t.Errorf("%s: boundary check passes = %v, want %v", name, got, tc.ok)

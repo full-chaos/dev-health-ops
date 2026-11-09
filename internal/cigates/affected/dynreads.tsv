@@ -613,7 +613,6 @@ internal/teamactive	roster_census_test.go
 internal/teamattribution	is_primary_census_test.go
 internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
-internal/testsupport/authrows	credentials_test.go
 internal/testsupport/authrows	golden_test.go
 internal/testsupport/authrows	responses_test.go
 internal/testsupport/bigboydir	bigboydir.go

@@ -30,7 +30,7 @@ func TestAdminSetPasswordEndsTheOlderSession(t *testing.T) {
 	}
 	session := uuid.New()
 	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, legacy_token_version, created_at)
-VALUES ($1, $2, $3, now() + interval '1 hour', 0, now() - interval '1 minute')`, session, created.ID, []byte(session.String())); err != nil {
+VALUES ($1, $2, $3, now() + interval '1 hour', 0, clock_timestamp())`, session, created.ID, []byte(session.String())); err != nil {
 		t.Fatal(err)
 	}
 	rule, err := sessionrule.New(`"auth"`, time.Hour)

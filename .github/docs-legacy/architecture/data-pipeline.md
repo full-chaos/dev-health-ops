@@ -558,6 +558,12 @@ did not commit.
   One work item id stored under two repository ids counts once: the row with
   the newest `last_synced` is the item, and of two rows of one `last_synced`
   the row of the lower repository id.
+  The org view counts an item once per organization: the rule runs over the
+  item's rows in every work scope (the org winner), and the item counts in
+  the scope of that row only. A partition reads the rows of its items that
+  are stored in other scopes (the org winner read, one more statement per
+  partition, split by `querybound`), so a run of listed repositories equals a
+  full run for the org view (CHAOS-10796).
   Cost: the items read has no `repo_id` predicate. `work_items` is sorted by
   `(org_id, repo_id, work_item_id)`, so the read uses the `org_id` part of the
   key and reads the item rows of the organization, where a read of one

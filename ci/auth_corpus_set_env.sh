@@ -60,8 +60,8 @@ fi
 printf 'auth_corpus_set_env: %s %s; recreating go-api of %s\n' "${NAME}" "$([ -n "${VALUE}" ] && echo set || echo unset)" "${PROJECT}"
 timeout --kill-after=2 "${wait_seconds}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --detach --no-deps --force-recreate --no-build go-api
 
-# auth-service reads the same variable on every register request, so it is recreated with the state too (on leg acp with
-# AUTH_USERS_OWNED from it); the wait is bounded by compose. CHAOS-13107: on leg go-api too, since compose.yml forwards
+# auth-service reads the same variable on every register request, so it is recreated with the state too (users stay
+# owned: compose.yml's default); the wait is bounded by compose. CHAOS-13107: on leg go-api too, since compose.yml forwards
 # sign-up (AUTH_PROXY_CREDENTIALS) to auth-service there as well.
 if [ "${NAME}" = "AUTH_AUTO_CREATE_ORG_ON_REGISTER" ]; then
   timeout --kill-after=2 "${wait_seconds}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \

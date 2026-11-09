@@ -1,5 +1,5 @@
 # The path set of the external auth corpus (CHAOS-11596). A merge queue entry whose group touches one of these paths
-# runs ci/auth_corpus_external.sh (go-api, acp, acp-nokeys, acp-social-unowned) as job auth-corpus-queue of go-auth-service.yml; its result
+# runs ci/auth_corpus_external.sh (go-api, acp, acp-nokeys) as job auth-corpus-queue of go-auth-service.yml; its result
 # fans into the required context auth-gate. One bash glob per line, matched against the repo-relative path with
 # `case`: `*` matches any characters including `/`, except in a row that starts with `=`, which matches one directory only
 # (the file's directory must equal the row's directory part). A line starting with # is a comment.

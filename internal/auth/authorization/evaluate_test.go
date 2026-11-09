@@ -718,8 +718,8 @@ func TestEvaluate_AcrContextReadIsAllowedToTheOrgRolesByDefault(t *testing.T) {
 }
 
 // Catalog version 17 (legacy parity): every organization role reads ACR evidence (the membership default, as
-// acr.context.read) and issues an ACR credential. No platform role holds either action: the platform admin with no
-// membership row is a separate change (the flag needs its executed legacy cell).
+// acr.context.read) and issues an ACR credential. A platform admin with no membership row issues one (the flag, as
+// the executed legacy web cells answer); no platform role reads ACR evidence.
 func TestEvaluate_AcrEvidenceReadAndCredentialIssueAllowEveryOrganizationRole(t *testing.T) {
 	_, roles, _ := vocab(t)
 	e := NewEvaluator()
@@ -730,15 +730,19 @@ func TestEvaluate_AcrEvidenceReadAndCredentialIssueAllowEveryOrganizationRole(t 
 			if got := e.Evaluate(evidence, platformSnapshot(r.Role)); got.Allowed {
 				t.Errorf("role %s on acr.evidence.read: %+v, want deny", r.Role, got)
 			}
-			if got := e.Evaluate(issue, platformSnapshot(r.Role)); got.Allowed {
-				t.Errorf("role %s on acr.credential.issue: %+v, want deny", r.Role, got)
+			got := e.Evaluate(issue, platformSnapshot(r.Role))
+			if want := r.Role == "platform_admin"; got.Allowed != want {
+				t.Errorf("role %s on acr.credential.issue: %+v, want allowed=%v", r.Role, got, want)
+			}
+			if r.Role == "platform_admin" && got.Reason != ReasonAllowedByPlatformAdmin {
+				t.Errorf("platform_admin on acr.credential.issue: reason %s, want %s", got.Reason, ReasonAllowedByPlatformAdmin)
 			}
 			continue
 		}
 		if got := e.Evaluate(evidence, repoSnapshot(r.Role)); !got.Allowed {
 			t.Errorf("role %s on acr.evidence.read: %+v, want allow", r.Role, got)
 		}
-		if got := e.Evaluate(issue, orgSnapshot(r.Role)); !got.Allowed || got.Reason != ReasonAllowedByRole {
+		if got := e.Evaluate(issue, repoSnapshot(r.Role)); !got.Allowed || got.Reason != ReasonAllowedByRole {
 			t.Errorf("role %s on acr.credential.issue: %+v, want allowed_by_role", r.Role, got)
 		}
 	}

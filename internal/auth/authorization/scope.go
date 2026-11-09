@@ -90,11 +90,18 @@ func (e *Evaluator) organizationAllow(r Request, act policycatalog.Action, s Sna
 	return Decision{Allowed: true, Reason: ReasonAllowedByRole, PolicyRevision: rev, Obligations: o}
 }
 
-// withRepositoryObligations gives a repository allow its obligations: the tenant scope, the one repository key of
-// the request, and the redaction rule of the membership role (empty for a service account).
-func (e *Evaluator) withRepositoryObligations(d Decision, r Request, role string) Decision {
-	d.Obligations = &Obligations{TenantScope: r.OrganizationID, RepositoryRestricted: true,
-		RepositoryAllowlist: []string{r.ResourceKey}, Redaction: e.redactionFor(role, r.Action)}
+// withRepositoryObligations gives a repository allow its obligations: the tenant scope, the redaction rule of the
+// membership role (empty for a service account), and the repositories it covers. An allow that is org-wide in fact
+// (repositoryScope's unrestricted: the membership default with no grant row, or a live wildcard grant) carries
+// repository_scope organization and no allowlist; any other allow carries the one repository key of the request.
+func (e *Evaluator) withRepositoryObligations(d Decision, r Request, role string, unrestricted bool) Decision {
+	o := &Obligations{TenantScope: r.OrganizationID, Redaction: e.redactionFor(role, r.Action)}
+	if unrestricted {
+		o.RepositoryScope = RepositoryScopeOrganization
+	} else {
+		o.RepositoryRestricted, o.RepositoryAllowlist = true, []string{r.ResourceKey}
+	}
+	d.Obligations = o
 	return d
 }
 

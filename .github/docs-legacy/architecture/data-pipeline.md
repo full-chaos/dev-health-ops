@@ -564,6 +564,14 @@ did not commit.
   are stored in other scopes (the org winner read, one more statement per
   partition, split by `querybound`), so a run of listed repositories equals a
   full run for the org view (CHAOS-10796).
+  The scope view counts an item once per work scope: the key is (provider,
+  `work_scope_id`, id), the newest row of that scope wins (on a tie the lower
+  repository id), and a row of another scope does not compete. An item that
+  is a row of two scopes counts in both, so the sum over scopes can be more
+  than the org total (D5204). Each view's rows are computed from its own item
+  set and written under its own `row_view`, with attributions keyed by
+  (scope, id) for the scope set. A run of listed repositories equals a full
+  run per view (CHAOS-10797).
   Cost: the items read has no `repo_id` predicate. `work_items` is sorted by
   `(org_id, repo_id, work_item_id)`, so the read uses the `org_id` part of the
   key and reads the item rows of the organization, where a read of one

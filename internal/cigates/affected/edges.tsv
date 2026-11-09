@@ -38,6 +38,7 @@ internal/auth/entitlement	deps_test.go	internal/auth/...
 internal/auth/entitlement	deps_test.go	unexpressed
 internal/auth/identity	service_provider_callers_test.go	internal/auth/...
 internal/auth/identity/oidc	environment_proxy_test.go	unexpressed
+internal/auth/passwordpolicy	callers_test.go	unexpressed
 internal/authzenforce	census_test.go	unexpressed
 internal/cigates	governance.go	unexpressed
 internal/cigates/affected	always_select_test.go	unexpressed

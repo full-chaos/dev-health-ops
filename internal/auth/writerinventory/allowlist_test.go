@@ -30,7 +30,6 @@ var Allowlist = []Entry{
 	{File: "internal/api/session/register.go", Func: "insertMembership", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/api/session/register.go", Func: "insertOrganization", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/api/session/social.go", Func: "handlers.createSocialUser", Table: "public.users", Verb: "INSERT"},
-	{File: "internal/api/session/store.go", Func: "revokeToken", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/api/session/store.go", Func: "touchLastLogin", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/session/store.go", Func: "updateAttempt", Table: "public.login_attempts", Verb: "UPDATE"},
 	{File: "internal/api/session/verify.go", Func: "handlers.resetPassword", Table: "public.users", Verb: "UPDATE"},

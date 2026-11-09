@@ -2616,8 +2616,6 @@ func TestPurposeStateSecretsThatShareAValueAreRefused(t *testing.T) {
 	other := strings.Repeat("o", 40)
 	for name, extra := range map[string]map[string]string{
 		"sso equals github": {"SSO_STATE_SECRET": same, "GITHUB_APP_STATE_SECRET": same},
-		"sso equals jwt":    {"SSO_STATE_SECRET": other, "JWT_SECRET_KEY": other},
-		"github equals jwt": {"GITHUB_APP_STATE_SECRET": other, "JWT_SECRET_KEY": other},
 	} {
 		values := map[string]string{"POSTGRES_URI": "postgresql://app:app@db.internal:5432/appdb", "JWT_SECRET_KEY": "jwt-key"}
 		for k, v := range extra {

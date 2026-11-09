@@ -4,8 +4,8 @@
 // oauth.py, refresh.py, session.py). The Python bodies are the spec; every
 // response, row and token matches them (TestSessionVenueOracle).
 //
-// Tokens are minted and verified by internal/auth/edgetoken, the one HS256
-// implementation; the caller of a protected route is decided by
+// go-api mints and verifies no session token itself (auth-service owns
+// sessions); the caller of a protected route is decided by
 // internal/api/policy. Passwords, provider tokens and minted tokens never
 // reach a log line or an error text.
 package session
@@ -27,16 +27,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
-// Deps are the session routes' dependencies.
+// Deps are the session routes' dependencies. They hold no token key: go-api
+// mints no session token (Issuer asks auth-service) and verifies none on
+// logout, which revokes nothing locally.
 type Deps struct {
-	Pool     *pgxpool.Pool
-	Guard    *policy.Guard
-	Auth     *policy.Authenticator
-	Verifier *edgetoken.Verifier
+	Pool  *pgxpool.Pool
+	Guard *policy.Guard
+	Auth  *policy.Authenticator
 	// ClickHouse is the api's own ClickHouse login (organization activity); nil means none (no CLICKHOUSE_URI).
 	ClickHouse driver.Conn
 	// Limits is where the rate limits count: the api's shared counter
@@ -114,9 +114,9 @@ func (d Deps) withDefaults() Deps {
 
 // Routes mounts the session, registration, verification, password reset,
 // invite and onboarding routes. It returns nothing unless the
-// protected-route runtime and the token keys are configured.
+// protected-route runtime is configured.
 func Routes(deps Deps) []httpapi.Route {
-	if deps.Pool == nil || deps.Guard == nil || deps.Auth == nil || deps.Verifier == nil {
+	if deps.Pool == nil || deps.Guard == nil || deps.Auth == nil {
 		return nil
 	}
 	defaults := deps.withDefaults()

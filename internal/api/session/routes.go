@@ -310,9 +310,9 @@ func (h handlers) logout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	body, _ := policy.BodyFrom(ctx)
 	var errs pybody.Errors
-	var refreshToken string
+	// refresh_token is still required on the wire; go-api holds no key to verify it, so it revokes nothing.
 	if object, ok := errs.Object(body); ok {
-		refreshToken, _ = errs.RequiredString(object, "refresh_token", 0, 0)
+		_, _ = errs.RequiredString(object, "refresh_token", 0, 0)
 	}
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
@@ -321,20 +321,6 @@ func (h handlers) logout(w http.ResponseWriter, r *http.Request) {
 	user, ok := h.optionalUser(w, r)
 	if !ok {
 		return
-	}
-	if claims, err := h.Verifier.VerifyRefresh(refreshToken); err == nil {
-		// An absent jti reads as nil, which is falsy, as .get("jti") is.
-		if jti := claims["jti"]; truthy(jti) {
-			jtiText, err := pyStrClaim(jti)
-			if err != nil {
-				h.fail(w, r, "refresh jti", err)
-				return
-			}
-			if err := h.inTx(ctx, func(tx pgx.Tx) error { return revokeToken(ctx, tx, jtiText, h.Now()) }); err != nil {
-				h.fail(w, r, "revoke token", err)
-				return
-			}
-		}
 	}
 	if user != nil {
 		// An empty org_id does not parse, as _parse_uuid("") is None.

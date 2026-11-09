@@ -372,10 +372,6 @@ type Config struct {
 	// Python api parses CORS_ALLOWED_ORIGINS: comma-separated, entries trimmed,
 	// empty entries dropped (dho api only).
 	CORSAllowedOrigins []string
-	// APIJWTSecret, APIJWTIssuer and APIJWTAudience verify the access token
-	// (dho api only): JWT_SECRET_KEY, JWT_ISSUER and JWT_AUDIENCE, the same
-	// variables the Python api reads.
-	APIJWTSecret secrets.Value
 	// SSOStateSecret and GitHubAppStateSecret (SSO_STATE_SECRET,
 	// GITHUB_APP_STATE_SECRET) key the SSO login state and the GitHub App
 	// install state, one key per purpose. Optional (dho api only).
@@ -386,8 +382,10 @@ type Config struct {
 	// rotation overlap (dho api only). Both are optional.
 	LinkTokenSecret         secrets.Value
 	LinkTokenSecretPrevious secrets.Value
-	APIJWTIssuer            string
-	APIJWTAudience          string
+	// APIJWTIssuer and APIJWTAudience are JWT_ISSUER and JWT_AUDIENCE (dho api
+	// only): the claims of the GitHub App install state token.
+	APIJWTIssuer   string
+	APIJWTAudience string
 	// APIExpectedWorkerGroups is EXPECTED_WORKER_GROUPS for the api's
 	// /health/workers (dho api only): nil when the variable is unset (no Go
 	// fleet declared), else its comma-separated, trimmed, non-empty entries
@@ -987,10 +985,6 @@ func Load(spec Spec) (Config, error) {
 		}
 		cfg.CORSAllowedOrigins = parseCORSOrigins(corsOrigins)
 		cfg.PagerDutyOAuthRedirectURI, _ = lookup("PAGER_DUTY_REDIRECT_URI")
-		cfg.APIJWTSecret, _, err = secrets.ResolveSecret("JWT_SECRET_KEY", lookup)
-		if err != nil {
-			return Config{}, err
-		}
 		for _, state := range []struct {
 			env   string
 			field *secrets.Value
@@ -1004,19 +998,9 @@ func Load(spec Spec) (Config, error) {
 			}
 			*state.field = value
 		}
-		if cfg.SSOStateSecret.Configured() {
-			for _, other := range []struct {
-				env   string
-				value secrets.Value
-			}{{"GITHUB_APP_STATE_SECRET", cfg.GitHubAppStateSecret}, {"JWT_SECRET_KEY", cfg.APIJWTSecret}} {
-				if other.value.Configured() && other.value.Reveal() == cfg.SSOStateSecret.Reveal() {
-					return Config{}, fmt.Errorf("SSO_STATE_SECRET must differ from %s: one key per purpose", other.env)
-				}
-			}
-		}
-		if cfg.GitHubAppStateSecret.Configured() && cfg.APIJWTSecret.Configured() &&
-			cfg.GitHubAppStateSecret.Reveal() == cfg.APIJWTSecret.Reveal() {
-			return Config{}, errors.New("GITHUB_APP_STATE_SECRET must differ from JWT_SECRET_KEY: one key per purpose")
+		if cfg.SSOStateSecret.Configured() && cfg.GitHubAppStateSecret.Configured() &&
+			cfg.GitHubAppStateSecret.Reveal() == cfg.SSOStateSecret.Reveal() {
+			return Config{}, errors.New("SSO_STATE_SECRET must differ from GITHUB_APP_STATE_SECRET: one key per purpose")
 		}
 		cfg.LinkTokenSecret, _, err = secrets.ResolveSecret("LINK_TOKEN_SECRET", lookup)
 		if err != nil {

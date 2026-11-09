@@ -95,6 +95,12 @@ type Deps struct {
 	// (AUTH_PROXY_ORG_PROVISIONING). Nil leaves the member, invite and delete
 	// routes as they were: go-api writes, no auth call.
 	OrgProvisioner authprovision.Provisioner
+	// OrgDeletionAuth is AUTH_PROXY_URL set: an auth-service holds organizations, so the organization delete asks it to
+	// deprovision even with AUTH_PROXY_ORG_PROVISIONING off. False (no auth-service) deletes as before, with no call.
+	OrgDeletionAuth bool
+	// OrgDeprovisioner is the delete's auth-service client with AUTH_PROXY_ORG_PROVISIONING off; nil while
+	// OrgDeletionAuth is the no_client case. Unused with the switch on (OrgProvisioner deprovisions then).
+	OrgDeprovisioner OrgDeprovisioner
 	// OrgSuspender is the client of auth-service's organization suspend route, from the same switch; nil leaves PATCH
 	// is_active=false as it was.
 	OrgSuspender orgreactivate.Suspender
@@ -151,6 +157,8 @@ func Routes(deps Deps) []httpapi.Route {
 		invites:            deps.Invites,
 		orgReactivator:     deps.OrgReactivator,
 		orgProvision:       deps.OrgProvisioner,
+		orgDeletionAuth:    deps.OrgDeletionAuth,
+		orgDeprovision:     deps.OrgDeprovisioner,
 		orgSuspender:       deps.OrgSuspender,
 		orgState:           deps.OrgState,
 		delegator:          deps.Delegator,
@@ -226,6 +234,9 @@ type handlers struct {
 	// orgProvision is Deps.OrgProvisioner: when set, the member, invite and
 	// delete routes ask auth-service and write nothing of their own.
 	orgProvision authprovision.Provisioner
+	// orgDeletionAuth and orgDeprovision are Deps.OrgDeletionAuth and Deps.OrgDeprovisioner.
+	orgDeletionAuth bool
+	orgDeprovision  OrgDeprovisioner
 	// orgSuspender is Deps.OrgSuspender, the PATCH is_active=false counterpart.
 	orgSuspender orgreactivate.Suspender
 	// orgState is Deps.OrgState: the read whose revision the is_active call sends.

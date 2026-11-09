@@ -2,6 +2,9 @@ package authruntime
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"regexp"
 	"strings"
@@ -23,6 +26,7 @@ func TestNoFixedCredentialLiteralInThePackage(t *testing.T) {
 		t.Fatal(err)
 	}
 	scanned := 0
+	sources := map[string][]byte{}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
 			continue
@@ -32,6 +36,7 @@ func TestNoFixedCredentialLiteralInThePackage(t *testing.T) {
 			t.Fatal(err)
 		}
 		scanned++
+		sources[entry.Name()] = raw
 		for number, line := range strings.Split(string(raw), "\n") {
 			for _, found := range shaped.FindAllString(line, -1) {
 				if mixed(found) {
@@ -46,10 +51,80 @@ func TestNoFixedCredentialLiteralInThePackage(t *testing.T) {
 	if scanned == 0 {
 		t.Fatal("no Go source scanned: the scan measured nothing")
 	}
+	aliased, parsed, err := aliasedPasswordFindings(sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed == 0 || parsed != scanned {
+		t.Fatalf("the alias pass parsed %d of %d Go sources: it measured nothing", parsed, scanned)
+	}
+	for _, finding := range aliased {
+		t.Errorf("%s holds a fixed password bound to a literal and formatted into a role password", finding)
+	}
 }
 
-func aliasedPasswordFindings(name string, src []byte) ([]string, error) {
-	return nil, nil
+// aliasedPasswordFindings parses every source and reports, as "<line> <file>", each call whose format holds
+// PASSWORD '%s' and takes a string literal, or an identifier bound to a string literal anywhere in the package.
+// Residual: a password built by string concatenation is not seen.
+func aliasedPasswordFindings(sources map[string][]byte) (findings []string, parsed int, err error) {
+	format := regexp.MustCompile(`(?i)password\s+'%s'`)
+	fset := token.NewFileSet()
+	files := map[string]*ast.File{}
+	for name, src := range sources {
+		file, err := parser.ParseFile(fset, name, src, 0)
+		if err != nil {
+			return nil, 0, err
+		}
+		files[name] = file
+	}
+	bound := map[string]bool{}
+	isString := func(expr ast.Expr) bool {
+		lit, ok := expr.(*ast.BasicLit)
+		return ok && lit.Kind == token.STRING
+	}
+	for _, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.ValueSpec:
+				for i, name := range n.Names {
+					if i < len(n.Values) && isString(n.Values[i]) {
+						bound[name.Name] = true
+					}
+				}
+			case *ast.AssignStmt:
+				for i, lhs := range n.Lhs {
+					if ident, ok := lhs.(*ast.Ident); ok && i < len(n.Rhs) && isString(n.Rhs[i]) {
+						bound[ident.Name] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	for name, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			withFormat := false
+			for _, arg := range call.Args[:max(len(call.Args)-1, 0)] {
+				if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING && format.MatchString(lit.Value) {
+					withFormat = true
+				}
+			}
+			if !withFormat {
+				return true
+			}
+			last := call.Args[len(call.Args)-1]
+			ident, isIdent := last.(*ast.Ident)
+			if (isIdent && bound[ident.Name]) || isString(last) {
+				findings = append(findings, fmt.Sprintf("%d %s", fset.Position(last.Pos()).Line, name))
+			}
+			return true
+		})
+	}
+	return findings, len(files), nil
 }
 
 func TestAliasedPasswordConstIsFound(t *testing.T) {
@@ -57,9 +132,12 @@ func TestAliasedPasswordConstIsFound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found, err := aliasedPasswordFindings("pw_alias_fixture.go", src)
+	found, parsed, err := aliasedPasswordFindings(map[string][]byte{"pw_alias_fixture.go": src})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if parsed != 1 {
+		t.Fatalf("parsed %d files, want 1", parsed)
 	}
 	want := map[int]bool{8: true, 13: true, 17: true}
 	for _, line := range found {
@@ -74,5 +152,18 @@ func TestAliasedPasswordConstIsFound(t *testing.T) {
 	}
 	for number := range want {
 		t.Errorf("fixture line %d is not reported", number)
+	}
+}
+
+func TestAliasedPasswordConstInAnotherFileIsFound(t *testing.T) {
+	found, parsed, err := aliasedPasswordFindings(map[string][]byte{
+		"a.go": []byte("package p\n\nconst pw = \"x1\"\n"),
+		"b.go": []byte("package p\n\nimport \"fmt\"\n\nfunc f() string {\n\treturn fmt.Sprintf(`CREATE ROLE r LOGIN PASSWORD '%s'`, pw)\n}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed != 2 || len(found) != 1 || found[0] != "6 b.go" {
+		t.Fatalf("parsed %d, findings %q", parsed, found)
 	}
 }

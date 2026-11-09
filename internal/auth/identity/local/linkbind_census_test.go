@@ -42,6 +42,7 @@ var passwordInserters = []string{
 	"internal/api/session/register.go",
 	"internal/api/session/social.go",
 	"internal/apiservice/admin/userstore.go",
+	"internal/auth/identity/adminusers.go",
 	"internal/auth/identity/publicusers.go",
 	"internal/testsupport/sessionscenario/sessionscenario.go",
 }

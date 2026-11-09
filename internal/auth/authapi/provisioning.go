@@ -135,14 +135,14 @@ type ProvisioningDeps struct {
 	Orgs            OrganizationLifecycle
 	ServiceAccounts ServiceAccounts // the organization service account aggregate
 	Grants          Grants          // the resource grant aggregate; nil mounts no grant route
-	// Workload is the go-api workload token path the session issue route
-	// takes too (one subject); nil refuses every workload token.
+	// Workload is the go-api workload token path the session issue route takes too (one subject); nil refuses every workload token.
 	Workload *SessionIssueWorkload
 	Logger   *slog.Logger
 	Meter    metric.Meter
-	// ProfileRows is the endpoint-profile document the routes are checked
-	// against; nil is the one the binary embeds. Tests plant others.
+	// ProfileRows is the endpoint-profile document the routes are checked against; nil is the one the binary embeds. Tests plant others.
 	ProfileRows []byte
+	// UsersAdminStores are the user-admin routes' stores: UsersAdminRoutes reads them, ProvisioningRoutes does not.
+	UsersAdminStores
 }
 
 type provisioningHandlers struct {
@@ -264,7 +264,7 @@ func (h provisioningHandlers) caller(w http.ResponseWriter, r *http.Request, op,
 		h.retiredRefusals.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", op)))
 		h.rec.logger.WarnContext(ctx, "provisioning route refused: service credential", "operation", op, "refusal", "retired_credential_class")
 	case issueClassWorkload:
-		if !workloadOperations[op] {
+		if !workloadOperations[op] && !usersAdminOperations[op] {
 			h.rec.logger.WarnContext(ctx, "provisioning route refused: workload token", "operation", op, "refusal", "operation")
 			break
 		}

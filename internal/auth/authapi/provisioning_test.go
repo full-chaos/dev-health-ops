@@ -300,6 +300,8 @@ type provFixture struct {
 	grants                                      *fakeGrants
 	reads                                       *fakeReads
 	grantReads                                  *fakeGrantReads
+	usersAdmin                                  *fakeUsersAdmin
+	roles                                       *fakePlatformRoles
 	reader                                      *sdkmetric.ManualReader
 	logs                                        *bytes.Buffer
 	mux                                         *http.ServeMux
@@ -369,7 +371,8 @@ func buildProvFixture(t *testing.T, profileRows []byte, w *workloadIssueFixture)
 		workload = w.workload
 	}
 	f := &provFixture{t: t, w: w, orgs: &fakeEnsurer{}, members: &fakeMembers{}, invites: &fakeInvites{},
-		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, sa: &fakeServiceAccounts{}, grants: &fakeGrants{}, reads: &fakeReads{}, grantReads: &fakeGrantReads{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
+		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, sa: &fakeServiceAccounts{}, grants: &fakeGrants{}, reads: &fakeReads{}, grantReads: &fakeGrantReads{}, usersAdmin: &fakeUsersAdmin{}, roles: &fakePlatformRoles{},
+		reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
 		org: uuid.New(), admin: uuid.New(), owner: uuid.New(), viewer: uuid.New(), super: uuid.New(), target: uuid.New(), x: uuid.New()}
 	f.account()
 	f.grants.principal = f.target
@@ -383,9 +386,10 @@ func buildProvFixture(t *testing.T, profileRows []byte, w *workloadIssueFixture)
 	}
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, ProfileRows: profileRows,
-		Workload: workload,
-		Logger:   slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Meter:    sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
+		UsersAdminStores: UsersAdminStores{UsersAdmin: f.usersAdmin, PlatformRoles: f.roles},
+		Workload:         workload,
+		Logger:           slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Meter:            sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,8 +399,15 @@ func buildProvFixture(t *testing.T, profileRows []byte, w *workloadIssueFixture)
 	if err != nil {
 		t.Fatal(err)
 	}
+	usersRoutes, err := UsersAdminRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs, ProfileRows: profileRows,
+		UsersAdminStores: UsersAdminStores{UsersAdmin: f.usersAdmin, PlatformRoles: f.roles}, Workload: workload,
+		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.mux = http.NewServeMux()
-	for _, route := range append(routes, readRoutes...) {
+	for _, route := range append(append(routes, readRoutes...), usersRoutes...) {
 		f.mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
 	}
 	return f

@@ -65,9 +65,10 @@ const EnvAuthProxyOrgProvisioning = "AUTH_PROXY_ORG_PROVISIONING"
 // default. It needs AUTH_PROXY_SESSIONS: the base session of a delegated session is an auth-service session.
 const EnvAuthProxyImpersonation = "AUTH_PROXY_IMPERSONATION"
 
-// EnvAuthProxyServiceAccountKeys is the switch of the admin service account key routes (CHAOS-9262): on, go-api
-// sends issue, rotate, revoke and list to auth-service's key routes with its workload token; off, the routes answer
-// 503 config_missing. It is no aggregate and is off by default.
+// EnvAuthProxyServiceAccountKeys is the switch of the admin service account key routes (CHAOS-9262) and lifecycle
+// routes (CHAOS-13320): on, go-api sends issue, rotate, revoke and list, and create, disable, enable and owner, to
+// auth-service with its workload token; off, the key routes answer 503 config_missing and the lifecycle routes are not
+// mounted (their paths answer 404 as before). It is no aggregate and is off by default.
 const EnvAuthProxyServiceAccountKeys = admin.EnvServiceAccountKeys
 
 // AuthProxyFlagEnv is the routing flag of an aggregate, AUTH_PROXY_<NAME>.
@@ -798,6 +799,19 @@ func serviceAccountKeys(cfg AuthProxyConfig, cred provisioningCredential) (authp
 		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyServiceAccountKeys, err)
 	}
 	return authprovision.NewKeyClient(core), nil
+}
+
+// serviceAccounts is the client of auth-service's service account lifecycle routes under the same switch and
+// credential as serviceAccountKeys; nil when off, so the admin lifecycle routes are not mounted.
+func serviceAccounts(cfg AuthProxyConfig, cred provisioningCredential) (authprovision.ServiceAccounts, error) {
+	if !cfg.ServiceAccountKeysOn() {
+		return nil, nil
+	}
+	core, err := authprovision.NewWorkloadCore(cfg.Upstream, cred.workload, cfg.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyServiceAccountKeys, err)
+	}
+	return authprovision.NewAccountClient(core), nil
 }
 
 // orgProvisioner is the client of auth-service's provisioning routes when

@@ -230,7 +230,7 @@ func compatRoutes(
 	if err != nil {
 		return nil, err
 	}
-	provisioning, err := provisioningRoutes(cfg, logger, pool, schema, identities, issueWorkload, sessions)
+	provisioning, err := goAPIInternalRoutes(cfg, logger, pool, schema, identities, issueWorkload, sessions)
 	if err != nil {
 		return nil, err
 	}

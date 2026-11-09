@@ -113,7 +113,7 @@ func (d *dialCounter) settle() {
 			last, quiet = n, time.Now()
 			continue
 		}
-		//abstime:allow quiet window, never a pass/fail: a later dial fails by name in backstop, a cell still dialling at 1s fails by name
+		//abstime:allow D6934: the settle is a wait, never a pass/fail on time; backstop re-reads the dial counter, so a late dial fails by cell name
 		if time.Since(quiet) >= 25*time.Millisecond {
 			return
 		}

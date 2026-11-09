@@ -84,10 +84,13 @@ type appendedGroup struct {
 	deleted     uint8
 }
 
-// appendedSince reads the log rows stored after since.
+// appendedSince reads the log rows stored after since. The mark is bound in
+// microseconds: clickhouse-go renders a positional time.Time argument as a
+// whole-second toDateTime, which would count an earlier refresh of the same
+// second as appended after the mark.
 func appendedSince(ctx context.Context, t *testing.T, conn driver.Conn, since time.Time) []appendedGroup {
 	t.Helper()
-	rows, err := conn.Query(ctx, "SELECT org_id, row_key, is_deleted FROM project_team_ownership_groups_log WHERE stored_at > ? ORDER BY org_id, row_key", since)
+	rows, err := conn.Query(ctx, "SELECT org_id, row_key, is_deleted FROM project_team_ownership_groups_log WHERE stored_at > fromUnixTimestamp64Micro(?, 'UTC') ORDER BY org_id, row_key", since.UnixMicro())
 	if err != nil {
 		t.Fatal(err)
 	}

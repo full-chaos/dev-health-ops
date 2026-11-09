@@ -2,6 +2,7 @@ package authapi
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -77,11 +78,15 @@ func TestAuthorizeOverCapWorkloadTokenGetsTheGarbageAnswer(t *testing.T) {
 	}
 }
 
-// withoutRequestID is the answer body with this request's minted id removed.
+// withoutRequestID is the answer body without the members minted per request
+// (request_id, occurred_at).
 func withoutRequestID(rec *httptest.ResponseRecorder) string {
-	id := rec.Header().Get("X-Auth-Request-ID")
-	if id == "" {
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		return rec.Body.String()
 	}
-	return strings.ReplaceAll(rec.Body.String(), id, "")
+	delete(body, "request_id")
+	delete(body, "occurred_at")
+	out, _ := json.Marshal(body)
+	return string(out)
 }

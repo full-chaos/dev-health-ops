@@ -2104,3 +2104,33 @@ postgresql:
   #    loopback: trust) stays in force. Switching it restarts the pod.
   hba:
     enabled: false
+  # -- Nightly pg_dump of the bundled PostgreSQL (CHAOS-13373). Off by default: with `enabled: false`
+  #    the render does not change. With `enabled: true` and postgresql.enabled, the chart adds the
+  #    CronJob <fullname>-postgresql-backup and the PVC <fullname>-postgresql-backups (kept on
+  #    uninstall). The Job runs the image above (pg_dump major == server major), reads the password
+  #    from the Secret and key the StatefulSet reads, writes <UTC ts>.dump (custom format, checked
+  #    with pg_restore --list) and <ts>.dump.sha256, then keeps the newest `keep` dumps. A failed
+  #    dump fails the Job. The PVC is a separate volume, not off-host: it survives a lost or broken
+  #    database volume, not a lost disk. Runbook: docs/operate/maintain/backup-and-restore.md.
+  backup:
+    enabled: false
+    # -- Cron schedule, read in `timeZone`.
+    schedule: "17 3 * * *"
+    # -- CronJob spec.timeZone. Empty leaves it out (the controller's own zone).
+    timeZone: "Etc/UTC"
+    # -- How many dumps (with their .sha256) stay on the PVC; older ones are deleted after a good dump.
+    keep: 7
+    size: 20Gi
+    # -- Empty = the cluster default StorageClass.
+    storageClass: ""
+    # -- A finished Job (and its pod log) is deleted this long after it ends. The stale-backup alert
+    #    (alerts/rules.yml PostgresBackupStale) depends on it: a successful Job's series lasts this
+    #    long, and the alert window is 25h minus it. Change both together.
+    ttlSecondsAfterFinished: 43200
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"

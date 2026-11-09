@@ -197,8 +197,13 @@ func TestPostgresBackupRunsTheStatefulSetImageAgainstTheBundledService(t *testin
 	if !strings.Contains(c["image"].(string), "@sha256:") {
 		t.Errorf("image %v is not digest-pinned", c["image"])
 	}
-	if c["imagePullPolicy"] != at(pg, "imagePullPolicy") {
-		t.Errorf("imagePullPolicy = %v, want the StatefulSet's %v", c["imagePullPolicy"], at(pg, "imagePullPolicy"))
+	// The StatefulSet sets no imagePullPolicy; the Job takes postgresql.image.pullPolicy, never image.pullPolicy.
+	if c["imagePullPolicy"] != "IfNotPresent" {
+		t.Errorf("imagePullPolicy = %v, want postgresql.image.pullPolicy IfNotPresent", c["imagePullPolicy"])
+	}
+	never := append(append([]string{}, pgBackupOn...), "--set", "image.pullPolicy=Never")
+	if cj, _, _, _ := pgBackupRender(t, never...); pgBackupContainer(t, cj)["imagePullPolicy"] != "IfNotPresent" {
+		t.Error("image.pullPolicy=Never leaks onto the backup Job's registry image")
 	}
 	for name, want := range map[string]any{
 		"PGHOST":      "a-dev-health-postgresql",

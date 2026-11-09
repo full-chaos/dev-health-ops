@@ -1,0 +1,133 @@
+{{- if and .Values.postgresql.enabled .Values.postgresql.backup.enabled }}
+{{- /*
+CHAOS-13373: nightly pg_dump of the bundled PostgreSQL to a dedicated PVC.
+
+Off by default (postgresql.backup.enabled=false): nothing here renders. The PVC
+is its own volume, so a dump survives a lost or broken database volume or a bad
+migration; it is on the same node and disk, so it does not survive a lost disk.
+
+The Job runs the StatefulSet's own image (pg_dump major == server major) and
+reads the password from the Secret and key the StatefulSet reads
+(dev-health.postgresqlPasswordSecretKeyRef). The pod is a release pod (release
+selector labels), so the release-wide NetworkPolicy already admits it at
+PostgreSQL; no policy of its own is needed.
+
+ttlSecondsAfterFinished removes a finished Job, so k8s.job.successful_pods for
+a good run lasts that long: the stale-backup alert (alerts/rules.yml,
+PostgresBackupStale) is built on it. Change the two together.
+*/}}
+{{- $b := .Values.postgresql.backup }}
+{{- if lt (int $b.keep) 1 }}
+{{- fail "postgresql.backup.keep must be 1 or more: it is how many dumps stay on the PVC" }}
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "dev-health.fullname" . }}-postgresql-backups
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "postgresql-backup" "context" $) | nindent 4 }}
+  annotations:
+    # The dumps outlive the release: helm uninstall leaves this claim.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if $b.storageClass }}
+  storageClassName: {{ $b.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $b.size }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "dev-health.fullname" . }}-postgresql-backup
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "postgresql-backup" "context" $) | nindent 4 }}
+spec:
+  schedule: {{ $b.schedule | quote }}
+  {{- with $b.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: {{ int $b.ttlSecondsAfterFinished }}
+      template:
+        metadata:
+          labels:
+            {{- include "dev-health.componentSelectorLabels" (dict "component" "postgresql-backup" "context" $) | nindent 12 }}
+        spec:
+          {{- include "dev-health.imagePullSecrets" . | nindent 10 }}
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext: {runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, fsGroup: 70, fsGroupChangePolicy: OnRootMismatch, seccompProfile: {type: RuntimeDefault}}
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ include "dev-health.fullname" . }}-postgresql-backups
+            - name: tmp
+              emptyDir: {}
+          containers:
+            - name: pg-dump
+              image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
+              # The PostgreSQL image's own policy, never image.pullPolicy (see postgresql.image.pullPolicy).
+              imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+              # 70 is the postgres user of the image (the uid the server runs as).
+              securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+              env:
+                - name: PGHOST
+                  value: {{ include "dev-health.fullname" . }}-postgresql
+                - name: PGPORT
+                  value: "5432"
+                - name: PGUSER
+                  value: {{ .Values.postgresql.credentials.user | quote }}
+                - name: PGDATABASE
+                  value: {{ .Values.postgresql.credentials.database | quote }}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      {{- include "dev-health.postgresqlPasswordSecretKeyRef" . | nindent 22 }}
+                - name: PGCONNECT_TIMEOUT
+                  value: "30"
+                - name: BACKUP_KEEP
+                  value: {{ int $b.keep | quote }}
+              # Every step must succeed or the Job fails (set -e): a dump that is
+              # not complete and readable never gets the .dump name, and old
+              # dumps are pruned only after a good one is in place.
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  case "$BACKUP_KEEP" in ''|*[!0-9]*|0) echo "pg-backup failed: BACKUP_KEEP=$BACKUP_KEEP is not a count of 1 or more" >&2; exit 2 ;; esac
+                  cd /backups
+                  ts=$(date -u +%Y%m%dT%H%M%SZ)
+                  part="$ts.dump.partial"
+                  pg_dump --format=custom --file="$part"
+                  pg_restore --list "$part" >/dev/null
+                  sum=$(sha256sum "$part" | cut -d ' ' -f 1)
+                  printf '%s  %s\n' "$sum" "$ts.dump" > "$ts.dump.sha256"
+                  mv -- "$part" "$ts.dump"
+                  bytes=$(wc -c < "$ts.dump" | tr -d ' ')
+                  echo "pg-backup ok file=$ts.dump bytes=$bytes sha256=$(printf '%s' "$sum" | cut -c 1-12)"
+                  ls -1 -- *.dump | sort -r | tail -n "+$((BACKUP_KEEP + 1))" | while read -r old; do
+                    rm -f -- "$old" "$old.sha256"
+                    echo "pg-backup pruned file=$old"
+                  done
+                  find . -maxdepth 1 -name '*.partial' -mtime +0 -exec rm -f -- {} \;
+              resources:
+                {{- toYaml $b.resources | nindent 16 }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+                - name: tmp
+                  mountPath: /tmp
+{{- end }}

@@ -390,7 +390,7 @@ func (g *Guard) RefuseImpersonatingCaller(next http.Handler) http.Handler {
 			WriteAuthFailure(w, "", ErrUnavailable)
 		case session != nil:
 			g.logger.WarnContext(r.Context(), "api guard: route refused in an impersonation session",
-				slog.String("path", r.URL.Path), slog.String("admin_user_id", session.AdminUserID.String()))
+				slog.String("path", r.Pattern), slog.String("admin_user_id", session.AdminUserID.String()))
 			WriteDetail(w, http.StatusForbidden, msgImpersonationReadOnly, nil)
 		default:
 			next.ServeHTTP(w, r)

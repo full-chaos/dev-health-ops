@@ -72,8 +72,8 @@ func (h *handlers) writeProvisionUnavailable(w http.ResponseWriter) {
 }
 
 // withDeactivated adds the wire reason auth-service sends for a deactivated
-// actor; only the member and invite routes carry it, organization creation
-// keeps its own answer.
+// actor; the member, invite and service account key routes carry it,
+// organization creation keeps its own answer.
 func withDeactivated(answers map[string]provisionAnswer) map[string]provisionAnswer {
 	answers["principal_deactivated"] = provisionAnswer{http.StatusForbidden, "Account is deactivated"}
 	return answers

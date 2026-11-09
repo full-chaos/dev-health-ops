@@ -122,7 +122,59 @@ func apiProbesPortsUnique(g *guard) {
 		seen[k] = true
 		names = append(names, str(at(p, "name")))
 	}
-	g.expect(equal(names, []string{"http"}), "query-api container ports named %v, want [http]: /metrics is scraped through the http port", names)
+	g.expect(equal(names, []string{"http", "operator"}), "query-api container ports named %v, want [http operator]: probes and the /metrics scrape use the operator port", names)
+}
+
+func queryAPIOperatorListener(g *guard) {
+	docs := g.docs("operator-contract", join(set("queryApi.enabled=true"), []string{"--show-only", "templates/query-api-deployment.yaml"})...)
+	deps := ofKind(docs, "Deployment")
+	if len(deps) == 0 {
+		g.failf("no query-api Deployment rendered")
+		return
+	}
+	c := containers(deps[0])[0]
+	opPort := ""
+	for _, p := range list(c["ports"]) {
+		if str(at(p, "name")) == "operator" {
+			opPort = str(at(p, "containerPort"))
+		}
+	}
+	g.expect(opPort == "8080", "query-api declares the operator containerPort %q, want 8080", opPort)
+	for _, pr := range []struct{ kind, path string }{{"readinessProbe", "/readyz"}, {"livenessProbe", "/healthz"}} {
+		g.expect(str(at(c, pr.kind, "httpGet", "port")) == "operator", "query-api %s targets port %q, want operator", pr.kind, str(at(c, pr.kind, "httpGet", "port")))
+		g.expect(str(at(c, pr.kind, "httpGet", "path")) == pr.path, "query-api %s path is %q, want %s", pr.kind, str(at(c, pr.kind, "httpGet", "path")), pr.path)
+	}
+	addr := ""
+	for _, e := range list(c["env"]) {
+		if str(at(e, "name")) == "DEV_HEALTH_HTTP_ADDR" {
+			addr = str(at(e, "value"))
+		}
+	}
+	g.expect(addr == ":8080", "query-api DEV_HEALTH_HTTP_ADDR is %q, want :8080 (the operator port)", addr)
+}
+
+func queryAPIOperatorPortCollisionRefused(g *guard) {
+	g.refusal("queryApi.operatorPort equal to queryApi.port", "t", set("queryApi.enabled=true", "queryApi.operatorPort=8090")...)
+}
+
+func queryAPIOperatorScrapeAdmitted(g *guard) {
+	docs := g.docs("operator-netpol", join(set("queryApi.enabled=true", "networkPolicy.enabled=true", "queryApi.mcp.enabled=true", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/8"), setJSON(`queryApi.mcp.allowedFrom=[{"matchLabels":{"a":"b"}}]`))...)
+	pol := named(docs, "NetworkPolicy", "operator-netpol-dev-health-ingress-query-api")
+	if pol == nil {
+		g.failf("no query-api ingress NetworkPolicy rendered")
+		return
+	}
+	found := false
+	for _, r := range list(at(pol, "spec", "ingress")) {
+		if len(list(at(r, "from"))) == 1 && at(r, "from", 0, "podSelector") != nil {
+			ports := ""
+			for _, p := range list(at(r, "ports")) {
+				ports += str(at(p, "port")) + " "
+			}
+			found = strings.Contains(ports, "8080")
+		}
+	}
+	g.expect(found, "the in-namespace rule of the query-api ingress policy does not admit the operator port 8080 (the scrape)")
 }
 
 func migrationHookDefault(g *guard) {
@@ -168,6 +220,9 @@ func TestRolloutGuardsRealTree(t *testing.T) {
 		check{"rolling-group-wins", rollingGroupWins},
 		check{"rolling-schema-rejects-unknown-key", rollingSchemaRejectsUnknownKey},
 		check{"api-probes-ports-unique", apiProbesPortsUnique},
+		check{"query-api-operator-listener", queryAPIOperatorListener},
+		check{"query-api-operator-port-collision-refused", queryAPIOperatorPortCollisionRefused},
+		check{"query-api-operator-scrape-admitted", queryAPIOperatorScrapeAdmitted},
 		check{"migration-hook-default", migrationHookDefault},
 		check{"migration-hook-post-install-refused", migrationHookPostInstallRefused},
 		check{"migration-hook-local-needs-bundled", migrationHookLocalNeedsBundled},
@@ -199,7 +254,19 @@ func TestRolloutGuardsPlantedDefects(t *testing.T) {
 			apiProbesPortsUnique, "must be unique"},
 		{"query-api-port-renamed", chartOnly,
 			mut(chartFile(qapi), "            - name: http\n              containerPort: {{ .Values.queryApi.port }}", "            - name: web\n              containerPort: {{ .Values.queryApi.port }}"),
-			apiProbesPortsUnique, "named [web]"},
+			apiProbesPortsUnique, "named [web operator]"},
+		{"query-api-readiness-back-on-http", chartOnly,
+			mut(chartFile(qapi), "httpGet: {path: /readyz, port: operator}", "httpGet: {path: /readyz, port: http}"),
+			queryAPIOperatorListener, "readinessProbe targets port"},
+		{"query-api-liveness-back-on-http", chartOnly,
+			mut(chartFile(qapi), "httpGet: {path: /healthz, port: operator}", "httpGet: {path: /healthz, port: http}"),
+			queryAPIOperatorListener, "livenessProbe targets port"},
+		{"query-api-operator-port-collision-accepted", chartOnly,
+			mut(chartFile(qapi), `{{- if or (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.port))`, `{{- if or false (eq 1 2)`),
+			queryAPIOperatorPortCollisionRefused, "must be refused"},
+		{"query-api-operator-scrape-not-admitted", chartOnly,
+			mut(chartFile("templates/networkpolicy.yaml"), "        - protocol: TCP\n          port: {{ $.Values.queryApi.operatorPort }}\n", ""),
+			queryAPIOperatorScrapeAdmitted, "does not admit the operator port"},
 		{"migrate-hook-default-moves", chartOnly,
 			mut(chartFile("templates/migrate-job.yaml"), `{{- $hookEvents := .Values.migrations.hook.events }}`, `{{- $hookEvents := list "pre-install" }}`),
 			migrationHookDefault, "default migrate hook"},

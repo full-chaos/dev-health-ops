@@ -1,10 +1,15 @@
 package secrets
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 )
+
+// ErrEmptyValue is the cause of the error Resolve returns for a key_FILE that
+// holds nothing after its final newline is removed.
+var ErrEmptyValue = errors.New("contains an empty value")
 
 // LookupEnv is compatible with os.LookupEnv and easy to replace in tests.
 type LookupEnv func(string) (string, bool)
@@ -48,7 +53,7 @@ func Resolve(key string, lookup LookupEnv) (Value, bool, error) {
 	}
 	value := trimFinalNewline(string(contents))
 	if value == "" {
-		return Value{}, false, fmt.Errorf("%s_FILE contains an empty value", key)
+		return Value{}, false, fmt.Errorf("%s_FILE %w", key, ErrEmptyValue)
 	}
 	return NewValue(value), true, nil
 }

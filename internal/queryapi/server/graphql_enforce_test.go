@@ -84,6 +84,8 @@ type enforceCaller struct {
 	// orgHeader is the X-Org-Id the request names; memberOfB makes the caller a member of servedOrgB.
 	orgHeader string
 	memberOfB bool
+	// role is the caller's membership role in ecOrg; "" is admin.
+	role string
 }
 
 var callerUser = enforceCaller{user: true}
@@ -99,6 +101,9 @@ func runGraphQLEnforce(t *testing.T, gate *pdp.Gate, caller enforceCaller, docum
 		found:   map[uuid.UUID]bool{ecUser: true},
 		members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
 		roles:   map[[2]uuid.UUID]string{{ecUser, ecOrg}: "admin"},
+	}
+	if caller.role != "" {
+		store.roles[[2]uuid.UUID{ecUser, ecOrg}] = caller.role
 	}
 	if caller.memberOfB {
 		store.members[[2]uuid.UUID{ecUser, servedOrgB}] = true

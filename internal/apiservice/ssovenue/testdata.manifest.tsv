@@ -2,4 +2,5 @@
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 -	header	golden/s-s-o-routes-venue-oracle.json
+cf7ba866886071e670390d379d7152f61035ff7666e2844192864cfa4258c510	hand-written	providers-authorize.go-pin.json
 ddd414d42158a028f75e60a1a05dcd0dffd3c215820b556eb6c765710ffb013f	go-generated	signin.go-pin.json

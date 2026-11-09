@@ -5173,8 +5173,11 @@ check_auth_paths_selftest() {
 # a new package can miss. Every Go package of the module that LOOKS like auth (any
 # path segment starting with auth or audit) or imports the auth schema adapter
 # must be inside the gate (AUTH_PACKAGES) or named, with a reason, in
-# ci/auth_gate_scope_exempt.txt (package<TAB>reason). An exemption that is
-# gated, or that names no package, is stale and fails. The decision is
+# ci/auth_gate_scope_exempt.txt (package<TAB>class<TAB>reason). An exemption that is
+# gated, or that names no package, is stale and fails. A test-only row fails when
+# the package imports the auth schema adapter outside its tests (or looks like
+# auth by path); a package row on a package with test imports only is
+# over-broad and fails. The decision is
 # `cmd/cigate scope-verdict` (internal/cigates/scope.go), over the candidate
 # sources (`scope-candidates -sources`: segment, import, testimport).
 # auth_scope_candidates: the import path of every Go package of the module that

@@ -127,9 +127,15 @@ func nonBlankLines(r io.Reader) ([]string, error) {
 	return out, sc.Err()
 }
 
+// Exemption classes of ci/auth_gate_scope_exempt.txt (package<TAB>class<TAB>reason).
+const (
+	ExemptTestOnly = "test-only" // the auth schema adapter may appear in the package's tests only
+	ExemptPackage  = "package"   // the whole package is exempt; the reason says why
+)
+
 type scopeExemption struct {
-	pkg, reason string
-	tabbed      bool
+	pkg, class, reason string
+	tabbed             bool
 }
 
 // AuthScopeVerdict is the auth scope selftest's decision. gated holds the gate's package paths, sources the
@@ -179,11 +185,12 @@ func AuthScopeVerdict(gated, sources, exempt io.Reader, stdout, stderr io.Writer
 	var rows []scopeExemption
 	exempted := map[string]bool{}
 	for _, l := range exemptLines {
-		pkg, reason, tabbed := strings.Cut(l, "\t")
+		pkg, rest, tabbed := strings.Cut(l, "\t")
 		if strings.HasPrefix(pkg, "#") {
 			continue
 		}
-		rows = append(rows, scopeExemption{pkg: pkg, reason: reason, tabbed: tabbed})
+		class, reason, _ := strings.Cut(rest, "\t")
+		rows = append(rows, scopeExemption{pkg: pkg, class: class, reason: reason, tabbed: tabbed})
 		if tabbed {
 			exempted[pkg] = true
 		}
@@ -197,6 +204,15 @@ func AuthScopeVerdict(gated, sources, exempt io.Reader, stdout, stderr io.Writer
 	if len(missing) > 0 {
 		return fail("package(s) look like auth or import the auth schema but are neither in the gate nor exempt with a reason in ci/auth_gate_scope_exempt.txt: %s", strings.Join(missing, " "))
 	}
+	var classless []string
+	for _, r := range rows {
+		if r.class != ExemptTestOnly && r.class != ExemptPackage {
+			classless = append(classless, r.pkg)
+		}
+	}
+	if len(classless) > 0 {
+		return fail("exemption row(s) with no or unknown class (want package<TAB>%s|%s<TAB>reason): %s", ExemptTestOnly, ExemptPackage, strings.Join(classless, " "))
+	}
 	var stale []string
 	for _, r := range rows {
 		if strings.TrimSpace(r.reason) == "" {
@@ -208,6 +224,27 @@ func AuthScopeVerdict(gated, sources, exempt io.Reader, stdout, stderr io.Writer
 	}
 	if len(stale) > 0 {
 		return fail("stale or reasonless exemption(s) (gated, no longer a candidate, or no reason): %s", strings.Join(stale, " "))
+	}
+	var nonTest, authPath, overBroad []string
+	for _, r := range rows {
+		src := candidates[r.pkg]
+		switch {
+		case r.class == ExemptTestOnly && src[SourceImport]:
+			nonTest = append(nonTest, r.pkg)
+		case r.class == ExemptTestOnly && src[SourceSegment]:
+			authPath = append(authPath, r.pkg)
+		case r.class == ExemptPackage && len(src) == 1 && src[SourceTestImport]:
+			overBroad = append(overBroad, r.pkg)
+		}
+	}
+	if len(nonTest) > 0 {
+		return fail("test-only exemption(s) with a non-test auth schema import: %s", strings.Join(nonTest, " "))
+	}
+	if len(authPath) > 0 {
+		return fail("test-only exemption(s) on an auth-looking path: %s", strings.Join(authPath, " "))
+	}
+	if len(overBroad) > 0 {
+		return fail("over-broad exemption(s) (test imports only; use test-only): %s", strings.Join(overBroad, " "))
 	}
 	fmt.Fprintf(stdout, "auth scope: %d candidate packages, all gated or exempt\n", len(candidates))
 	return 0

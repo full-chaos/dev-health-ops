@@ -111,7 +111,10 @@ func (d *dialCounter) settle() {
 		time.Sleep(5 * time.Millisecond)
 		if n := d.count(); n != last {
 			last, quiet = n, time.Now()
-		} else if time.Since(quiet) >= 25*time.Millisecond {
+			continue
+		}
+		//abstime:allow quiet window, never a pass/fail: a later dial fails by name in backstop, a cell still dialling at 1s fails by name
+		if time.Since(quiet) >= 25*time.Millisecond {
 			return
 		}
 	}

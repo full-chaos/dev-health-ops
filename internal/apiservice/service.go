@@ -399,6 +399,7 @@ func configureWith(
 ) ([]lifecycle.Component, error) {
 	removedenv.ObserveOrgsOwned(ctx, envsecrets.ProcessLookup, logger)
 	warnRetiredJWTSecretKey(ctx, envsecrets.ProcessLookup, logger)
+	warnSharedStateSecret(ctx, cfg, logger)
 	if err := checkTrustedProxies(logger); err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_trusted_proxies", "api_trusted_proxies_invalid", err)
 	}
@@ -708,6 +709,15 @@ const retiredJWTSecretKey = "JWT_SECRET_KEY"
 func warnRetiredJWTSecretKey(ctx context.Context, lookup func(string) (string, bool), logger *slog.Logger) {
 	if value, _ := lookup(retiredJWTSecretKey); value != "" {
 		logger.WarnContext(ctx, retiredJWTSecretKey+" is set but unused (HS256 retired)")
+	}
+}
+
+// warnSharedStateSecret logs one WARN when SSO_STATE_SECRET equals GITHUB_APP_STATE_SECRET. One key per
+// purpose is config hygiene, never a refused start (product rule 3); the line names the keys, never a value.
+func warnSharedStateSecret(ctx context.Context, cfg config.Config, logger *slog.Logger) {
+	if cfg.SSOStateSecret.Configured() && cfg.GitHubAppStateSecret.Configured() &&
+		cfg.SSOStateSecret.Reveal() == cfg.GitHubAppStateSecret.Reveal() {
+		logger.WarnContext(ctx, "SSO_STATE_SECRET equals GITHUB_APP_STATE_SECRET: set one key per purpose")
 	}
 }
 

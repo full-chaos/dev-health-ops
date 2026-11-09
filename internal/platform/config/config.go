@@ -998,10 +998,6 @@ func Load(spec Spec) (Config, error) {
 			}
 			*state.field = value
 		}
-		if cfg.SSOStateSecret.Configured() && cfg.GitHubAppStateSecret.Configured() &&
-			cfg.GitHubAppStateSecret.Reveal() == cfg.SSOStateSecret.Reveal() {
-			return Config{}, errors.New("SSO_STATE_SECRET must differ from GITHUB_APP_STATE_SECRET: one key per purpose")
-		}
 		cfg.LinkTokenSecret, _, err = secrets.ResolveSecret("LINK_TOKEN_SECRET", lookup)
 		if err != nil {
 			return Config{}, err

@@ -80,9 +80,15 @@ func (f *provFixture) usersReached() int {
 	return f.usersAdmin.calls + len(f.roles.grants) + len(f.roles.revokes)
 }
 
+// The go-api workload token passes the gate: a {} body is the handler's own 400 malformed (not 401/404) with no store
+// call, and a served body reaches the user-admin store once.
 func TestUsersAdminRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 	for _, c := range usersRouteCases(t) {
 		f := newEmbeddedUsersFixture(t)
+		expectRefusal(t, f.post(c.path, "{}", nil), http.StatusBadRequest, reasonMalformed)
+		if f.usersReached() != 0 {
+			t.Fatalf("%s: a {} body reached a store (%d)", c.op, f.usersReached())
+		}
 		if response := f.post(c.path, c.body(f), nil); response.Code != http.StatusOK {
 			t.Fatalf("%s with the go-api workload token: %d %s, want 200", c.op, response.Code, response.Body)
 		}
@@ -94,9 +100,32 @@ func TestUsersAdminRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 
 // Every other workload principal prod mints a token for (the acr-api, query-api and web rows of auth.workloads, named
 // in credential-classes.json) is refused on every route, as is a go-api token for another audience or out of time: the
-// one 401 invalid_credentials, and no actor read and no store call.
+// one 401 invalid_credentials, and no actor read and no store call. Each of the three is a principal this auth-service
+// admits elsewhere on the same key set (acr-api on the acr events gate, all three on the authorize caller gate), so
+// only a users gate that names go-api alone refuses them.
 func TestUsersAdminRoutesRefuseOtherProdWorkloadSubjects(t *testing.T) {
 	acrAPI, queryAPI, web := session.WirePrincipalID(uuid.New()), session.WirePrincipalID(uuid.New()), session.WirePrincipalID(uuid.New())
+	admitted := newEmbeddedUsersFixture(t).w
+	acrEvents, err := NewSessionIssueWorkload(SessionIssueWorkloadConfig{IssuerURL: goldenIssuer, Keys: admitted.keys, Subject: acrAPI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	callers, err := NewAuthorizeCallers(AuthorizeCallersConfig{IssuerURL: goldenIssuer, Keys: admitted.keys, Subjects: []string{acrAPI, queryAPI, web}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range []string{acrAPI, queryAPI, web} {
+		header, _ := admitted.mint(contracts.WorkloadTokenTyp, func(c *contracts.WorkloadTokenClaims) { c.Sub = sub })
+		bearer := strings.TrimPrefix(header["Authorization"], "Bearer ")
+		if caller, why, err := callers.Authenticate(bearer); err != nil || why != "" || caller.Subject != sub {
+			t.Fatalf("the authorize caller gate does not admit %s: %q %v", sub, why, err)
+		}
+		if sub == acrAPI {
+			if _, why, err := acrEvents.authorize(bearer); err != nil || why != "" {
+				t.Fatalf("the acr events gate does not admit acr-api: %q %v", why, err)
+			}
+		}
+	}
 	refused := map[string]func(*contracts.WorkloadTokenClaims){
 		"acr-api subject":               func(c *contracts.WorkloadTokenClaims) { c.Sub = acrAPI },
 		"query-api subject":             func(c *contracts.WorkloadTokenClaims) { c.Sub = queryAPI },
@@ -164,6 +193,9 @@ func TestUsersAdminRoutesRefuseTheRetiredServiceCredential(t *testing.T) {
 	for _, c := range usersRouteCases(t) {
 		expectRefusal(t, f.post(c.path, c.body(f), map[string]string{"Authorization": "Bearer " + provisioningToken}),
 			http.StatusUnauthorized, reasonInvalidCredentials)
+		if got, _ := f.refusals(c.op); got != 1 {
+			t.Fatalf("%s: retired credential refusals = %d, want 1", c.op, got)
+		}
 		if !strings.Contains(f.logs.String(), `"operation":"`+c.op+`","refusal":"retired_credential_class"`) {
 			t.Fatalf("%s: no retired_credential_class refusal in the log:\n%s", c.op, f.logs.String())
 		}

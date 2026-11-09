@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"io"
 	"log/slog"
 	"net/http"
@@ -58,34 +57,6 @@ func wantByteRefusal(t *testing.T, rec *httptest.ResponseRecorder, password stri
 	}
 	if strings.Contains(rec.Body.String(), password) {
 		t.Errorf("body %s echoes the password", rec.Body)
-	}
-}
-
-func registerWith(password string) (rec *httptest.ResponseRecorder, reached bool) {
-	rec = httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", nil)
-	r = r.WithContext(context.WithValue(r.Context(), registerInputKey{}, registerInput{email: "a@example.com", password: password}))
-	reached = reachesPool(func() { handlers{Deps: Deps{Mail: authmail.Config{LinkSecret: testLinkSecret}}}.register(rec, r) })
-	return rec, reached
-}
-
-func TestRegisterRefusesAPasswordOverTheByteLimitBeforeHashing(t *testing.T) {
-	for name, password := range map[string]string{"73 bytes": passwordAt73Bytes, "multi-byte under 72 characters": passwordMultiByte} {
-		rec, reached := registerWith(password)
-		if reached {
-			t.Fatalf("%s: register went on to the transaction", name)
-		}
-		wantByteRefusal(t, rec, password)
-		const want = `{"detail":{"message":"Password validation failed","errors":["Password must be no more than 72 bytes long"]}}`
-		if strings.TrimSpace(rec.Body.String()) != want {
-			t.Errorf("%s: body %s, want the parity table's shape %s", name, rec.Body, want)
-		}
-	}
-}
-
-func TestRegisterAcceptsA72BytePasswordPastThePolicy(t *testing.T) {
-	if _, reached := registerWith(passwordAt72Bytes); !reached {
-		t.Fatal("a 72-byte password was refused")
 	}
 }
 

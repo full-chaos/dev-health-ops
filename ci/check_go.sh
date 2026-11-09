@@ -1049,6 +1049,9 @@ check_test() {
 GO_TEST_WEIGHTS="${GO_TEST_WEIGHTS:-${ROOT}/ci/go_test_weights.tsv}"
 # ci/go_test_pins.tsv (CHAOS-13422): the heavy packages ci/go_race_shard.awk places first, each on its own shard.
 GO_TEST_PINS="${GO_TEST_PINS:-${ROOT}/ci/go_test_pins.tsv}"
+# GO_TEST_SERIAL_FACTOR (CHAOS-13422): the other packages of a test shard overlap, so a shard's wall is about their summed time / 1.9
+# (1.80-2.01 over the 5 shards of PR #5995's run at 9244407eb); the serial package adds its whole wall, so it weighs 2x in the split.
+GO_TEST_SERIAL_FACTOR=2
 GO_TEST_SHARD_CAP_SECONDS="${GO_TEST_SHARD_CAP_SECONDS:-1800}"
 GO_TEST_SHARD_WALL_PERCENT=85
 
@@ -1078,7 +1081,8 @@ check_test_shard_plan() {
       selected=$((selected + 1))
     done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./... \
       | quality_filter "${module_dir}" "${modpath}" \
-      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")
+      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" \
+          -v serial="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}" -v serialx="${GO_TEST_SERIAL_FACTOR}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")
   done
   [ "${selected}" -gt 0 ] || [ "${QUALITY_FILTER_ACTIVE}" -eq 1 ] \
     || die "test shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"

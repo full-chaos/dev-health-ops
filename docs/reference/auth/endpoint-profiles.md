@@ -246,6 +246,13 @@ ticket. It excuses the 4xx rule on the rows that it names, and nothing else.
 When a named row no longer diverges, the gate fails until the ledger row is
 removed.
 
+`TestWrongClassGateQueryAPI` (`internal/queryapi/server/wrong_class_gate_test.go`)
+applies the same rules to the query-api rows, public rows included, on every
+listener a row names. The REST rows run on their production route builders.
+The `/query` route set and two REST builders need a live ClickHouse at build
+time, so their rows run on the listener test stack instead. The census line
+names the stack of each row.
+
 ## `delegated_bearer`
 
 An auth-service row that `authenticateWith` gates has `delegated_bearer`:

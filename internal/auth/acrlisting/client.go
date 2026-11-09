@@ -165,6 +165,18 @@ func ValidOrigin(u *url.URL) bool {
 	return false
 }
 
+const clusterServiceSuffix = ".svc.cluster.local"
+
+// ValidClusterHTTPOrigin reports whether u is a plain-http origin on a cluster-local Service host (<name>.svc.cluster.local,
+// any case), with no user info or fragment. ValidOrigin never accepts it: only a caller's own explicit opt-in may.
+func ValidClusterHTTPOrigin(u *url.URL) bool {
+	if u == nil || u.Scheme != "http" || u.User != nil || u.Fragment != "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return len(host) > len(clusterServiceSuffix) && strings.HasSuffix(host, clusterServiceSuffix)
+}
+
 // New returns a Client.
 func New(cfg Config) (*Client, error) {
 	switch {
@@ -364,7 +376,17 @@ func ValidOrgID(orgID string) bool { return orgPattern.MatchString(orgID) }
 // httpguard.NoRedirects(httpClient), so it follows no redirect. It returns the access token and its lifetime; a
 // failure is an *Error of KindExchange, KindInvalidRequest or KindInvalidTarget that names no token and no body.
 func Exchange(ctx context.Context, httpClient *http.Client, tokenEndpoint *url.URL, subjectTokenFile, orgID string) (string, time.Duration, error) {
-	if httpClient == nil || !ValidOrigin(tokenEndpoint) || !ValidOrgID(orgID) {
+	return exchangeAt(ctx, httpClient, tokenEndpoint, ValidOrigin(tokenEndpoint), subjectTokenFile, orgID)
+}
+
+// ExchangeAllowingClusterHTTP is Exchange that also accepts a plain-http token endpoint on a cluster-local Service host
+// (ValidClusterHTTPOrigin). Only a caller with its own explicit opt-in calls it.
+func ExchangeAllowingClusterHTTP(ctx context.Context, httpClient *http.Client, tokenEndpoint *url.URL, subjectTokenFile, orgID string) (string, time.Duration, error) {
+	return exchangeAt(ctx, httpClient, tokenEndpoint, ValidOrigin(tokenEndpoint) || ValidClusterHTTPOrigin(tokenEndpoint), subjectTokenFile, orgID)
+}
+
+func exchangeAt(ctx context.Context, httpClient *http.Client, tokenEndpoint *url.URL, endpointOK bool, subjectTokenFile, orgID string) (string, time.Duration, error) {
+	if httpClient == nil || !endpointOK || !ValidOrgID(orgID) {
 		return "", 0, fail(KindExchange)
 	}
 	subject, err := readSubject(subjectTokenFile)

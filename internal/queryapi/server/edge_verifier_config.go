@@ -17,7 +17,7 @@ const edgeJWTSecretEnvVar = "GO_API_EDGE_JWT_SECRET"
 
 // buildEdgeVerifierFromEnv builds the access-token verifier every REST route
 // in this binary shares, or (nil, nil) when AUTH_ACCESS_TOKEN_ISSUER is unset:
-// the route then accepts the envelope alone. With the issuer set it routes
+// the route then accepts no bearer (the envelope is retired). With the issuer set it routes
 // every token by the request's endpoint-profile row (routeEdgeVerifier); the
 // validator verifies EdDSA only, so an HS256 token is refused alg_not_allowed.
 func buildEdgeVerifierFromEnv(getenv getenvFunc, users edgeUserStore) (*principal.EdgeVerifier, error) {

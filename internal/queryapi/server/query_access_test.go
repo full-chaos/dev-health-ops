@@ -85,13 +85,14 @@ func TestQueryAPIQueryAndGraphQLUserTokenPath(t *testing.T) {
 	}
 }
 
-// T5 on /query: the envelope keeps its verifier with the issuer set.
-func TestQueryAPIQueryEnvelopeStillReachesTheEnvelopeVerifierWhenIssuerSet(t *testing.T) {
+// T5 on /query: with the issuer set, the retired envelope gets the bare 401 of
+// an unaccepted bearer and never reaches the access-token validator.
+func TestQueryAPIQueryRefusesTheEnvelopeWhenIssuerSet(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
 	stack := newAccessStack(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
-	if got := stack.send("query", http.MethodPost, "/query", "envelope", ""); got.Status != http.StatusOK {
-		t.Fatalf("envelope: %d %s", got.Status, got.Body)
+	if got := stack.send("query", http.MethodPost, "/query", "envelope", ""); got != (answer{http.StatusUnauthorized, queryRefusal}) {
+		t.Fatalf("envelope: %d %q, want 401 %q", got.Status, got.Body, queryRefusal)
 	}
 	if got := stack.reader.counts(t); len(got) != 0 {
 		t.Fatalf("the envelope reached the access-token validator: %v", got)

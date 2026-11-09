@@ -151,10 +151,6 @@ func (r *refreshRig) lookups() int64 { return r.connects.Count() - r.base }
 type refreshRow struct {
 	name, pattern string
 	body          func(token string) string
-	// control is the kind that is this row's genuine credential shape, not a refused one.
-	control string
-	// noProjection is a row whose genuine credential reaches the store without projecting a principal.
-	noProjection bool
 	// refusedStatus is the status every refused input gets.
 	refusedStatus int
 	garbage       string
@@ -170,8 +166,8 @@ func refreshRows() []refreshRow {
 		// The opaque credential is this row's genuine credential; a go-api refresh JWT is refused like garbage (the HS256
 		// refresh exchange is retired).
 		{name: "POST /api/v1/auth/refresh", pattern: PatternCompatRefresh, body: compat, refusedStatus: http.StatusUnauthorized, garbage: "aaaa.bbbb.cccc"},
-		// Logout also ends a go-api refresh JWT's lineage, so "legacy-refresh" is its control too.
-		{name: "POST /api/v1/auth/logout", pattern: PatternCompatLogout, body: compat, control: "legacy-refresh", noProjection: true, refusedStatus: http.StatusOK, garbage: "not-a-credential"},
+		// A go-api refresh JWT revokes nothing at logout: the answer of a meaningless value.
+		{name: "POST /api/v1/auth/logout", pattern: PatternCompatLogout, body: compat, refusedStatus: http.StatusOK, garbage: "not-a-credential"},
 	}
 }
 
@@ -187,9 +183,6 @@ func TestRefreshRowsRefuseUserTokens(t *testing.T) {
 				t.Fatalf("the reference refusal (a meaningless value) is %d %s, want %d", wantStatus, wantBody, row.refusedStatus)
 			}
 			for _, tok := range tokens {
-				if tok.Kind == row.control {
-					continue
-				}
 				status, body := r.post(row.pattern, row.body(tok.Value))
 				if status != wantStatus || sameBytes(body) != sameBytes(wantBody) {
 					t.Errorf("%s: %d %s, want the refusal of a meaningless value: %d %s", tok.Kind, status, body, wantStatus, wantBody)
@@ -238,20 +231,9 @@ func TestRefreshRowsControlAGenuineCredentialReachesTheStore(t *testing.T) {
 	for _, row := range refreshRows() {
 		t.Run(row.name, func(t *testing.T) {
 			r := newRefreshRig(t)
-			credential := opaque
-			if row.control != "" {
-				for _, tok := range usertokens.All(t) {
-					if tok.Kind == row.control {
-						credential = tok.Value
-					}
-				}
-			}
-			r.post(row.pattern, row.body(credential))
+			r.post(row.pattern, row.body(opaque))
 			if r.lookups() == 0 {
 				t.Fatal("a genuine credential never reached the store: the counting pool detects nothing")
-			}
-			if row.control != "" && !row.noProjection && r.projector.users.Load() == 0 {
-				t.Fatal("a genuine go-api refresh token was not projected: the projector counter detects nothing")
 			}
 		})
 	}

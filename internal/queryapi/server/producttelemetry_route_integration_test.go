@@ -13,16 +13,12 @@ import (
 )
 
 // The platform gate and the org check, exercised through the real /query
-// handler: a signed envelope is verified by the real principal.Verifier and its
-// claims reach the resolvers through the real middleware. No claims are built
-// by hand.
-func TestProductTelemetryRoute_GatesThroughTheSignedEnvelope(t *testing.T) {
+// handler: the internal identity headers state the caller and its claims reach
+// the resolvers through the real middleware. No claims are built by hand. The
+// effective-principal envelope is a retired class: refused before any read.
+func TestProductTelemetryRoute_GatesThroughTheInternalIdentity(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 	pub, priv, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, otherPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,46 +29,43 @@ func TestProductTelemetryRoute_GatesThroughTheSignedEnvelope(t *testing.T) {
 	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 
 	input := map[string]any{"startDate": "2026-01-01", "endDate": "2026-01-08"}
-	platform := func(bearer string) (int, string) {
-		rec := postGraphQLWithVariables(t, handler, registeredProductTelemetryPlatformDashboardDocument, bearerCarrier(bearer), map[string]any{"input": input})
+	platform := func(carrier func(*http.Request)) (int, string) {
+		rec := postGraphQLWithVariables(t, handler, registeredProductTelemetryPlatformDashboardDocument, carrier, map[string]any{"input": input})
 		return rec.Code, rec.Body.String()
 	}
-	org := func(bearer, orgID string) (int, string) {
-		rec := postGraphQLWithVariables(t, handler, registeredProductTelemetryDashboardDocument, bearerCarrier(bearer), map[string]any{"orgId": orgID, "input": input})
+	org := func(carrier func(*http.Request), orgID string) (int, string) {
+		rec := postGraphQLWithVariables(t, handler, registeredProductTelemetryDashboardDocument, carrier, map[string]any{"orgId": orgID, "input": input})
 		return rec.Code, rec.Body.String()
 	}
 	valid := time.Now().Add(time.Hour)
 
 	for _, tc := range []struct {
-		name  string
-		token string
+		name    string
+		carrier func(*http.Request)
 	}{
-		{"no envelope", ""},
-		{"envelope signed by another key", signDataHealthEnvelope(t, otherPriv, principal.Claims{OrgID: "org-1", IsSuperuser: true}, valid)},
-		{"expired envelope", signDataHealthEnvelope(t, priv, principal.Claims{OrgID: "org-1", IsSuperuser: true}, time.Now().Add(-time.Hour))},
+		{"no credential", nil},
+		{"the retired envelope", irBearer(signDataHealthEnvelope(t, priv, principal.Claims{OrgID: "org-1", IsSuperuser: true, IsSuperuserVerified: true}, valid))},
 	} {
 		t.Run("platform "+tc.name, func(t *testing.T) {
-			if code, body := platform(tc.token); code != http.StatusUnauthorized || strings.Contains(body, "totals") {
+			if code, body := platform(tc.carrier); code != http.StatusUnauthorized || strings.Contains(body, "totals") {
 				t.Fatalf("code=%d body=%s", code, body)
 			}
 		})
 	}
 
-	impersonator := "admin-user"
 	for _, tc := range []struct {
-		name   string
-		claims principal.Claims
-		served bool
+		name               string
+		orgID, role        string
+		super, imp, served bool
 	}{
-		{"member", principal.Claims{OrgID: "org-1", Role: "owner"}, false},
-		{"verified-only flag", principal.Claims{OrgID: "org-1", IsSuperuserVerified: true}, false},
-		{"superuser", principal.Claims{OrgID: "org-1", IsSuperuser: true, IsSuperuserVerified: true}, true},
-		{"superuser without org", principal.Claims{IsSuperuser: true, IsSuperuserVerified: true}, true},
-		{"superuser impersonating", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true, IsSuperuserVerified: true, ImpersonationActive: true, ImpersonatedBy: &impersonator}, false},
-		{"impersonating flag alone", principal.Claims{OrgID: "org-1", ImpersonationActive: true}, false},
+		{"member", "org-1", "owner", false, false, false},
+		{"superuser", "org-1", "", true, false, true},
+		{"superuser without org", "", "", true, false, true},
+		{"superuser impersonating", "org-1", "member", true, true, false},
+		{"impersonating flag alone", "org-1", "", false, true, false},
 	} {
 		t.Run("platform "+tc.name, func(t *testing.T) {
-			code, body := platform(signDataHealthEnvelope(t, priv, tc.claims, valid))
+			code, body := platform(iaHeaders(tc.orgID, tc.role, tc.super, tc.imp))
 			if code != http.StatusOK {
 				t.Fatalf("code=%d body=%s", code, body)
 			}
@@ -89,21 +82,22 @@ func TestProductTelemetryRoute_GatesThroughTheSignedEnvelope(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name   string
-		claims principal.Claims
-		orgArg string
-		served bool
+		name        string
+		orgID, role string
+		super, imp  bool
+		orgArg      string
+		served      bool
 	}{
-		{"own org", principal.Claims{OrgID: "org-1"}, "org-1", true},
-		{"other org", principal.Claims{OrgID: "org-1"}, "org-2", false},
-		// As in Python's OrgIdAuthExtension: a verified, non-impersonating
-		// superuser may name another org (the operation then runs as it); an
-		// impersonating one may not.
-		{"superuser other org", principal.Claims{OrgID: "org-1", IsSuperuser: true, IsSuperuserVerified: true}, "org-2", true},
-		{"superuser impersonating other org", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true, IsSuperuserVerified: true, ImpersonationActive: true, ImpersonatedBy: &impersonator}, "org-2", false},
+		{"own org", "org-1", "", false, false, "org-1", true},
+		{"other org", "org-1", "", false, false, "org-2", false},
+		// As in Python's OrgIdAuthExtension: a non-impersonating superuser may
+		// name another org (the operation then runs as it); an impersonating
+		// one may not.
+		{"superuser other org", "org-1", "", true, false, "org-2", true},
+		{"superuser impersonating other org", "org-1", "member", true, true, "org-2", false},
 	} {
 		t.Run("org "+tc.name, func(t *testing.T) {
-			code, body := org(signDataHealthEnvelope(t, priv, tc.claims, valid), tc.orgArg)
+			code, body := org(iaHeaders(tc.orgID, tc.role, tc.super, tc.imp), tc.orgArg)
 			if code != http.StatusOK {
 				t.Fatalf("code=%d body=%s", code, body)
 			}

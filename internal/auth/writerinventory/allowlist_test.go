@@ -119,14 +119,6 @@ var Allowlist = []Entry{
 	{File: "internal/auth/restorefence/lockouts.go", Func: "raiseLockouts", Table: "public.login_attempts", Verb: "UPSERT"},
 	{File: "internal/auth/restorefence/init.go", Func: "initInsertSQL", Table: "auth.restore_fence_state", Verb: "INSERT"},
 	{File: "internal/auth/restorefence/specs.go", Func: "flowStatesSQL", Table: "auth.sso_flow_states", Verb: "UPDATE"},
-	{File: "internal/auth/session/end_all.go", Func: "Store.EndAllInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
-	// acp ruling D6512 (CHAOS-12045): a membership removal revokes the member's go-api refresh tokens of that organization
-	// (revoked_at only, rows locked NOWAIT) inside the removal's audit.Commit; its auth sessions and credentials end
-	// through Store.revokeSessions (the rows below).
-	{File: "internal/auth/session/end_org.go", Func: "Store.EndOrgInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
-	// D6529 (ticket 12051), under the grant scope of D6512: an organization suspend or deprovision revokes the organization's
-	// go-api refresh tokens (revoked_at only, rows locked NOWAIT) inside the verb's audit.Commit.
-	{File: "internal/auth/session/end_org.go", Func: "Store.EndOrganizationInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Begin", Table: "auth.sso_flow_states", Verb: "INSERT"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Consume", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.updateOrganization", Table: "auth.organizations", Verb: "UPDATE"},
@@ -261,11 +253,6 @@ var Allowlist = []Entry{
 	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.RotateBootstrap", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/org/store.go", Func: "Store.Create", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/org/store.go", Func: "Store.mutateOnce", Table: "auth.organizations", Verb: "UPDATE"},
-	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.
-	{File: "internal/auth/session/legacy.go", Func: "Store.exchangeLegacy", Table: "public.refresh_tokens", Verb: "UPDATE"},
-	{File: "internal/auth/session/legacy.go", Func: "Store.revokeFamilyTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
-	{File: "internal/auth/session/legacy.go", Func: "Store.revokeLegacyFamily", Table: "public.refresh_tokens", Verb: "UPDATE"},
-	{File: "internal/auth/session/legacy_revoke.go", Func: "Store.RevokeLegacyWith", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/session/signin.go", Func: "Store.insertSessionAs", Table: "auth.refresh_credentials", Verb: "INSERT"},
 	{File: "internal/auth/delegationend/delegationend.go", Func: "Begin", Table: "public.impersonation_sessions", Verb: "INSERT"},
 	{File: "internal/auth/delegationend/delegationend.go", Func: "End", Table: "auth.sessions", Verb: "UPDATE"},

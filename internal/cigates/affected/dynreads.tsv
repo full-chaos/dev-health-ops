@@ -504,6 +504,7 @@ internal/queryapi/analytics	canonical_only_census_test.go
 internal/queryapi/analytics	nan_class_live_test.go
 internal/queryapi/graph	field_action_map_test.go
 internal/queryapi/graph	field_precheck_parity_test.go
+internal/queryapi/graph	legacy_refusal_guard_first_test.go
 internal/queryapi/graph	root_class_census_test.go
 internal/queryapi/graph/model	sdl_nullability_gate_test.go
 internal/queryapi/heatmap	identity.go

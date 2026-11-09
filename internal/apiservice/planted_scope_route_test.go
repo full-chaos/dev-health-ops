@@ -151,7 +151,7 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 // TestGoAPIScopeDeclaresTheEndpointProfileRows: the api listener's scope
 // decides with the go-api endpoint-profile rows.
 func TestGoAPIScopeDeclaresTheEndpointProfileRows(t *testing.T) {
-	protected, err := newProtection(apiTestConfig(), nil, false, quietLogger())
+	protected, err := newProtection(apiTestConfig(), nil, false, AuthProxyConfig{}, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

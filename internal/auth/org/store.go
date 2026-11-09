@@ -236,7 +236,7 @@ func (s *Store) mutate(ctx context.Context, v verb, id uuid.UUID, newName string
 	if ended != (session.Ended{}) {
 		s.sessions.RecordEnded(ctx, ended)
 		s.logger.InfoContext(ctx, "organization suspended; its sessions ended", "organization_id", id.String(),
-			"sessions", ended.Sessions, "refresh_tokens", ended.RefreshTokens)
+			"sessions", ended.Sessions)
 	}
 	return changed, nil
 }

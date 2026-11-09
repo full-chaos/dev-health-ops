@@ -55,11 +55,9 @@ func (s *Store) revokeAllLive(ctx context.Context, tx audit.TxOps, principal str
 	return len(ids), tx.AddEvent(sessionevent.Principal(principal, sessionevent.ReasonCaller, at))
 }
 
-// Ended is what EndAllInTx ended: the auth sessions it revoked and the go-api
-// refresh_tokens rows it revoked (counts only).
+// Ended is what EndAllInTx ended: the auth sessions it revoked (a count).
 type Ended struct {
-	Sessions      int
-	RefreshTokens int64
+	Sessions int
 }
 
 // EndAllInTx ends every credential class of the principal inside the caller's
@@ -69,9 +67,7 @@ type Ended struct {
 //   - every live auth-service session and its refresh credentials;
 //   - go-api's users.token_version, raised by the password write itself
 //     (identity.Store.SetPasswordHash), which ends the access tokens go-api
-//     minted without a sid;
-//   - the principal's go-api refresh_tokens rows (revoke_all_for_user), which
-//     ends the legacy refresh exchange.
+//     minted without a sid.
 //
 // Any error is returned for the caller to roll the transaction back.
 func (s *Store) EndAllInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) (Ended, error) {
@@ -80,12 +76,7 @@ func (s *Store) EndAllInTx(ctx context.Context, tx audit.TxOps, principalID uuid
 	if err != nil {
 		return Ended{}, fmt.Errorf("%w: revoking the sessions: %w", ErrStore, err)
 	}
-	tag, err := tx.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = clock_timestamp()
-		WHERE user_id = $1::uuid AND revoked_at IS NULL`, principal)
-	if err != nil {
-		return Ended{}, fmt.Errorf("%w: revoking the go-api refresh tokens: %w", ErrStore, err)
-	}
-	return Ended{Sessions: revoked, RefreshTokens: tag.RowsAffected()}, nil
+	return Ended{Sessions: revoked}, nil
 }
 
 // RecordEnded counts the sessions an EndAllInTx revoked in

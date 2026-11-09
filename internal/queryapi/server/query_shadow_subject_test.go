@@ -7,7 +7,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -21,7 +20,7 @@ func TestQueryHandsTheOperationItsBearer(t *testing.T) {
 	if err := routeAuthenticator(auth, setup.opts); err != nil {
 		t.Fatal(err)
 	}
-	verifier, priv := iaVerifier(t)
+	verifier, _ := iaVerifier(t)
 	type seen struct {
 		subject graph.ShadowSubject
 		has     bool
@@ -39,7 +38,6 @@ func TestQueryHandsTheOperationItsBearer(t *testing.T) {
 	routed := routes.ServeHTTP
 
 	user := m.mint(ecUser, nil, nil)
-	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: "org-env", Role: "member"})
 	cells := []struct {
 		name    string
 		handler http.HandlerFunc
@@ -48,7 +46,6 @@ func TestQueryHandsTheOperationItsBearer(t *testing.T) {
 		wantOK  bool
 	}{
 		{"user access token", routed, irBearer(user), graph.ShadowSubject{Bearer: user, UserAccessToken: true, SkipReason: policy.ShadowReasonNone}, true},
-		{"envelope", routed, irBearer(envelope), graph.ShadowSubject{Bearer: envelope, SkipReason: policy.ShadowReasonEnvelope}, true},
 		{"headers", routed, iaHeaders("org-hdr", "member", false, false), graph.ShadowSubject{}, false},
 	}
 	for _, cell := range cells {

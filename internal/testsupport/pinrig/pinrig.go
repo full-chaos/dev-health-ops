@@ -10,16 +10,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 const pinRigPassword = "pin-rig-test-only-not-a-credential"
@@ -31,6 +33,7 @@ type PinRig struct {
 	admin    *pgxpool.Pool
 	sessions *session.Store
 	auth     *policy.Authenticator
+	tokens   *edtokens.Issuer
 	reader   policy.PGStore
 	// base is the session store's configuration, for Lifetimes.
 	base session.Config
@@ -86,16 +89,20 @@ func NewPinRig(t *testing.T, ctx context.Context, admin *pgxpool.Pool, instance 
 		t.Fatal(err)
 	}
 	reader := policy.PGStore{Pool: login(roles["pin_reader"]), AuthSchema: "auth"}
-	auth, err := policy.NewAuthenticator(pinStore{PGStore: reader, users: admin},
-		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	auth, err := policy.NewAuthenticator(pinStore{PGStore: reader, users: admin}, logger)
 	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := edtokens.New(t)
+	if err := accessrouting.RouteUserTokens(auth, tokens.Verifier(t), noop.NewMeterProvider().Meter("pinrig"), logger); err != nil {
 		t.Fatal(err)
 	}
 	orgs, err := identity.New(identity.Config{Pool: admin, Schema: schema, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &PinRig{admin: admin, sessions: sessions, auth: auth, reader: reader, base: base, orgs: orgs}
+	return &PinRig{admin: admin, sessions: sessions, auth: auth, tokens: tokens, reader: reader, base: base, orgs: orgs}
 }
 
 // Reader is go-api's session read as the session reader role holds it: its
@@ -189,16 +196,20 @@ func (r *PinRig) ClearPin(t *testing.T, ctx context.Context, sid uuid.UUID) {
 	}
 }
 
-// Check is go-api's decision for a token of user naming sid, carrying the
-// user's current token_version.
+// Check is go-api's decision for a user access token of user naming sid, on a
+// go-api row: the session row is read as the session reader role holds it.
 func (r *PinRig) Check(ctx context.Context, user, sid uuid.UUID) error {
-	var version int64
-	if err := r.admin.QueryRow(ctx, `SELECT token_version FROM users WHERE id = $1`, user).Scan(&version); err != nil {
+	token, err := r.tokens.Mint(edtokens.Claims{UserID: user, SessionID: &sid})
+	if err != nil {
 		return err
 	}
-	_, err := r.auth.CheckClaims(ctx, jwt.MapClaims{"sub": user.String(), "sid": session.WireSessionID(sid), "tv": float64(version)})
+	_, err = r.auth.Authenticate(policy.WithRouteProfile(ctx, pinCheckRoute), token)
 	return err
 }
+
+// pinCheckRoute is a go-api row that accepts a user access token and reads no
+// organization.
+const pinCheckRoute = "GET /api/v1/auth/me"
 
 // Refused reports whether err is the generic refusal of a token.
 func Refused(err error) bool { return policy.IsRefusal(err) }
@@ -210,4 +221,8 @@ type pinStore struct {
 
 func (s pinStore) UserState(ctx context.Context, id uuid.UUID) (policy.UserState, bool, error) {
 	return policy.PGStore{Pool: s.users}.UserState(ctx, id)
+}
+
+func (s pinStore) AccessUser(ctx context.Context, id uuid.UUID) (policy.AccessUserRow, bool, error) {
+	return policy.PGStore{Pool: s.users}.AccessUser(ctx, id)
 }

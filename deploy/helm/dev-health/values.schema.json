@@ -87,6 +87,7 @@
           "properties": {
             "secretName": { "type": "string", "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*)?$" },
             "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" },
+            "credential": { "description": "go-api presents its workload token on the session issue route and renders no AUTH_SESSION_ISSUE_TOKEN. Absent keeps the token reference.", "type": "string", "enum": ["workload"] },
             "workloadBootstrap": {
               "description": "CHAOS-13039: go-api's workload token on the session issue route, from a bootstrap credential file that a Secret mounts. Off renders nothing.",
               "type": "object",
@@ -191,6 +192,17 @@
               "type": "array",
               "uniqueItems": true,
               "items": { "type": "string", "enum": ["acr", "admin", "analytics", "authz", "billing", "credentials", "git", "integrations", "license", "members", "metrics", "org", "reports", "settings", "teams", "work_items"] }
+            },
+            "queryApiPdpMode": { "type": "string", "enum": ["", "off", "shadow", "enforce"] },
+            "queryApi": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "enum": ["analytics", "metrics", "git", "work_items", "integrations", "reports", "org"] }
+            },
+            "queryApiHeaders": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "enum": ["analytics", "metrics", "git", "work_items", "integrations", "reports", "org"] }
             }
           }
         },

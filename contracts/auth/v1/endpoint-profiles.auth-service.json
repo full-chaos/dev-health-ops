@@ -15,20 +15,6 @@
       "id": "POST /v1/token/refresh [dev-health-auth-service @api]",
       "issued_credential": [
         {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 67,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims from the live users and membership rows, plus sid."
-        },
-        {
           "algorithm": null,
           "anchor": {
             "line": 587,
@@ -265,20 +251,6 @@
       "id": "POST /api/v1/auth/login [dev-health-auth-service @api]",
       "issued_credential": [
         {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 67,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims from the live users and membership rows, plus sid."
-        },
-        {
           "algorithm": null,
           "anchor": {
             "line": 24,
@@ -299,19 +271,14 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 159
+        "line": 155
       },
       "surface_kind": "rest"
     },
     {
       "accepted_credential_classes": [
-        "ops_refresh_token",
         "refresh_credential"
       ],
-      "class_disambiguator": {
-        "kind": "body_field",
-        "name": "refresh_token"
-      },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the credential, its session and the users row are read live; rotation is single use under the session row lock.",
       "disclosure_behavior": "Every refusal of a presented credential is a 401 whose go-api shaped body is {\"detail\":{\"message\":...}} with no reason code and no credential; the reason code goes to the audit row and the log only. A store or key failure is a 5xx.",
@@ -319,20 +286,6 @@
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/refresh [dev-health-auth-service @api]",
       "issued_credential": [
-        {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 67,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims from the live users and membership rows, plus sid."
-        },
         {
           "algorithm": null,
           "anchor": {
@@ -361,7 +314,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 146
+        "line": 142
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -389,7 +342,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 147
+        "line": 143
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -448,23 +401,9 @@
       "id": "POST /api/v1/auth/switch-org [dev-health-auth-service @api]",
       "issued_credential": [
         {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 67,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims for the caller's new session in the requested organization, plus sid (hs256_compat class)."
-        },
-        {
           "algorithm": "EdDSA",
           "anchor": {
-            "line": 67,
+            "line": 45,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -527,20 +466,6 @@
       "id": "POST /api/v1/auth/social-login [dev-health-auth-service @api]",
       "issued_credential": [
         {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 67,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims from the live users and membership rows, plus sid."
-        },
-        {
           "algorithm": null,
           "anchor": {
             "line": 24,
@@ -568,7 +493,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 166
+        "line": 162
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -584,20 +509,6 @@
       "graphql_field_name": null,
       "id": "POST /internal/v1/sessions [dev-health-auth-service @api]",
       "issued_credential": [
-        {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 67,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims from the live users and membership rows, plus sid."
-        },
         {
           "algorithm": null,
           "anchor": {
@@ -626,7 +537,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 163
+        "line": 159
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -671,20 +582,6 @@
       "graphql_field_name": null,
       "id": "POST /internal/v1/sessions/delegated [dev-health-auth-service @api]",
       "issued_credential": [
-        {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 67,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 900,
-          "note": "go-api's access claims of the target from the live users and membership rows, plus sid and impersonating_user_id = the actor. exp is the session's expires_at, at most 15 minutes."
-        },
         {
           "algorithm": null,
           "anchor": {
@@ -1996,23 +1893,9 @@
       "id": "POST /api/v1/auth/change-password [dev-health-auth-service @api]",
       "issued_credential": [
         {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 67,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims for the caller's new session, plus sid (hs256_compat class)."
-        },
-        {
           "algorithm": "EdDSA",
           "anchor": {
-            "line": 67,
+            "line": 45,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -2186,20 +2069,6 @@
       "id": "POST /api/v1/auth/oidc/{provider_id}/callback [dev-health-auth-service @api]",
       "issued_credential": [
         {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 67,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims from the live users and membership rows, plus sid."
-        },
-        {
           "algorithm": null,
           "anchor": {
             "line": 24,
@@ -2268,20 +2137,6 @@
       "id": "POST /api/v1/auth/oauth/{provider_id}/callback [dev-health-auth-service @api]",
       "issued_credential": [
         {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 67,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims from the live users and membership rows, plus sid."
-        },
-        {
           "algorithm": null,
           "anchor": {
             "line": 24,
@@ -2349,20 +2204,6 @@
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/saml/{provider_id}/acs [dev-health-auth-service @api]",
       "issued_credential": [
-        {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 67,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims from the live users and membership rows, plus sid."
-        },
         {
           "algorithm": null,
           "anchor": {

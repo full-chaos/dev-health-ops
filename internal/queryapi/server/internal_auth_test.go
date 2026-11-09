@@ -27,10 +27,10 @@ import (
 )
 
 // CHAOS-6144: /query and /buildinfo take the identity from the internal
-// headers OR the envelope, never both, and answer the same claims for the
-// same identity whichever carrier states it. Everything runs through the
-// real dispatch handler and the real principal.Verifier; no claims are
-// built by hand on the request path.
+// headers, never together with a bearer. The effective-principal envelope is
+// a retired class: it is refused like any unaccepted bearer. Everything runs
+// through the real dispatch handler; no claims are built by hand on the
+// request path.
 
 const (
 	iaIssuer   = "test-issuer"
@@ -150,7 +150,7 @@ func iaHeaders(orgID, role string, superuser, impersonating bool) func(*http.Req
 	}
 }
 
-func TestQueryAnswersTheSameClaimsForBothCarriers(t *testing.T) {
+func TestQueryAnswersTheHeaderClaimsAndRefusesTheEnvelope(t *testing.T) {
 	verifier, priv := iaVerifier(t)
 	for _, identity := range []struct {
 		name       string
@@ -167,14 +167,14 @@ func TestQueryAnswersTheSameClaimsForBothCarriers(t *testing.T) {
 			envelope := iaEnvelope(t, priv, principal.Claims{
 				OrgID: identity.org, Role: identity.role, IsSuperuser: identity.super, IsSuperuserVerified: identity.super, ImpersonationActive: identity.imp,
 			})
-			if code := iaPost(t, handler, func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+envelope) }); code != http.StatusOK {
-				t.Fatalf("envelope carrier: %d", code)
+			if code := iaPost(t, handler, func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+envelope) }); code != http.StatusUnauthorized {
+				t.Fatalf("envelope carrier: %d, want 401 (a retired class)", code)
 			}
 			if code := iaPost(t, handler, iaHeaders(identity.org, identity.role, identity.super, identity.imp)); code != http.StatusOK {
 				t.Fatalf("header carrier: %d", code)
 			}
-			if len(*seen) != 2 || (*seen)[0] != (*seen)[1] {
-				t.Fatalf("carriers disagree: %+v", *seen)
+			if len(*seen) != 1 {
+				t.Fatalf("resolver ran %d times, want once (the header carrier only): %+v", len(*seen), *seen)
 			}
 			want := authctx.Claims{OrgID: identity.org, Role: identity.role, IsSuperuser: identity.super, ImpersonationActive: identity.imp,
 				Scope: pepgate.Legacy(identity.org)}
@@ -230,7 +230,7 @@ func TestQueryRefusesEveryAmbiguousOrMalformedCarrier(t *testing.T) {
 	}
 }
 
-func TestBuildInfoTakesEitherCarrierAndRefusesBoth(t *testing.T) {
+func TestBuildInfoTakesTheHeaderCarrierAndRefusesTheEnvelopeAndBoth(t *testing.T) {
 	verifier, priv := iaVerifier(t)
 	handler := newBuildInfoHandler(verifier, nil, nil)
 	get := func(mutate func(*http.Request)) int {
@@ -241,8 +241,8 @@ func TestBuildInfoTakesEitherCarrierAndRefusesBoth(t *testing.T) {
 		return rec.Code
 	}
 	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "admin"})
-	if code := get(func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+envelope) }); code != http.StatusOK {
-		t.Fatalf("envelope: %d", code)
+	if code := get(func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+envelope) }); code != http.StatusUnauthorized {
+		t.Fatalf("envelope: %d, want 401 (a retired class)", code)
 	}
 	if code := get(iaHeaders("org-1", "admin", false, false)); code != http.StatusOK {
 		t.Fatalf("headers: %d", code)
@@ -265,7 +265,7 @@ func TestBuildInfoTakesEitherCarrierAndRefusesBoth(t *testing.T) {
 func TestBrowserReachableRESTAuthIgnoresTheInternalHeaders(t *testing.T) {
 	verifier, _ := iaVerifier(t)
 	m := newAccessMinter(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(newAccessStore()))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(newAccessStore()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,34 +568,6 @@ func TestOnlyTheServerPackageImportsTheInternalIdentityPackage(t *testing.T) {
 	}
 	if !sameSet(importers, want) {
 		t.Fatalf("packages importing internalidentity: %v, want %v", importers, want)
-	}
-}
-
-// TestQueryEnvelopeNeverGrantsSuperuserWithoutProofOrUnderImpersonation is the
-// CHAOS-4738 / G-50 case end to end: a verified envelope that asserts
-// is_superuser reaches the resolvers as a superuser only with
-// is_superuser_verified and no active impersonation.
-func TestQueryEnvelopeNeverGrantsSuperuserWithoutProofOrUnderImpersonation(t *testing.T) {
-	verifier, priv := iaVerifier(t)
-	for _, tc := range []struct {
-		name      string
-		claims    principal.Claims
-		wantSuper bool
-	}{
-		{"hint only", principal.Claims{OrgID: "org-1", Role: "owner", IsSuperuser: true}, false},
-		{"hint and verified", principal.Claims{OrgID: "org-1", Role: "owner", IsSuperuser: true, IsSuperuserVerified: true}, true},
-		{"hint and verified while impersonating", principal.Claims{OrgID: "org-1", Role: "owner", IsSuperuser: true, IsSuperuserVerified: true, ImpersonationActive: true}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			handler, seen := iaDispatch(t, verifier)
-			envelope := iaEnvelope(t, priv, tc.claims)
-			if code := iaPost(t, handler, func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+envelope) }); code != http.StatusOK {
-				t.Fatalf("envelope carrier: %d", code)
-			}
-			if len(*seen) != 1 || (*seen)[0].IsSuperuser != tc.wantSuper {
-				t.Fatalf("resolver claims = %+v, want IsSuperuser %v", *seen, tc.wantSuper)
-			}
-		})
 	}
 }
 

@@ -93,7 +93,7 @@ func TestVerifyRoutedNeedsRouteAccess(t *testing.T) {
 	if nilVerifier.Routed() {
 		t.Fatal("a nil verifier reports routed")
 	}
-	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
+	v := mustEdgeVerifier(t)
 	if v.Routed() {
 		t.Fatal("NewEdgeVerifier alone is routed")
 	}

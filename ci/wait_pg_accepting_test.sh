@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Red/green coverage for ci/lib/wait_pg_accepting.sh and its call in ci/check_session_cutover_rehearsal.sh.
+# Red/green coverage for ci/lib/wait_pg_accepting.sh.
 # Hermetic: a test-local `kubectl` on PATH; any call shape it does not know exits 99. Run: bash ci/wait_pg_accepting_test.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="${ROOT}/ci/lib/wait_pg_accepting.sh"
-SCRIPT="${ROOT}/ci/check_session_cutover_rehearsal.sh"
 T="$(mktemp -d)"
 trap 'rm -rf "${T}"' EXIT
 mkdir -p "${T}/bin"
@@ -59,10 +58,6 @@ cell c 1000 4
 if [ "${RC}" != 0 ] && printf '%s\n' "${OUT}" | grep -qF 'postgres accepted no connection after 4 attempts' \
   && printf '%s\n' "${OUT}" | grep -qF 'the database system is shutting down'; then ok "c never accepts: non-zero, bound message names the last error"; else bad "c rc=${RC}: ${OUT}"; fi
 if [ "${CALLS}" = 4 ]; then ok "c bound is attempts: 4 calls"; else bad "c calls=${CALLS}"; fi
-
-first_use="$(grep -n '| PSU -f -' "${SCRIPT}" | head -1 | cut -d: -f1 || true)"
-wait_at="$(grep -n '^wait_pg_accepting ' "${SCRIPT}" | head -1 | cut -d: -f1 || true)"
-if { [ -n "${first_use}" ] && [ -n "${wait_at}" ] && [ "${wait_at}" -lt "${first_use}" ]; }; then ok "d the rehearsal script waits before its first psql"; else bad "d no wait before the first psql (wait=${wait_at:-none} psql=${first_use:-none})"; fi
 
 [ "${fails}" = 0 ] || { printf '%d failed\n' "${fails}"; exit 1; }
 printf 'all passed\n'

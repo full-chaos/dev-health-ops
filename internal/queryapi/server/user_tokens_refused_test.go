@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens/withissuer"
 )
@@ -25,12 +24,11 @@ func TestMCPRefusesUserTokensAsAuthorization(t *testing.T) {
 	}
 }
 
-// /buildinfo built with no edge carrier accepts the internal identity headers or the effective-principal
-// envelope only: every kind of user token as the bearer is refused 401 (it is no envelope), and the control
-// shows a genuine envelope is accepted by the same handler.
+// /buildinfo built with no edge carrier accepts the internal identity headers only: every kind of user token as the
+// bearer is refused 401, and the control shows the headers are accepted by the same handler.
 func TestBuildInfoRefusesUserTokens(t *testing.T) {
 	tokens := withissuer.All(t)
-	verifier, priv := iaVerifier(t)
+	verifier, _ := iaVerifier(t)
 	handler := newBuildInfoHandler(verifier, nil, nil)
 	for _, tok := range tokens {
 		recorder := httptest.NewRecorder()
@@ -44,9 +42,9 @@ func TestBuildInfoRefusesUserTokens(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/buildinfo", nil)
-	request.Header.Set("Authorization", "Bearer "+iaEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "member"}))
+	iaHeaders("org-1", "member", false, false)(request)
 	handler(recorder, request)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("control: a genuine envelope was refused by /buildinfo: %d %s", recorder.Code, recorder.Body.String())
+		t.Fatalf("control: the internal identity headers were refused by /buildinfo: %d %s", recorder.Code, recorder.Body.String())
 	}
 }

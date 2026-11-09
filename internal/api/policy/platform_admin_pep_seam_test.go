@@ -2,21 +2,17 @@ package policy
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"io"
-	"maps"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/full-chaos/dev-health-go/authverify"
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/full-chaos/dev-health-go/pep/pepfake"
 	"github.com/golang-jwt/jwt/v5"
-	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
@@ -102,14 +98,14 @@ func orgAdminRule() pepfake.Rule {
 		OrganizationID: ownOrg, TenantScope: ownOrg}
 }
 
-// adminUsersRows is the production action map with the /admin/users rows naming admin.users, as the profile rows
-// of PR-2 will.
+// adminUsersRows is the production action map; it names admin.users on each /admin/users row.
 func adminUsersRows(t *testing.T) map[string]ShadowRow {
 	t.Helper()
-	rows := maps.Clone(productionGoAPIRows(t))
-	for pattern, level := range platformAdminGapRoutes {
-		if level == Admin {
-			rows[pattern] = ShadowRow{Action: rule.ActionAdminUsers, Namespace: "admin", ResourceType: "platform", HighRisk: true}
+	rows := productionGoAPIRows(t)
+	want := ShadowRow{Action: rule.ActionAdminUsers, Namespace: "admin", ResourceType: "platform", HighRisk: true}
+	for pattern := range adminOrUsersRoutes {
+		if rows[pattern] != want {
+			t.Fatalf("%s: production row %+v, want %+v", pattern, rows[pattern], want)
 		}
 	}
 	return rows
@@ -175,7 +171,8 @@ func seamServe(h http.Handler, method, path string) response {
 }
 
 // An admin-or row asks one batch: the platform action and members.manage in the token's organization. Either allow
-// passes; the handler's platform answer is the platform question's, never the organization one's.
+// passes; the handler's platform answer is the platform question's, never the organization one's. A refusal of a token
+// with no organization is the legacy guard's 403 for it (product rule 1).
 func TestAdminOrRowsAskOneBatchAndKeepThePlatformAnswer(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -192,7 +189,7 @@ func TestAdminOrRowsAskOneBatchAndKeepThePlatformAnswer(t *testing.T) {
 		{"both", []pepfake.Rule{platformRule(rule.ActionAdminUsers), orgAdminRule()}, false, "admin", userClaims(nil), 200, "platform=true", 2},
 		{"neither, legacy superuser", nil, true, "admin", userClaims(nil), 403, `{"detail":"Admin access required"}`, 2},
 		{"org-less platform holder", []pepfake.Rule{platformRule(rule.ActionAdminUsers)}, true, "", orglessAccessClaims(), 200, "platform=true", 1},
-		{"org-less, no platform action", nil, true, "", orglessAccessClaims(), 403, `{"detail":"Admin access required"}`, 1},
+		{"org-less, no platform action", nil, true, "", orglessAccessClaims(), 403, `{"detail":"Organization context required"}`, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := recordEnforce(t)
@@ -350,45 +347,6 @@ func equalToMain(t *testing.T, got, main response) {
 	}
 }
 
-// CHAOS-13126: ops_access_token_hs256 is retired. With the admin cell on, an HS256 token on routed go-api (the production
-// access validator: alg_not_allowed) is the generic 401 before any platform question, superuser or not.
-func TestAnHS256TokenIsTheRetiredClassWithTheAdminCellOn(t *testing.T) {
-	pub, _, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	eddsa, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: "https://issuer.test", Audience: "dev-health-api", Keys: authverify.StaticKeys{"k": pub}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	validator, err := accessverify.New(accessverify.Config{
-		Rows:  []accessverify.Row{{Service: "dev-health-ops-api", Profile: "POST /api/v1/telemetry/report", AcceptsUser: true}},
-		EdDSA: eddsa, Meter: noop.NewMeterProvider().Meter("test"), Logger: quiet(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, superuser := range []bool{true, false} {
-		decider := &countingDecider{inner: platformAdminFake(t)}
-		store := newStore()
-		store.users[userID] = UserState{IsActive: true, IsSuperuser: superuser}
-		auth, err := NewAuthenticator(fixtureStore{Store: store}, quiet())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := auth.RouteAccess(refusalOnlyValidator{validator}, "dev-health-ops-api"); err != nil {
-			t.Fatal(err)
-		}
-		guard := NewGuard(auth, quiet())
-		guard.SetEnforcer(seamEnforcer(t, decider, productionGoAPIRows(t), "admin"))
-		got := serve(seamMux(guard), http.MethodPost, "/api/v1/telemetry/report", bearer(t, func(m jwt.MapClaims) { m["is_superuser"] = superuser }))
-		singles, batches := decider.counts()
-		if got.status != http.StatusUnauthorized || !strings.Contains(got.body, "Invalid or expired token") || singles+batches != 0 {
-			t.Fatalf("superuser %v: %d %q after %d questions, want the generic 401 and none", superuser, got.status, got.body, singles+batches)
-		}
-	}
-}
-
 // refusalOnlyValidator is the production access validator for a token it refuses; an admitted token fails the cell.
 type refusalOnlyValidator struct{ v *accessverify.Validator }
 
@@ -530,11 +488,18 @@ func TestAdminAdmissionKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			serveWith := func(cell string) response {
-				decider := newDenyingFake(t)
+				// The decision point's state is the caller's: platform_admin for a platform admin, members.manage in the
+				// token's organization for an org admin.
+				var rules []pepfake.Rule
 				if c.platformAdmin {
-					decider = platformAdminFake(t).(denyingFake)
+					for _, action := range rule.PlatformActions {
+						rules = append(rules, platformRule(action))
+					}
 				}
-				return seamServe(seamHandler(t, legacyStore(c.platformAdmin, c.role), userClaims(nil), seamEnforcer(t, decider, productionGoAPIRows(t), cell)),
+				if c.role == "admin" {
+					rules = append(rules, orgAdminRule())
+				}
+				return seamServe(seamHandler(t, legacyStore(c.platformAdmin, c.role), userClaims(nil), seamEnforcer(t, newDenyingFake(t, rules...), productionGoAPIRows(t), cell)),
 					http.MethodGet, c.path)
 			}
 			got := serveWith("admin")
@@ -551,19 +516,27 @@ func TestAdminAdmissionKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
 	}
 }
 
-// With the admin cell on, an HS256 superuser who claims admin while its membership row says member keeps main's
-// answer at an admin-or row: main skips the membership read for a holder of admin.orgs, and the HS256 caller is not
-// judged by the decision point (no question).
+// With the admin cell on, a superuser who claims admin while its membership row says member keeps main's answer at an
+// admin-or row: main skips the membership read for a holder of admin.orgs, and the decision point, for which the
+// superuser is a platform admin, allows admin.users. (The fixture's routed token is judged now that the /admin/users
+// rows name admin.users.)
 func TestAnHS256SuperuserKeepsMainsAdmissionWithTheAdminCellOn(t *testing.T) {
+	headers := bearer(t, func(m jwt.MapClaims) {
+		superClaims(m)
+		m["role"] = "admin"
+	})
+	var rules []pepfake.Rule
+	for _, action := range rule.PlatformActions {
+		r := platformRule(action)
+		r.PrincipalReference = strings.TrimPrefix(headers["Authorization"], "Bearer ")
+		rules = append(rules, r)
+	}
 	serveWith := func(cell string) response {
 		store := newStore()
 		store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
 		guard := NewGuard(authenticator(t, store), quiet())
-		guard.SetEnforcer(seamEnforcer(t, &countingDecider{inner: newDenyingFake(t)}, productionGoAPIRows(t), cell))
-		return serve(seamMux(guard), http.MethodGet, "/api/v1/admin/users/"+targetUserID.String(), bearer(t, func(m jwt.MapClaims) {
-			superClaims(m)
-			m["role"] = "admin"
-		}))
+		guard.SetEnforcer(seamEnforcer(t, &countingDecider{inner: newDenyingFake(t, rules...)}, productionGoAPIRows(t), cell))
+		return serve(seamMux(guard), http.MethodGet, "/api/v1/admin/users/"+targetUserID.String(), headers)
 	}
 	got := serveWith("admin")
 	equalToMain(t, got, mainAnswer(t, serveWith))

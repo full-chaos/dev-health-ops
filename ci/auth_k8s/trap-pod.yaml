@@ -20,6 +20,9 @@ spec:
       env:
         - name: AUTH_DATABASE_URI
           valueFrom: {secretKeyRef: {name: auth-db, key: AUTH_DATABASE_URI}}
+        # eddsa is the only access token class: without its issuer URL the service refuses to start.
+        - name: AUTH_TOKEN_ISSUER_URL
+          value: https://auth.k8s-proof.example
       volumeMounts: [${mount}]
   volumes:
     - name: key

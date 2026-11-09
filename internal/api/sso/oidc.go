@@ -64,13 +64,10 @@ package sso
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -286,11 +283,7 @@ func decryptProviderSecret(cipher credentials.Cipher, raw *string, key string) s
 
 // initiateOIDCAuth is POST /oidc/{provider_id}/authorize.
 func (h handlers) initiateOIDCAuth(w http.ResponseWriter, r *http.Request) {
-	providerID, err := pythonparity.ParseUUID(r.PathValue("provider_id"))
-	if err != nil {
-		h.fail(w, r, "parse provider id", err)
-		return
-	}
+	providerID, parseErr := pythonparity.ParseUUID(r.PathValue("provider_id"))
 	rawBody, _ := policy.BodyFrom(r.Context())
 	var errs pybody.Errors
 	object, ok := errs.Object(rawBody)
@@ -308,7 +301,7 @@ func (h handlers) initiateOIDCAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	row, err := scanProvider(h.Pool.QueryRow(ctx, `SELECT `+providerColumns+` FROM sso_providers WHERE id = $1::uuid`, providerID))
+	row, err := scanProvider(h.providerByID(ctx, providerColumns, providerID, parseErr))
 	if errorsIsNoRows(err) {
 		policy.WriteDetail(w, http.StatusNotFound, "SSO provider not found", nil)
 		return
@@ -401,11 +394,7 @@ func (h handlers) initiateOIDCAuth(w http.ResponseWriter, r *http.Request) {
 
 // oidcCallback is POST /oidc/{provider_id}/callback.
 func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
-	providerID, err := pythonparity.ParseUUID(r.PathValue("provider_id"))
-	if err != nil {
-		h.fail(w, r, "parse provider id", err)
-		return
-	}
+	providerID, parseErr := pythonparity.ParseUUID(r.PathValue("provider_id"))
 	body, _ := policy.BodyFrom(r.Context())
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
@@ -421,7 +410,7 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	row, err := scanOIDCProvider(h.Pool.QueryRow(ctx, `SELECT `+oidcProviderColumns+` FROM sso_providers WHERE id = $1::uuid`, providerID))
+	row, err := scanOIDCProvider(h.providerByID(ctx, oidcProviderColumns, providerID, parseErr))
 	if errorsIsNoRows(err) {
 		policy.WriteDetail(w, http.StatusNotFound, "SSO provider not found", nil)
 		return
@@ -793,39 +782,6 @@ func mustParseUUID(text string) uuid.UUID {
 }
 
 func uuidPtr(id uuid.UUID) *uuid.UUID { return &id }
-
-// hashRefreshJTI is refresh_tokens._hash_token: sha256 of the jti's UTF-8
-// bytes, the same hash refreshByHash (internal/api/session/store.go) looks
-// up by. Duplicated rather than exported: one call site (login.go's
-// finishSSOLogin), and the session package's own copy is unexported for
-// the same reason.
-func hashRefreshJTI(jti string) string {
-	sum := sha256.Sum256([]byte(jti))
-	return hex.EncodeToString(sum[:])
-}
-
-// clientHost is request.client.host: the peer's host, nil without one.
-func clientHost(r *http.Request) *string {
-	if r.RemoteAddr == "" {
-		return nil
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	return &host
-}
-
-// userAgentHeader is request.headers.get("user-agent"): the first value,
-// nil when absent.
-func userAgentHeader(r *http.Request) *string {
-	values := r.Header.Values("User-Agent")
-	if len(values) == 0 {
-		return nil
-	}
-	value := policy.Latin1(values[0])
-	return &value
-}
 
 // exchangeOIDCCode is the token-endpoint call: client_secret and the code ride its BODY, which a 307 would send again
 // to any host, so it follows no redirect whatever client was supplied.

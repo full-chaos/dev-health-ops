@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
@@ -144,10 +145,7 @@ func newValidateFixture(t *testing.T, eddsa bool) *validateFixture {
 		AuthTime: now.Add(-time.Hour), AMR: []string{"pwd"}, CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(7 * 24 * time.Hour),
 		LegacyTokenVersion: &pin}
 	admin, username := "admin", "ada"
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	issuer := newTestIssuer(t)
 	hs256, err := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +224,7 @@ func (f *validateFixture) goAPIHandler() http.Handler {
 		f.goAPIRouteAccess(auth, logger)
 	}
 	for _, route := range apisession.Routes(apisession.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Auth: auth,
-		Verifier: verifier, Signer: f.hs256, Logger: logger, Limits: httpapi.NewMemoryCounters(nil)}) {
+		Verifier: verifier, Logger: logger, Limits: httpapi.NewMemoryCounters(nil)}) {
 		if route.Method == http.MethodPost && route.Pattern == PatternCompatValidate {
 			templates, err := httpapi.NewRouteTemplates([]httpapi.Route{route})
 			if err != nil {
@@ -330,24 +328,31 @@ func tokenBody(token string) string {
 	return `{"token":` + string(quoted) + `}`
 }
 
-// hs256Token is go-api's access token for the fixture user, with the
-// session's sid; mutate edits the claims.
-func (f *validateFixture) hs256Token(mutate func(*edgetoken.AccessClaims)) string {
+// hs256Token is a go-api HS256 access token for the fixture user, with the
+// session's sid: a bearer of the retired class.
+func (f *validateFixture) hs256Token() string {
 	f.t.Helper()
 	sid := session.WireSessionID(f.record.ID)
-	claims := edgetoken.AccessClaims{UserID: f.principal.String(), Email: "ada@example.com", OrgID: f.org.String(), Role: "admin",
-		TokenVersion: 4, SessionID: &sid}
-	if mutate != nil {
-		mutate(&claims)
+	return hs256AccessToken(f.t, f.principal.String(), f.org.String(), 4, &sid)
+}
+
+// hs256AccessToken is a go-api HS256 access token (the retired class) under the
+// test key; no production code mints one.
+func hs256AccessToken(t testing.TB, subject, org string, tv int64, sid *string) string {
+	t.Helper()
+	now := time.Now()
+	claims := jwt.MapClaims{"sub": subject, "email": "ada@example.com", "org_id": org, "role": "admin", "is_superuser": false,
+		"type": "access", "iss": testIssuer, "aud": testAudience, "exp": now.Add(time.Hour).Unix(), "iat": now.Unix(),
+		"jti": uuid.NewString(), "tv": tv}
+	if sid != nil {
+		claims["sid"] = *sid
 	}
-	compact, err := f.hs256.Access(claims, time.Now(), uuid.NewString())
+	compact, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(testSecret))
 	if err != nil {
-		f.t.Fatal(err)
+		t.Fatal(err)
 	}
 	return compact
 }
-
-func sidless(c *edgetoken.AccessClaims) { c.SessionID = nil }
 
 // eddsaToken is the user access token the eddsa class mints for the fixture
 // session, at audience (dev-health-api: the token web sends; auth-service:
@@ -574,7 +579,7 @@ func TestValidateCompatEdDSAAnswerIsGoAPIsRoutedAnswerByteForByte(t *testing.T) 
 		{name: "org the user left", arrange: func(f *validateFixture) { delete(f.users.roles, [2]uuid.UUID{f.principal, f.org}) },
 			want: func(f *validateFixture) string { return f.validAnswer("ada@example.com", f.org.String(), "member") }},
 		{name: "aud auth-service", token: func(f *validateFixture) string { return f.eddsaToken(contracts.SessionRouteAudience) }},
-		{name: "HS256 token beside it (retired class, refused)", token: func(f *validateFixture) string { return f.hs256Token(nil) }},
+		{name: "HS256 token beside it (retired class, refused)", token: func(f *validateFixture) string { return f.hs256Token() }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newValidateFixture(t, true)
@@ -615,7 +620,7 @@ func TestValidateCompatC5TokenClassesAreGoAPIsAndNoWider(t *testing.T) {
 		f := newValidateFixture(t, true)
 		expectAnswer(t, "user token, aud dev-health-api", f.post(f.server, tokenBody(f.eddsaToken(contracts.PlatformAPIAudience)), nil),
 			http.StatusOK, f.validAnswer("ada@example.com", f.org.String(), "admin"))
-		expectAnswer(t, "HS256 token beside it (retired class, refused)", f.post(f.server, tokenBody(f.hs256Token(nil)), nil),
+		expectAnswer(t, "HS256 token beside it (retired class, refused)", f.post(f.server, tokenBody(f.hs256Token()), nil),
 			http.StatusOK, nullAnswer)
 		now := time.Now().Unix()
 		refused := map[string]string{
@@ -657,7 +662,7 @@ func TestValidateCompatC5TokenClassesAreGoAPIsAndNoWider(t *testing.T) {
 		f := newValidateFixture(t, true)
 		f.document = validateRowsHS256
 		f.build()
-		if r := f.post(f.server, tokenBody(f.hs256Token(nil)), nil); r.Code != http.StatusNotFound {
+		if r := f.post(f.server, tokenBody(f.hs256Token()), nil); r.Code != http.StatusNotFound {
 			t.Fatalf("mounted on a row without user_access_token: %d %s", r.Code, r.Body)
 		}
 	})
@@ -695,7 +700,7 @@ func TestValidateCompatC6AStoreFaultIsThe503(t *testing.T) {
 				f := newValidateFixture(t, eddsa)
 				tc.arrange(f)
 				f.build()
-				token := f.hs256Token(nil)
+				token := f.hs256Token()
 				if eddsa {
 					token = f.eddsaToken(contracts.PlatformAPIAudience)
 				}

@@ -1,7 +1,6 @@
 package authapi
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -31,29 +30,6 @@ func TestNewEdDSAIssuerStillRefusesAShortLegacyKey(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	if _, err := NewEdDSAIssuer(strings.Repeat("k", edgetoken.MinSecretLength-1), testIssuer, contracts.PlatformAPIAudience, signer, goldenIssuer); err == nil {
 		t.Fatal("a legacy key below the minimum length is accepted")
-	}
-}
-
-func TestIssuerWithoutLegacyKeyRefusesAnHS256BearerWithoutReadingIt(t *testing.T) {
-	signer, _, _ := fileSigner(t)
-	issuer, err := NewEdDSAIssuer("", testIssuer, contracts.PlatformAPIAudience, signer, goldenIssuer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compact, err := hs.Access(Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bearer, reason, err := issuer.Verify(compact)
-	if !errors.Is(err, errLegacyKeyAbsent) {
-		t.Fatalf("err = %v, want errLegacyKeyAbsent", err)
-	}
-	if reason != edgetoken.ReasonBadSignature || bearer != (Bearer{}) {
-		t.Fatalf("reason %q bearer %+v, want bad_signature and no bearer", reason, bearer)
 	}
 }
 

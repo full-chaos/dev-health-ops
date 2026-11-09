@@ -34,7 +34,7 @@ func TestTheAuthorizeCallerListLoadsAndNeedsTheTokenIssuer(t *testing.T) {
 	}
 	delete(env, EnvTokenIssuerURL)
 	_, err = Load(Spec{LookupEnv: lookupFrom(env)})
-	if err == nil || !strings.Contains(err.Error(), EnvAuthorizeCallerSubjects) || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
+	if err == nil || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
 		t.Fatalf("callers without an issuer were not refused by name: %v", err)
 	}
 }

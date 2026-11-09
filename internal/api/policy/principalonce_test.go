@@ -30,7 +30,6 @@ import (
 	"github.com/google/uuid"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
@@ -237,13 +236,8 @@ func TestRefusalTableHasOneRowPerPrefix(t *testing.T) {
 // TestRefusalPrefixesNeverVerify is the refusal parity proof: a JWS header is
 // a JSON object, so its first byte is JSON whitespace or '{' (base64url "ey"
 // for '{"'). The first base64url quantum of every refusal prefix decodes to a
-// byte that is neither, so no value with that prefix is a JWS, and the legacy
-// verifier refuses every one today.
+// byte that is neither, so no value with that prefix is a JWS.
 func TestRefusalPrefixesNeverVerify(t *testing.T) {
-	verifier, err := edgetoken.New(testKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	if got := base64.RawURLEncoding.EncodeToString([]byte(`{"`))[:2]; got != "ey" {
 		t.Fatalf("base64url of {\" starts %q", got)
 	}
@@ -259,9 +253,6 @@ func TestRefusalPrefixesNeverVerify(t *testing.T) {
 			t.Fatalf("prefix %s decodes to first byte %q, which can start a JSON object", refusal.Prefix, first)
 		}
 		for _, value := range []string{refusal.Prefix + strings.Repeat("A", 43), refusal.Prefix + "eyJhbGciOiJIUzI1NiJ9.e30.sig"} {
-			if _, err := verifier.Verify(value); err == nil {
-				t.Fatalf("%s verified", value)
-			}
 			if _, _, err := jwt.NewParser().ParseUnverified(value, jwt.MapClaims{}); err == nil {
 				t.Fatalf("%s parsed as a JWS", value)
 			}

@@ -153,7 +153,7 @@ func TestDelegatedBearerRowsFollowTheRule(t *testing.T) {
 // TestNewProtectionReadsTheDelegatedRows: the authenticator go-api serves
 // with reads the embedded rows, so the Guard's deny follows them.
 func TestNewProtectionReadsTheDelegatedRows(t *testing.T) {
-	protected, err := newProtection(apiTestConfig(), nil, false, quietLogger())
+	protected, err := newProtection(apiTestConfig(), nil, false, AuthProxyConfig{}, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

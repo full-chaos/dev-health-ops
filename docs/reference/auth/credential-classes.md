@@ -72,7 +72,7 @@ shows where that happens today.
 | `org_invite_token` | active | human | |
 | `license_key` | active | infrastructure | |
 | `infrastructure_deployment_credentials` | active | infrastructure | |
-| `effective_principal_envelope` | active | human | |
+| `effective_principal_envelope` | retired | human | no endpoint-profile row accepts it; query-api refuses it on every route |
 | `refresh_credential` | active | human | |
 | `user_access_token` | **unconsumed** | human | |
 | `internal_svc_authsess_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |
@@ -171,7 +171,7 @@ contract is `access-token.v1`: header {alg EdDSA, typ at+jwt, kid}; claims iss,
 aud (one of `dev-health-api`, `auth-service`, `acr-api`, `acr-mcp`), sub, principal_type, sid, jti,
 iat, nbf, exp, optional org_id and scope. It carries no role, email, profile,
 superuser bit or token version: authorization is checked per request. Its
-lifetime is at most the 60 min HS256-compat ceiling. The class is
+lifetime is at most 60 min, the ceiling of the retired HS256 token. The class is
 `unconsumed`: nothing mints or verifies it yet.
 The audiences `acr-api` and `acr-mcp` (scopes `acr:api` and `acr:mcp`) are ACR's: acr-api accepts `acr-api` only and acr-mcp `acr-mcp`
 only. go-api, query-api and auth-service refuse both. No ops platform token

@@ -23,7 +23,7 @@ services:
       AUTH_WORKLOAD_BOOTSTRAP: "true"
       AUTH_MEMBERSHIP_ROUTES: "true"
       AUTH_INVITE_TOKEN_SECRET: ${AUTH_INVITE_TOKEN_SECRET:?AUTH_INVITE_TOKEN_SECRET must be set}
-      AUTH_INVITE_TOKEN_SECRET_PREVIOUS: ${AUTH_INVITE_TOKEN_SECRET_PREVIOUS:?AUTH_INVITE_TOKEN_SECRET_PREVIOUS must be set}
+      AUTH_INVITE_TOKEN_SECRET_PREVIOUS: ${AUTH_INVITE_TOKEN_SECRET_PREVIOUS:-}
       # AUTH_USERS_OWNED: auth-service serves the credential routes, and they need these mail settings. The console provider
       # delivers no mail: this overlay proves the token path, not sign-up.
       EMAIL_FROM_ADDRESS: proof@example.test

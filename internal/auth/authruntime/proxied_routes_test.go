@@ -285,11 +285,11 @@ func TestNotMountedStubsAnswer503WithRetryAfterInEveryPhase(t *testing.T) {
 			t.Fatal(err)
 		}
 		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-		routes, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
+		routes, err := sessionRoutes(cfg, logger, pool, schema, &stubSigner{}, mustLimits(t), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
+		credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), &stubSigner{})
 		if err != nil {
 			t.Fatal(err)
 		}

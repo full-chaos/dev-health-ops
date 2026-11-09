@@ -119,11 +119,10 @@ type Deps struct {
 	// Guard to wrap a handler with its authorization level.
 	Auth  *policy.Authenticator
 	Guard *policy.Guard
-	// Verifier and Signer are the access/refresh token keys (JWT_SECRET_KEY),
-	// nil without a pool: the session routes (internal/api/session) mint
-	// and verify with them.
+	// Verifier is the access/refresh token key (JWT_SECRET_KEY),
+	// nil without a pool: the session routes (internal/api/session) verify
+	// with it.
 	Verifier *edgetoken.Verifier
-	Signer   *edgetoken.Signer
 	// AccessVerify is the profile-routed access-token validator; nil when
 	// AUTH_ACCESS_TOKEN_ISSUER is unset. When set, Auth routes through it.
 	AccessVerify *accessverify.Validator
@@ -224,6 +223,9 @@ type Deps struct {
 	// auth-service; nil (AUTH_PROXY_ORG_PROVISIONING off) leaves go-api the
 	// writer.
 	OrgProvisioner authprovision.Provisioner
+	// ServiceAccountKeys sends the admin service account key verbs to auth-service; nil
+	// (AUTH_PROXY_SERVICE_ACCOUNT_KEYS off) answers the key routes 503 config_missing.
+	ServiceAccountKeys authprovision.ServiceAccountKeys
 	// OrgSuspender suspends an organization in auth-service before the admin PATCH writes is_active=false; nil with
 	// AUTH_PROXY_ORG_PROVISIONING off.
 	OrgSuspender orgreactivate.Suspender

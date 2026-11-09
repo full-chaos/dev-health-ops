@@ -28,8 +28,6 @@ internal/api/policy/scope.go	Scope.useTokenOrg	admin.orgs	4
 internal/api/policy/shadow_guard.go	shadowCallerKind	admin.orgs	handler
 internal/api/session/permissions.go	userPermissions	admin.orgs	2
 internal/api/session/permissions.go	userPermissions	admin.users	2
-internal/api/session/refresh.go	handlers.refreshRole	admin.orgs	4
-internal/api/session/refresh.go	handlers.refuseRevokedOfAGoneMember	admin.orgs	4
 internal/api/telemetry/report.go	handlers.requirePlatformRole	admin.telemetry	handler
 internal/api/telemetry/telemetry.go	handlers.withOrg	admin.telemetry	handler
 internal/apiservice/admin/auditlogs.go	handlers.auditLogRoutes	admin.audit	route
@@ -42,6 +40,7 @@ internal/apiservice/admin/impersonation.go	handlers.impersonationStatus	admin.im
 internal/apiservice/admin/impersonation_handoff.go	handlers.handoffRoutes	admin.impersonate	route
 internal/apiservice/admin/orgs.go	handlers.orgRoutes	admin.orgs	route
 internal/apiservice/admin/platformstats.go	handlers.platformRoutes	admin.stats	route
+internal/apiservice/admin/serviceaccount_keys.go	handlers.serviceAccountKeyRoutes	admin.users	route
 internal/apiservice/admin/users.go	handlers.createUserOrg	admin.users	8
 internal/apiservice/admin/users.go	handlers.listUsers	admin.users	8
 internal/apiservice/admin/users.go	handlers.userRoutes	admin.users	route

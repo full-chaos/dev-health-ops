@@ -4,12 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math"
 	"net/http"
-	"strconv"
 	"strings"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
@@ -36,12 +33,10 @@ type User struct {
 	ImpersonatedBy *string
 	TokenVersion   int
 	// SessionID is the auth-service session the token's sid claim names,
-	// checked live; nil for a token without sid (a go-api token).
+	// checked live.
 	SessionID *uuid.UUID
-	// superuserClaim is the verified legacy token's is_superuser claim, by
-	// Python truthiness; accessToken marks a user access token.
-	superuserClaim bool
-	accessToken    bool
+	// accessToken marks a user access token.
+	accessToken bool
 }
 
 // Holds reports whether the caller holds the platform action now.
@@ -161,134 +156,6 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string) (*User, 
 	}
 	reads.users[key] = userRead{user: copyUser(user), err: err}
 	return user, err
-}
-
-// CheckClaims is Authenticate's second half: the live users-row checks on
-// claims a caller has already verified with the SAME edgetoken.Verifier
-// (found, is_active, token_version). A caller that verifies the token itself,
-// to keep its own per-reason telemetry, calls this instead of Authenticate so
-// the decision stays one implementation across planes. It returns (nil,
-// errRejected) for every refusal and a wrapped store error (ErrUnavailable or
-// other) when the lookup fails; it never treats a failed lookup as a pass.
-func (a *Authenticator) CheckClaims(ctx context.Context, claims jwt.MapClaims) (*User, error) {
-	user, err := userFromClaims(claims)
-	if err != nil {
-		return nil, err
-	}
-	id, ok := ParsePyUUID(user.UserID)
-	if !ok {
-		a.logger.WarnContext(ctx, "api access token has an invalid user id claim")
-		return nil, errRejected
-	}
-	user.ID = id
-
-	state, found, err := a.store.UserState(ctx, id)
-	if err != nil {
-		a.logger.WarnContext(ctx, "api access token user lookup failed",
-			slog.String("user_id", user.UserID), slog.Bool("unavailable", errors.Is(err, ErrUnavailable)))
-		return nil, err
-	}
-	if !found {
-		a.logger.WarnContext(ctx, "api access token valid but user not found", slog.String("user_id", user.UserID))
-		return nil, errRejected
-	}
-	if !state.IsActive {
-		a.logger.WarnContext(ctx, "api access token valid but user is deactivated", slog.String("user_id", user.UserID))
-		return nil, errRejected
-	}
-	version, ok := tokenVersion(claims)
-	if !ok {
-		a.logger.WarnContext(ctx, "api access denied: stale-session check unreadable", slog.String("user_id", user.UserID))
-		return nil, errRejected
-	}
-	if version != state.TokenVersion {
-		a.logger.WarnContext(ctx, "api access denied: stale session", slog.String("user_id", user.UserID))
-		return nil, errRejected
-	}
-	sessionID, err := a.checkSession(ctx, claims, id, state.TokenVersion)
-	if err != nil {
-		return nil, err
-	}
-	user.SessionID = sessionID
-	user.IsSuperuser, user.Platform = state.IsSuperuser, state.Platform
-	user.TokenVersion = int(version)
-	return user, nil
-}
-
-// errClaimType is a claim whose JSON type Python's code path raises on
-// (TypeError/AttributeError outside the caught set): a 500, not a 401.
-var errClaimType = errors.New("policy: access token claim has an unsupported type")
-
-func userFromClaims(claims jwt.MapClaims) (*User, error) {
-	sub, ok := claims["sub"].(string)
-	if !ok {
-		// uuid.UUID(<non-str>) raises TypeError/AttributeError, which
-		// authenticate_access_token does not catch.
-		return nil, errClaimType
-	}
-	user := &User{UserID: sub, Role: nonMemberRole}
-	user.Email, _ = claims["email"].(string)
-	user.OrgID, _ = claims["org_id"].(string)
-	if role, present := claims["role"]; present {
-		user.Role, _ = role.(string)
-	}
-	user.Username = optionalString(claims, "username")
-	user.FullName = optionalString(claims, "full_name")
-	user.ImpersonatedBy = optionalString(claims, "impersonating_user_id")
-	user.superuserClaim = pyTruthy(claims["is_superuser"])
-	return user, nil
-}
-
-func optionalString(claims jwt.MapClaims, key string) *string {
-	value, ok := claims[key].(string)
-	if !ok {
-		return nil
-	}
-	return &value
-}
-
-// tokenVersion is `0 if tv is None else int(tv)` with the TypeError and
-// ValueError of int() mapped to ok=false.
-func tokenVersion(claims jwt.MapClaims) (int64, bool) {
-	raw, present := claims["tv"]
-	if !present || raw == nil {
-		return 0, true
-	}
-	switch value := raw.(type) {
-	case bool:
-		if value {
-			return 1, true
-		}
-		return 0, true
-	case float64:
-		if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) >= 1<<63 {
-			return 0, false
-		}
-		return int64(value), true
-	case string:
-		return pyIntString(value)
-	default:
-		return 0, false
-	}
-}
-
-// pyIntString is int(str) for base 10: surrounding whitespace, an optional
-// sign, and ASCII digits with single underscores between them.
-func pyIntString(value string) (int64, bool) {
-	text := strings.TrimFunc(value, isPySpace)
-	sign := ""
-	if strings.HasPrefix(text, "+") || strings.HasPrefix(text, "-") {
-		sign, text = text[:1], text[1:]
-	}
-	if text == "" || strings.HasPrefix(text, "_") || strings.HasSuffix(text, "_") || strings.Contains(text, "__") {
-		return 0, false
-	}
-	// ParseInt refuses anything but ASCII digits after the one sign.
-	parsed, err := strconv.ParseInt(sign+strings.ReplaceAll(text, "_", ""), 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return parsed, true
 }
 
 // isPySpace is str.isspace for the code points a latin-1 header or a JSON

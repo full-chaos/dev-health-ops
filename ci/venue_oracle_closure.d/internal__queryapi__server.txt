@@ -27,7 +27,6 @@ internal/auth/copyproject
 internal/auth/decisioncache
 internal/auth/delegationend
 internal/auth/delegationinput
-internal/auth/edgetoken
 internal/auth/emaildomain
 internal/auth/grant
 internal/auth/grantend

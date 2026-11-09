@@ -187,6 +187,7 @@ internal/testsupport/containers
 internal/testsupport/edtokens
 internal/testsupport/egressallow
 internal/testsupport/ingestpg
+internal/testsupport/legacyjwt
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed

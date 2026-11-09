@@ -56,6 +56,7 @@ internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
 internal/auth/authruntime	fixed_credential_scan_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*
+internal/auth/authruntime	no_hs256_key_census_test.go	internal	tree	*.go
 internal/auth/authruntime	pgusers_census_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	queryapi_enforce_parity_integration_test.go	unexpressed	-	-
 internal/auth/authruntime	refresh_ttl_source_test.go	internal/auth/authruntime	dir	*

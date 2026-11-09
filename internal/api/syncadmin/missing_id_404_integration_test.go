@@ -20,7 +20,7 @@ func (v *cascadeVenue) jobRows() int {
 	return v.count(`SELECT count(*) FROM backfill_jobs`) + v.count(`SELECT count(*) FROM job_runs`)
 }
 
-func missingIDCells(t *testing.T, route func(id string) string, otherOrgID func(cascadeSeeded) uuid.UUID, notFound string) {
+func missingIDCells(t *testing.T, route func(id string) string, body string, otherOrgID func(cascadeSeeded) uuid.UUID, notFound string) {
 	t.Helper()
 	v := startCascadeVenue(t, false)
 	orgB := uuid.NewString()
@@ -31,7 +31,7 @@ func missingIDCells(t *testing.T, route func(id string) string, otherOrgID func(
 	ids := map[string]string{"missing id": uuid.NewString(), "another org's id": otherOrgID(oneB).String()}
 	rows, jobs, waits := v.handoffRows(), v.jobRows(), awaitCount(t)
 	for name, id := range ids {
-		status, text := v.call("POST", route(id), "")
+		status, text := v.call("POST", route(id), body)
 		if status != http.StatusNotFound || text != notFound {
 			t.Fatalf("%s: %d %s, want 404 %s", name, status, text, notFound)
 		}
@@ -50,7 +50,7 @@ func missingIDCells(t *testing.T, route func(id string) string, otherOrgID func(
 // TestIntegrationSyncMissingOrOtherOrgIDIs404BeforeAnyHandOff: POST
 // /integrations/{id}/sync.
 func TestIntegrationSyncMissingOrOtherOrgIDIs404BeforeAnyHandOff(t *testing.T) {
-	missingIDCells(t, func(id string) string { return "/api/v1/admin/integrations/" + id + "/sync" },
+	missingIDCells(t, func(id string) string { return "/api/v1/admin/integrations/" + id + "/sync" }, `{}`,
 		func(one cascadeSeeded) uuid.UUID { return one.integration },
 		`{"detail":"Integration not found"}`)
 }
@@ -58,7 +58,7 @@ func TestIntegrationSyncMissingOrOtherOrgIDIs404BeforeAnyHandOff(t *testing.T) {
 // TestSyncConfigTriggerMissingOrOtherOrgIDIs404BeforeAnyHandOff: POST
 // /sync-configs/{id}/trigger.
 func TestSyncConfigTriggerMissingOrOtherOrgIDIs404BeforeAnyHandOff(t *testing.T) {
-	missingIDCells(t, func(id string) string { return "/api/v1/admin/sync-configs/" + id + "/trigger" },
+	missingIDCells(t, func(id string) string { return "/api/v1/admin/sync-configs/" + id + "/trigger" }, "",
 		func(one cascadeSeeded) uuid.UUID { return one.config },
 		`{"detail":"Sync configuration not found"}`)
 }

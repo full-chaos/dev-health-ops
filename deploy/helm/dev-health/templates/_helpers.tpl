@@ -293,6 +293,25 @@ PostgreSQL URI — auto-computed when postgresql.enabled
 {{- end }}
 {{- end }}
 
+{{/*
+The Secret and key that hold the bundled PostgreSQL password, as the body of a
+secretKeyRef (name, key): postgresql.credentialsSecret.existingSecret when its
+name is set, else the chart's <fullname>-postgresql-credentials (key
+POSTGRES_PASSWORD, rendered with the store whenever existingSecret is unset).
+The StatefulSet's POSTGRES_PASSWORD and the backup CronJob's PGPASSWORD both
+read it, so the two cannot name different Secrets.
+*/}}
+{{- define "dev-health.postgresqlPasswordSecretKeyRef" -}}
+{{- $existing := .Values.postgresql.credentialsSecret.existingSecret -}}
+{{- if $existing.name -}}
+name: {{ $existing.name | quote }}
+key: {{ $existing.key | default "POSTGRES_PASSWORD" | quote }}
+{{- else -}}
+name: {{ include "dev-health.fullname" . }}-postgresql-credentials
+key: POSTGRES_PASSWORD
+{{- end -}}
+{{- end }}
+
 {{/* Go PgBouncer topology helpers. The poolers have stable in-cluster Service
 names; role credentials and runtime DSNs remain Secret values. */}}
 {{- define "dev-health.goPgbouncerSecretName" -}}

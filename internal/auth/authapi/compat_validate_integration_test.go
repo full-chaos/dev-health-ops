@@ -158,7 +158,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 		return hs256AccessToken(t, principal.String(), org.String(), tv, wire)
 	}
 	userToken := func(principal, sid uuid.UUID) string {
-		eddsa, err := NewEdDSAIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience, signer, goldenIssuer)
+		eddsa, err := NewEdDSAIssuer(contracts.PlatformAPIAudience, signer, goldenIssuer)
 		if err != nil {
 			t.Fatal(err)
 		}

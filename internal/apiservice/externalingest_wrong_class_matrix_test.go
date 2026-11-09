@@ -23,9 +23,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/ingestpg"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/legacyjwt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
 )
 
@@ -241,11 +241,11 @@ func pushWrongClassCells(t *testing.T, rig *pushRig) []pushCell {
 		}
 		return headers
 	}
-	signer, err := edgetoken.NewSigner(probeKey, "dev-health-ops", "dev-health-api")
+	signer, err := legacyjwt.NewSigner(probeKey, "dev-health-ops", "dev-health-api")
 	if err != nil {
 		t.Fatal(err)
 	}
-	refresh, err := signer.Refresh(edgetoken.RefreshClaims{UserID: probeUser.String(), OrgID: probeOrg.String(), FamilyID: uuid.NewString()}, probeNow, uuid.NewString())
+	refresh, err := signer.Refresh(legacyjwt.RefreshClaims{UserID: probeUser.String(), OrgID: probeOrg.String(), FamilyID: uuid.NewString()}, probeNow, uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
 	}

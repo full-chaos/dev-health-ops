@@ -172,7 +172,7 @@ func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 	}
 	id := uuid.New()
 	actor, subject := in.Actor.String(), in.Principal.String()
-	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+	err := s.commit(ctx, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if err := lockWrites(ctx, tx); err != nil {
 				return err
@@ -240,7 +240,7 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 		return ErrPlatformOwnerCLIOnly
 	}
 	var target uuid.UUID
-	err := s.pool.QueryRow(ctx, `SELECT id FROM `+s.q+`.platform_role_assignments WHERE principal_id = $1 AND role_key = $2`,
+	err := s.reader(ctx).QueryRow(ctx, `SELECT id FROM `+s.q+`.platform_role_assignments WHERE principal_id = $1 AND role_key = $2`,
 		in.Principal, in.Role).Scan(&target)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotHeld
@@ -249,7 +249,7 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 		return s.storeErr(ctx, "read revoke target", err)
 	}
 	actor, subject := in.Actor.String(), in.Principal.String()
-	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+	err = s.commit(ctx, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if err := lockWrites(ctx, tx); err != nil {
 				return err

@@ -49,6 +49,26 @@
     }
   },
   "properties": {
+    "postgresql": {
+      "type": "object",
+      "properties": {
+        "backup": {
+          "type": "object",
+          "description": "Nightly pg_dump of the bundled PostgreSQL (CHAOS-13373): a CronJob and a PVC, rendered only with enabled=true and postgresql.enabled=true.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "schedule": { "type": "string", "pattern": "^\\S+( \\S+){4}$" },
+            "timeZone": { "type": "string" },
+            "keep": { "type": "integer", "minimum": 1 },
+            "size": { "type": "string", "pattern": "^[0-9]+(Mi|Gi|Ti)$" },
+            "storageClass": { "type": "string" },
+            "ttlSecondsAfterFinished": { "type": "integer", "minimum": 0 },
+            "resources": { "type": "object" }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
     "valkey": {
       "type": "object",
       "required": ["appendfsync"],

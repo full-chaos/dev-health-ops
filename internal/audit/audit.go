@@ -454,7 +454,7 @@ func validateMutationAudit(event AuditEvent) error {
 	if err := event.validate(); err != nil {
 		return err
 	}
-	if appendOnlyEventTypes[event.EventType] || publicPurgeEventTypes[event.EventType] {
+	if appendOnlyEventTypes[event.EventType] || publicPurgeEventTypes[event.EventType] || publicProjectionEventTypes[event.EventType] {
 		return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, event.EventType)
 	}
 	return nil

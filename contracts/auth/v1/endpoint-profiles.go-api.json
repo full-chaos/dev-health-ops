@@ -5806,7 +5806,7 @@
         "legacy_hs256": false
       },
       "action": null,
-      "classification": "protected",
+      "classification": "public",
       "current_state_cache_behavior": "none: no authorization read (internal/api/billing/routes.go:87)",
       "delegated_bearer": "allowed",
       "disclosure_behavior": null,
@@ -5826,7 +5826,7 @@
         },
         "description": "policy.Optional: a valid access token is read when present; an anonymous caller is served."
       },
-      "public_rationale": null,
+      "public_rationale": "Public plan catalog: the pricing page reads it with no credential (CHAOS-458), as the legacy get_current_user_optional route did; it serves active plans only and no tenant data. A user access token, when sent, is read only to let an admin.billing holder see inactive plans and prices.",
       "reachable_validators": [
         {
           "anchor": {
@@ -5873,7 +5873,7 @@
         "legacy_hs256": false
       },
       "action": null,
-      "classification": "protected",
+      "classification": "public",
       "current_state_cache_behavior": "none: no authorization read (internal/api/billing/routes.go:96)",
       "delegated_bearer": "allowed",
       "disclosure_behavior": null,
@@ -5893,7 +5893,7 @@
         },
         "description": "policy.Optional: a valid access token is read when present; an anonymous caller is served."
       },
-      "public_rationale": null,
+      "public_rationale": "Public plan catalog: the pricing page reads it with no credential (CHAOS-458), as the legacy get_current_user_optional route did; it serves active plans only and no tenant data. A user access token, when sent, is read only to let an admin.billing holder see inactive plans and prices.",
       "reachable_validators": [
         {
           "anchor": {

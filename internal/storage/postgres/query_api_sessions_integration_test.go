@@ -50,7 +50,8 @@ func startQueryAPISessionsHarness(t *testing.T, ctx context.Context, withAuthSch
 	if withAuthSchema {
 		statements = append(statements,
 			"CREATE SCHEMA auth",
-			"CREATE TABLE auth.sessions (id uuid PRIMARY KEY, principal_id uuid, revoked_at timestamptz, legacy_token_version bigint, token_hash text)",
+			"CREATE TABLE auth.sessions (id uuid PRIMARY KEY, principal_id uuid, revoked_at timestamptz, legacy_token_version bigint, token_hash text, created_at timestamptz, web_session_id uuid)",
+			"CREATE TABLE auth.users (principal_id uuid PRIMARY KEY, password_updated_at timestamptz, password_hash text)",
 			"CREATE TABLE auth.principals (id uuid PRIMARY KEY, kind text, disabled_at timestamptz, display_name text)",
 			"CREATE TABLE auth.platform_role_assignments (id uuid PRIMARY KEY, principal_id uuid, role_key text, expires_at timestamptz, granted_by uuid)",
 		)
@@ -214,10 +215,15 @@ func TestQueryAPIRoleCannotReadOtherAuthColumnsOrTables(t *testing.T) {
 		t.Fatalf("the migrate leg: %v", err)
 	}
 	pool := connectAs(t, ctx, h.uri, h.role, queryAPISessionsPassword)
-	if _, err := pool.Exec(ctx, "SELECT id, principal_id, revoked_at, legacy_token_version FROM auth.sessions WHERE id = gen_random_uuid()"); err != nil {
+	if _, err := pool.Exec(ctx, "SELECT id, principal_id, revoked_at, legacy_token_version, created_at, web_session_id FROM auth.sessions WHERE id = gen_random_uuid()"); err != nil {
 		t.Fatalf("the declared session columns must read: %v", err)
 	}
+	if _, err := pool.Exec(ctx, "SELECT principal_id, password_updated_at FROM auth.users WHERE principal_id = gen_random_uuid()"); err != nil {
+		t.Fatalf("the declared password stamp must read: %v", err)
+	}
 	for _, statement := range []string{
+		"SELECT password_hash FROM auth.users",
+		"SELECT * FROM auth.users",
 		"SELECT token_hash FROM auth.sessions",
 		"SELECT * FROM auth.sessions",
 		"SELECT id FROM auth.principals",
@@ -289,51 +295,38 @@ func TestQueryAPIPostureRefusesAnExtraOrMissingPlatformColumn(t *testing.T) {
 	}
 }
 
-// With real column privileges: the widened session read, granted on top of the
-// old one, is ready; one more auth column, or a part of the widening, is refused
-// and the refusal names the column.
-func TestQueryAPIPostureAcceptsTheWidenedSessionReadExactly(t *testing.T) {
+// With real column privileges: the old read alone (the four sessions columns) is not
+// ready and names the first missing column; the river leg's widened read is ready;
+// one more auth column, or a part of the widening, is refused and named.
+func TestQueryAPIPostureNeedsTheWidenedSessionReadExactly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	h := startQueryAPISessionsHarness(t, ctx, true)
-	for _, statement := range []string{
-		"ALTER TABLE auth.sessions ADD COLUMN created_at timestamptz, ADD COLUMN web_session_id uuid",
-		"CREATE TABLE auth.users (principal_id uuid PRIMARY KEY, password_updated_at timestamptz, password_hash text)",
-	} {
-		if _, err := h.admin.Exec(ctx, statement); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
-	}
-	read := QueryAPISessionReadFor("auth", false)
-	if err := h.applyLeg(ctx, &read); err != nil {
-		t.Fatalf("the migrate leg: %v", err)
-	}
-	if err := h.check(t, ctx, &read); err != nil {
-		t.Fatalf("the old session read must be ready: %v", err)
-	}
-	for _, statement := range []string{
-		"GRANT SELECT (created_at, web_session_id) ON auth.sessions TO " + h.role,
-		"GRANT SELECT (principal_id, password_updated_at) ON auth.users TO " + h.role,
-	} {
-		if _, err := h.admin.Exec(ctx, statement); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
-	}
-	if err := h.check(t, ctx, &read); err != nil {
-		t.Fatalf("the widened session read must be ready: %v", err)
-	}
 	exec := func(statement string) {
 		t.Helper()
 		if _, err := h.admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
+	read := QueryAPISessionReadFor("auth", false)
 	refused := func(after, want string) {
 		t.Helper()
 		err := h.check(t, ctx, &read)
 		if err == nil || !errors.Is(err, ErrPostureRefused) || !strings.Contains(err.Error(), want) {
 			t.Errorf("after %s: %v, want a refusal naming %s", after, err, want)
 		}
+	}
+	if err := h.applyLeg(ctx, nil); err != nil {
+		t.Fatalf("the migrate leg without the session read: %v", err)
+	}
+	exec("GRANT USAGE ON SCHEMA auth TO " + h.role)
+	exec("GRANT SELECT (id, principal_id, revoked_at, legacy_token_version) ON auth.sessions TO " + h.role)
+	refused("the old session read", "auth.sessions.created_at")
+	if err := h.applyLeg(ctx, &read); err != nil {
+		t.Fatalf("the migrate leg: %v", err)
+	}
+	if err := h.check(t, ctx, &read); err != nil {
+		t.Fatalf("the widened session read must be ready: %v", err)
 	}
 	exec("GRANT SELECT (password_hash) ON auth.users TO " + h.role)
 	refused("the widened read plus users.password_hash", "auth.users.password_hash")

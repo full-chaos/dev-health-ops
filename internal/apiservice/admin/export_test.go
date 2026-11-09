@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
@@ -22,3 +23,11 @@ func SetSetupCallbackTimeout(d time.Duration) (restore func()) {
 // fingerprint so the status venue oracle can seed records that match the
 // org's CURRENT BYO config, as a real certification would.
 var ReadinessFingerprint = readinessFingerprint
+
+// SetOrgDeletionDeleteHook runs hook after each ALTER DELETE of an org
+// deletion's ClickHouse purge, and returns the restore.
+func SetOrgDeletionDeleteHook(hook func(ctx context.Context, table string, pass int)) (restore func()) {
+	previous := orgDeletionDeleteHook
+	orgDeletionDeleteHook = hook
+	return func() { orgDeletionDeleteHook = previous }
+}

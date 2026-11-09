@@ -536,12 +536,19 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, ch *orgDeleti
 		if err := ch.conn.Exec(syncCtx, fmt.Sprintf("ALTER TABLE `%s` DELETE WHERE %s", t.Name, condition), bind); err != nil {
 			fail(t.Name, err)
 		}
+		if orgDeletionDeleteHook != nil {
+			orgDeletionDeleteHook(ctx, t.Name, 0)
+		}
 	}
 	if len(failed) > 0 {
 		return &orgDeletionIncompleteError{tables: failed, err: first}
 	}
 	return nil
 }
+
+// orgDeletionDeleteHook, when a test sets it, runs after each ALTER DELETE of
+// the ClickHouse purge with the table and the pass: 0 in the table loop.
+var orgDeletionDeleteHook func(ctx context.Context, table string, pass int)
 
 // orgDeletionMutationSettings: 2 waits for every replica, so a 200 means the
 // rows are gone for reads on any replica.

@@ -68,7 +68,8 @@ const minRateLimitSecretBytes = 32
 // Limits is what a limited route counts with: the shared counter store and the
 // key that digests an e-mail, a link secret or a principal id before it is
 // part of a counter key. The key is HKDF-SHA256 of the secret NewLimits is
-// given (AUTH_RATE_LIMIT_KEY); rotating it resets the buckets.
+// given (NewSessionLimits: AUTH_RATE_LIMIT_KEY, else AUTH_SESSION_SUCCESSOR_KEY);
+// rotating that secret resets the buckets.
 type Limits struct {
 	store httpapi.CounterStore
 	key   []byte
@@ -81,13 +82,25 @@ func NewLimits(store httpapi.CounterStore, secret string) (*Limits, error) {
 		return nil, errors.New("authapi: the limits need a counter store")
 	}
 	if len(secret) < minRateLimitSecretBytes {
-		return nil, errors.New("authapi: the limits need the session signing secret")
+		return nil, errors.New("authapi: the limits need a key of at least 32 bytes")
 	}
 	key := make([]byte, sha256.Size)
 	if _, err := io.ReadFull(hkdf.New(sha256.New, []byte(secret), nil, []byte(rateLimitKeyInfo)), key); err != nil {
 		return nil, err
 	}
 	return &Limits{store: store, key: key}, nil
+}
+
+// NewSessionLimits returns the limits over store keyed from rateKey
+// (AUTH_RATE_LIMIT_KEY) or, when it is empty, from successorKey
+// (AUTH_SESSION_SUCCESSOR_KEY). Either way the key is the HKDF subkey under
+// rateLimitKeyInfo, never the secret itself, and the successor key's own use
+// (session.successorLabel) is a different derivation.
+func NewSessionLimits(store httpapi.CounterStore, rateKey, successorKey string) (*Limits, error) {
+	if rateKey != "" {
+		return NewLimits(store, rateKey)
+	}
+	return NewLimits(store, successorKey)
 }
 
 // LimitIDs are the ids of every limiter the service counts, in the table's

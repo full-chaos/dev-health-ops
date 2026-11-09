@@ -107,7 +107,7 @@ func (l *lazyStore) Shutdown(context.Context) error {
 }
 
 // limitStore returns the limits (the shared counter store and the digest key,
-// derived from AUTH_RATE_LIMIT_KEY, which config requires with the session routes) when a limited
+// derived from AUTH_RATE_LIMIT_KEY, else AUTH_SESSION_SUCCESSOR_KEY; config refuses neither) when a limited
 // route mounts, and nil (no key derived, nothing built, nothing dialled) when
 // none does: a value in AUTH_VALKEY_URI beside no limited route is inert. The
 // login is this service's own (an ACL user limited to the auth_svc_ key
@@ -135,14 +135,14 @@ func limitStore(
 	if err := registry.RegisterMetrics(metricsSourceRateLimit, httpapi.RateLimitStoreErrors); err != nil {
 		return nil, nil, err
 	}
-	limits, err := authapi.NewLimits(store, rateLimitSecret(cfg))
+	limits, err := authapi.NewSessionLimits(store, rateLimitSecret(cfg), cfg.Session.SuccessorKey.Reveal())
 	if err != nil {
 		return nil, nil, err
 	}
 	return limits, []lifecycle.Component{store}, nil
 }
 
-// rateLimitSecret is AUTH_RATE_LIMIT_KEY, the limiter's only key.
+// rateLimitSecret is AUTH_RATE_LIMIT_KEY, "" when unset (the limiter then keys from the successor key).
 func rateLimitSecret(cfg authconfig.Config) string {
 	return cfg.Session.RateLimitKey.Reveal()
 }

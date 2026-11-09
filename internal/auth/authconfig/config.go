@@ -117,8 +117,9 @@ const (
 	// with the session secrets, it mounts the login route. Secret.
 	EnvLoginLockoutKey = "AUTH_LOGIN_LOCKOUT_KEY"
 	// EnvRateLimitKey is the key the rate-limit counters digest identifiers
-	// with (HKDF input). Required with the session routes; it is the limiter's
-	// only key. Secret: environment or _FILE only.
+	// with (HKDF input). Optional; unset, the limiter keys from
+	// EnvSessionSuccessorKey (authapi.NewSessionLimits). Secret: environment or
+	// _FILE only.
 	EnvRateLimitKey = "AUTH_RATE_LIMIT_KEY"
 
 	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
@@ -337,7 +338,7 @@ type SessionTokens struct {
 	// AccessLifetime is the eddsa access token's exp - iat (EnvAccessTokenLifetime).
 	AccessLifetime time.Duration
 	SuccessorKey   secrets.Value
-	// RateLimitKey is EnvRateLimitKey, the rate limiter's only key; set whenever Enabled is.
+	// RateLimitKey is EnvRateLimitKey; unset, the rate limiter keys from SuccessorKey.
 	RateLimitKey secrets.Value
 	// LoginEnabled is set with LockoutKey: the login route is mounted.
 	LoginEnabled bool
@@ -748,9 +749,10 @@ func accessTokenLifetime(lookup secrets.LookupEnv) (time.Duration, error) {
 }
 
 // sessionTokens resolves the session routes' settings. The successor key
-// alone turns the session routes on, and they need the rate-limit key: it is
-// the limiter's only key. The retired HS256 settings (RetiredHS256Settings)
-// are read by nothing here; the runtime warns when one is set.
+// alone turns the session routes on; the rate-limit key is optional (unset,
+// the limiter keys from the successor key). The retired HS256 settings
+// (RetiredHS256Settings) are read by nothing here; the runtime warns when one
+// is set.
 func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	class, err := accessTokenClass(lookup)
 	if err != nil {
@@ -796,10 +798,7 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 		}
 		return out, nil
 	}
-	if !hasRateKey {
-		return SessionTokens{}, fmt.Errorf("%s is required with %s (the rate limiter has no other key)", EnvRateLimitKey, EnvSessionSuccessorKey)
-	}
-	if len([]rune(rateKey.Reveal())) < minRateLimitKeyLength {
+	if hasRateKey && len([]rune(rateKey.Reveal())) < minRateLimitKeyLength {
 		return SessionTokens{}, fmt.Errorf(
 			"%s must be at least %d characters", EnvRateLimitKey, minRateLimitKeyLength,
 		)

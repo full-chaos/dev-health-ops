@@ -62,7 +62,6 @@ func TestSessionSecretsAreRefusedAloneOrMalformed(t *testing.T) {
 	short := strings.Repeat("k", 31)
 	cases := map[string]map[string]string{
 		"rate-limit key alone":     sessionEnv(testRateKey, ""),
-		"successor key alone":      sessionEnv("", testSuccessorKey),
 		"rate-limit key too short": sessionEnv(short, testSuccessorKey),
 		"successor key not base64": sessionEnv(testRateKey, "!!not-base64url!!"),
 		"successor key 31 bytes":   sessionEnv(testRateKey, base64.RawURLEncoding.EncodeToString(make([]byte, 31))),

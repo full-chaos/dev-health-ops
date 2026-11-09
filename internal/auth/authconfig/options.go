@@ -235,8 +235,7 @@ var optionRegistry = []Option{
 	{
 		Env: EnvSessionSuccessorKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "32-byte session successor key, base64url without padding; " +
-			EnvSessionSuccessorKey + "_FILE reads it from a mounted file instead. Set, it mounts the session routes, which need " +
-			EnvRateLimitKey,
+			EnvSessionSuccessorKey + "_FILE reads it from a mounted file instead. Set, it mounts the session routes",
 	},
 	{
 		Flag: "jwt-audience", Env: EnvAccessTokenAudience, Kind: KindString,
@@ -267,7 +266,8 @@ var optionRegistry = []Option{
 	{
 		Env: EnvRateLimitKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "key the rate-limit counters digest identifiers with, at least 32 characters; " + EnvRateLimitKey +
-			"_FILE reads it from a mounted file instead. The limiter's only key: required with the session secrets, and needs them",
+			"_FILE reads it from a mounted file instead. Unset, the limiter is keyed from " + EnvSessionSuccessorKey +
+			" (its own HKDF subkey); needs the session secrets",
 	},
 	{
 		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,

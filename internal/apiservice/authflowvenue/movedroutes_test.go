@@ -94,9 +94,71 @@ var dependsOnMoved = map[string]string{
 }
 
 // inProcessRetiredRows are the row comparisons a moved route's step changes on the Python plane (sign-up users,
-// organizations, memberships and audit rows, the link tokens, the refresh token a reset revokes): the in-process run
-// retires them under movedRuling. org_invites stays compared.
-var inProcessRetiredRows = []string{"users", "organizations", "memberships", "email_verification_tokens", "password_reset_tokens", "refresh_tokens", "audit_logs"}
+// organizations, memberships and audit rows, the link tokens): the in-process run retires them under movedRuling. The
+// forwarded legs still compare every one of them. org_invites and refresh_tokens stay compared in process.
+var inProcessRetiredRows = []string{"users", "organizations", "memberships", "email_verification_tokens", "password_reset_tokens", "audit_logs"}
+
+// inProcessRefreshExcluded are the users whose refresh_tokens rows a retired step wrote on the Python plane (a reset
+// revoked one, a sign-in with the reset password made one): the in-process run compares refresh_tokens without their
+// rows, and every other user's rows (the kept sign-in, invite and onboarding steps) as they are.
+var inProcessRefreshExcluded = []string{"alice@example.com", "pia@example.com"}
+
+// refreshWritingDependents are the users of the dependent steps that sign in or refresh, the steps that write
+// refresh_tokens: "login: <user>, ..." and "refresh: <user>'s ...".
+func refreshWritingDependents() []string {
+	seen := map[string]bool{}
+	for name := range dependsOnMoved {
+		for _, prefix := range []string{"login: ", "refresh: "} {
+			rest, ok := strings.CutPrefix(name, prefix)
+			if !ok {
+				continue
+			}
+			user, _, _ := strings.Cut(rest, ",")
+			user, _, _ = strings.Cut(user, "'")
+			seen[strings.TrimSpace(user)+"@example.com"] = true
+		}
+	}
+	users := make([]string, 0, len(seen))
+	for user := range seen {
+		users = append(users, user)
+	}
+	sort.Strings(users)
+	return users
+}
+
+// withoutUsers is rows (" | " separated) without the lines of users.
+func withoutUsers(rows string, users []string) string {
+	var kept []string
+	for _, line := range strings.Split(rows, " | ") {
+		excluded := false
+		for _, user := range users {
+			if strings.HasPrefix(line, user) {
+				excluded = true
+			}
+		}
+		if !excluded && line != "" {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, " | ")
+}
+
+// The in-process refresh_tokens exclusion is exactly the users of the dependent sign-in and refresh steps: one user more
+// or one user less fails here.
+func TestInProcessRefreshExclusionIsTheDependentSignInUsers(t *testing.T) {
+	got := append([]string(nil), inProcessRefreshExcluded...)
+	sort.Strings(got)
+	if want := refreshWritingDependents(); !slices.Equal(got, want) {
+		t.Errorf("inProcessRefreshExcluded = %v, want the dependent sign-in users %v", got, want)
+	}
+	if slices.Contains(inProcessRetiredRows, "refresh_tokens") {
+		t.Error("refresh_tokens is retired whole, but kept in-process steps write it")
+	}
+	rows := "alice@example.comorg-bfalse 1 | ivan@example.comorg-afalse 1 | pia@example.com<null>false 1"
+	if kept := withoutUsers(rows, inProcessRefreshExcluded); kept != "ivan@example.comorg-afalse 1" {
+		t.Errorf("withoutUsers kept %q", kept)
+	}
+}
 
 // movedStepRoute is the moved route a step is on or depends on, and whether the in-process run retires it.
 func movedStepRoute(moved map[string]bool, name, method, path string) (string, bool) {

@@ -728,6 +728,10 @@ func (r *runner) rows(name, query string) {
 	}
 	goRows := venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), query)
 	if projected {
+		if r.moved != nil && name == "refresh_tokens" {
+			r.refreshRowsInProcess(goRows)
+			return
+		}
 		r.projectedRows(name, goRows)
 		return
 	}
@@ -736,6 +740,19 @@ func (r *runner) rows(name, query string) {
 	fmt.Fprintf(&r.receipt, "%s rows after the scenario: %s\n", name, venueoracle.Mark(same))
 	if pyRows == "" {
 		r.t.Errorf("%s rows are empty", name)
+	}
+}
+
+// refreshRowsInProcess is projectedRows for refresh_tokens on the in-process run: the rows of inProcessRefreshExcluded,
+// written on the Python plane by retired steps, leave both sides; every other row is compared through the quirk table.
+func (r *runner) refreshRowsInProcess(goRows string) {
+	r.t.Helper()
+	pyRows := withoutUsers(r.golden.InspectRows(r.t, "refresh_tokens"), inProcessRefreshExcluded)
+	target := withoutUsers(r.golden.ProjectRows(r.t, "refresh_tokens", goRows), inProcessRefreshExcluded)
+	problems := r.ledger.Compare("refresh_tokens", pyRows, target)
+	fmt.Fprintf(&r.receipt, "refresh_tokens rows after the scenario, without %v (%s): %s\n", inProcessRefreshExcluded, movedRuling, venueoracle.Mark(len(problems) == 0))
+	for _, problem := range problems {
+		r.t.Error(problem)
 	}
 }
 

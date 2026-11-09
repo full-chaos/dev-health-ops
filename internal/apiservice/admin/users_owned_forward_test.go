@@ -29,6 +29,8 @@ type fakeUsersAdmin struct {
 	deletes   []authprovision.UserDeleteRequest
 	err       error
 	deleted   authprovision.DeletedUser
+	// onUpdate runs inside UpdateUser: the write auth-service makes, as the read-back sees it.
+	onUpdate func()
 }
 
 func (f *fakeUsersAdmin) CreateUser(_ context.Context, in authprovision.UserCreateRequest) (authprovision.CreatedUser, error) {
@@ -43,6 +45,9 @@ func (f *fakeUsersAdmin) CreateUser(_ context.Context, in authprovision.UserCrea
 func (f *fakeUsersAdmin) UpdateUser(_ context.Context, in authprovision.UserUpdateRequest) error {
 	f.verbs = append(f.verbs, "update")
 	f.updates = append(f.updates, in)
+	if f.onUpdate != nil && f.err == nil {
+		f.onUpdate()
+	}
 	return f.err
 }
 
@@ -350,14 +355,19 @@ func TestUsersOwnedPatchProfileFieldsForwardToAuth(t *testing.T) {
 	}
 }
 
-// R23: an empty PATCH still reaches auth-service and answers the row (ledger row known-divergence-noop-patch-updated-at:
-// auth-service writes nothing for it, so updated_at keeps its value).
-func TestUsersOwnedNoOpPatchForwardsAndAnswers200(t *testing.T) {
-	mustLedgerRow(t, "known-divergence-noop-patch-updated-at")
-	db, users := ownedDB(activeStored()), &fakeUsersAdmin{}
+// R23 (pm D6915, parity): an empty PATCH reaches auth-service, which bumps updated_at as legacy does, and go-api
+// answers the row it reads after the call: the bumped updated_at, not the one it read before.
+func TestUsersOwnedNoOpPatchAnswersTheBumpedUpdatedAt(t *testing.T) {
+	db := ownedDB(activeStored())
+	bumped := provStamp.Add(time.Hour)
+	users := &fakeUsersAdmin{onUpdate: func() {
+		row := activeStored().row()
+		row[14] = bumped
+		db.rows[ownedByIDSQL] = row
+	}}
 	code, body := ownedCall{route: "update", body: `{}`}.run(ownedHandlers(db, users, true))
-	if code != http.StatusOK || !strings.Contains(body, `"updated_at"`) {
-		t.Fatalf("answer %d %s, want 200 with the row", code, body)
+	if code != http.StatusOK || !strings.Contains(body, `"updated_at":"`+pyTimeString(bumped)+`"`) {
+		t.Fatalf("answer %d %s, want 200 with updated_at %s", code, body, pyTimeString(bumped))
 	}
 	mustForwardOnly(t, db, users, "update")
 }

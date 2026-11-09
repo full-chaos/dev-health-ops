@@ -795,7 +795,7 @@ func TestWrongClassGateAuthServiceFailsOnAStaleDivergence(t *testing.T) {
 }
 
 // With no ledger row, the excusable findings are exactly the named rows' cells of the rules their rows excuse, and
-// every named row has one: the ledger excuses its named rows and rules and nothing else.
+// every rule a row excuses has one there: the ledger excuses its named rows and rules and nothing wider.
 func TestWrongClassGateAuthServiceExcusesOnlyTheNamedRows(t *testing.T) {
 	runAuthGateOnce(t)
 	named := gateDivergences(t)
@@ -805,11 +805,13 @@ func TestWrongClassGateAuthServiceExcusesOnlyTheNamedRows(t *testing.T) {
 		if !ok || !slices.Contains(excusal.rules, finding.rule) {
 			t.Errorf("a failure outside the named rows and rules: %s", finding.text)
 		}
-		failed[finding.profile] = true
+		failed[finding.profile+" "+finding.rule] = true
 	}
-	for profile := range named {
-		if !failed[profile] {
-			t.Errorf("%s: no excusable failure without its ledger row", profile)
+	for profile, excusal := range named {
+		for _, rule := range excusal.rules {
+			if !failed[profile+" "+rule] {
+				t.Errorf("%s: ledger %s excuses %s, which no cell of the row fails without it", profile, excusal.owner, rule)
+			}
 		}
 	}
 }

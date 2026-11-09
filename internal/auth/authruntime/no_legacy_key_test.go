@@ -35,10 +35,9 @@ func noLegacyKeyConfig(t *testing.T) authconfig.Config {
 		authconfig.EnvTokenIssuerURL:      accessCheckIssuer,
 		authconfig.EnvRateLimitKey:        noLegacyKeyRateLimitKey,
 	})
-	delete(env, authconfig.EnvAccessTokenSecret)
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
-		t.Fatalf("eddsa without %s does not load: %v", authconfig.EnvAccessTokenSecret, err)
+		t.Fatalf("eddsa with no HS256 key does not load: %v", err)
 	}
 	return cfg
 }
@@ -89,7 +88,7 @@ func TestEdDSASessionRoutesBuildAndServeWithoutTheLegacyKey(t *testing.T) {
 	if _, err := issuer.Access(grant); err != nil {
 		t.Fatalf("the production issuer mints no access token without the legacy key: %v", err)
 	}
-	minter, err := authapi.NewEdDSAIssuer("", cfg.Session.AccessIssuer, authapi.AccessTokenAudience, signer, accessCheckIssuer)
+	minter, err := authapi.NewEdDSAIssuer(authapi.AccessTokenAudience, signer, accessCheckIssuer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +96,7 @@ func TestEdDSASessionRoutesBuildAndServeWithoutTheLegacyKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := legacyAccess(t, testAccessSecret, cfg.Session.AccessIssuer, "dev-health-api", grant)
+	legacy := legacyAccess(t, testAccessSecret, "dev-health-ops", "dev-health-api", grant)
 	handler := mountRoutes(routes)
 	if status, reason := routeAnswer(t, handler, http.MethodGet, authapi.PatternCurrent, "", eddsa); status != http.StatusServiceUnavailable || reason != "store_unavailable" {
 		t.Errorf("EdDSA bearer: %d %q; want 503 store_unavailable", status, reason)

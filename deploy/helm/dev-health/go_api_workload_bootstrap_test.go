@@ -204,3 +204,12 @@ func TestWorkloadBootstrapAuthServiceTakesItsEnvThroughExtraEnv(t *testing.T) {
 		t.Errorf("auth-service AUTH_TOKEN_ISSUER_URL = %v, want %s (the workload token issuer go-api sends)", env["AUTH_TOKEN_ISSUER_URL"], wbIssuer)
 	}
 }
+
+func TestWorkloadBootstrapExtraEnvOtherCaseSpellingsAreAccepted(t *testing.T) {
+	for _, name := range []string{"auth_session_issue_credential", "Auth_Workload_Bootstrap_File", "auth_workload_issuer", " AUTH_WORKLOAD_ISSUER"} {
+		_, out, err := renderAuth(t, goAPIWithAuth(wbOn("--set-json", `goApi.extraEnv=[{"name":"`+name+`","value":"x"}]`)...)...)
+		if err != nil {
+			t.Errorf("extraEnv %q is a different variable in a container and was refused: %v\n%.400s", name, err, out)
+		}
+	}
+}

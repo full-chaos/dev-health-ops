@@ -44,7 +44,7 @@ func TestWorkItemWritersRefuseUInt32OverflowInsteadOfWrapping(t *testing.T) {
 				[]workitemmetrics.MetricsDailyRow{{
 					Day: day, Provider: "github", WorkScopeID: "acme/platform",
 					TeamID: "team-a", TeamName: "Core", ItemsStarted: overflow,
-				}}, computedAt)
+				}}, nil, computedAt)
 		}},
 		{"work_item_user_metrics_daily", func(conn workItemBatchConn) (int, error) {
 			return WriteWorkItemUserMetricsDaily(ctx, conn, "org-a", day,
@@ -52,7 +52,7 @@ func TestWorkItemWritersRefuseUInt32OverflowInsteadOfWrapping(t *testing.T) {
 					Day: day, Provider: "github", WorkScopeID: "acme/platform",
 					UserIdentity: "alice", TeamID: "team-a", TeamName: "Core",
 					ItemsCompleted: overflow,
-				}}, computedAt)
+				}}, nil, computedAt)
 		}},
 		{"estimate_coverage_metrics_daily", func(conn workItemBatchConn) (int, error) {
 			return WriteEstimateCoverageMetricsDaily(ctx, conn, "org-a", day,
@@ -92,7 +92,7 @@ func TestWorkItemWritersRefuseNegativeCounters(t *testing.T) {
 		[]workitemmetrics.MetricsDailyRow{{
 			Day: day, Provider: "github", WorkScopeID: "acme/platform",
 			TeamID: "team-a", TeamName: "Core", WIPCountEndOfDay: -1,
-		}}, day)
+		}}, nil, day)
 	if conn.prepares != 1 {
 		t.Fatalf("the writer prepared %d batches, want 1: the refusal must come from the counter check", conn.prepares)
 	}

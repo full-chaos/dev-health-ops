@@ -126,9 +126,9 @@ func (*oneWorkItemRow) ColumnTypes() []chdriver.ColumnType { return nil }
 func (*oneWorkItemRow) Totals(...any) error                { return errors.New("no totals") }
 func (*oneWorkItemRow) ScanStruct(any) error               { return errors.New("no rows") }
 
-// workItemSendFailingConn dispatches Query() by the text of the four reads of
-// loadWorkItemScopeRead (one scope, one work item, one transition, no
-// attribution row) and PrepareBatch() by table substring, failing Send() only
+// workItemSendFailingConn dispatches Query() by the text of the reads of
+// loadWorkItemScopeRead (one scope, one work item, no row of it in another
+// scope, one transition, no attribution row) and PrepareBatch() by table substring, failing Send() only
 // for failTable. failQuery fails the first read whose text contains it.
 type workItemSendFailingConn struct {
 	stubDriverConn
@@ -148,6 +148,9 @@ func (conn *workItemSendFailingConn) Query(_ context.Context, query string, _ ..
 	switch {
 	case strings.Contains(query, "SELECT DISTINCT provider"):
 		return &oneWorkItemScopeRow{}, nil
+	case query == workItemOrgWinnerReadSQL:
+		// The org winner read: the one item has no row in another scope.
+		return &emptyWorkItemRelatedRows{}, nil
 	case strings.Contains(query, "work_items FINAL"):
 		return &oneWorkItemScopedRow{}, nil
 	case strings.Contains(query, "FROM work_item_transitions"):
@@ -336,6 +339,7 @@ func TestWorkItemScopeFamiliesWriteNothingWhenAReadFails(t *testing.T) {
 	reads := map[string]string{
 		"the scopes of the partition": "SELECT DISTINCT provider",
 		"the items of the scopes":     "SELECT repo_id, last_synced,",
+		"the org winner rows":         workItemOrgWinnerReadSQL,
 		"the transitions":             "FROM work_item_transitions",
 		"the attributions":            "FROM work_item_team_attributions FINAL",
 		"the blocked spans":           "FROM work_item_dependencies FINAL",

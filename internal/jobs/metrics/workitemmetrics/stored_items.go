@@ -30,6 +30,23 @@ type StoredItem struct {
 	StartedAt   *time.Time
 	ClosedAt    *time.Time
 	StoryPoints *float64
+
+	// Scope is the work scope the item's attribution is keyed by, in a set that
+	// holds an item once per work scope (the scope view, CHAOS-10797): two rows
+	// of one item in two scopes each keep the attribution of their own row. It
+	// is empty in a set that holds an item once (the org view, the request-time
+	// read), whose attributions are keyed by the item id. See AttributionKey.
+	Scope string
+}
+
+// AttributionKey is the key of an item's attribution in the map
+// ComputeStoredItemsDay reads: the item id when scope is empty, else the scope
+// and the id.
+func AttributionKey(scope, workItemID string) string {
+	if scope == "" {
+		return workItemID
+	}
+	return scope + "\x00" + workItemID
 }
 
 // PrimaryAttribution is the primary team row of work_item_team_attributions for an
@@ -108,14 +125,14 @@ func ProjectStoredItems(rows []StoredItem) []Item {
 	return items
 }
 
-// StoredItemResolver answers from the primary attributions, applying the same
-// normalize_team_id/normalize_team_name defaults Python applies to a nil resolver
-// result. A work item with no row resolves to unassigned/Unassigned, which is
+// StoredItemResolver answers from the primary attributions (keyed by
+// AttributionKey), applying the same normalize_team_id/normalize_team_name
+// defaults Python applies to a nil resolver result. A work item with no row resolves to unassigned/Unassigned, which is
 // what resolve_team_attribution returns when every cascade source declines.
 func StoredItemResolver(rows []StoredItem, attributions map[string]PrimaryAttribution) Resolver {
 	return func(index int) Attribution {
 		row := rows[index]
-		attribution := attributions[row.WorkItemID]
+		attribution := attributions[AttributionKey(row.Scope, row.WorkItemID)]
 		return Attribution{
 			WorkScopeID:    row.WorkScopeID(),
 			TeamID:         NormalizeTeamID(&attribution.TeamID),

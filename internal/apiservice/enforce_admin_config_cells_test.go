@@ -25,7 +25,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
@@ -307,10 +306,6 @@ func adminConfigServerOver(t *testing.T, enforcer func(*testing.T) *policy.Enfor
 	if edit != nil {
 		edit(store)
 	}
-	verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth, err := policy.NewAuthenticator(store, quietLogger())
 	if err != nil {
 		t.Fatal(err)
@@ -349,7 +344,7 @@ func adminConfigServerOver(t *testing.T, enforcer func(*testing.T) *policy.Enfor
 	if enforcer != nil {
 		guard.SetEnforcer(enforcer(t))
 	}
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Verifier: verifier}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard}
 	scope := policy.NewScope(auth, quietLogger())
 	server, err := NewServer(apiTestConfig(), quietLogger(), build(t, deps), scope.Layers()...)
 	if err != nil {

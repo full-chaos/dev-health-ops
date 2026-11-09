@@ -15,6 +15,7 @@ var usersOwnedForwardedEntryPoints = map[string]string{
 	"internal/apiservice/admin/users.go|handlers.createUser":      "internal/apiservice/admin/users_owned_forward.go|handlers.createUserInAuth",
 	"internal/apiservice/admin/users.go|handlers.updateUser":      "internal/apiservice/admin/users_owned_forward.go|handlers.updateUserInAuth",
 	"internal/apiservice/admin/users.go|handlers.setUserPassword": "internal/apiservice/admin/users_owned_forward.go|handlers.setUserPasswordInAuth",
+	"internal/apiservice/admin/users.go|handlers.deleteUser":      "internal/apiservice/admin/users_owned_forward.go|handlers.deleteUserInAuth",
 }
 
 // guardedUserWrites are the local writes an owned forward must not reach: the guarded store writers and the guarded

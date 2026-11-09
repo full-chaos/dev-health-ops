@@ -3,6 +3,7 @@
 # authapi, policy and the minter). TestEveryPublicSuperuserLiteralIsListed holds this list.
 # file	function	count	kind
 internal/adminops/users.go	runUsersDelete	1	log key
+internal/api/authprovision/users.go	UsersClient.UpdateUser	1	request key (the auth-service users update member; a platform_admin grant or revoke)
 internal/api/billing/entitlements.go	handlers.entitlementAccessSQL	1	read: the off column of PlatformRoleRead
 internal/api/policy/accessroute_user.go	PGStore.AccessUser	1	grant-error text
 internal/api/policy/store.go	PGStore.UserState	1	grant-error text
@@ -17,8 +18,8 @@ internal/apiservice/admin/guards.go	pgStore.targetsSuperuserSQL	1	read: the off 
 internal/apiservice/admin/orgs_provision.go	pgStore.isSuperuserSQL	1	read: the off column of PlatformRoleRead
 internal/apiservice/admin/platformstats.go	pgStore.superuserCountSQL	1	read: the off column of PlatformRoleRead
 internal/apiservice/admin/store.go	pgStore.targetUserSQL	1	read: the off column of PlatformRoleRead
-internal/apiservice/admin/users.go	handlers.createUser	1	request key (refused while owned)
-internal/apiservice/admin/users.go	parseUserUpdate	1	request key (refused while owned)
+internal/apiservice/admin/users.go	handlers.createUser	1	request key (forwarded while owned)
+internal/apiservice/admin/users.go	parseUserUpdate	1	request key (forwarded while owned)
 internal/apiservice/admin/users.go	userResponseObject	1	response key
 internal/apiservice/admin/userstore.go	-	1	read: fullUserColumns, used only through userColumns
 internal/apiservice/admin/userstore.go	pgStore.insertUser	1	write (refused while owned)

@@ -12,6 +12,7 @@
 # file	function	reads
 internal/adminops/users.go	runUsersDelete	2
 internal/adminops/users.go	runUsersList	1
+internal/api/authprovision/users.go	UsersClient.UpdateUser	2
 internal/api/policy/accessroute.go	Scope.mayImpersonate	1
 internal/api/policy/accessroute_user.go	Authenticator.accessTokenUser	1
 internal/api/policy/principal.go	User.Holds	1
@@ -31,6 +32,11 @@ internal/apiservice/admin/operator.go	userView	1
 internal/apiservice/admin/store.go	pgStore.userByID	1
 internal/apiservice/admin/users.go	handlers.updateUser	2
 internal/apiservice/admin/users.go	userResponseObject	1
+internal/apiservice/admin/users_owned_forward.go	decideUserUpdate	3
+internal/apiservice/admin/users_owned_forward.go	handlers.createUserInAuth	3
+internal/apiservice/admin/users_owned_forward.go	handlers.deleteUserInAuth	1
+internal/apiservice/admin/users_owned_forward.go	handlers.setUserPasswordInAuth	1
+internal/apiservice/admin/users_owned_forward.go	handlers.updateUserInAuth	3
 internal/apiservice/admin/userstore.go	pgStore.insertUser	4
 internal/apiservice/admin/userstore.go	pgStore.updateUser	4
 internal/apiservice/admin/userstore.go	scanFullUser	1

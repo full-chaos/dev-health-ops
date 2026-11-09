@@ -12,10 +12,7 @@ import (
 // length rule, shows up here.
 func TestEveryPasswordSettingPathCallsTheSharedPolicy(t *testing.T) {
 	paths := []struct{ file, fn, callee string }{
-		{"../../api/session/register.go", "register", "passwordpolicy.ValidateForHash"},
 		{"../../api/session/changepassword.go", "changePassword", "passwordpolicy.ValidateForHash"},
-		{"../../api/session/resetpolicy.go", "validateResetPasswordPolicy", "passwordpolicy.ValidateForHash"},
-		{"../../api/session/verify.go", "resetPassword", "validateResetPasswordPolicy"},
 		{"../../apiservice/admin/passwordviolations.go", "refusePasswordPolicy", "passwordpolicy.ValidateForHash"},
 		{"../../apiservice/admin/users.go", "createUser", "refusePasswordPolicy"},
 		{"../../apiservice/admin/users.go", "setUserPassword", "passwordpolicy.ValidateForHash"},

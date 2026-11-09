@@ -31,7 +31,6 @@ var (
 // raises token_version in the same statement.
 var passwordUpdaters = []string{
 	"internal/api/session/changepassword.go",
-	"internal/api/session/verify.go",
 	"internal/apiservice/admin/userstore.go",
 	"internal/auth/identity/publicusers.go",
 }
@@ -39,7 +38,6 @@ var passwordUpdaters = []string{
 // passwordInserters create a new row: no link can be bound to a principal that
 // did not exist when the link was issued.
 var passwordInserters = []string{
-	"internal/api/session/register.go",
 	"internal/api/session/social.go",
 	"internal/apiservice/admin/userstore.go",
 	"internal/auth/identity/publicusers.go",

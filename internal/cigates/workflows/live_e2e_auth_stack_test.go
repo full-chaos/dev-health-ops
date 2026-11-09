@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
 // The web live e2e logs in through auth-service the way prod does (go-api session issue with the workload
@@ -148,6 +149,26 @@ func TestLiveE2EAuthServiceEnvLoadsAndMintsEdDSA(t *testing.T) {
 	}
 }
 
+// CHAOS-13356: with users owned go-api forwards register to auth-service, whose register budget is 3 per hour per
+// client address unless AUTH_REGISTER_LIMIT says otherwise; every live e2e request comes from one address. The script
+// gives auth-service go-api's venue value (1000/hour, the form go-api parses) and no other side of the script sets it;
+// prod sets it nowhere (deploy/helm/dev-health/auth_register_limit_test.go).
+func TestLiveE2EAuthStackRegisterLimitIsAuthServiceOnly(t *testing.T) {
+	env := liveStackEnv(t, "auth-service")
+	if env["AUTH_REGISTER_LIMIT"] != "1000/hour" {
+		t.Fatalf("FAIL: auth-service AUTH_REGISTER_LIMIT=%q, want 1000/hour", env["AUTH_REGISTER_LIMIT"])
+	}
+	limit, err := httpapi.ParseLimit("auth_svc_register_ip", env["AUTH_REGISTER_LIMIT"])
+	if err != nil || limit.Count != 1000 || limit.Window.Hours() != 1 {
+		t.Fatalf("FAIL: AUTH_REGISTER_LIMIT is not go-api's form: %+v %v", limit, err)
+	}
+	for _, side := range []string{"go-api", "query-api", "web"} {
+		if value, ok := liveStackEnv(t, side)["AUTH_REGISTER_LIMIT"]; ok {
+			t.Errorf("FAIL: the script sets AUTH_REGISTER_LIMIT=%q for %s; it is auth-service's only", value, side)
+		}
+	}
+}
+
 func TestLiveE2EQueryAPIEnvIsProdsFlagSet(t *testing.T) {
 	env := liveStackEnv(t, "query-api")
 	if env["AUTH_PROXY_SESSIONS"] != "true" || env["AUTH_ACCESS_TOKEN_ISSUER"] == "" {
@@ -262,7 +283,7 @@ func assertUpWiredTheWebCaller(t *testing.T, state, out string) {
 	if seed < 0 || start < 0 || seed > start {
 		t.Errorf("FAIL: the seed step (%d) must come before auth-service starts (%d)", seed, start)
 	}
-	for _, want := range []string{"AUTH_USERS_OWNED=true\n", "EMAIL_PROVIDER=console\n", "AUTH_MAIL_ALLOW_CONSOLE=true\n", "EMAIL_FROM_ADDRESS=", "APP_BASE_URL="} {
+	for _, want := range []string{"AUTH_USERS_OWNED=true\n", "EMAIL_PROVIDER=console\n", "AUTH_MAIL_ALLOW_CONSOLE=true\n", "EMAIL_FROM_ADDRESS=", "APP_BASE_URL=", "AUTH_REGISTER_LIMIT=1000/hour\n"} {
 		if !strings.Contains(string(saved), want) {
 			t.Errorf("FAIL: the saved auth-service environment lacks %q", strings.TrimSpace(want))
 		}

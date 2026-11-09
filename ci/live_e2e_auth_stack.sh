@@ -115,6 +115,8 @@ raw_env() {
       : "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:?AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT is not set}"
       : "${AUTH_AUTHORIZE_CALLER_SUBJECTS:?AUTH_AUTHORIZE_CALLER_SUBJECTS is not set}"
       flag_rows auth-service
+      # AUTH_REGISTER_LIMIT: go-api forwards register here (users owned) and every request of the run comes from one
+      # address, so the 3/hour default would refuse the 4th sign-up. go-api's venue value, same form; prod sets none.
       printf '%s\n' \
         "AUTH_SERVICE_HTTP_ADDR=${AUTH_API_ADDR}" \
         "AUTH_SERVICE_OPERATOR_HTTP_ADDR=${AUTH_OPERATOR_ADDR}" \
@@ -136,7 +138,8 @@ raw_env() {
         "EMAIL_PROVIDER=console" \
         "EMAIL_FROM_ADDRESS=live-e2e@example.test" \
         "AUTH_MAIL_ALLOW_CONSOLE=true" \
-        "APP_BASE_URL=${LIVE_E2E_APP_BASE_URL:-http://localhost:3000}"
+        "APP_BASE_URL=${LIVE_E2E_APP_BASE_URL:-http://localhost:3000}" \
+        "AUTH_REGISTER_LIMIT=1000/hour"
       ;;
     *) die "unknown side ${side} (go-api, query-api, auth-service, web)" ;;
   esac

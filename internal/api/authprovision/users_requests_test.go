@@ -28,10 +28,10 @@ import (
 // The members each user-admin route admits: auth-service's own admit lists, the slices its handlers pass to admit.
 // The route refuses any other member as malformed, so a request carries only these.
 var usersAdmitted = map[string][]string{
-	authprovision.PathUsersCreate:   authapi.UsersCreateMembers,
-	authprovision.PathUsersUpdate:   authapi.UsersUpdateMembers,
-	authprovision.PathUsersPassword: authapi.UsersPasswordMembers,
-	authprovision.PathUsersDelete:   authapi.UsersDeleteMembers,
+	authprovision.PathUsersCreate:   authapi.UsersCreateMembers(),
+	authprovision.PathUsersUpdate:   authapi.UsersUpdateMembers(),
+	authprovision.PathUsersPassword: authapi.UsersPasswordMembers(),
+	authprovision.PathUsersDelete:   authapi.UsersDeleteMembers(),
 }
 
 type usersServer struct {

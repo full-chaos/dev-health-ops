@@ -68,10 +68,10 @@ var reviewed = []notPasswordSetting{
 		why: "test fixture seed: takes *testing.T and a fixed hash"},
 	{kind: "uncalled", fn: mod + "internal/auth/identity.Store.SetPasswordHash", at: "internal/auth/identity/local.go:188",
 		why: "only tests call it; a non-test caller must be walked"},
-	{kind: "hop", fn: mod + "internal/auth/authapi.provisioningHandlers.usersCreate", at: "internal/auth/authapi/provisioning_users.go:286",
+	{kind: "hop", fn: mod + "internal/auth/authapi.provisioningHandlers.usersCreate", at: "internal/auth/authapi/provisioning_users.go:299",
 		route: "/internal/v1/users/create", why: "internal HTTP: go-api posts the hash after its own policy check",
 		callers: []string{mod + "internal/api/authprovision.UsersClient.CreateUser"}},
-	{kind: "hop", fn: mod + "internal/auth/authapi.provisioningHandlers.usersPassword", at: "internal/auth/authapi/provisioning_users.go:419",
+	{kind: "hop", fn: mod + "internal/auth/authapi.provisioningHandlers.usersPassword", at: "internal/auth/authapi/provisioning_users.go:432",
 		route: "/internal/v1/users/password", why: "internal HTTP: go-api posts the hash after its own policy check",
 		callers: []string{mod + "internal/api/authprovision.UsersClient.SetUserPassword"}},
 }

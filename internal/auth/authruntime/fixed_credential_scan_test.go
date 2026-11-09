@@ -107,19 +107,34 @@ func aliasedPasswordFindings(sources map[string][]byte) (findings []string, pars
 			if !ok {
 				return true
 			}
-			withFormat := false
-			for _, arg := range call.Args[:max(len(call.Args)-1, 0)] {
-				if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING && format.MatchString(lit.Value) {
-					withFormat = true
+			for i, arg := range call.Args {
+				lit, ok := arg.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
 				}
-			}
-			if !withFormat {
-				return true
-			}
-			last := call.Args[len(call.Args)-1]
-			ident, isIdent := last.(*ast.Ident)
-			if (isIdent && bound[ident.Name]) || isString(last) {
-				findings = append(findings, fmt.Sprintf("%d %s", fset.Position(last.Pos()).Line, name))
+				at := format.FindStringIndex(lit.Value)
+				if at == nil {
+					continue
+				}
+				verbs := 0
+				for j := 0; j < at[0]; j++ {
+					if lit.Value[j] != '%' {
+						continue
+					}
+					if lit.Value[j+1] == '%' {
+						j++
+						continue
+					}
+					verbs++
+				}
+				if i+1+verbs >= len(call.Args) {
+					continue
+				}
+				target := call.Args[i+1+verbs]
+				ident, isIdent := target.(*ast.Ident)
+				if (isIdent && bound[ident.Name]) || isString(target) {
+					findings = append(findings, fmt.Sprintf("%d %s", fset.Position(target.Pos()).Line, name))
+				}
 			}
 			return true
 		})

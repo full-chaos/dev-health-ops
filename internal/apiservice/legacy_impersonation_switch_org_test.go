@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // endableSessionStore is legacySessionStore whose session row can end. A
@@ -77,23 +78,16 @@ func TestSwitchOrgRefusesTheImpersonatingAdminBearer(t *testing.T) {
 	}
 	for _, state := range states {
 		t.Run(state.name, func(t *testing.T) {
-			key := strings.Repeat("fixture-key-", 3)
-			verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
+			verifier, err := edgetoken.New(strings.Repeat("fixture-key-", 3), "dev-health-ops", "dev-health-api")
 			if err != nil {
 				t.Fatal(err)
 			}
-			signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-			if err != nil {
-				t.Fatal(err)
-			}
+			tokens := edtokens.New(t)
 			store := &endableSessionStore{legacySessionStore: legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}}
 			if state.revoked {
 				store.platform = revokedImpersonate()
 			}
-			auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-			if err != nil {
-				t.Fatal(err)
-			}
+			auth := tokens.AuthenticatorOver(t, store, quietLogger())
 			rows, err := goAPIScopeRows()
 			if err != nil {
 				t.Fatal(err)
@@ -120,17 +114,13 @@ func TestSwitchOrgRefusesTheImpersonatingAdminBearer(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(pool.Close)
-			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
+			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
 				AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 			server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 			if err != nil {
 				t.Fatal(err)
 			}
-			access, err := signer.Access(edgetoken.AccessClaims{UserID: store.admin.String(), Email: "admin@example.com", OrgID: uuid.NewString(),
-				Role: "member", IsSuperuser: true, TokenVersion: 1}, time.Now().UTC(), uuid.NewString())
-			if err != nil {
-				t.Fatal(err)
-			}
+			access := tokens.MustMint(t, edtokens.Claims{UserID: store.admin, OrgID: uuid.NewString(), TokenVersion: 1})
 			serve := func() *httptest.ResponseRecorder {
 				request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/switch-org", strings.NewReader(switchOrgBody))
 				request.RemoteAddr = "192.0.2.10:4711"
@@ -214,11 +204,7 @@ func TestSwitchOrgRefusesTheImpersonatingEdDSABearer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			signer, err := edgetoken.NewSigner(probeKey, "dev-health-ops", "dev-health-api")
-			if err != nil {
-				t.Fatal(err)
-			}
-			auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
+			auth, err := policy.NewAuthenticator(store, quietLogger())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -227,7 +213,7 @@ func TestSwitchOrgRefusesTheImpersonatingEdDSABearer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			validator, err := accessverify.New(accessverify.Config{Rows: realRows(t), Legacy: legacyVerifier(auth.AuthenticateLegacy), EdDSA: eddsa,
+			validator, err := accessverify.New(accessverify.Config{Rows: realRows(t), EdDSA: eddsa,
 				Meter: sdkmetric.NewMeterProvider().Meter("test"), Logger: quietLogger(), Now: func() time.Time { return probeNow }})
 			if err != nil {
 				t.Fatal(err)
@@ -261,7 +247,7 @@ func TestSwitchOrgRefusesTheImpersonatingEdDSABearer(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(pool.Close)
-			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
+			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
 				AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 			server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 			if err != nil {
@@ -337,21 +323,14 @@ func TestSwitchOrgAnswers503WhenACallerReadFails(t *testing.T) {
 	}
 	for name, fail := range cases {
 		t.Run(name, func(t *testing.T) {
-			key := strings.Repeat("fixture-key-", 3)
-			verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
+			verifier, err := edgetoken.New(strings.Repeat("fixture-key-", 3), "dev-health-ops", "dev-health-api")
 			if err != nil {
 				t.Fatal(err)
 			}
-			signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-			if err != nil {
-				t.Fatal(err)
-			}
+			tokens := edtokens.New(t)
 			store := &failingReadStore{legacySessionStore: legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}}
 			fail(store)
-			auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-			if err != nil {
-				t.Fatal(err)
-			}
+			auth := tokens.AuthenticatorOver(t, store, quietLogger())
 			rows, err := goAPIScopeRows()
 			if err != nil {
 				t.Fatal(err)
@@ -375,17 +354,13 @@ func TestSwitchOrgAnswers503WhenACallerReadFails(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(pool.Close)
-			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
+			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
 				AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 			server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 			if err != nil {
 				t.Fatal(err)
 			}
-			access, err := signer.Access(edgetoken.AccessClaims{UserID: store.admin.String(), Email: "admin@example.com", OrgID: uuid.NewString(),
-				Role: "member", IsSuperuser: true, TokenVersion: 1}, time.Now().UTC(), uuid.NewString())
-			if err != nil {
-				t.Fatal(err)
-			}
+			access := tokens.MustMint(t, edtokens.Claims{UserID: store.admin, OrgID: uuid.NewString(), TokenVersion: 1})
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/switch-org", strings.NewReader(switchOrgBody))
 			request.RemoteAddr = "192.0.2.10:4711"
 			request.Header.Set("Content-Type", "application/json")

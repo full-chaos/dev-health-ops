@@ -9,7 +9,7 @@ import (
 // without AUTH_ACCESS_TOKEN_ISSUER is refused with one error naming it. With no pool there is no protected route and
 // go-api starts with no verifier.
 func TestBuildAccessVerify_IssuerRequiredOnlyWithAPool(t *testing.T) {
-	protected, err := newProtection(apiTestConfig(), nil, false, quietLogger())
+	protected, err := newProtection(apiTestConfig(), nil, false, AuthProxyConfig{}, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

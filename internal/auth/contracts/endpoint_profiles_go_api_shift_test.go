@@ -31,11 +31,18 @@ func TestAdminFieldsSurviveALineShift(t *testing.T) {
 		map[string]string{"internal/api/teamsidentity/teamsidentity.go": "func Routes("})
 	scopes := catalogScopes(t)
 	var problems []string
+	resolved := 0
 	for _, row := range rows {
 		problems = append(problems, adminFieldViolations(row, scopes, root)...)
+		if _, _, err := registrationEntry(row, root); err == nil {
+			resolved++
+		}
 	}
 	if len(problems) != 0 {
 		t.Errorf("a line shift broke %d admin-field checks:\n%s", len(problems), strings.Join(problems, "\n"))
+	}
+	if resolved < 208 {
+		t.Fatalf("only %d of %d covered rows resolved their registration on the shifted tree: the measurement did not happen", resolved, len(rows))
 	}
 }
 

@@ -47,6 +47,9 @@ func TestQueryRowAnchorsSurviveALineShift(t *testing.T) {
 	if len(problems) != 0 {
 		t.Errorf("a line shift broke %d of %d query-api anchors:\n%s", len(problems), checked, strings.Join(problems, "\n"))
 	}
+	if checked < 30 {
+		t.Fatalf("only %d query-api anchors were checked on the shifted tree: the measurement did not happen", checked)
+	}
 }
 
 // A row whose source names no registration of its method and route, or two that its listeners do not tell apart,

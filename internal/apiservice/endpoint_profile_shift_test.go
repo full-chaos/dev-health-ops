@@ -32,6 +32,9 @@ func TestRowRegistrationsSurviveALineShift(t *testing.T) {
 	if len(problems) != 0 {
 		t.Errorf("a line shift broke %d of %d rows:\n%s", len(problems), checked, strings.Join(problems, "\n"))
 	}
+	if checked < 200 {
+		t.Fatalf("only %d rows were checked on the shifted tree: the measurement did not happen", checked)
+	}
 }
 
 func TestValidatorAnchorsSurviveALineShift(t *testing.T) {
@@ -43,6 +46,9 @@ func TestValidatorAnchorsSurviveALineShift(t *testing.T) {
 	problems, checked, _ := anchorNoteProblems(t, root, loadGoAPIRows(t))
 	if len(problems) != 0 {
 		t.Errorf("a line shift broke %d of %d validator anchors:\n%s", len(problems), checked, strings.Join(problems, "\n"))
+	}
+	if checked < 200 {
+		t.Fatalf("only %d validator anchors were checked on the shifted tree: the measurement did not happen", checked)
 	}
 }
 

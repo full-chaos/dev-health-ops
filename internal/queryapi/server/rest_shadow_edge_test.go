@@ -18,9 +18,10 @@ import (
 )
 
 // CHAOS-13073 r1 (acp ruling D6714 / 13106 option D): a delegated token is counted impersonation_refused before any skip
-// class, on the routed and the unrouted path, with or without an organization, for the EdDSA user access token and the
-// EdDSA envelope the PDP cannot judge, and an org-required refusal is observed. The retired HS256 class is the one
-// generic-401 cell of the plane (TestQueryAPIHS256IsRefusedOnEveryRow). Every other cell keeps its legacy answer.
+// class, on the routed and the unrouted path, with or without an organization, for the EdDSA user access token, and an
+// org-required refusal is observed. The retired HS256 class is the one generic-401 cell of the plane
+// (TestQueryAPIHS256IsRefusedOnEveryRow). The effective-principal envelope is a retired class on both paths: the 401 of
+// an unaccepted bearer and no shadow observation, delegated or not. Every other cell keeps its legacy answer.
 func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 	forbidden := answer{http.StatusForbidden, `{"detail":"Organization context required"}`}
 	served := answer{http.StatusOK, fmt.Sprintf(`{"org":%q}`, ecOrg.String())}
@@ -35,13 +36,13 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 		status    answer
 		want      string
 	}
-	envelopeOrgless := answer{http.StatusOK, `{"org":""}`}
+	unaccepted := answer{http.StatusUnauthorized, restRefusal}
 	var cells []cell
 	for _, routed := range []bool{true, false} {
 		path := map[bool]string{true: "routed", false: "unrouted"}[routed]
 		cells = append(cells,
-			cell{path + " envelope org delegated", routed, "envelope", true, true, served, refused},
-			cell{path + " envelope orgless delegated", routed, "envelope", false, true, envelopeOrgless, refused},
+			cell{path + " envelope org delegated", routed, "envelope", true, true, unaccepted, ""},
+			cell{path + " envelope orgless delegated", routed, "envelope", false, true, unaccepted, ""},
 		)
 	}
 	cells = append(cells,

@@ -22,7 +22,6 @@ import (
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/clickhouse"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
@@ -281,28 +280,6 @@ func writeTestJWKS(t *testing.T, pub ed25519.PublicKey) string {
 	return path
 }
 
-func signTestEnvelope(t *testing.T, priv ed25519.PrivateKey, orgID string) string {
-	t.Helper()
-	claims := principal.Claims{
-		SchemaVersion: principal.SupportedSchemaVersion,
-		OrgID:         orgID,
-		Role:          "admin",
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    itTestIssuer,
-			Audience:  jwt.ClaimStrings{itTestAudience},
-			Subject:   "user-1",
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-		},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	token.Header["kid"] = itTestKID
-	signed, err := token.SignedString(priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return signed
-}
-
 func startTestRegistryPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -362,14 +339,6 @@ func postGraphQLWithVariables(t *testing.T, handler http.HandlerFunc, query stri
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	return rec
-}
-
-// bearerCarrier presents token as the Authorization bearer; an empty token presents no carrier.
-func bearerCarrier(token string) func(*http.Request) {
-	if token == "" {
-		return nil
-	}
-	return irBearer(token)
 }
 
 // TestFeatureFlagsRoute_IsServedByTheCatalog is the CHAOS-4367

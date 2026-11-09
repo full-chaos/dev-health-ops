@@ -14,13 +14,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
@@ -342,22 +342,6 @@ func newLiveREST(t *testing.T, pattern string, shape func(*accessStore)) *liveRE
 	}
 }
 
-// iaEnvelopeExpiredAt is iaEnvelope whose exp is at.
-func iaEnvelopeExpiredAt(t *testing.T, priv ed25519.PrivateKey, claims principal.Claims, at time.Time) string {
-	t.Helper()
-	claims.SchemaVersion = principal.SupportedSchemaVersion
-	claims.RegisteredClaims = jwt.RegisteredClaims{
-		Issuer: iaIssuer, Audience: jwt.ClaimStrings{iaAudience}, Subject: "user-1", ExpiresAt: jwt.NewNumericDate(at),
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	token.Header["kid"] = iaKID
-	signed, err := token.SignedString(priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return signed
-}
-
 // stateCell is one current-state cell: the same credential answers ok, the store changes, and the next request
 // answers after.
 type stateCell struct {
@@ -586,8 +570,7 @@ func restIDCells(t *testing.T, o *liveObs, row liveRow) {
 }
 
 // restStateCells: a user access token's users row, session, token version and membership are read on every
-// request, so a change between two requests answers the second; the envelope reads no state and is refused past
-// its exp.
+// request, so a change between two requests answers the second.
 func restStateCells(t *testing.T, o *liveObs, row liveRow, path string, fixture func(func(*accessStore)) *liveREST, accepted map[string]bool) {
 	t.Helper()
 	if accepted[classUserToken] {
@@ -598,21 +581,11 @@ func restStateCells(t *testing.T, o *liveObs, row liveRow, path string, fixture 
 			o.wantStatus("user token, "+cell.name, f.do(row.method, path, f.user, nil), cell.after)
 		}
 	}
-	if accepted[classEnvelope] {
-		f := fixture(noStateRead)
-		o.wantStatus("envelope, every store read failing", f.do(row.method, path, f.envelope, nil), http.StatusOK)
-		expired := iaEnvelopeExpiredAt(t, f.priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}, time.Now().Add(-time.Minute))
-		o.wantStatus("envelope past its exp", f.do(row.method, path, expired, nil), http.StatusUnauthorized)
-	}
 	o.textHas("current_state_cache_behavior", "none: per-request read", "nothing is cached between requests")
-	if accepted[classEnvelope] {
-		o.textHas("current_state_cache_behavior", "the effective-principal envelope reads no state", "trusted until exp")
-	}
 }
 
 // restImpersonationCells: a REST row serves the organization its credential names, and an impersonation credential
-// names the target's: a delegated user access token and an envelope that states an active impersonation are each
-// served as the target organization, never as the actor's.
+// names the target's: a delegated user access token is served as the target organization, never as the actor's.
 func restImpersonationCells(t *testing.T, o *liveObs, row liveRow, path string, fixture func(func(*accessStore)) *liveREST, accepted map[string]bool) {
 	t.Helper()
 	if accepted[classUserToken] {
@@ -622,15 +595,6 @@ func restImpersonationCells(t *testing.T, o *liveObs, row liveRow, path string, 
 		o.wantStatus("delegated user token for the target organization", got, http.StatusOK)
 		if org := restOrg(got); org != liveTargetOrg.String() {
 			o.fail("delegated user token: the handler saw org %q, want the target's %q", org, liveTargetOrg)
-		}
-	}
-	if accepted[classEnvelope] {
-		f := fixture(nil)
-		envelope := iaEnvelope(t, f.priv, principal.Claims{OrgID: liveTargetOrg.String(), Role: "viewer", ImpersonationActive: true})
-		got := f.do(row.method, path, envelope, nil)
-		o.wantStatus("envelope stating an active impersonation", got, http.StatusOK)
-		if org := restOrg(got); org != liveTargetOrg.String() {
-			o.fail("envelope stating an active impersonation: the handler saw org %q, want the target's %q", org, liveTargetOrg)
 		}
 	}
 	o.impersonationPolicy(true)
@@ -647,17 +611,15 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 		o.wantStatus(listener+": no credential", stack.live(q), http.StatusUnauthorized)
 		o.wantStatus(listener+": unparseable bearer", stack.live(with(func(c *liveReq) { c.bearer = "not.a.token" })), http.StatusUnauthorized)
 		o.wantStatus(listener+": edge token (retired HS256 class)", stack.live(with(func(c *liveReq) { c.bearer = stack.edge })), http.StatusUnauthorized)
-		for name, bearer := range map[string]string{"envelope": stack.envelope, "user token": stack.user} {
-			cell := listener + ": " + name
-			stack = liveStack(t, nil)
-			bearer = map[string]string{"envelope": stack.envelope, "user token": stack.user}[name]
-			a := stack.live(with(func(c *liveReq) {
-				c.bearer = bearer
-				c.headers = map[string]string{"X-Org-Id": liveOtherOrg.String()}
-			}))
-			o.wantStatus(cell, a, http.StatusOK)
-			o.wantOrg(cell, stack, authctx.Claims{OrgID: ecOrg.String()})
-		}
+		o.wantStatus(listener+": envelope (retired class)", stack.live(with(func(c *liveReq) { c.bearer = stack.envelope })), http.StatusUnauthorized)
+		o.wantNoRun(listener+": envelope (retired class)", stack)
+		stack = liveStack(t, nil)
+		a := stack.live(with(func(c *liveReq) {
+			c.bearer = stack.user
+			c.headers = map[string]string{"X-Org-Id": liveOtherOrg.String()}
+		}))
+		o.wantStatus(listener+": user token", a, http.StatusOK)
+		o.wantOrg(listener+": user token", stack, authctx.Claims{OrgID: ecOrg.String()})
 		stack = liveStack(t, nil)
 		if row.route != "/query/proof-write" {
 			o.wantStatus(listener+": unregistered document", stack.live(with(func(c *liveReq) {
@@ -666,15 +628,9 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 			})), http.StatusNotFound)
 		}
 
-		// Impersonation: the edge carrier reads the session; the envelope and
-		// the internal headers state it themselves and never read one.
+		// Impersonation: the edge carrier reads the session; the internal
+		// headers state it themselves and never read one.
 		sessionDown := func(s *accessStore) { asSuperuser(s); s.errSession = fmt.Errorf("session store timeout") }
-		stack = liveStack(t, sessionDown)
-		a := stack.live(with(func(c *liveReq) {
-			c.bearer = iaEnvelope(t, stack.priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin", ImpersonationActive: true})
-		}))
-		o.wantStatus(listener+": envelope claiming impersonation", a, http.StatusOK)
-		o.wantOrg(listener+": envelope claiming impersonation", stack, authctx.Claims{OrgID: ecOrg.String(), ImpersonationActive: true})
 		if listener == "internal" {
 			stack = liveStack(t, sessionDown)
 			a = stack.live(with(func(c *liveReq) {
@@ -691,10 +647,6 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 			proofWriteCells(t, o)
 		}
 		stackStateCells(t, o, listener+": ", q)
-		stack = liveStack(t, noStateRead)
-		o.wantStatus(listener+": envelope, every store read failing", stack.live(with(func(c *liveReq) { c.bearer = stack.envelope })), http.StatusOK)
-		expired := iaEnvelopeExpiredAt(t, stack.priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}, time.Now().Add(-time.Minute))
-		o.wantStatus(listener+": envelope past its exp", stack.live(with(func(c *liveReq) { c.bearer = expired })), http.StatusUnauthorized)
 		if listener == "internal" {
 			stack = liveStack(t, noStateRead)
 			o.wantStatus("internal headers, every store read failing", stack.live(with(func(c *liveReq) {
@@ -708,7 +660,7 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 	o.textHas("resource_resolver", "organization_from_credential")
 	o.impersonationPolicy(true)
 	o.textHas("current_state_cache_behavior", "none: per-request read", "nothing is cached between requests",
-		"the effective-principal envelope and the internal identity headers read no state", "trusted until exp")
+		"the internal identity headers read no state")
 	if row.route == "/query/proof-write" {
 		o.textHas("current_state_cache_behavior", "the go_api_proof_orgs allowlist is read on every request")
 	}
@@ -723,7 +675,7 @@ func proofWriteCells(t *testing.T, o *liveObs) {
 	t.Helper()
 	const mutation = "mutation LiveProofWrite { probe }"
 	for _, allowed := range []bool{true, false} {
-		verifier, priv := iaVerifier(t)
+		verifier, _ := iaVerifier(t)
 		ran := 0
 		mux := routeswitch.NewMux(routeswitch.StaticSwitch{"m": true})
 		mux.Register("m", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { ran++ }))
@@ -731,7 +683,7 @@ func proofWriteCells(t *testing.T, o *liveObs) {
 			func(_ context.Context, org string) bool { return allowed && org == ecOrg.String() })
 		request := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(documentBody(mutation)))
 		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Authorization", "Bearer "+iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}))
+		iaHeaders(ecOrg.String(), "admin", false, false)(request)
 		recorder := httptest.NewRecorder()
 		handler(recorder, request)
 		o.see(recorder.Code)
@@ -758,37 +710,49 @@ func driveBuildInfo(t *testing.T, row liveRow) *liveObs {
 		q.bearer = stack.edge
 		o.wantStatus(listener+": edge token (not an accepted class)", stack.live(q), http.StatusUnauthorized)
 		q.bearer = stack.envelope
-		first := stack.live(q)
-		o.wantStatus(listener+": envelope", first, http.StatusOK)
-		for name, claims := range map[string]principal.Claims{
-			"another organization":  {OrgID: liveOtherOrg.String(), Role: "viewer"},
-			"no organization":       {Role: "viewer"},
-			"impersonation active":  {OrgID: ecOrg.String(), Role: "admin", ImpersonationActive: true},
-			"another org and super": {OrgID: liveOtherOrg.String(), Role: "viewer", IsSuperuser: true},
-		} {
-			q.bearer = iaEnvelope(t, stack.priv, claims)
-			got := stack.live(q)
-			if got.status != http.StatusOK || got.body != first.body {
-				o.fail("%s: status %d body %q, want the same build identity %q: the credential's organization is not read", name, got.status, trim(got.body), trim(first.body))
+		o.wantStatus(listener+": envelope (retired class)", stack.live(q), http.StatusUnauthorized)
+		q.bearer = ""
+		identity := liveBuildIdentity(t)
+		if listener == "internal" {
+			for name, headers := range map[string][4]string{
+				"another organization":  {liveOtherOrg.String(), "viewer", "false", "false"},
+				"no organization":       {"", "viewer", "false", "false"},
+				"impersonation active":  {ecOrg.String(), "admin", "false", "true"},
+				"another org and super": {liveOtherOrg.String(), "viewer", "true", "false"},
+			} {
+				for _, store := range []func(*accessStore){nil, noStateRead} {
+					h := q
+					h.headers = map[string]string{internalidentity.HeaderOrgID: headers[0], internalidentity.HeaderRole: headers[1],
+						internalidentity.HeaderSuperuser: headers[2], internalidentity.HeaderImpersonationActive: headers[3]}
+					got := liveStack(t, store).live(h)
+					o.see(got.status)
+					if got.status != http.StatusOK || got.body != identity {
+						o.fail("internal headers, %s (every store read failing: %v): status %d body %q, want the build identity %q: the credential's organization and no state are read",
+							name, store != nil, got.status, trim(got.body), trim(identity))
+					}
+				}
 			}
 		}
-		down := liveStack(t, noStateRead)
-		q.bearer = down.envelope
-		if got := down.live(q); got.status != http.StatusOK || got.body != first.body {
-			o.fail("envelope, every store read failing: status %d body %q, want the build identity: the route reads no state", got.status, trim(got.body))
-		}
-		q.bearer = iaEnvelopeExpiredAt(t, stack.priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}, time.Now().Add(-time.Minute))
-		o.wantStatus(listener+": envelope past its exp", stack.live(q), http.StatusUnauthorized)
-		buildInfoUserTokenCells(t, o, listener, q, first.body)
+		buildInfoUserTokenCells(t, o, listener, q, identity)
 		stackStateCellsAs(t, o, listener+": platform admin, ", q, asSuperuser)
 	}
 	o.textHas("resource_resolver", "none:")
 	o.impersonationPolicy(false)
 	o.textHas("current_state_cache_behavior", "none: per-request read", "nothing is cached between requests",
-		"the effective-principal envelope reads no state")
+		"the internal identity headers read no state")
 	o.textHas("disclosure_behavior", "not a platform admin (admin.orgs)", "active impersonation session", "delegated")
 	o.statusText()
 	return o
+}
+
+// liveBuildIdentity is the body /buildinfo serves an accepted caller: the process's build identity.
+func liveBuildIdentity(t *testing.T) string {
+	t.Helper()
+	body, err := buildstamp.Body(version.Current("query-api"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body) + "\n"
 }
 
 // buildInfoUserTokenCells: /buildinfo serves a user access token only when its live users row is a platform admin

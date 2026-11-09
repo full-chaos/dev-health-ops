@@ -91,13 +91,13 @@ func mdExecPattern(pattern string) string {
 // rows newline-terminated, "" for none).
 func mdEvidenceHead(file, src, dyn, edges, patterns, walks string) map[string]string {
 	return mdHead(map[string]string{
-		file:                       src,
-		"b/b_dyn.go":               fmt.Sprintf(plantedEnvReader, "b"),
-		tablesDir + "dynreads.tsv": "b\tb_dyn.go\n" + dyn,
-		tablesDir + "reach.tsv":    "b\tb_dyn.go\t*\n",
-		tablesDir + "edges.tsv":    "#\n" + edges,
-		tablesDir + "patterns.tsv": "#\n" + patterns,
-		tablesDir + "walks.tsv":    "d\td_walk_test.go\t.\ttree\t*.go\n" + walks,
+		file:                        src,
+		"b/b_dyn.go":                fmt.Sprintf(plantedEnvReader, "b"),
+		tablesDir + "dynreads.tsv":  "b\tb_dyn.go\n" + dyn,
+		tablesDir + "reach.d/b.tsv": "b\tb_dyn.go\t*\n",
+		tablesDir + "edges.tsv":     "#\n" + edges,
+		tablesDir + "patterns.tsv":  "#\n" + patterns,
+		tablesDir + "walks.tsv":     "d\td_walk_test.go\t.\ttree\t*.go\n" + walks,
 	})
 }
 
@@ -172,7 +172,7 @@ func TestPlanVerdictMarkdownOnlyPlansTheBoundedReaders(t *testing.T) {
 	h := mdHead(nil)
 	// b reads a path from the environment: a dynreads.tsv row, which may name any file, a .md file too.
 	hd := mdHead(map[string]string{"b/b_dyn.go": fmt.Sprintf(plantedEnvReader, "b"),
-		tablesDir + "dynreads.tsv": "b\tb_dyn.go\n", tablesDir + "reach.tsv": "b\tb_dyn.go\t*\n"})
+		tablesDir + "dynreads.tsv": "b\tb_dyn.go\n", tablesDir + "reach.d/b.tsv": "b\tb_dyn.go\t*\n"})
 	runRows(t, []verdictRow{
 		// The fixture names, case labels and filters of README.md read nothing and the *.go walk skips it: no reader.
 		{name: "root_readme_pr_is_none", head: h, extra: md, changed: []string{"README.md"}, want: "NONE"},

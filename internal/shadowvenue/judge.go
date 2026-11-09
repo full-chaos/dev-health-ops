@@ -56,6 +56,12 @@ type resultLine struct {
 	used                            bool
 }
 
+// refusalLine is a go-api "admin: org deletion refused" line: the organization and the refusal reason.
+type refusalLine struct {
+	at            time.Time
+	orgID, reason string
+}
+
 type warnLine struct {
 	at            time.Time
 	route, caller string
@@ -69,6 +75,7 @@ type Tuple struct{ Class, Legacy, Shadow, Reason string }
 // Evidence is the shadow lines of one go-api log.
 type Evidence struct {
 	results     []resultLine
+	refusals    []refusalLine
 	mismatches  []warnLine
 	servedOther []warnLine
 }
@@ -84,7 +91,7 @@ func ParseLog(r io.Reader) (Evidence, error) {
 		n++
 		var rec map[string]any
 		if json.Unmarshal(scanner.Bytes(), &rec) != nil {
-			for _, msg := range []string{MsgResult, MsgMismatch, MsgServedOther} {
+			for _, msg := range []string{MsgResult, MsgMismatch, MsgServedOther, OrgDeletionRefusedMsg} {
 				if strings.Contains(scanner.Text(), `"`+msg+`"`) {
 					return Evidence{}, fmt.Errorf("log line %d: a %q line that is not JSON: the evidence is unreadable", n, msg)
 				}
@@ -92,6 +99,17 @@ func ParseLog(r io.Reader) (Evidence, error) {
 			continue
 		}
 		msg, _ := rec["msg"].(string)
+		if msg == OrgDeletionRefusedMsg {
+			stamp, _ := rec["time"].(string)
+			at, err := time.Parse(time.RFC3339Nano, stamp)
+			orgID, _ := rec["org_id"].(string)
+			reason, _ := rec["reason"].(string)
+			if err != nil || orgID == "" || reason == "" {
+				return Evidence{}, fmt.Errorf("log line %d: a %q line without a valid time, org_id or reason", n, msg)
+			}
+			ev.refusals = append(ev.refusals, refusalLine{at: at, orgID: orgID, reason: reason})
+			continue
+		}
 		if msg != MsgResult && msg != MsgMismatch && msg != MsgServedOther {
 			continue
 		}
@@ -195,7 +213,7 @@ type SlotVerdict struct {
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictSkippedSeam, VerdictSkippedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard, VerdictEvidencedNoOrg:
 		return true
 	}
 	return false

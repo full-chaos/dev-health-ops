@@ -218,6 +218,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		tokens[s.Principal] = token
 	}
 	fmt.Fprintf(stdout, "drive: %d slots, gap %s, start %s\n", len(plan.Slots), *gap, time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(stdout, "drive: schedule sha12 %s\n", shadowvenue.ScheduleSHA12(plan.Slots))
 	if err := driver.Drive(ctx, plan, tokens, file); err != nil {
 		fmt.Fprintln(stderr, err)
 		return finish(file, exitFail, stderr)
@@ -544,6 +545,7 @@ func judge(args []string, stdout, stderr io.Writer) int {
 		verdicts[i] = fmt.Sprintf("%s %d", verdict, counts[verdict])
 	}
 	fmt.Fprintf(stdout, "judge: slots %s\n", strings.Join(verdicts, ", "))
+	fmt.Fprintf(stdout, "judge: schedule sha12 %s\n", shadowvenue.ScheduleSHA12(slots))
 	fmt.Fprintf(stdout, "judge: rows %d, rows passed %d, void %v, exit %d, table %s\n", len(report.Rows), passed, report.Void, report.Exit(), *out)
 	return finish(file, report.Exit(), stderr)
 }
@@ -711,6 +713,7 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 		verdicts[i] = fmt.Sprintf("%s %d", verdict, counts[verdict])
 	}
 	fmt.Fprintf(stdout, "judge-enforced: slots %s\n", strings.Join(verdicts, ", "))
+	fmt.Fprintf(stdout, "judge-enforced: schedule sha12 %s\n", shadowvenue.ScheduleSHA12(slots))
 	if noOrg, served, other, err := shadowvenue.UnjudgedTotals(files["metrics-before"], files["metrics-after"]); err == nil {
 		fmt.Fprintf(stdout, "judge-enforced: unjudged no_org %d, served_org %d, other %d\n", noOrg, served, other)
 	}

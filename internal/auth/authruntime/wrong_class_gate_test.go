@@ -477,7 +477,8 @@ func gateRequest(row wrongclass.Row, carrier wrongclass.Carrier) *http.Request {
 // credential class of credential-classes.json the row does not accept. A wrong class answers exactly what a garbage
 // credential in the same carrier answers (no credential, for a carrier other than the Authorization header). It
 // causes no store dial and no key-set read that the garbage credential does not cause, and none at all on a protected
-// row; a protected row refuses it with a 4xx. The accept controls show the rig tells an accepted class from a refused one.
+// row; a protected row refuses it with a 4xx. An accepted class (the controls) must reach the store and answer other
+// than a garbage credential: the rig tells an accepted class from a refused one.
 func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format string, args ...any)) (wrongclass.Census, map[string]*listenerCensus, []gateFinding) {
 	rows, err := wrongclass.LoadRows(authv1.AuthServiceEndpointProfiles)
 	if err != nil {
@@ -592,7 +593,7 @@ func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format strin
 						text: fmt.Sprintf("%s: wrong class %s on a protected row answered %s, want a 4xx refusal", cellID, carrier.Class, got.answer)})
 				}
 			}
-			controlled := map[string]bool{}
+			controlled, seen := map[string]bool{}, map[string]string{}
 			for _, control := range rowControls {
 				if !row.Accepts(control.Class) {
 					continue
@@ -602,9 +603,14 @@ func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format strin
 				if got.dials > 0 {
 					storeAccepts++
 				}
-				if got.dials > 0 || got.answer != want.answer {
+				// A workload row reads its body before the store, so a body-less accepted workload token is refused there
+				// for its body (reason malformed), not for its credential (garbage: 401 invalid_credentials): its answer
+				// alone tells accept from refuse.
+				reached := got.dials > 0 || control.Class == "workload_token"
+				if reached && got.answer != want.answer {
 					controlled[control.Class] = true
 				}
+				seen[control.Class] += fmt.Sprintf(" [%s, %d dials; garbage %s]", got.answer, got.dials, want.answer)
 			}
 			for _, class := range row.Accepted {
 				if !slices.ContainsFunc(controls, func(c wrongclass.Carrier) bool { return c.Class == class }) {
@@ -614,7 +620,7 @@ func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format strin
 				counts.accept++
 				accepts[class]++
 				if !controlled[class] {
-					errorf("%s: accepted class %s answered as a garbage credential with no store dial: the rig cannot tell accept from refuse", cellID, class)
+					errorf("%s: accepted class %s did not answer other than a garbage credential, after a store read (user, refresh):%s: the rig cannot tell accept from refuse", cellID, class, seen[class])
 				}
 			}
 		}

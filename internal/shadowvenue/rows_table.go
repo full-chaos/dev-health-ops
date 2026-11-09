@@ -113,4 +113,8 @@ C2	GET	/api/v1/admin/integrations	A	no	-	drift-S	mismatch	/api/v1/admin/integrat
 99	PATCH	/api/v1/admin/users/{user_id}	A	no	-	-	match	/api/v1/admin/users/{missing}	{}
 100	POST	/api/v1/admin/users/{user_id}/password	A	no	-	-	match	/api/v1/admin/users/{missing}/password	{}
 101	DELETE	/api/v1/admin/users/{user_id}	A	no	-	-	match	/api/v1/admin/users/{missing}	-
+102	GET	/api/v1/admin/service-accounts/{service_account_id}/keys	A	no	-	-	match	/api/v1/admin/service-accounts/{missing}/keys	-
+103	POST	/api/v1/admin/service-accounts/{service_account_id}/keys	A	no	-	-	match	/api/v1/admin/service-accounts/{missing}/keys	{}
+104	POST	/api/v1/admin/service-accounts/{service_account_id}/keys/rotate	A	no	-	-	match	/api/v1/admin/service-accounts/{missing}/keys/rotate	{"overlap_seconds":0}
+105	POST	/api/v1/admin/service-accounts/keys/{credential_id}/revoke	A	no	-	-	match	/api/v1/admin/service-accounts/keys/crd_{missing}/revoke	{"reason":"venue"}
 `)

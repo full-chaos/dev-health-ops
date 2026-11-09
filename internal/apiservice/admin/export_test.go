@@ -31,3 +31,7 @@ func SetOrgDeletionDeleteHook(hook func(ctx context.Context, table string, pass 
 	orgDeletionDeleteHook = hook
 	return func() { orgDeletionDeleteHook = previous }
 }
+
+// OrgDeletionRefreshFedTables is the org deletion's list of the tables a
+// refreshable view fills: table -> the view.
+var OrgDeletionRefreshFedTables = orgDeletionRefreshFedTables

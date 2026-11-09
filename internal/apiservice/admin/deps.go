@@ -194,6 +194,9 @@ type handlers struct {
 	// readGrants replaces the org deletion's grant read in tests; nil reads
 	// SHOW GRANTS FOR CURRENT_USER FINAL.
 	readGrants func(context.Context, driver.Conn) ([]string, error)
+	// readRefreshStates replaces the org deletion's read of system.view_refreshes
+	// in tests; nil reads it.
+	readRefreshStates func(context.Context, driver.Conn, []string) (uint64, error)
 	// spend is the LLM spend route's ClickHouse reader; nil when the api has no
 	// ClickHouse login.
 	spend     spendReader

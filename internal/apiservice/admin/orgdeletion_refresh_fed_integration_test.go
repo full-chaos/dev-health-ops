@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -312,5 +315,121 @@ func TestOrgDeletionReportsGroupRowsThatKeepComingBack(t *testing.T) {
 	}
 	if got, want := fmt.Sprint(record.seen()), "[1 2 3 4]"; got != want {
 		t.Errorf("the current table was deleted on passes %s, want %s (one delete, then three passes)", got, want)
+	}
+}
+
+// viewTarget is the table after the first " TO " of a materialized view's
+// CREATE statement, without its database.
+var viewTarget = regexp.MustCompile("\\sTO\\s+(?:`?\\w+`?\\.)?`?(\\w+)`?")
+
+// The org deletion's list of refresh-fed tables is every table a refreshable
+// view of the migrated schema fills: its target, and the target of each view
+// that copies a listed table, closed over; each maps to the refreshable view at
+// its root, and each is an org table the purge discovers.
+func TestOrgDeletionRefreshFedTablesAreEveryRefreshableViewTarget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	t.Cleanup(cancel)
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := instance.Close(context.Background()); err != nil {
+			t.Errorf("close clickhouse instance: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhouse.Open(ctx, clickhouse.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatalf("open clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	stringRows := func(query string, args ...any) []string {
+		t.Helper()
+		rows, err := conn.Query(ctx, query, args...)
+		if err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var value string
+			if err := rows.Scan(&value); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, value)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	target := func(view string) string {
+		t.Helper()
+		queries := stringRows("SELECT create_table_query FROM system.tables WHERE database = currentDatabase() AND name = ?", view)
+		if len(queries) != 1 {
+			t.Fatalf("view %s: %d CREATE statement(s)", view, len(queries))
+		}
+		match := viewTarget.FindStringSubmatch(queries[0])
+		if match == nil {
+			t.Fatalf("view %s writes into no TO table: %s", view, queries[0])
+		}
+		return match[1]
+	}
+	dependents := func(table string) []string {
+		t.Helper()
+		var names []string
+		if err := conn.QueryRow(ctx, "SELECT dependencies_table FROM system.tables WHERE database = currentDatabase() AND name = ?", table).Scan(&names); err != nil {
+			t.Fatalf("dependencies of %s: %v", table, err)
+		}
+		return names
+	}
+
+	refreshable := map[string]bool{}
+	for _, view := range stringRows("SELECT view FROM system.view_refreshes WHERE database = currentDatabase()") {
+		refreshable[view] = true
+	}
+	if len(refreshable) == 0 {
+		t.Fatal("the migrated schema has no refreshable view: the chain did not apply")
+	}
+	got := map[string]string{}
+	var queue []string
+	for view := range refreshable {
+		table := target(view)
+		got[table] = view
+		queue = append(queue, table)
+	}
+	for len(queue) > 0 {
+		table := queue[0]
+		queue = queue[1:]
+		for _, view := range dependents(table) {
+			if refreshable[view] {
+				continue
+			}
+			next := target(view)
+			if _, seen := got[next]; seen {
+				continue
+			}
+			got[next] = got[table]
+			queue = append(queue, next)
+		}
+	}
+
+	if want := admin.OrgDeletionRefreshFedTables; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("tables a refreshable view fills: %v; orgDeletionRefreshFedTables: %v", got, want)
+	}
+	discovered, err := admin.DiscoverClickHouseOrgTables(ctx, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orgTables := map[string]bool{}
+	for _, table := range discovered {
+		orgTables[table.Name] = true
+	}
+	for table := range got {
+		if !orgTables[table] {
+			t.Errorf("%s is filled by a refreshable view but is not an org table the purge discovers", table)
+		}
 	}
 }

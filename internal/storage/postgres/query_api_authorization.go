@@ -148,13 +148,15 @@ func QueryAPIPosture() RolePosture {
 // QueryAPISessionRead is what query-api reads in the auth schema while
 // auth-service owns sessions (AUTH_PROXY_SESSIONS): USAGE on the schema and
 // column SELECT on a list of its tables (Tables). The first is the sessions
-// table, the columns the session check reads (internal/api/policy/session.go);
-// while auth-service owns the platform roles (AUTH_PLATFORM_ROLES_OWNED) the
-// platform role read follows (Also). It must equal the list auth-migrate grants
+// table, the columns the session check reads (internal/api/policy/session.go,
+// sessionrule.Revoked), then the password stamp in users; while auth-service owns
+// the platform roles (AUTH_PLATFORM_ROLES_OWNED) the platform role read follows
+// (Also). It must equal the list auth-migrate grants
 // a session reader role (authschema.SessionReaderReads; this package cannot
 // import authschema, whose tests import this package, so
 // TestQueryAPIAuthReadsEqualTheReaderColumnsInBothStates in rivermigrate pins it).
-// Readiness holds the role to this read or to Widened, exactly one of the two.
+// Readiness holds the role to this read or to Widened, exactly one of the two;
+// for QueryAPISessionReadFor's read the two are one set, so the old read is refused.
 type QueryAPISessionRead struct {
 	Schema  string
 	Table   string
@@ -176,8 +178,9 @@ func (r QueryAPISessionRead) Tables() []QueryAPIAuthTable {
 
 // Widened is the read the session rule needs (sessionrule.Revoked): the sessions
 // columns plus created_at and web_session_id, and the principal's password stamp
-// in users, then Also. It is the second set readiness accepts while the grant
-// widens; once both granters emit it, it replaces the read and this form goes.
+// in users, then Also. It was the second set readiness accepted while the grant
+// widened. Both granters now emit it (QueryAPISessionReadFor), whose Widened is the
+// same set; this form goes once no query-api that holds the old read is live.
 func (r QueryAPISessionRead) Widened() QueryAPISessionRead {
 	return QueryAPISessionRead{
 		Schema:  r.Schema,
@@ -188,15 +191,16 @@ func (r QueryAPISessionRead) Widened() QueryAPISessionRead {
 }
 
 // QueryAPISessionReadFor is the read in the named auth schema: the sessions
-// table, and the platform role read while platformRolesOwned (the columns of
-// platformrole.HoldsSQL).
+// columns and the password stamp sessionrule.Revoked reads, and the platform role
+// read while platformRolesOwned (the columns of platformrole.HoldsSQL).
 func QueryAPISessionReadFor(schema string, platformRolesOwned bool) QueryAPISessionRead {
-	read := QueryAPISessionRead{Schema: schema, Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+	read := QueryAPISessionRead{Schema: schema, Table: "sessions",
+		Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version", "created_at", "web_session_id"},
+		Also:    []QueryAPIAuthTable{{Table: "users", Columns: []string{"principal_id", "password_updated_at"}}}}
 	if platformRolesOwned {
-		read.Also = []QueryAPIAuthTable{
-			{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
-			{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}},
-		}
+		read.Also = append(read.Also,
+			QueryAPIAuthTable{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
+			QueryAPIAuthTable{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}})
 	}
 	return read
 }

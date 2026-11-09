@@ -10,12 +10,15 @@ const queryAPIAuthSchema = "auth"
 
 var (
 	queryAPIMembershipColumns = []string{"org_id", "role", "user_id"}
-	queryAPISessionColumns    = []string{"id", "legacy_token_version", "principal_id", "revoked_at"}
+	queryAPISessionColumns    = []string{"created_at", "id", "legacy_token_version", "principal_id", "revoked_at", "web_session_id"}
+	// queryAPIStampColumns is the one users read: the password stamp sessionrule.Revoked compares, by principal.
+	queryAPIStampColumns = []string{"password_updated_at", "principal_id"}
 )
 
 // queryAPIAuthSurfaceDefects is the CHAOS-10985 pin on the declared query-api posture: public.memberships is held through
 // exactly three SELECT columns and never as a whole table; no relation is schema-qualified (the manifest resolves to public);
-// and the one thing query-api reads in the auth schema is the sessions columns, never memberships or organizations.
+// and what query-api reads in the auth schema is the sessions columns and the users password stamp (sessionrule.Revoked),
+// never memberships or organizations, and no other users column.
 func queryAPIAuthSurfaceDefects(p RolePosture, session QueryAPISessionRead) []string {
 	var out []string
 	memberships := map[string][]string{}
@@ -56,6 +59,24 @@ func queryAPIAuthSurfaceDefects(p RolePosture, session QueryAPISessionRead) []st
 	}
 	if strings.Join(columns, ",") != strings.Join(queryAPISessionColumns, ",") {
 		out = append(out, fmt.Sprintf("the auth session read columns = %v, want exactly %v", columns, queryAPISessionColumns))
+	}
+	stamp := false
+	for _, also := range session.Also {
+		cols := append([]string{}, also.Columns...)
+		sort.Strings(cols)
+		switch also.Table {
+		case "users":
+			stamp = true
+			if strings.Join(cols, ",") != strings.Join(queryAPIStampColumns, ",") {
+				out = append(out, fmt.Sprintf("the auth users read columns = %v, want exactly %v", cols, queryAPIStampColumns))
+			}
+		case "platform_role_assignments", "principals":
+		default:
+			out = append(out, fmt.Sprintf("the auth session read also reads table %q: query-api holds nothing of the auth memberships or organizations", also.Table))
+		}
+	}
+	if !stamp {
+		out = append(out, "the auth session read holds no users password stamp: sessionrule.Revoked reads it")
 	}
 	return out
 }

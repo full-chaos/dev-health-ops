@@ -466,11 +466,6 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_service_account_keys", "api_service_account_keys_config_invalid", err)
 	}
-	deps.UsersAdmin, err = usersAdminClient(authProxy, deps.UsersOwned, sharedWorkloadClient(provisioningCred, sessionCred))
-	if err != nil {
-		closeComponents(depComponents)
-		return nil, dependencyFailure(ctx, logger, "api_users_admin", "api_users_admin_config_invalid", err)
-	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {
 		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, authProxy, logger)
@@ -496,6 +491,11 @@ func configureWith(
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
+	}
+	deps.UsersAdmin, err = usersAdminClient(authProxy, deps.UsersOwned, sharedWorkloadClient(provisioningCred, sessionCred))
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_users_admin", "api_users_admin_config_invalid", err)
 	}
 	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, acrSubjectSourceOf(deps.Pool, deps.AuthSchema))
 	if err != nil {

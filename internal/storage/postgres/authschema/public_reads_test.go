@@ -82,9 +82,10 @@ func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 	insert, update := UsersWriteGrant()
 	wantInsert := []string{"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
 		"is_active", "is_verified", "token_version", "created_at", "updated_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier"}
-	// email and is_active: the admin email change and soft delete go-api makes through auth-service (acp attest of
-	// PLAN-13376 v2, S1 ticket 13377).
-	wantUpdate := []string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at", "email", "is_active"}
+	// email, is_active, username, full_name, avatar_url: the admin email and profile changes and the soft delete go-api
+	// makes through auth-service (pm D6872, acp attest of PLAN-13376 v2, S1 ticket 13377).
+	wantUpdate := []string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at", "email", "is_active",
+		"username", "full_name", "avatar_url"}
 	if !reflect.DeepEqual(insert, wantInsert) || !reflect.DeepEqual(update, wantUpdate) {
 		t.Fatalf("UsersWriteGrant = %v / %v, want %v / %v", insert, update, wantInsert, wantUpdate)
 	}

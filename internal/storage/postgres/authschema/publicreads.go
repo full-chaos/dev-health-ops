@@ -171,8 +171,9 @@ func LegacyRefreshTokenGrant() TableWriteGrant {
 // SAML account belongs to, never rewritten. Before 0155 its grant is DEFERRED.
 // is_superuser is never written (CHAOS-10993): the column defaults to false and the
 // platform roles live in auth.platform_role_assignments.
-// email and is_active are updated only by the admin user writes go-api makes through auth-service (identity
-// adminusers.go: an admin email change, an admin soft delete), in the audit.Commit that writes the auth rows.
+// email, is_active, username, full_name and avatar_url are updated only by the admin user writes go-api makes through
+// auth-service (identity adminusers.go: an admin email or profile change, an admin soft delete), in the commit that
+// writes the auth rows (audit.Commit, or audit.CommitPublicProjection for a profile-only change).
 // saml_nameid_format and saml_sp_name_qualifier (ops revision 0160) are inserted only, with a SAML
 // account's NameID attributes as go-api stores them; before 0160 their grant is DEFERRED.
 func UsersWriteGrant() (insert, update []string) {
@@ -181,7 +182,8 @@ func UsersWriteGrant() (insert, update []string) {
 			"is_active", "is_verified", "token_version", "created_at", "updated_at", "sso_provider_id",
 			"saml_nameid_format", "saml_sp_name_qualifier",
 		},
-		[]string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at", "email", "is_active"}
+		[]string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at", "email", "is_active", "username",
+			"full_name", "avatar_url"}
 }
 
 // InsertGrant is a column-level INSERT grant on one ops-schema table.

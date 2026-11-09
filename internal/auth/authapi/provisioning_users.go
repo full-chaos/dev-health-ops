@@ -298,7 +298,8 @@ type usersChangeAnswer struct {
 }
 
 func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request) {
-	body, caller, ok := h.admit(w, r, opUsersUpdate, "actor_principal_id", "principal_id", "organization_id", "email", "is_verified", "is_superuser")
+	body, caller, ok := h.admit(w, r, opUsersUpdate, "actor_principal_id", "principal_id", "organization_id", "email", "is_verified",
+		"is_superuser", "username", "full_name", "avatar_url")
 	if !ok {
 		return
 	}
@@ -308,7 +309,10 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 	email, err4 := body.optionalAnyText("email", maxShortTextBytes)
 	verified, err5 := optionalBoolPointer(body, "is_verified")
 	superuser, err6 := optionalBoolPointer(body, "is_superuser")
-	if errors.Join(err1, err2, err3, err4, err5, err6) != nil {
+	username, err7 := body.optionalAnyText("username", maxShortTextBytes)
+	fullName, err8 := body.optionalAnyText("full_name", maxShortTextBytes)
+	avatarURL, err9 := body.optionalAnyText("avatar_url", maxShortTextBytes)
+	if errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9) != nil {
 		h.malformedUsers(w, r, opUsersUpdate)
 		return
 	}
@@ -327,7 +331,8 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	roleChange := superuser != nil && *superuser != state.Holds(actionAdminUsers)
-	decided := identity.DecideAdminUpdate(cur, email, verified)
+	decided := identity.DecideAdminUpdate(cur, identity.AdminUpdatePatch{Email: email, Verified: verified, Username: username,
+		FullName: fullName, AvatarURL: avatarURL})
 	var superuserWrite func(context.Context, audit.TxOps) error
 	if roleChange {
 		grantIt := *superuser
@@ -351,7 +356,8 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 			err = h.PlatformRoles.Revoke(ctx, platformrole.RevokeInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin})
 		}
 	default:
-		err = h.UsersAdmin.AdminUpdateUser(ctx, identity.AdminUpdateRequest{Principal: target, Email: email, Verified: verified, Actor: actor,
+		err = h.UsersAdmin.AdminUpdateUser(ctx, identity.AdminUpdateRequest{Principal: target, Email: email, Verified: verified,
+			Username: username, FullName: fullName, AvatarURL: avatarURL, Actor: actor,
 			RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, &target),
 			Superuser: superuserWrite}, cur)
 	}

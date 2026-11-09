@@ -76,3 +76,19 @@ func TestUsersUpdateRevokeOfTheLastPlatformAdminIsRefused(t *testing.T) {
 	body := map[string]any{"actor_principal_id": f.super.String(), "principal_id": f.super.String(), "is_superuser": false}
 	expectRefusal(t, f.post(usersUpdatePath, encode(body), nil), http.StatusConflict, reasonLastPlatformAdmin)
 }
+
+// The profile fields (username, full_name, avatar_url) are forwarded to the store as sent.
+func TestUsersUpdateForwardsTheProfileFields(t *testing.T) {
+	t.Parallel()
+	f := newUsersAdminFixture(t)
+	body := map[string]any{"actor_principal_id": f.super.String(), "principal_id": f.target.String(), "username": "Neo",
+		"full_name": "", "avatar_url": "https://example.test/a.png"}
+	if response := f.post(usersUpdatePath, encode(body), nil); response.Code != http.StatusOK {
+		t.Fatalf("profile update: %d %s", response.Code, response.Body)
+	}
+	got := f.usersAdmin.update
+	if got.Username == nil || *got.Username != "Neo" || got.FullName == nil || *got.FullName != "" || got.AvatarURL == nil ||
+		*got.AvatarURL != "https://example.test/a.png" {
+		t.Fatalf("store got username %v full_name %v avatar_url %v", got.Username, got.FullName, got.AvatarURL)
+	}
+}

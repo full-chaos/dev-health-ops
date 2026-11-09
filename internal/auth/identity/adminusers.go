@@ -31,6 +31,12 @@ var ErrUsernameTaken = errors.New("identity: the username belongs to an existing
 // verifier (or the admin has none). Nothing is written.
 var ErrAdminPasswordInvalid = errors.New("identity: the acting admin password does not match")
 
+// The commit kinds an admin update picks between; tests record the pick.
+var (
+	commitMutation         = audit.Commit
+	commitPublicProjection = audit.CommitPublicProjection
+)
+
 // AdminTx is the part of the audited transaction the admin writes run on: audit.TxOps, or a test double.
 type AdminTx interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
@@ -232,17 +238,21 @@ func adminCreateAuditRow(ctx context.Context, tx audit.TxOps, orgID, actor, user
 		ResourceID: user.String(), Description: &description, Changes: changes, RequestMetadata: metadata, CreatedAt: at})
 }
 
-// AdminUpdateRequest is go-api's admin update (users.go updateUser) of the fields auth-service takes over: the email
-// and the verified flag. A nil field is unchanged.
+// AdminUpdateRequest is go-api's admin update (users.go updateUser) of every field auth-service takes over: the
+// email, the verified flag and the profile (username, full_name, avatar_url). A nil field is unchanged. The is_active
+// change stays go-api's refusal (CHAOS-13209 row 4), and is_superuser is the Superuser step.
 type AdminUpdateRequest struct {
 	Principal uuid.UUID
 	// Email is the address as sent: an empty one, or one whose lower case is the stored address, changes nothing; any
 	// other is checked for a collision and stored lower-cased and stripped (go-api's updateUser).
-	Email     *string
-	Verified  *bool
-	Actor     uuid.UUID
-	RequestID *string
-	Caller    audit.Caller
+	Email    *string
+	Verified *bool
+	// Username "" stores NULL; any other value is checked for a collision (unless its lower case is the stored one)
+	// and stored lower-cased and stripped. FullName and AvatarURL are stored as sent.
+	Username, FullName, AvatarURL *string
+	Actor                         uuid.UUID
+	RequestID                     *string
+	Caller                        audit.Caller
 	// Authorize runs first in the transaction (locks, actor and target rules); Superuser, when set, runs last (the
 	// platform_admin grant or revoke).
 	Authorize func(ctx context.Context, tx audit.TxOps) error
@@ -254,22 +264,23 @@ type AdminUpdateRequest struct {
 type AdminUpdateCurrent struct {
 	Email    string
 	Verified bool
+	Username *string
 }
 
 // ErrStateChangedUnderLock reports an admin update whose user changed between the route's read and its locks.
 // Nothing is written; a retry decides on the new state.
 var ErrStateChangedUnderLock = errors.New("identity: the user changed while the update waited for its locks")
 
-// AdminUpdateState reads the email (public.users, go-api's value) and the verified flag (auth.users, the authority
-// while auth owns users) an update decides on.
+// AdminUpdateState reads the email and username (public.users, go-api's values) and the verified flag (auth.users,
+// the authority while auth owns users) an update decides on.
 func (s *Store) AdminUpdateState(ctx context.Context, principal uuid.UUID) (AdminUpdateCurrent, error) {
 	return readAdminUpdateState(ctx, s.pool, s.q, principal)
 }
 
 func readAdminUpdateState(ctx context.Context, q AdminTx, schema string, principal uuid.UUID) (AdminUpdateCurrent, error) {
 	var cur AdminUpdateCurrent
-	err := q.QueryRow(ctx, `SELECT p.email, a.email_verified_at IS NOT NULL FROM public.users p
-JOIN `+schema+`.users a ON a.principal_id = p.id WHERE p.id = $1`, principal).Scan(&cur.Email, &cur.Verified)
+	err := q.QueryRow(ctx, `SELECT p.email, a.email_verified_at IS NOT NULL, p.username FROM public.users p
+JOIN `+schema+`.users a ON a.principal_id = p.id WHERE p.id = $1`, principal).Scan(&cur.Email, &cur.Verified, &cur.Username)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return cur, ErrUserNotFound
 	}
@@ -280,30 +291,66 @@ JOIN `+schema+`.users a ON a.principal_id = p.id WHERE p.id = $1`, principal).Sc
 type AdminUpdateDecision struct {
 	Email    *string // the stored form of a changed address
 	Verified *bool
+	// UsernameSet is a sent username: Username is its stored form (nil is NULL), UsernameCheck whether it is checked
+	// for a collision (go-api checks only a new non-empty name).
+	UsernameSet, UsernameCheck bool
+	Username                   *string
+	FullName, AvatarURL        *string
 }
 
-// Empty reports an update that changes neither field.
-func (d AdminUpdateDecision) Empty() bool { return d.Email == nil && d.Verified == nil }
+// Profile reports a decision that writes a profile column.
+func (d AdminUpdateDecision) Profile() bool {
+	return d.UsernameSet || d.FullName != nil || d.AvatarURL != nil
+}
 
-// DecideAdminUpdate is go-api's updateUser decision for the email and the verified flag.
-func DecideAdminUpdate(cur AdminUpdateCurrent, email *string, verified *bool) AdminUpdateDecision {
+// Empty reports an update that changes nothing.
+func (d AdminUpdateDecision) Empty() bool { return d.Email == nil && d.Verified == nil && !d.Profile() }
+
+// AdminUpdatePatch is the fields an update sent.
+type AdminUpdatePatch struct {
+	Email                         *string
+	Verified                      *bool
+	Username, FullName, AvatarURL *string
+}
+
+// DecideAdminUpdate is go-api's updateUser decision. The email and the verified flag change only when they differ
+// from the stored values in go-api's write form; a sent profile column is written as go-api writes it.
+func DecideAdminUpdate(cur AdminUpdateCurrent, p AdminUpdatePatch) AdminUpdateDecision {
 	var d AdminUpdateDecision
-	if email != nil && *email != "" && pythonparity.Lower(*email) != cur.Email {
-		stored := pythonparity.Strip(pythonparity.Lower(*email))
+	if p.Email != nil && *p.Email != "" && pythonparity.Lower(*p.Email) != cur.Email {
+		stored := pythonparity.Strip(pythonparity.Lower(*p.Email))
 		d.Email = &stored
 	}
-	if verified != nil && *verified != cur.Verified {
-		v := *verified
+	if p.Verified != nil && *p.Verified != cur.Verified {
+		v := *p.Verified
 		d.Verified = &v
 	}
+	if p.Username != nil {
+		d.UsernameSet = true
+		if *p.Username != "" {
+			stored := pythonparity.Strip(pythonparity.Lower(*p.Username))
+			d.Username = &stored
+			current := ""
+			if cur.Username != nil {
+				current = pythonparity.Lower(*cur.Username)
+			}
+			d.UsernameCheck = pythonparity.Lower(*p.Username) != current
+		}
+	}
+	d.FullName, d.AvatarURL = p.FullName, p.AvatarURL
 	return d
 }
 
-// AdminUpdateUser applies the decision in one audit.Commit: an email change in auth.users and public.users
-// (user.email_changed), a verified change in auth.users email_verified_at and public.users is_verified
-// (user.email_verified or user.email_unverified), public updated_at, then Superuser. decided is the decision the route
-// made on the state it read; under the locks the state is read again and a different decision is
-// ErrStateChangedUnderLock.
+func (r AdminUpdateRequest) patch() AdminUpdatePatch {
+	return AdminUpdatePatch{Email: r.Email, Verified: r.Verified, Username: r.Username, FullName: r.FullName, AvatarURL: r.AvatarURL}
+}
+
+// AdminUpdateUser applies the decision. An email or verified change is one audit.Commit with its provisioning events
+// (user.email_changed, user.email_verified or user.email_unverified), the profile columns and the Superuser step in
+// the same transaction. A profile change with a platform role change and nothing else is one audit.Commit off the
+// stream (OffStreamPublicProfile; the role change queues its own events). A profile change alone is one
+// audit.CommitPublicProjection (EventUserProfileUpdated): its columns are in no guarded table, so Commit would count
+// it as no change. Under the locks the state is read again, and a different decision is ErrStateChangedUnderLock.
 func (s *Store) AdminUpdateUser(ctx context.Context, req AdminUpdateRequest, cur AdminUpdateCurrent) (err error) {
 	defer func() { s.countLink(ctx, "admin_update", err) }()
 	if !s.ownsUsers {
@@ -312,9 +359,9 @@ func (s *Store) AdminUpdateUser(ctx context.Context, req AdminUpdateRequest, cur
 	if req.Authorize == nil {
 		return errors.New("identity: an admin update needs its actor rule")
 	}
-	decided := DecideAdminUpdate(cur, req.Email, req.Verified)
+	decided := DecideAdminUpdate(cur, req.patch())
 	subject := req.Principal.String()
-	actor := req.Actor
+	actor := Actor{PrincipalID: &req.Actor, RequestID: req.RequestID}
 	var fields []string
 	var events []audit.OutboxEvent
 	if decided.Email != nil {
@@ -333,90 +380,143 @@ func (s *Store) AdminUpdateUser(ctx context.Context, req AdminUpdateRequest, cur
 	if decided.Email != nil && decided.Verified == nil {
 		reason, eventType = "principal_projected", "auth.user.email_changed"
 	}
-	if len(events) == 0 {
-		if req.Superuser == nil {
-			return audit.ErrNoStateChange
+	fields = append(fields, decided.profileFields()...)
+	var applied int64
+	apply := func(ctx context.Context, tx audit.TxOps) error {
+		if err := req.Authorize(ctx, tx); err != nil {
+			return err
 		}
+		if err := s.lockUser(ctx, tx, req.Principal); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `SELECT id FROM public.users WHERE id = $1 FOR UPDATE`, req.Principal); err != nil {
+			return err
+		}
+		now, err := readAdminUpdateState(ctx, tx, s.q, req.Principal)
+		if err != nil {
+			return err
+		}
+		if again := DecideAdminUpdate(now, req.patch()); !sameDecision(again, decided) {
+			return ErrStateChangedUnderLock
+		}
+		if applied, err = applyAdminUpdate(ctx, tx, s.q, req.Principal, decided, req.Email); err != nil {
+			return err
+		}
+		if req.Superuser != nil {
+			return req.Superuser(ctx, tx)
+		}
+		return nil
+	}
+	refusals := []error{ErrEmailTaken, ErrUsernameTaken, ErrStateChangedUnderLock, ErrUserNotFound}
+	switch {
+	case len(events) > 0:
+		event := withChangedFields(localAudit(eventType, reason, subject, actor), fields...)
+		req.Caller.Annotate(event.Attributes)
+		return commitMutation(ctx, s.pool, s.schema, audit.Mutation{Apply: apply, Audit: event, Events: events, Refusals: refusals})
+	case decided.Profile() && req.Superuser != nil:
+		event := withChangedFields(localAudit("auth.user.updated", "principal_projected", subject, actor), fields...)
+		req.Caller.Annotate(event.Attributes)
+		return commitMutation(ctx, s.pool, s.schema, audit.Mutation{Apply: apply, Audit: event, OffStream: audit.OffStreamPublicProfile,
+			Refusals: refusals})
+	case decided.Profile():
+		event := withChangedFields(localAudit(audit.EventUserProfileUpdated, "principal_projected", subject, actor), fields...)
+		req.Caller.Annotate(event.Attributes)
+		return commitPublicProjection(ctx, s.pool, s.schema, event, func(ctx context.Context, tx audit.TxOps) (int64, error) {
+			err := apply(ctx, tx)
+			return applied, err
+		})
+	case req.Superuser != nil:
 		return errors.New("identity: a platform role change alone is the platform role store's own commit")
 	}
-	event := withChangedFields(localAudit(eventType, reason, subject, Actor{PrincipalID: &actor, RequestID: req.RequestID}), fields...)
-	req.Caller.Annotate(event.Attributes)
-	return audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
-		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			if err := req.Authorize(ctx, tx); err != nil {
-				return err
-			}
-			if err := s.lockUser(ctx, tx, req.Principal); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, `SELECT id FROM public.users WHERE id = $1 FOR UPDATE`, req.Principal); err != nil {
-				return err
-			}
-			now, err := readAdminUpdateState(ctx, tx, s.q, req.Principal)
-			if err != nil {
-				return err
-			}
-			if again := DecideAdminUpdate(now, req.Email, req.Verified); !sameDecision(again, decided) {
-				return ErrStateChangedUnderLock
-			}
-			if err := applyAdminUpdate(ctx, tx, s.q, req.Principal, decided, req.Email); err != nil {
-				return err
-			}
-			if req.Superuser != nil {
-				return req.Superuser(ctx, tx)
-			}
-			return nil
-		},
-		Audit:    event,
-		Events:   events,
-		Refusals: []error{ErrEmailTaken, ErrStateChangedUnderLock, ErrUserNotFound},
-	})
+	return audit.ErrNoStateChange
+}
+
+func (d AdminUpdateDecision) profileFields() []string {
+	var fields []string
+	if d.UsernameSet {
+		fields = append(fields, "username")
+	}
+	if d.FullName != nil {
+		fields = append(fields, "full_name")
+	}
+	if d.AvatarURL != nil {
+		fields = append(fields, "avatar_url")
+	}
+	return fields
 }
 
 func sameDecision(a, b AdminUpdateDecision) bool {
-	sameText := (a.Email == nil) == (b.Email == nil) && (a.Email == nil || *a.Email == *b.Email)
+	sameText := func(x, y *string) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
 	sameBool := (a.Verified == nil) == (b.Verified == nil) && (a.Verified == nil || *a.Verified == *b.Verified)
-	return sameText && sameBool
+	return sameText(a.Email, b.Email) && sameBool && a.UsernameSet == b.UsernameSet && a.UsernameCheck == b.UsernameCheck &&
+		sameText(a.Username, b.Username)
 }
 
-// applyAdminUpdate is the update's statements. The email collision check is go-api's (get_by_email on the address as
-// sent, lower-cased), then the auth email_lower key decides a race.
-func applyAdminUpdate(ctx context.Context, tx AdminTx, q string, principal uuid.UUID, d AdminUpdateDecision, sent *string) error {
+// applyAdminUpdate is the update's statements; it returns the public.users rows it changed. The email and username
+// collision checks are go-api's (get_by_email and get_by_username on the value as sent, lower-cased), then the auth
+// email_lower key decides an email race.
+func applyAdminUpdate(ctx context.Context, tx AdminTx, q string, principal uuid.UUID, d AdminUpdateDecision, sent *string) (int64, error) {
+	var changed int64
 	if d.Email != nil {
 		var taken bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.users WHERE lower(email) = $1)`,
 			pythonparity.Lower(*sent)).Scan(&taken); err != nil {
-			return err
+			return 0, err
 		}
 		if taken {
-			return ErrEmailTaken
+			return 0, ErrEmailTaken
 		}
 		if _, err := tx.Exec(ctx, `UPDATE `+q+`.users SET email = $2, email_lower = $2, updated_at = clock_timestamp() WHERE principal_id = $1`,
 			principal, *d.Email); err != nil {
 			if isEmailCollision(err) {
-				return ErrEmailTaken
+				return 0, ErrEmailTaken
 			}
-			return err
+			return 0, err
 		}
 	}
 	if d.Verified != nil {
 		if _, err := tx.Exec(ctx, `UPDATE `+q+`.users
 SET email_verified_at = CASE WHEN $2::boolean THEN clock_timestamp() END, updated_at = clock_timestamp() WHERE principal_id = $1`,
 			principal, *d.Verified); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	if d.Email != nil {
-		if err := updatePublicUserRow(ctx, tx, `UPDATE public.users SET email = $2, updated_at = now() WHERE id = $1`, principal, *d.Email); err != nil {
-			return err
+	if d.UsernameCheck {
+		var taken bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.users WHERE lower(username) = $1)`,
+			pythonparity.Lower(*d.Username)).Scan(&taken); err != nil {
+			return 0, err
+		}
+		if taken {
+			return 0, ErrUsernameTaken
 		}
 	}
-	if d.Verified != nil {
-		if err := updatePublicUserRow(ctx, tx, `UPDATE public.users SET is_verified = $2, updated_at = now() WHERE id = $1`, principal, *d.Verified); err != nil {
-			return err
+	if d.FullName != nil {
+		if _, err := tx.Exec(ctx, `UPDATE `+q+`.principals SET display_name = $2, updated_at = clock_timestamp() WHERE id = $1`,
+			principal, *d.FullName); err != nil {
+			return 0, err
 		}
 	}
-	return nil
+	for _, write := range []struct {
+		set       bool
+		statement string
+		value     any
+	}{
+		{d.Email != nil, `UPDATE public.users SET email = $2, updated_at = now() WHERE id = $1`, d.Email},
+		{d.Verified != nil, `UPDATE public.users SET is_verified = $2, updated_at = now() WHERE id = $1`, d.Verified},
+		{d.UsernameSet, `UPDATE public.users SET username = $2, updated_at = now() WHERE id = $1`, d.Username},
+		{d.FullName != nil, `UPDATE public.users SET full_name = $2, updated_at = now() WHERE id = $1`, d.FullName},
+		{d.AvatarURL != nil, `UPDATE public.users SET avatar_url = $2, updated_at = now() WHERE id = $1`, d.AvatarURL},
+	} {
+		if !write.set {
+			continue
+		}
+		if err := updatePublicUserRow(ctx, tx, write.statement, principal, write.value); err != nil {
+			return 0, err
+		}
+		changed++
+	}
+	return changed, nil
 }
 
 func updatePublicUserRow(ctx context.Context, tx AdminTx, statement string, principal uuid.UUID, value any) error {

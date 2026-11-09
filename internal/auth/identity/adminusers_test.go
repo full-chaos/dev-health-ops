@@ -87,13 +87,13 @@ func TestDecideAdminUpdateComparesInTheWritePathForm(t *testing.T) {
 	cur := AdminUpdateCurrent{Email: "a@x.test", Verified: false}
 	upper, empty, other := "A@X.test", "", " New@X.test"
 	yes, no := true, false
-	if d := DecideAdminUpdate(cur, &upper, &no); !d.Empty() {
+	if d := DecideAdminUpdate(cur, AdminUpdatePatch{Email: &upper, Verified: &no}); !d.Empty() {
 		t.Errorf("same address in upper case and the same flag: %+v, want no change", d)
 	}
-	if d := DecideAdminUpdate(cur, &empty, nil); !d.Empty() {
+	if d := DecideAdminUpdate(cur, AdminUpdatePatch{Email: &empty}); !d.Empty() {
 		t.Errorf("empty address: %+v, want no change", d)
 	}
-	d := DecideAdminUpdate(cur, &other, &yes)
+	d := DecideAdminUpdate(cur, AdminUpdatePatch{Email: &other, Verified: &yes})
 	if d.Email == nil || *d.Email != "new@x.test" || d.Verified == nil || !*d.Verified {
 		t.Errorf("new address and verified: %+v, want new@x.test and true", d)
 	}

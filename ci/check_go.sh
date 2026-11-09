@@ -1047,7 +1047,7 @@ check_test() {
 # with no row weighs 1, and ci/go_race_shard.awk (longest-processing-time) places them: a wrong weight costs balance, never
 # coverage. internal/gqlgenguard stays alone (see SERIAL_HEAVY_TEST_PACKAGE), in whichever shard the split puts it.
 GO_TEST_WEIGHTS="${GO_TEST_WEIGHTS:-${ROOT}/ci/go_test_weights.tsv}"
-# ci/go_test_pins.tsv (CHAOS-13422): the heavy packages ci/go_race_shard.awk places first, each on its own shard.
+# ci/go_test_pins.tsv (CHAOS-13422): the packages ci/go_race_shard.awk places first: the heavy ones each on its own shard, then the apart ones, then the serial one.
 GO_TEST_PINS="${GO_TEST_PINS:-${ROOT}/ci/go_test_pins.tsv}"
 # GO_TEST_SERIAL_FACTOR (CHAOS-13422): the other packages of a test shard overlap, so a shard's wall is about their summed time / 1.9
 # (1.80-2.01 over the 5 shards of PR #5995's run at 9244407eb); the serial package adds its whole wall, so it weighs 2x in the split.

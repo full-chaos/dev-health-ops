@@ -28,12 +28,17 @@ cat > "${T}/bin/curl" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FAKE_ARGV}"
 env >> "${FAKE_ENV}"
-out="" url="" cfg="" accept=""
+out="" url="" cfg="" accept="" argv_bearer=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o | --output) out="$2"; shift 2 ;;
     -K | --config) if [ "$2" = - ]; then cfg="$(cat)"; else cfg="$(cat "$2")"; fi; shift 2 ;;
-    -H | --header) case "$2" in [Aa]ccept:*application/octet-stream*) accept=1 ;; esac; shift 2 ;;
+    -H | --header)
+      case "$2" in
+        [Aa]ccept:*application/octet-stream*) accept=1 ;;
+        [Aa]uthorization:\ [Bb]earer\ *) argv_bearer="${2#*earer }" ;;
+      esac
+      shift 2 ;;
     http*) url="$1"; shift ;;
     *) shift ;;
   esac
@@ -41,6 +46,8 @@ done
 case "${cfg}" in *'ccept: application/octet-stream'*) accept=1 ;; esac
 authed=""
 bearer="$(printf '%s\n' "${cfg}" | sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p' | head -1)"
+# A token on argv authenticates too, so a helper that leaks it there still downloads and is caught by t2, not by t1.
+[ -n "${bearer}" ] || bearer="${argv_bearer}"
 if [ -n "${bearer}" ] && [ "$(printf '%s' "${bearer}" | sha256sum | cut -d' ' -f1)" = "${FAKE_TOKEN_SHA}" ]; then authed=1; fi
 emit() { if [ -n "${out}" ]; then cat > "${out}"; else cat; fi; }
 case "${url}" in

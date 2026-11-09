@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -29,6 +30,14 @@ func TestValidClusterHTTPOriginTakesOnlyAPlainHTTPClusterServiceHost(t *testing.
 		{"http://u@acr.ns.svc.cluster.local", false},
 		{"http://acr.ns.svc.cluster.local#f", false},
 		{"http://:8080", false},
+		{"http://dev..svc.cluster.local", false},
+		{"http://dev_health.svc.cluster.local", false},
+		{"http://-dev.svc.cluster.local", false},
+		{"http://dev-.svc.cluster.local", false},
+		{"http://a.b-c.svc.cluster.local", true},
+		{"http://" + strings.Repeat("a", 63) + ".svc.cluster.local", true},
+		{"http://" + strings.Repeat("a", 64) + ".svc.cluster.local", false},
+		{"http://@acr.ns.svc.cluster.local", false},
 	}
 	for _, tc := range cases {
 		u, err := url.Parse(tc.raw)

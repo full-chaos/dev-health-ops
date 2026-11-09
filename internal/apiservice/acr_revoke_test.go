@@ -175,6 +175,23 @@ func TestTheClusterHTTPOptInNeedsBothClauses(t *testing.T) {
 		{"opt-in present but whitespace", set(httpsBase, httpsTok, " \t\n "), false, optIn},
 		{"opt-in present but empty, cluster host", set(clusterBase, clusterTok, ""), false, optIn},
 		{"only a blank opt-in", map[string]string{optIn: " "}, false, optIn},
+		{"https base, empty query", set(httpsBase+"?", httpsTok, "-"), false, EnvACRRevokeURL},
+		{"https base, empty fragment", set(httpsBase+"#", httpsTok, "-"), false, EnvACRRevokeURL},
+		{"https token, empty fragment", set(httpsBase, httpsTok+"#", "-"), false, EnvACRRevokeTokenURL},
+		{"https base, empty user info", set("https://@acr.internal.test", httpsTok, "-"), false, EnvACRRevokeURL},
+		{"https token, empty user info", set(httpsBase, "https://@acr.internal.test/api/v1/oauth/token", "-"), false, EnvACRRevokeTokenURL},
+		{"loopback base, empty query", set("http://127.0.0.1:8080?", "http://127.0.0.1:8080/api/v1/oauth/token", "-"), false, EnvACRRevokeURL},
+		{"loopback token, empty fragment", set("http://127.0.0.1:8080", "http://127.0.0.1:8080/api/v1/oauth/token#", "-"), false, EnvACRRevokeTokenURL},
+		{"cluster base, empty query", set(clusterBase+"?", clusterTok, "true"), false, EnvACRRevokeURL},
+		{"cluster base, empty fragment", set(clusterBase+"#", clusterTok, "true"), false, EnvACRRevokeURL},
+		{"cluster token, empty fragment", set(clusterBase, clusterTok+"#", "true"), false, EnvACRRevokeTokenURL},
+		{"cluster base, empty user info", set("http://@dev-health-acr.dev-health.svc.cluster.local:8080", clusterTok, "true"), false, EnvACRRevokeURL},
+		{"cluster host, empty label", set("http://dev..svc.cluster.local", clusterTok, "true"), false, EnvACRRevokeURL},
+		{"cluster host, underscore", set("http://dev_health.svc.cluster.local", clusterTok, "true"), false, EnvACRRevokeURL},
+		{"cluster host, leading hyphen", set("http://-dev.svc.cluster.local", clusterTok, "true"), false, EnvACRRevokeURL},
+		{"cluster host, trailing hyphen", set("http://dev-.svc.cluster.local", clusterTok, "true"), false, EnvACRRevokeURL},
+		{"cluster host, inner hyphen and digits", set("http://dev-health-1.ns-2.svc.cluster.local:8080", "http://dev-health-1.ns-2.svc.cluster.local:8080/api/v1/oauth/token", "true"), true, ""},
+		{"https token keeps its query", set(httpsBase, httpsTok+"?x=1", "-"), true, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

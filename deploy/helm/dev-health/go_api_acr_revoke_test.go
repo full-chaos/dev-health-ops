@@ -122,6 +122,15 @@ func TestACRRevokeClusterHTTPNeedsTheOptInAndTheClusterHost(t *testing.T) {
 	}
 }
 
+func TestACRRevokeClusterHostTakesValidLabelsAndATokenQuery(t *testing.T) {
+	host := "http://dev-health-1.ns-2.svc.cluster.local:8080"
+	_, env := arGoAPI(t, arOn("--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url="+host,
+		"--set-string", "goApi.acrRevoke.tokenURL="+host+"/api/v1/oauth/token?x=1")...)
+	if got := arValue(env, "ACR_REVOKE_URL"); got != host {
+		t.Errorf("ACR_REVOKE_URL = %v, want %s", got, host)
+	}
+}
+
 func TestACRRevokeKeepsTheExistingExtraVolume(t *testing.T) {
 	dep, _ := arGoAPI(t, append(arOn(), "--set-json", "goApi.extraVolumes="+extraVolumesJSON, "--set-json", "goApi.extraVolumeMounts="+extraMountsJSON)...)
 	vols, _ := at(dep, "spec", "template", "spec", "volumes").([]any)
@@ -157,6 +166,17 @@ func TestACRRevokeRefusesUnusableValues(t *testing.T) {
 		{"other scheme", []string{"--set-string", "goApi.acrRevoke.url=ftp://acr.revoke-proof.example"}, "goApi.acrRevoke.url"},
 		{"opt-in with a cluster host and another scheme", []string{"--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url=ftp://acr.ns.svc.cluster.local"}, "goApi.acrRevoke.url must be https"},
 		{"https url without a host", []string{"--set-string", "goApi.acrRevoke.url=https:///internal"}, "goApi.acrRevoke.url must be https"},
+		{"url with an empty query", []string{"--set-string", "goApi.acrRevoke.url=" + arBase + "?"}, "goApi.acrRevoke.url"},
+		{"url with an empty fragment", []string{"--set-string", "goApi.acrRevoke.url=" + arBase + "#"}, "goApi.acrRevoke.url"},
+		{"token url with an empty fragment", []string{"--set-string", "goApi.acrRevoke.tokenURL=" + arToken + "#"}, "goApi.acrRevoke.tokenURL"},
+		{"url with empty user info", []string{"--set-string", "goApi.acrRevoke.url=https://@acr.revoke-proof.example"}, "goApi.acrRevoke.url"},
+		{"token url with empty user info", []string{"--set-string", "goApi.acrRevoke.tokenURL=https://@acr.revoke-proof.example/api/v1/oauth/token"}, "goApi.acrRevoke.tokenURL"},
+		{"opt-in, cluster url with an empty query", []string{"--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url=" + arCluster + "?"}, "goApi.acrRevoke.url"},
+		{"opt-in, cluster url with empty user info", []string{"--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url=http://@dev-health-acr.dev-health.svc.cluster.local:8080"}, "goApi.acrRevoke.url"},
+		{"opt-in, cluster host with an empty label", []string{"--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url=http://dev..svc.cluster.local"}, "goApi.acrRevoke.url"},
+		{"opt-in, cluster host with an underscore", []string{"--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url=http://dev_health.svc.cluster.local"}, "goApi.acrRevoke.url"},
+		{"opt-in, cluster host with a leading hyphen", []string{"--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url=http://-dev.svc.cluster.local"}, "goApi.acrRevoke.url"},
+		{"opt-in, cluster host with a trailing hyphen", []string{"--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url=http://dev-.svc.cluster.local"}, "goApi.acrRevoke.url"},
 		{"expiration below the Kubernetes minimum", []string{"--set", "goApi.acrRevoke.expirationSeconds=599"}, "goApi.acrRevoke.expirationSeconds"},
 		{"expiration above a day", []string{"--set", "goApi.acrRevoke.expirationSeconds=86401"}, "goApi.acrRevoke.expirationSeconds"},
 		{"expiration as a string", []string{"--set-string", "goApi.acrRevoke.expirationSeconds=3600"}, "goApi.acrRevoke.expirationSeconds"},

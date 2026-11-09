@@ -15,8 +15,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/legacyjwt"
 )
 
 // CHAOS-11400 (acp answers-11400-impl-1, G1 and G2): a refused compat refresh writes go-api's login_failed row
@@ -157,12 +157,12 @@ func TestCompatRefreshOfAnInvalidTokenWritesGoAPIsRefusalRow(t *testing.T) {
 // legacyRefreshToken mints a go-api refresh JWT for the user in org and seeds its public.refresh_tokens row.
 func (e *routesEnv) legacyRefreshToken(t *testing.T, ctx context.Context, user, org uuid.UUID) string {
 	t.Helper()
-	signer, err := edgetoken.NewSigner(testAccessSecret, "dev-health-ops", "dev-health-api")
+	signer, err := legacyjwt.NewSigner(testAccessSecret, "dev-health-ops", "dev-health-api")
 	if err != nil {
 		t.Fatal(err)
 	}
 	jti, family := uuid.NewString(), uuid.New()
-	token, err := signer.Refresh(edgetoken.RefreshClaims{UserID: user.String(), OrgID: org.String(), FamilyID: family.String()}, time.Now(), jti)
+	token, err := signer.Refresh(legacyjwt.RefreshClaims{UserID: user.String(), OrgID: org.String(), FamilyID: family.String()}, time.Now(), jti)
 	if err != nil {
 		t.Fatal(err)
 	}

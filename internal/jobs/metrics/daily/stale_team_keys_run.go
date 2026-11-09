@@ -160,19 +160,14 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 	// rows are the rows of the day, and it writes them newer than the rows of
 	// the partitions (see retractStaleTeamKeysOfRun, step 4).
 	workItemKeys := func(keyCtx context.Context) (runStaleKeys, error) {
-		read, triplet, err := computeWorkItemTriplet(keyCtx, conn, run, partition, scope)
+		read, views, err := computeWorkItemTriplet(keyCtx, conn, run, partition, scope)
 		if err != nil {
 			return runStaleKeys{}, err
 		}
-		keys := make([]staleKey, 0, len(triplet.MetricsDaily))
-		for _, row := range triplet.MetricsDaily {
-			for _, rowView := range workItemRowViews {
-				keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, rowView})
-			}
-		}
+		keys := workItemViewKeys(views.Org.MetricsDaily, views.Scope.MetricsDaily, metricsDailyKey)
 		return runStaleKeys{scope: read.staleKeyScope(), everyScope: wholeOrganization, proveNoItem: proveNoItem, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
-				return WriteWorkItemMetricsDaily(writeCtx, conn, run.OrganizationID, day, triplet.MetricsDaily, version)
+				return WriteWorkItemMetricsDaily(writeCtx, conn, run.OrganizationID, day, views.Org.MetricsDaily, views.Scope.MetricsDaily, version)
 			}}, nil
 	}
 	// work_item_user_metrics_daily (CHAOS-9135): the person rows of the same
@@ -181,19 +176,14 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 	// recompute that gives the person another team REPLACES the row; the row
 	// of zeros is for a person the compute no longer produces for the day.
 	userKeys := func(keyCtx context.Context) (runStaleKeys, error) {
-		read, triplet, err := computeWorkItemTriplet(keyCtx, conn, run, partition, scope)
+		read, views, err := computeWorkItemTriplet(keyCtx, conn, run, partition, scope)
 		if err != nil {
 			return runStaleKeys{}, err
 		}
-		keys := make([]staleKey, 0, len(triplet.UserMetricsDaily))
-		for _, row := range triplet.UserMetricsDaily {
-			for _, rowView := range workItemRowViews {
-				keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.UserIdentity, rowView})
-			}
-		}
+		keys := workItemViewKeys(views.Org.UserMetricsDaily, views.Scope.UserMetricsDaily, userMetricsDailyKey)
 		return runStaleKeys{scope: read.staleKeyScope(), everyScope: wholeOrganization, proveNoItem: proveNoItem, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
-				return WriteWorkItemUserMetricsDaily(writeCtx, conn, run.OrganizationID, day, triplet.UserMetricsDaily, version)
+				return WriteWorkItemUserMetricsDaily(writeCtx, conn, run.OrganizationID, day, views.Org.UserMetricsDaily, views.Scope.UserMetricsDaily, version)
 			}}, nil
 	}
 	estimateKeys := func(keyCtx context.Context) (runStaleKeys, error) {
@@ -215,15 +205,10 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		if err != nil {
 			return runStaleKeys{}, err
 		}
-		keys := make([]staleKey, 0, len(computed.rows))
-		for _, row := range computed.rows {
-			for _, rowView := range workItemRowViews {
-				keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status, rowView})
-			}
-		}
+		keys := workItemViewKeys(computed.rows, computed.scopeRows, stateDurationsDailyKey)
 		return runStaleKeys{scope: computed.read.staleKeyScope(), everyScope: wholeOrganization, proveNoItem: proveNoItem, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
-				return WriteWorkItemStateDurationsDaily(writeCtx, conn, run.OrganizationID, day, computed.rows, version)
+				return WriteWorkItemStateDurationsDaily(writeCtx, conn, run.OrganizationID, day, computed.rows, computed.scopeRows, version)
 			}}, nil
 	}
 	// ai_governance_coverage_daily: every partition computes the same rows

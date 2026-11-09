@@ -18,7 +18,7 @@ const (
 
 func provisioningEnv(set map[string]string) map[string]string {
 	env := baseEnv()
-	env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey], env[EnvValkeyURI] = testAccessSecret, testSuccessorKey, testValkeyURI
+	env[EnvRateLimitKey], env[EnvSessionSuccessorKey], env[EnvValkeyURI] = testRateKey, testSuccessorKey, testValkeyURI
 	for k, v := range set {
 		if v == "<unset>" {
 			delete(env, k)
@@ -50,7 +50,7 @@ func TestMembershipRoutesSwitch(t *testing.T) {
 		{name: "true with a blank signing key", env: merge(both, map[string]string{EnvMembershipRoutes: "true", EnvInviteTokenSecret: ""}),
 			wantErr: EnvMembershipRoutes + "=true needs " + EnvInviteTokenSecret},
 		{name: "true without the session secrets", env: merge(both, map[string]string{EnvMembershipRoutes: "true",
-			EnvAccessTokenSecret: "<unset>", EnvSessionSuccessorKey: "<unset>", EnvValkeyURI: "<unset>"}),
+			EnvRateLimitKey: "<unset>", EnvSessionSuccessorKey: "<unset>", EnvValkeyURI: "<unset>"}),
 			wantErr: EnvMembershipRoutes + " needs the session secrets"},
 		{name: "a typo is refused", env: merge(both, map[string]string{EnvMembershipRoutes: "yes"}),
 			wantErr: EnvMembershipRoutes + ` must be "true" or "false"`},
@@ -61,7 +61,7 @@ func TestMembershipRoutesSwitch(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 					t.Fatalf("Load = %v, want an error containing %q", err, c.wantErr)
 				}
-				for _, secret := range []string{testInviteSecret, testInvitePrevious, testAccessSecret} {
+				for _, secret := range []string{testInviteSecret, testInvitePrevious, testRateKey} {
 					if strings.Contains(err.Error(), secret) {
 						t.Fatalf("the error names a key value: %v", err)
 					}
@@ -100,7 +100,7 @@ func TestInviteAcceptSecretsOrder(t *testing.T) {
 	}{
 		{"two distinct keys", testInvitePrevious, []string{testInviteSecret, testInvitePrevious}},
 		{"previous equal to the signing key", testInviteSecret, []string{testInviteSecret}},
-		{"previous equal to the access key", testAccessSecret, []string{testInviteSecret, testAccessSecret}},
+		{"previous equal to the rate-limit key", testRateKey, []string{testInviteSecret, testRateKey}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg, err := Load(Spec{LookupEnv: lookupFrom(provisioningEnv(map[string]string{EnvMembershipRoutes: "true",
@@ -145,15 +145,15 @@ func TestSafeAttrsNamesTheRoutesSwitchAndNoInviteKey(t *testing.T) {
 	}
 }
 
-func TestInviteAcceptSecretsNeverHoldTheAccessSecret(t *testing.T) {
+func TestInviteAcceptSecretsNeverHoldTheRateLimitKey(t *testing.T) {
 	env := provisioningEnv(map[string]string{EnvMembershipRoutes: "true",
 		EnvInviteTokenSecret: testInviteSecret, EnvInviteTokenSecretPrevious: testInvitePrevious})
 	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.InviteAcceptSecrets(); slices.Contains(got, testAccessSecret) || len(got) != 2 {
-		t.Fatalf("accept list holds %d keys, access secret among them: %v", len(got), slices.Contains(got, testAccessSecret))
+	if got := cfg.InviteAcceptSecrets(); slices.Contains(got, testRateKey) || len(got) != 2 {
+		t.Fatalf("accept list holds %d keys, rate-limit key among them: %v", len(got), slices.Contains(got, testRateKey))
 	}
 }
 

@@ -346,8 +346,7 @@ func TestSignerCheckBurstRunsOneCheck(t *testing.T) {
 }
 
 func TestPreflightRefusesAnIssuerWithoutAMinter(t *testing.T) {
-	ed := newEdDSAIssuer(t, readableKeySigner(t), testAudience)
-	none := &Issuer{verifier: ed.verifier, now: time.Now}
+	none := &Issuer{now: time.Now}
 	if err := none.Preflight(context.Background()); !errors.Is(err, errIssue) {
 		t.Fatalf("none: %v, want errIssue", err)
 	}

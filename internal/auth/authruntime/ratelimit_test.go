@@ -266,15 +266,12 @@ func TestTheDormantMountSetBootsWithoutTheStoreSecret(t *testing.T) {
 	}
 }
 
-func TestRateLimitIsKeyedFromItsOwnKeyWhenSetAndFromTheSessionSecretWhenNot(t *testing.T) {
+// The limiter has one key, AUTH_RATE_LIMIT_KEY; a leftover HS256 key beside it is never the limiter's key.
+func TestRateLimitIsKeyedFromItsOwnKeyOnly(t *testing.T) {
 	t.Parallel()
 	rateKey := strings.Repeat("r", 40)
-	fallback := limitConfig(t, sessionEnvironment(map[string]string{}))
-	if got := rateLimitSecret(fallback); got != testAccessSecret {
-		t.Fatal("unset, the rate-limit secret is not the session secret")
-	}
-	own := limitConfig(t, sessionEnvironment(map[string]string{authconfig.EnvRateLimitKey: rateKey}))
+	own := limitConfig(t, sessionEnvironment(map[string]string{authconfig.EnvRateLimitKey: rateKey, "AUTH_JWT_SECRET_KEY": testAccessSecret}))
 	if got := rateLimitSecret(own); got != rateKey || got == testAccessSecret {
-		t.Fatal("set, the rate-limit secret is not AUTH_RATE_LIMIT_KEY alone")
+		t.Fatal("the rate-limit secret is not AUTH_RATE_LIMIT_KEY alone")
 	}
 }

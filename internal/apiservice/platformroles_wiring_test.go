@@ -14,7 +14,7 @@ import (
 // The request scope's impersonation gate reads the switch startup parsed.
 func TestTheRequestScopeGetsThePlatformRolesSwitch(t *testing.T) {
 	for _, owned := range []bool{false, true} {
-		protected, err := newProtection(apiTestConfig(), nil, owned, quietLogger())
+		protected, err := newProtection(apiTestConfig(), nil, owned, AuthProxyConfig{}, quietLogger())
 		if err != nil {
 			t.Fatal(err)
 		}

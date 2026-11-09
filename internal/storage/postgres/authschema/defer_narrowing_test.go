@@ -16,8 +16,8 @@ func TestUsersOwnedPublicGrantIsExactlyWhatTheSwitchGives(t *testing.T) {
 		{GrantRecord{Kind: "column", Object: "users", Column: "email", Privilege: "INSERT"}, true},
 		{GrantRecord{Kind: "column", Object: "organizations", Column: "slug", Privilege: "INSERT"}, true},
 		{GrantRecord{Kind: "column", Object: "memberships", Column: "role", Privilege: "INSERT"}, true},
-		{GrantRecord{Kind: "relation", Object: "password_reset_tokens", Privilege: "DELETE"}, true},
-		{GrantRecord{Kind: "column", Object: "email_verification_tokens", Column: "id", Privilege: "SELECT"}, true},
+		{GrantRecord{Kind: "relation", Object: "password_reset_tokens", Privilege: "DELETE"}, false},
+		{GrantRecord{Kind: "column", Object: "email_verification_tokens", Column: "id", Privilege: "SELECT"}, false},
 		{GrantRecord{Kind: "column", Object: "users", Column: "full_name", Privilege: "UPDATE"}, false},
 		{GrantRecord{Kind: "column", Object: "users", Column: "last_login_at", Privilege: "INSERT"}, false},
 		// CHAOS-10993: no auth build after the column omission (#5531) inserts is_superuser, so a deferred run keeps no

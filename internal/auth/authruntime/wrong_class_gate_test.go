@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/exceptionledger"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -462,8 +465,16 @@ func inValidateBody(carriers []wrongclass.Carrier) []wrongclass.Carrier {
 }
 
 // gateRequest is carrier on row. On the refresh route a body carrier rides in refresh-request.v1 (schema_version set),
-// so the body reaches the credential check and is not refused for its envelope.
+// and on the exchange route the subject_token carrier rides in the RFC 8693 form of a bootstrap subject, so the body
+// reaches the credential check and is not refused for its envelope.
 func gateRequest(row wrongclass.Row, carrier wrongclass.Carrier) *http.Request {
+	if carrier.BodyField == "subject_token" && row.Route == workloadexchange.Pattern {
+		form := url.Values{"grant_type": {workloadexchange.GrantTypeTokenExchange}, "subject_token": {carrier.Value},
+			"subject_token_type": {workloadexchange.TokenTypeWorkloadBootstrap}, "audience": {"auth-service"}}
+		request := httptest.NewRequest(row.Method, row.Path(), strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		return request
+	}
 	if carrier.BodyField == "" || row.Route != authapi.PatternRefresh {
 		return carrier.Request(row.Method, row.Path())
 	}
@@ -479,7 +490,7 @@ func gateRequest(row wrongclass.Row, carrier wrongclass.Carrier) *http.Request {
 // causes no store dial and no key-set read that the garbage credential does not cause, and none at all on a protected
 // row; a protected row refuses it with a 4xx. An accepted class (the controls) must reach the store and answer other
 // than a garbage credential: the rig tells an accepted class from a refused one.
-func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format string, args ...any)) (wrongclass.Census, map[string]*listenerCensus, []gateFinding) {
+func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format string, args ...any)) (wrongclass.Census, map[string]*listenerCensus, []gateFinding, map[string]bool) {
 	rows, err := wrongclass.LoadRows(authv1.AuthServiceEndpointProfiles)
 	if err != nil {
 		t.Fatal(err)
@@ -511,6 +522,7 @@ func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format strin
 		{Class: "user_access_token", Header: wrongclass.Authorization, Value: "Bearer " + rig.userToken(t, authapi.AccessTokenAudience)},
 		{Class: "user_access_token", Header: wrongclass.Authorization, Value: "Bearer " + rig.userToken(t, contracts.PlatformAPIAudience)},
 		{Class: "workload_token", Header: wrongclass.Authorization, Value: "Bearer " + rig.workloadToken(t, contracts.WorkloadTokenTyp)},
+		{Class: workload.BootstrapClass, BodyField: "subject_token", Value: workload.BootstrapPrefix + wrongclass.Filler},
 	}
 	for _, class := range classes {
 		if class.ID != "refresh_credential" {
@@ -528,6 +540,7 @@ func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format strin
 	}
 	accepts, storeAccepts := map[string]int{}, 0
 	var findings []gateFinding
+	unmeasured := map[string]bool{}
 	for _, row := range rows {
 		for _, listener := range gateListeners(row) {
 			if rig.handlers[listener] == nil {
@@ -603,29 +616,54 @@ func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format strin
 				if got.dials > 0 {
 					storeAccepts++
 				}
-				// A workload row reads its body before the store, so a body-less accepted workload token is refused there
-				// for its body (reason malformed), not for its credential (garbage: 401 invalid_credentials): its answer
-				// alone tells accept from refuse.
-				reached := got.dials > 0 || control.Class == "workload_token"
-				if reached && got.answer != want.answer {
+				// An accepted user or refresh credential reaches the store and answers other than garbage. A workload row
+				// reads its body before the store, so a body-less accepted workload token is refused there for its body
+				// (reason malformed), not for its credential (garbage: 401 invalid_credentials): its answer alone tells.
+				// The exchange answers one invalid_grant to every refusal and to a store it cannot read, so a bootstrap
+				// credential is told by its registry read alone (garbage is refused for its shape before any read).
+				accepted := got.dials > 0 && got.answer != want.answer
+				switch control.Class {
+				case "workload_token":
+					accepted = got.answer != want.answer
+				case workload.BootstrapClass:
+					accepted = got.dials > 0 && want.dials == 0
+				}
+				if accepted {
 					controlled[control.Class] = true
 				}
 				seen[control.Class] += fmt.Sprintf(" [%s, %d dials; garbage %s]", got.answer, got.dials, want.answer)
 			}
+			controlCells := 0
 			for _, class := range row.Accepted {
 				if !slices.ContainsFunc(controls, func(c wrongclass.Carrier) bool { return c.Class == class }) {
 					continue
 				}
+				controlCells++
 				census.AcceptCells++
 				counts.accept++
 				accepts[class]++
 				if !controlled[class] {
-					errorf("%s: accepted class %s did not answer other than a garbage credential, after a store read (user, refresh):%s: the rig cannot tell accept from refuse", cellID, class, seen[class])
+					errorf("%s: accepted class %s did not show the accept its control rule wants (user, refresh: a store read and another answer than garbage; workload: another answer; bootstrap: a registry read garbage does not make):%s: the rig cannot tell accept from refuse", cellID, class, seen[class])
 				}
+			}
+			if len(row.Accepted) > 0 && controlCells == 0 {
+				unmeasured[row.Method+" "+row.Route] = true
 			}
 		}
 	}
-	for _, class := range []string{"user_access_token", "workload_token", "refresh_credential"} {
+	// A row whose accepted classes have no control is not measured: the rig never showed it can accept there. The
+	// list is pinned, so a row joins it, or leaves it, only with this file's change.
+	for profile := range unmeasured {
+		if !slices.Contains(notMeasuredRows, profile) {
+			errorf("%s: no accepted class of the row has an accept control, and the row is not in notMeasuredRows: the row is not measured", profile)
+		}
+	}
+	for _, profile := range notMeasuredRows {
+		if !unmeasured[profile] {
+			errorf("%s is in notMeasuredRows, but an accepted class of the row has an accept control (or no such row): remove it from the list", profile)
+		}
+	}
+	for _, class := range []string{"user_access_token", "workload_token", "refresh_credential", workload.BootstrapClass} {
 		if accepts[class] == 0 {
 			errorf("accept controls: no %s cell: the class is not measured", class)
 		}
@@ -639,7 +677,18 @@ func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format strin
 	if census.WrongCells == 0 {
 		errorf("no wrong-class cell ran")
 	}
-	return census, perListener, findings
+	return census, perListener, findings, unmeasured
+}
+
+// notMeasuredRows are the rows whose accepted classes have no accept control, so the rig never shows it can accept
+// there; their wrong-class cells still run. Each class needs what a test rig cannot make: social_oauth_exchange a
+// provider's own access token, sso_oidc_exchange an authorization code from the provider with the signed state of a
+// configured provider, sso_saml_exchange a SAML response signed by a configured identity provider.
+var notMeasuredRows = []string{
+	"POST /api/v1/auth/social-login",
+	"POST /api/v1/auth/oidc/{provider_id}/callback",
+	"POST /api/v1/auth/oauth/{provider_id}/callback",
+	"POST /api/v1/auth/saml/{provider_id}/acs",
 }
 
 // The two rules a ledger row can excuse on the rows it names; G1 and the equal-to-garbage G2 are never excused.
@@ -743,15 +792,16 @@ var authGateRun struct {
 	perListener map[string]*listenerCensus
 	hard        []string
 	findings    []gateFinding
+	unmeasured  map[string]bool
 }
 
 func runAuthGateOnce(t *testing.T) {
 	t.Helper()
 	authGateRun.once.Do(func() {
-		census, perListener, findings := runAuthServiceGate(t, newAuthGateRig(t), func(format string, args ...any) {
+		census, perListener, findings, unmeasured := runAuthServiceGate(t, newAuthGateRig(t), func(format string, args ...any) {
 			authGateRun.hard = append(authGateRun.hard, fmt.Sprintf(format, args...))
 		})
-		authGateRun.census, authGateRun.perListener, authGateRun.findings, authGateRun.done = census, perListener, findings, true
+		authGateRun.census, authGateRun.perListener, authGateRun.findings, authGateRun.unmeasured, authGateRun.done = census, perListener, findings, unmeasured, true
 	})
 	if !authGateRun.done {
 		t.Fatal("the gate run did not finish")
@@ -766,6 +816,12 @@ func TestWrongClassGateAuthService(t *testing.T) {
 	judgeFindings(t, authGateRun.findings, gateDivergences(t), t.Errorf)
 	census, perListener := authGateRun.census, authGateRun.perListener
 	t.Log(census.Line())
+	unmeasured := make([]string, 0, len(authGateRun.unmeasured))
+	for profile := range authGateRun.unmeasured {
+		unmeasured = append(unmeasured, profile)
+	}
+	sort.Strings(unmeasured)
+	t.Logf("WRONG_CLASS_GATE_ACCEPT_COVERAGE service=auth-service rows=%d not_measured: %d (%s)", census.Rows, len(unmeasured), strings.Join(unmeasured, ", "))
 	listeners := make([]string, 0, len(perListener))
 	for listener := range perListener {
 		listeners = append(listeners, listener)

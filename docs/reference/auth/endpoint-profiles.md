@@ -258,7 +258,10 @@ protected row. auth-service builds no shadow:
 `TestWrongClassGateAuthServiceHasNoShadow` fails when a package of the build
 other than `internal/api/policy` uses a policy shadow. Its ledger rows say
 which rule they excuse (the 4xx rule, or the 4xx rule and the protected-row
-read rule) on the rows that they name.
+read rule) on the rows that they name. A row whose accepted classes have no
+accept control (a provider token, an OIDC code, a SAML response) is named in
+the gate's pinned not-measured list; a row that joins or leaves it fails the
+gate until the list changes.
 
 ## `delegated_bearer`
 

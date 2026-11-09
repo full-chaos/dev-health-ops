@@ -6528,7 +6528,7 @@
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
-        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:483 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
+        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:488 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
         "credential_binding: the acr-api workload token is not bound to an organization (it carries no org claim); its holder may name any organization; an organization-bound claim is not in this leaf"
       ],
@@ -6620,7 +6620,7 @@
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
-        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:483 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
+        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:488 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
         "credential_binding: the acr-api workload token is not bound to an organization (it carries no org claim); its holder may name any organization; an organization-bound claim is not in this leaf"
       ],
@@ -6667,7 +6667,7 @@
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
-        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:483 names them on the main listener only); the read reports the user's active impersonation in its answer (impersonating) and applies no override; enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
+        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:488 names them on the main listener only); the read reports the user's active impersonation in its answer (impersonating) and applies no override; enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
         "credential_binding: the acr-api workload token is not bound to an organization (it carries no org claim); its holder may name any organization and user; an organization-bound claim is not in this leaf"
       ],

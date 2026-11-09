@@ -28,6 +28,10 @@ const (
 	// issueWorkloadAudience is the audience the issue route accepts: the one
 	// workload audience the registry gives the go-api workload.
 	issueWorkloadAudience = "auth-service"
+
+	// maxIssueBearerBytes bounds the bearer before any header is decoded: the
+	// workload token bound, the one class these routes take.
+	maxIssueBearerBytes = contracts.WorkloadTokenMaxBytes
 )
 
 // issueRefusedPrefixes are the credential classes the issue route never takes:
@@ -48,7 +52,7 @@ const (
 // bearer's text alone: no store, no key set, no signature. A refused class
 // carries the reason for the log line.
 func classifyIssueBearer(bearer string) (issueClass, string) {
-	if len(bearer) > contracts.WorkloadTokenMaxBytes {
+	if len(bearer) > maxIssueBearerBytes {
 		return issueClassRefused, "oversized"
 	}
 	if strings.HasPrefix(bearer, compatPrefix) {

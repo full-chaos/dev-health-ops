@@ -218,6 +218,10 @@ type Deps struct {
 	// auth-service; nil (AUTH_PROXY_ORG_PROVISIONING off) leaves go-api the
 	// writer.
 	OrgProvisioner authprovision.Provisioner
+	// OrgDeletionAuth is AUTH_PROXY_URL set: the organization delete asks auth-service to deprovision with
+	// AUTH_PROXY_ORG_PROVISIONING off too, through OrgDeprovisioner (nil when the workload inputs are missing or invalid).
+	OrgDeletionAuth  bool
+	OrgDeprovisioner admin.OrgDeprovisioner
 	// ServiceAccountKeys sends the admin service account key verbs to auth-service; nil
 	// (AUTH_PROXY_SERVICE_ACCOUNT_KEYS off) answers the key routes 503 config_missing.
 	ServiceAccountKeys authprovision.ServiceAccountKeys

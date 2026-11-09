@@ -39,8 +39,8 @@ var (
 	ErrStore      = errors.New("orgdeprovision: store unavailable")
 )
 
-// errSessionsBusy reports that a session or go-api refresh token row of the
-// organization is locked by another writer (session.ErrBusy): the commit is
+// errSessionsBusy reports that a session row of the organization is locked by
+// another writer (session.ErrBusy): the commit is
 // rolled back, which releases the rows that writer may wait for, and planned again.
 var errSessionsBusy = errors.New("orgdeprovision: a session of the organization is locked by another writer")
 
@@ -141,8 +141,8 @@ type plan struct {
 // its rows name FOR KEY SHARE (step 1: members go-api wrote with no auth row,
 // inviters of go-api-only invites, the actor of its audit row), the organization row FOR UPDATE
 // (step 3, exclusive), Authorize, the pending invites (step 4), every
-// membership row (steps 5 and 6), the organization's sessions and go-api
-// refresh tokens NOWAIT (step 6a, session.Store.EndOrganizationInTx), its grants
+// membership row (steps 5 and 6), the organization's sessions NOWAIT
+// (step 6a, session.Store.EndOrganizationInTx), its grants
 // (step 6d), its live service-account key rows FOR UPDATE (step 6e; their
 // accounts are among the step-1 principal rows), the suspension, then the
 // revisions inside audit.Commit. It takes no public.users
@@ -290,7 +290,7 @@ func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 		if ended != (session.Ended{}) {
 			s.sessions.RecordEnded(ctx, ended)
 			s.logger.InfoContext(ctx, "organization deprovisioned; its sessions ended", "organization_id", in.OrgID.String(),
-				"sessions", ended.Sessions, "refresh_tokens", ended.RefreshTokens)
+				"sessions", ended.Sessions)
 		}
 		return &Result{RemovedMemberships: p.members.Len(), RevokedInvites: p.invites.Len(), Suspended: p.active}, nil
 	case errors.Is(err, audit.ErrNoStateChange):

@@ -135,3 +135,58 @@ func TestServiceAccountKeyRowsAnswerAsLegacyWithTheAdminCellOn(t *testing.T) {
 		}
 	}
 }
+
+const (
+	unavailableBody     = `{"detail":"Authorization service temporarily unavailable"}`
+	noDecisionPointBody = `{"detail":{"message":"Authorization service temporarily unavailable","reason_code":"authz_enforce_no_decision_point"}}`
+)
+
+// serviceAccountKeyFaultAnswer is a caller class's answer on a key row with the admin cell on and no verdict to be had:
+// "unconfigured" (no decision point client) or "dead" (the decision point answers 500). The row's route question is
+// asked before the legacy checks, so every judged caller is refused fail-closed (no fallback to the legacy guard);
+// with a dead decision point a live impersonation row is refused before the question. A token the authenticator
+// refuses is the 401 as before.
+func serviceAccountKeyFaultAnswer(fault, caller string) (int, string) {
+	switch {
+	case serviceAccountKeyLegacyClass[caller] == "401":
+		return http.StatusUnauthorized, ""
+	case fault == "unconfigured":
+		return http.StatusServiceUnavailable, noDecisionPointBody
+	case caller == "impersonating platform admin":
+		return http.StatusForbidden, impersonationBody
+	}
+	return http.StatusServiceUnavailable, unavailableBody
+}
+
+// Fault cells (admin cell on, no verdict): each caller class on each key row gets serviceAccountKeyFaultAnswer; a
+// plain 503 carries Retry-After. Each cell is logged as "FAULT fault|route|caller|status|body" with the cell-off answer
+// beside it.
+func TestServiceAccountKeyRowsFaultCellsWithTheAdminCellOn(t *testing.T) {
+	off, offMinter := adminConfigServerWith(t, nil, withUsersCellCallers)
+	offCallers := usersCallers(t, offMinter)
+	dead := newCellPDP(t)
+	for _, fault := range []string{"unconfigured", "dead"} {
+		enforcer := func(t *testing.T) *policy.Enforcer { return newCellEnforcer(t, nil, "admin", true) }
+		if fault == "dead" {
+			enforcer = func(t *testing.T) *policy.Enforcer { return newCellEnforcer(t, dead, "admin", false) }
+		}
+		h, minter := adminConfigServerWith(t, enforcer, withUsersCellCallers)
+		callers := usersCallers(t, minter)
+		for _, key := range serviceAccountKeyKeys {
+			for i, caller := range callers {
+				dead.reset("fail")
+				got := usersCellDo(h, key, caller.token)
+				was := usersCellDo(off, key, offCallers[i].token)
+				t.Logf("FAULT %s|%s|%s|on %d %s|off %d %s", fault, key, caller.name, got.status, strings.TrimSpace(got.body),
+					was.status, strings.TrimSpace(was.body))
+				status, body := serviceAccountKeyFaultAnswer(fault, caller.name)
+				if got.status != status || (body != "" && got.body != body) {
+					t.Errorf("%s %s / %s: %d %q, want %d %q", fault, key, caller.name, got.status, got.body, status, body)
+				}
+				if got.body == unavailableBody && got.header.Get("Retry-After") != "5" {
+					t.Errorf("%s %s / %s: Retry-After %q, want 5", fault, key, caller.name, got.header.Get("Retry-After"))
+				}
+			}
+		}
+	}
+}

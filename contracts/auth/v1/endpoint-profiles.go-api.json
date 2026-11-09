@@ -5366,9 +5366,7 @@
       }
     },
     {
-      "accepted_credential_classes": [
-        "email_verification_token"
-      ],
+      "accepted_credential_classes": [],
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
@@ -12560,9 +12558,7 @@
       "tenant_requirement": "none"
     },
     {
-      "accepted_credential_classes": [
-        "password_reset_token"
-      ],
+      "accepted_credential_classes": [],
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,

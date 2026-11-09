@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -694,28 +696,92 @@ func TestRunStartAcceptsTheFormsTheCallersEmit(t *testing.T) {
 	}
 }
 
-func TestRunnerCallsTheGoGateWithTheDSNInTheEnvironment(t *testing.T) {
+// The runner's readback path is executed, not text-matched: the real assert_readback function is cut out of the
+// script (the script runs docker and a daemon at top level, so it cannot be sourced whole) and run under bash against
+// a fake cigate that records its argv and whether CLICKHOUSE_URI reached it, without ever printing the DSN.
+const fakeDSN = "clickhouse://proofuser:s3cr3t-sentinel@ch.invalid:9000/db"
+
+func runReadback(t *testing.T, gateExit int) (rc int, argv string, envMatched bool) {
+	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "ci", "run_metrics_executed_proof.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(raw)
-	if !strings.Contains(text, "metrics-proof") || strings.Contains(text, "assert_metrics_executed_proof.py") {
-		t.Fatal("run_metrics_executed_proof.sh must call `cigate metrics-proof`, not the deleted script")
+	fn := regexp.MustCompile(`(?s)\nassert_readback\(\) \{.*?\n\}\n`).FindString(string(raw))
+	if fn == "" {
+		t.Fatal("assert_readback function not found in run_metrics_executed_proof.sh")
 	}
-	if strings.Contains(text, "python3") {
-		t.Fatal("run_metrics_executed_proof.sh must not call python3")
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	re := regexp.MustCompile(`(?s)assert_readback\(\) \{.*?\n\}`)
-	body := re.FindString(text)
-	if body == "" {
-		t.Fatal("assert_readback function not found")
+	argvFile := filepath.Join(dir, "argv")
+	envFile := filepath.Join(dir, "env")
+	stub := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > \"$FAKE_ARGV_FILE\"\n" +
+		"if [ \"${CLICKHOUSE_URI:-}\" = \"$FAKE_WANT_DSN\" ]; then echo match > \"$FAKE_ENV_FILE\"; else echo nomatch > \"$FAKE_ENV_FILE\"; fi\n" +
+		"exit \"$FAKE_EXIT\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "cigate"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(body, `CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"`) {
+	fnFile := filepath.Join(dir, "fn.sh")
+	if err := os.WriteFile(fnFile, []byte(fn), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", `source "$FN_FILE"; assert_readback`)
+	cmd.Env = []string{
+		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"FN_FILE=" + fnFile,
+		"BIN_DIR=" + binDir,
+		"CLICKHOUSE_URI_NATIVE=" + fakeDSN,
+		"ORG_ID=" + orgA,
+		"RUN_START=2026-09-01T00:00:00Z",
+		"ASSERT_SUMMARY_JSON=" + filepath.Join(dir, "summary.json"),
+		"FAKE_ARGV_FILE=" + argvFile,
+		"FAKE_ENV_FILE=" + envFile,
+		"FAKE_WANT_DSN=" + fakeDSN,
+		"FAKE_EXIT=" + strconv.Itoa(gateExit),
+	}
+	if _, err := cmd.CombinedOutput(); err != nil {
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) {
+			t.Fatalf("bash did not run: %v", err)
+		}
+		rc = ee.ExitCode()
+	}
+	a, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatalf("the fake cigate was never called: %v", err)
+	}
+	e, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rc, string(a), strings.TrimSpace(string(e)) == "match"
+}
+
+func TestRunnerCallsTheGoGateWithTheDSNInTheEnvironment(t *testing.T) {
+	rc, argv, envMatched := runReadback(t, 0)
+	if rc != 0 {
+		t.Fatalf("gate exit 0 must give runner exit 0, got %d", rc)
+	}
+	if !strings.HasPrefix(argv, "metrics-proof\n") {
+		t.Fatalf("the runner must call `cigate metrics-proof`, argv=%q", argv)
+	}
+	if !envMatched {
 		t.Fatal("the DSN must reach the gate by the CLICKHOUSE_URI environment variable (native DSN)")
 	}
-	if strings.Contains(body, "--clickhouse-uri") {
+	if strings.Contains(argv, "s3cr3t-sentinel") || strings.Contains(argv, "ch.invalid") || strings.Contains(argv, "--clickhouse-uri") {
 		t.Fatal("the DSN can hold a password: never pass it as an argument")
+	}
+}
+
+func TestRunnerExitFollowsTheGateExit(t *testing.T) {
+	for _, code := range []int{1, 2, 7} {
+		if rc, _, _ := runReadback(t, code); rc != code {
+			t.Errorf("gate exit %d must give runner exit %d, got %d", code, code, rc)
+		}
 	}
 }
 

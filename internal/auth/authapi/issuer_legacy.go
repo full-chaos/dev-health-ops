@@ -2,11 +2,9 @@ package authapi
 
 import (
 	"errors"
-	"sync/atomic"
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -21,7 +19,7 @@ var errLegacyKeyAbsent = errors.New("authapi: no legacy key to verify a go-api r
 
 // VerifyLegacyRefresh checks token as go-api's refresh route did
 // (validate_token(token, "refresh"), same key, issuer and audience as the
-// access token) and reads its sub, org_id and jti. Only logout reads it.
+// access token) and reads its sub, org_id and jti.
 func (i *Issuer) VerifyLegacyRefresh(token string) (session.LegacyRefresh, error) {
 	if i.verifier == nil {
 		return session.LegacyRefresh{}, errLegacyKeyAbsent
@@ -55,9 +53,3 @@ func (i *Issuer) VerifyLegacyRefresh(token string) (session.LegacyRefresh, error
 	}
 	return out, nil
 }
-
-// legacyLogoutAccepted counts each HS256 refresh token the compat logout route verifies; nil counts nothing.
-var legacyLogoutAccepted atomic.Pointer[accessverify.LogoutCounter]
-
-// SetLogoutAccepted sets the counter the compat logout route counts verified HS256 refresh tokens with.
-func SetLogoutAccepted(counter *accessverify.LogoutCounter) { legacyLogoutAccepted.Store(counter) }

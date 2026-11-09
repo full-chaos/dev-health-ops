@@ -39,7 +39,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -83,19 +82,16 @@ func investmentSunburstSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwit
 }
 
 // loadInvestmentRouteConfig reads this route family's own dependency set
-// -- ClickHouse plus the envelope verifier trio. Deliberately NOT
+// -- ClickHouse only; the envelope key is optional. Deliberately NOT
 // loadQueryRouteConfig, same reasoning as quadrant_route.go's own
 // loadQuadrantRouteConfig doc comment: none of these three routes touch
 // registry Postgres.
-func loadInvestmentRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadInvestmentRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 // buildInvestmentRoute constructs the GET+POST /api/v1/investment
@@ -105,12 +101,12 @@ func loadInvestmentRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issu
 // build/start" contract every other optionally-configured route in this
 // binary follows.
 func buildInvestmentRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadInvestmentRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadInvestmentRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -173,12 +169,12 @@ func buildInvestmentRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler h
 // one-client-per-route-file convention every other route in this binary
 // follows (quadrant_route.go, explain_route.go, drilldown_prs_route.go).
 func buildInvestmentSunburstRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadInvestmentRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadInvestmentRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, err
 	}

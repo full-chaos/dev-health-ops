@@ -202,7 +202,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	// The /api/v1/auth/* proxy to auth-service (CHAOS-10231): each flag off
 	// keeps go-api's own handler; on, only the innermost handler forwards,
 	// behind go-api's guard, validator and rate limiter.
-	proxy := newAuthProxy(deps.AuthProxy, logger)
+	proxy := newAuthProxy(deps.AuthProxy, logger).withImpersonatingCallerRefusal(deps.Guard)
 	routes = append(routes, session.Routes(session.Deps{
 		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier,
 		// The api's own ClickHouse login: organization activity.
@@ -282,6 +282,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgSuspender:       deps.OrgSuspender,
 			OrgState:           deps.OrgState,
 			Delegator:          deps.Delegator,
+			ServiceAccountKeys: deps.ServiceAccountKeys,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -408,6 +409,7 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
 		}
 	}
+	authProxy.WarnInvalidImpersonation(ctx, logger)
 	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_acr_project_scope", "api_acr_project_scope_config_invalid", err)
@@ -457,9 +459,14 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
+	deps.ServiceAccountKeys, err = serviceAccountKeys(authProxy, provisioningCred)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_service_account_keys", "api_service_account_keys_config_invalid", err)
+	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {
-		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, logger)
+		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, authProxy, logger)
 		if err != nil {
 			closeComponents(depComponents)
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
@@ -699,7 +706,7 @@ type protection struct {
 // the endpoint-profile row only (buildAccessVerify); JWT_SECRET_KEY keys the
 // local session signer and its refresh-token verifier, so with a database it
 // is required, and a missing or short key stops startup.
-func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, logger *slog.Logger) (protection, error) {
+func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, proxy AuthProxyConfig, logger *slog.Logger) (protection, error) {
 	if !cfg.APIJWTSecret.Configured() {
 		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
 	}
@@ -726,6 +733,10 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	}
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
+	// With impersonation through auth-service, the delegated bearer is the
+	// impersonation; auth-service still writes go-api's session row, so the
+	// admin's own bearer beside it is refused but on status and stop.
+	scope.RefuseLegacyImpersonation(proxy.ImpersonationOn())
 	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger), authSchema: authSchema,
 		verifier: verifier}, nil
 }

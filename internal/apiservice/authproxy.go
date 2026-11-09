@@ -29,6 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
@@ -64,6 +65,11 @@ const EnvAuthProxyOrgProvisioning = "AUTH_PROXY_ORG_PROVISIONING"
 // default. It needs AUTH_PROXY_SESSIONS: the base session of a delegated session is an auth-service session.
 const EnvAuthProxyImpersonation = "AUTH_PROXY_IMPERSONATION"
 
+// EnvAuthProxyServiceAccountKeys is the switch of the admin service account key routes (CHAOS-9262): on, go-api
+// sends issue, rotate, revoke and list to auth-service's key routes with its workload token; off, the routes answer
+// 503 config_missing. It is no aggregate and is off by default.
+const EnvAuthProxyServiceAccountKeys = admin.EnvServiceAccountKeys
+
 // AuthProxyFlagEnv is the routing flag of an aggregate, AUTH_PROXY_<NAME>.
 func AuthProxyFlagEnv(a AuthAggregate) string { return "AUTH_PROXY_" + strings.ToUpper(string(a)) }
 
@@ -85,6 +91,11 @@ type AuthProxyConfig struct {
 	OrgProvisioning bool
 	// Impersonation is AUTH_PROXY_IMPERSONATION.
 	Impersonation bool
+	// impersonationInvalidLength is the length of an AUTH_PROXY_IMPERSONATION value strconv.ParseBool does not read
+	// (the switch is then off); 0 when the value is valid or unset.
+	impersonationInvalidLength int
+	// ServiceAccountKeys is AUTH_PROXY_SERVICE_ACCOUNT_KEYS.
+	ServiceAccountKeys bool
 	// ClientAddrKey is AUTH_CLIENT_ADDR_SIGNING_KEY: with it every forward and every session issue carries a proof of
 	// the X-Forwarded-For value (internal/auth/clientaddr, CHAOS-11645). nil sends no proof.
 	ClientAddrKey *clientaddr.ProofKey
@@ -99,6 +110,21 @@ func (c AuthProxyConfig) OrgProvisioningOn() bool { return c.Upstream != nil && 
 
 // ImpersonationOn reports whether go-api starts and ends the admin impersonation session through auth-service.
 func (c AuthProxyConfig) ImpersonationOn() bool { return c.Upstream != nil && c.Impersonation }
+
+// WarnInvalidImpersonation logs one WARN when AUTH_PROXY_IMPERSONATION held a value strconv.ParseBool does not read:
+// the switch is off and go-api starts (D6465). The line names the variable and the value's length, never the value.
+func (c AuthProxyConfig) WarnInvalidImpersonation(ctx context.Context, logger *slog.Logger) {
+	if c.impersonationInvalidLength == 0 {
+		return
+	}
+	logger.WarnContext(ctx, "AUTH_PROXY_IMPERSONATION is not a boolean; the impersonation switch is off",
+		slog.String("env", EnvAuthProxyImpersonation), slog.Int("value_length", c.impersonationInvalidLength))
+}
+
+// ServiceAccountKeysOn reports whether the admin service account key routes call auth-service.
+func (c AuthProxyConfig) ServiceAccountKeysOn() bool {
+	return c.Upstream != nil && c.ServiceAccountKeys
+}
 
 // ParseAuthProxyConfig reads AUTH_PROXY_URL and the AUTH_PROXY_<aggregate>
 // flags. Every flag defaults off. It refuses a flag without a URL, a URL
@@ -136,11 +162,19 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 		anyOn = anyOn || on
 	}
 	if raw, ok := lookup(EnvAuthProxyImpersonation); ok && strings.TrimSpace(raw) != "" {
+		if on, err := strconv.ParseBool(strings.TrimSpace(raw)); err != nil {
+			cfg.impersonationInvalidLength = len(raw)
+		} else {
+			cfg.Impersonation = on
+			anyOn = anyOn || on
+		}
+	}
+	if raw, ok := lookup(EnvAuthProxyServiceAccountKeys); ok && strings.TrimSpace(raw) != "" {
 		on, err := strconv.ParseBool(strings.TrimSpace(raw))
 		if err != nil {
-			return AuthProxyConfig{}, fmt.Errorf("%s must be true or false", EnvAuthProxyImpersonation)
+			return AuthProxyConfig{}, fmt.Errorf("%s must be true or false", EnvAuthProxyServiceAccountKeys)
 		}
-		cfg.Impersonation = on
+		cfg.ServiceAccountKeys = on
 		anyOn = anyOn || on
 	}
 	raw, _ := lookup(EnvAuthProxyURL)
@@ -381,6 +415,16 @@ type authProxy struct {
 	cfg       AuthProxyConfig
 	logger    *slog.Logger
 	transport http.RoundTripper
+	// refuseImpersonating, when set, fronts the owner-authenticated routes, which skip the scope layers.
+	refuseImpersonating func(http.Handler) http.Handler
+}
+
+// withImpersonatingCallerRefusal makes the owner-authenticated routes refuse an admin bearer with a live go-api impersonation row.
+func (p *authProxy) withImpersonatingCallerRefusal(guard *policy.Guard) *authProxy {
+	if guard != nil {
+		p.refuseImpersonating = guard.RefuseImpersonatingCaller
+	}
+	return p
 }
 
 func newAuthProxy(cfg AuthProxyConfig, logger *slog.Logger) *authProxy {
@@ -508,7 +552,11 @@ func (p *authProxy) wrap(routes []httpapi.Route) []httpapi.Route {
 		}
 		if owner, owned := ownerAuthenticatedRoutes[key]; owned && p.cfg.Enabled(owner) {
 			// go-api's guard, validator and limiter are dropped: the forward is the whole route.
-			routes[index].Handler = p.sessionRoute(aggregate, p.inner(routes[index].Pattern, nil))
+			forward := p.inner(routes[index].Pattern, nil)
+			if p.refuseImpersonating != nil && key == "POST /api/v1/auth/switch-org" {
+				forward = p.refuseImpersonating(forward)
+			}
+			routes[index].Handler = p.sessionRoute(aggregate, forward)
 			continue
 		}
 		routes[index].Handler = p.sessionRoute(aggregate, routes[index].Handler)
@@ -736,6 +784,20 @@ func dropHop(header http.Header) {
 	for _, name := range hopHeaders {
 		header.Del(name)
 	}
+}
+
+// serviceAccountKeys is the client of auth-service's service account key routes when AUTH_PROXY_SERVICE_ACCOUNT_KEYS
+// is on, built from the workload token of cred; nil when off, so the admin key routes answer 503 config_missing. On
+// without a usable credential is a start-up error.
+func serviceAccountKeys(cfg AuthProxyConfig, cred provisioningCredential) (authprovision.ServiceAccountKeys, error) {
+	if !cfg.ServiceAccountKeysOn() {
+		return nil, nil
+	}
+	core, err := authprovision.NewWorkloadCore(cfg.Upstream, cred.workload, cfg.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyServiceAccountKeys, err)
+	}
+	return authprovision.NewKeyClient(core), nil
 }
 
 // orgProvisioner is the client of auth-service's provisioning routes when

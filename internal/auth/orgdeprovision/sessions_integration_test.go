@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
@@ -16,10 +15,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
-	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 func (e *env) open(t *testing.T, ctx context.Context, principal uuid.UUID, orgID *uuid.UUID) uuid.UUID {
@@ -142,12 +139,9 @@ func (e *env) wantEnded(t *testing.T, ctx context.Context, c orgCredentials) {
 			t.Errorf("the session of the %s did not stay live", name)
 		}
 	}
-	for name, id := range map[string]uuid.UUID{"member": c.tokenInOrg, "ex-member": c.tokenExMember} {
-		if !e.tokenRevoked(t, ctx, id) {
-			t.Errorf("the %s's go-api refresh token of the organization is not revoked", name)
-		}
-	}
-	for name, id := range map[string]uuid.UUID{"other organization": c.tokenOtherOrg, "no organization": c.tokenNoOrgs} {
+	// go-api's refresh tokens are go-api's own: auth-service holds no privilege on them.
+	for name, id := range map[string]uuid.UUID{"member": c.tokenInOrg, "ex-member": c.tokenExMember,
+		"other organization": c.tokenOtherOrg, "no organization": c.tokenNoOrgs} {
 		if e.tokenRevoked(t, ctx, id) {
 			t.Errorf("the go-api refresh token of the %s was revoked", name)
 		}
@@ -231,8 +225,7 @@ func TestADeprovisionThatFindsACredentialLockedGivesUpWithNothingWritten(t *test
 		lock string
 		row  func(orgCredentials) uuid.UUID
 	}{
-		"a session":              {holdSession, func(c orgCredentials) uuid.UUID { return c.exMemberSession }},
-		"a go-api refresh token": {holdToken, func(c orgCredentials) uuid.UUID { return c.tokenInOrg }},
+		"a session": {holdSession, func(c orgCredentials) uuid.UUID { return c.exMemberSession }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := getEnv(t)
@@ -286,79 +279,19 @@ func TestADeprovisionRetriesARowLockedForAMoment(t *testing.T) {
 	e.wantEnded(t, ctx, c)
 }
 
-// waiters counts the backends of this database that wait on a lock.
-func (e *env) waiters(t *testing.T, ctx context.Context) int {
-	t.Helper()
-	return e.count(t, ctx, `SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
-WHERE NOT l.granted AND a.datname = current_database()`)
-}
-
-// The cycle NOWAIT exists for, on the real statements: a legacy exchange holds its go-api refresh token and waits for a
-// key-share lock on the organization row (its new session's foreign key), which the verb holds FOR UPDATE. The verb
-// never waits for the token: it rolls back without a deadlock, the exchange completes, and the next attempt ends the
-// session the exchange made.
-func TestAVerbHoldingTheOrganizationRowNeverWaitsOnALegacyExchange(t *testing.T) {
-	verbs := map[string]func(ctx context.Context, e *env, orgID uuid.UUID, authorize func(context.Context, audit.TxOps, uuid.UUID) error) error{
-		"deprovision": func(ctx context.Context, e *env, orgID uuid.UUID, authorize func(context.Context, audit.TxOps, uuid.UUID) error) error {
-			_, err := e.service.Deprovision(ctx, Input{OrgID: orgID, Authorize: authorize})
-			return err
-		},
-		"suspend": func(ctx context.Context, e *env, orgID uuid.UUID, authorize func(context.Context, audit.TxOps, uuid.UUID) error) error {
-			_, err := e.orgs.SuspendAuthorized(ctx, orgID, nil, org.Actor{}, authorize)
-			return err
-		},
+// A go-api refresh token row another writer holds does not stop a deprovision: the verb never reads go-api's
+// refresh tokens.
+func TestADeprovisionIgnoresAGoAPIRefreshTokenAnotherWriterHolds(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	c := e.credentials(t, ctx)
+	release := e.hold(t, ctx, holdToken, c.tokenInOrg)
+	if _, err := e.service.Deprovision(ctx, Input{OrgID: c.org, Authorize: allowOrg}); err != nil {
+		t.Fatalf("Deprovision with a go-api refresh token held: %v", err)
 	}
-	for name, verb := range verbs {
-		t.Run(name, func(t *testing.T) {
-			e := getEnv(t)
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			orgID := e.seedOrg(t, ctx)
-			user, _ := e.seedUser(t, ctx)
-			e.add(t, ctx, orgID, user, "owner")
-			token, jti := e.goToken(t, ctx, user, &orgID)
-			type answer struct {
-				result session.Result
-				err    error
-			}
-			exchanged := make(chan answer, 1)
-			var once sync.Once
-			// The exchange runs on the test's context: the verb's own ends with its commit.
-			authorize := func(context.Context, audit.TxOps, uuid.UUID) error {
-				once.Do(func() {
-					go func() {
-						result, err := e.sessions.ExchangeLegacy(ctx, session.LegacyRefresh{PrincipalID: user, OrganizationID: &orgID, JTI: contracts.NewSecretString(jti)})
-						exchanged <- answer{result, err}
-					}()
-					for e.waiters(t, context.Background()) != 1 {
-						select {
-						case got := <-exchanged:
-							t.Errorf("the exchange answered %q (%v) without waiting for the organization row", got.result.Reason, got.err)
-							exchanged <- got
-							return
-						case <-ctx.Done():
-							return
-						default:
-						}
-					}
-				})
-				return nil
-			}
-			if err := verb(ctx, e, orgID, authorize); err != nil {
-				t.Fatalf("the verb: deadlock=%v err=%v, want it done with no deadlock", isDeadlock(err), err)
-			}
-			got := <-exchanged
-			if got.err != nil || got.result.Reason != session.ReasonAccepted {
-				t.Fatalf("ExchangeLegacy = %q, %v", got.result.Reason, got.err)
-			}
-			if !e.sessionEnded(t, ctx, got.result.Issued.Session.ID) {
-				t.Fatal("the session the exchange made outlived the verb")
-			}
-			if !e.tokenRevoked(t, ctx, token) {
-				t.Fatal("the go-api refresh token is not revoked")
-			}
-		})
-	}
+	release()
+	e.wantEnded(t, ctx, c)
 }
 
 // A suspend ends what a deprovision ends, in its one commit and with its one audit row. A repeat is a no-op: a session

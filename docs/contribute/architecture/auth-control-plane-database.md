@@ -106,14 +106,10 @@ grants back exactly the manifest. Highlights:
   grant, leaving two audit rows.
 - There is no field in the manifest type for a DDL privilege.
 - In the ops (`public`) schema the role reads the columns of
-  `authschema.PublicReadColumns()` and nothing else, with one temporary
-  exception, `authschema.LegacyRefreshTokenGrant()`: column `SELECT` on
-  `refresh_tokens` (`token_hash`, `user_id`, `org_id`, `family_id`,
-  `expires_at`, `revoked_at`) and `UPDATE (revoked_at)`. It lets
-  `compatRefresh` exchange a go-api refresh token once for an auth-service
-  session and revoke a reused token's go-api family. The posture reports a
-  missing or wider privilege on that table. The grant is removed when
-  no live go-api refresh token is left.
+  `authschema.PublicReadColumns()` and nothing else. It holds no privilege on
+  go-api's `refresh_tokens`: each grants pass revokes the column grant the
+  retired one-time legacy refresh exchange used, and the posture reports any
+  privilege on that table.
 - Every session row stores `legacy_token_version` (migration 0016), the
   user's `public.users.token_version` when the session was created. A refresh
   of a session whose pin differs from the current version is revoked and

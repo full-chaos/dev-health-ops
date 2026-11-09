@@ -177,7 +177,7 @@ func TestCredentialIssuerFollowsTheConfiguredAccessClass(t *testing.T) {
 	}
 }
 
-// The production builder: the legacy HS256 refresh verifier (logout) checks go-api's audience.
+// The production builder: the legacy HS256 refresh verifier checks go-api's audience.
 func TestTheLegacyAudienceOfTheProductionIssuerFollowsTheClass(t *testing.T) {
 	cfg := classConfig(t, "eddsa")
 	mint := func(audience string) string {

@@ -112,10 +112,6 @@ func (h handlers) authenticateWith(w http.ResponseWriter, r *http.Request, opera
 		refuse(w, r, operation, unauthorized(reasonMalformed), nil)
 		return Bearer{}, session.Record{}, false
 	}
-	if strings.HasPrefix(token, "svc_acr_") {
-		w.WriteHeader(http.StatusNoContent)
-		return Bearer{}, session.Record{}, false
-	}
 	bearer, reason, err := h.Issuer.bearer(r.Context(), r.Pattern, token)
 	if err != nil {
 		refused, logged := bearerRefusal(reason, err)

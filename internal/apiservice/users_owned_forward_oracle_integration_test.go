@@ -263,6 +263,9 @@ func usersOracleForm(body string) string {
 	})
 }
 
+// usersOracleCases is the length of usersOracleRun's case list: the cell compares exactly this many answers.
+const usersOracleCases = 18
+
 type usersOracleAnswer struct {
 	name   string
 	status int
@@ -362,21 +365,31 @@ func TestUsersOwnedForwardAnswerEqualsNotOwnedAnswer(t *testing.T) {
 	var legacy, owned []usersOracleAnswer
 	t.Run("not owned", func(t *testing.T) { legacy = usersOracleRun(t, startUsersOracleStack(t, ctx, false)) })
 	t.Run("owned", func(t *testing.T) { owned = usersOracleRun(t, startUsersOracleStack(t, ctx, true)) })
-	if len(owned) != len(legacy) || len(owned) == 0 {
-		t.Fatalf("owned ran %d cases, not owned %d", len(owned), len(legacy))
+	if len(owned) != usersOracleCases || len(legacy) != usersOracleCases {
+		t.Fatalf("owned ran %d cases, not owned %d; want %d each", len(owned), len(legacy), usersOracleCases)
 	}
 	pinned := map[string]int{"create into a suspended org": http.StatusCreated, "superuser on an inactive user": http.StatusOK,
 		"repeat delete": http.StatusNotFound}
+	compared := 0
 	for i, o := range owned {
 		l := legacy[i]
-		if o.status != l.status || o.form != l.form {
-			t.Errorf("%s: owned %d %s, not owned %d %s", o.name, o.status, o.form, l.status, l.form)
-		}
-		if want, ok := pinned[o.name]; ok && o.status != want {
-			t.Errorf("%s: owned %d, want %d", o.name, o.status, want)
-		}
-		if o.status >= 500 || strings.Contains(o.raw, "operation_moved") {
-			t.Errorf("%s: owned answered %d %s", o.name, o.status, o.raw)
-		}
+		t.Run(o.name, func(t *testing.T) {
+			compared++
+			if o.name != l.name {
+				t.Fatalf("case %d is %q owned, %q not owned", i, o.name, l.name)
+			}
+			if o.status != l.status || o.form != l.form {
+				t.Errorf("owned %d %s, not owned %d %s", o.status, o.form, l.status, l.form)
+			}
+			if want, ok := pinned[o.name]; ok && o.status != want {
+				t.Errorf("owned %d, want %d", o.status, want)
+			}
+			if o.status >= 500 || strings.Contains(o.raw, "operation_moved") {
+				t.Errorf("owned answered %d %s", o.status, o.raw)
+			}
+		})
+	}
+	if compared != usersOracleCases {
+		t.Fatalf("compared %d cases, want %d", compared, usersOracleCases)
 	}
 }

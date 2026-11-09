@@ -515,7 +515,7 @@ func checkBand(t *testing.T, entry, tier string) {
 }
 
 // authServiceAPIRules returns the from-list of EVERY ingress rule of the auth-service NetworkPolicy that holds the API
-// port: a second rule on that port adds peers the first-rule helper authServiceAPIFrom never sees.
+// port (an omitted or empty ports list means every port): a second rule on that port adds peers the first-rule helper authServiceAPIFrom never sees.
 func authServiceAPIRules(t *testing.T, docs []map[string]any) [][]any {
 	t.Helper()
 	policy := authDoc(docs, "NetworkPolicy", "a-dev-health-auth-service")
@@ -526,12 +526,16 @@ func authServiceAPIRules(t *testing.T, docs []map[string]any) [][]any {
 	var rules [][]any
 	for _, rule := range ingress {
 		ports, _ := at(rule, "ports").([]any)
+		covers := len(ports) == 0
 		for _, port := range ports {
 			if at(port, "port") == 8095 {
-				from, _ := at(rule, "from").([]any)
-				rules = append(rules, from)
+				covers = true
 				break
 			}
+		}
+		if covers {
+			from, _ := at(rule, "from").([]any)
+			rules = append(rules, from)
 		}
 	}
 	return rules

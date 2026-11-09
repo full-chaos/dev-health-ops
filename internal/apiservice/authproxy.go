@@ -829,3 +829,45 @@ func orgProvisioner(cfg AuthProxyConfig, cred provisioningCredential) (authprovi
 	}
 	return client, nil
 }
+
+// orgDeletionDeprovisioner is the organization delete's auth-service client with AUTH_PROXY_ORG_PROVISIONING off.
+// configured is AUTH_PROXY_URL set: an auth-service holds organizations. The client takes the workload token: the
+// provisioning or session credential's client when one is built, else one from the workload inputs, read with no
+// switch. Missing or invalid inputs never fail the start: a nil client, one WARN line, and each delete logs no_client.
+// With the switch on the delete deprovisions through the provisioner and this client is not built.
+func orgDeletionDeprovisioner(ctx context.Context, logger *slog.Logger, cfg AuthProxyConfig, provisioner authprovision.Provisioner,
+	provisioning provisioningCredential, session sessionCredential, lookup func(string) (string, bool)) (configured bool, client admin.OrgDeprovisioner) {
+	if cfg.Upstream == nil {
+		return false, nil
+	}
+	if provisioner != nil {
+		return true, nil
+	}
+	workload := provisioning.workload
+	if workload == nil {
+		workload = session.workload
+	}
+	if workload == nil {
+		subject, _ := lookup(EnvAuthWorkloadSubjectFile)
+		bootstrap, _ := lookup(EnvAuthWorkloadBootstrapFile)
+		if strings.TrimSpace(subject) == "" && strings.TrimSpace(bootstrap) == "" {
+			logger.WarnContext(ctx, "org deletion: no workload inputs, so a delete cannot deprovision the organization in auth-service",
+				slog.String("needs", EnvAuthWorkloadSubjectFile+" or "+EnvAuthWorkloadBootstrapFile))
+			return true, nil
+		}
+		built, err := newWorkloadClient(cfg, lookup, []workloadAsk{{Flag: EnvAuthProxyURL}})
+		if err != nil {
+			logger.WarnContext(ctx, "org deletion: the workload inputs are invalid, so a delete cannot deprovision the organization in auth-service",
+				slog.String("error", err.Error()))
+			return true, nil
+		}
+		workload = built
+	}
+	built, err := authprovision.NewWorkload(cfg.Upstream, workload, cfg.Timeout)
+	if err != nil {
+		logger.WarnContext(ctx, "org deletion: no auth-service client, so a delete cannot deprovision the organization",
+			slog.String("error", err.Error()))
+		return true, nil
+	}
+	return true, built
+}

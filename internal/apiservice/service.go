@@ -278,6 +278,8 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			AuthSchema:         deps.AuthSchema,
 			OrgReactivator:     deps.OrgReactivator,
 			OrgProvisioner:     deps.OrgProvisioner,
+			OrgDeletionAuth:    deps.OrgDeletionAuth,
+			OrgDeprovisioner:   deps.OrgDeprovisioner,
 			OrgSuspender:       deps.OrgSuspender,
 			OrgState:           deps.OrgState,
 			Delegator:          deps.Delegator,
@@ -461,6 +463,8 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
+	deps.OrgDeletionAuth, deps.OrgDeprovisioner = orgDeletionDeprovisioner(ctx, logger, authProxy, deps.OrgProvisioner,
+		provisioningCred, sessionCred, envsecrets.ProcessLookup)
 	deps.ServiceAccountKeys, err = serviceAccountKeys(authProxy, provisioningCred)
 	if err == nil {
 		deps.ServiceAccounts, err = serviceAccounts(authProxy, provisioningCred)

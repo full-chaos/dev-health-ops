@@ -217,8 +217,12 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // 121 -> 122: 130_work_unit_issue_size.sql adds `work_unit_issue_size`
 // (version computed_at), keyed on (org_id, work_unit_id) -- CHAOS-9807. A
 // reader takes argMax on computed_at per unit.
+// 122 -> 123: 147_project_team_ownership_groups.sql adds
+// `project_team_ownership_groups_current` (version stored_at), keyed on
+// (org_id, row_key) -- CHAOS-6347. A reader reads it FINAL; is_deleted is a
+// plain column, so FINAL keeps a gone group's latest row.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 122
+	const wantCount = 123
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

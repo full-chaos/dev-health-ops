@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
 )
 
@@ -21,7 +23,9 @@ var usersAdminPaths = []string{usersCreatePath, usersUpdatePath, usersPasswordPa
 
 func newUsersAdminFixture(t *testing.T) *provFixture {
 	t.Helper()
-	return newProvFixtureFor(t, docWithRows(t, append([]string{PatternOrgRename}, usersAdminPaths...)...), nil)
+	f := newProvFixtureFor(t, docWithRows(t, append([]string{PatternOrgRename}, usersAdminPaths...)...), nil)
+	f.roles.held = map[uuid.UUID]bool{f.super: true} // the stored assignment of the fixture's active superuser
+	return f
 }
 
 func testHash(t *testing.T, password string) string {
@@ -47,7 +51,7 @@ func usersAnswerOf(t *testing.T, body []byte) map[string]any {
 func TestUsersAdminRoutesMountWithTheirRows(t *testing.T) {
 	t.Parallel()
 	with := newUsersAdminFixture(t)
-	without := newProvFixture(t)
+	without := newProvFixtureWith(t, embeddedDocWithoutRoutes(t, usersAdminPaths...))
 	for _, path := range usersAdminPaths {
 		expectRefusal(t, with.post(path, `{}`, nil), http.StatusBadRequest, reasonMalformed)
 		if got := without.post(path, `{}`, nil).Code; got != http.StatusNotFound {

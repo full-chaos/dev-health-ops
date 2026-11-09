@@ -23,6 +23,12 @@
 # have finished, so nothing else of the leg runs beside them. Without `solo`,
 # every package is split as before. Still a partition: the two parts of every
 # shard together hold each package exactly once.
+# pin=<tsv> (CHAOS-13422, ci/go_test_pins.tsv, package<TAB>reason): the listed packages are placed before everything else, each on the
+# then-lightest shard, heaviest first, so as many pinned packages as there are shards land on distinct shards. A pinned package
+# is split like any other (same part, same run): only its placement differs. Still a partition.
+# serial=<key> serialx=<factor> (CHAOS-13422): the package check_go.sh runs alone after the shard's other packages. Its whole wall
+# adds to the shard, while the other packages overlap (sum / factor), so its weight counts factor times. A pinned serial package is
+# placed after the other pins.
 BEGIN {
   FS = "\t"
   if (weights != "") {
@@ -32,6 +38,14 @@ BEGIN {
       w[f[1]] = f[2] + 0
     }
     close(weights)
+  }
+  if (pin != "") {
+    while ((getline line < pin) > 0) {
+      if (line ~ /^[[:space:]]*(#|$)/) continue
+      split(line, f, "\t")
+      isPin[f[1]] = 1
+    }
+    close(pin)
   }
   if (solo != "") {
     while ((getline line < solo) > 0) {
@@ -51,7 +65,10 @@ BEGIN {
   n++
   path[n] = pkg
   weight[n] = (key in w) ? w[key] : defw + 0
+  if (serial != "" && key == serial && serialx + 0 > 0) weight[n] = weight[n] * serialx
+  serialPkg[n] = (serial != "" && key == serial) ? 1 : 0
   soloPkg[n] = (key in isSolo) ? 1 : 0
+  pinPkg[n] = ((key in isPin) && !(key in isSolo)) ? 1 : 0
 }
 END {
   # insertion sort by (weight desc, path asc): n is a few hundred at most
@@ -66,9 +83,20 @@ END {
     order[j + 1] = v
   }
   for (s = 1; s <= count; s++) load[s] = 0
+  for (ppass = 0; ppass <= 1; ppass++) {
+    for (i = 1; i <= n; i++) {
+      k = order[i]
+      if (!pinPkg[k] || serialPkg[k] != ppass) continue
+      best = 1
+      for (s = 2; s <= count; s++) if (load[s] < load[best]) best = s
+      load[best] += weight[k]
+      if (best == shard) keep[k] = 1
+    }
+  }
   for (pass = 1; pass <= 2; pass++) {
     for (i = 1; i <= n; i++) {
       k = order[i]
+      if (pinPkg[k]) continue
       if (soloPkg[k] != (pass == 1)) continue
       best = 1
       for (s = 2; s <= count; s++) if (load[s] < load[best]) best = s

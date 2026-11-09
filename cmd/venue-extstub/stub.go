@@ -107,14 +107,16 @@ func answerIn(mode, service, method, host, path, query string) answer {
 		}
 		return answer{http.StatusForbidden, bodySeedRefused}
 	}
-	return answerFor(service, method, path)
+	return answerFor(service, method, host, path)
 }
 
 // answerFor is the stub's frozen reply to a request: the same for every caller and both runs of a pair, so the
-// yardstick and the enforced run see one outside world. Stripe answers the plan pull's two lists empty (nothing to
-// write) and refuses every other call as an invalid request (no retry, no write after it); PagerDuty and GitHub refuse
-// the credential. A host the stub does not serve is 421.
-func answerFor(service, method, path string) answer {
+// yardstick and the enforced run see one outside world. Stripe answers the plan pull's two lists empty, the subscription
+// update and retrieve, and the invoice void, with fixed objects, and refuses every other call as an invalid request (no
+// retry, no write after it); PagerDuty answers the client-credentials token and the services list, GitHub the OAuth
+// code exchange and the user's installations, with fixed bodies, and both refuse every other call's credential. A host
+// the stub does not serve is 421.
+func answerFor(service, method, host, path string) answer {
 	switch service {
 	case "stripe":
 		switch {
@@ -122,25 +124,57 @@ func answerFor(service, method, path string) answer {
 			return answer{http.StatusOK, bodyProducts}
 		case method == http.MethodGet && path == "/v1/prices":
 			return answer{http.StatusOK, bodyPrices}
+		case (method == http.MethodPost || method == http.MethodGet) && isOneSegment(path, "/v1/subscriptions/", ""):
+			return answer{http.StatusOK, bodySubscription}
+		case method == http.MethodPost && isOneSegment(path, "/v1/invoices/", "/void"):
+			return answer{http.StatusOK, bodyInvoiceVoid}
 		}
 		return answer{http.StatusBadRequest, bodyStripeRefused}
 	case "pagerduty":
+		switch {
+		case method == http.MethodPost && host == "identity.pagerduty.com" && path == "/oauth/token":
+			return answer{http.StatusOK, bodyPagerDutyToken}
+		case method == http.MethodGet && host == "api.pagerduty.com" && path == "/services":
+			return answer{http.StatusOK, bodyPagerDutyServices}
+		}
 		return answer{http.StatusUnauthorized, bodyPagerDutyRefused}
 	case "github":
+		switch {
+		case method == http.MethodPost && host == "github.com" && path == "/login/oauth/access_token":
+			return answer{http.StatusOK, bodyGitHubToken}
+		case method == http.MethodGet && host == "api.github.com" && path == "/user/installations":
+			return answer{http.StatusOK, bodyGitHubInstallations}
+		}
 		return answer{http.StatusUnauthorized, bodyGitHubRefused}
 	}
 	return answer{http.StatusMisdirectedRequest, bodyNotServed}
 }
 
+// isOneSegment reports whether path is prefix, one non-empty segment without a slash, then suffix.
+func isOneSegment(path, prefix, suffix string) bool {
+	rest, ok := strings.CutPrefix(path, prefix)
+	if !ok {
+		return false
+	}
+	id, ok := strings.CutSuffix(rest, suffix)
+	return ok && id != "" && !strings.Contains(id, "/")
+}
+
 // The frozen answer bodies: constants only, so no request byte can reach a response.
 const (
-	bodyProducts         = `{"object":"list","data":[],"has_more":false,"url":"/v1/products"}`
-	bodyPrices           = `{"object":"list","data":[],"has_more":false,"url":"/v1/prices"}`
-	bodyStripeRefused    = `{"error":{"type":"invalid_request_error","message":"venue stub: refused"}}`
-	bodyPagerDutyRefused = `{"error":{"message":"venue stub: credential refused","code":2006}}`
-	bodyGitHubRefused    = `{"message":"venue stub: credential refused"}`
-	bodyNotServed        = `{"message":"venue stub: host not served"}`
-	bodySeedRefused      = `{"message":"venue stub: seed mode answers only the seed probe"}`
+	bodyProducts            = `{"object":"list","data":[],"has_more":false,"url":"/v1/products"}`
+	bodyPrices              = `{"object":"list","data":[],"has_more":false,"url":"/v1/prices"}`
+	bodySubscription        = `{"id":"sub_venue_stub","object":"subscription","status":"active","cancel_at_period_end":false,"customer":"cus_venue_stub","items":{"object":"list","data":[{"id":"si_venue_stub","object":"subscription_item","price":{"id":"price_venue_stub","object":"price"}}],"has_more":false,"url":"/v1/subscription_items"}}`
+	bodyInvoiceVoid         = `{"id":"in_venue_stub","object":"invoice","status":"void"}`
+	bodyPagerDutyToken      = `{"access_token":"venue-stub-token","token_type":"bearer","expires_in":3600,"scope":"escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read"}`
+	bodyPagerDutyServices   = `{"services":[{"id":"PVENUE1","name":"venue-stub-service","status":"active"}],"limit":100,"offset":0,"more":false}`
+	bodyGitHubToken         = `{"access_token":"venue-stub-token","token_type":"bearer","scope":""}`
+	bodyGitHubInstallations = `{"total_count":1,"installations":[{"id":1,"account":{"login":"venue-stub","type":"Organization"}}]}`
+	bodyStripeRefused       = `{"error":{"type":"invalid_request_error","message":"venue stub: refused"}}`
+	bodyPagerDutyRefused    = `{"error":{"message":"venue stub: credential refused","code":2006}}`
+	bodyGitHubRefused       = `{"message":"venue stub: credential refused"}`
+	bodyNotServed           = `{"message":"venue stub: host not served"}`
+	bodySeedRefused         = `{"message":"venue stub: seed mode answers only the seed probe"}`
 )
 
 // serviceOf is the service of a request host (port and case dropped).
@@ -176,6 +210,8 @@ func handler(log *hitLog, mode string) http.Handler {
 // the paths and methods the answer table tells apart.
 var configProbes = []struct{ method, path, query string }{
 	{"GET", "/v1/products", ""}, {"GET", "/v1/prices", ""}, {"POST", "/v1/subscriptions/x", ""},
+	{"GET", "/v1/subscriptions/x", ""}, {"DELETE", "/v1/subscriptions/x", ""}, {"POST", "/v1/invoices/x/void", ""},
+	{"POST", "/login/oauth/access_token", ""}, {"GET", "/user/installations", "per_page=100&page=1"},
 	{"GET", seedPath, seedQuery}, {"GET", seedPath, ""}, {"POST", "/oauth/token", ""}, {"GET", "/", ""},
 }
 

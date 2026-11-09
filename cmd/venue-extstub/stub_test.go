@@ -90,11 +90,21 @@ func TestStubAnswersFromTheFrozenTable(t *testing.T) {
 	}{
 		{"api.stripe.com", "GET", "/v1/products", 200, `"data":[]`},
 		{"api.stripe.com", "GET", "/v1/prices", 200, `"data":[]`},
-		{"api.stripe.com", "POST", "/v1/subscriptions/sub_x", 400, "invalid_request_error"},
+		{"api.stripe.com", "POST", "/v1/subscriptions/sub_x", 200, `"object":"subscription"`},
+		{"api.stripe.com", "GET", "/v1/subscriptions/sub_x", 200, `"id":"si_venue_stub"`},
+		{"api.stripe.com", "POST", "/v1/invoices/in_x/void", 200, `"status":"void"`},
+		{"api.stripe.com", "GET", "/v1/invoices/in_x/void", 400, "invalid_request_error"},
+		{"api.stripe.com", "POST", "/v1/subscriptions/sub_x/extra", 400, "invalid_request_error"},
+		{"api.stripe.com", "POST", "/v1/subscriptions/", 400, "invalid_request_error"},
 		{"api.stripe.com", "DELETE", "/v1/subscriptions/sub_x", 400, "invalid_request_error"},
-		{"api.pagerduty.com", "GET", "/services", 401, "credential refused"},
-		{"identity.pagerduty.com", "POST", "/oauth/token", 401, "credential refused"},
-		{"github.com", "POST", "/login/oauth/access_token", 401, "credential refused"},
+		{"api.pagerduty.com", "GET", "/services", 200, `"more":false`},
+		{"api.pagerduty.com", "GET", "/other", 401, "credential refused"},
+		{"api.pagerduty.com", "POST", "/oauth/token", 401, "credential refused"},
+		{"identity.pagerduty.com", "GET", "/services", 401, "credential refused"},
+		{"identity.pagerduty.com", "POST", "/oauth/token", 200, `"access_token"`},
+		{"github.com", "POST", "/login/oauth/access_token", 200, `"access_token"`},
+		{"github.com", "GET", "/user/installations", 401, "credential refused"},
+		{"api.github.com", "GET", "/user/installations", 200, `"id":1`},
 		{"api.github.com", "GET", "/app/installations/1", 401, "credential refused"},
 		{"other.example", "GET", "/", 421, "not served"},
 	}
@@ -369,5 +379,63 @@ func TestUnservedHostsIsTheFrozenCensusAndInTheDigest(t *testing.T) {
 	UnservedHosts = saved
 	if before == after {
 		t.Fatal("the config digest does not change with the unserved host list")
+	}
+}
+
+// Every new answer is a pure function of its inputs and its body carries the fields go-api's client decoders read.
+func TestNewAnswersAreDeterministicAndDecode(t *testing.T) {
+	cases := []struct {
+		service, method, host, path string
+		fields                      func(map[string]any) bool
+	}{
+		{"stripe", "POST", "api.stripe.com", "/v1/subscriptions/a", func(m map[string]any) bool {
+			items, _ := m["items"].(map[string]any)
+			data, _ := items["data"].([]any)
+			first, _ := data[0].(map[string]any)
+			return m["id"] != "" && first["id"] == "si_venue_stub"
+		}},
+		{"stripe", "GET", "api.stripe.com", "/v1/subscriptions/b", func(m map[string]any) bool { return m["object"] == "subscription" }},
+		{"stripe", "POST", "api.stripe.com", "/v1/invoices/c/void", func(m map[string]any) bool { return m["status"] == "void" }},
+		{"pagerduty", "POST", "identity.pagerduty.com", "/oauth/token", func(m map[string]any) bool {
+			return m["access_token"] != "" && m["expires_in"] == float64(3600)
+		}},
+		{"pagerduty", "GET", "api.pagerduty.com", "/services", func(m map[string]any) bool {
+			list, _ := m["services"].([]any)
+			first, _ := list[0].(map[string]any)
+			return m["more"] == false && first["id"] == "PVENUE1"
+		}},
+		{"github", "POST", "github.com", "/login/oauth/access_token", func(m map[string]any) bool { return m["access_token"] != "" }},
+		{"github", "GET", "api.github.com", "/user/installations", func(m map[string]any) bool {
+			list, _ := m["installations"].([]any)
+			first, _ := list[0].(map[string]any)
+			account, _ := first["account"].(map[string]any)
+			return first["id"] == float64(1) && account["login"] != "" && account["type"] != ""
+		}},
+	}
+	for _, c := range cases {
+		a := answerIn(modeRun, c.service, c.method, c.host, c.path, "")
+		if b := answerIn(modeRun, c.service, c.method, c.host, c.path, "x=1"); a != b {
+			t.Errorf("%s %s%s: answer depends on the query", c.method, c.host, c.path)
+		}
+		if again := answerFor(c.service, c.method, c.host, c.path); a != again || a.status != 200 {
+			t.Errorf("%s %s%s: %v then %v", c.method, c.host, c.path, a, again)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(a.body), &m); err != nil || !c.fields(m) {
+			t.Errorf("%s %s%s: body %q does not hold the fields the client reads (%v)", c.method, c.host, c.path, a.body, err)
+		}
+	}
+}
+
+// Seed mode answers none of the new calls.
+func TestSeedModeIgnoresTheNewAnswers(t *testing.T) {
+	for _, c := range []struct{ service, method, host, path string }{
+		{"stripe", "POST", "api.stripe.com", "/v1/subscriptions/a"},
+		{"pagerduty", "GET", "api.pagerduty.com", "/services"},
+		{"github", "GET", "api.github.com", "/user/installations"},
+	} {
+		if a := answerIn(modeSeed, c.service, c.method, c.host, c.path, ""); a.status != http.StatusForbidden {
+			t.Errorf("%s %s%s: seed answered %d", c.method, c.host, c.path, a.status)
+		}
 	}
 }

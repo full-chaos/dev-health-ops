@@ -14,7 +14,8 @@ import (
 )
 
 // frozenBodies are every body the stub can answer: constants only, so no request byte can reach a response.
-var frozenBodies = []string{bodyProducts, bodyPrices, bodyStripeRefused, bodyPagerDutyRefused, bodyGitHubRefused, bodyNotServed, bodySeedRefused, seedBody}
+var frozenBodies = []string{bodyProducts, bodyPrices, bodyStripeRefused, bodyPagerDutyRefused, bodyGitHubRefused, bodyNotServed, bodySeedRefused, seedBody,
+	bodySubscription, bodyInvoiceVoid, bodyPagerDutyToken, bodyPagerDutyServices, bodyGitHubToken, bodyGitHubInstallations}
 
 // No request byte reaches a response body: for requests with markup in the path, the query and the host, in both modes,
 // every body is one of the frozen constants, written with the response writer's own Write.

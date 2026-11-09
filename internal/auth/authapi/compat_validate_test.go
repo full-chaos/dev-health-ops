@@ -206,10 +206,6 @@ func (f *validateFixture) build() {
 // route-profile middleware (apiservice newServer).
 func (f *validateFixture) goAPIHandler() http.Handler {
 	f.t.Helper()
-	verifier, err := edgetoken.New(testSecret, testIssuer, testAudience)
-	if err != nil {
-		f.t.Fatal(err)
-	}
 	logger := slog.New(slog.DiscardHandler)
 	auth, err := policy.NewAuthenticator(goAPIValidateStore{f}, logger)
 	if err != nil {
@@ -223,8 +219,7 @@ func (f *validateFixture) goAPIHandler() http.Handler {
 	if f.eddsa {
 		f.goAPIRouteAccess(auth, logger)
 	}
-	for _, route := range apisession.Routes(apisession.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Auth: auth,
-		Verifier: verifier, Logger: logger, Limits: httpapi.NewMemoryCounters(nil)}) {
+	for _, route := range apisession.Routes(apisession.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Auth: auth, Logger: logger, Limits: httpapi.NewMemoryCounters(nil)}) {
 		if route.Method == http.MethodPost && route.Pattern == PatternCompatValidate {
 			templates, err := httpapi.NewRouteTemplates([]httpapi.Route{route})
 			if err != nil {

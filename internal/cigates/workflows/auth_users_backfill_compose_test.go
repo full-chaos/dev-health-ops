@@ -8,9 +8,10 @@ import (
 // CHAOS-13107 (goapi-leg-local-2): compose.yml has auth-service own users (AUTH_USERS_OWNED defaults true), and its
 // users_owned readiness check refuses while public.users holds a user the auth schema does not: a fresh install has
 // one, the migrations' baseline service placeholder (go-api-prove@service.dev-health.invalid). So the users are
-// copied before auth-service serves, as production copies them before its flip: the auth-users-backfill one-shot runs
-// `dho auth users-backfill` with AUTH_USERS_OWNED=false for that run only (the verb refuses while the flag is on), on
-// auth-service's own login and schema, after the auth schema and its grants, and auth-service waits for it.
+// copied before auth-service serves: the auth-users-backfill one-shot, the venues' seed tool, runs
+// `dho auth users-backfill -insert-only` with users owned (CHAOS-13356: -insert-only is the one form the verb runs while
+// users are owned), on auth-service's own login and schema, after the auth schema and its grants, and auth-service waits
+// for it.
 func TestComposeCopiesTheUsersBeforeAuthServiceServes(t *testing.T) {
 	c := readComposeFile(t, "compose.yml")
 	backfill, ok := c.Services["auth-users-backfill"]
@@ -22,8 +23,8 @@ func TestComposeCopiesTheUsersBeforeAuthServiceServes(t *testing.T) {
 	if got := strings.Join(backfill.Command, " "); got != "auth users-backfill -insert-only" {
 		t.Errorf("auth-users-backfill command = %q, want \"auth users-backfill -insert-only\"", got)
 	}
-	if owned, _ := envString(t, backfill, "AUTH_USERS_OWNED"); owned != "false" {
-		t.Errorf("auth-users-backfill AUTH_USERS_OWNED = %q, want the literal false: the verb refuses while users are owned", owned)
+	if owned, _ := envString(t, backfill, "AUTH_USERS_OWNED"); owned != "${AUTH_USERS_OWNED:-true}" {
+		t.Errorf("auth-users-backfill AUTH_USERS_OWNED = %q, want the default-on pass-through ${AUTH_USERS_OWNED:-true}: the seed runs with users owned, as auth-service does", owned)
 	}
 	authService := c.Services["auth-service"]
 	for _, name := range []string{"AUTH_DATABASE_URI", "AUTH_DATABASE_SCHEMA"} {

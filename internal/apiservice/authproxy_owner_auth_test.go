@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
@@ -55,10 +54,6 @@ type ownerFixture struct {
 // and the scope exemption of cfg.
 func newOwnerFixture(t *testing.T, cfg AuthProxyConfig) *ownerFixture {
 	t.Helper()
-	verifier, err := edgetoken.New(proxyTestKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	reads := &atomic.Int64{}
 	store := scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}
 	auth := proxyTokens.AuthenticatorOver(t, countingScopeStore{scopeStore: store, reads: reads}, quietLogger())
@@ -67,7 +62,7 @@ func newOwnerFixture(t *testing.T, cfg AuthProxyConfig) *ownerFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
+	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 		AuthProxy: cfg, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 	scope := policy.NewScope(auth, quietLogger())
 	server, err := newServer(config.Config{APIAddress: "127.0.0.1:0", CORSAllowedOrigins: []string{proxyOrigin}}, quietLogger(), routes,

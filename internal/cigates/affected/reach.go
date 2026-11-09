@@ -3,6 +3,7 @@ package affected
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -22,19 +23,30 @@ import (
 	"golang.org/x/tools/go/ssa/ssautil"
 )
 
-// reach.tsv (generated): package<TAB>site<TAB>reacher. A code-scope site of dynreads.tsv, of an unexpressed walk or of an
+// reach.d/ (generated): one file per package, its directory with / -> __ (reachFileOf), rows package<TAB>site<TAB>reacher;
+// the table is the union of the files. A code-scope site of dynreads.tsv, of an unexpressed walk or of an
 // unexpressed edge runs only in a program that can call it. Each row names one package whose test binary, or whose
 // main program, reaches a function that holds the site (Rapid Type Analysis from the generated test main and from
 // main, each with its package init, over every tag set in reachTags). reacher `-`: no program reaches the site;
 // reacher `*`: the site is in no function the analysis can place (a package variable initializer, a file no tag set
 // builds), so every test binary that links the package is selected, as without the table. plan-verdict selects the
-// reachers of a code-scope row instead of its reverse import closure. A code-scope row with no reach.tsv row is a
+// reachers of a code-scope row instead of its reverse import closure. A code-scope row with no reach.d row is a
 // defect of the tables (FULL); `cigate plan-reads --reach` recomputes the table and fails on any difference.
 const (
-	reachFile = "reach.tsv"
-	reachAny  = "*"
-	reachNone = "-"
+	reachDir = "reach.d"
+	// reachLegacyFile is the one-file table reach.d replaced (CHAOS-13101): the loader refuses it, the writer removes it.
+	reachLegacyFile = "reach.tsv"
+	reachAny        = "*"
+	reachNone       = "-"
 )
+
+// reachFileOf is the reach.d file of a package, named as ci/venue_oracle_closure.d named its files.
+func reachFileOf(pkg string) string {
+	if pkg == "." {
+		return "_root.tsv"
+	}
+	return strings.ReplaceAll(pkg, "/", "__") + ".tsv"
+}
 
 // reachTags: the build tag sets of the planned test runs (the integration plan, and its race legs). An untagged build
 // (the go-quality legs) is a subset of the integration build, so its programs reach no more: no file is built only
@@ -105,7 +117,7 @@ type reachStats struct {
 // heap grow to twice that, up to the caller's GOMEMLIMIT. A lower GOMEMLIMIT of the caller stays.
 const reachHeapLimit = 8 << 30
 
-// reachRows computes the reach.tsv rows of the code-scope sites of reads under root.
+// reachRows computes the reach.d rows of the code-scope sites of reads under root.
 func reachRows(root string, reads []Read) (map[string]bool, reachStats, error) {
 	start := time.Now()
 	if limit := debug.SetMemoryLimit(-1); limit > reachHeapLimit {
@@ -365,11 +377,57 @@ func peakRSSMiB() int64 {
 	return ru.Maxrss >> 10 // KiB
 }
 
+// writeReach writes one reach.d file per package with rows, removes every other reach.d file and the legacy reach.tsv.
 func writeReach(dir string, rows map[string]bool) error {
-	var b strings.Builder
-	b.WriteString(reachHeader)
+	files := map[string]*strings.Builder{}
 	for _, row := range sortedKeys(rows) {
-		b.WriteString(row + "\n")
+		name := reachFileOf(strings.SplitN(row, "\t", 2)[0])
+		if files[name] == nil {
+			files[name] = &strings.Builder{}
+			files[name].WriteString(reachHeader)
+		}
+		files[name].WriteString(row + "\n")
 	}
-	return os.WriteFile(filepath.Join(dir, reachFile), []byte(b.String()), 0o644)
+	if err := os.MkdirAll(filepath.Join(dir, reachDir), 0o755); err != nil {
+		return err
+	}
+	old, err := reachFiles(dir)
+	if err != nil {
+		return err
+	}
+	for _, name := range old {
+		if files[name] == nil {
+			if err := os.Remove(filepath.Join(dir, reachDir, name)); err != nil {
+				return err
+			}
+		}
+	}
+	for _, name := range sortedKeys(files) {
+		if err := os.WriteFile(filepath.Join(dir, reachDir, name), []byte(files[name].String()), 0o644); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, reachLegacyFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// reachFiles is the sorted file names of dir/reach.d (none when it is missing); an entry that is not a .tsv file is an error.
+func reachFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(dir, reachDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), ".tsv") {
+			return nil, fmt.Errorf("%s/%s: not a .tsv file; %s holds only the generated reach tables", reachDir, e.Name(), reachDir)
+		}
+		names = append(names, e.Name())
+	}
+	return names, nil
 }

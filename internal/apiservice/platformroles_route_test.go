@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 // recordingPG is a PostgreSQL wire server that answers BEGIN and refuses every other statement, keeping the text of each.
@@ -105,15 +104,11 @@ func TestARoutedUsersReadFollowsThePlatformRolesSwitch(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(pool.Close)
-		verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-		if err != nil {
-			t.Fatal(err)
-		}
 		auth, err := policy.NewAuthenticator(newProbeStore(), quietLogger())
 		if err != nil {
 			t.Fatal(err)
 		}
-		deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
+		deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 			PlatformRolesOwned: c.owned, AuthSchema: "auth_x", SessionIssuer: stubSessionIssuer{}}
 		server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()))
 		if err != nil {

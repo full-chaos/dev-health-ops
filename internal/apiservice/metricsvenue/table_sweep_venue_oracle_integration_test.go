@@ -20,7 +20,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -167,15 +166,11 @@ func dhoAPIServes(t *testing.T) func(string) bool {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	verifier, err := edgetoken.New(strings.Repeat("k", 48), "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier,
+	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger),
 		ClickHouse: stubClickHouse{}, Valkey: stubValkey{}}
 	mux := http.NewServeMux()
 	routes := apiservice.Routes(deps, logger)

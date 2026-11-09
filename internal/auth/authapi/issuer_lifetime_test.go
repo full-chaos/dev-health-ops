@@ -20,7 +20,7 @@ func TestEdDSAAccessLifetimeSetsBothTokensAndExpiresIn(t *testing.T) {
 	if def.ExpiresIn() != 3600 {
 		t.Fatalf("default ExpiresIn %d, want 3600", def.ExpiresIn())
 	}
-	issuer, err := NewEdDSAIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience, signer, goldenIssuer, WithAccessLifetime(10*time.Minute))
+	issuer, err := NewEdDSAIssuer(contracts.PlatformAPIAudience, signer, goldenIssuer, WithAccessLifetime(10*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestEdDSAAccessLifetimeSetsBothTokensAndExpiresIn(t *testing.T) {
 func TestEdDSAAccessLifetimeOutsideTheCeilingIsRefused(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	for _, lifetime := range []time.Duration{0, -time.Minute, 30 * time.Second, 61 * time.Minute} {
-		if _, err := NewEdDSAIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience, signer, goldenIssuer, WithAccessLifetime(lifetime)); err == nil {
+		if _, err := NewEdDSAIssuer(contracts.PlatformAPIAudience, signer, goldenIssuer, WithAccessLifetime(lifetime)); err == nil {
 			t.Errorf("lifetime %s built an issuer", lifetime)
 		}
 	}
@@ -65,7 +65,7 @@ func TestEdDSAAccessLifetimeOutsideTheCeilingIsRefused(t *testing.T) {
 // and its access token's exp - iat are both 600.
 func TestCompatRefreshUnderEdDSAStatesTheConfiguredLifetime(t *testing.T) {
 	signer, _, _ := fileSigner(t)
-	issuer, err := NewEdDSAIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience, signer, goldenIssuer, WithAccessLifetime(10*time.Minute))
+	issuer, err := NewEdDSAIssuer(contracts.PlatformAPIAudience, signer, goldenIssuer, WithAccessLifetime(10*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}

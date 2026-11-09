@@ -6,7 +6,7 @@ import (
 )
 
 func eddsaEnv() map[string]string {
-	env := sessionEnv(testAccessSecret, testSuccessorKey)
+	env := sessionEnv(testRateKey, testSuccessorKey)
 	env[EnvAccessTokenClass] = "eddsa"
 	env[EnvTokenIssuerURL] = "https://auth.example.test"
 	env[EnvAccessTokenAudience] = "dev-health-api"

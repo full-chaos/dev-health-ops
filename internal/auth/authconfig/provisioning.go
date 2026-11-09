@@ -68,7 +68,7 @@ func provisioning(lookup secrets.LookupEnv, session SessionTokens) (Provisioning
 		return Provisioning{}, nil
 	}
 	if !session.Enabled {
-		return Provisioning{}, fmt.Errorf("%s needs the session secrets (%s)", EnvMembershipRoutes, sessionSecretNames(session.AccessClass))
+		return Provisioning{}, fmt.Errorf("%s needs the session secrets (%s)", EnvMembershipRoutes, EnvSessionSuccessorKey)
 	}
 	if !hasSecret || secret.Reveal() == "" {
 		return Provisioning{}, fmt.Errorf("%s=true needs %s", EnvMembershipRoutes, EnvInviteTokenSecret)

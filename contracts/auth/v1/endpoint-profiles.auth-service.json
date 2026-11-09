@@ -403,7 +403,7 @@
         {
           "algorithm": "EdDSA",
           "anchor": {
-            "line": 45,
+            "line": 42,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -1895,7 +1895,7 @@
         {
           "algorithm": "EdDSA",
           "anchor": {
-            "line": 45,
+            "line": 42,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },

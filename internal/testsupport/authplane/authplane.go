@@ -114,8 +114,7 @@ func Start(t testing.TB, ctx context.Context, adminURI string, key Key, jwtKey s
 		t.Fatal(err)
 	}
 	projectUsers(t, ctx, pool, projector)
-	issuer, err := authapi.NewEdDSAIssuer(jwtKey, "dev-health-ops", edtokens.Audience,
-		token.NewFileSigner(token.FileConfig{KeyPath: key.path, KeyID: keyID}), IssuerURL)
+	issuer, err := authapi.NewEdDSAIssuer(edtokens.Audience, token.NewFileSigner(token.FileConfig{KeyPath: key.path, KeyID: keyID}), IssuerURL)
 	if err != nil {
 		t.Fatal(err)
 	}

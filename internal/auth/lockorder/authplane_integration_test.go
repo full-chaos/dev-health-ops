@@ -96,8 +96,7 @@ func (e *env) authPlaneOn(pool *pgxpool.Pool, schema authschema.ValidatedIdentif
 	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
 		return nil, err
 	}
-	issuer, err := authapi.NewEdDSAIssuer(jwtKey, "dev-health-ops", "dev-health-api",
-		token.NewFileSigner(token.FileConfig{KeyPath: keyPath, KeyID: "k1"}), "https://auth.example.test")
+	issuer, err := authapi.NewEdDSAIssuer("dev-health-api", token.NewFileSigner(token.FileConfig{KeyPath: keyPath, KeyID: "k1"}), "https://auth.example.test")
 	if err != nil {
 		return nil, fmt.Errorf("issuer: %w", err)
 	}

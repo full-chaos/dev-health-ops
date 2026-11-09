@@ -327,6 +327,7 @@ func TestTheShardPartitionPlantedAwkMutantsAreCaught(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The pin pass and the split pass each hold this line; a mutant replaces every copy, so it lands on the pass that runs.
 	const keep = "if (best == shard) keep[k] = 1"
 	if !strings.Contains(string(b), keep) {
 		t.Fatalf("awk no longer contains %q: update the planted mutants", keep)
@@ -336,7 +337,7 @@ func TestTheShardPartitionPlantedAwkMutantsAreCaught(t *testing.T) {
 		"duplicates a package": "if (best == shard || k == 1) keep[k] = 1",
 	} {
 		mutant := filepath.Join(t.TempDir(), "mutant.awk")
-		if err := os.WriteFile(mutant, []byte(strings.Replace(string(b), keep, repl, 1)), 0o644); err != nil {
+		if err := os.WriteFile(mutant, []byte(strings.ReplaceAll(string(b), keep, repl)), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if raceshardHoldsDefect(t, mutant) == "" {

@@ -415,14 +415,54 @@ func composeAuthPlatformRolesOwned(g *guard) {
 	r := composeAuth(g)
 	svc := mp(r.services["auth-service"]["environment"])
 	g.expect(str(svc["AUTH_PLATFORM_ROLES_OWNED"]) == "true", "auth-service AUTH_PLATFORM_ROLES_OWNED=%q, want true (the prod form: a plain up must keep it)", str(svc["AUTH_PLATFORM_ROLES_OWNED"]))
-	g.expect(str(svc["AUTH_USERS_OWNED"]) == "false", "auth-service AUTH_USERS_OWNED=%q, want false (the venue has no mail settings: auth_mail_config_invalid)", str(svc["AUTH_USERS_OWNED"]))
 	for _, name := range []string{"go-api", "query-api", "web"} {
-		env := mp(r.services[name]["environment"])
-		for _, key := range []string{"AUTH_PLATFORM_ROLES_OWNED", "AUTH_USERS_OWNED"} {
-			_, set := env[key]
-			g.expect(!set, "%s sets %s: only auth-service owns, go-api stays legacy for the drift-S controls", name, key)
+		_, set := mp(r.services[name]["environment"])["AUTH_PLATFORM_ROLES_OWNED"]
+		g.expect(!set, "%s sets AUTH_PLATFORM_ROLES_OWNED: only auth-service reads it on this venue", name)
+	}
+}
+
+// CHAOS-13356: every service of the venue runs with users owned, as prod's phase 4 (deploy values.prod.yaml usersOwnedStage
+// owned): auth-service owns users and sends the verify and reset mail over SMTP to the venue's mailpit service, go-api forwards
+// sessions, local login and credentials and carries the switch (it refuses it without the three), the auth one-shots keep the
+// owned grant set, and the seed tool one-off runs owned. No service sets the switch to anything but true.
+func composeAuthUsersOwned(g *guard) {
+	r := composeAuth(g)
+	env := func(name string) doc { return mp(r.services[name]["environment"]) }
+	for name, s := range r.services {
+		if v, set := mp(s["environment"])["AUTH_USERS_OWNED"]; set {
+			g.expect(str(v) == "true", "%s AUTH_USERS_OWNED=%q, want true: users are owned on every venue", name, str(v))
 		}
 	}
+	for _, name := range []string{"auth-service", "go-api", "auth-migrate", "auth-grants", "auth-users-backfill"} {
+		g.expect(str(env(name)["AUTH_USERS_OWNED"]) == "true", "%s AUTH_USERS_OWNED=%q, want true", name, str(env(name)["AUTH_USERS_OWNED"]))
+	}
+	for _, k := range []string{"AUTH_PROXY_SESSIONS", "AUTH_PROXY_LOCAL_LOGIN", "AUTH_PROXY_CREDENTIALS"} {
+		g.expect(str(env("go-api")[k]) == "true", "go-api %s=%q, want true: go-api refuses AUTH_USERS_OWNED without it", k, str(env("go-api")[k]))
+	}
+	auth := env("auth-service")
+	for k, want := range map[string]string{"EMAIL_PROVIDER": "smtp", "SMTP_HOST": "mailpit", "SMTP_PORT": "1025", "SMTP_USE_TLS": "false",
+		"AUTH_MAIL_ALLOW_CONSOLE": "true", "EMAIL_FROM_ADDRESS": "noreply@bigboy.invalid", "APP_BASE_URL": "http://localhost:3000"} {
+		g.expect(str(auth[k]) == want, "auth-service %s=%q, want %q: owned users need a mail setting, and the venue's sink is mailpit (auth_mail_config_invalid)", k, str(auth[k]), want)
+	}
+	// The sink is the venue's own mailpit, on a network auth-service shares.
+	mailpit, ok := r.services["mailpit"]
+	g.expect(ok, "the venue has no mailpit service: auth-service's SMTP_HOST names it")
+	if ok {
+		shared := false
+		for n := range mp(mailpit["networks"]) {
+			if _, on := mp(r.services["auth-service"]["networks"])[n]; on {
+				shared = true
+			}
+		}
+		g.expect(shared, "auth-service shares no network with mailpit: its mail cannot reach the sink")
+	}
+	g.expect(str(auth["AUTH_LOGIN_LOCKOUT_KEY_FILE"]) == "/run/auth/session/login-lockout-key", "auth-service AUTH_LOGIN_LOCKOUT_KEY_FILE=%q: go-api forwards local login, and the login route mounts only with the lockout key", str(auth["AUTH_LOGIN_LOCKOUT_KEY_FILE"]))
+	_, direct := auth["AUTH_LOGIN_LOCKOUT_KEY"]
+	g.expect(!direct, "auth-service carries AUTH_LOGIN_LOCKOUT_KEY: a secret is a _FILE")
+	cmd := strings.Join(strs(r.services["auth-session-keys-init"]["command"]), " ")
+	g.expect(strings.Contains(cmd, "/run/auth/session/login-lockout-key"), "auth-session-keys-init does not write the login lockout key")
+	seed := env("auth-users-backfill")
+	g.expect(str(seed["AUTH_PLATFORM_ROLES_OWNED"]) == "true", "auth-users-backfill AUTH_PLATFORM_ROLES_OWNED=%q, want true: the seed never grants a platform role from users.is_superuser", str(seed["AUTH_PLATFORM_ROLES_OWNED"]))
 }
 
 func composeAuthReadme(g *guard) {
@@ -436,7 +476,7 @@ func composeAuthReadme(g *guard) {
 	if end := strings.Index(section[3:], "\n## "); end >= 0 {
 		section = section[:end+3]
 	}
-	for _, want := range []string{"run --rm acr-workload-bootstrap", "AUTH_WORKLOAD_READER_ROLES", "openssl req", "/ca/issuer.pem", "/key/issuer.key", "expires_at", "bigboy-platform-admin-fixture.sh", "AUTH_PLATFORM_ROLES_OWNED"} {
+	for _, want := range []string{"run --rm acr-workload-bootstrap", "AUTH_WORKLOAD_READER_ROLES", "openssl req", "/ca/issuer.pem", "/key/issuer.key", "expires_at", "bigboy-platform-admin-fixture.sh", "AUTH_PLATFORM_ROLES_OWNED", "seed tool", "users-backfill -insert-only", "auth.platform_role_assignments"} {
 		g.expect(strings.Contains(section, want), "README auth venue section lacks %q", want)
 	}
 	for _, m := range composeReadmeCmdRe.FindAllStringSubmatch(section, -1) {
@@ -456,6 +496,7 @@ var composeAuthChecks = []check{
 	{"the_auth_start_order_is_the_compose_yml_order", composeAuthStartOrder},
 	{"auth_service_mints_eddsa_and_the_verifiers_and_session_wiring_follow", composeAuthEddsaWiring},
 	{"auth_service_owns_platform_roles_by_default_and_go_api_does_not", composeAuthPlatformRolesOwned},
+	{"every_service_runs_with_users_owned_and_auth_service_has_mail", composeAuthUsersOwned},
 	{"the_readme_holds_the_auth_venue_procedure", composeAuthReadme},
 }
 
@@ -554,10 +595,34 @@ func TestComposeAuthVenuePlanted(t *testing.T) {
 			check: composeAuthEddsaWiring, want: "AUTH_VALKEY_URI"},
 		{name: "auth-service jwt key dropped", mutate: mut(composeFile, "      AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY}\n", ""),
 			check: composeAuthEddsaWiring, want: "AUTH_JWT_SECRET_KEY"},
-		{name: "auth-service platform roles not owned", mutate: mut(composeFile, "      AUTH_PLATFORM_ROLES_OWNED: 'true'\n", ""),
+		{name: "auth-service platform roles not owned", mutate: mut(composeFile, "      AUTH_PLATFORM_ROLES_OWNED: 'true'\n      # go-api forwards local login", "      # go-api forwards local login"),
 			check: composeAuthPlatformRolesOwned, want: "AUTH_PLATFORM_ROLES_OWNED"},
-		{name: "auth-service users owned", mutate: mut(composeFile, "      AUTH_SERVICE_HTTP_ADDR: :8095\n      AUTH_SERVICE_OPERATOR_HTTP_ADDR: :8096\n      AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s\n      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}\n      AUTH_SESSION_SUCCESSOR_KEY_FILE: /run/auth/session/successor-key\n      AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem\n      AUTH_SIGNING_KEY_ID: auth-signing-bigboy\n      AUTH_TOKEN_ISSUER_URL: https://auth.bigboy.internal:8443\n      AUTH_USERS_OWNED: 'false'\n", "      AUTH_SERVICE_HTTP_ADDR: :8095\n      AUTH_SERVICE_OPERATOR_HTTP_ADDR: :8096\n      AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s\n      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}\n      AUTH_SESSION_SUCCESSOR_KEY_FILE: /run/auth/session/successor-key\n      AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem\n      AUTH_SIGNING_KEY_ID: auth-signing-bigboy\n      AUTH_TOKEN_ISSUER_URL: https://auth.bigboy.internal:8443\n      AUTH_USERS_OWNED: 'true'\n"),
-			check: composeAuthPlatformRolesOwned, want: "AUTH_USERS_OWNED"},
+		{name: "auth-service users not owned", mutate: mut(composeFile, "      AUTH_USERS_OWNED: 'true'\n      AUTH_MAIL_ALLOW_CONSOLE: 'true'\n", "      AUTH_USERS_OWNED: 'false'\n      AUTH_MAIL_ALLOW_CONSOLE: 'true'\n"),
+			check: composeAuthUsersOwned, want: "auth-service AUTH_USERS_OWNED"},
+		{name: "auth one-shots not owned", mutate: mut(composeFile, "  AUTH_SCHEMA_OWNER_ROLE: devhealth_auth_migrator\n  # CHAOS-13356: users are owned here, as prod's phase 4: auth-migrate and auth-grants keep the owned grant set.\n  AUTH_USERS_OWNED: 'true'\n", "  AUTH_SCHEMA_OWNER_ROLE: devhealth_auth_migrator\n  AUTH_USERS_OWNED: 'false'\n"),
+			check: composeAuthUsersOwned, want: "auth-migrate AUTH_USERS_OWNED"},
+		{name: "seed one-off not owned", mutate: mut(composeFile, "      AUTH_PLATFORM_ROLES_OWNED: 'true'\n      AUTH_USERS_OWNED: 'true'\n    image: '${BIGBOY_DHO_IMAGE", "      AUTH_PLATFORM_ROLES_OWNED: 'true'\n      AUTH_USERS_OWNED: 'false'\n    image: '${BIGBOY_DHO_IMAGE"),
+			check: composeAuthUsersOwned, want: "auth-users-backfill AUTH_USERS_OWNED"},
+		{name: "seed one-off grants platform roles", mutate: mut(composeFile, "      AUTH_PLATFORM_ROLES_OWNED: 'true'\n      AUTH_USERS_OWNED: 'true'\n    image: '${BIGBOY_DHO_IMAGE", "      AUTH_USERS_OWNED: 'true'\n    image: '${BIGBOY_DHO_IMAGE"),
+			check: composeAuthUsersOwned, want: "auth-users-backfill AUTH_PLATFORM_ROLES_OWNED"},
+		{name: "go-api not owned", mutate: mut(composeFile, "    - AUTH_USERS_OWNED=true\n", ""),
+			check: composeAuthUsersOwned, want: "go-api AUTH_USERS_OWNED"},
+		{name: "go-api keeps credentials", mutate: mut(composeFile, "    - AUTH_PROXY_CREDENTIALS=true\n", ""),
+			check: composeAuthUsersOwned, want: "go-api AUTH_PROXY_CREDENTIALS"},
+		{name: "go-api keeps local login", mutate: mut(composeFile, "    - AUTH_PROXY_LOCAL_LOGIN=true\n    - AUTH_PROXY_SESSIONS=true\n    - AUTH_PROXY_URL=http://auth-service:8095\n    - AUTH_SESSION_ISSUE_CREDENTIAL=workload\n", "    - AUTH_PROXY_SESSIONS=true\n    - AUTH_PROXY_URL=http://auth-service:8095\n    - AUTH_SESSION_ISSUE_CREDENTIAL=workload\n"),
+			check: composeAuthUsersOwned, want: "go-api AUTH_PROXY_LOCAL_LOGIN"},
+		{name: "auth-service without a mail provider", mutate: mut(composeFile, "      EMAIL_PROVIDER: smtp\n", ""),
+			check: composeAuthUsersOwned, want: "auth-service EMAIL_PROVIDER"},
+		{name: "auth-service mails through the console", mutate: mut(composeFile, "      EMAIL_PROVIDER: smtp\n", "      EMAIL_PROVIDER: console\n"),
+			check: composeAuthUsersOwned, want: "auth-service EMAIL_PROVIDER"},
+		{name: "auth-service mails another host", mutate: mut(composeFile, "      SMTP_HOST: mailpit\n", "      SMTP_HOST: smtp.example.com\n"),
+			check: composeAuthUsersOwned, want: "auth-service SMTP_HOST"},
+		{name: "auth-service console not allowed", mutate: mut(composeFile, "      AUTH_MAIL_ALLOW_CONSOLE: 'true'\n", ""),
+			check: composeAuthUsersOwned, want: "auth-service AUTH_MAIL_ALLOW_CONSOLE"},
+		{name: "auth-service without the lockout key", mutate: mut(composeFile, "      AUTH_LOGIN_LOCKOUT_KEY_FILE: /run/auth/session/login-lockout-key\n", ""),
+			check: composeAuthUsersOwned, want: "AUTH_LOGIN_LOCKOUT_KEY_FILE"},
+		{name: "lockout key never written", mutate: mut(composeFile, "for f in /run/auth/session/successor-key /run/auth/session/login-lockout-key; do", "for f in /run/auth/session/successor-key; do"),
+			check: composeAuthUsersOwned, want: "does not write the login lockout key"},
 		{name: "go-api owns platform roles", mutate: mut(composeFile, "    - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443\n", "    - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443\n    - AUTH_PLATFORM_ROLES_OWNED=true\n"),
 			check: composeAuthPlatformRolesOwned, want: "go-api sets AUTH_PLATFORM_ROLES_OWNED"},
 		{name: "readme loses the bootstrap step", copy: readme, mutate: mut("ci/bigboy/README.md", "run --rm acr-workload-bootstrap", "up -d acr-workload-bootstrap"),

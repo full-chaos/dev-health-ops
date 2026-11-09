@@ -336,6 +336,7 @@ internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go
 internal/cigates/workflows	registry_retry_test.go
 internal/cigates/workflows	ttl_registry_test.go
+internal/cigates/workflows	venue_users_owned_test.go
 internal/cigates/workflows	workflows_common_test.go
 internal/cigates/workflows	workflows_go_integration_pr_scope_test.go
 internal/cigates/workflows	workflows_go_quality_queue_skip_test.go
@@ -343,6 +344,7 @@ internal/cigates/workflows	workflows_go_queue_cancel_children_test.go
 internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
+internal/cigates/workflows	workflows_venue_always_runs_test.go
 internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
 internal/deploymentcontract	manifest.go
@@ -634,7 +636,6 @@ internal/testsupport/ratchet	ratchet_test.go
 internal/testsupport/recordedfiles	recordedfiles.go
 internal/testsupport/recordedfiles	recordedfiles_test.go
 internal/testsupport/venuechanged	changed_test.go
-internal/testsupport/venuechanged	closure_test.go
 internal/testsupport/venuechanged	trigger_coverage_test.go
 internal/testsupport/venueoracle	external.go
 internal/testsupport/venueoracle	external_test.go

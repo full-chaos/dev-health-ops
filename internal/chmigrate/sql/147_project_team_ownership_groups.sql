@@ -6,7 +6,8 @@
 -- groups once per refresh and give each changed group a stored stamp a reader can seek on:
 --
 --   project_team_ownership_groups_log      every change of a group, ORDER BY (org_id, stored_at, row_key): the seek.
---   project_team_ownership_groups_current  the latest row per group (ReplacingMergeTree(stored_at, is_deleted)),
+--   project_team_ownership_groups_current  the latest row per group (ReplacingMergeTree(stored_at)), a gone group
+--                                          included: its latest row carries is_deleted = 1,
 --                                          ORDER BY (org_id, row_key): a log row is current when its stored_at is
 --                                          the group's current stored_at.
 --   project_team_ownership_groups_current_mv  copies every log insert into current.
@@ -14,8 +15,9 @@
 --                                          compares it with current, and appends only what changed: a group whose
 --                                          content_hash differs or that is new (is_deleted = 0), and a group that
 --                                          is gone (is_deleted = 1). A refresh with no source change appends nothing.
---                                          The test reads c_is_deleted itself, so it does not rest on whether FINAL
---                                          hides a deleted row.
+--                                          is_deleted is a plain column, not the engine's deletion flag: FINAL must
+--                                          return the deleted latest row, never hide it or fall back to an older
+--                                          live row, or a gone group would be appended as deleted on every refresh.
 --
 -- The group build is the reader's per-organization group statement with org_id carried through every window,
 -- join and GROUP BY, and conflict_identities sorted (a set; groupUniqArray order is not stable, and the hash must
@@ -64,7 +66,7 @@ CREATE TABLE IF NOT EXISTS project_team_ownership_groups_current
     stored_at DateTime64(6, 'UTC'),
     is_deleted UInt8
 )
-ENGINE = ReplacingMergeTree(stored_at, is_deleted)
+ENGINE = ReplacingMergeTree(stored_at)
 ORDER BY (org_id, row_key);
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS project_team_ownership_groups_current_mv
@@ -244,4 +246,4 @@ FULL OUTER JOIN (
     FROM project_team_ownership_groups_current FINAL
 ) AS c ON g.g_org_id = c.c_org_id AND g.g_row_key = c.c_row_key
 WHERE (g_row_key != '' AND (c_row_key = '' OR c_is_deleted = 1 OR c_content_hash != g_content_hash))
-   OR (g_row_key = '' AND c_is_deleted = 0);
+   OR (g_row_key = '' AND c_row_key != '' AND c_is_deleted = 0);

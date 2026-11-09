@@ -312,7 +312,8 @@ func TestMigration147RefreshAppendsExactlyTheChangedGroups(t *testing.T) {
 		{"ownership: T2's manual (conflicting) row removed", func() {
 			groupsExec(ctx, t, conn, `ALTER TABLE team_project_ownership DELETE WHERE org_id = ? AND team_id = 'T2' AND source = 'manual' SETTINGS mutations_sync = 2`, groupsOrgA)
 		}, false},
-		{"no change again", func() {}, true},
+		{"no change after the removal", func() {}, true},
+		{"no change after the removal, again", func() {}, true},
 	}
 	for _, step := range steps {
 		mark := serverNow(ctx, t, conn)

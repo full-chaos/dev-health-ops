@@ -183,6 +183,17 @@ auth-service takes AUTH_WORKLOAD_BOOTSTRAP and AUTH_SESSION_ISSUE_WORKLOAD_SUBJE
 {{- if has (upper (trim (toString .name))) (list "AUTH_SESSION_ISSUE_CREDENTIAL" "AUTH_WORKLOAD_BOOTSTRAP_FILE" "AUTH_WORKLOAD_ISSUER") }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.sessionIssue.workloadBootstrap renders it, and a later entry would shadow the rendered value" .name) }}{{- end }}
 {{- end }}
 {{- end }}
+{{- /*
+goApi.sessionIssue.credential=workload: go-api presents its own workload token on the session issue route (the credential mode
+prod already runs), so it reads no AUTH_SESSION_ISSUE_TOKEN. The chart then renders AUTH_SESSION_ISSUE_CREDENTIAL=workload and no
+token reference, and ignores goApi.sessionIssue.secretName. Absent = token mode, rendered as before. goApi.extraEnv cannot set the name.
+*/}}
+{{- $siWorkload := eq (toString (default dict .Values.goApi.sessionIssue).credential) "workload" }}
+{{- if $siWorkload }}
+{{- range .Values.goApi.extraEnv }}
+{{- if eq (upper (trim (toString .name))) "AUTH_SESSION_ISSUE_CREDENTIAL" }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.sessionIssue.credential renders it, and a later entry would shadow the rendered value" .name) }}{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -315,6 +326,9 @@ spec:
               value: "/run/workload/api.bootstrap"
             - name: AUTH_WORKLOAD_ISSUER
               value: {{ $wbIssuer | quote }}
+            {{- else if and $sessionsOn $siWorkload }}
+            - name: AUTH_SESSION_ISSUE_CREDENTIAL
+              value: "workload"
             {{- else if $sessionsOn }}
             {{- /* The auth-session-issuer svc_ credential go-api presents to
             auth-service's session issue route. Not optional: sessions on

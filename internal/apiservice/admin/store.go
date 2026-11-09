@@ -60,9 +60,10 @@ type targetUser struct {
 	IsSuperuser bool
 }
 
-// targetUserSQL is userByID's read, with is_superuser by the platform roles switch.
+// targetUserSQL is userByID's read, with is_superuser by the platform roles switch: the target's stored holding, so a
+// disabled superuser target keeps its protection as legacy's stored column gave it.
 func (s pgStore) targetUserSQL() (string, error) {
-	superuser, err := s.platformRoles().Superuser("is_superuser", "users.id")
+	superuser, err := s.platformRoles().StoredSuperuser("is_superuser", "users.id")
 	if err != nil {
 		return "", err
 	}

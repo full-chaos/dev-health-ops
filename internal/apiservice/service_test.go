@@ -187,9 +187,7 @@ func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
 	cfg := config.Config{
 		APIAddress:     "127.0.0.1:0",
 		APIDatabaseURI: secrets.NewValue("postgres://user:pass@127.0.0.1:1/nonexistent"),
-		// With a database the api authenticates callers, so it needs the key.
-		APIJWTSecret: secrets.NewValue(strings.Repeat("fixture-key-", 3)),
-		APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
+		APIJWTIssuer:   "dev-health-ops", APIJWTAudience: "dev-health-api",
 	}
 	components, err := configure(context.Background(), cfg, registry, quietLogger())
 	if err != nil {
@@ -301,51 +299,24 @@ func TestCommandRunsTheServiceThroughTheShell(t *testing.T) {
 	}
 }
 
-// apiTestConfig is a configuration with the api database and signing key
-// set. The DSN points at a closed local port and the key is a fixture built
-// at runtime.
+// apiTestConfig is a configuration with the api database set. The DSN
+// points at a closed local port.
 func apiTestConfig() config.Config {
 	return config.Config{
 		APIAddress:          "127.0.0.1:0",
 		APIDatabaseURI:      secrets.NewValue("postgresql://devhealth_api@127.0.0.1:1/devhealth?connect_timeout=1"),
 		APIDatabaseRole:     "devhealth_api",
 		RiverDatabaseSchema: "river",
-		APIJWTSecret:        secrets.NewValue(strings.Repeat("fixture-key-", 3)),
 		APIJWTIssuer:        "dev-health-ops",
 		APIJWTAudience:      "dev-health-api",
 	}
 }
 
-// TestConfigureRefusesADatabaseWithoutAUsableSigningKey: with a database the
-// api authenticates callers, so JWT_SECRET_KEY must be present and at least
-// 32 characters; the error names the key and never carries configuration.
-func TestConfigureRefusesADatabaseWithoutAUsableSigningKey(t *testing.T) {
-	cases := map[string]struct {
-		mutate func(*config.Config)
-		names  string
-	}{
-		"no signing key": {func(cfg *config.Config) { cfg.APIJWTSecret = secrets.Value{} }, "JWT_SECRET_KEY"},
-		"short key":      {func(cfg *config.Config) { cfg.APIJWTSecret = secrets.NewValue("short") }, "32 characters"},
-	}
-	for name, test := range cases {
-		t.Run(name, func(t *testing.T) {
-			cfg := apiTestConfig()
-			test.mutate(&cfg)
-			components, err := configure(context.Background(), cfg, health.NewRegistry(time.Second), quietLogger())
-			if err == nil {
-				t.Fatalf("configure accepted it: %d components", len(components))
-			}
-			if !strings.Contains(err.Error(), test.names) {
-				t.Fatalf("error %q does not name %q", err, test.names)
-			}
-			if strings.Contains(err.Error(), "fixture-key") || strings.Contains(err.Error(), "127.0.0.1:1") {
-				t.Fatalf("error leaks configuration: %v", err)
-			}
-		})
-	}
-	// Without a database no caller is authenticated, so no key is needed.
+// TestConfigureStartsTransportOnlyWithoutADatabase: without a database no
+// caller is authenticated and the api still starts.
+func TestConfigureStartsTransportOnlyWithoutADatabase(t *testing.T) {
 	cfg := apiTestConfig()
-	cfg.APIDatabaseURI, cfg.APIJWTSecret = secrets.Value{}, secrets.Value{}
+	cfg.APIDatabaseURI = secrets.Value{}
 	if _, err := configure(context.Background(), cfg, health.NewRegistry(time.Second), quietLogger()); err != nil {
 		t.Fatalf("transport-only configure: %v", err)
 	}

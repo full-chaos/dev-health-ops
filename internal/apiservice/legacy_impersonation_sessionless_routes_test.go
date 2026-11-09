@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
@@ -32,10 +31,6 @@ type sessionlessAnswer struct {
 // legacy caller (the admin's own bearer beside a live go-api session row),
 // and names each answer.
 func TestSessionlessRoutesAnswerTheLegacyImpersonationCaller(t *testing.T) {
-	verifier, err := edgetoken.New(strings.Repeat("fixture-key-", 3), "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	tokens := edtokens.New(t)
 	store := &legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}
 	auth := tokens.AuthenticatorOver(t, store, quietLogger())
@@ -62,7 +57,7 @@ func TestSessionlessRoutesAnswerTheLegacyImpersonationCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
+	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 		AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 	server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 	if err != nil {

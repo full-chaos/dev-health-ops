@@ -16,7 +16,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
@@ -76,10 +75,6 @@ var legacyAdmitted = []string{"GET /api/v1/admin/impersonate/status", "POST /api
 // scope's refusal is told from the route's by the impersonation headers,
 // which the scope stamps only when it lets the session through.
 func TestLegacyImpersonationCallerCensusUnderTheProxySwitch(t *testing.T) {
-	verifier, err := edgetoken.New(strings.Repeat("fixture-key-", 3), "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	tokens := edtokens.New(t)
 	store := &legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}
 	auth := tokens.AuthenticatorOver(t, store, quietLogger())
@@ -107,7 +102,7 @@ func TestLegacyImpersonationCallerCensusUnderTheProxySwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = clickHouse.Close() })
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}
 	routes := Routes(deps, quietLogger())
 	server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 	if err != nil {

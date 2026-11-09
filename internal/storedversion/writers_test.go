@@ -105,6 +105,7 @@ var unresolvedWriters = map[string]string{
 	"internal/auth/identity/local/linkcred.go":               "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local/linkbind.go":               "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local.go":                        "PostgreSQL auth-schema principal and user inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/adminusers.go":                   "PostgreSQL auth-schema principal and user inserts of the go-api admin users create through auth-service (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/cliuser.go":                      "PostgreSQL auth-schema principal and user inserts of the dho auth users-create verb (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/oidc/flowstore.go":               "PostgreSQL auth-schema sso_flow_states insert (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/saml/pgstore.go":                 "PostgreSQL auth-schema sso_flow_states and saml_assertion_uses inserts (schema name interpolated); no in-scope ClickHouse table",

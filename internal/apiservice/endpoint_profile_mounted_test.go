@@ -58,7 +58,7 @@ func mountedRoutesWith(t *testing.T, configure func(*policy.Authenticator)) []mo
 	if configure != nil {
 		configure(auth)
 	}
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), ServiceAccounts: stubAccounts{}}
 	var out []mountedRoute
 	for _, route := range Routes(deps, quietLogger()) {
 		out = append(out, mountedRoute{"api", route.Method, route.Pattern, route.Handler})

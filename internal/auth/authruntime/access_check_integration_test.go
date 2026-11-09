@@ -36,7 +36,7 @@ func TestEdDSASessionTokenEndsWithItsSessionAndItsTokenVersion(t *testing.T) {
 	user, org := e.seed(t, ctx)
 
 	signer := token.NewFileSigner(token.FileConfig{KeyPath: filepath.Join(dir, "k1.pem"), KeyID: "k1"})
-	minter, err := authapi.NewEdDSAIssuer(testAccessSecret, "dev-health-ops", "dev-health-api", signer, "https://auth.example.test")
+	minter, err := authapi.NewEdDSAIssuer("dev-health-api", signer, "https://auth.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}

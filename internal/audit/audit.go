@@ -454,7 +454,7 @@ func validateMutationAudit(event AuditEvent) error {
 	if err := event.validate(); err != nil {
 		return err
 	}
-	if appendOnlyEventTypes[event.EventType] || publicPurgeEventTypes[event.EventType] {
+	if appendOnlyEventTypes[event.EventType] || publicPurgeEventTypes[event.EventType] || publicProjectionEventTypes[event.EventType] {
 		return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, event.EventType)
 	}
 	return nil
@@ -464,7 +464,13 @@ func (m Mutation) validate() error {
 	if m.Apply == nil {
 		return fmt.Errorf("%w: no state mutation", ErrMutationFailed)
 	}
-	for _, event := range append([]AuditEvent{m.Audit}, m.Also...) {
+	for i, event := range append([]AuditEvent{m.Audit}, m.Also...) {
+		if i == 0 && commitAdmitsPublicProjection(event.EventType, m.OffStream) {
+			if err := event.validate(); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := validateMutationAudit(event); err != nil {
 			return err
 		}

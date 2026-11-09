@@ -18,7 +18,7 @@ const (
 )
 
 var qualityLegNames = []string{
-	"static", "test-1-of-4", "test-2-of-4", "test-3-of-4", "test-4-of-4",
+	"static", "test-1-of-5", "test-2-of-5", "test-3-of-5", "test-4-of-5", "test-5-of-5",
 	"race-1-of-6", "race-2-of-6", "race-3-of-6", "race-4-of-6", "race-5-of-6", "race-6-of-6",
 }
 
@@ -74,7 +74,7 @@ func runQualityHelper(t *testing.T, sha string, runs string, jobs string, failRu
 	if failRuns {
 		write("fail-runs", "")
 	}
-	command := exec.Command("bash", script, qualityRepo, sha, "go-quality.yml", qualityLegPrefix, qualityLegStep, "11")
+	command := exec.Command("bash", script, qualityRepo, sha, "go-quality.yml", qualityLegPrefix, qualityLegStep, "12")
 	command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "STUB_DIR="+dir)
 	if idFile != "" {
 		command.Env = append(command.Env, "QUEUE_TESTED_RUN_ID_FILE="+idFile)
@@ -85,7 +85,7 @@ func runQualityHelper(t *testing.T, sha string, runs string, jobs string, failRu
 }
 
 // The go-quality form of ci/queue_tested_sha.sh answers only for a green merge_group run of this repository, for exactly
-// this sha, in which all ten legs ran their gate in the latest attempt. Every other answer keeps the legs running.
+// this sha, in which all twelve legs ran their gate in the latest attempt. Every other answer keeps the legs running.
 func TestQueueTestedShaForGoQualityAnswersOnlyForAFullyRanQueueRun(t *testing.T) {
 	good := qualityRunsJSON(qualitySha, "merge_group", qualityRepo, "success")
 	allRan := qualityJobsJSON(qualityLegs(nil))
@@ -97,7 +97,7 @@ func TestQueueTestedShaForGoQualityAnswersOnlyForAFullyRanQueueRun(t *testing.T)
 		failRuns bool
 		want     bool
 	}{
-		{"all ten legs ran green", qualitySha, good, allRan, false, true},
+		{"all twelve legs ran green", qualitySha, good, allRan, false, true},
 		{"a test leg was skipped by its plan", qualitySha, good,
 			qualityJobsJSON(qualityLegs(func(i int, l *qualityLeg) {
 				if i == 2 {
@@ -134,7 +134,7 @@ func TestQueueTestedShaForGoQualityAnswersOnlyForAFullyRanQueueRun(t *testing.T)
 					l.job = "cancelled"
 				}
 			})), false, false},
-		{"only ten legs", qualitySha, good, qualityJobsJSON(qualityLegs(nil)[1:]), false, false},
+		{"only eleven legs", qualitySha, good, qualityJobsJSON(qualityLegs(nil)[1:]), false, false},
 		{"no leg job at all", qualitySha, good, qualityJobsJSON(nil), false, false},
 		{"the run is from a fork repository", qualitySha, qualityRunsJSON(qualitySha, "merge_group", "someone/dev-health-ops", "success"), allRan, false, false},
 		{"the run is not a merge_group run", qualitySha, qualityRunsJSON(qualitySha, "push", qualityRepo, "success"), allRan, false, false},
@@ -345,8 +345,8 @@ func TestGoQualityLegSkipIsPushOnlyNeverStaticAndKeepsReceipts(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(qualityLegNames, ",") {
 		t.Errorf("matrix legs %v differ from the pinned list %v", names, qualityLegNames)
 	}
-	if len(names) != 11 {
-		t.Errorf("the matrix has %d legs, want 11 (static + 4 test + 6 race)", len(names))
+	if len(names) != 12 {
+		t.Errorf("the matrix has %d legs, want 12 (static + 5 test + 6 race)", len(names))
 	}
 }
 

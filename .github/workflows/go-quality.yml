@@ -195,7 +195,7 @@ jobs:
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
-      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, test-N-of-4, race-N-of-6; the tooling tests pin the
+      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, test-N-of-5, race-N-of-6; the tooling tests pin the
       # race and test counts there). go-quality-plan filters them with ci/go_quality_legs.sh: a pull request without the ci:full
       # label starts no race leg (a job cannot read its own matrix in an `if`, so the leg is left out, not started to report a
       # skip). The legs are not required status contexts (the ruleset requires the `go-quality` aggregate), so the count can
@@ -420,6 +420,7 @@ jobs:
           bash ci/go_worker_fixture_test.sh
           bash ci/pull_base_image_test.sh
           bash ci/retry_test.sh
+          bash ci/fetch_pinned_release_test.sh
           bash ci/ghcr_login_test.sh
           bash ci/auth_rotation_probe_test.sh
           bash ci/rehearse_auth_key_rotation_test.sh
@@ -589,7 +590,10 @@ jobs:
         # the nondeterminism this pins away. Checksum-verified, because an
         # unverified download is a pin on a name rather than on bytes.
         # Installed under RUNNER_TEMP and put on PATH via GITHUB_PATH so no
-        # step needs sudo.
+        # step needs sudo. CHAOS-13426: the download is authenticated with the
+        # job token (contents: read) and retried (ci/lib/fetch_pinned_release.sh).
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version=0.11.0
@@ -627,7 +631,7 @@ jobs:
               ;;
           esac
           tarball="shellcheck-v${version}.linux.${arch}.tar.gz"
-          curl -fsSL -o "${RUNNER_TEMP}/${tarball}" "https://github.com/koalaman/shellcheck/releases/download/v${version}/${tarball}"
+          bash ci/lib/fetch_pinned_release.sh koalaman/shellcheck "v${version}" "${tarball}" "${sha}" "${RUNNER_TEMP}/${tarball}"
           echo "${sha}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
           tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}"
           mkdir -p "${RUNNER_TEMP}/bin"
@@ -682,7 +686,7 @@ jobs:
           QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
         run: |
           if [ -n "${QUEUE_RUN}" ]; then
-            summary="go-quality on this push: static ran; test-1-of-4, test-2-of-4, test-3-of-4, test-4-of-4, race-1-of-6, race-2-of-6, race-3-of-6, race-4-of-6, race-5-of-6, race-6-of-6 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
+            summary="go-quality on this push: static ran; test-1-of-5, test-2-of-5, test-3-of-5, test-4-of-5, test-5-of-5, race-1-of-6, race-2-of-6, race-3-of-6, race-4-of-6, race-5-of-6, race-6-of-6 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
           else
             summary="go-quality on this push: every leg ran (no queue-tested sha)"
           fi

@@ -27,6 +27,7 @@ internal/apiservice/admin/userstore.go	pgStore.updateUser	1	write (an explicit v
 internal/apiservice/admin/userstore.go	pgStore.userColumns	2	read: the off column of PlatformRoleRead
 internal/auth/authapi/compat.go	refreshUserInfo	1	response key
 internal/auth/authapi/login.go	userInfo	1	response key
+internal/auth/authapi/provisioning_users.go	provisioningHandlers.usersUpdate	2	request key (a platform_admin grant or revoke; no public column is written)
 internal/auth/authapi/users.go	PGUsers.stateSQL	1	read: the off column of the switched statement
 internal/auth/authconfig/options.go	-	1	help text
 internal/auth/decisionstate/decisionstate.go	stateQuery	1	read: the state version digests the public users row (is_active, is_superuser); it decides nothing

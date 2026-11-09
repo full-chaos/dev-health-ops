@@ -59,6 +59,8 @@ type Operator struct {
 	Provisioner authprovision.Provisioner
 	// readGrants replaces the org deletion's ClickHouse grant read in a test.
 	readGrants func(context.Context, driver.Conn) ([]string, error)
+	// readRefreshStates replaces the org deletion's refresh-state read in a test.
+	readRefreshStates func(context.Context, driver.Conn, []string) (uint64, error)
 }
 
 func (o Operator) logger() *slog.Logger {
@@ -693,13 +695,14 @@ func (o Operator) orgDeleteHandlers(config DeleteOrgConfig, httpDoer providerfou
 		db = o.db
 	}
 	h := &handlers{
-		store:         o.store(db),
-		logger:        o.logger(),
-		clickHouseDSN: config.ClickHouseDSN,
-		decryptor:     config.Decryptor,
-		pagerDuty:     config.PagerDuty,
-		httpDoer:      httpDoer,
-		readGrants:    o.readGrants,
+		store:             o.store(db),
+		logger:            o.logger(),
+		clickHouseDSN:     config.ClickHouseDSN,
+		decryptor:         config.Decryptor,
+		pagerDuty:         config.PagerDuty,
+		httpDoer:          httpDoer,
+		readGrants:        o.readGrants,
+		readRefreshStates: o.readRefreshStates,
 	}
 	if !dryRun {
 		h.orgProvision = actorProvisioner{Provisioner: o.Provisioner, actor: config.Actor, resolve: o.resolveActor}

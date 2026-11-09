@@ -144,11 +144,14 @@ jobs:
           fetch-depth: 0
 
       - name: Install the pinned Gitleaks binary
+        # CHAOS-13426: authenticated (the job token, contents: read), retried; an anonymous download got 504s on 11-09.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSfL --retry 3 -o "${RUNNER_TEMP}/${tarball}" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          bash ci/lib/fetch_pinned_release.sh gitleaks/gitleaks "v${GITLEAKS_VERSION}" "${tarball}" "${GITLEAKS_SHA256}" \
+            "${RUNNER_TEMP}/${tarball}"
           echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum --check --strict
           mkdir -p "${RUNNER_TEMP}/gitleaks"
           tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}/gitleaks" gitleaks

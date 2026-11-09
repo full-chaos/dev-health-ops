@@ -12,17 +12,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
-// Issuer mints the EdDSA access token and verifies the HS256 legacy refresh token.
+// Issuer mints the EdDSA access token. It verifies no HS256 token.
 type Issuer struct {
-	eddsa    *eddsaMinter
-	verifier *edgetoken.Verifier
-	kids     KidRecorder
-	access   *AccessCheck
-	now      func() time.Time
+	eddsa  *eddsaMinter
+	kids   KidRecorder
+	access *AccessCheck
+	now    func() time.Time
 }
 
 // Grant is what an access token says about its bearer.

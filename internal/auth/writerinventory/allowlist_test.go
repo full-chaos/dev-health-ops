@@ -108,6 +108,20 @@ var Allowlist = []Entry{
 	// acp 11-07 ruling, CHAOS-13196: `dho auth users-create` provisions a verified local user through ProvisionCLIUser.
 	{File: "internal/auth/identity/cliuser.go", Func: "Store.ProvisionCLIUser", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/cliuser.go", Func: "Store.ProvisionCLIUser", Table: "auth.users", Verb: "INSERT"},
+	// acp attest of PLAN-13376 v2 (S1, ticket 13377): the user-admin routes go-api calls while auth-service owns users write
+	// the auth rows and go-api's public rows in one commit (create, email, verified and profile update, admin password set, soft delete).
+	{File: "internal/auth/identity/adminusers.go", Func: "Store.AdminSetPassword", Table: "auth.users", Verb: "UPDATE"},
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminCreate", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminCreate", Table: "auth.users", Verb: "INSERT"},
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminCreate", Table: "public.users", Verb: "INSERT"},
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminSoftDelete", Table: "auth.principals", Verb: "UPDATE"},
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminSoftDelete", Table: "auth.users", Verb: "UPDATE"},
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminSoftDelete", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminUpdate", Table: "auth.principals", Verb: "UPDATE"},
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminUpdate", Table: "auth.users", Verb: "UPDATE"},
+	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminUpdate", Table: "public.users", Verb: "UPDATE"},
+	// acp accept of PLAN-13376-delta-v4 (pm D6915): an admin PATCH with no field change bumps public.users.updated_at.
+	{File: "internal/auth/identity/adminusers.go", Func: "touchPublicUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.SetEmailVerifiedWith", Table: "auth.users", Verb: "UPDATE"},

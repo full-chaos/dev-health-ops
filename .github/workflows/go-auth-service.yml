@@ -238,8 +238,6 @@ jobs:
             targets: FuzzParseRefreshRequest FuzzDecodeAuthorizationRequest
           - package: internal/auth/contracts
             targets: FuzzParseErrorEnvelope FuzzRevisionUnmarshal FuzzTimestampUnmarshal FuzzParseAccessToken FuzzParseWorkloadToken
-          - package: internal/auth/edgetoken
-            targets: FuzzVerifyToken
           - package: internal/auth/signedtoken
             targets: FuzzValidSignedToken
           - package: internal/auth/httpapi

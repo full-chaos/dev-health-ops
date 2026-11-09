@@ -41,6 +41,7 @@ internal/apiservice/admin/impersonation_handoff.go	handlers.handoffRoutes	admin.
 internal/apiservice/admin/orgs.go	handlers.orgRoutes	admin.orgs	route
 internal/apiservice/admin/platformstats.go	handlers.platformRoutes	admin.stats	route
 internal/apiservice/admin/serviceaccount_keys.go	handlers.serviceAccountKeyRoutes	admin.users	route
+internal/apiservice/admin/serviceaccounts.go	handlers.serviceAccountRoutes	admin.users	route
 internal/apiservice/admin/users.go	handlers.createUserOrg	admin.users	8
 internal/apiservice/admin/users.go	handlers.listUsers	admin.users	8
 internal/apiservice/admin/users.go	handlers.userRoutes	admin.users	route
@@ -48,6 +49,7 @@ internal/auth/authapi/compat.go	compatHandlers.compatRefresh	admin.orgs	4
 internal/auth/authapi/compat_guard.go	guardRefresh	admin.orgs	4
 internal/auth/authapi/provisioning.go	provisioningHandlers.actorRule	admin.orgs	9
 internal/auth/authapi/provisioning.go	provisioningHandlers.targetsRule	admin.users	9
+internal/auth/authapi/provisioning_users.go	provisioningHandlers.usersActorRule	admin.users	9
 internal/auth/authapi/refresh.go	handlers.refresh	admin.orgs	4
 internal/queryapi/datahealth/datahealth.go	RequireOperator	admin.stats	6
 internal/queryapi/graph/operation_org_guard.go	operationOrgDecision	admin.orgs	handler

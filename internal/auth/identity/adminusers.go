@@ -187,7 +187,7 @@ func (s *Store) AdminCreateUser(ctx context.Context, req AdminCreateRequest) (_ 
 	event := withChangedFields(localAudit("auth.principal.provisioned", "principal_provisioned", subject,
 		Actor{PrincipalID: &actor, RequestID: req.RequestID}), fields...)
 	req.Caller.Annotate(event.Attributes)
-	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+	err = commitMutation(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if err := req.Authorize(ctx, tx); err != nil {
 				return err

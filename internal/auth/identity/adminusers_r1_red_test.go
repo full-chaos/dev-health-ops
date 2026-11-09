@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
@@ -72,5 +73,24 @@ func TestAdminPublicUsernameRaceIsUsernameTaken(t *testing.T) {
 	email := &pgconn.PgError{Code: "23505", SchemaName: "public", TableName: "users", ConstraintName: "ix_users_email"}
 	if err := updatePublicUserRow(context.Background(), failingExecTx{email}, `UPDATE public.users SET email = $2, updated_at = now() WHERE id = $1`, uuid.New(), &name); !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("an email race on update = %v, want ErrEmailTaken (control)", err)
+	}
+}
+
+// The create path maps a username race the same way (round r1 P2): the commit's unique violation on
+// ix_users_username is ErrUsernameTaken, one on ix_users_email stays ErrEmailTaken.
+func TestAdminCreateUsernameRaceIsUsernameTaken(t *testing.T) {
+	store := lazyOwnedStore(t)
+	none := func(context.Context, audit.TxOps) error { return nil }
+	for index, want := range map[string]error{"ix_users_username": ErrUsernameTaken, "ix_users_email": ErrEmailTaken} {
+		race := &pgconn.PgError{Code: "23505", SchemaName: "public", TableName: "users", ConstraintName: index}
+		old := commitMutation
+		commitMutation = func(context.Context, *pgxpool.Pool, authschema.ValidatedIdentifier, audit.Mutation) error {
+			return fmt.Errorf("%w: applying the state mutation: %w", audit.ErrMutationFailed, race)
+		}
+		_, err := store.AdminCreateUser(context.Background(), AdminCreateRequest{Email: "a@example.test", Actor: uuid.New(), Authorize: none})
+		commitMutation = old
+		if !errors.Is(err, want) {
+			t.Errorf("a create race on %s = %v, want %v", index, err, want)
+		}
 	}
 }

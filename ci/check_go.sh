@@ -5174,7 +5174,9 @@ check_auth_paths_selftest() {
 # path segment starting with auth or audit) or imports the auth schema adapter
 # must be inside the gate (AUTH_PACKAGES) or named, with a reason, in
 # ci/auth_gate_scope_exempt.txt (package<TAB>reason). An exemption that is
-# gated, or that names no package, is stale and fails.
+# gated, or that names no package, is stale and fails. The decision is
+# `cmd/cigate scope-verdict` (internal/cigates/scope.go), over the candidate
+# sources (`scope-candidates -sources`: segment, import, testimport).
 # auth_scope_candidates: the import path of every Go package of the module that
 # LOOKS like auth (a path segment starting with auth or audit) or imports the
 # auth schema adapter. One definition for the scope selftest AND the relevance
@@ -5193,42 +5195,31 @@ auth_scope_tags() {
 
 # auth_scope_candidates: discovery runs once with no tag, once with every derived
 # tag, and once per tag (a `!tag` file is visible only without it; an `a && b`
-# file only with both), and unions the results.
+# file only with both), and unions the results. `auth_scope_candidates -sources`
+# prints path<TAB>source lines instead of paths.
 auth_scope_candidates() {
-  local module tag tags all=""
+  local module tag tags all="" mode=("$@")
   module="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)"
   tags="$(auth_scope_tags)"
   [ -n "${tags}" ] || die "auth scope: no build tag found in the module; derivation is broken"
   for tag in ${tags}; do all+="${all:+,}${tag}"; done
   {
     for set in "" "${all}" ${tags}; do
-      auth_go list -mod=readonly -tags="${set}" -e -json ./... | auth_go run -trimpath -mod=readonly ./cmd/cigate scope-candidates "${module}"
+      auth_go list -mod=readonly -tags="${set}" -e -json ./... | auth_go run -trimpath -mod=readonly ./cmd/cigate scope-candidates "${mode[@]}" "${module}"
     done
   } | LC_ALL=C sort -u
 }
 
 check_auth_scope_selftest() {
-  local exempt="${ROOT}/ci/auth_gate_scope_exempt.txt" gated candidates missing stale pkg reason
-  gated="$(auth_go list -mod=readonly "${AUTH_PACKAGES[@]}" | LC_ALL=C sort -u)"
-  [ -n "${gated}" ] || die "auth scope: the gate selects no package"
-  candidates="$(auth_scope_candidates)"
-  [ -n "${candidates}" ] || die "auth scope: no candidate package found; the selftest would measure nothing"
-  missing=""
-  while IFS= read -r pkg; do
-    [ -n "${pkg}" ] || continue
-    printf '%s\n' "${gated}" | grep -qx -- "${pkg}" && continue
-    grep -qE "^${pkg//\//\\/}	" "${exempt}" 2>/dev/null && continue
-    missing+="${pkg} "
-  done <<<"${candidates}"
-  [ -z "${missing}" ] || die "auth scope: package(s) look like auth or import the auth schema but are neither in the gate nor exempt with a reason in ci/auth_gate_scope_exempt.txt: ${missing}"
-  stale=""
-  while IFS=$'\t' read -r pkg reason; do
-    case "${pkg}" in ''|'#'*) continue ;; esac
-    [[ "${reason}" =~ [^[:space:]] ]] || stale+="${pkg}(no reason) "
-    if printf '%s\n' "${gated}" | grep -qx -- "${pkg}" || ! printf '%s\n' "${candidates}" | grep -qx -- "${pkg}"; then stale+="${pkg} "; fi
-  done <"${exempt}"
-  [ -z "${stale}" ] || die "auth scope: stale or reasonless exemption(s) (gated, no longer a candidate, or no reason): ${stale}"
-  printf 'auth scope: %s candidate packages, all gated or exempt\n' "$(printf '%s\n' "${candidates}" | wc -l | tr -d ' ')"
+  local exempt="${ROOT}/ci/auth_gate_scope_exempt.txt" dir rc=0
+  # Files, not <(...): `go run` starts the built binary without the shell's extra fds.
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-auth-scope.XXXXXX")" || die "auth scope: no temp dir"
+  auth_go list -mod=readonly "${AUTH_PACKAGES[@]}" | LC_ALL=C sort -u >"${dir}/gated" || rc=$?
+  [ "${rc}" -eq 0 ] && { auth_scope_candidates -sources >"${dir}/sources" || rc=$?; }
+  [ "${rc}" -eq 0 ] && { auth_go run -trimpath -mod=readonly ./cmd/cigate scope-verdict \
+    --gated "${dir}/gated" --sources "${dir}/sources" --exempt "${exempt}" || rc=$?; }
+  rm -rf -- "${dir}"
+  [ "${rc}" -eq 0 ] || die "auth scope: the scope selftest refused (rc ${rc}; reason above)"
 }
 
 check_auth() {

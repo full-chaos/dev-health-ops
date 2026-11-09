@@ -1,6 +1,7 @@
 package cigates
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"regexp"
@@ -9,6 +10,13 @@ import (
 )
 
 var authSegment = regexp.MustCompile(`^(auth|audit)`)
+
+// Why a package is an auth scope candidate.
+const (
+	SourceSegment    = "segment"    // a path segment starting with auth or audit
+	SourceImport     = "import"     // the auth schema adapter in Imports (non-test files)
+	SourceTestImport = "testimport" // the auth schema adapter in TestImports or XTestImports
+)
 
 func stringList(m map[string]any, key string) []string {
 	list, _ := m[key].([]any)
@@ -21,54 +29,186 @@ func stringList(m map[string]any, key string) []string {
 	return out
 }
 
-// AuthScopeCandidates reads `go list -json` objects from in and prints the auth-looking package paths of module.
-func AuthScopeCandidates(module string, in io.Reader, stdout, stderr io.Writer) int {
+func authScopeSources(module string, in io.Reader, stderr io.Writer) (map[string]map[string]bool, int) {
 	pkgs, err := jsonStream(in)
 	if err != nil {
 		fmt.Fprintf(stderr, "auth scope: unreadable go list output: %v\n", err)
-		return 1
+		return nil, 1
 	}
 	adapter := module + "/internal/storage/postgres/authschema"
-	found := map[string]bool{}
+	found := map[string]map[string]bool{}
+	add := func(path, source string) {
+		if found[path] == nil {
+			found[path] = map[string]bool{}
+		}
+		found[path][source] = true
+	}
 	seen := 0
 	for _, p := range pkgs {
 		path, ok := p["ImportPath"].(string)
 		if !ok {
 			fmt.Fprintln(stderr, "auth scope: package without ImportPath")
-			return 1
+			return nil, 1
 		}
 		if !strings.HasPrefix(path, module) {
 			continue
 		}
 		seen++
 		relative := strings.TrimLeft(path[len(module):], "/")
-		imports := append(append(stringList(p, "Imports"), stringList(p, "TestImports")...), stringList(p, "XTestImports")...)
-		match := false
 		for _, seg := range strings.Split(relative, "/") {
 			if seg != "" && authSegment.MatchString(seg) {
-				match = true
+				add(path, SourceSegment)
 			}
 		}
-		for _, imp := range imports {
+		for _, imp := range stringList(p, "Imports") {
 			if imp == adapter {
-				match = true
+				add(path, SourceImport)
 			}
 		}
-		if match {
-			found[path] = true
+		for _, imp := range append(stringList(p, "TestImports"), stringList(p, "XTestImports")...) {
+			if imp == adapter {
+				add(path, SourceTestImport)
+			}
 		}
 	}
 	if seen == 0 {
 		fmt.Fprintln(stderr, "auth scope: go list reported no package of the module")
-		return 1
+		return nil, 1
 	}
-	paths := make([]string, 0, len(found))
-	for p := range found {
-		paths = append(paths, p)
+	return found, 0
+}
+
+func sortedKeys(m map[string]map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
 	}
-	sort.Strings(paths)
-	for _, p := range paths {
+	sort.Strings(out)
+	return out
+}
+
+// AuthScopeCandidates reads `go list -json` objects from in and prints the auth-looking package paths of module.
+func AuthScopeCandidates(module string, in io.Reader, stdout, stderr io.Writer) int {
+	found, rc := authScopeSources(module, in, stderr)
+	if rc != 0 {
+		return rc
+	}
+	for _, p := range sortedKeys(found) {
 		fmt.Fprintln(stdout, p)
 	}
+	return 0
+}
+
+// AuthScopeCandidateSources is AuthScopeCandidates with one "path<TAB>source" line per reason.
+func AuthScopeCandidateSources(module string, in io.Reader, stdout, stderr io.Writer) int {
+	found, rc := authScopeSources(module, in, stderr)
+	if rc != 0 {
+		return rc
+	}
+	for _, p := range sortedKeys(found) {
+		for _, s := range []string{SourceSegment, SourceImport, SourceTestImport} {
+			if found[p][s] {
+				fmt.Fprintf(stdout, "%s\t%s\n", p, s)
+			}
+		}
+	}
+	return 0
+}
+
+func nonBlankLines(r io.Reader) ([]string, error) {
+	var out []string
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		if line := strings.TrimRight(sc.Text(), "\r"); strings.TrimSpace(line) != "" {
+			out = append(out, line)
+		}
+	}
+	return out, sc.Err()
+}
+
+type scopeExemption struct {
+	pkg, reason string
+	tabbed      bool
+}
+
+// AuthScopeVerdict is the auth scope selftest's decision. gated holds the gate's package paths, sources the
+// "path<TAB>source" lines of every discovery pass (duplicates allowed), exempt the ci/auth_gate_scope_exempt.txt rows.
+// It returns 0 and prints the count line when every candidate is gated or exempt, else 2.
+func AuthScopeVerdict(gated, sources, exempt io.Reader, stdout, stderr io.Writer) int {
+	fail := func(format string, a ...any) int {
+		fmt.Fprintf(stderr, "auth scope: "+format+"\n", a...)
+		return 2
+	}
+	gatedLines, err := nonBlankLines(gated)
+	if err != nil {
+		return fail("unreadable gate package list: %v", err)
+	}
+	if len(gatedLines) == 0 {
+		return fail("the gate selects no package")
+	}
+	gatedSet := map[string]bool{}
+	for _, l := range gatedLines {
+		gatedSet[strings.TrimSpace(l)] = true
+	}
+	sourceLines, err := nonBlankLines(sources)
+	if err != nil {
+		return fail("unreadable candidate sources: %v", err)
+	}
+	if len(sourceLines) == 0 {
+		return fail("no candidate package found; the selftest would measure nothing")
+	}
+	candidates := map[string]map[string]bool{}
+	for _, l := range sourceLines {
+		path, source, ok := strings.Cut(l, "\t")
+		switch {
+		case !ok || path == "":
+			return fail("malformed candidate source line %q (want path<TAB>source)", l)
+		case source != SourceSegment && source != SourceImport && source != SourceTestImport:
+			return fail("unknown candidate source %q for %s", source, path)
+		}
+		if candidates[path] == nil {
+			candidates[path] = map[string]bool{}
+		}
+		candidates[path][source] = true
+	}
+	exemptLines, err := nonBlankLines(exempt)
+	if err != nil {
+		return fail("unreadable exemption file: %v", err)
+	}
+	var rows []scopeExemption
+	exempted := map[string]bool{}
+	for _, l := range exemptLines {
+		pkg, reason, tabbed := strings.Cut(l, "\t")
+		if strings.HasPrefix(pkg, "#") {
+			continue
+		}
+		rows = append(rows, scopeExemption{pkg: pkg, reason: reason, tabbed: tabbed})
+		if tabbed {
+			exempted[pkg] = true
+		}
+	}
+	var missing []string
+	for _, p := range sortedKeys(candidates) {
+		if !gatedSet[p] && !exempted[p] {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) > 0 {
+		return fail("package(s) look like auth or import the auth schema but are neither in the gate nor exempt with a reason in ci/auth_gate_scope_exempt.txt: %s", strings.Join(missing, " "))
+	}
+	var stale []string
+	for _, r := range rows {
+		if strings.TrimSpace(r.reason) == "" {
+			stale = append(stale, r.pkg+"(no reason)")
+		}
+		if gatedSet[r.pkg] || candidates[r.pkg] == nil {
+			stale = append(stale, r.pkg)
+		}
+	}
+	if len(stale) > 0 {
+		return fail("stale or reasonless exemption(s) (gated, no longer a candidate, or no reason): %s", strings.Join(stale, " "))
+	}
+	fmt.Fprintf(stdout, "auth scope: %d candidate packages, all gated or exempt\n", len(candidates))
 	return 0
 }

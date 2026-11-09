@@ -408,16 +408,29 @@ if [ "${LEG}" = "acp" ]; then
   read_ports
 fi
 
+# legacy_link_purge is the users-owned switch's purge of go-api's legacy link-token rows (public.email_verification_tokens,
+# public.password_reset_tokens), as a deployment's switch runs it (dho auth legacy-link-purge, CHAOS-13361): the owned
+# hand-off of every leg runs it once the seeded users are copied, with the owned grants (the auth role's DELETE on the two
+# tables) in place from bring-up. The verb refuses unless AUTH_USERS_OWNED is true: the migrate service takes compose.yml's
+# default (true), and the script refuses a caller's value that is not true, so it sets nothing itself.
+legacy_link_purge() {
+  printf 'step 1f: legacy-link-purge of the seeded legacy link-token rows\n'
+  timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
+    run --rm --no-deps migrate auth legacy-link-purge -run-id authcorpus-switch >/dev/null || die "legacy-link-purge failed"
+}
+
 # owned_seed_copy is the hand-off of every leg (CHAOS-13356: auth-service owns users from bring-up). compose.yml's
 # auth-users-backfill one-shot copied the users before auth-service first served; the corpus then seeds its own users into
 # public.users as a superuser, behind auth-service, which is not ready while a public user has no auth twin. The same
 # one-shot copies them (`users-backfill -insert-only`, users owned, auth-service's login: it creates the missing auth users
-# and changes no existing one), and auth-service is recreated on the copied users. The corpus test seeds first (it signals
-# ${SEEDED_FILE}), so this runs once its users exist; the test is then handed the forwarded set (${FLIPPED_FILE}) and goes on.
+# and changes no existing one), the legacy link-token rows are purged, and auth-service is recreated on the copied users.
+# The corpus test seeds first (it signals ${SEEDED_FILE}), so this runs once its users exist; the test is then handed the
+# forwarded set (${FLIPPED_FILE}) and goes on.
 owned_seed_copy() {
   printf 'step 1f: auth-users-backfill of the seeded users, then auth-service again\n'
   timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
     run --rm --no-deps auth-users-backfill || die "users-backfill failed"
+  legacy_link_purge
   timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
     up --detach --no-deps --force-recreate --no-build --wait --wait-timeout 300 auth-service
 }

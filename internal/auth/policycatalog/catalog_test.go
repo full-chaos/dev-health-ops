@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "9bea80ad38fd05f1a6199e8501a548a3446ce18580673d15808d567806fc9e36"
-	rolesSHA   = "ff421e32be43a67dab4c882c7696447fd749719c955f293574c688588f8d47d7"
+	actionsSHA = "d03560cfabbcd514eaed695b31fbbfe9227a825fba737da75827492df7a38ec4"
+	rolesSHA   = "8c1ec5927b7b77ea5bde9997525faac3c9a800722a4d4173155db66a4660c985"
 )
 
 func repoRoot(t *testing.T) string {
@@ -640,7 +640,7 @@ func TestPlatformActionsAreHeldOnlyByPlatformAdmin(t *testing.T) {
 func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing.T) {
 	want := map[string]Action{
 		"acr.evidence.read":    {Scope: ScopeOrganization, ResourceKind: "repository", RiskClass: RiskLow, CacheClass: CacheResourceRevisionBound, Impersonation: ImpersonationAllowed},
-		"acr.credential.issue": {Scope: ScopeOrganization, ResourceKind: "organization", RiskClass: RiskHigh, CacheClass: CacheNone, Impersonation: ImpersonationDenied},
+		"acr.credential.issue": {Scope: ScopeOrganization, ResourceKind: "organization", RiskClass: RiskHigh, CacheClass: CacheNone, Impersonation: ImpersonationDenied, RepositoryScope: RepositoryScopeFiltered},
 	}
 	for id, w := range want {
 		a, err := Default().Action(id)
@@ -648,7 +648,8 @@ func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing
 			t.Errorf("%s: %v", id, err)
 			continue
 		}
-		if a.Scope != w.Scope || a.ResourceKind != w.ResourceKind || a.RiskClass != w.RiskClass || a.CacheClass != w.CacheClass || a.Impersonation != w.Impersonation {
+		if a.Scope != w.Scope || a.ResourceKind != w.ResourceKind || a.RiskClass != w.RiskClass || a.CacheClass != w.CacheClass || a.Impersonation != w.Impersonation ||
+			(w.RepositoryScope != "" && a.RepositoryScope != w.RepositoryScope) {
 			t.Errorf("%s = %+v, want %+v", id, a, w)
 		}
 	}
@@ -669,6 +670,28 @@ func TestEveryOrganizationRoleHoldsAcrEvidenceReadAndCredentialIssue(t *testing.
 	for id := range org {
 		if _, err := c.Role(id); err != nil {
 			t.Errorf("organization role %s is missing: %v", id, err)
+		}
+	}
+}
+
+// Product rule 1 and the executed legacy cells: a platform admin with no membership row approves a device and
+// gives consent in the organization of its session, so acr.credential.issue carries the platform-admin flag.
+func TestAcrCredentialIssueAllowsAPlatformAdminWithNoMembership(t *testing.T) {
+	a, err := Default().Action("acr.credential.issue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.PlatformAdmin {
+		t.Fatalf("acr.credential.issue PlatformAdmin = false, want true")
+	}
+}
+
+// Legacy refuses the ACR repository reads to a platform admin with no membership row in its token's
+// organization, so no repository action carries the flag.
+func TestNoRepositoryActionCarriesThePlatformAdminFlag(t *testing.T) {
+	for _, a := range Default().Actions() {
+		if a.ResourceKind == "repository" && a.PlatformAdmin {
+			t.Errorf("repository action %s carries platform_admin allowed", a.ID)
 		}
 	}
 }
@@ -709,7 +732,7 @@ func TestThePlatformAdminActionsAreTheAdminGuardAndTheLegacyQueryAPIAndBillingAc
 		}
 	}
 	sort.Strings(got)
-	want := []string{"analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read",
+	want := []string{"acr.credential.issue", "analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read",
 		"integrations.write", "license.read", "members.invite", "members.manage", "metrics.read", "reports.write",
 		"settings.write", "teams.write", "work_items.read"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {

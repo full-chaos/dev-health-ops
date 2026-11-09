@@ -231,6 +231,10 @@ type funcDecl struct {
 	file *srcFile
 }
 
+// moduleRootPkg is the module-relative directory of the package whose Caller is runtime.Caller one frame deeper: its
+// skip 0 names the file of the function that called it, as runtime.Caller(0) does.
+const moduleRootPkg = "internal/testsupport/moduleroot"
+
 // constZero reports whether e folds to the integer constant 0 (the skip of runtime.Caller that names the call's own file).
 func (c *fileCtx) constZero(e ast.Expr, sc *scope) bool {
 	v, ok := c.fold(e, sc, 0)
@@ -1044,7 +1048,7 @@ func (c *fileCtx) bind(body ast.Node, sc *scope) {
 						}
 						v := dynInfo
 						switch {
-						case name == "runtime.Caller" && i == 1 && len(call.Args) == 1 && c.constZero(call.Args[0], sc):
+						case (name == "runtime.Caller" || name == c.g.module+"/"+moduleRootPkg+".Caller") && i == 1 && len(call.Args) == 1 && c.constZero(call.Args[0], sc):
 							v = pathInfo{kind: kOwn}
 						case (name == "os.MkdirTemp" || name == "os.CreateTemp") && i == 0:
 							v = pathInfo{kind: kTemp}

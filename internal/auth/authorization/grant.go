@@ -236,7 +236,8 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 		if why := e.membershipDefaultDenial(memberRole, act); why != "" {
 			return deny(why)
 		}
-		return e.withRepositoryObligations(repositoryAllow(ReasonAllowedByMembershipDefault, act, rev, now), r, memberRole)
+		_, unrestricted, _ := e.repositoryScope(s, r.OrganizationID, memberRole, act, rows, now)
+		return e.withRepositoryObligations(repositoryAllow(ReasonAllowedByMembershipDefault, act, rev, now), r, memberRole, unrestricted)
 	}
 
 	var sawRevoked, sawExpired, sawUnresolved bool
@@ -271,7 +272,8 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 			sawExpired = true
 			continue
 		}
-		return e.withRepositoryObligations(repositoryAllow(ReasonAllowedByRepositoryGrant, act, rev, now), r, memberRole)
+		_, unrestricted, _ := e.repositoryScope(s, r.OrganizationID, memberRole, act, rows, now)
+		return e.withRepositoryObligations(repositoryAllow(ReasonAllowedByRepositoryGrant, act, rev, now), r, memberRole, unrestricted)
 	}
 	switch {
 	case sawExpired:

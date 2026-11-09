@@ -166,6 +166,25 @@ func TestPasswordPathCensusHopRows(t *testing.T) {
 		{name: "new caller names the constant", rows: both, files: map[string]string{"internal/api/authprovision/other.go": "package authprovision\n\n" +
 			"func postOther(hash string) { post(PathUsersPassword, hash) }\n"},
 			want: "reviewed row hop " + mod + "internal/auth/authapi.handlers.usersPassword: functions outside internal/auth that name"},
+		{name: "the only pinned caller is absent", rows: []notPasswordSetting{noCreateCaller, passwordRow},
+			remove: []string{"internal/apiservice/admin/users.go"},
+			files: map[string]string{
+				"internal/api/authprovision/authprovision.go": "package authprovision\n\nconst (\n\tPathUsersCreate   = \"/internal/v1/users/create\"\n" +
+					"\tPathUsersPassword = \"/internal/v1/users/password\"\n)\n",
+				"internal/auth/identity/local.go": "package identity\n\nimport \"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy\"\n\n" +
+					"func changeLocal(x Exec, pw string) {\n\tif len(passwordpolicy.ValidateForHash(pw)) > 0 {\n\t\treturn\n\t}\n" +
+					"\tx(`UPDATE public.users SET password_hash = $2, token_version = token_version + 1 WHERE id = $1`, pw)\n}\n"},
+			want: "reviewed row hop " + mod + "internal/auth/authapi.handlers.usersPassword: functions outside internal/auth that name " +
+				mod + "internal/api/authprovision.PathUsersPassword = [], want [" + mod + "internal/api/authprovision.PostPassword]"},
+		{name: "the pinned caller has only an unguarded path", rows: both,
+			files: map[string]string{
+				"internal/apiservice/admin/users.go": "package admin\n\nimport (\n\t\"github.com/full-chaos/dev-health-ops/internal/api/authprovision\"\n" +
+					"\t\"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy\"\n)\n\n" +
+					"func createUser(password string) {\n\tif len(passwordpolicy.ValidateForHash(password)) > 0 {\n\t\treturn\n\t}\n\tauthprovision.PostCreate(password)\n}\n\n" +
+					"func forceSet(password string) { authprovision.PostPassword(password) }\n"},
+			want: "password path reaches no ValidateForHash call: " + mod + "internal/auth/identity.SetPassword <- " + mod +
+				"internal/auth/authapi.handlers.usersPassword <- <HTTP /internal/v1/users/password> <- " + mod +
+				"internal/api/authprovision.PostPassword <- " + mod + "internal/apiservice/admin.forceSet"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

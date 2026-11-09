@@ -11,6 +11,7 @@ internal/auth/passwordhash
 internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/sessionid
+internal/auth/sessionrule
 internal/authzenforce
 internal/chmigrate
 internal/cli

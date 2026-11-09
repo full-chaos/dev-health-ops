@@ -73,6 +73,7 @@ internal/auth/repokey
 internal/auth/requestid
 internal/auth/sessionevent
 internal/auth/sessionid
+internal/auth/sessionrule
 internal/auth/signedtoken
 internal/auth/workloadinput
 internal/authzenforce

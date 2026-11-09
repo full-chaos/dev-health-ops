@@ -15,6 +15,7 @@ internal/auth/policycatalog
 internal/auth/repoidentityevent
 internal/auth/repokey
 internal/auth/sessionid
+internal/auth/sessionrule
 internal/authzenforce
 internal/chmigrate
 internal/cli

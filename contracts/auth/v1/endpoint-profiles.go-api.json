@@ -3781,14 +3781,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
-      "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/service-accounts/{service_account_id}/keys [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -11056,14 +11054,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
-      "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -11122,14 +11118,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
-      "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/service-accounts/{service_account_id}/keys [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -11188,14 +11182,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
-      "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",

@@ -186,7 +186,7 @@ auth-service takes AUTH_WORKLOAD_BOOTSTRAP and AUTH_SESSION_ISSUE_WORKLOAD_SUBJE
 {{- /*
 goApi.sessionIssue.credential=workload: go-api presents its own workload token on the session issue route (the credential mode
 prod already runs), so it reads no AUTH_SESSION_ISSUE_TOKEN. The chart then renders AUTH_SESSION_ISSUE_CREDENTIAL=workload and no
-token reference, and ignores goApi.sessionIssue.secretName. Absent = token mode, rendered as before. goApi.extraEnv cannot set the name.
+token reference, and ignores goApi.sessionIssue.secretName. Absent or "" = token mode, rendered as before. goApi.extraEnv cannot set the name.
 */}}
 {{- $siWorkload := eq (toString (default dict .Values.goApi.sessionIssue).credential) "workload" }}
 {{- if $siWorkload }}

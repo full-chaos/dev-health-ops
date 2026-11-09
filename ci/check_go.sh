@@ -1047,6 +1047,11 @@ check_test() {
 # with no row weighs 1, and ci/go_race_shard.awk (longest-processing-time) places them: a wrong weight costs balance, never
 # coverage. internal/gqlgenguard stays alone (see SERIAL_HEAVY_TEST_PACKAGE), in whichever shard the split puts it.
 GO_TEST_WEIGHTS="${GO_TEST_WEIGHTS:-${ROOT}/ci/go_test_weights.tsv}"
+# ci/go_test_pins.tsv (CHAOS-13422): the packages ci/go_race_shard.awk places first: the heavy ones each on its own shard, then the apart ones, then the serial one.
+GO_TEST_PINS="${GO_TEST_PINS:-${ROOT}/ci/go_test_pins.tsv}"
+# GO_TEST_SERIAL_FACTOR (CHAOS-13422): the other packages of a test shard overlap, so a shard's wall is about their summed time / 1.9
+# (1.80-2.01 over the 5 shards of PR #5995's run at 9244407eb); the serial package adds its whole wall, so it weighs 2x in the split.
+GO_TEST_SERIAL_FACTOR=2
 GO_TEST_SHARD_CAP_SECONDS="${GO_TEST_SHARD_CAP_SECONDS:-1800}"
 GO_TEST_SHARD_WALL_PERCENT=85
 
@@ -1057,6 +1062,7 @@ check_test_shard_args() {
   { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
     || die "test shard ${shard} is outside 1..${count}"
   [ -f "${GO_TEST_WEIGHTS}" ] || die "test shards need ${GO_TEST_WEIGHTS}"
+  [ -f "${GO_TEST_PINS}" ] || die "test shards need ${GO_TEST_PINS}"
 }
 
 # check_test_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package of the shard, key = import path relative
@@ -1075,7 +1081,8 @@ check_test_shard_plan() {
       selected=$((selected + 1))
     done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./... \
       | quality_filter "${module_dir}" "${modpath}" \
-      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")
+      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" \
+          -v serial="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}" -v serialx="${GO_TEST_SERIAL_FACTOR}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")
   done
   [ "${selected}" -gt 0 ] || [ "${QUALITY_FILTER_ACTIVE}" -eq 1 ] \
     || die "test shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"

@@ -93,6 +93,8 @@ type PlatformRoles interface {
 	LockWritesShared(ctx context.Context, tx audit.TxOps) error
 	GrantOn(ctx context.Context, tx audit.TxOps, in platformrole.GrantInput) (uuid.UUID, error)
 	RevokeOn(ctx context.Context, tx audit.TxOps, in platformrole.RevokeInput) error
+	// HeldOn reads the stored assignment, whatever the principal's state: the update's role change is decided from it.
+	HeldOn(ctx context.Context, q platformrole.RowQuerier, principal uuid.UUID, role string) (bool, error)
 	Grant(ctx context.Context, in platformrole.GrantInput) (uuid.UUID, error)
 	Revoke(ctx context.Context, in platformrole.RevokeInput) error
 	// RefuseLastPlatformAdmin refuses an erase of the last active platform_admin, after LockWrites.
@@ -357,12 +359,14 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 		h.answerUsersError(w, r, opUsersUpdate, err)
 		return
 	}
-	state, _, err := h.Users.StateOn(ctx, h.Reader, target)
+	// The stored assignment, not the active authority: an inactive user who still holds platform_admin and is sent
+	// is_superuser true is no change, and sent false is a revoke, as go-api writes its stored column.
+	held, err := h.PlatformRoles.HeldOn(ctx, h.Reader, target, platformrole.PlatformAdmin)
 	if err != nil {
 		h.answerUsersError(w, r, opUsersUpdate, err)
 		return
 	}
-	roleChange := superuser != nil && *superuser != state.Holds(actionAdminUsers)
+	roleChange := superuser != nil && *superuser != held
 	decided := identity.DecideAdminUpdate(cur, identity.AdminUpdatePatch{Email: email, Verified: verified, Username: username,
 		FullName: fullName, AvatarURL: avatarURL})
 	var superuserWrite func(context.Context, audit.TxOps) error
@@ -370,35 +374,25 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 		grantIt := *superuser
 		superuserWrite = func(ctx context.Context, tx audit.TxOps) error {
 			if grantIt {
-				_, err := h.PlatformRoles.GrantOn(ctx, tx, platformrole.GrantInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin})
+				_, err := h.PlatformRoles.GrantOn(ctx, tx, platformrole.GrantInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin,
+					AllowDisabledTarget: true})
 				return err
 			}
 			return h.PlatformRoles.RevokeOn(ctx, tx, platformrole.RevokeInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin})
 		}
 	}
-	switch {
-	case decided.Empty() && !roleChange:
-		h.rec.record(ctx, opUsersUpdate, "success", reasonAccepted, nil)
-		writeJSON(w, http.StatusOK, usersChangeAnswer{PrincipalID: target.String()})
-		return
-	case decided.Empty():
-		if *superuser {
-			_, err = h.PlatformRoles.Grant(ctx, platformrole.GrantInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin})
-		} else {
-			err = h.PlatformRoles.Revoke(ctx, platformrole.RevokeInput{Actor: actor, Principal: target, Role: platformrole.PlatformAdmin})
-		}
-	default:
-		err = h.UsersAdmin.AdminUpdateUser(ctx, identity.AdminUpdateRequest{Principal: target, Email: email, Verified: verified,
-			Username: username, FullName: fullName, AvatarURL: avatarURL, Actor: actor,
-			RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, grantRequested, &target),
-			Superuser: superuserWrite}, cur)
-	}
+	// Every PATCH, a no-op and a platform role change only included, is one AdminUpdateUser: one lock order, and
+	// public.users.updated_at moves as go-api's PATCH moves it (pm D6915).
+	err = h.UsersAdmin.AdminUpdateUser(ctx, identity.AdminUpdateRequest{Principal: target, Email: email, Verified: verified,
+		Username: username, FullName: fullName, AvatarURL: avatarURL, Actor: actor,
+		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, grantRequested, &target),
+		Superuser: superuserWrite}, cur)
 	if err != nil {
 		h.answerUsersError(w, r, opUsersUpdate, err)
 		return
 	}
 	h.rec.record(ctx, opUsersUpdate, "success", reasonAccepted, nil)
-	writeJSON(w, http.StatusOK, usersChangeAnswer{PrincipalID: target.String(), Changed: true})
+	writeJSON(w, http.StatusOK, usersChangeAnswer{PrincipalID: target.String(), Changed: !decided.Empty() || roleChange})
 }
 
 // optionalBoolPointer reads an absent or null member as nil, else a JSON boolean.

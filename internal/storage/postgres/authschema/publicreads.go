@@ -137,9 +137,33 @@ func SessionReaderReadsWith(platformRolesOwned, workloadReader bool) []ColumnGra
 }
 
 // retiredRefreshTokensTable is go-api's public.refresh_tokens. The auth runtime
-// role held a column grant on it for the one-time legacy refresh exchange; each
-// grants pass revokes it, so a database migrated before the removal loses it.
+// role held a column grant on it for the one-time legacy refresh exchange; a
+// grants pass that finds the role still holding a direct privilege there revokes
+// it, so a database migrated before the removal loses it. A database where the
+// role holds nothing gets no statement: the migration login no longer holds
+// GRANT OPTION on the table, so a REVOKE there would fail with 42501.
 const retiredRefreshTokensTable = "refresh_tokens"
+
+// runtimeHoldsPublicGrant reports whether role holds a direct table or column
+// privilege on public.<table>, read from the ACLs (the set REVOKE removes).
+func runtimeHoldsPublicGrant(ctx context.Context, conn rowQuerier1, table, role string) (bool, error) {
+	var held bool
+	if err := conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+			CROSS JOIN LATERAL aclexplode(c.relacl) a
+			WHERE n.nspname = 'public' AND c.relname = $1
+			  AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = $2)
+		) OR EXISTS (
+			SELECT 1 FROM pg_attribute att JOIN pg_class c ON c.oid = att.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+			CROSS JOIN LATERAL aclexplode(att.attacl) a
+			WHERE n.nspname = 'public' AND c.relname = $1 AND NOT att.attisdropped
+			  AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = $2)
+		)`, table, role).Scan(&held); err != nil {
+		return false, fmt.Errorf("%w: reading the runtime role's privileges on %s.%s", ErrMigrationFailed, publicSchema, table)
+	}
+	return held, nil
+}
 
 // UsersWriteGrant is the switch-gated write access to public.users: the auth
 // runtime role projects each user it creates or changes to go-api's table in
@@ -517,7 +541,14 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 	if err != nil {
 		return nil, err
 	}
+	held := false
 	if exists {
+		held, err = runtimeHoldsPublicGrant(ctx, conn, retiredRefreshTokensTable, options.RuntimeRole)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if held {
 		tableID, err := NewValidatedIdentifier(retiredRefreshTokensTable)
 		if err != nil {
 			return nil, err

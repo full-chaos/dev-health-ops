@@ -106,3 +106,20 @@ func TestUsersDeleteOfTheLastPlatformAdminIsRefused(t *testing.T) {
 			f.roles.lastAdminChecks, f.roles.locks, f.roles.sharedLocks)
 	}
 }
+
+// An org admin edits a member of its organization with the edit form's unchanged is_superuser:false: that is no
+// platform role write, so it is not refused (go-api guards.go:106-109 refuses a non-superuser only for a grant or a
+// superuser target; round r1 P1-2).
+func TestUsersUpdateUnchangedSuperuserFalseByOrgAdminIsServed(t *testing.T) {
+	t.Parallel()
+	f := newUsersAdminFixture(t)
+	f.users.roles[[2]uuid.UUID{f.target, f.org}] = "member"
+	body := map[string]any{"actor_principal_id": f.admin.String(), "principal_id": f.target.String(), "organization_id": f.org.String(),
+		"email": "changed@example.test", "is_superuser": false}
+	if response := f.post(usersUpdatePath, encode(body), nil); response.Code != http.StatusOK {
+		t.Fatalf("org admin edit with an unchanged is_superuser:false: %d %s, want 200", response.Code, response.Body)
+	}
+	if len(f.roles.grants)+len(f.roles.revokes) != 0 {
+		t.Fatalf("grants %v revokes %v, want none", f.roles.grants, f.roles.revokes)
+	}
+}

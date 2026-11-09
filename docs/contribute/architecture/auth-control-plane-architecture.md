@@ -52,7 +52,7 @@ Go images. See [deployment](auth-control-plane-deployment.md).
 | `internal/auth/keystore` | Signing-key custody: the file contract and the public half only. |
 | `internal/auth/httpapi` | The middleware stack and server shared by the API listener: request ids, body bound, rate limits, panic recovery, error envelope. |
 | `internal/auth/contracts` | Go validation of the wire contracts under `contracts/auth/v1/`. |
-| `internal/auth/edgetoken`, `signedtoken`, `passwordhash`, `passwordpolicy`, `ratelimitvalkey` | Behaviour-parity ports of the existing Python auth helpers. |
+| `internal/auth/signedtoken`, `passwordhash`, `passwordpolicy`, `ratelimitvalkey` | Behaviour-parity ports of the existing Python auth helpers. |
 | `internal/audit` | The same-transaction audit and outbox write, the outbox publisher loop and the reaper. See [audit and outbox operations](auth-control-plane-audit-outbox.md). |
 | `internal/storage/postgres/authschema` | The auth-owned schema: its own migration lineage, the runtime grant manifest, posture checks. See [database, roles and migrations](auth-control-plane-database.md). |
 | `contracts/auth/v1/` | The language-neutral wire contracts and golden fixtures. See the [contract and SDK guide](auth-control-plane-contracts.md). |

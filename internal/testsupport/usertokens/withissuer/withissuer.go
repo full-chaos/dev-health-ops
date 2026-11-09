@@ -55,7 +55,7 @@ func Mint(t testing.TB) string {
 		t.Fatal(err)
 	}
 	signer := token.NewFileSigner(token.FileConfig{KeySetPath: manifestPath})
-	issuer, err := authapi.NewEdDSAIssuer(usertokens.Secret, usertokens.LegacyIssuer, usertokens.Audience, signer, EdDSAIssuer)
+	issuer, err := authapi.NewEdDSAIssuer(usertokens.Audience, signer, EdDSAIssuer)
 	if err != nil {
 		t.Fatal(err)
 	}

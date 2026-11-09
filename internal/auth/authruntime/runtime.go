@@ -151,8 +151,7 @@ func newAccessIssuer(cfg authconfig.Config, signer authapi.AccessSigner) (*autha
 		return nil, fmt.Errorf("authruntime: unknown access token class %q", cfg.Session.AccessClass)
 	}
 	return authapi.NewEdDSAIssuer(
-		cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience,
-		signer, cfg.TokenIssuerURL, authapi.WithLegacyAudience(cfg.Session.LegacyAudience), authapi.WithAccessLifetime(cfg.Session.AccessLifetime),
+		cfg.Session.AccessAudience, signer, cfg.TokenIssuerURL, authapi.WithAccessLifetime(cfg.Session.AccessLifetime),
 	)
 }
 
@@ -230,7 +229,7 @@ func compatRoutes(
 	if err != nil {
 		return nil, err
 	}
-	provisioning, err := provisioningRoutes(cfg, logger, pool, schema, identities, issueWorkload, sessions)
+	provisioning, err := goAPIInternalRoutes(cfg, logger, pool, schema, identities, issueWorkload, sessions)
 	if err != nil {
 		return nil, err
 	}
@@ -306,6 +305,7 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 		logger.Warn("install the OTel meter provider", "error", err)
 	}
 	removedenv.ObserveOrgsOwned(parent, lookup, logger)
+	warnRetiredHS256Settings(parent, lookup, logger)
 
 	ctx, stop := lifecycle.SignalContext(parent)
 	defer stop()

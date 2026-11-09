@@ -72,7 +72,8 @@ func HoldsSQL(schema, principalExpr, roleExpr string) string {
 // the principal's state (platformrole.Store.HeldOn's condition). It is no authority read: go-api's admin users view
 // shows it as legacy showed its stored is_superuser column; a decision reads HoldsSQL.
 func StoredHoldsSQL(schema, principalExpr, roleExpr string) string {
-	return HoldsSQL(schema, principalExpr, roleExpr)
+	return `EXISTS (SELECT 1 FROM ` + schema + `.platform_role_assignments pra_stored WHERE pra_stored.principal_id = ` + principalExpr +
+		` AND pra_stored.role_key = ` + roleExpr + ` AND (pra_stored.expires_at IS NULL OR pra_stored.expires_at > statement_timestamp()))`
 }
 
 // PublicActiveRule is ActiveRule for a decision input: the holder is a public.users row that is active, in place of an

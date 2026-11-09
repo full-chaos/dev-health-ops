@@ -73,7 +73,17 @@ func (p PlatformRoleRead) Superuser(offExpr, idExpr string) (string, error) {
 // the users row idExpr has a stored, unexpired platform_admin assignment, whatever its principal's state (legacy's
 // stored column). It is no authority read: a decision reads Superuser.
 func (p PlatformRoleRead) StoredSuperuser(offExpr, idExpr string) (string, error) {
-	return p.Superuser(offExpr, idExpr)
+	if !p.Owned {
+		return offExpr, nil
+	}
+	name := p.AuthSchema
+	if name == "" {
+		name = defaultAuthSchema
+	}
+	if err := checkSchemaName(name); err != nil {
+		return "", fmt.Errorf("policy: auth schema: %w", err)
+	}
+	return rule.StoredHoldsSQL(pgx.Identifier{name}.Sanitize(), idExpr, "'"+rule.PlatformAdmin+"'"), nil
 }
 
 // superuserColumn is the is_superuser column of the users reads: public

@@ -65,6 +65,17 @@ func UsersAdminRowsError(raw []byte) error {
 // maxUsersAdminBody bounds a user-admin body: a create carries a verifier and request metadata.
 const maxUsersAdminBody = 8 << 10
 
+// The members each user-admin route admits; any other member is malformed. go-api's client tests import these lists.
+var (
+	UsersCreateMembers = []string{"actor_principal_id", "email", "password_hash", "username", "full_name", "auth_provider",
+		"auth_provider_id", "is_verified", "grant_platform_admin", "organization_id", "role", "request_metadata"}
+	UsersUpdateMembers = []string{"actor_principal_id", "principal_id", "organization_id", "email", "is_verified", "is_superuser",
+		"username", "full_name", "avatar_url"}
+	UsersPasswordMembers = []string{"actor_principal_id", "principal_id", "organization_id", "admin_password", "password_hash",
+		"request_metadata"}
+	UsersDeleteMembers = []string{"actor_principal_id", "principal_id", "organization_id", "mode"}
+)
+
 // usersAdminOperations are the user-admin routes' operations. They take the go-api workload token only, as the
 // workloadOperations do; they are listed apart because their rows are a separate gate (withUsersAdminRoutes).
 var usersAdminOperations = map[string]bool{opUsersCreate: true, opUsersUpdate: true, opUsersPassword: true, opUsersDelete: true}
@@ -273,8 +284,7 @@ type usersCreateAnswer struct {
 }
 
 func (h provisioningHandlers) usersCreate(w http.ResponseWriter, r *http.Request) {
-	body, caller, ok := h.admitUpTo(w, r, opUsersCreate, maxUsersAdminBody, "actor_principal_id", "email", "password_hash", "username",
-		"full_name", "auth_provider", "auth_provider_id", "is_verified", "grant_platform_admin", "organization_id", "role", "request_metadata")
+	body, caller, ok := h.admitUpTo(w, r, opUsersCreate, maxUsersAdminBody, UsersCreateMembers...)
 	if !ok {
 		return
 	}
@@ -331,8 +341,7 @@ type usersChangeAnswer struct {
 }
 
 func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request) {
-	body, caller, ok := h.admit(w, r, opUsersUpdate, "actor_principal_id", "principal_id", "organization_id", "email", "is_verified",
-		"is_superuser", "username", "full_name", "avatar_url")
+	body, caller, ok := h.admit(w, r, opUsersUpdate, UsersUpdateMembers...)
 	if !ok {
 		return
 	}
@@ -408,8 +417,7 @@ func optionalBoolPointer(o strictObject, name string) (*bool, error) {
 }
 
 func (h provisioningHandlers) usersPassword(w http.ResponseWriter, r *http.Request) {
-	body, _, ok := h.admit(w, r, opUsersPassword, "actor_principal_id", "principal_id", "organization_id", "admin_password", "password_hash",
-		"request_metadata")
+	body, _, ok := h.admit(w, r, opUsersPassword, UsersPasswordMembers...)
 	if !ok {
 		return
 	}
@@ -453,7 +461,7 @@ type usersDeleteAnswer struct {
 }
 
 func (h provisioningHandlers) usersDelete(w http.ResponseWriter, r *http.Request) {
-	body, caller, ok := h.admit(w, r, opUsersDelete, "actor_principal_id", "principal_id", "organization_id", "mode")
+	body, caller, ok := h.admit(w, r, opUsersDelete, UsersDeleteMembers...)
 	if !ok {
 		return
 	}

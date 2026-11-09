@@ -22,18 +22,16 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 )
 
-// The members each user-admin route admits (auth-service internal/auth/authapi/provisioning_users.go admit lists):
-// the route refuses any other member as malformed, so a request carries only these.
+// The members each user-admin route admits: auth-service's own admit lists, the slices its handlers pass to admit.
+// The route refuses any other member as malformed, so a request carries only these.
 var usersAdmitted = map[string][]string{
-	authprovision.PathUsersCreate: {"actor_principal_id", "email", "password_hash", "username", "full_name", "auth_provider",
-		"auth_provider_id", "is_verified", "grant_platform_admin", "organization_id", "role", "request_metadata"},
-	authprovision.PathUsersUpdate: {"actor_principal_id", "principal_id", "organization_id", "email", "is_verified", "is_superuser",
-		"username", "full_name", "avatar_url"},
-	authprovision.PathUsersPassword: {"actor_principal_id", "principal_id", "organization_id", "admin_password", "password_hash",
-		"request_metadata"},
-	authprovision.PathUsersDelete: {"actor_principal_id", "principal_id", "organization_id", "mode"},
+	authprovision.PathUsersCreate:   authapi.UsersCreateMembers,
+	authprovision.PathUsersUpdate:   authapi.UsersUpdateMembers,
+	authprovision.PathUsersPassword: authapi.UsersPasswordMembers,
+	authprovision.PathUsersDelete:   authapi.UsersDeleteMembers,
 }
 
 type usersServer struct {

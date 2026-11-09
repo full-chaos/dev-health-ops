@@ -375,15 +375,19 @@ jwks_lacks() { # a served key set without KID: an unreachable or malformed docum
 }
 sessions_revoked_ge_1() { [[ "${KOUT}" =~ sessions\ revoked:\ ([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -ge 1 ]; }
 
-# ---------- seed one user through go-api register (auth-service sign-up stays gated); the host SMTP sink is unreachable
-# from the bigboy docker bridge, so the verified flag is set in the throwaway database ----------
+# ---------- seed one user through go-api register (forwarded to auth-service: users are owned, CHAOS-13356); the host SMTP
+# sink is unreachable from the bigboy docker bridge, so the verified flag is set in the throwaway database, in auth.users
+# (the authority, which the forwarded login reads) and in its public.users projection ----------
 say "step 3: seed one verified user"
 EMAIL="rotation-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')@example.com"
 PASSWORD="Pw-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 export EMAIL PASSWORD
 E="${EMAIL}" P="${PASSWORD}" post_json /api/v1/auth/register '{email:env.E,password:env.P,full_name:"Rotation Rehearsal",org_name:"Rotation Rehearsal Org"}'
 case "${P_CODE}" in 200 | 201 | 202) ;; *) die "register answered ${P_CODE}" ;; esac
-psql_one "UPDATE public.users SET is_verified = true WHERE email = '${EMAIL}' RETURNING 1" | grep -qx 1 || die "could not verify the seeded user in the database"
+# auth.users is guarded (authschema 0006 audit_commit_guard): a write runs only in a transaction that names itself the
+# audit transaction first. One psql -c string is one transaction.
+psql_one "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; UPDATE auth.users SET email_verified_at = clock_timestamp() WHERE email_lower = lower('${EMAIL}') RETURNING 1" | grep -qx 1 || die "could not verify the seeded user in auth.users"
+psql_one "UPDATE public.users SET is_verified = true WHERE email = '${EMAIL}' RETURNING 1" | grep -qx 1 || die "could not verify the seeded user in public.users"
 
 # ---------- smoke ----------
 rec_open "${DIR}/records/10-smoke.txt" "smoke $(date -u +%Y-%m-%dT%H:%M:%SZ)"

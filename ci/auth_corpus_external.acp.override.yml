@@ -4,9 +4,9 @@
 # The auth network, go-api's pinned address on it, and what auth-service needs for the corpus's rows (mail sink,
 # provider stub, trusted proxy) are the main override's: both legs talk to auth-service since CHAOS-13107.
 #
-# CHAOS-13107: compose.yml has auth-service own users (AUTH_USERS_OWNED defaults true). This leg owns them only from
-# step 1e, after the seed and the backfill: every service that reads the flag takes it from the state file or the
-# step's own command, default false.
+# CHAOS-13356: users are owned from bring-up on this leg too: every service that reads AUTH_USERS_OWNED takes compose.yml's
+# default (true), so this file names none. go-api starts only once auth-service serves the aggregates users owned needs
+# (ci/auth_corpus_external.sh step 1e).
 
 services:
   go-api:
@@ -19,7 +19,6 @@ services:
       - AUTH_PROXY_SOCIAL
       - AUTH_PROXY_OIDC
       - AUTH_PROXY_SAML
-      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
   # CHAOS-13107: go-river-migrate grants the api role the manifest of AUTH_PROXY_SESSIONS (internal/rivermigrate), and
   # go-api's readiness checks the manifest of its own flag. compose.yml turns the flag on for both; this leg takes go-api's
   # from the state file (above), so the grant pass takes the same one: both unset until step 1d turns sessions on.
@@ -36,7 +35,6 @@ services:
       - AUTH_JWT_SECRET_KEY
       - AUTH_SESSION_SUCCESSOR_KEY
       - AUTH_LOGIN_LOCKOUT_KEY
-      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
   # auth-service counts the login's rate limits in the venue's Valkey, which it reaches over auth_plane.
   valkey:
     networks: !override [default, auth_plane]
@@ -44,17 +42,6 @@ services:
   auth-migrate:
     environment:
       - AUTH_SESSION_READER_ROLES=devhealth_api,devhealth_query_api
-      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
   auth-grants:
     environment:
       - AUTH_SESSION_READER_ROLES=devhealth_api,devhealth_query_api
-      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
-  auth-fence-init:
-    environment:
-      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
-  auth-workload-seed:
-    environment:
-      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
-  auth-workload-bootstrap:
-    environment:
-      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}

@@ -12,7 +12,14 @@
 #   bash ci/live_e2e_auth_stack.sh down STATE_DIR                           stop auth-service by pid
 #   bash ci/live_e2e_auth_stack.sh stop-auth STATE_DIR      stop auth-service by pid (the outage cell); start-auth starts it again with the same environment
 #   bash ci/live_e2e_auth_stack.sh start-auth STATE_DIR
+#   bash ci/live_e2e_auth_stack.sh verify-user STATE_DIR EMAIL  mark one user's e-mail verified in auth.users (the authority:
+#                                                          users are owned) and in its public.users projection
+#   bash ci/live_e2e_auth_stack.sh grant-platform-admin STATE_DIR EMAIL  test setup only: give one user an active platform_admin
+#                                                          row in auth.platform_role_assignments (written directly, as the bigboy fixture)
 # SIDE is go-api, query-api, auth-service or web. The flags are ci/live_e2e_auth_flags.tsv (the prod flag set).
+# CHAOS-13356: users are owned by auth-service, as prod (phase 4, usersOwnedStage owned): `up` copies the users the
+# caller already seeded into the auth schema with the seed tool (`dho auth users-backfill -insert-only`) before
+# auth-service starts, and auth-service sends the credentials mail through the console provider (no mail is delivered).
 # The https front (localhost:8443 to 127.0.0.1:8095) with STATE_DIR/tls is the caller's: the Go and web verifiers read
 # the issuer over https and nothing here serves TLS.
 set -euo pipefail
@@ -108,6 +115,8 @@ raw_env() {
       : "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:?AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT is not set}"
       : "${AUTH_AUTHORIZE_CALLER_SUBJECTS:?AUTH_AUTHORIZE_CALLER_SUBJECTS is not set}"
       flag_rows auth-service
+      # AUTH_REGISTER_LIMIT: go-api forwards register here (users owned) and every request of the run comes from one
+      # address, so the 3/hour default would refuse the 4th sign-up. go-api's venue value, same form; prod sets none.
       printf '%s\n' \
         "AUTH_SERVICE_HTTP_ADDR=${AUTH_API_ADDR}" \
         "AUTH_SERVICE_OPERATOR_HTTP_ADDR=${AUTH_OPERATOR_ADDR}" \
@@ -125,7 +134,12 @@ raw_env() {
         "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER=${CLUSTER_ISSUER}" \
         "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL=https://${TOKENREVIEW_ADDR}" \
         "AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE=${state}/tls/ca.pem" \
-        "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE=${state}/workload/reviewer.token"
+        "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE=${state}/workload/reviewer.token" \
+        "EMAIL_PROVIDER=console" \
+        "EMAIL_FROM_ADDRESS=live-e2e@example.test" \
+        "AUTH_MAIL_ALLOW_CONSOLE=true" \
+        "APP_BASE_URL=${LIVE_E2E_APP_BASE_URL:-http://localhost:3000}" \
+        "AUTH_REGISTER_LIMIT=1000/hour"
       ;;
     *) die "unknown side ${side} (go-api, query-api, auth-service, web)" ;;
   esac
@@ -154,7 +168,7 @@ migrate_run() {
   local user="$1" password="$2"
   shift 2
   AUTH_MIGRATION_DATABASE_URI="$(dsn "${user}" "${password}")" \
-    AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=false \
+    AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=true \
     AUTH_RUNTIME_DATABASE_ROLE="${RUNTIME_ROLE}" AUTH_SCHEMA_OWNER_ROLE="${MIGRATION_ROLE}" \
     "${STATE}/bin/auth-migrate" "$@"
 }
@@ -236,6 +250,10 @@ up() {
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" grants >/dev/null
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" restore-fence init -if-absent >/dev/null
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" workloads seed -apply >/dev/null
+
+  printf 'step 4b: the seed tool: copy the users the caller seeded into the auth schema (compose auth-users-backfill)\n'
+  AUTH_DATABASE_URI="$(dsn "${RUNTIME_ROLE}" "${runtime_password}")" AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=true \
+    "${dho}" auth users-backfill -insert-only >/dev/null
 
   printf 'step 5: api workload bootstrap credential (compose auth-workload-bootstrap)\n'
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" workloads bootstrap-create -workload api -out "${STATE}/workload/api.bootstrap" -apply >/dev/null
@@ -356,6 +374,45 @@ start_auth() {
   die "auth-service did not become ready again"
 }
 
+# verify_user STATE EMAIL: the e-mail of one user is verified, in auth.users (the authority while users are owned; its
+# guard admits a write only in a transaction that names itself the audit transaction, authschema 0006) and in the
+# public.users projection go-api still reads. Exactly one row each, or it fails.
+verify_user() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" n
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "verify-user: not an e-mail address"
+  n="$(PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -At -c \
+    "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; \
+     WITH a AS (UPDATE ${SCHEMA}.users SET email_verified_at = coalesce(email_verified_at, clock_timestamp()) WHERE email_lower = lower('${email}') RETURNING 1), \
+          p AS (UPDATE public.users SET is_verified = true WHERE lower(email) = lower('${email}') RETURNING 1) \
+     SELECT (SELECT count(*) FROM a) || ' ' || (SELECT count(*) FROM p)" | tail -n 1)"
+  [ "${n}" = "1 1" ] || die "verify-user: want one auth.users and one public.users row, got ${n:-none}"
+  printf 'verified %s in auth.users and public.users\n' "${email}"
+}
+
+# grant_platform_admin STATE EMAIL: test setup only. The user's platform_admin assignment is written directly into
+# auth.platform_role_assignments (no route, no audit or outbox row; the guard admits the write in a transaction that names
+# itself the audit transaction first, authschema 0006), active: an existing row of the user is made permanent again. A
+# read-back of the active rows (the platform role store's rule: not expired, the principal not disabled) must be exactly 1.
+grant_platform_admin() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" n
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "grant-platform-admin: not an e-mail address"
+  PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -qAt -c \
+    "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; \
+     INSERT INTO ${SCHEMA}.platform_role_assignments (principal_id, role_key) \
+       SELECT u.principal_id, 'platform_admin' FROM ${SCHEMA}.users u WHERE u.email_lower = lower('${email}') \
+     ON CONFLICT (principal_id, role_key) DO UPDATE SET expires_at = NULL, updated_at = now()" >/dev/null \
+    || die "grant-platform-admin: the write failed"
+  n="$(PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -At -c \
+    "SELECT count(*) FROM ${SCHEMA}.platform_role_assignments r JOIN ${SCHEMA}.users u ON u.principal_id = r.principal_id \
+       JOIN ${SCHEMA}.principals p ON p.id = r.principal_id \
+     WHERE u.email_lower = lower('${email}') AND r.role_key = 'platform_admin' AND p.disabled_at IS NULL \
+       AND (r.expires_at IS NULL OR r.expires_at > now())" | tail -n 1)"
+  [ "${n}" = 1 ] || die "grant-platform-admin: want one active platform_admin row for the user, got ${n:-none}"
+  printf 'granted platform_admin to %s in auth.platform_role_assignments\n' "${email}"
+}
+
 verb="${1:-}"
 case "${verb}" in
   up)
@@ -386,5 +443,13 @@ case "${verb}" in
     [ "$#" -eq 2 ] || die "usage: start-auth STATE_DIR"
     start_auth "$2"
     ;;
-  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth" ;;
+  verify-user)
+    [ "$#" -eq 3 ] || die "usage: verify-user STATE_DIR EMAIL"
+    verify_user "$2" "$3"
+    ;;
+  grant-platform-admin)
+    [ "$#" -eq 3 ] || die "usage: grant-platform-admin STATE_DIR EMAIL"
+    grant_platform_admin "$2" "$3"
+    ;;
+  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | verify-user | grant-platform-admin" ;;
 esac

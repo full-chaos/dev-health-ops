@@ -123,10 +123,29 @@ func predicatesOf(text string) string {
 	return strings.Join(out, " | ")
 }
 
-// handWrittenLiveness walks internal/ and cmd/ under root and returns, per statement that
-// names the sessions table and tests revoked_at or expires_at by hand, its predicates.
-func handWrittenLiveness(t *testing.T, root string) map[string]string {
+// handWrittenIn returns, per statement of one Go file (rel, from the repo root) that names the
+// sessions table and tests revoked_at or expires_at by hand, its predicates.
+func handWrittenIn(t *testing.T, rel string, raw []byte) map[string]string {
 	t.Helper()
+	found := map[string]string{}
+	if !strings.Contains(string(raw), "sessions") {
+		return found
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, rel, raw, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for scope, text := range statementLiterals(fset, file) {
+		if sessionsWord.MatchString(text) && livenessWords.MatchString(text) {
+			found[rel+"#"+scope] = predicatesOf(text)
+		}
+	}
+	return found
+}
+
+func TestNoHandWrittenSessionLivenessPredicate(t *testing.T) {
+	root := repoRoot(t)
 	found := map[string]string{}
 	for _, top := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, top), func(path string, d fs.DirEntry, err error) error {
@@ -145,18 +164,8 @@ func handWrittenLiveness(t *testing.T, root string) map[string]string {
 			if err != nil {
 				return err
 			}
-			if !strings.Contains(string(raw), "sessions") {
-				return nil
-			}
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, path, raw, parser.SkipObjectResolution)
-			if err != nil {
-				return err
-			}
-			for scope, text := range statementLiterals(fset, file) {
-				if sessionsWord.MatchString(text) && livenessWords.MatchString(text) {
-					found[rel+"#"+scope] = predicatesOf(text)
-				}
+			for key, predicates := range handWrittenIn(t, rel, raw) {
+				found[key] = predicates
 			}
 			return nil
 		})
@@ -164,11 +173,6 @@ func handWrittenLiveness(t *testing.T, root string) map[string]string {
 			t.Fatal(err)
 		}
 	}
-	return found
-}
-
-func TestNoHandWrittenSessionLivenessPredicate(t *testing.T) {
-	found := handWrittenLiveness(t, repoRoot(t))
 	var keys []string
 	for k := range found {
 		keys = append(keys, k)
@@ -234,36 +238,20 @@ func TestCensusSeesASecondPredicateInsideAnAllowlistedStatement(t *testing.T) {
 }
 
 // The two reads that left the allowlist are seen again if their hand-written form comes
-// back: the old texts, planted at their paths in a tree of their own, are reported and
-// are not allowlisted.
+// back: the old texts, read as the files at their paths, are reported and are not allowlisted.
 func TestCensusSeesAPlantedRevokedAtReadAtEitherSite(t *testing.T) {
-	root := t.TempDir()
-	planted := map[string]string{
-		"internal/api/policy/session.go":  "package policy\n\nconst sessionStateQuery = `SELECT principal_id, revoked_at IS NOT NULL, legacy_token_version FROM {auth_schema}.sessions WHERE id = $1`\n",
-		"internal/edgetokenmint/eddsa.go": "package edgetokenmint\n\nconst sessionLiveSQL = `SELECT principal_id, revoked_at IS NOT NULL, expires_at <= now(), legacy_token_version FROM %s.sessions WHERE id = $1`\n",
-	}
-	if err := os.MkdirAll(filepath.Join(root, "cmd"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for rel, body := range planted {
-		file := filepath.Join(root, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	found := handWrittenLiveness(t, root)
-	for key, want := range map[string]string{
-		"internal/api/policy/session.go#sessionStateQuery": "revoked_at IS NOT NULL",
-		"internal/edgetokenmint/eddsa.go#sessionLiveSQL":   "expires_at <= | revoked_at IS NOT NULL",
+	for rel, c := range map[string]struct{ body, key, want string }{
+		"internal/api/policy/session.go": {"package policy\n\nconst sessionStateQuery = `SELECT principal_id, revoked_at IS NOT NULL, legacy_token_version FROM {auth_schema}.sessions WHERE id = $1`\n",
+			"internal/api/policy/session.go#sessionStateQuery", "revoked_at IS NOT NULL"},
+		"internal/edgetokenmint/eddsa.go": {"package edgetokenmint\n\nconst sessionLiveSQL = `SELECT principal_id, revoked_at IS NOT NULL, expires_at <= now(), legacy_token_version FROM %s.sessions WHERE id = $1`\n",
+			"internal/edgetokenmint/eddsa.go#sessionLiveSQL", "expires_at <= | revoked_at IS NOT NULL"},
 	} {
-		if found[key] != want {
-			t.Errorf("%s: the census reports [%s], want [%s]", key, found[key], want)
+		found := handWrittenIn(t, rel, []byte(c.body))
+		if found[c.key] != c.want {
+			t.Errorf("%s: the census reports [%s], want [%s]", c.key, found[c.key], c.want)
 		}
-		if _, ok := livenessAllowlist[key]; ok {
-			t.Errorf("%s is allowlisted: a planted revoked_at read there passes the census", key)
+		if _, ok := livenessAllowlist[c.key]; ok {
+			t.Errorf("%s is allowlisted: a planted revoked_at read there passes the census", c.key)
 		}
 	}
 }

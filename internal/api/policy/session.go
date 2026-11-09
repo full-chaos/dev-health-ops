@@ -99,8 +99,10 @@ func (a *Authenticator) checkSession(ctx context.Context, sid string, subject uu
 // takes no refresh lifetime. The session reader grant covers exactly what it reads.
 func sessionStateSQL(quotedSchema string) string {
 	revocation, _ := sessionrule.NewRevocation(quotedSchema) // a sanitized identifier is never empty
-	return `SELECT s.principal_id, ` + revocation.Revoked("s") + ` IS NOT NULL, s.legacy_token_version FROM ` + quotedSchema + `.sessions s WHERE s.id = $1`
+	return strings.NewReplacer("{auth_schema}", quotedSchema, "{revoked}", revocation.Revoked("s")).Replace(sessionStateQuery)
 }
+
+const sessionStateQuery = `SELECT s.principal_id, {revoked} IS NOT NULL, s.legacy_token_version FROM {auth_schema}.sessions s WHERE s.id = $1`
 
 // SessionState reads the session id names, in the auth schema AuthSchema
 // names: its principal, whether it is revoked and its token_version pin.

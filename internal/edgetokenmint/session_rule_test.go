@@ -6,7 +6,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionrule"
 )
 
@@ -21,11 +20,12 @@ func (d recordingDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 }
 
 // The mint pre-check takes revoke and the absolute cap from the session rule, at the
-// auth plane's one refresh lifetime (Cap reads it only through a web parent).
+// auth plane's one refresh lifetime, sessionrule.DefaultRefreshTTL (session.DefaultRefreshTTL names it;
+// Cap reads it only through a web parent).
 func TestCheckSessionReadsTheSharedRule(t *testing.T) {
 	principal := testPrincipal()
 	for schema, quoted := range map[string]string{"": `"auth"`, "tenant_auth": `"tenant_auth"`} {
-		rule, err := sessionrule.New(quoted, session.DefaultRefreshTTL)
+		rule, err := sessionrule.New(quoted, sessionrule.DefaultRefreshTTL)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -3,6 +3,7 @@ package testshard_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,10 @@ import (
 // CHAOS-13422: the five heaviest test packages (each runs 330-720 s alone) must not share a shard, because two of them side by
 // side make a shard's wall exceed the sum of their weights' share. ci/go_test_pins.tsv lists them; ci/go_race_shard.awk
 // (-v pin=) places the pinned packages first, each on the then-lightest shard, before the longest-processing-time split.
+// The serial package (check_go.sh SERIAL_HEAVY_TEST_PACKAGE) is pinned too: it runs alone after the shard's other packages, so
+// its whole wall adds to the shard; it goes last, onto the shard of the lightest heavy package.
+
+const serialPinKey = "internal/gqlgenguard"
 
 func pinRows(t *testing.T) []string {
 	t.Helper()
@@ -38,9 +43,20 @@ func TestThePinnedHeavyPackagesLandOnDistinctShards(t *testing.T) {
 	for _, p := range pkgs {
 		known[keyOf(mod, p)] = true
 	}
-	pins := pinRows(t)
+	var pins []string
+	serialPinned := false
+	for _, k := range pinRows(t) {
+		if k == serialPinKey {
+			serialPinned = true
+			continue
+		}
+		pins = append(pins, k)
+	}
+	if !serialPinned {
+		t.Errorf("ci/go_test_pins.tsv does not pin the serial package %s", serialPinKey)
+	}
 	if len(pins) != shardCount {
-		t.Fatalf("ci/go_test_pins.tsv holds %d rows, want one per test shard (%d)", len(pins), shardCount)
+		t.Fatalf("ci/go_test_pins.tsv holds %d heavy rows, want one per test shard (%d)", len(pins), shardCount)
 	}
 	for _, k := range pins {
 		if !known[k] {
@@ -65,4 +81,39 @@ func TestThePinnedHeavyPackagesLandOnDistinctShards(t *testing.T) {
 		}
 		used[s] = k
 	}
+	w := testWeights(t)
+	lightest := pins[0]
+	for _, k := range pins[1:] {
+		if w[k] < w[lightest] {
+			lightest = k
+		}
+	}
+	if serialPinned && shardOf[serialPinKey] != shardOf[lightest] {
+		t.Errorf("serial package %s is on shard %d, want the shard of the lightest heavy package %s (shard %d)",
+			serialPinKey, shardOf[serialPinKey], lightest, shardOf[lightest])
+	}
+}
+
+func testWeights(t *testing.T) map[string]int {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "go_test_weights.tsv"))
+	if err != nil {
+		t.Fatalf("ci/go_test_weights.tsv: %v", err)
+	}
+	w := map[string]int{}
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(l) == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(l, "\t")
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			t.Fatalf("weight row %q: %v", l, err)
+		}
+		w[k] = n
+	}
+	return w
 }

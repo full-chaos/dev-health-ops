@@ -828,9 +828,6 @@ VALUES ($1, $2, $3, NULL, 'local', true, $4, false, 0, now() - interval '1 day',
 VALUES ($1, $2, $3, $4, $5, $6, $7, now() + $8::interval, now() - interval '1 hour', now() - interval '1 hour')`,
 			invite.id, invite.org, invite.email, invite.role, tokenHash, alice, invite.status, invite.expiresIn)
 	}
-	_, verificationHash := linkToken(expiredVerification)
-	exec(`INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, created_at)
-VALUES ($1, $2, $3, now() - interval '1 hour', now() - interval '25 hours')`, expiredVerification, uma, verificationHash)
 	_, resetHash := linkToken(expiredReset)
 	exec(`INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
 VALUES ($1, $2, $3, now() - interval '1 hour', now() - interval '2 hours')`, expiredReset, judy, resetHash)

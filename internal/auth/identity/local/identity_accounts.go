@@ -189,7 +189,7 @@ func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, req Pas
 	}
 	a.Sessions.RecordEnded(ctx, ended)
 	slog.InfoContext(ctx, "password changed; credentials ended", "principal_id", req.ID.String(),
-		"sessions", ended.Sessions, "refresh_tokens", ended.RefreshTokens, "reset_links", links, "token_version", version)
+		"sessions", ended.Sessions, "reset_links", links, "token_version", version)
 	return result, nil
 }
 

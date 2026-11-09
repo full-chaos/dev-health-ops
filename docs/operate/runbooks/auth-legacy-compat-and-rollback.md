@@ -37,8 +37,8 @@ token.
 
 go-api, query-api and auth-service pick the validator for a route from its endpoint-profile row and from the `alg`
 of the token. In the contract files no row has `legacy_hs256` true: the class `ops_access_token_hs256` is
-`retired`, so every row refuses an HS256 bearer with `alg_not_allowed`. The HS256 refresh verifier stays for the
-legacy refresh and logout paths until its own change removes it.
+`retired`, so every row refuses an HS256 bearer with `alg_not_allowed`. No auth-service route verifies a go-api
+HS256 refresh token: refresh answers it as a token that does not verify, and logout revokes nothing for it.
 
 ## Preconditions of running the class
 

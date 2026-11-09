@@ -13,13 +13,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 )
 
-// ErrBusy reports that a session or go-api refresh token row EndOrgInTx or
-// EndOrganizationInTx must revoke is locked by another writer. The caller rolls
-// its whole transaction back and tries again: it never waits for such a row
-// while it holds the auth lock order's principal or organization locks (an
-// Exchange holds its session row and then needs a key-share lock on the
-// principal for its new credential; a legacy exchange holds its go-api refresh
-// token and then needs a key-share lock on the organization for its session).
+// ErrBusy reports that a session row EndOrgInTx or EndOrganizationInTx must
+// revoke is locked by another writer. The caller rolls its whole transaction
+// back and tries again: it never waits for such a row while it holds the auth
+// lock order's principal or organization locks (an Exchange holds its session
+// row and then needs a key-share lock on the principal for its new credential).
 var ErrBusy = errors.New("session: a credential row to end is locked by another writer")
 
 // BusyAttempts bounds the attempts of an organization verb that gets ErrBusy.
@@ -47,8 +45,7 @@ const lockNotAvailable = "55P03"
 // sessions commit together or not at all:
 //
 //   - every live auth-service session of the principal in the organization
-//     and its refresh credentials;
-//   - the principal's go-api refresh_tokens rows of the organization.
+//     and its refresh credentials.
 //
 // Sessions of other organizations and sessions with no organization are not
 // read. Rows are locked NOWAIT: a row another writer holds is ErrBusy.
@@ -63,17 +60,7 @@ func (s *Store) EndOrgInTx(ctx context.Context, tx audit.TxOps, principalID, org
 	if err != nil {
 		return Ended{}, err
 	}
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM public.refresh_tokens
-		WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL ORDER BY token_hash FOR UPDATE NOWAIT`,
-		principalID, organizationID); err != nil {
-		return Ended{}, endOrgErr("locking the go-api refresh tokens", err)
-	}
-	tag, err := tx.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = clock_timestamp()
-		WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL`, principalID, organizationID)
-	if err != nil {
-		return Ended{}, endOrgErr("revoking the go-api refresh tokens", err)
-	}
-	return Ended{Sessions: sessions, RefreshTokens: tag.RowsAffected()}, nil
+	return Ended{Sessions: sessions}, nil
 }
 
 // EndOrganizationInTx ends every credential scoped to one organization inside
@@ -82,14 +69,11 @@ func (s *Store) EndOrgInTx(ctx context.Context, tx audit.TxOps, principalID, org
 // together or not at all:
 //
 //   - every live auth-service session of the organization and its refresh
-//     credentials;
-//   - the organization's go-api refresh_tokens rows.
+//     credentials.
 //
 // Sessions of other organizations and sessions with no organization are not
 // read. The caller holds the organization row FOR UPDATE, so rows are locked
-// NOWAIT: a legacy exchange holds its go-api refresh token and then waits for
-// a key-share lock on that row (the new session's foreign key), and waiting
-// for its token would close a deadlock. A row another writer holds is ErrBusy.
+// NOWAIT: a row another writer holds is ErrBusy.
 func (s *Store) EndOrganizationInTx(ctx context.Context, tx audit.TxOps, organizationID uuid.UUID) (Ended, error) {
 	sessions, err := s.endLockedSessions(ctx, tx, func(at time.Time) audit.OutboxEvent {
 		return sessionevent.Organization(organizationID.String(), sessionevent.ReasonOrgEnded, at)
@@ -101,16 +85,7 @@ func (s *Store) EndOrganizationInTx(ctx context.Context, tx audit.TxOps, organiz
 	if err != nil {
 		return Ended{}, err
 	}
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM public.refresh_tokens
-		WHERE org_id = $1 AND revoked_at IS NULL ORDER BY token_hash FOR UPDATE NOWAIT`, organizationID); err != nil {
-		return Ended{}, endOrgErr("locking the go-api refresh tokens", err)
-	}
-	tag, err := tx.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = clock_timestamp()
-		WHERE org_id = $1 AND revoked_at IS NULL`, organizationID)
-	if err != nil {
-		return Ended{}, endOrgErr("revoking the go-api refresh tokens", err)
-	}
-	return Ended{Sessions: sessions, RefreshTokens: tag.RowsAffected()}, nil
+	return Ended{Sessions: sessions}, nil
 }
 
 // endLockedSessions runs lock, which reads (id, live) of the sessions to end

@@ -138,28 +138,6 @@ func TestAGraceReplayWritesNoRefreshedEvent(t *testing.T) {
 	}
 }
 
-// The legacy exchange of a go-api refresh token is a refresh too: one event on its first exchange, none on a replay.
-func TestTheLegacyExchangeCommitsOneRefreshedEvent(t *testing.T) {
-	ctx := testContext(t)
-	e := newEnv(t, ctx)
-	user := e.goUser(t, ctx, 0)
-	e.goRefresh(t, ctx, user, uuid.New(), "jti-refreshed", time.Hour)
-	first, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-refreshed"))
-	if err != nil || first.Reason != ReasonAccepted {
-		t.Fatalf("ExchangeLegacy = %s, %v", first.Reason, err)
-	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND subject_principal_id = $2
-		AND attributes->>'target_id' = $3 AND attributes->>'reason_code' = 'accepted'`, refreshedEventType, user.String(), first.Session.ID.String()); n != 1 {
-		t.Fatalf("%s events of the legacy exchange = %d, want 1", refreshedEventType, n)
-	}
-	if second, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-refreshed")); err != nil || second.Reason != ReasonGraceReplay {
-		t.Fatalf("replay = %s, %v; want refresh_grace_replay", second.Reason, err)
-	}
-	if n := e.refreshedEvents(t, ctx, first.Session.ID); n != 1 {
-		t.Fatalf("%s events after a legacy replay = %d, want still 1", refreshedEventType, n)
-	}
-}
-
 // The statements a build without the change runs outside audit.Commit (Create's session and credential insert, and
 // rotate's successor insert) are unchanged on the schema with the refresh_credentials create count.
 func TestTheOldBuildsWritesStillRunOutsideCommit(t *testing.T) {

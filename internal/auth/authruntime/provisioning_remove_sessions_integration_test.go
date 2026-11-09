@@ -52,9 +52,9 @@ FROM auth.sessions s WHERE s.id = $1`, id).Scan(&revoked, &liveCredentials); err
 	}
 }
 
-// The suspend and deprovision routes, as configure builds them: the organization's sessions and go-api refresh tokens end
-// with the verb, a session of no organization stays live, the answers are unchanged, and a row another writer holds is
-// the 503 with nothing written.
+// The suspend and deprovision routes, as configure builds them: the organization's sessions end with the verb, a session
+// of no organization and go-api's refresh tokens stay as they were, the answers are unchanged, and a row another writer
+// holds is the 503 with nothing written.
 func TestProvisioningOrgRoutesEndTheOrganizationsSessions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -120,8 +120,8 @@ VALUES ($1, $2, $3, $4, gen_random_uuid(), now() + interval '1 day', now())`, id
 			if got.status != http.StatusOK || object(t, got)[route.answerKey] != true {
 				t.Fatalf("after the release: %d %s", got.status, got.body)
 			}
-			if !revoked(inOrg) || !tokenRevoked(goToken) {
-				t.Fatalf("session revoked %v, go-api token revoked %v; want both ended", revoked(inOrg), tokenRevoked(goToken))
+			if !revoked(inOrg) || tokenRevoked(goToken) {
+				t.Fatalf("session revoked %v, go-api token revoked %v; want the session ended and the go-api token left", revoked(inOrg), tokenRevoked(goToken))
 			}
 			if revoked(noOrg) {
 				t.Fatal("the session with no organization was ended")

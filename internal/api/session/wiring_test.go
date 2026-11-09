@@ -16,21 +16,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 func completeDeps(t *testing.T) Deps {
 	t.Helper()
-	verifier, err := edgetoken.New("wiring-test-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth := &policy.Authenticator{}
 	return Deps{Pool: &pgxpool.Pool{}, Guard: policy.NewGuard(auth, slog.New(slog.DiscardHandler)), Auth: auth,
-		Verifier: verifier, Issuer: stubIssuer{}}
+		Issuer: stubIssuer{}}
 }
 
-// Routes mounts all seventeen routes only when every one of its five
+// Routes mounts all eighteen routes only when every one of its three
 // required dependencies is present; each missing one alone leaves nothing
 // mounted.
 func TestRoutesNeedEveryRequiredDependency(t *testing.T) {
@@ -38,10 +33,9 @@ func TestRoutesNeedEveryRequiredDependency(t *testing.T) {
 		t.Fatalf("complete deps mount %d routes, want 18", got)
 	}
 	for name, drop := range map[string]func(*Deps){
-		"Pool":     func(d *Deps) { d.Pool = nil },
-		"Guard":    func(d *Deps) { d.Guard = nil },
-		"Auth":     func(d *Deps) { d.Auth = nil },
-		"Verifier": func(d *Deps) { d.Verifier = nil },
+		"Pool":  func(d *Deps) { d.Pool = nil },
+		"Guard": func(d *Deps) { d.Guard = nil },
+		"Auth":  func(d *Deps) { d.Auth = nil },
 	} {
 		deps := completeDeps(t)
 		drop(&deps)

@@ -213,10 +213,6 @@ func newEnv(t *testing.T) (*env, error) {
 	}
 
 	const jwtKey = "lockorder-test-signing-key-32-bytes-long!!"
-	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		return nil, err
-	}
 	if e.signer, err = legacyjwt.NewSigner(jwtKey, "dev-health-ops", "dev-health-api"); err != nil {
 		return nil, err
 	}
@@ -242,7 +238,7 @@ func newEnv(t *testing.T) (*env, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier,
+	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth,
 		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger, Issuer: issuer}) {
 		switch route.Pattern {
 		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard":
@@ -265,7 +261,7 @@ func newEnv(t *testing.T) (*env, error) {
 	e.server = httptest.NewServer(profiled)
 	closers = append(closers, e.server.Close)
 	issuerMux := http.NewServeMux()
-	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier,
+	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth,
 		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger, Issuer: issuer}) {
 		switch route.Pattern {
 		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard":

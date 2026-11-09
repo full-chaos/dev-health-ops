@@ -22,7 +22,7 @@ import (
 // go.sum, every other file in a directory that holds a Go file, every //go:embed path, the build tag sets, and the whole
 // `go env` minus volatileGoEnv. A change outside those (docs, workflows, web) leaves the key alone. The header binds the
 // rows to the key with a digest; the digest catches accident and is NOT authentication: CI therefore lets only pull
-// requests read a store (--reach-cache-fresh on every other event), and the stored result is compared with reach.tsv
+// requests read a store (--reach-cache-fresh on every other event), and the stored result is compared with reach.d
 // like a computed one. Any doubt (a go command failing, a replace outside the repository, a foreign store) recomputes.
 const reachCacheSchema = "reach-cache-v2"
 
@@ -117,6 +117,8 @@ func reachKey(root string) (string, error) {
 			return true
 		case goDirs[path.Dir(f)]:
 			return true
+		case path.Base(path.Dir(f)) == reachDir && goDirs[path.Dir(path.Dir(f))]:
+			return true // the reach table, as its one file beside the Go files of its package was
 		}
 		for d := range embedDirs {
 			if f == d || strings.HasPrefix(f, strings.TrimSuffix(d, "/")+"/") {

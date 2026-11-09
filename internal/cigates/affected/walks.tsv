@@ -17,6 +17,7 @@ internal/api/integrationsadmin/discoveryvenue	discover_venue_oracle_integration_
 internal/api/policy	accessroute_test.go	.	tree	*.go
 internal/api/policy	delegated_test.go	internal/api	tree	*
 internal/api/policy	delegated_test.go	internal/apiservice	tree	*
+internal/api/policy	platform_question_no_decision_point_cells_test.go	internal/api/policy	dir	*
 internal/api/policy	principalonce_test.go	unexpressed	-	-
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/syncadmin	dataset_writer_census_test.go	unexpressed	-	*.go
@@ -153,6 +154,7 @@ internal/chmigrate	archive_test.go	internal/chmigrate/archive/sql	dir	*
 internal/chmigrate	rollback_version_row_test.go	internal/chmigrate/rollback	dir	*
 internal/cigates/abstime	abstime.go	unexpressed	-	-
 internal/cigates/affected	plan.go	unexpressed	-	-
+internal/cigates/affected	reach.go	unexpressed	-	-
 internal/cigates/affected	reachcache.go	unexpressed	-	-
 internal/cigates/affected	scan.go	unexpressed	-	*.go
 internal/cigates/affected	scan.go	unexpressed	-	-
@@ -255,6 +257,11 @@ internal/cigates/workflows	providerstub_not_release_test.go	.github/workflows	di
 internal/cigates/workflows	race_json_artifact_test.go	unexpressed	-	-
 internal/cigates/workflows	registry_retry_test.go	unexpressed	-	-
 internal/cigates/workflows	ttl_registry_test.go	unexpressed	-	-
+internal/cigates/workflows	venue_users_owned_test.go	.	dir	*
+internal/cigates/workflows	venue_users_owned_test.go	.github/workflows	tree	*
+internal/cigates/workflows	venue_users_owned_test.go	ci	tree	*
+internal/cigates/workflows	venue_users_owned_test.go	docker	tree	*
+internal/cigates/workflows	venue_users_owned_test.go	scripts	tree	*
 internal/cigates/workflows	workflows_common_test.go	unexpressed	-	-
 internal/cigates/workflows	workflows_go_resolver_test.go	unexpressed	-	-
 internal/cigates/workflows	workflows_image_publishing_test.go	deploy	tree	*
@@ -522,7 +529,6 @@ internal/testsupport/idpstub	boundary_test.go	internal/testsupport/idpstub	tree	
 internal/testsupport/moduleroot	moduleroot_test.go	unexpressed	-	*.go
 internal/testsupport/providerstub	stub.go	unexpressed	-	-
 internal/testsupport/recordedfiles	recordedfiles.go	unexpressed	-	-
-internal/testsupport/venuechanged	closure_test.go	ci/venue_oracle_closure.d	dir	*
 internal/testsupport/venuechanged	closure_test.go	ci/venue_oracle_registry.d	dir	*
 internal/testsupport/venuechanged	trigger_coverage_test.go	ci/venue_oracle_registry.d	dir	*
 internal/testsupport/venuechanged	trigger_coverage_test.go	unexpressed	-	-

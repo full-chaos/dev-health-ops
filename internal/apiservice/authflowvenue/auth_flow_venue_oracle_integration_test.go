@@ -36,7 +36,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	mailpkg "github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -1217,10 +1216,6 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	if os.Getenv("DEV_HEALTH_VENUE_GO_LOG") != "" {
 		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
-	verifier, err := edgetoken.New(sessionscenario.Key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -1242,8 +1237,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := apiservice.Deps{Pool: pool, Valkey: valkeyClient, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger),
-		Verifier: verifier, Invites: mailConfig, SessionIssuer: plane.Issuer,
+	deps := apiservice.Deps{Pool: pool, Valkey: valkeyClient, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger), Invites: mailConfig, SessionIssuer: plane.Issuer,
 		AuthProxy: apiservice.AuthProxyConfig{Upstream: plane.URL, On: map[apiservice.AuthAggregate]bool{apiservice.AuthSessions: true}}}
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.Layers()...)

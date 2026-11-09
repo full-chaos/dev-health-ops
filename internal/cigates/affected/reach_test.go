@@ -9,7 +9,7 @@ import (
 )
 
 // CHAOS-10547: a code-scope site the tool cannot bound runs only in a program that can call it. plan-reads --write
-// writes reach.tsv from the call graph (RTA from each test main and main, with its package init), and plan-verdict
+// writes reach.d from the call graph (RTA from each test main and main, with its package init), and plan-verdict
 // selects the packages whose programs reach the site, not every importer of its package. An interface call, a function
 // value and a run of a main that calls the site all reach it; go:linkname hides calls, so its tree plans FULL.
 
@@ -99,7 +99,7 @@ func TestReachSelectsTheProgramsThatCallACodeScopeSite(t *testing.T) {
 	if res := writeTables(t, f.root); res.code != 0 {
 		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
 	}
-	raw, err := os.ReadFile(filepath.Join(f.root, tablesDir, "reach.tsv"))
+	raw, err := os.ReadFile(filepath.Join(f.root, tablesDir, "reach.d", "b.tsv"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestReachSelectsTheProgramsThatCallACodeScopeSite(t *testing.T) {
 	// d links b and never calls Load: no row; c, e (interface), f (function value) and cmd/tool (main) reach it.
 	want := "b\tb.go\tc b\tb.go\tcmd/tool b\tb.go\te b\tb.go\tf"
 	if got := strings.Join(rows, " "); got != want {
-		t.Fatalf("reach.tsv rows %q, want %q", got, want)
+		t.Fatalf("reach.d/b.tsv rows %q, want %q", got, want)
 	}
 	cases := []struct {
 		name string
@@ -152,18 +152,18 @@ func TestReachTableDefectsPlanFull(t *testing.T) {
 	runNongo(t, []nongoCase{
 		{name: "a_code_site_with_no_reach_row_is_full", head: map[string]string{"b/b_dyn.go": reachReader,
 			tablesDir + "dynreads.tsv": "b\tb_dyn.go\n"},
-			changed: []string{"AGENTS.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"has no reach.tsv row"}},
-		{name: "a_reach_row_with_no_code_site_is_full", head: map[string]string{tablesDir + "reach.tsv": "b\tb_gone.go\tc\n"},
+			changed: []string{"AGENTS.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"has no reach.d/b.tsv row"}},
+		{name: "a_reach_row_with_no_code_site_is_full", head: map[string]string{tablesDir + "reach.d/b.tsv": "b\tb_gone.go\tc\n"},
 			changed: []string{"AGENTS.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"names no code-scope site"}},
 		{name: "go_linkname_is_full", head: map[string]string{"e/e.go": "package e\n\nimport _ \"unsafe\"\n\n//go:linkname now time.now\nfunc now() (int64, int32, int64)\n"},
 			changed: []string{"AGENTS.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"go:linkname hides calls"}},
 		{name: "a_file_built_only_without_the_integration_tag_is_full", head: map[string]string{"e/e.go": "//go:build !integration\n\npackage e\n"},
 			changed: []string{"AGENTS.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"a build constraint on !integration"}},
 		{name: "a_star_row_keeps_the_importers", head: map[string]string{"b/b_dyn.go": reachReader,
-			tablesDir + "dynreads.tsv": "b\tb_dyn.go\n", tablesDir + "reach.tsv": "b\tb_dyn.go\t*\n"},
+			tablesDir + "dynreads.tsv": "b\tb_dyn.go\n", tablesDir + "reach.d/b.tsv": "b\tb_dyn.go\t*\n"},
 			changed: []string{"AGENTS.md"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
 		{name: "a_dash_row_selects_no_one", head: map[string]string{"b/b_dyn.go": reachReader,
-			tablesDir + "dynreads.tsv": "b\tb_dyn.go\n", tablesDir + "reach.tsv": "b\tb_dyn.go\t-\n"},
+			tablesDir + "dynreads.tsv": "b\tb_dyn.go\n", tablesDir + "reach.d/b.tsv": "b\tb_dyn.go\t-\n"},
 			changed: []string{"AGENTS.md"}, want: "NONE"},
 	})
 }
@@ -181,13 +181,13 @@ func TestReachRelativeRootEqualsAbsoluteRoot(t *testing.T) {
 	if res := writeTables(t, f.root); res.code != 0 {
 		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
 	}
-	reach := filepath.Join(f.root, tablesDir, "reach.tsv")
+	reach := filepath.Join(f.root, tablesDir, "reach.d", "b.tsv")
 	absolute, err := os.ReadFile(reach)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(absolute), "b\tb.go\tc") {
-		t.Fatalf("absolute-root reach.tsv has no placed row for b:\n%s", absolute)
+		t.Fatalf("absolute-root reach.d/b.tsv has no placed row for b:\n%s", absolute)
 	}
 	if err := os.Remove(reach); err != nil {
 		t.Fatal(err)
@@ -202,6 +202,6 @@ func TestReachRelativeRootEqualsAbsoluteRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(relative) != string(absolute) {
-		t.Fatalf("--root . reach.tsv differs from the absolute-root table:\n%s\nwant:\n%s", relative, absolute)
+		t.Fatalf("--root . reach.d/b.tsv differs from the absolute-root table:\n%s\nwant:\n%s", relative, absolute)
 	}
 }

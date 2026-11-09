@@ -44,9 +44,6 @@ func PublicPrivilegeSet() []PublicPrivilege {
 	for _, entry := range PublicReadColumns() {
 		add(entry.Table, "SELECT", entry.Columns)
 	}
-	refresh := LegacyRefreshTokenGrant()
-	add(refresh.Table, "SELECT", refresh.Select)
-	add(refresh.Table, "UPDATE", refresh.Update)
 	usersInsert, usersUpdate := UsersWriteGrant()
 	add("users", "INSERT", usersInsert)
 	add("users", "UPDATE", usersUpdate)

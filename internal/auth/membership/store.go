@@ -233,8 +233,7 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 //	5. public.memberships: the organization's owner rows and the pairs, FOR UPDATE, ORDER BY id;
 //	6. auth.memberships pair rows FOR UPDATE, ORDER BY id;
 //	   6a. a removal: the pair's auth.sessions FOR UPDATE NOWAIT, ORDER
-//	   BY id, then their refresh credentials, then the pair's
-//	   public.refresh_tokens FOR UPDATE NOWAIT (session.Store.EndOrgInTx). An
+//	   BY id, then their refresh credentials (session.Store.EndOrgInTx). An
 //	   Exchange holds its session row and then needs a key-share lock on the
 //	   principal (the new credential's foreign key), so waiting here would
 //	   close a cycle with step 1: a locked row rolls the removal back and it
@@ -553,8 +552,8 @@ func refusedNext(prev state) state {
 // locks: the verb is planned again.
 var errStateMoved = errors.New("membership: the rows changed while the change was planned")
 
-// errSessionsBusy reports that a removal found a session or go-api refresh
-// token row of the pair locked by another writer (session.ErrBusy). The whole
+// errSessionsBusy reports that a removal found a session row of the pair
+// locked by another writer (session.ErrBusy). The whole
 // transaction is rolled back, which releases the principal locks the other
 // writer may be waiting for, and the verb is planned again.
 var errSessionsBusy = errors.New("membership: a session of the removed member is locked by another writer")
@@ -715,7 +714,7 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 		s.sessions.RecordEnded(ctx, ended)
 		if ended != (session.Ended{}) {
 			s.logger.InfoContext(ctx, "membership removed; its sessions of the organization ended", "organization_id", c.OrgID.String(),
-				"principal_id", c.PrincipalID.String(), "sessions", ended.Sessions, "refresh_tokens", ended.RefreshTokens)
+				"principal_id", c.PrincipalID.String(), "sessions", ended.Sessions)
 		}
 	}
 	return s.Get(ctx, c.OrgID, c.PrincipalID)

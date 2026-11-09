@@ -62,9 +62,6 @@ type fakeSessions struct {
 	created         []createdSession
 	signIns         int
 	createErr       error
-	// RevokeLegacy.
-	revokedLegacy   []session.LegacyRefresh
-	revokeLegacyErr error
 	// minted counts accepted exchanges: a successor a client never receives.
 	minted int
 	// exchanges counts every Exchange, accepted or refused: each one writes.
@@ -153,13 +150,6 @@ func (f *fakeSessions) CreateSupersedingAudited(ctx context.Context, principal u
 	defer f.mu.Unlock()
 	f.created[len(f.created)-1].predecessor = &predecessor
 	return issued, nil
-}
-
-func (f *fakeSessions) RevokeLegacy(_ context.Context, legacy session.LegacyRefresh, actor session.Actor) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.revokedLegacy, f.actors = append(f.revokedLegacy, legacy), append(f.actors, actor)
-	return f.revokeLegacyErr == nil, f.revokeLegacyErr
 }
 
 func (f *fakeSessions) Exchange(context.Context, contracts.SecretString) (session.Result, error) {

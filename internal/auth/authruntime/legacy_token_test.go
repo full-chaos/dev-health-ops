@@ -30,7 +30,7 @@ func legacyAccess(t *testing.T, secret, issuer, audience string, grant authapi.G
 	return token
 }
 
-// legacyRefresh is go-api's HS256 refresh token for grant: the token logout still revokes (CHAOS-13125).
+// legacyRefresh is go-api's HS256 refresh token for grant.
 func legacyRefresh(t *testing.T, secret, issuer, audience string, grant authapi.Grant) string {
 	t.Helper()
 	signer, err := edgetoken.NewSigner(secret, issuer, audience)

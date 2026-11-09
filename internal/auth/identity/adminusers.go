@@ -122,6 +122,10 @@ func applyAdminCreate(ctx context.Context, tx AdminTx, q string, p adminCreatePl
 			return ErrUsernameTaken
 		}
 	}
+	// go-api's create refuses a non-local account without a valid provider subject before it writes (users.go:300).
+	if err := RefuseInvalidProviderID(p.Provider, p.AuthProviderID); err != nil {
+		return err
+	}
 	var algorithm *string
 	if p.PasswordHash != nil {
 		a := passwordAlgorithm
@@ -205,7 +209,7 @@ func (s *Store) AdminCreateUser(ctx context.Context, req AdminCreateRequest) (_ 
 		},
 		Audit:    event,
 		Events:   events,
-		Refusals: []error{ErrEmailTaken, ErrUsernameTaken},
+		Refusals: []error{ErrEmailTaken, ErrUsernameTaken, ErrInvalidProviderID},
 	})
 	switch {
 	case err == nil:
@@ -213,6 +217,8 @@ func (s *Store) AdminCreateUser(ctx context.Context, req AdminCreateRequest) (_ 
 		return AdminUser{}, ErrEmailTaken
 	case errors.Is(err, ErrUsernameTaken):
 		return AdminUser{}, ErrUsernameTaken
+	case errors.Is(err, ErrInvalidProviderID):
+		return AdminUser{}, ErrInvalidProviderID
 	default:
 		return AdminUser{}, err
 	}

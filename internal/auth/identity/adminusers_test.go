@@ -153,3 +153,19 @@ func TestAdminSoftDeleteAlreadyDoneIsGoAPIs(t *testing.T) {
 		}
 	}
 }
+
+// The create refuses a non-local account without a valid provider subject before any row is written, as go-api's
+// create does (RefuseInvalidProviderID).
+func TestAdminCreateRefusesAnInvalidProviderIDBeforeAnyWrite(t *testing.T) {
+	tx := &recordingTx{}
+	provider := "github"
+	err := applyAdminCreate(context.Background(), tx, `"auth"`, planAdminCreate(AdminCreateRequest{Email: "a@example.test", AuthProvider: &provider}), nil, nil)
+	if !errors.Is(err, ErrInvalidProviderID) {
+		t.Fatalf("applyAdminCreate = %v, want ErrInvalidProviderID", err)
+	}
+	for _, s := range tx.statements {
+		if strings.HasPrefix(strings.TrimSpace(s), "INSERT") {
+			t.Fatalf("a row was written before the refusal: %q", s)
+		}
+	}
+}

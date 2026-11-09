@@ -43,6 +43,7 @@ const (
 	reasonUsernameTaken        = "username_taken"
 	reasonAdminPasswordInvalid = "admin_password_invalid"
 	reasonLastPlatformAdmin    = "last_platform_admin"
+	reasonProviderIDInvalid    = "provider_id_invalid"
 )
 
 // usersAdminPatterns are the user-admin routes; they mount together, only when each has its row (UsersAdminRoutes).
@@ -227,6 +228,8 @@ func (h provisioningHandlers) answerUsersError(w http.ResponseWriter, r *http.Re
 		answer = refusal{http.StatusConflict, reasonEmailTaken}
 	case errors.Is(err, identity.ErrUsernameTaken):
 		answer = refusal{http.StatusConflict, reasonUsernameTaken}
+	case errors.Is(err, identity.ErrInvalidProviderID):
+		answer = refusal{http.StatusBadRequest, reasonProviderIDInvalid}
 	case errors.Is(err, identity.ErrUserNotFound):
 		answer = refusal{http.StatusNotFound, reasonPrincipalNotFound}
 	case errors.Is(err, identity.ErrStateChangedUnderLock):

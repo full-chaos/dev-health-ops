@@ -93,9 +93,15 @@ func TestEveryPasswordSettingPathCallsTheSharedPolicy(t *testing.T) {
 // A load that fails, or type errors in a package, fail the census: it never
 // walks a partial graph.
 func TestPasswordPathCensusFailsOnABrokenLoad(t *testing.T) {
-	root, err := filepath.Abs("testdata/brokenload")
-	if err != nil {
-		t.Fatal(err)
+	// Written at run time: a checked-in module that does not type-check would fail every vet of the repository's modules.
+	root := t.TempDir()
+	for name, src := range map[string]string{
+		"go.mod":    "module brokenload\n\ngo 1.22\n",
+		"broken.go": "package brokenload\n\nvar Broken int = \"not an int\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	res := censusPasswordPaths(root, []string{"./..."}, nil, nil, 1)
 	t.Log(res.problems)
@@ -234,7 +240,9 @@ var fixtureRoutes = []hopRoute{
 	{path: "/internal/v1/users/password", constant: mod + "internal/api/authprovision.PathUsersPassword"},
 }
 
-// copyFixture copies the fixture module dir into a new temporary directory.
+// copyFixture copies the fixture module dir into a new temporary directory. The
+// fixture's go.mod is checked in as go.mod.fixture so the repository holds no
+// nested module; the copy gets it back as go.mod.
 func copyFixture(t *testing.T, dir string) string {
 	t.Helper()
 	dst := t.TempDir()
@@ -252,6 +260,9 @@ func copyFixture(t *testing.T, dir string) string {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
+		}
+		if filepath.Base(rel) == "go.mod.fixture" {
+			rel = filepath.Join(filepath.Dir(rel), "go.mod")
 		}
 		return os.WriteFile(filepath.Join(dst, rel), data, 0o644)
 	})

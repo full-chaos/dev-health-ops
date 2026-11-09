@@ -26,7 +26,8 @@ printf '%s\n' '#!/usr/bin/env bash' 'echo "$1" >> "${FAKE_SLEEP_LOG}"' 'exit 0' 
 # shellcheck disable=SC2016
 printf '%s\n' \
   '#!/usr/bin/env bash' \
-  'printf '\''%s\n'\'' "$*" >> "${FAKE_ARGV}"' \
+  'all="$*"' \
+  'printf '\''%s\n'\'' "${all}" >> "${FAKE_ARGV}"' \
   'env >> "${FAKE_ENV}"' \
   'out="" url="" cfg="" accept="" argv_bearer="" lt=""' \
   'while [ "$#" -gt 0 ]; do' \
@@ -46,7 +47,7 @@ printf '%s\n' \
   'done' \
   'case "${cfg}" in *'\''ccept: application/octet-stream'\''*) accept=1 ;; esac' \
   '# t9b: a request that carries an Authorization header must not use --location-trusted' \
-  '[ -z "${lt}" ] || case "${cfg}" in *[Aa]uthorization:*) printf '\''%s\n'\'' "$*" >> "${FAKE_LT}" ;; *) [ -z "${argv_bearer}" ] || printf '\''%s\n'\'' "$*" >> "${FAKE_LT}" ;; esac' \
+  '[ -z "${lt}" ] || case "${cfg}" in *[Aa]uthorization:*) printf '\''%s\n'\'' "${all}" >> "${FAKE_LT}" ;; *) [ -z "${argv_bearer}" ] || printf '\''%s\n'\'' "${all}" >> "${FAKE_LT}" ;; esac' \
   'authed=""' \
   'bearer="$(printf '\''%s\n'\'' "${cfg}" | sed -n '\''s/^header = "Authorization: Bearer \(.*\)"$/\1/p'\'' | head -1)"' \
   '# A token on argv authenticates too, so a helper that leaks it there still downloads and is caught by t2, not by t1.' \

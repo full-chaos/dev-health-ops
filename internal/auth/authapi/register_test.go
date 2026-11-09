@@ -103,9 +103,9 @@ func shapeOf(t *testing.T, status int, body string) string {
 	return strings.TrimSpace(out + keys + " " + message)
 }
 
-// goAPIAnswersAbovePython are the rows whose frozen golden is the Python plane's answer and go-api's own answer
-// is stricter: the row's test pins go-api's live answer instead.
-var goAPIAnswersAbovePython = map[string]struct{}{"password_over_72_bytes": {}}
+// goAPIForwardedRows are the rows go-api does not answer itself: past validation and the limiter it forwards the
+// sign-up to auth-service, so the frozen golden (the Python plane's recording) is not go-api's answer.
+var goAPIForwardedRows = map[string]struct{}{"password_policy": {}, "password_over_72_bytes": {}}
 
 func TestRegisterRouteRefusalsMatchTheCheckedInTable(t *testing.T) {
 	registerEnv(t, "")
@@ -163,7 +163,10 @@ func TestRegisterRouteRefusalsMatchTheCheckedInTable(t *testing.T) {
 		if got := shapeOf(t, r.Code, r.Body.String()); got != table[id].authService {
 			t.Fatalf("%s: auth-service answers %q, the table says %q", id, got, table[id].authService)
 		}
-		if _, frozenAt500 := goAPIAnswersAbovePython[id]; frozenAt500 {
+		if _, forwarded := goAPIForwardedRows[id]; forwarded {
+			if table[id].goAPI != "forwarded to auth-service: its answer" && !strings.HasPrefix(table[id].goAPI, "forwarded to auth-service: its answer (") {
+				t.Fatalf("%s: go-api forwards this sign-up, the table says %q", id, table[id].goAPI)
+			}
 			continue
 		}
 		if got := shapeOf(t, row.Status, row.Body); got != table[id].goAPI {
@@ -175,9 +178,8 @@ func TestRegisterRouteRefusalsMatchTheCheckedInTable(t *testing.T) {
 	if got := shapeOf(t, answer.Code, answer.Body.String()); got != table["email_taken"].authService {
 		t.Fatalf("email_taken: auth-service answers %q, the table says %q", got, table["email_taken"].authService)
 	}
-	if !strings.Contains(string(registerSource), `registerAcceptedMessage = "Check your email to continue"`) || !strings.Contains(string(registerSource), "http.StatusAccepted") ||
-		table["email_taken"].goAPI != table["email_taken"].authService {
-		t.Fatal("email_taken: go-api's register.go does not answer 202 with the table's message")
+	if table["email_taken"].goAPI != "forwarded to auth-service: its answer" || !strings.Contains(string(registerSource), "usersowned.Write(w)") {
+		t.Fatal("email_taken: go-api's register.go serves a local sign-up body; the table says it forwards")
 	}
 	c := newCredFixture(t)
 	var limited *httptest.ResponseRecorder

@@ -138,6 +138,8 @@ internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*
 internal/auth/session	liveness_census_test.go	cmd	tree	*
 internal/auth/session	liveness_census_test.go	internal	tree	*
 internal/auth/writerinventory	credential_registry_reader_census_test.go	internal	tree	*.go
+internal/auth/writerinventory	link_tokens_dropped_test.go	cmd	tree	*.go
+internal/auth/writerinventory	link_tokens_dropped_test.go	internal	tree	*.go
 internal/auth/writerinventory	scan_test.go	.	tree	*.go
 internal/auth/writerinventory	scan_test.go	internal/storage/postgres/authschema/migrations	dir	*
 internal/auth/writerinventory	session_revoke_census_test.go	internal	tree	*.go

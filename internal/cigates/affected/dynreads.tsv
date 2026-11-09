@@ -142,6 +142,7 @@ internal/auth/session	credential_test.go
 internal/auth/session	liveness_census_test.go
 internal/auth/workloadexchange	tokenreview.go
 internal/auth/workloadinput	workloadinput.go
+internal/auth/writerinventory	link_tokens_dropped_test.go
 internal/auth/writerinventory	membership_census_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	usersowned_census_shapes_test.go

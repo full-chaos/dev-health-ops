@@ -483,9 +483,10 @@ func (r *runner) retireMail(label string) {
 	fmt.Fprintf(&r.receipt, "%-70s python=%d go=%d retired (%s)\n", label+": e-mails", len(pythonMails), drained, movedRuling)
 }
 
-// movedCells runs the one executed in-process cell of each moved route (movedProbes): go-api answers 409 with the
-// operation_moved reason, after its own validator and limiter, in a fresh rate-limit window.
-func (r *runner) movedCells() {
+// movedCells runs the executed in-process cells of each moved route (movedProbes), once without and once with a user
+// access token: go-api answers 409 with the operation_moved reason, after its own scope layers, validator and limiter,
+// in a fresh rate-limit window.
+func (r *runner) movedCells(bearer string) {
 	r.t.Helper()
 	flushValkey(r.t, r.ctx, r.venue.ValkeyURI, r.venue.PythonValkeyURI)
 	keys := make([]string, 0, len(r.moved))
@@ -495,26 +496,29 @@ func (r *runner) movedCells() {
 	sort.Strings(keys)
 	fmt.Fprintf(&r.receipt, "-- moved routes (in process)\n")
 	for _, key := range keys {
-		method, path, _ := strings.Cut(key, " ")
 		probe, ok := movedProbes[key]
 		if !ok {
 			r.t.Errorf("%s: no moved-route cell", key)
 			continue
 		}
-		body := probe
-		if strings.HasPrefix(probe, "?") {
-			path, body = path+probe, ""
-		}
-		got := venueoracle.Do(r.t, r.goBase, request("moved: "+key, method, path, "", body))
-		var answer struct {
-			Detail struct {
-				Reason string `json:"reason"`
-			} `json:"detail"`
-		}
-		ok = got.Status == http.StatusConflict && json.Unmarshal([]byte(got.Body), &answer) == nil && answer.Detail.Reason == usersowned.Reason
-		fmt.Fprintf(&r.receipt, "%-70s go=%d %s\n", "moved: "+key, got.Status, venueoracle.Mark(ok))
-		if !ok {
-			r.t.Errorf("%s: go-api answered %d %s, want 409 with reason %s", key, got.Status, venueoracle.RedactText(got.Body), usersowned.Reason)
+		for _, cell := range []struct{ label, bearer string }{{"no bearer", ""}, {"bearer", bearer}} {
+			method, path, _ := strings.Cut(key, " ")
+			body := probe
+			if strings.HasPrefix(probe, "?") {
+				path, body = path+probe, ""
+			}
+			name := "moved: " + key + ", " + cell.label
+			got := venueoracle.Do(r.t, r.goBase, request(name, method, path, cell.bearer, body))
+			var answer struct {
+				Detail struct {
+					Reason string `json:"reason"`
+				} `json:"detail"`
+			}
+			ok := got.Status == http.StatusConflict && json.Unmarshal([]byte(got.Body), &answer) == nil && answer.Detail.Reason == usersowned.Reason
+			fmt.Fprintf(&r.receipt, "%-70s go=%d %s\n", name, got.Status, venueoracle.Mark(ok))
+			if !ok {
+				r.t.Errorf("%s: go-api answered %d %s, want 409 with reason %s", name, got.Status, venueoracle.RedactText(got.Body), usersowned.Reason)
+			}
 		}
 	}
 }
@@ -1207,7 +1211,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	}
 	r.batch("limits", limits)
 	if r.moved != nil {
-		r.movedCells()
+		r.movedCells(tok["alice"])
 	}
 
 	r.rows("users", `SELECT email, coalesce(username, '<null>'), coalesce(full_name, '<null>'), coalesce(auth_provider, '<null>'),

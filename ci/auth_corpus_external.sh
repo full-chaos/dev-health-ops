@@ -420,7 +420,6 @@ if [ "${LEG}" = "acp" ]; then
     # The flag is set for these two commands only (not exported): the go-api recreates that follow take it from the state.
     AUTH_USERS_OWNED=true timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
       run --rm --no-deps auth-grants >/dev/null
-    legacy_link_purge
     AUTH_USERS_OWNED=true timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
       up --detach --no-deps --force-recreate --no-build --wait --wait-timeout 300 auth-service
     # go-api refuses AUTH_USERS_OWNED without AUTH_PROXY_CREDENTIALS, and auth-service serves the credentials routes only
@@ -440,16 +439,6 @@ if [ "${LEG}" = "acp" ]; then
     bash "${SCRIPT_DIR}/auth_corpus_set_env.sh" AUTH_USERS_OWNED true
   }
 fi
-
-# legacy_link_purge is the users-owned switch's purge of go-api's legacy link-token rows (public.email_verification_tokens,
-# public.password_reset_tokens), as a deployment's flip runs it (dho auth legacy-link-purge): the owned hand-off of either
-# leg runs it once the seeded users are owned and the owned grants (the auth role's switch-gated DELETE) are applied. The
-# verb refuses unless AUTH_USERS_OWNED is true, so the flag is set for this one command.
-legacy_link_purge() {
-  printf 'step 1e: legacy-link-purge of the seeded legacy link-token rows\n'
-  AUTH_USERS_OWNED=true timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
-    run --rm --no-deps migrate auth legacy-link-purge -run-id authcorpus-switch >/dev/null || die "legacy-link-purge failed"
-}
 
 # Whether auth-service owns users on this run: leg acp from step 1e (unless AUTH_CORPUS_USERS_UNOWNED=1); leg go-api as
 # compose.yml renders go-api's AUTH_USERS_OWNED (below).
@@ -496,7 +485,6 @@ if [ "${LEG}" = "go-api" ]; then
     printf 'step 1e (go-api): auth-users-backfill of the seeded users\n'
     timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
       run --rm --no-deps auth-users-backfill || die "users-backfill failed"
-    legacy_link_purge
     timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
       up --detach --no-deps --force-recreate --no-build --wait --wait-timeout 300 auth-service
   }

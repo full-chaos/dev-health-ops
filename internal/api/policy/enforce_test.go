@@ -626,7 +626,7 @@ func collectSum(t *testing.T, reader *sdkmetric.ManualReader, name, label string
 	return description, values
 }
 
-// No caller gives the unjudged counter a "delegated" reason: its closed reason set is hs256, no_org, served_org and
+// No caller gives the unjudged counter a "delegated" reason: its closed reason set is no_user_bearer, no_org, served_org and
 // impersonation (a live-row read; the live-row platform wrap is refused, not unjudged).
 func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	recordEnforce(t)
@@ -644,7 +644,7 @@ func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	if !slices.Equal(reasons, []string{"impersonation", "no_org"}) {
 		t.Errorf("unjudged reasons %v, want [impersonation no_org] (no delegated point)", reasons)
 	}
-	if want := "by route row and reason: hs256, no_org, served_org, impersonation"; !strings.HasSuffix(description, want) {
+	if want := "by route row and reason: no_user_bearer, no_org, served_org, impersonation"; !strings.HasSuffix(description, want) {
 		t.Errorf("unjudged description %q, want it to end %q", description, want)
 	}
 }
@@ -694,6 +694,29 @@ func TestAnOrganizationRouteWithNoOrganizationKeepsTheLegacyAnswerAndIsCountedUn
 	}
 }
 
+// A caller with no bearer, or with a token that is not a user access token, keeps the legacy answer with no decision
+// point call and is counted unjudged no_user_bearer. The guard sends neither today (it refuses a missing bearer and
+// every user it builds holds a user access token), so the cell asks the Enforcer directly.
+func TestAnEnforcedRowCallerWithNoUserBearerIsCountedNoUserBearer(t *testing.T) {
+	for name, o := range map[string]enforceObservation{
+		"no bearer":                       {bearer: "", userAccessToken: true},
+		"a token that is no access token": {bearer: shadowBearer, userAccessToken: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := recordEnforce(t)
+			pdp := newTestPDP(t, allowAll)
+			o.pattern, o.orgID, o.read = "GET /api/v1/admin/teams", ownOrg, true
+			if got := newEnforcerFor(t, pdp.client(t), onFor("teams")).decide(context.Background(), o); got != enforceLegacy {
+				t.Fatalf("verdict %v, want enforceLegacy", got)
+			}
+			if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{"GET /api/v1/admin/teams/no_user_bearer"}) || len(rec.snapshot()) != 0 {
+				t.Fatalf("%d PDP calls, unjudged %v, decisions %v, want 0, [GET /api/v1/admin/teams/no_user_bearer] and none",
+					n, rec.unjudgedSnapshot(), rec.snapshot())
+			}
+		})
+	}
+}
+
 // A platform route needs no organization, so a caller with none is judged.
 func TestAPlatformRouteWithNoOrganizationIsJudged(t *testing.T) {
 	rec := recordEnforce(t)
@@ -734,7 +757,7 @@ func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("enforce-test")
 	newEnforceDecisionAdder(meter)(context.Background(), "teams", "allow")
-	newEnforceUnjudgedAdder(meter)(context.Background(), "GET /api/v1/admin/teams", "hs256")
+	newEnforceUnjudgedAdder(meter)(context.Background(), "GET /api/v1/admin/teams", "no_user_bearer")
 	var collected metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &collected); err != nil {
 		t.Fatal(err)
@@ -762,9 +785,8 @@ func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
 	if got := keys["dev_health_authz_enforcement_unjudged_total"]; !slices.Equal(got, []string{"reason", "route"}) {
 		t.Fatalf("unjudged counter labels %v", got)
 	}
-	reasons := []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg}
-	if !slices.Equal(reasons, []string{"hs256", "no_org"}) {
-		t.Fatalf("reasons %v, want hs256 and no_org", reasons)
+	if want := []string{"no_user_bearer", "no_org", "served_org", "impersonation"}; !slices.Equal(enforceUnjudgedReasons, want) {
+		t.Fatalf("unjudged reasons %v, want %v", enforceUnjudgedReasons, want)
 	}
 }
 

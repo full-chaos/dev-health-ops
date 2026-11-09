@@ -27,18 +27,6 @@ func TestEdDSASessionsNeedOnlyTheSuccessorKey(t *testing.T) {
 	}
 }
 
-func TestEdDSASessionsNeedTheRateLimitKey(t *testing.T) {
-	env := successorOnlyEnv(AccessClassEdDSA)
-	delete(env, EnvRateLimitKey)
-	_, err := Load(Spec{LookupEnv: lookupFrom(env)})
-	if err == nil || !strings.Contains(err.Error(), EnvRateLimitKey) {
-		t.Fatalf("got %v, want an error naming %s", err, EnvRateLimitKey)
-	}
-	if strings.Contains(err.Error(), testSuccessorKey) {
-		t.Fatal("the error quotes a secret")
-	}
-}
-
 func TestEdDSASessionRefusalsNameTheSuccessorKeyOnly(t *testing.T) {
 	for name, set := range map[string]func(map[string]string){
 		"lockout key":      func(env map[string]string) { env[EnvLoginLockoutKey] = testSuccessorKey },

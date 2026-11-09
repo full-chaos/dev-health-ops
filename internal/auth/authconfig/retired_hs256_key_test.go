@@ -70,18 +70,24 @@ func TestTheRetiredHS256KeyAloneLoadsWithTheSessionRoutesOff(t *testing.T) {
 	}
 }
 
-// The rate limiter has one key, AUTH_RATE_LIMIT_KEY: with the session routes on and no rate-limit key the start is
-// refused naming it (a missing required key), whatever the HS256 key holds.
-func TestTheRateLimitKeyIsRequiredWhateverTheRetiredHS256KeyHolds(t *testing.T) {
-	env := retiredKeyEnv()
-	delete(env, EnvRateLimitKey)
-	env[retiredHS256Key] = strings.Repeat("leftover-hs256-", 3)
-	_, err := Load(Spec{LookupEnv: lookupFrom(env)})
-	if err == nil || !strings.Contains(err.Error(), EnvRateLimitKey+" is required") {
-		t.Fatalf("got %v, want a refusal saying %s is required", err, EnvRateLimitKey)
-	}
-	if strings.Contains(err.Error(), "leftover-hs256-") || strings.Contains(err.Error(), retiredKeySuccessorKey) {
-		t.Fatal("the refusal quotes a secret")
+// AUTH_RATE_LIMIT_KEY is optional (product rule 3): with the session routes on and no rate-limit key the start is not
+// refused, whatever the retired HS256 key holds; the limiter then keys from the successor key (authapi.NewSessionLimits).
+func TestTheSessionRoutesStartWithoutTheRateLimitKey(t *testing.T) {
+	for name, hs256 := range map[string]string{"no HS256 key": "", "a leftover HS256 key": strings.Repeat("leftover-hs256-", 3)} {
+		env := retiredKeyEnv()
+		delete(env, EnvRateLimitKey)
+		if hs256 != "" {
+			env[retiredHS256Key] = hs256
+		}
+		cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+		if err != nil {
+			t.Errorf("%s: the session routes without %s are refused at load: %v", name, EnvRateLimitKey, err)
+			continue
+		}
+		if !cfg.Session.Enabled || cfg.Session.RateLimitKey.Configured() || cfg.Session.SuccessorKey.Reveal() != retiredKeySuccessorKey {
+			t.Errorf("%s: sessions enabled %v, rate-limit key configured %v; want sessions on, no rate-limit key, the successor key",
+				name, cfg.Session.Enabled, cfg.Session.RateLimitKey.Configured())
+		}
 	}
 }
 

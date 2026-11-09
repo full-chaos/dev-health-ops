@@ -326,10 +326,159 @@ func TestMigration147RefreshAppendsExactlyTheChangedGroups(t *testing.T) {
 		refreshGroups(ctx, t, conn)
 		got := appendedSince(ctx, t, conn, mark)
 		if fmt.Sprint(sortAppended(got)) != fmt.Sprint(sortAppended(want)) {
+			dumpGroupKeys(ctx, t, conn, step.name, got, want)
 			t.Fatalf("%s: appended %v, want exactly %v", step.name, got, want)
 		}
 		before = requireStoredEqualsOracle(ctx, t, conn, step.name)
 		t.Logf("%s: %d groups appended, equal to the oracle's changes", step.name, len(got))
+	}
+}
+
+// dumpGroupKeys logs, column by column, every key appended or wanted in one
+// set but not the other: its log rows and its current rows in stamp order
+// (current with the part each row is in, read without FINAL), current FINAL,
+// and the oracle; then the parts of the two tables, the view's refresh state
+// and the refresh inserts in query_log. Every line starts with DIAG.
+func dumpGroupKeys(ctx context.Context, t *testing.T, conn driver.Conn, label string, got, want []appendedGroup) {
+	t.Helper()
+	count := map[appendedGroup]int{}
+	for _, g := range got {
+		count[g]++
+	}
+	for _, g := range want {
+		count[g]--
+	}
+	keys := map[[2]string]bool{}
+	for g, n := range count {
+		if n != 0 {
+			keys[[2]string{g.org, g.rowKey}] = true
+			t.Logf("DIAG %s: %+v appended %+d times more than wanted", label, g, n)
+		}
+	}
+	lines := func(query string, args ...any) []string {
+		rows, err := conn.Query(ctx, query, args...)
+		if err != nil {
+			return []string{"query failed: " + err.Error()}
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				return append(out, "scan failed: "+err.Error())
+			}
+			out = append(out, line)
+		}
+		return out
+	}
+	const row = "concat(toString(stored_at), ' deleted=', toString(is_deleted), ' hash=', toString(content_hash), ' ', " + groupsContentSQL + ")"
+	for key := range keys {
+		org, rowKey := key[0], key[1]
+		t.Logf("DIAG %s key %s %s", label, org, rowKey)
+		for _, l := range lines("SELECT "+row+" FROM project_team_ownership_groups_log WHERE org_id = ? AND row_key = ? ORDER BY stored_at", org, rowKey) {
+			t.Logf("DIAG   log      %s", l)
+		}
+		for _, l := range lines("SELECT concat(_part, ' ', "+row+") FROM project_team_ownership_groups_current WHERE org_id = ? AND row_key = ? ORDER BY stored_at", org, rowKey) {
+			t.Logf("DIAG   current  %s", l)
+		}
+		for _, l := range lines("SELECT "+row+" FROM project_team_ownership_groups_current FINAL WHERE org_id = ? AND row_key = ?", org, rowKey) {
+			t.Logf("DIAG   final    %s", l)
+		}
+		t.Logf("DIAG   oracle   %s", oracleGroups(ctx, t, conn, org)[rowKey])
+	}
+	for _, l := range lines("SELECT concat(table, ' active parts=', toString(count()), ' rows=', toString(sum(rows))) FROM system.parts WHERE database = currentDatabase() AND active AND table LIKE 'project_team_ownership_groups%' GROUP BY table") {
+		t.Logf("DIAG parts %s", l)
+	}
+	for _, l := range lines("SELECT toString(tuple(*)) FROM system.view_refreshes WHERE database = currentDatabase()") {
+		t.Logf("DIAG view_refreshes %s", l)
+	}
+	if err := conn.Exec(ctx, "SYSTEM FLUSH LOGS"); err == nil {
+		for _, l := range lines(`SELECT concat(toString(query_start_time_microseconds), ' -> ', toString(event_time_microseconds), ' written=', toString(written_rows), ' ', query_id)
+FROM system.query_log
+WHERE type = 'QueryFinish' AND query_kind = 'Insert' AND has(databases, currentDatabase())
+  AND position(query, 'project_team_ownership_groups_log') > 0 AND event_time > now() - INTERVAL 15 MINUTE
+ORDER BY query_start_time_microseconds`) {
+			t.Logf("DIAG refresh insert %s", l)
+		}
+	}
+}
+
+// O2 repeated: with merges of both tables stopped (every refresh's rows stay in
+// their own part, so current holds several versions of a group side by side)
+// and after three changes that give the same groups new versions, at least
+// twenty refreshes with no source change, run until the server clock has passed
+// the view's next scheduled refresh so the schedule fires among them, each
+// append nothing, and current
+// equals the oracle after each. A comparison that reads more than the latest
+// row of a group, or a schedule that interleaves with a triggered refresh,
+// shows up here as appended rows.
+func TestMigration147RepeatedNoChangeRefreshesAppendNothing(t *testing.T) {
+	ctx := context.Background()
+	conn := groupsHead(ctx, t)
+	groupsExec(ctx, t, conn, "SYSTEM STOP MERGES project_team_ownership_groups_current")
+	groupsExec(ctx, t, conn, "SYSTEM STOP MERGES project_team_ownership_groups_log")
+	refreshGroups(ctx, t, conn)
+	before := requireStoredEqualsOracle(ctx, t, conn, "first refresh")
+
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	changes := []struct {
+		name   string
+		change func()
+	}{
+		{"projects: P2 updated", func() {
+			later := at.Add(6 * time.Hour)
+			groupsExec(ctx, t, conn, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES ('P2', ?, 'github', 'K2', 'P2 renamed', 1, 'started', '', ?, ?)`,
+				groupsOrgA, later, later)
+		}},
+		{"projects: P2 updated again", func() {
+			later := at.Add(8 * time.Hour)
+			groupsExec(ctx, t, conn, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES ('P2', ?, 'github', 'K2', 'P2 renamed twice', 1, 'started', '', ?, ?)`,
+				groupsOrgA, later, later)
+		}},
+		{"ownership: a later assertion closes T1's P1", func() {
+			closed := at.Add(72 * time.Hour)
+			groupsExec(ctx, t, conn, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at, last_synced) VALUES (?, 'github', 'T1', 'P1', 'K1', 'native', ?, ?, ?, ?)`,
+				groupsOrgA, at.Add(48*time.Hour), &closed, at.Add(5*time.Hour), at.Add(5*time.Hour))
+		}},
+	}
+	for _, step := range changes {
+		mark := serverNow(ctx, t, conn)
+		step.change()
+		want := changedGroups(groupsOrgA, before[groupsOrgA], oracleGroups(ctx, t, conn, groupsOrgA))
+		if len(want) == 0 {
+			t.Fatalf("%s: the oracle changed no group; the step is built to change some", step.name)
+		}
+		refreshGroups(ctx, t, conn)
+		if got := appendedSince(ctx, t, conn, mark); fmt.Sprint(sortAppended(got)) != fmt.Sprint(sortAppended(want)) {
+			dumpGroupKeys(ctx, t, conn, step.name, got, want)
+			t.Fatalf("%s: appended %v, want exactly %v", step.name, got, want)
+		}
+		before = requireStoredEqualsOracle(ctx, t, conn, step.name)
+	}
+	var nextTick time.Time
+	if err := conn.QueryRow(ctx, "SELECT next_refresh_time FROM system.view_refreshes WHERE database = currentDatabase() AND view = ?", groupsRefreshView).Scan(&nextTick); err != nil {
+		t.Fatal(err)
+	}
+	start := serverNow(ctx, t, conn)
+	crossed := false
+	for i := 1; i <= 40 && (i <= 20 || !crossed); i++ {
+		mark := serverNow(ctx, t, conn)
+		refreshGroups(ctx, t, conn)
+		if got := appendedSince(ctx, t, conn, mark); len(got) != 0 {
+			label := fmt.Sprintf("no-change refresh %d", i)
+			dumpGroupKeys(ctx, t, conn, label, got, nil)
+			t.Fatalf("%s appended %v, want nothing", label, got)
+		}
+		requireStoredEqualsOracle(ctx, t, conn, fmt.Sprintf("no-change refresh %d", i))
+		crossed = serverNow(ctx, t, conn).After(nextTick)
+		time.Sleep(3500 * time.Millisecond)
+	}
+	if !crossed {
+		t.Fatalf("the no-change refreshes never passed the view's scheduled refresh at %v: the cell did not cross the schedule", nextTick)
+	}
+	if got := appendedSince(ctx, t, conn, start); len(got) != 0 {
+		dumpGroupKeys(ctx, t, conn, "the whole no-change loop", got, nil)
+		t.Fatalf("refreshes appended %v during the no-change loop (the schedule included), want nothing", got)
 	}
 }
 

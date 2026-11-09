@@ -3,12 +3,13 @@ package testshard_test
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
 )
 
-// CHAOS-13422: the five heaviest test packages (each runs 330-720 s alone) must not share a shard, because two of them side by
+// CHAOS-13422: the five heaviest test packages (median 435-715 s in the test leg) must not share a shard, because two of them side by
 // side make a shard's wall exceed the sum of their weights' share. ci/go_test_pins.tsv lists them; ci/go_race_shard.awk
 // (-v pin=) places the pinned packages first, each on the then-lightest shard, before the longest-processing-time split.
 // The serial package (check_go.sh SERIAL_HEAVY_TEST_PACKAGE) is pinned too: it runs alone after the shard's other packages, so
@@ -82,6 +83,29 @@ func TestThePinnedHeavyPackagesLandOnDistinctShards(t *testing.T) {
 		used[s] = k
 	}
 	w := testWeights(t)
+	// The heavy pins are the shardCount heaviest packages of ci/go_test_weights.tsv (the serial package aside), so the
+	// pin list follows the measured medians when they are refreshed.
+	var ranked []string
+	for k := range w {
+		if k != serialPinKey {
+			ranked = append(ranked, k)
+		}
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if w[ranked[i]] != w[ranked[j]] {
+			return w[ranked[i]] > w[ranked[j]]
+		}
+		return ranked[i] < ranked[j]
+	})
+	top := map[string]bool{}
+	for _, k := range ranked[:shardCount] {
+		top[k] = true
+	}
+	for _, k := range pins {
+		if !top[k] {
+			t.Errorf("pinned package %s (weight %d) is not one of the %d heaviest in ci/go_test_weights.tsv: %v", k, w[k], shardCount, ranked[:shardCount])
+		}
+	}
 	lightest := pins[0]
 	for _, k := range pins[1:] {
 		if w[k] < w[lightest] {

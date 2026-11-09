@@ -1,6 +1,7 @@
 // Package acrcredentials is go-api's session route that revokes an MCP-bound acr credential by id for a signed-in
 // user who lost the token (CHAOS-12959). go-api authorizes the human; acr decides whether the credential admits that
-// actor: an organization admin, or the user who approved the credential.
+// actor: an organization admin, or the user who approved the credential. A platform admin (admin.orgs) is the
+// organization admin of any organization, with or without a membership row there (product rule 1).
 //
 // The route is a Go-only route (no FastAPI ancestor), so its answers are written with policy.WriteDetail, never
 // WriteModel. Routes is not mounted by apiservice until the route's endpoint-profile row lands (D6617).
@@ -17,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrrevoke"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // RevokePattern is the route's pattern.
@@ -82,7 +84,8 @@ func (h handlers) answer(w http.ResponseWriter, r *http.Request, status int, det
 }
 
 // revoke runs behind policy.Authenticated and RefuseImpersonation. The organization is the token's org claim, as on
-// the admin routes; the actor kind comes from the caller's live membership row there, never from the role claim.
+// the admin routes; the actor kind is the admin for a holder of admin.orgs (no membership read, as
+// ensureOrgAdminAccess), else the caller's live membership row there, never the role claim.
 func (h handlers) revoke(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := policy.UserFrom(ctx)
@@ -110,20 +113,11 @@ func (h handlers) revoke(w http.ResponseWriter, r *http.Request) {
 		h.answer(w, r, http.StatusServiceUnavailable, msgUnavailable, "not_configured", "")
 		return
 	}
-	role, found, err := h.members.Membership(ctx, user.ID, org)
-	switch {
-	case err != nil:
-		h.answer(w, r, http.StatusServiceUnavailable, msgUnavailable, "membership_read_failed", "")
-		return
-	case !found:
-		h.answer(w, r, http.StatusForbidden, msgNotMember, "not_member", "")
+	actorType, ok := h.actor(w, r, user, org)
+	if !ok {
 		return
 	}
-	actorType := acrrevoke.ActorUser
-	if role == "owner" || role == "admin" {
-		actorType = acrrevoke.ActorAdmin
-	}
-	err = h.revoker.Revoke(ctx, org.String(), credentialID, actorType, user.ID.String())
+	err := h.revoker.Revoke(ctx, org.String(), credentialID, actorType, user.ID.String())
 	switch {
 	case err == nil:
 		h.answer(w, r, http.StatusNoContent, "", "revoked", actorType)
@@ -135,4 +129,28 @@ func (h handlers) revoke(w http.ResponseWriter, r *http.Request) {
 		h.logger.WarnContext(ctx, "acr credential revoke failed", slog.String("error", err.Error()))
 		h.answer(w, r, http.StatusServiceUnavailable, msgUnavailable, "acr_failed", actorType)
 	}
+}
+
+// actor is the acr actor type of user in org, or false once it has answered.
+func (h handlers) actor(w http.ResponseWriter, r *http.Request, user *policy.User, org uuid.UUID) (string, bool) {
+	held, err := policy.HoldsPlatform(r.Context(), user, rule.ActionAdminOrgs)
+	if err != nil {
+		policy.WritePlatformDecisionRefusal(w, err)
+		return "", false
+	}
+	if held {
+		return acrrevoke.ActorAdmin, true
+	}
+	role, found, err := h.members.Membership(r.Context(), user.ID, org)
+	switch {
+	case err != nil:
+		h.answer(w, r, http.StatusServiceUnavailable, msgUnavailable, "membership_read_failed", "")
+		return "", false
+	case !found:
+		h.answer(w, r, http.StatusForbidden, msgNotMember, "not_member", "")
+		return "", false
+	case role == "owner" || role == "admin":
+		return acrrevoke.ActorAdmin, true
+	}
+	return acrrevoke.ActorUser, true
 }

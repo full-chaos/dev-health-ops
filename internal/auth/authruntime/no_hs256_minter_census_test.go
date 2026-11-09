@@ -1,4 +1,4 @@
-package edgetoken
+package authruntime
 
 import (
 	"io/fs"

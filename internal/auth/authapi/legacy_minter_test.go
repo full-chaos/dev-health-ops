@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
@@ -23,9 +22,6 @@ type legacyMinter struct {
 }
 
 func newLegacyMinter(secret, issuer, audience string) (*legacyMinter, error) {
-	if _, err := edgetoken.New(secret, issuer, audience); err != nil {
-		return nil, err
-	}
 	return &legacyMinter{secret: secret, issuer: issuer, audience: audience, now: time.Now}, nil
 }
 

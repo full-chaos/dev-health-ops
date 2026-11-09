@@ -167,14 +167,25 @@ func ValidOrigin(u *url.URL) bool {
 
 const clusterServiceSuffix = ".svc.cluster.local"
 
+var clusterDNSLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
 // ValidClusterHTTPOrigin reports whether u is a plain-http origin on a cluster-local Service host (<name>.svc.cluster.local,
-// any case), with no user info or fragment. ValidOrigin never accepts it: only a caller's own explicit opt-in may.
+// any case, every label of <name> a DNS label), with no user info or fragment. ValidOrigin never accepts it: only a
+// caller's own explicit opt-in may.
 func ValidClusterHTTPOrigin(u *url.URL) bool {
 	if u == nil || u.Scheme != "http" || u.User != nil || u.Fragment != "" {
 		return false
 	}
-	host := strings.ToLower(u.Hostname())
-	return len(host) > len(clusterServiceSuffix) && strings.HasSuffix(host, clusterServiceSuffix)
+	name, ok := strings.CutSuffix(strings.ToLower(u.Hostname()), clusterServiceSuffix)
+	if !ok {
+		return false
+	}
+	for _, label := range strings.Split(name, ".") {
+		if !clusterDNSLabel.MatchString(label) {
+			return false
+		}
+	}
+	return true
 }
 
 // New returns a Client.

@@ -48,13 +48,14 @@ func newACRRevoker(lookup func(string) (string, bool), logger *slog.Logger) acrc
 	case strings.TrimSpace(allowValue) != "false":
 		return refuse(EnvACRRevokeAllowClusterHTTP)
 	}
-	// A value that does not parse is a nil URL, which ValidOrigin refuses.
+	// A value that does not parse is a nil URL, which ValidOrigin refuses. The raw checks also catch an empty "?" or "#",
+	// which the parsed URL no longer shows.
 	baseURL, _ := url.Parse(base)
-	if !acrrevoke.ValidOrigin(baseURL, allow) || baseURL.RawQuery != "" {
+	if strings.ContainsAny(base, "?#") || !acrrevoke.ValidOrigin(baseURL, allow) {
 		return refuse(EnvACRRevokeURL)
 	}
 	tokenURL, _ := url.Parse(token)
-	if !acrrevoke.ValidOrigin(tokenURL, allow) {
+	if strings.Contains(token, "#") || !acrrevoke.ValidOrigin(tokenURL, allow) {
 		return refuse(EnvACRRevokeTokenURL)
 	}
 	client, err := acrrevoke.New(acrrevoke.Config{BaseURL: baseURL, TokenEndpoint: tokenURL, SubjectTokenFile: subject, AllowClusterHTTP: allow})

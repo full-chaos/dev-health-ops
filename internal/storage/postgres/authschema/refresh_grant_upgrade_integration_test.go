@@ -10,7 +10,8 @@ import (
 )
 
 // The upgrade from the live release: after the owner move the migrator holds the
-// old refresh_tokens column privileges WITH GRANT OPTION (the old owner pass) and
+// old refresh_tokens column privileges WITH GRANT OPTION and the table-level anchor
+// privilege (the old owner pass gave both to every PublicPrivilegeSet table) and
 // has granted them to the runtime role (the old grants pass). The new grants pass,
 // run as the migrator, refuses the revoke with the pinned digest, then revokes all
 // seven with it, and the next run needs no acknowledgement.
@@ -26,6 +27,7 @@ func TestTheLiveReleaseRefreshTokensGrantLeavesWithTheAcknowledgedDigest(t *test
 	for _, statement := range []string{
 		`GRANT ` + selectCols + ` ON public.refresh_tokens TO ` + migrator + ` WITH GRANT OPTION`,
 		`GRANT UPDATE (revoked_at) ON public.refresh_tokens TO ` + migrator + ` WITH GRANT OPTION`,
+		`GRANT ` + PublicAnchorPrivilege + ` ON public.refresh_tokens TO ` + migrator,
 	} {
 		if _, err := env.old.Exec(ctx, statement); err != nil {
 			t.Fatalf("live owner pass %q: %v", statement, err)

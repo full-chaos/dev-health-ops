@@ -136,7 +136,7 @@ func newGateRig(t *testing.T) *gateRig {
 		t.Fatal(err)
 	}
 	guard.SetShadow(shadow)
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Limits: limiter, ACRWorkload: workload}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Limits: limiter, ACRWorkload: workload, ServiceAccounts: stubAccounts{}}
 	scopeRows, err := goAPIScopeRows()
 	if err != nil {
 		t.Fatal(err)

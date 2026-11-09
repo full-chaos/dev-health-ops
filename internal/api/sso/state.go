@@ -58,7 +58,7 @@ const oidcStateHKDFInfo = "dev-health-ops:oidc-state-aead-v1"
 // code is useless without the verifier, so a state mechanism that leaks
 // the verifier defeats it). oidcState IS the state value initiateOIDCAuth
 // returns, sealed with AES-256-GCM: a genuine AEAD, confidentiality AND
-// integrity in one primitive, keyed by HKDF-SHA256(APIJWTSecret, info=
+// integrity in one primitive, keyed by HKDF-SHA256(SSO_STATE_SECRET, info=
 // oidcStateHKDFInfo). The AAD is the path's own provider_id, so a
 // ciphertext minted for one provider fails authentication -- before any
 // JSON parsing -- if presented at a different provider_id's callback path,

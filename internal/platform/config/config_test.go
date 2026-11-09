@@ -2609,23 +2609,16 @@ func TestPurposeStateSecretsAreOptionalFileCapableAndLongEnough(t *testing.T) {
 	}
 }
 
-func TestPurposeStateSecretsThatShareAValueAreRefused(t *testing.T) {
+func TestPurposeStateSecretsThatShareAValueStillLoad(t *testing.T) {
 	t.Parallel()
 
 	same := strings.Repeat("s", 40)
-	other := strings.Repeat("o", 40)
-	for name, extra := range map[string]map[string]string{
-		"sso equals github": {"SSO_STATE_SECRET": same, "GITHUB_APP_STATE_SECRET": same},
-		"sso equals jwt":    {"SSO_STATE_SECRET": other, "JWT_SECRET_KEY": other},
-		"github equals jwt": {"GITHUB_APP_STATE_SECRET": other, "JWT_SECRET_KEY": other},
-	} {
-		values := map[string]string{"POSTGRES_URI": "postgresql://app:app@db.internal:5432/appdb", "JWT_SECRET_KEY": "jwt-key"}
-		for k, v := range extra {
-			values[k] = v
-		}
-		_, err := Load(Spec{Service: APIServiceName, LookupEnv: lookup(values)})
-		if err == nil || strings.Contains(err.Error(), same) || strings.Contains(err.Error(), other) {
-			t.Fatalf("%s: got %v, want a refusal that does not print a value", name, err)
-		}
+	values := map[string]string{"POSTGRES_URI": "postgresql://app:app@db.internal:5432/appdb", "SSO_STATE_SECRET": same, "GITHUB_APP_STATE_SECRET": same}
+	cfg, err := Load(Spec{Service: APIServiceName, LookupEnv: lookup(values)})
+	if err != nil {
+		t.Fatalf("sso equals github: %v, want the load to go on (product rule 3: go-api warns at start)", err)
+	}
+	if cfg.SSOStateSecret.Reveal() != same || cfg.GitHubAppStateSecret.Reveal() != same {
+		t.Fatal("sso equals github: the state keys do not carry their values")
 	}
 }

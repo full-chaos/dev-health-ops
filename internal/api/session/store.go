@@ -2,8 +2,6 @@ package session
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -213,19 +211,6 @@ func organizationExists(ctx context.Context, tx pgx.Tx, orgID uuid.UUID) (bool, 
 		return false, nil
 	}
 	return err == nil, err
-}
-
-// hashToken is refresh_tokens._hash_token: sha256 of the jti's UTF-8.
-func hashToken(jti string) string {
-	digest := sha256.Sum256([]byte(jti))
-	return hex.EncodeToString(digest[:])
-}
-
-// revokeToken is revoke_token.
-func revokeToken(ctx context.Context, tx pgx.Tx, jti string, now time.Time) error {
-	_, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = $2 WHERE token_hash = $1::text AND revoked_at IS NULL`,
-		hashToken(jti), now.UTC())
-	return err
 }
 
 // attemptRow is one login_attempts row.

@@ -22,7 +22,6 @@ const testCredential = "planted-credential-6369"
 
 func reachableDatabase(cfg config.Config) config.Config {
 	cfg.APIDatabaseURI = secrets.NewValue("postgres://api:" + testCredential + "@127.0.0.1:1/app")
-	cfg.APIJWTSecret = secrets.NewValue(strings.Repeat("fixture-key-", 3))
 	cfg.APIJWTIssuer, cfg.APIJWTAudience = "dev-health-ops", "dev-health-api"
 	return cfg
 }
@@ -54,14 +53,14 @@ func TestStartupDependencyFailuresNameTheDependency(t *testing.T) {
 			dependency: "webhook_job_registry", reason: "api_job_registry_load_failed",
 			errorText: "load job contracts for webhook intake",
 		},
-		"access-token verifier": {
+		"protection config": {
 			cfg: func(*testing.T) config.Config {
 				cfg := reachableDatabase(config.Config{APIAddress: "127.0.0.1:0"})
-				cfg.APIJWTSecret = secrets.Value{}
+				cfg.APIJWTAudience = "acr-api"
 				return cfg
 			},
 			dependency: "api_access_token_verifier", reason: "api_protection_config_failed",
-			errorText: "JWT_SECRET_KEY is required",
+			errorText: "is an ACR audience",
 		},
 		"valkey": {
 			cfg: func(t *testing.T) config.Config {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -622,4 +623,104 @@ func workItemMetricsRowWithID(id string) workItemMetricsRow {
 	var row workItemMetricsRow
 	row.WorkItemID = id
 	return row
+}
+
+// scopeViewSums is the live rows of a table for the day by "view/scope": the
+// measure summed over the keys of each (row_view, work_scope_id), for the org
+// and the scope view.
+func scopeViewSums(t *testing.T, ctx context.Context, conn driver.Conn, org, table, measure, predicate string) map[string]float64 {
+	t.Helper()
+	rows, err := conn.Query(ctx, `
+SELECT row_view, work_scope_id, toFloat64(sum(`+measure+`)) AS total
+FROM `+table+` FINAL
+WHERE org_id = ? AND day = ? AND row_view IN ('org', 'scope') AND `+predicate+`
+GROUP BY row_view, work_scope_id
+HAVING total > 0`, org, scopeReadDay)
+	if err != nil {
+		t.Fatalf("read %s: %v", table, err)
+	}
+	defer rows.Close()
+	sums := map[string]float64{}
+	for rows.Next() {
+		var (
+			view, scope string
+			total       float64
+		)
+		if err := rows.Scan(&view, &scope, &total); err != nil {
+			t.Fatalf("scan %s: %v", table, err)
+		}
+		sums[view+"/"+scope] = total
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate %s: %v", table, err)
+	}
+	return sums
+}
+
+// CHAOS-10797: one work item stored under repository A in scope old (older)
+// and under B in scope new (newer). The org view counts it once, in scope new;
+// the scope view counts it once in each scope (org total 1, scope sum 2). Two
+// listed partitions write what one run of both repositories writes, per view,
+// in work_item_metrics_daily, work_item_user_metrics_daily (the person once
+// per scope) and work_item_state_durations_daily. When the item later moves to
+// scope new in repository A too, the recompute and the end of the run leave
+// no live key of scope old in either view.
+func TestWorkItemScopeViewCountsAnItemOncePerScopeOnAServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+
+	seedScopeReadItems(t, ctx, conn,
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoA, id: "moved", projectID: "old",
+			lastSynced: scopeReadDay.Add(11 * time.Hour)},
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoB, id: "moved", projectID: "new",
+			lastSynced: scopeReadDay.Add(13 * time.Hour)},
+	)
+	seedScopeReadAttribution(t, ctx, conn, scopeReadOrgA, scopeReadRepoA, "moved", "team-old")
+	seedScopeReadAttribution(t, ctx, conn, scopeReadOrgA, scopeReadRepoB, "moved", "team-new")
+	seedScopeReadTransition(t, ctx, conn, scopeReadOrgA, scopeReadRepoA, "moved", scopeReadDay.Add(6*time.Hour))
+
+	snapshot := func() [3]map[string]float64 {
+		return [3]map[string]float64{
+			scopeViewSums(t, ctx, conn, scopeReadOrgA, "work_item_metrics_daily", "items_completed", "1"),
+			scopeViewSums(t, ctx, conn, scopeReadOrgA, "work_item_user_metrics_daily", "items_completed", "retracted = 0"),
+			scopeViewSums(t, ctx, conn, scopeReadOrgA, "work_item_state_durations_daily", "items_touched", "1"),
+		}
+	}
+	want := [3]map[string]float64{
+		{"org/new": 1, "scope/old": 1, "scope/new": 1},
+		{"org/new": 1, "scope/old": 1, "scope/new": 1},
+		// todo until 06:00, then in_progress until the completion at 10:00.
+		{"org/new": 2, "scope/old": 2, "scope/new": 2},
+	}
+
+	runWorkItemScopeFamilies(t, ctx, conn, scopeReadOrgA, scopeReadRepoA)
+	runWorkItemScopeFamilies(t, ctx, conn, scopeReadOrgA, scopeReadRepoB)
+	listed := snapshot()
+	if !reflect.DeepEqual(listed, want) {
+		t.Fatalf("two listed partitions wrote %v, want %v", listed, want)
+	}
+	runWorkItemScopeFamilies(t, ctx, conn, scopeReadOrgA, scopeReadRepoA, scopeReadRepoB)
+	if full := snapshot(); !reflect.DeepEqual(full, listed) {
+		t.Fatalf("one run of both repositories wrote %v, the listed partitions %v: listed != full", full, listed)
+	}
+
+	// The item moves to scope new in repository A too: A's row is now the
+	// newest row of the item, in scope new.
+	seedScopeReadItems(t, ctx, conn,
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoA, id: "moved", projectID: "new",
+			lastSynced: scopeReadDay.Add(14 * time.Hour)},
+	)
+	runWorkItemScopeFamilies(t, ctx, conn, scopeReadOrgA, scopeReadRepoA, scopeReadRepoB)
+	run := Run{ID: uuid.NewString(), OrganizationID: scopeReadOrgA, TargetDay: scopeReadDay, FullOrg: true,
+		DiscoveredRepoIDs: scopeReadPartition(scopeReadRepoA, scopeReadRepoB).RepoIDs}
+	endStaleKeyRun(t, ctx, conn, run, time.Now().UTC().Add(time.Minute))
+	moved := [3]map[string]float64{
+		{"org/new": 1, "scope/new": 1},
+		{"org/new": 1, "scope/new": 1},
+		{"org/new": 2, "scope/new": 2},
+	}
+	if got := snapshot(); !reflect.DeepEqual(got, moved) {
+		t.Fatalf("after the move and the end of the run: %v, want %v (no live key of scope old in either view)", got, moved)
+	}
 }

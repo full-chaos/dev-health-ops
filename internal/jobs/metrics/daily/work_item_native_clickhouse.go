@@ -161,11 +161,14 @@ func workItemUInt32s(table, subject string, counters []workItemCounter) ([]uint3
 	return checked, nil
 }
 
+// WriteWorkItemMetricsDaily writes orgRows under row_view 'org' and scopeRows
+// under 'scope' (see workItemViews). The count is the keys of either view plus
+// the rows of zeros.
 func WriteWorkItemMetricsDaily(
 	ctx context.Context, conn workItemBatchConn, organizationID string, day time.Time,
-	rows []workitemmetrics.MetricsDailyRow, computedAt time.Time,
+	orgRows, scopeRows []workitemmetrics.MetricsDailyRow, computedAt time.Time,
 ) (int, error) {
-	if len(rows) == 0 {
+	if len(orgRows) == 0 && len(scopeRows) == 0 {
 		return 0, nil
 	}
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
@@ -173,10 +176,7 @@ func WriteWorkItemMetricsDaily(
 	}
 	dayValue := workitemmetrics.UTCDay(day)
 	computedAtUTC := computedAt.UTC()
-	keys := make([]staleKey, 0, len(rows))
-	for _, row := range rows {
-		keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
-	}
+	viewRows, keys, firsts := workItemViews(orgRows, scopeRows, metricsDailyKey)
 	legacy, err := legacyRetractionVersions(ctx, conn, teamkeytables.WorkItemMetricsDaily, organizationID, dayValue, keys, computedAtUTC)
 	if err != nil {
 		return 0, err
@@ -198,12 +198,12 @@ func WriteWorkItemMetricsDaily(
 		view string
 		at   time.Time
 	}
-	entries := make([]entry, 0, len(rows)*(len(workItemRowViews)+1))
+	entries := make([]entry, 0, len(viewRows)+len(keys))
+	for _, viewRow := range viewRows {
+		entries = append(entries, entry{viewRow.row, viewRow.view, computedAtUTC})
+	}
 	zeroRows := 0
-	for index, row := range rows {
-		for _, rowView := range workItemRowViews {
-			entries = append(entries, entry{row, rowView, computedAtUTC})
-		}
+	for index, row := range firsts {
 		if retraction, retracted := legacy[keys[index].text()]; retracted {
 			zero := workitemmetrics.MetricsDailyRow{Provider: row.Provider, WorkScopeID: row.WorkScopeID, TeamID: row.TeamID, TeamName: row.TeamName}
 			entries = append(entries, entry{zero, teamkeytables.LegacyRowView, retraction.version})
@@ -249,20 +249,21 @@ func WriteWorkItemMetricsDaily(
 	// ambiguity instead of silently open (matches
 	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return len(rows) + zeroRows, fmt.Errorf("send work_item_metrics_daily batch: %w", err)
+		return len(keys) + zeroRows, fmt.Errorf("send work_item_metrics_daily batch: %w", err)
 	}
-	return len(rows) + zeroRows, nil
+	return len(keys) + zeroRows, nil
 }
 
 // WriteWorkItemUserMetricsDaily ports write_work_item_user_metrics
 // (sinks/clickhouse/work_graph.py:259). Also converted to
 // ReplacingMergeTree(computed_at) by migration 055 -- same collapse-on-recompute
-// contract as above, not duplication.
+// contract as above, not duplication. The views and the count are those of
+// WriteWorkItemMetricsDaily.
 func WriteWorkItemUserMetricsDaily(
 	ctx context.Context, conn workItemBatchConn, organizationID string, day time.Time,
-	rows []workitemmetrics.UserMetricsDailyRow, computedAt time.Time,
+	orgRows, scopeRows []workitemmetrics.UserMetricsDailyRow, computedAt time.Time,
 ) (int, error) {
-	if len(rows) == 0 {
+	if len(orgRows) == 0 && len(scopeRows) == 0 {
 		return 0, nil
 	}
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
@@ -270,10 +271,7 @@ func WriteWorkItemUserMetricsDaily(
 	}
 	dayValue := workitemmetrics.UTCDay(day)
 	computedAtUTC := computedAt.UTC()
-	keys := make([]staleKey, 0, len(rows))
-	for _, row := range rows {
-		keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.UserIdentity})
-	}
+	viewRows, keys, firsts := workItemViews(orgRows, scopeRows, userMetricsDailyKey)
 	legacy, err := legacyRetractionVersions(ctx, conn, teamkeytables.WorkItemUserMetricsDaily, organizationID, dayValue, keys, computedAtUTC)
 	if err != nil {
 		return 0, err
@@ -294,12 +292,12 @@ func WriteWorkItemUserMetricsDaily(
 		at        time.Time
 		retracted uint8
 	}
-	entries := make([]entry, 0, len(rows)*(len(workItemRowViews)+1))
+	entries := make([]entry, 0, len(viewRows)+len(keys))
+	for _, viewRow := range viewRows {
+		entries = append(entries, entry{viewRow.row, viewRow.view, computedAtUTC, 0})
+	}
 	zeroRows := 0
-	for index, row := range rows {
-		for _, rowView := range workItemRowViews {
-			entries = append(entries, entry{row, rowView, computedAtUTC, 0})
-		}
+	for index, row := range firsts {
 		if retraction, retracted := legacy[keys[index].text()]; retracted {
 			// The team of a person is carried from the newest stored row of the key.
 			zero := workitemmetrics.UserMetricsDailyRow{
@@ -346,9 +344,9 @@ func WriteWorkItemUserMetricsDaily(
 	// ambiguity instead of silently open (matches
 	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return len(rows) + zeroRows, fmt.Errorf("send work_item_user_metrics_daily batch: %w", err)
+		return len(keys) + zeroRows, fmt.Errorf("send work_item_user_metrics_daily batch: %w", err)
 	}
-	return len(rows) + zeroRows, nil
+	return len(keys) + zeroRows, nil
 }
 
 // WriteWorkItemCycleTimes ports write_work_item_cycle_times
@@ -459,9 +457,6 @@ func WriteEstimateCoverageMetricsDaily(
 	return len(rows), nil
 }
 
-// workItemRowViews are the views every aggregate row of the three work-item
-// daily tables is written under. Until the per-scope dedupe lands both views
-// hold the same numbers; a legacy row is never written again.
 // workItemUserTeamSplit is the four parallel team_split_* columns of one
 // work_item_user_metrics_daily row (CHAOS-12535). A row of zeros holds none.
 type workItemUserTeamSplit struct {
@@ -493,4 +488,58 @@ func workItemUserTeamSplitColumns(row workitemmetrics.UserMetricsDailyRow) (work
 	return split, nil
 }
 
-var workItemRowViews = []string{teamkeytables.OrgRowView, teamkeytables.ScopeRowView}
+// metricsDailyKey and userMetricsDailyKey are the keys of a row of
+// work_item_metrics_daily and work_item_user_metrics_daily without row_view.
+func metricsDailyKey(row workitemmetrics.MetricsDailyRow) staleKey {
+	return staleKey{row.Provider, row.WorkScopeID, row.TeamID}
+}
+
+func userMetricsDailyKey(row workitemmetrics.UserMetricsDailyRow) staleKey {
+	return staleKey{row.Provider, row.WorkScopeID, row.UserIdentity}
+}
+
+// workItemViewRow is a row of one view of the three work-item daily tables.
+type workItemViewRow[T any] struct {
+	row  T
+	view string
+}
+
+// workItemViews lays out the rows of the two views for one insert block: the
+// org rows under row_view 'org', then the scope rows under 'scope' (CHAOS-10797:
+// each view from its own item set; a legacy row is never written again). keys
+// are the union of the two views' keys without row_view, in the order first
+// seen, and firsts the first row of each key: the row a legacy row of zeros
+// takes its values from.
+func workItemViews[T any](orgRows, scopeRows []T, key func(T) staleKey) (rows []workItemViewRow[T], keys []staleKey, firsts []T) {
+	rows = make([]workItemViewRow[T], 0, len(orgRows)+len(scopeRows))
+	seen := make(map[string]struct{}, len(orgRows)+len(scopeRows))
+	add := func(row T, view string) {
+		rows = append(rows, workItemViewRow[T]{row, view})
+		rowKey := key(row)
+		if _, duplicate := seen[rowKey.text()]; duplicate {
+			return
+		}
+		seen[rowKey.text()] = struct{}{}
+		keys = append(keys, rowKey)
+		firsts = append(firsts, row)
+	}
+	for _, row := range orgRows {
+		add(row, teamkeytables.OrgRowView)
+	}
+	for _, row := range scopeRows {
+		add(row, teamkeytables.ScopeRowView)
+	}
+	return rows, keys, firsts
+}
+
+// workItemViewKeys are the keys of the two views' rows with row_view: the
+// run-level retraction decides a key per view, so a key that one view does not
+// produce is stale in that view.
+func workItemViewKeys[T any](orgRows, scopeRows []T, key func(T) staleKey) []staleKey {
+	viewRows, _, _ := workItemViews(orgRows, scopeRows, key)
+	keys := make([]staleKey, 0, len(viewRows))
+	for _, viewRow := range viewRows {
+		keys = append(keys, append(key(viewRow.row), viewRow.view))
+	}
+	return keys
+}

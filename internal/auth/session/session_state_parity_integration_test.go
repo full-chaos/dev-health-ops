@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
@@ -60,7 +61,29 @@ type parityEnv struct {
 	api      *pgxpool.Pool
 	sessions *Store
 	identity *identity.Store
+	schema   authschema.ValidatedIdentifier
 	org      uuid.UUID
+}
+
+// guardedRow runs one auth-schema INSERT through audit.Commit (migration 0006's guard refuses it
+// otherwise), with its audit row (fixture setup is off the provisioning stream). scan, when set,
+// reads a RETURNING row inside the same transaction.
+func (e *parityEnv) guardedRow(t *testing.T, ctx context.Context, sql string, args []any, scan func(pgx.Row) error) {
+	t.Helper()
+	err := audit.Commit(ctx, e.admin, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if scan != nil {
+				return scan(tx.QueryRow(ctx, sql, args...))
+			}
+			_, err := tx.Exec(ctx, sql, args...)
+			return err
+		},
+		Audit:     audit.AuditEvent{EventType: "test.session_setup", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamSessionLifecycle,
+	})
+	if err != nil {
+		t.Fatalf("guarded %q: %v", sql, err)
+	}
 }
 
 func startParityEnv(t *testing.T, ctx context.Context) *parityEnv {
@@ -124,16 +147,12 @@ func startParityEnv(t *testing.T, ctx context.Context) *parityEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	org := uuid.New()
-	for _, statement := range []string{
-		`INSERT INTO public.organizations (id, slug, name) VALUES ($1, 'parity-org', 'Parity')`,
-		`INSERT INTO acp.organizations (id, slug, name) VALUES ($1, 'parity-org', 'Parity')`,
-	} {
-		if _, err := admin.Exec(ctx, statement, org); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
+	e := &parityEnv{admin: admin, api: readerStoreLogin(t, ctx, admin, roles["parity_api"]), sessions: sessions, identity: ids, schema: schema, org: uuid.New()}
+	if _, err := admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, 'parity-org', 'Parity')`, e.org); err != nil {
+		t.Fatalf("seed public.organizations: %v", err)
 	}
-	return &parityEnv{admin: admin, api: readerStoreLogin(t, ctx, admin, roles["parity_api"]), sessions: sessions, identity: ids, org: org}
+	e.guardedRow(t, ctx, `INSERT INTO acp.organizations (id, slug, name) VALUES ($1, 'parity-org', 'Parity')`, []any{e.org}, nil)
+	return e
 }
 
 // principal makes one user: auth principal and users row (password stamped three hours ago, before
@@ -142,13 +161,13 @@ func (e *parityEnv) principal(t *testing.T, ctx context.Context) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	name := "parity-" + id.String()[:8]
+	e.guardedRow(t, ctx, `INSERT INTO acp.principals (id, kind, display_name) VALUES ($1, 'user', 'parity')`, []any{id}, nil)
+	e.guardedRow(t, ctx, `INSERT INTO acp.users (principal_id, email, email_lower, password_hash, password_algorithm, password_updated_at)
+VALUES ($1, $2, $2, 'parity-hash', 'parity-algorithm', now() - interval '3 hours')`, []any{id, name + "@example.test"}, nil)
 	for _, statement := range []struct {
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO acp.principals (id, kind, display_name) VALUES ($1, 'user', 'parity')`, []any{id}},
-		{`INSERT INTO acp.users (principal_id, email, email_lower, password_hash, password_algorithm, password_updated_at)
-VALUES ($1, $2, $2, 'parity-hash', 'parity-algorithm', now() - interval '3 hours')`, []any{id, name + "@example.test"}},
 		{`INSERT INTO public.users (id, email, username, full_name, token_version) VALUES ($1, $2, $3, 'Parity User', 2)`, []any{id, name + "@example.test", name}},
 		{`INSERT INTO public.memberships (id, user_id, org_id, role) VALUES (gen_random_uuid(), $1, $2, 'admin')`, []any{id, e.org}},
 	} {
@@ -171,10 +190,9 @@ func (e *parityEnv) seed(t *testing.T, ctx context.Context, principal uuid.UUID,
 		revokedAt = "now()"
 	}
 	var id uuid.UUID
-	if err := e.admin.QueryRow(ctx, `INSERT INTO acp.sessions (principal_id, organization_id, token_hash, created_at, expires_at, revoked_at, legacy_token_version, web_session_id)
-VALUES ($1, $2, $3, `+created+`, `+expires+`, `+revokedAt+`, $4, $5) RETURNING id`, principal, org, []byte(uuid.NewString()), pin, parent).Scan(&id); err != nil {
-		t.Fatalf("seed session: %v", err)
-	}
+	e.guardedRow(t, ctx, `INSERT INTO acp.sessions (principal_id, organization_id, token_hash, created_at, expires_at, revoked_at, legacy_token_version, web_session_id)
+VALUES ($1, $2, $3, `+created+`, `+expires+`, `+revokedAt+`, $4, $5) RETURNING id`,
+		[]any{principal, org, []byte(uuid.NewString()), pin, parent}, func(r pgx.Row) error { return r.Scan(&id) })
 	return id
 }
 
@@ -330,9 +348,7 @@ func TestSessionStateDiffersOnlyOnStatesNoWriterMakes(t *testing.T) {
 	// session, so no writer leaves this row.
 	q := e.principal(t, ctx)
 	stampAfter := e.seed(t, ctx, q, "now() - interval '2 hours'", "now() + interval '1 hour'", false, 2, nil)
-	if _, err := e.admin.Exec(ctx, `UPDATE acp.users SET password_updated_at = now() - interval '1 hour' WHERE principal_id = $1`, q); err != nil {
-		t.Fatal(err)
-	}
+	e.guardedRow(t, ctx, `UPDATE acp.users SET password_updated_at = now() - interval '1 hour' WHERE principal_id = $1`, []any{q}, nil)
 	old, now := e.both(t, ctx, q, stampAfter)
 	t.Logf("password stamp after the session, pin current: old %q, new %q", old, now)
 	if old != "served | mint live" || now != "refused | mint refused (not live)" {

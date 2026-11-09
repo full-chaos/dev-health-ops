@@ -73,8 +73,8 @@ func TestACRRevokeOnRendersEnvVolumeAndDerivedPath(t *testing.T) {
 			t.Errorf("%s = %v, want %q", name, got, value)
 		}
 	}
-	if env["ACR_REVOKE_ALLOW_CLUSTER_HTTP"] != nil {
-		t.Errorf("an https render carries ACR_REVOKE_ALLOW_CLUSTER_HTTP: %v", env["ACR_REVOKE_ALLOW_CLUSTER_HTTP"])
+	if got := arValue(env, "ACR_REVOKE_ALLOW_CLUSTER_HTTP"); got != "false" {
+		t.Errorf("ACR_REVOKE_ALLOW_CLUSTER_HTTP = %v, want \"false\": every enabled render carries all four names", got)
 	}
 	vols, _ := at(dep, "spec", "template", "spec", "volumes").([]any)
 	if len(vols) != 1 || at(vols[0], "name") != arVolume {
@@ -117,8 +117,8 @@ func TestACRRevokeClusterHTTPNeedsTheOptInAndTheClusterHost(t *testing.T) {
 		t.Errorf("ACR_REVOKE_URL = %v", got)
 	}
 	_, env = arGoAPI(t, arOn("--set", "goApi.acrRevoke.allowClusterHTTP=false")...)
-	if env["ACR_REVOKE_ALLOW_CLUSTER_HTTP"] != nil {
-		t.Errorf("allowClusterHTTP=false renders %v", env["ACR_REVOKE_ALLOW_CLUSTER_HTTP"])
+	if got := arValue(env, "ACR_REVOKE_ALLOW_CLUSTER_HTTP"); got != "false" {
+		t.Errorf("allowClusterHTTP=false renders ACR_REVOKE_ALLOW_CLUSTER_HTTP = %v, want \"false\"", got)
 	}
 }
 

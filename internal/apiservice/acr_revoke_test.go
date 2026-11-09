@@ -171,6 +171,10 @@ func TestTheClusterHTTPOptInNeedsBothClauses(t *testing.T) {
 		{"opt-in 1", set(httpsBase, httpsTok, "1"), false, optIn},
 		{"opt-in yes", set(httpsBase, httpsTok, "yes"), false, optIn},
 		{"only the opt-in", map[string]string{optIn: "true"}, false, EnvACRRevokeURL},
+		{"opt-in present but empty", set(httpsBase, httpsTok, ""), false, optIn},
+		{"opt-in present but whitespace", set(httpsBase, httpsTok, " \t\n "), false, optIn},
+		{"opt-in present but empty, cluster host", set(clusterBase, clusterTok, ""), false, optIn},
+		{"only a blank opt-in", map[string]string{optIn: " "}, false, optIn},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

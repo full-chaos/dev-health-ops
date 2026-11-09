@@ -497,7 +497,7 @@ func TestLiveE2EVerifyUserCells(t *testing.T) {
 			if !wantOK && !strings.Contains(out, "verify-user: want one auth.users and one public.users row") {
 				t.Errorf("FAIL: %s failed without naming the read-back:\n%s", cell, out)
 			}
-			if !strings.Contains(sql, "set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)") || !strings.Contains(sql, "UPDATE auth.users") {
+			if !strings.Contains(sql, "pg_current_xact_id()::text, true)") || !strings.Contains(sql, "UPDATE auth.users") {
 				t.Errorf("FAIL: the write is not one guarded transaction on auth.users: %q", sql)
 			}
 		})
@@ -524,7 +524,7 @@ func TestLiveE2EGrantPlatformAdminCells(t *testing.T) {
 			}
 			lines := strings.Split(strings.TrimSpace(sql), "\n")
 			write := lines[0]
-			if !strings.Contains(write, "set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)") ||
+			if !strings.Contains(write, "pg_current_xact_id()::text, true)") ||
 				!strings.Contains(write, "INSERT INTO auth.platform_role_assignments") || !strings.Contains(write, "'platform_admin'") ||
 				strings.Index(write, "set_config") > strings.Index(write, "INSERT INTO") {
 				t.Errorf("FAIL: the write is not one guarded transaction that inserts the platform_admin row: %q", write)

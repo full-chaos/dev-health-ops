@@ -299,23 +299,28 @@ hostport() {
   [[ "${port}" =~ ^[0-9]+$ ]] || die "could not read the published port of $1 $2 (${port})"
   printf '%s' "${port}"
 }
-STUB_ADMIN_PORT="$(hostport providerstub 9090)"
-STUB_ADMIN="http://127.0.0.1:${STUB_ADMIN_PORT}"
-curl --silent --show-error --fail --max-time 10 "${STUB_ADMIN}/requests" >/dev/null || die "the corpus provider stub's recorder does not answer at ${STUB_ADMIN}"
-# The corpus mail sink (the smtpsink service of this project) publishes its read API on loopback only; the test reads the
-# captured mail through it. A recorder that does not answer fails the leg before any step runs.
-SMTP_ADMIN_PORT="$(hostport smtpsink 9090)"
-SMTP_ADMIN="http://127.0.0.1:${SMTP_ADMIN_PORT}"
-sink_up=""
-for _ in $(seq 1 "${AUTH_CORPUS_SINK_TRIES:-30}"); do
-  if curl --silent --fail --max-time 5 "${SMTP_ADMIN}/mails" >/dev/null; then sink_up=1; break; fi
-  sleep 1
-done
-[ -n "${sink_up}" ] || die "the corpus mail sink's read API does not answer at ${SMTP_ADMIN}"
-PG_PORT="$(hostport postgres 5432)"
-CH_PORT="$(hostport clickhouse 9000)"
-VALKEY_PORT="$(hostport valkey 6379)"
-printf 'ports: api %s postgres %s clickhouse %s valkey %s\n' "${API_PORT}" "${PG_PORT}" "${CH_PORT}" "${VALKEY_PORT}"
+# read_ports reads every published host port the test uses. Step 1e recreates services (a recreated container gets a
+# new ephemeral port), so the acp leg reads them again after it.
+read_ports() {
+  STUB_ADMIN_PORT="$(hostport providerstub 9090)"
+  STUB_ADMIN="http://127.0.0.1:${STUB_ADMIN_PORT}"
+  curl --silent --show-error --fail --max-time 10 "${STUB_ADMIN}/requests" >/dev/null || die "the corpus provider stub's recorder does not answer at ${STUB_ADMIN}"
+  # The corpus mail sink (the smtpsink service of this project) publishes its read API on loopback only; the test reads the
+  # captured mail through it. A recorder that does not answer fails the leg before any step runs.
+  SMTP_ADMIN_PORT="$(hostport smtpsink 9090)"
+  SMTP_ADMIN="http://127.0.0.1:${SMTP_ADMIN_PORT}"
+  sink_up=""
+  for _ in $(seq 1 "${AUTH_CORPUS_SINK_TRIES:-30}"); do
+    if curl --silent --fail --max-time 5 "${SMTP_ADMIN}/mails" >/dev/null; then sink_up=1; break; fi
+    sleep 1
+  done
+  [ -n "${sink_up}" ] || die "the corpus mail sink's read API does not answer at ${SMTP_ADMIN}"
+  PG_PORT="$(hostport postgres 5432)"
+  CH_PORT="$(hostport clickhouse 9000)"
+  VALKEY_PORT="$(hostport valkey 6379)"
+  printf 'ports: api %s postgres %s clickhouse %s valkey %s\n' "${API_PORT}" "${PG_PORT}" "${CH_PORT}" "${VALKEY_PORT}"
+}
+read_ports
 export AUTH_CORPUS_PROJECT="${PROJECT}" AUTH_CORPUS_STATE="${STATE}" AUTH_CORPUS_LEG="${LEG}"
 
 # probe AGGREGATE sets PROBED to "served" (auth-service answers OPTIONS on every route of it with 405) or "not served"
@@ -400,6 +405,7 @@ if [ "${LEG}" = "acp" ]; then
   . "${STATE}"
   printf 'step 1e: up --build --wait go-api, forwarding %s, users owned\n' "$(join_comma "${FORWARDED[@]}")"
   up_service go-api
+  read_ports
 fi
 
 # owned_seed_copy is the hand-off of every leg (CHAOS-13356: auth-service owns users from bring-up). compose.yml's

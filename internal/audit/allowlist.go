@@ -238,6 +238,7 @@ var attributeVocabulary = map[string][]string{
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
 		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "service_account_uid", "assertion_key", "invited_by", "joined_at", "owner_principal_id",
+		"username", "avatar_url",
 	},
 }
 

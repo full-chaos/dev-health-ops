@@ -4,7 +4,7 @@ package authschema
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"regexp"
 	"slices"
 	"strings"
@@ -16,7 +16,62 @@ import (
 // migrator its grant options (pm D6870/D6872): a migrator given the earlier set holds no grant option on them.
 var widenedUsersUpdateColumns = []string{"avatar_url", "email", "full_name", "is_active", "username"}
 
-var postureColumnLine = regexp.MustCompile(`(?m)^\s*- column: (\S+ on public\.users\.\S+) \(`)
+var gapLine = regexp.MustCompile(`(?m)^  - (.+)$`)
+
+// refusedGapLines is the sorted gap lines of a grant-option refusal.
+func refusedGapLines(err error) []string {
+	var lines []string
+	for _, m := range gapLine.FindAllStringSubmatch(err.Error(), -1) {
+		lines = append(lines, m[1])
+	}
+	slices.Sort(lines)
+	return lines
+}
+
+func requireNothingGranted(t *testing.T, before, after []string) {
+	t.Helper()
+	if onlyA, onlyB := diffLines(before, after); len(onlyA)+len(onlyB) > 0 {
+		t.Errorf("the refused run left a partial grant: lost %v, gained %v", onlyA, onlyB)
+	}
+}
+
+func requireRemedy(t *testing.T, env *ownerMoveEnv, err error) {
+	t.Helper()
+	if !errors.Is(err, ErrMigratorGrantOptionMissing) {
+		t.Fatalf("error = %v, want ErrMigratorGrantOptionMissing", err)
+	}
+	for _, want := range []string{"auth-migrate owner-move -grants-only", env.migratorRole, env.oldRole} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q:\n%v", want, err)
+		}
+	}
+}
+
+func widenedUsersUpdateLines() []string {
+	var want []string
+	for _, column := range widenedUsersUpdateColumns {
+		want = append(want, "UPDATE ("+column+") ON public.users")
+	}
+	return want
+}
+
+func revokeWidenedUsersUpdate(t *testing.T, ctx context.Context, env *ownerMoveEnv) {
+	t.Helper()
+	_, update := UsersWriteGrant()
+	for _, column := range widenedUsersUpdateColumns {
+		if !slices.Contains(update, column) {
+			t.Fatalf("UsersWriteGrant UPDATE has no %s: the widening this cell reproduces is not on this tree", column)
+		}
+	}
+	quoted := make([]string, len(widenedUsersUpdateColumns))
+	for i, column := range widenedUsersUpdateColumns {
+		quoted[i] = Quote(mustValidatedIdentifier(column))
+	}
+	if _, err := env.old.Exec(ctx, "REVOKE UPDATE ("+strings.Join(quoted, ", ")+") ON TABLE public.users FROM "+
+		Quote(mustValidatedIdentifier(env.migratorRole))+" CASCADE"); err != nil {
+		t.Fatalf("give the migrator the pre-widening grant set: %v", err)
+	}
+}
 
 // A migrator given its grant options before the users write grant widened holds none on the widened columns. The
 // migrate's GRANT of the users write grant then gives the runtime role nothing on them, and the posture check refuses
@@ -32,19 +87,10 @@ func TestPreWideningMigratorGrantSetFailsThePostureOnTheWidenedColumns(t *testin
 		t.Fatalf("Apply as the migrator with the current grant set: %v", err)
 	}
 
-	_, update := UsersWriteGrant()
-	for _, column := range widenedUsersUpdateColumns {
-		if !slices.Contains(update, column) {
-			t.Fatalf("UsersWriteGrant UPDATE has no %s: the widening this cell reproduces is not on this tree", column)
-		}
-	}
+	revokeWidenedUsersUpdate(t, ctx, env)
 	quoted := make([]string, len(widenedUsersUpdateColumns))
 	for i, column := range widenedUsersUpdateColumns {
 		quoted[i] = Quote(mustValidatedIdentifier(column))
-	}
-	if _, err := env.old.Exec(ctx, fmt.Sprintf(`REVOKE UPDATE (%s) ON TABLE public.users FROM %s CASCADE`,
-		strings.Join(quoted, ", "), Quote(mustValidatedIdentifier(env.migratorRole)))); err != nil {
-		t.Fatalf("give the migrator the pre-widening grant set: %v", err)
 	}
 
 	aclBefore := env.aclSnapshot(t, ctx)
@@ -53,21 +99,11 @@ func TestPreWideningMigratorGrantSetFailsThePostureOnTheWidenedColumns(t *testin
 		t.Fatal("the migrate passed with a migrator that holds no grant option on the widened columns")
 	}
 	t.Logf("migrate refusal:\n%v", err)
-	var refused []string
-	for _, m := range postureColumnLine.FindAllStringSubmatch(err.Error(), -1) {
-		refused = append(refused, m[1])
+	requireRemedy(t, env, err)
+	if refused, want := refusedGapLines(err), widenedUsersUpdateLines(); !slices.Equal(refused, want) {
+		t.Fatalf("the refusal lists %v, want exactly %v", refused, want)
 	}
-	slices.Sort(refused)
-	var want []string
-	for _, column := range widenedUsersUpdateColumns {
-		want = append(want, "UPDATE on public.users."+column)
-	}
-	if !slices.Equal(refused, want) {
-		t.Fatalf("posture refused %v, want exactly %v", refused, want)
-	}
-	if onlyA, onlyB := diffLines(aclBefore, env.aclSnapshot(t, ctx)); len(onlyA)+len(onlyB) > 0 {
-		t.Errorf("the failed migrate left a partial grant: lost %v, gained %v", onlyA, onlyB)
-	}
+	requireNothingGranted(t, aclBefore, env.aclSnapshot(t, ctx))
 
 	dry := env.moveOptions(false)
 	dry.GrantsOnly = true
@@ -116,4 +152,98 @@ func TestPreWideningMigratorGrantSetFailsThePostureOnTheWidenedColumns(t *testin
 			t.Errorf("after the grants-only apply and the migrate the runtime role holds no UPDATE (%s)", column)
 		}
 	}
+}
+
+// E2: the grants pass refuses the same way, before any GRANT.
+func TestGrantsPassRefusesAMigratorWithoutTheWidenedGrantOptions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	env := newOwnerMoveEnv(t, ctx, false)
+	env.move(t, ctx, env.moveOptions(true))
+	options := env.options(true)
+	if _, err := Apply(ctx, env.migrator, options); err != nil {
+		t.Fatalf("Apply as the migrator with the current grant set: %v", err)
+	}
+	revokeWidenedUsersUpdate(t, ctx, env)
+	aclBefore := env.aclSnapshot(t, ctx)
+	_, err := Grants(ctx, env.migrator, options)
+	if err == nil {
+		t.Fatal("the grants pass passed with a migrator that holds no grant option on the widened columns")
+	}
+	requireRemedy(t, env, err)
+	if refused, want := refusedGapLines(err), widenedUsersUpdateLines(); !slices.Equal(refused, want) {
+		t.Fatalf("the refusal lists %v, want exactly %v", refused, want)
+	}
+	requireNothingGranted(t, aclBefore, env.aclSnapshot(t, ctx))
+}
+
+// E3: with the users-owned switch off the users write grant is not declared, so the missing options are no gap.
+func TestGrantOptionPrecheckSkipsGrantsTheSwitchTurnsOff(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	env := newOwnerMoveEnv(t, ctx, false)
+	env.move(t, ctx, env.moveOptions(true))
+	revokeWidenedUsersUpdate(t, ctx, env)
+	if _, err := Apply(ctx, env.migrator, env.options(false)); err != nil {
+		t.Fatalf("Apply with the switch off and no option on the users write columns: %v", err)
+	}
+}
+
+// E4: an absent column is DEFERRED, not a gap: the pre-check never asks PostgreSQL about a column that does not exist.
+func TestGrantOptionPrecheckDefersAnAbsentColumn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	env := newOwnerMoveEnv(t, ctx, false)
+	env.move(t, ctx, env.moveOptions(true))
+	if _, err := env.old.Exec(ctx, `ALTER TABLE public.users DROP COLUMN sso_provider_id`); err != nil {
+		t.Fatalf("build the schema before the revision that adds sso_provider_id: %v", err)
+	}
+	if _, err := Apply(ctx, env.migrator, env.options(true)); err != nil {
+		t.Fatalf("Apply on a schema without a column of the grant set: %v", err)
+	}
+}
+
+// E5: the cell takes the CURRENT PublicPrivilegeSet, leaves the migrator the grant option on all of it but one entry,
+// and holds that the migrate refuses before any GRANT, lists exactly that entry and names the verb. It stays valid when
+// a later change widens the set.
+func TestMigratorMissingTheGrantOptionOfOneCurrentEntryRefuses(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	env := newOwnerMoveEnv(t, ctx, false)
+	env.move(t, ctx, env.moveOptions(true))
+	options := env.options(true)
+	if _, err := Apply(ctx, env.migrator, options); err != nil {
+		t.Fatalf("Apply as the migrator with the current grant set: %v", err)
+	}
+	set := PublicPrivilegeSet()
+	entry := set[len(set)-1]
+	migrator := Quote(mustValidatedIdentifier(env.migratorRole))
+	table := "public." + Quote(mustValidatedIdentifier(entry.Table))
+	var revoke string
+	var want []string
+	if entry.Columns == nil {
+		revoke = "REVOKE " + entry.Privilege + " ON TABLE " + table + " FROM " + migrator + " CASCADE"
+		want = []string{entry.Privilege + " ON public." + entry.Table}
+	} else {
+		quoted := make([]string, len(entry.Columns))
+		for i, column := range entry.Columns {
+			quoted[i] = Quote(mustValidatedIdentifier(column))
+			want = append(want, entry.Privilege+" ("+column+") ON public."+entry.Table)
+		}
+		revoke = "REVOKE " + entry.Privilege + " (" + strings.Join(quoted, ", ") + ") ON TABLE " + table + " FROM " + migrator + " CASCADE"
+	}
+	slices.Sort(want)
+	if _, err := env.old.Exec(ctx, revoke); err != nil {
+		t.Fatalf("take the grant option of %s %s from the migrator: %v", entry.Privilege, entry.Table, err)
+	}
+	aclBefore := env.aclSnapshot(t, ctx)
+	_, err := Apply(ctx, env.migrator, options)
+	if err == nil {
+		t.Fatalf("the migrate passed with no grant option on %s %s", entry.Privilege, entry.Table)
+	}
+	requireRemedy(t, env, err)
+	if refused := refusedGapLines(err); !slices.Equal(refused, want) {
+		t.Fatalf("the refusal lists %v, want exactly %v", refused, want)
+	}
+	requireNothingGranted(t, aclBefore, env.aclSnapshot(t, ctx))
 }

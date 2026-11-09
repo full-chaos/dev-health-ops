@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/keystore"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
@@ -26,7 +25,7 @@ import (
 // comes from mint itself, so a claim added to the minter counts.
 func TestTheLongestMintableWorkloadTokenFitsTheBound(t *testing.T) {
 	kid := strings.Repeat("k", 64)
-	if !keystore.KeyIDPattern.MatchString(kid) || keystore.KeyIDPattern.MatchString(kid+"k") {
+	if !token.ValidKeyID(kid) || token.ValidKeyID(kid+"k") {
 		t.Fatal("the kid is not at the keystore pattern's limit")
 	}
 	issuer := "https://" + strings.Repeat("a", 253) + ":65535" + strings.Repeat("/"+strings.Repeat("a", 64), 8)

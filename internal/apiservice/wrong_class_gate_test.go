@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -288,12 +289,13 @@ func gateDivergences(t *testing.T) map[string]string {
 	return out
 }
 
-// TestWrongClassGateGoAPI drives every go-api endpoint-profile row, on the listener its row names, with every
+// runGoAPIGate drives every go-api endpoint-profile row, on the listener its row names, with every
 // credential class of credential-classes.json the row does not accept, through the production listeners. A wrong
 // class answers exactly what a garbage credential in the same carrier answers (no credential, for a carrier other
 // than the Authorization header), reads no signing key and no store row, asks the shadow PDP nothing, and on a
 // protected row is a 4xx. The accept controls show the rig tells an accepted class from a refused one.
-func TestWrongClassGateGoAPI(t *testing.T) {
+func runGoAPIGate(t *testing.T, divergences map[string]string, errorf func(format string, args ...any)) wrongclass.Census {
+	t.Helper()
 	rig := newGateRig(t)
 	rows, err := wrongclass.LoadRows(authv1.GoAPIEndpointProfiles)
 	if err != nil {
@@ -304,7 +306,6 @@ func TestWrongClassGateGoAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	census := wrongclass.Census{Service: "go-api", Rows: len(rows), Classes: len(classes)}
-	divergences := gateDivergences(t)
 	divergent := map[string]int{}
 	var carriers []wrongclass.Carrier
 	for _, class := range classes {
@@ -333,12 +334,12 @@ func TestWrongClassGateGoAPI(t *testing.T) {
 	userAccepts, workloadAccepts, shadowAsked := 0, 0, 0
 	for _, row := range rows {
 		if len(row.Listeners) != 1 || rig.handlers[row.Listeners[0]] == nil {
-			t.Errorf("%s: listener %v is not one go-api listener", row.ID, row.Listeners)
+			errorf("%s: listener %v is not one go-api listener", row.ID, row.Listeners)
 			continue
 		}
 		listener := row.Listeners[0]
 		if !rig.mounted[row.Method+" "+row.Route+" @"+listener] {
-			t.Errorf("%s: no route %s %s is mounted on the %s listener: the row is not measured", row.ID, row.Method, row.Route, listener)
+			errorf("%s: no route %s %s is mounted on the %s listener: the row is not measured", row.ID, row.Method, row.Route, listener)
 			continue
 		}
 		baselines := map[string]gateCell{}
@@ -359,20 +360,20 @@ func TestWrongClassGateGoAPI(t *testing.T) {
 			got := rig.serve(listener, carrier.Request(row.Method, row.Path()))
 			want := baselineOf(carrier)
 			if got.answer != want.answer {
-				t.Errorf("%s: wrong class %s answered %s, a garbage credential in its carrier answers %s", row.ID, carrier.Class, got.answer, want.answer)
+				errorf("%s: wrong class %s answered %s, a garbage credential in its carrier answers %s", row.ID, carrier.Class, got.answer, want.answer)
 			}
 			if got.lookups != 0 {
-				t.Errorf("%s: wrong class %s made %d reads (keys %d, store %d)", row.ID, carrier.Class, got.lookups, got.keys, got.store)
+				errorf("%s: wrong class %s made %d reads (keys %d, store %d)", row.ID, carrier.Class, got.lookups, got.keys, got.store)
 			}
 			if got.decision != 0 {
-				t.Errorf("%s: wrong class %s made the shadow ask the PDP %d times", row.ID, carrier.Class, got.decision)
+				errorf("%s: wrong class %s made the shadow ask the PDP %d times", row.ID, carrier.Class, got.decision)
 			}
 			if row.Protected() && got.answer.Status/100 != 4 {
 				if owner, known := divergences[row.Method+" "+row.Route]; known {
 					divergent[row.Method+" "+row.Route]++
 					t.Logf("%s: wrong class %s on a protected row answered %s: known divergence, ledger %s", row.ID, carrier.Class, got.answer, owner)
 				} else {
-					t.Errorf("%s: wrong class %s on a protected row answered %s, want a 4xx refusal", row.ID, carrier.Class, got.answer)
+					errorf("%s: wrong class %s on a protected row answered %s, want a 4xx refusal", row.ID, carrier.Class, got.answer)
 				}
 			}
 		}
@@ -388,23 +389,45 @@ func TestWrongClassGateGoAPI(t *testing.T) {
 			got := rig.serve(listener, control.carrier.Request(row.Method, row.Path()))
 			shadowAsked += got.decision
 			if want := baselineOf(control.carrier); got.store == 0 && got.answer == want.answer {
-				t.Errorf("%s: accepted class %s answered %s with no store read, the garbage answer: the rig cannot tell accept from refuse", row.ID, control.carrier.Class, got.answer)
+				errorf("%s: accepted class %s answered %s with no store read, the garbage answer: the rig cannot tell accept from refuse", row.ID, control.carrier.Class, got.answer)
 			}
 		}
 	}
 	if userAccepts == 0 || workloadAccepts == 0 {
-		t.Errorf("accept controls: %d user_access_token, %d workload_token: a class with no control cell is not measured", userAccepts, workloadAccepts)
+		errorf("accept controls: %d user_access_token, %d workload_token: a class with no control cell is not measured", userAccepts, workloadAccepts)
 	}
 	if shadowAsked == 0 {
 		t.Error("no accept cell made the shadow ask the PDP: the shadow seam is not live, so zero on a wrong cell proves nothing")
 	}
 	for profile, owner := range divergences {
 		if divergent[profile] == 0 {
-			t.Errorf("ledger %s names %s, whose wrong-class cells all answer 4xx (or no such row): remove the ledger row", owner, profile)
+			errorf("ledger %s names %s, whose wrong-class cells all answer 4xx (or no such row): remove the ledger row", owner, profile)
 		}
 	}
 	if census.WrongCells == 0 {
 		t.Error("no wrong-class cell ran")
 	}
+	return census
+}
+
+func TestWrongClassGateGoAPI(t *testing.T) {
+	census := runGoAPIGate(t, gateDivergences(t), t.Errorf)
 	t.Log(census.Line())
+}
+
+// A ledger row that names a row whose wrong-class cells all answer 4xx fails the gate, so the fix of the divergence
+// forces its row out; the ledger's own rows are excused for G3 only and fail nothing else.
+func TestWrongClassGateFailsOnAStaleDivergence(t *testing.T) {
+	const stale = "GET /api/v1/auth/me"
+	divergences := gateDivergences(t)
+	if _, ok := divergences[stale]; ok {
+		t.Fatalf("the ledger names %s", stale)
+	}
+	divergences[stale] = "stale-probe (CHAOS-0)"
+	var failures []string
+	runGoAPIGate(t, divergences, func(format string, args ...any) { failures = append(failures, fmt.Sprintf(format, args...)) })
+	want := "ledger stale-probe (CHAOS-0) names " + stale + ", whose wrong-class cells all answer 4xx (or no such row): remove the ledger row"
+	if len(failures) != 1 || failures[0] != want {
+		t.Fatalf("failures %q, want exactly %q", failures, want)
+	}
 }

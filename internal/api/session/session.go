@@ -145,7 +145,7 @@ func Routes(deps Deps) []httpapi.Route {
 			httpapi.ValidateThenLimitDependency(validateRefresh, h.refreshLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/refresh", h.refreshNotLocal)))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me", h.me))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me/organizations", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me/organizations", h.myOrganizations))},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/switch-org", Handler: guard.BodyFirst(policy.Authenticated, inner("/api/v1/auth/switch-org", h.switchOrg))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/switch-org", Handler: guard.BodyFirst(policy.Authenticated, guard.RefuseImpersonation(inner("/api/v1/auth/switch-org", h.switchOrg)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/validate", Handler: guard.BodyFirst(policy.Public,
 			httpapi.ValidateThenLimitDependency(h.validateTokenBody, h.validateLimiter, validateLimitKey, h.Write)(inner("/api/v1/auth/validate", h.validate)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/logout", Handler: guard.BodyFirst(policy.Public, inner("/api/v1/auth/logout", h.logout))},

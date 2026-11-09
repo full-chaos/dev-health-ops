@@ -15,17 +15,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
-// C5. GET /buildinfo maps to org.read, which carries no platform_admin flag. The route verifies the internal envelope
-// and never asks the decision point, so a superuser's envelope gets the legacy 200 with every query-api cell on and a
-// PDP that refuses everything. A change that makes /buildinfo ask the PDP turns this red: org.read then needs its
+// C5. GET /buildinfo maps to org.read, which carries no platform_admin flag. The route reads the internal identity
+// headers and never asks the decision point, so a superuser stated by the headers gets the legacy 200 with every
+// query-api cell on and a PDP that refuses everything. A change that makes /buildinfo ask the PDP turns this red: org.read then needs its
 // legacy cell and the flag.
 func TestBuildInfoNeverAsksThePDP(t *testing.T) {
 	quietStdLog(t)
-	verifier, priv := iaVerifier(t)
-	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "viewer", IsSuperuser: true, IsSuperuserVerified: true})
+	verifier, _ := iaVerifier(t)
+	carrier := iaHeaders(ecOrg.String(), "viewer", true, false)
 	srv := pdptest.New(t)
 	srv.Deny("no_membership")
 	serve := func(mode string) (int, string) {
@@ -40,7 +39,7 @@ func TestBuildInfoNeverAsksThePDP(t *testing.T) {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/buildinfo", newBuildInfoHandler(verifier, nil, nil))
 		req := httptest.NewRequest(http.MethodGet, "/buildinfo", nil)
-		req.Header.Set("Authorization", "Bearer "+envelope)
+		carrier(req)
 		rec := httptest.NewRecorder()
 		planeHandler(mux, gate).ServeHTTP(rec, req)
 		gate.Wait()

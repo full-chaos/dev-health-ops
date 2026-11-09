@@ -174,20 +174,21 @@ func TestQueryAPIRESTOrgMissingIs403ForNonSuperuser(t *testing.T) {
 	}
 }
 
-// T5: with the issuer set, the envelope still goes to the envelope verifier,
-// and the profile-routed validator counts nothing for it.
-func TestQueryAPIRESTEnvelopeStillReachesTheEnvelopeVerifierWhenIssuerSet(t *testing.T) {
+// T5: with the issuer set, the envelope is a retired class: it gets the
+// refusal an unaccepted bearer gets, and the profile-routed validator counts
+// nothing for it.
+func TestQueryAPIRESTRefusesTheEnvelopeWhenIssuerSet(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
 	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
-	if got := f.do(http.MethodGet, f.envelope); got.Status != http.StatusOK || got.Body != `{"org":"`+ecOrg.String()+`"}` {
-		t.Fatalf("envelope: got %+v, want 200", got)
+	if got := f.do(http.MethodGet, f.envelope); got != (answer{http.StatusUnauthorized, restRefusal}) {
+		t.Fatalf("envelope: got %+v, want 401 %s", got, restRefusal)
 	}
 	if got := f.reader.counts(t); len(got) != 0 {
 		t.Fatalf("the envelope reached the access-token validator: %v", got)
 	}
 	if got := f.do(http.MethodGet, m.mint(ecUser, nil, map[string]any{"typ": "JWT"})); got.Status != http.StatusUnauthorized {
-		t.Fatalf("an EdDSA token typed as the envelope but signed by another key: got %+v, want 401 from the envelope verifier", got)
+		t.Fatalf("an EdDSA token typed as the envelope but signed by another key: got %+v, want 401", got)
 	}
 	if got := f.reader.counts(t); len(got) != 0 {
 		t.Fatalf("a typ JWT token reached the access-token validator: %v", got)

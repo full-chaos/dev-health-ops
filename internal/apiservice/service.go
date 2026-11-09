@@ -201,7 +201,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	// The /api/v1/auth/* proxy to auth-service (CHAOS-10231): each flag off
 	// keeps go-api's own handler; on, only the innermost handler forwards,
 	// behind go-api's guard, validator and rate limiter.
-	proxy := newAuthProxy(deps.AuthProxy, logger)
+	proxy := newAuthProxy(deps.AuthProxy, logger).withImpersonatingCallerRefusal(deps.Guard)
 	routes = append(routes, session.Routes(session.Deps{
 		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth,
 		// The api's own ClickHouse login: organization activity.
@@ -409,6 +409,7 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
 		}
 	}
+	authProxy.WarnInvalidImpersonation(ctx, logger)
 	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_acr_project_scope", "api_acr_project_scope_config_invalid", err)
@@ -465,7 +466,7 @@ func configureWith(
 	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {
-		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, logger)
+		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, authProxy, logger)
 		if err != nil {
 			closeComponents(depComponents)
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
@@ -713,7 +714,7 @@ func warnRetiredJWTSecretKey(ctx context.Context, lookup func(string) (string, b
 // newProtection builds the principal service. Access tokens are verified by
 // the endpoint-profile row only (buildAccessVerify); go-api holds no token key.
 // JWT_AUDIENCE still names go-api's audience, never an ACR one (ACP-ADR-13).
-func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, logger *slog.Logger) (protection, error) {
+func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, proxy AuthProxyConfig, logger *slog.Logger) (protection, error) {
 	if err := acraudience.Refuse("api", cfg.APIJWTAudience); err != nil {
 		return protection{}, err
 	}
@@ -736,6 +737,10 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	}
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
+	// With impersonation through auth-service, the delegated bearer is the
+	// impersonation; auth-service still writes go-api's session row, so the
+	// admin's own bearer beside it is refused but on status and stop.
+	scope.RefuseLegacyImpersonation(proxy.ImpersonationOn())
 	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger), authSchema: authSchema}, nil
 }
 

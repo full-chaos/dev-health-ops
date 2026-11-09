@@ -1,7 +1,6 @@
 package authapi
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -89,8 +88,8 @@ func legacyToken(t *testing.T, f *compatFixture, org string, secret string) stri
 }
 
 // The HS256 refresh exchange is retired: every go-api refresh JWT, one the legacy key verifies included, gets go-api's
-// answer for a refresh token that does not verify, and reaches no store or projector. Logout of a verified one still
-// answers 200 (TestCompatLogoutKeySetVerifiedLegacyTokenRevokesAndCounts).
+// answer for a refresh token that does not verify, and reaches no store or projector. Logout of a verified one
+// answers 200 and revokes nothing (TestCompatLogoutVerifiedLegacyTokenRevokesNothing).
 func TestCompatRefreshRefusesEveryGoAPIRefreshJWT(t *testing.T) {
 	for name, token := range map[string]func(*compatFixture) string{
 		"verified with the legacy key": func(f *compatFixture) string {
@@ -169,27 +168,6 @@ func TestCompatRefreshOfAPinlessSessionAnswersGoAPIsInvalidRefresh(t *testing.T)
 	}
 }
 
-func TestCompatLogoutEndsTheLineageOfAGoAPIRefreshToken(t *testing.T) {
-	f := newCompatFixture(t)
-	response := f.do(http.MethodPost, PatternCompatLogout, `{"refresh_token":"`+legacyToken(t, f, f.org.String(), testSecret)+`"}`, nil)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", response.Code, response.Body)
-	}
-	if len(f.sessions.revokedLegacy) != 1 {
-		t.Fatalf("%d legacy revocations, want 1", len(f.sessions.revokedLegacy))
-	}
-	got := f.sessions.revokedLegacy[0]
-	if got.PrincipalID != f.principal || got.OrganizationID == nil || *got.OrganizationID != f.org || got.JTI.Reveal() != "legacy-jti-0001" {
-		t.Fatalf("revoked %+v", got)
-	}
-	if len(f.sessions.byCredential) != 0 || len(f.projector.userCalls) != 0 {
-		t.Fatalf("by credential %v, projected %v; a legacy logout reaches neither", f.sessions.byCredential, f.projector.userCalls)
-	}
-	if f.sessions.actors[0].RequestID == nil {
-		t.Fatal("the revocation carries no request id")
-	}
-}
-
 func TestCompatLogoutAnswersTheSame200ForAnUnverifiedGoAPIRefreshToken(t *testing.T) {
 	for name, token := range map[string]func(*compatFixture) string{
 		"another key": func(f *compatFixture) string {
@@ -202,17 +180,8 @@ func TestCompatLogoutAnswersTheSame200ForAnUnverifiedGoAPIRefreshToken(t *testin
 		if response.Code != http.StatusOK {
 			t.Fatalf("%s: status %d", name, response.Code)
 		}
-		if len(f.sessions.revokedLegacy) != 0 || len(f.sessions.byCredential) != 0 {
-			t.Fatalf("%s: revoked legacy %d, by credential %d; an unverified token reaches nothing", name, len(f.sessions.revokedLegacy), len(f.sessions.byCredential))
+		if len(f.sessions.byCredential) != 0 {
+			t.Fatalf("%s: by credential %d; an unverified token reaches nothing", name, len(f.sessions.byCredential))
 		}
-	}
-}
-
-func TestCompatLogoutOfAGoAPIRefreshTokenFailsLikeTheOpaqueCase(t *testing.T) {
-	f := newCompatFixture(t)
-	f.sessions.revokeLegacyErr = errors.New("store down")
-	response := f.do(http.MethodPost, PatternCompatLogout, `{"refresh_token":"`+legacyToken(t, f, f.org.String(), testSecret)+`"}`, nil)
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("a store failure answered %d", response.Code)
 	}
 }

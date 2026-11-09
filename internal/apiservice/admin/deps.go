@@ -167,6 +167,7 @@ func (h *handlers) routes() []httpapi.Route {
 	out = append(out, h.userRoutes()...)
 	out = append(out, h.orgRoutes()...)
 	out = append(out, h.governanceRoutes()...)
+	out = append(out, h.serviceAccountKeyRoutes()...)
 	return out
 }
 

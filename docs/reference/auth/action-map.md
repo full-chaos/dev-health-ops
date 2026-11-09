@@ -191,47 +191,47 @@ The six dispatcher rows (`/graphql`, `/query` on the query and internal listener
 | Method and route | Class | Action | Accepted credential classes |
 | --- | --- | --- | --- |
 | `api_route /api/v1/` | public | none | none |
-| `GET /api/v1/drilldown/issues` | protected | `work_items.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/drilldown/issues` | protected | `work_items.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/drilldown/prs` | protected | `git.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/drilldown/prs` | protected | `git.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/explain` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/explain` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/filters/options` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/flame` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/flame/aggregated` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/heatmap` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/home` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/home` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/investment` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/investment` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/investment/explain` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/investment/sunburst` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
+| `GET /api/v1/drilldown/issues` | protected | `work_items.read` | `user_access_token` |
+| `POST /api/v1/drilldown/issues` | protected | `work_items.read` | `user_access_token` |
+| `GET /api/v1/drilldown/prs` | protected | `git.read` | `user_access_token` |
+| `POST /api/v1/drilldown/prs` | protected | `git.read` | `user_access_token` |
+| `GET /api/v1/explain` | protected | `metrics.read` | `user_access_token` |
+| `POST /api/v1/explain` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/filters/options` | protected | `analytics.read` | `user_access_token` |
+| `GET /api/v1/flame` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/flame/aggregated` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/heatmap` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/home` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/home` | protected | `analytics.read` | `user_access_token` |
+| `GET /api/v1/investment` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/investment` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/investment/explain` | protected | `analytics.read` | `user_access_token` |
+| `GET /api/v1/investment/sunburst` | protected | `analytics.read` | `user_access_token` |
 | `GET /api/v1/meta` | public | none | none |
-| `GET /api/v1/opportunities` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/opportunities` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/people` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/drilldown/issues` | protected | `work_items.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/drilldown/prs` | protected | `git.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/metric` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/summary` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/quadrant` | protected | `metrics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/sankey` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/sankey` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /api/v1/work-units` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/work-units` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /api/v1/work-units/{work_unit_id}/explain` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `GET /buildinfo` | protected | `org.read` | `effective_principal_envelope`, `user_access_token` (a platform admin only) |
+| `GET /api/v1/opportunities` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/opportunities` | protected | `analytics.read` | `user_access_token` |
+| `GET /api/v1/people` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/people/{person_id}/drilldown/issues` | protected | `work_items.read` | `user_access_token` |
+| `GET /api/v1/people/{person_id}/drilldown/prs` | protected | `git.read` | `user_access_token` |
+| `GET /api/v1/people/{person_id}/metric` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/people/{person_id}/summary` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/quadrant` | protected | `metrics.read` | `user_access_token` |
+| `GET /api/v1/sankey` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/sankey` | protected | `analytics.read` | `user_access_token` |
+| `GET /api/v1/work-units` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/work-units` | protected | `analytics.read` | `user_access_token` |
+| `POST /api/v1/work-units/{work_unit_id}/explain` | protected | `analytics.read` | `user_access_token` |
+| `GET /buildinfo` | protected | `org.read` | `user_access_token` (a platform admin only) |
 | `GET /graphql` | protected | `analytics.read` | `user_access_token` |
 | `POST /graphql` | protected | `analytics.read` | `user_access_token` |
 | `api_route /healthz` | public | none | none |
 | `GET /healthz` | public | none | none |
 | `GET /metrics` | public | none | none |
-| `POST /query` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
+| `POST /query` | protected | `analytics.read` | `user_access_token` |
 | `POST /query` | protected | `analytics.read` | none |
-| `POST /query/proof` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /query/proof-write` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
-| `POST /query/run-operation` | protected | `analytics.read` | `effective_principal_envelope`, `user_access_token` |
+| `POST /query/proof` | protected | `analytics.read` | `user_access_token` |
+| `POST /query/proof-write` | protected | `analytics.read` | `user_access_token` |
+| `POST /query/run-operation` | protected | `analytics.read` | `user_access_token` |
 | `api_route /readyz` | public | none | none |
 | `GET /readyz` | public | none | none |
 | `GET /registry` | public | none | none |

@@ -39,6 +39,8 @@ import (
 // gets the answer the legacy path gives. rule1NoOrgGolden is what main (0bf51eb9) answers on each REST handler for a
 // superuser with no org, recorded there by this test over rule1Client: status, body and a digest of every statement
 // with its bindings. The days of the default report window are digested by name (rule1WindowDays), not by date.
+// The "edge token" rows (the HS256 edge token, a class this tree no longer runs) passed as executed on main 98c7d4f56
+// (log 13154-legacy-rec-int-98c7d4f5.log sha256 2faa72118ecc, TestRule1PlatformAdminWithNoOrgGetsMainsRESTAnswers ok).
 const rule1NoOrgGolden = `{"edge caller, user access token routed | drilldown_issues":{"body":"{\"items\":[]}",
 "digest":"884760750f97cf60",
 "statements":1,
@@ -627,14 +629,10 @@ func rule1Gate(t *testing.T, mode, cells string) *pdp.Gate {
 }
 
 func rule1Classes() []rule1Class {
-	edge := func(t *testing.T, _ *accessMinter, _ *restFixture) string {
-		return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5})
-	}
 	user := func(_ *testing.T, m *accessMinter, _ *restFixture) string {
 		return m.mint(ecUser, map[string]any{"org_id": nil}, nil)
 	}
 	return []rule1Class{
-		{"edge token", false, "", "", edge},
 		// The superuser that came on the routed HS256 edge token on main f496ee5d (sub ecUser, no org) now comes on
 		// its user access token: CHAOS-13126 retired the routed HS256 class, the answers are main's for that caller.
 		{"edge caller, user access token routed", true, "", "", user},
@@ -665,7 +663,7 @@ func rule1Serve(t *testing.T, route rule1Route, class rule1Class) rule1Answer {
 	}
 	client := &rule1Client{}
 	handler := route.handler(client)
-	f := newRESTFixtureServing(t, store, setup, true, func(w http.ResponseWriter, r *http.Request) {
+	f := newRESTFixtureServing(t, store, setup, func(w http.ResponseWriter, r *http.Request) {
 		for name, value := range route.pathValues {
 			r.SetPathValue(name, value)
 		}
@@ -773,7 +771,7 @@ func TestRule1DigestHoldsNoWallClockDay(t *testing.T) {
 func TestRule1RoutedEdgeTokenIsTheRetiredClass(t *testing.T) {
 	quietStdLog(t)
 	edge := rule1Class{"edge token routed", true, "", "", func(t *testing.T, _ *accessMinter, _ *restFixture) string {
-		return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5})
+		return ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5})
 	}}
 	for _, route := range rule1Routes() {
 		got := rule1Serve(t, route, edge)
@@ -801,12 +799,19 @@ func TestRule1PlatformAdminWithNoOrgGetsMainsRESTAnswers(t *testing.T) {
 		raw, _ := json.Marshal(got)
 		t.Fatalf("golden: %v; answers: %s", err, raw)
 	}
-	if len(got) != len(rule1Classes())*21 || len(want) != len(got) {
-		t.Fatalf("%d answers, golden has %d, want %d", len(got), len(want), len(rule1Classes())*21)
+	// The "edge token" rows are the HS256 edge token's answers (the legacy path this tree no longer runs); they are
+	// main's executed answers for that caller, and the caller's user access token must give them byte for byte.
+	if len(got) != len(rule1Classes())*21 || len(want) != len(got)+21 {
+		t.Fatalf("%d answers, golden has %d, want %d + 21 legacy edge token rows", len(got), len(want), len(rule1Classes())*21)
 	}
 	for _, key := range keys {
 		if got[key] != want[key] {
 			t.Errorf("%s: got %+v, main answered %+v", key, got[key], want[key])
+		}
+		if route, edgeCaller := strings.CutPrefix(key, "edge caller, user access token routed | "); edgeCaller {
+			if legacy, ok := want["edge token | "+route]; !ok || got[key] != legacy {
+				t.Errorf("%s: got %+v, the HS256 edge token answered %+v", key, got[key], legacy)
+			}
 		}
 	}
 }

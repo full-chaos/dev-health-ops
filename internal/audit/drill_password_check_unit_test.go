@@ -148,3 +148,21 @@ func TestTheLegacyPasswordWriteIsPinnedToTheGoAPIStatement(t *testing.T) {
 		t.Fatalf("the drill's legacy password SQL is not the pinned go-api statement with the same columns:\n got %s\nwant %s", drillLegacyPasswordSQL, derived)
 	}
 }
+
+// The expect tag is T or F only (CHAOS-12338): any other tag, the empty one included, is refused before the attempts are
+// read, even with tries that would pass as a T copy, and the message never prints the tag.
+func TestPasswordAttemptsRefuseAnExpectTagThatIsNotTOrF(t *testing.T) {
+	for _, expect := range []string{"Q", "", "t", " T", "TF"} {
+		for _, fenced := range []bool{false, true} {
+			for _, kinds := range [][]string{{pwOK, pwBad, pwOK, pwBad}, {pwNA, pwNA, pwNA, pwNA}} {
+				err := checkPasswordAttempts(expect, fenced, passwordTries(kinds...))
+				if err == nil {
+					t.Fatalf("expect %q fenced=%v kinds %v: accepted", expect, fenced, kinds)
+				}
+				if err.Error() != "the expect tag is not T or F" {
+					t.Fatalf("expect %q: message %q, want the fixed text that never prints the tag", expect, err)
+				}
+			}
+		}
+	}
+}

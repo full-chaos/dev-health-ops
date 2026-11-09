@@ -35,7 +35,7 @@ import (
 )
 
 // Product rule 1 parity cells: the query-api REST authentication (authenticateRESTRequest, the edge verifier routed by
-// row with the HS256 leg on, the live users store over a migrated database) behind the plane handler, for a superuser
+// row, the live users store over a migrated database) behind the plane handler, for a superuser
 // with no membership row whose token names an organization with no row (U: never existed; R: its row deleted).
 // Legacy is the gate off; enforced is the gate in enforce mode with the four read cells on and the production
 // evaluator behind the PDP wire. The handler past authentication echoes the org and the scope org it may serve (the
@@ -193,12 +193,12 @@ func (p *msqPDP) take() []string {
 func msqHandler(t *testing.T, store queryAPIUserStore, m *accessMinter, gate *pdp.Gate) http.Handler {
 	t.Helper()
 	verifier, _ := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, store)
+	edge, err := principal.NewEdgeVerifier(store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	setup := testAccess(m.keys, nil, accessTestNow)
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
@@ -273,15 +273,12 @@ func TestPlatformAdminInAnUnknownOrDeletedOrganizationQueryAPIAnswersEqualLegacy
 		label string
 		id    uuid.UUID
 	}{{"org U no row (never existed)", msqOrgU}, {"org R no row (deleted)", msqOrgR}} {
-		org := o.id.String()
 		for _, c := range []struct {
 			label, token string
 			snap         msqSnap
 		}{
 			{"SU0/EdDSA/" + o.label, ed(msqSU0, o.id), su0},
-			{"SU0/HS256-edge/" + o.label, ecMintEdgeToken(t, ecEdgeClaims{sub: msqSU0.String(), orgID: org, role: "viewer", isSuperuser: true}), su0},
 			{"control plain/EdDSA/" + o.label, ed(msqPlain, o.id), msqSnap{}},
-			{"control plain/HS256-edge/" + o.label, ecMintEdgeToken(t, ecEdgeClaims{sub: msqPlain.String(), orgID: org, role: "viewer"}), msqSnap{}},
 		} {
 			control := strings.HasPrefix(c.label, "control")
 			p.register(c.token, c.label, c.snap)

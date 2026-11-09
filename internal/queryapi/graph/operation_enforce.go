@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -12,9 +13,12 @@ import (
 )
 
 // EnforceRoot is one root field of an operation as the decision sees it: its key ("Query.name") and catalog action.
+// LegacyRefuses is true when the root's pre-resolver check (fieldPrechecks) refuses the caller: a deny of the root then
+// leaves it to that check's refusal, the legacy answer (CHAOS-13334).
 type EnforceRoot struct {
-	Key    string
-	Action string
+	Key           string
+	Action        string
+	LegacyRefuses bool
 }
 
 // The codes of a refused operation's one error (extensions.code).
@@ -58,12 +62,12 @@ func (e OperationEnforce) InterceptOperation(ctx context.Context, next graphql.O
 	if e.Authorize == nil || operation == nil || operation.Operation == nil {
 		return next(ctx)
 	}
+	claims, _ := authctx.FromContext(ctx)
 	var roots []EnforceRoot
 	for _, field := range rootFields(operation) {
 		key := rootKey(operation.Operation.Operation, field.Name)
-		roots = append(roots, EnforceRoot{Key: key, Action: fieldActions[key]})
+		roots = append(roots, EnforceRoot{Key: key, Action: fieldActions[key], LegacyRefuses: legacyRefuses(claims, key, field, operation)})
 	}
-	claims, _ := authctx.FromContext(ctx)
 	scopes, refusal := e.Authorize(ctx, claims, roots)
 	if refusal != nil {
 		response := refusalResponse(ctx, refusal)
@@ -74,7 +78,9 @@ func (e OperationEnforce) InterceptOperation(ctx context.Context, next graphql.O
 
 // InterceptRootField hands each root field its decided scope through the request's claims. The claims' OrgID keeps the
 // ingress's spelling (main's answer for every spelling, product rule 1); the org helpers serve it only while it is the
-// scope's organization as a UUID.
+// scope's organization as a UUID. A root the decision refused (KindNone) keeps the request's claims and runs its
+// resolver only while its pre-resolver check still refuses them, so the resolver answers with that legacy refusal
+// before any read (CHAOS-13334); otherwise it never runs and the root answers FORBIDDEN.
 func (OperationEnforce) InterceptRootField(ctx context.Context, next graphql.RootResolver) graphql.Marshaler {
 	scopes, _ := ctx.Value(rootScopesKey{}).(map[string]pepgate.Scope)
 	field := graphql.GetRootFieldContext(ctx)
@@ -83,13 +89,30 @@ func (OperationEnforce) InterceptRootField(ctx context.Context, next graphql.Roo
 		return next(ctx)
 	}
 	// gqlgen's RootFieldContext.Object is the field's name, not its type: the key takes the operation's type.
-	if scope, ok := scopes[rootKey(operation.Operation.Operation, field.Field.Name)]; ok {
+	key := rootKey(operation.Operation.Operation, field.Field.Name)
+	if scope, ok := scopes[key]; ok {
+		if scope.Kind() == pepgate.KindNone {
+			claims, _ := authctx.FromContext(ctx)
+			if !legacyRefuses(claims, key, field.Field.Field, operation) {
+				graphql.AddError(ctx, &gqlerror.Error{Message: "Not authorized", Path: graphql.GetPath(ctx),
+					Extensions: map[string]any{"code": CodeForbidden}})
+				return graphql.Null
+			}
+			return next(ctx)
+		}
 		if claims, ok := authctx.FromContext(ctx); ok {
 			claims.Scope = scope
 			ctx = authctx.WithClaims(ctx, claims)
 		}
 	}
 	return next(ctx)
+}
+
+// legacyRefuses reports whether the root field's pre-resolver check refuses the caller of claims; a root with no check
+// never does.
+func legacyRefuses(claims authctx.Claims, key string, field *ast.Field, operation *graphql.OperationContext) bool {
+	check, has := fieldPrechecks[key]
+	return has && !check(claims, fieldOrgArgument(field, operation.Variables))
 }
 
 func refusalResponse(ctx context.Context, refusal *EnforceRefusal) *graphql.Response {

@@ -40,7 +40,7 @@ import (
 //
 // verifier may be nil only where a test exercises the no-carrier refusal.
 // edgeAuth/edgeStore are nil for /buildinfo (this credential is /query-only,
-// per D2898/D2905) and for a pod with no GO_API_EDGE_JWT_SECRET configured.
+// per D2898/D2905) and for a pod with no AUTH_ACCESS_TOKEN_ISSUER configured.
 func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, bool) {
 	if refuseAmbiguousCarrier(w, r) {
 		return authctx.Claims{}, false

@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "df1ad046e82988a16574a35fb91f7a63caf6bd6d0f27b60eba675b3729bf3b54"
-	rolesSHA   = "e3356d86831a4f95f4029f493bc59a6c3fb549500b661e5e4b83804d50ade03d"
+	actionsSHA = "d03560cfabbcd514eaed695b31fbbfe9227a825fba737da75827492df7a38ec4"
+	rolesSHA   = "8c1ec5927b7b77ea5bde9997525faac3c9a800722a4d4173155db66a4660c985"
 )
 
 func repoRoot(t *testing.T) string {
@@ -640,7 +640,7 @@ func TestPlatformActionsAreHeldOnlyByPlatformAdmin(t *testing.T) {
 func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing.T) {
 	want := map[string]Action{
 		"acr.evidence.read":    {Scope: ScopeOrganization, ResourceKind: "repository", RiskClass: RiskLow, CacheClass: CacheResourceRevisionBound, Impersonation: ImpersonationAllowed},
-		"acr.credential.issue": {Scope: ScopeOrganization, ResourceKind: "organization", RiskClass: RiskHigh, CacheClass: CacheNone, Impersonation: ImpersonationDenied},
+		"acr.credential.issue": {Scope: ScopeOrganization, ResourceKind: "organization", RiskClass: RiskHigh, CacheClass: CacheNone, Impersonation: ImpersonationDenied, RepositoryScope: RepositoryScopeFiltered},
 	}
 	for id, w := range want {
 		a, err := Default().Action(id)
@@ -648,20 +648,50 @@ func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing
 			t.Errorf("%s: %v", id, err)
 			continue
 		}
-		if a.Scope != w.Scope || a.ResourceKind != w.ResourceKind || a.RiskClass != w.RiskClass || a.CacheClass != w.CacheClass || a.Impersonation != w.Impersonation {
+		if a.Scope != w.Scope || a.ResourceKind != w.ResourceKind || a.RiskClass != w.RiskClass || a.CacheClass != w.CacheClass || a.Impersonation != w.Impersonation ||
+			(w.RepositoryScope != "" && a.RepositoryScope != w.RepositoryScope) {
 			t.Errorf("%s = %+v, want %+v", id, a, w)
 		}
 	}
 }
 
-// No role holds the two new actions until a roles change grants them.
-func TestNoRoleHoldsAcrEvidenceReadOrCredentialIssue(t *testing.T) {
+// D6849 (legacy parity): every organization role reads ACR evidence and issues an ACR credential, as
+// any org session may today (rule 2 for the evidence read). No platform role holds either action.
+func TestEveryOrganizationRoleHoldsAcrEvidenceReadAndCredentialIssue(t *testing.T) {
 	c := Default()
+	org := map[string]bool{"viewer": true, "member": true, "admin": true, "owner": true}
 	for _, r := range c.Roles() {
 		for _, id := range []string{"acr.evidence.read", "acr.credential.issue"} {
-			if c.Allows(r.ID, id) {
-				t.Errorf("role %s holds %s", r.ID, id)
+			if got, want := c.Allows(r.ID, id), org[r.ID]; got != want {
+				t.Errorf("role %s holds %s = %v, want %v", r.ID, id, got, want)
 			}
+		}
+	}
+	for id := range org {
+		if _, err := c.Role(id); err != nil {
+			t.Errorf("organization role %s is missing: %v", id, err)
+		}
+	}
+}
+
+// Product rule 1 and the executed legacy cells: a platform admin with no membership row approves a device and
+// gives consent in the organization of its session, so acr.credential.issue carries the platform-admin flag.
+func TestAcrCredentialIssueAllowsAPlatformAdminWithNoMembership(t *testing.T) {
+	a, err := Default().Action("acr.credential.issue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.PlatformAdmin {
+		t.Fatalf("acr.credential.issue PlatformAdmin = false, want true")
+	}
+}
+
+// Legacy refuses the ACR repository reads to a platform admin with no membership row in its token's
+// organization, so no repository action carries the flag.
+func TestNoRepositoryActionCarriesThePlatformAdminFlag(t *testing.T) {
+	for _, a := range Default().Actions() {
+		if a.ResourceKind == "repository" && a.PlatformAdmin {
+			t.Errorf("repository action %s carries platform_admin allowed", a.ID)
 		}
 	}
 }
@@ -702,7 +732,7 @@ func TestThePlatformAdminActionsAreTheAdminGuardAndTheLegacyQueryAPIAndBillingAc
 		}
 	}
 	sort.Strings(got)
-	want := []string{"analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read",
+	want := []string{"acr.credential.issue", "analytics.read", "billing.manage", "billing.read", "git.read", "integrations.read",
 		"integrations.write", "license.read", "members.invite", "members.manage", "metrics.read", "reports.write",
 		"settings.write", "teams.write", "work_items.read"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {

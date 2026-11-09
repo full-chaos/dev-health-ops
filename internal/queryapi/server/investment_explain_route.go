@@ -60,7 +60,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
@@ -99,27 +98,27 @@ func investmentExplainSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitc
 }
 
 // loadInvestmentExplainRouteConfig reuses loadQueryRouteConfig's env vars
-// (CLICKHOUSE_URI + the GO_API_ENVELOPE_* trio + GO_API_REGISTRY_POSTGRES_URI)
-// rather than inventing a second set: both routes need the same
-// ClickHouse/envelope/registry-Postgres dependencies in the same
+// (CLICKHOUSE_URI + GO_API_REGISTRY_POSTGRES_URI; the envelope key is
+// optional) rather than inventing a second set: both routes need the same
+// ClickHouse/registry-Postgres dependencies in the same
 // deployment (deploy/go-api/compose-query-api.yml declares them once for
 // the whole service).
 //
 // CORRECTION (CHAOS-5006 PR3): the comment this replaced claimed this
 // route "does NOT require GO_API_REGISTRY_POSTGRES_URI -- not meaningful
 // for a REST route" -- that was already STALE the moment it was written:
-// loadQueryRouteConfig's own ok gate requires ALL FIVE of its vars
+// loadQueryRouteConfig's own ok gate requires its data-store vars
 // together, registry-Postgres included, so this route was already
 // implicitly requiring it before this change, just never reading the
 // field. Now it does: registryPostgresURI backs the org-BYO settings
 // read path (internal/llmorgsettings), reusing the SAME Postgres this
 // route's config loading already, silently, required.
-func loadInvestmentExplainRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience, registryPostgresURI string, ok bool) {
+func loadInvestmentExplainRouteConfig(getenv getenvFunc) (clickHouseURI, registryPostgresURI string, ok bool) {
 	cfg, queryOk := loadQueryRouteConfig(getenv)
 	if !queryOk {
-		return "", "", "", "", "", false
+		return "", "", false
 	}
-	return cfg.ClickHouseURI, cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience, cfg.RegistryPostgresURI, true
+	return cfg.ClickHouseURI, cfg.RegistryPostgresURI, true
 }
 
 // buildInvestmentExplainRoute constructs the handler, its own
@@ -128,12 +127,12 @@ func loadInvestmentExplainRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPat
 // fail to build/start" contract loadQueryRouteConfig's own doc comment
 // describes) -- main() only calls mux.HandleFunc when ok is true.
 func buildInvestmentExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, registryPostgresURI, cfgOK := loadInvestmentExplainRouteConfig(getenv)
+	clickHouseURI, registryPostgresURI, cfgOK := loadInvestmentExplainRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("investment/explain: build envelope verifier: %w", err)
 	}

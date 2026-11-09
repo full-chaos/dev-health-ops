@@ -2,13 +2,9 @@ package apiservice
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
@@ -47,50 +43,6 @@ func TestConfigure_RefusesInvalidAccessTokenIssuer(t *testing.T) {
 	if err == nil || built {
 		t.Fatalf("built=%v err=%v", built, err)
 	}
-}
-
-func TestLegacyVerifier_StoreOutageIsUnavailableNotRefusal(t *testing.T) {
-	verify := legacyVerifier(func(context.Context, string) (*policy.User, error) { return nil, policy.ErrUnavailable })
-	_, err := verify(context.Background(), "t")
-	if !errors.Is(err, accessverify.ErrUnavailable) || errors.Is(err, accessverify.ErrRefused) {
-		t.Fatalf("err=%v", err)
-	}
-}
-
-// TestLegacyVerifier_ErrorClasses is acp D3: a refusal and a claim of the
-// wrong type stay refusals (401); any other store failure is unavailable
-// (503), never a refusal.
-func TestLegacyVerifier_ErrorClasses(t *testing.T) {
-	refusal, claimType := realLegacyErrors(t)
-	for name, in := range map[string]error{"refusal": refusal, "claim type": claimType} {
-		if _, err := legacyVerifier(func(context.Context, string) (*policy.User, error) { return nil, in })(context.Background(), "t"); err == nil || errors.Is(err, accessverify.ErrUnavailable) {
-			t.Errorf("%s became %v", name, err)
-		}
-	}
-	other := errors.New("store: connection reset")
-	if _, err := legacyVerifier(func(context.Context, string) (*policy.User, error) { return nil, other })(context.Background(), "t"); !errors.Is(err, accessverify.ErrUnavailable) {
-		t.Fatalf("a store failure was not unavailable: %v", err)
-	}
-}
-
-// realLegacyErrors are the errors the real Authenticator returns for a token
-// it refuses and for a sub claim of the wrong type.
-func realLegacyErrors(t *testing.T) (refusal, claimType error) {
-	t.Helper()
-	verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, newProbeStore(), quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, refusal = auth.AuthenticateLegacy(context.Background(), "not-a-token")
-	_, claimType = auth.AuthenticateLegacy(context.Background(), probeHS256(t, probeKey, map[string]any{"sub": 7}))
-	if !policy.IsRefusal(refusal) || !policy.IsClaimTypeError(claimType) {
-		t.Fatalf("refusal %v, claim type %v", refusal, claimType)
-	}
-	return refusal, claimType
 }
 
 // configureForAccessVerify runs the prod construction path with a database

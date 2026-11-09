@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -189,7 +190,7 @@ func TestAccessClassOfSplitsTheBearerClassesByHeader(t *testing.T) {
 		want  principal.AccessClass
 	}{
 		"user access token":            {m.mint(ecUser, nil, nil), principal.AccessClassUser},
-		"edge token":                   {ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5}), principal.AccessClassEdge},
+		"edge token":                   {ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5}), principal.AccessClassEdge},
 		"envelope typ JWT":             {m.mint(ecUser, nil, map[string]any{"typ": "JWT"}), principal.AccessClassOther},
 		"envelope without typ":         {m.mint(ecUser, nil, map[string]any{"typ": nil}), principal.AccessClassOther},
 		"typ in upper case":            {m.mint(ecUser, nil, map[string]any{"typ": "AT+JWT"}), principal.AccessClassOther},
@@ -219,20 +220,20 @@ func TestQueryAPIAccessRowsAreTheQueryAndInternalListenerInventory(t *testing.T)
 		}
 		byProfile[row.Profile] = row
 	}
-	want := map[string]struct{ user, legacy bool }{
-		"GET /api/v1/home":                      {true, false},
-		"POST /api/v1/home":                     {true, false},
-		"POST /query":                           {true, false},
-		"POST /query/proof":                     {true, false},
-		"POST /query/proof-write":               {true, false},
-		"POST /query/run-operation":             {true, false},
-		"GET /graphql":                          {true, false},
-		"POST /graphql":                         {true, false},
-		"GET /buildinfo":                        {true, false},
-		"GET /api/v1/meta":                      {false, false},
-		"GET /metrics":                          {false, false},
-		"POST /api/v1/sankey":                   {true, false},
-		"GET /api/v1/people/{person_id}/metric": {true, false},
+	want := map[string]bool{
+		"GET /api/v1/home":                      true,
+		"POST /api/v1/home":                     true,
+		"POST /query":                           true,
+		"POST /query/proof":                     true,
+		"POST /query/proof-write":               true,
+		"POST /query/run-operation":             true,
+		"GET /graphql":                          true,
+		"POST /graphql":                         true,
+		"GET /buildinfo":                        true,
+		"GET /api/v1/meta":                      false,
+		"GET /metrics":                          false,
+		"POST /api/v1/sankey":                   true,
+		"GET /api/v1/people/{person_id}/metric": true,
 	}
 	for profile, flags := range want {
 		row, ok := byProfile[profile]
@@ -240,8 +241,8 @@ func TestQueryAPIAccessRowsAreTheQueryAndInternalListenerInventory(t *testing.T)
 			t.Errorf("no row for %s", profile)
 			continue
 		}
-		if row.AcceptsUser != flags.user || row.LegacyHS256 != flags.legacy {
-			t.Errorf("%s: user %v legacy %v, want %v %v", profile, row.AcceptsUser, row.LegacyHS256, flags.user, flags.legacy)
+		if row.AcceptsUser != flags {
+			t.Errorf("%s: user %v, want %v", profile, row.AcceptsUser, flags)
 		}
 	}
 	for _, operatorOnly := range []string{"GET /healthz", "GET /readyz"} {
@@ -253,9 +254,6 @@ func TestQueryAPIAccessRowsAreTheQueryAndInternalListenerInventory(t *testing.T)
 	for _, row := range rows {
 		if row.AcceptsUser {
 			users++
-			if row.LegacyHS256 {
-				t.Errorf("%s keeps the HS256 opt-in: ops_access_token_hs256 is retired, every query-api row is EdDSA-only", row.Profile)
-			}
 		}
 	}
 	if users != 36 {
@@ -338,9 +336,8 @@ func TestQueryAPIRouteProfileIsMethodAndPattern(t *testing.T) {
 			seen = policy.RouteProfileFrom(r.Context())
 		})))
 		mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(p.method, p.path, nil))
-		row, ok := keys[seen]
-		if !ok || row.LegacyHS256 {
-			t.Errorf("%s %s: profile %q is not a row, or a row that keeps the retired HS256 opt-in", p.method, p.path, seen)
+		if _, ok := keys[seen]; !ok {
+			t.Errorf("%s %s: profile %q is not a row", p.method, p.path, seen)
 		}
 	}
 	var seen string
@@ -354,22 +351,18 @@ func TestQueryAPIRouteProfileIsMethodAndPattern(t *testing.T) {
 	}
 }
 
-// T6: on a row without the HS256 opt-in the legacy verifier never runs, and
-// the user token is refused where the row does not accept it (GET /buildinfo
+// T6: an HS256 token is refused on every row (its class is retired), and the
+// user token is refused where the row does not accept it (GET /buildinfo
 // accepts it; authenticateBuildInfo bounds it to a platform admin).
-func TestQueryAPIHS256OnARowWithoutLegacyNeverRunsTheLegacyVerifier(t *testing.T) {
+func TestQueryAPIHS256IsRefusedOnEveryRow(t *testing.T) {
 	m := newAccessMinter(t)
 	setup := testAccess(m.keys, nil, accessTestNow)
 	reader := setup.reader
-	calls := 0
-	validator, err := newQueryAccessValidator(setup.opts, func(context.Context, string) (any, error) {
-		calls++
-		return &policy.User{}, nil
-	})
+	validator, err := newQueryAccessValidator(setup.opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	edge := ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	for _, profile := range []string{"GET /buildinfo", "GET /api/v1/meta", "GET /metrics", "PUT /api/v1/home"} {
 		if _, err := validator.Validate(context.Background(), queryAPIAccessService, profile, edge); !errors.Is(err, accessverify.ErrRefused) {
 			t.Errorf("%s: HS256 err = %v, want a refusal", profile, err)
@@ -382,12 +375,13 @@ func TestQueryAPIHS256OnARowWithoutLegacyNeverRunsTheLegacyVerifier(t *testing.T
 			t.Errorf("%s: user token err = %v, want a refusal", profile, err)
 		}
 	}
-	if calls != 0 {
-		t.Fatalf("the legacy verifier ran %d times on rows without the opt-in", calls)
+	if _, err := validator.Validate(context.Background(), queryAPIAccessService, "GET /api/v1/home", edge); !errors.Is(err, accessverify.ErrRefused) {
+		t.Errorf("a user row: HS256 err = %v, want a refusal", err)
 	}
 	got := reader.counts(t)
 	for _, want := range []string{
 		accessverify.RefusedMetric + "|profile=GET /buildinfo,reason=alg_not_allowed,service=dev-health-query-api",
+		accessverify.RefusedMetric + "|profile=GET /api/v1/home,reason=alg_not_allowed,service=dev-health-query-api",
 		accessverify.RefusedMetric + "|profile=unknown,reason=no_profile,service=unknown",
 	} {
 		if got[want] == 0 {
@@ -407,31 +401,36 @@ func TestBuildersRouteByRowOnlyWithTheIssuerSet(t *testing.T) {
 	}
 	defer pool.Close()
 	users := newQueryAPIUserStore(policy.PGStore{Pool: pool})
+	// AUTH_ACCESS_TOKEN_ISSUER alone decides: set, every builder is built and
+	// routed; unset (the edge secret does not count, HS256 is retired), the REST
+	// verifier and the users store are not built, and the /query authenticator
+	// over a pool is a start error naming the issuer.
 	for name, tc := range map[string]struct {
-		env    map[string]string
-		built  bool
-		routed bool
+		env   map[string]string
+		built bool
 	}{
-		"secret only":       {map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}, true, false},
-		"secret and issuer": {map[string]string{edgeJWTSecretEnvVar: edgeTestSecret, accessTokenIssuerEnvVar: accessTestIssuer}, true, true},
-		"issuer only":       {map[string]string{accessTokenIssuerEnvVar: accessTestIssuer}, true, true},
-		"issuer blank":      {map[string]string{accessTokenIssuerEnvVar: "  "}, false, false},
-		"neither":           {nil, false, false},
+		"secret only":       {map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}, false},
+		"secret and issuer": {map[string]string{edgeJWTSecretEnvVar: edgeTestSecret, accessTokenIssuerEnvVar: accessTestIssuer}, true},
+		"issuer only":       {map[string]string{accessTokenIssuerEnvVar: accessTestIssuer}, true},
+		"issuer blank":      {map[string]string{accessTokenIssuerEnvVar: "  "}, false},
+		"neither":           {nil, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			settings := edgeSettings(tc.env)
 			edge, err := buildEdgeVerifierFromEnv(settings, users)
-			if err != nil || (edge != nil) != tc.built || edge.Routed() != tc.routed {
-				t.Errorf("REST: verifier %v routed %v err %v; want built %v routed %v", edge != nil, edge.Routed(), err, tc.built, tc.routed)
+			if err != nil || (edge != nil) != tc.built || (edge != nil && !edge.Routed()) {
+				t.Errorf("REST: verifier %v err %v; want built %v and routed", edge != nil, err, tc.built)
 			}
 			auth, store, err := buildQueryEdgeAuthenticatorFromEnv(settings, pool)
-			if err != nil || (auth != nil) != tc.built || (auth != nil && auth.Routed() != tc.routed) {
-				t.Errorf("/query: authenticator %v err %v; want built %v routed %v", auth != nil, err, tc.built, tc.routed)
-			}
-			if tc.built {
+			switch {
+			case tc.built && (err != nil || auth == nil || !auth.Routed()):
+				t.Errorf("/query: authenticator %v err %v; want a routed authenticator", auth != nil, err)
+			case tc.built:
 				if _, ok := store.(queryAPIUserStore); !ok {
 					t.Errorf("/query store is %T, want queryAPIUserStore", store)
 				}
+			case err == nil || !strings.Contains(err.Error(), accessTokenIssuerEnvVar) || auth != nil:
+				t.Errorf("/query over a pool: authenticator %v err %v; want a start error naming %s", auth != nil, err, accessTokenIssuerEnvVar)
 			}
 			userStore, err := newEdgeUserStore(settings, pool)
 			if err != nil || (userStore != nil) != tc.built {
@@ -477,3 +476,12 @@ func TestQueryAPIAccessUserReadsOnlyGrantedColumns(t *testing.T) {
 }
 
 func (accessStore) ReadsPlatformRoles() bool { return false }
+
+// withIssuer is os.Getenv with AUTH_ACCESS_TOKEN_ISSUER set: the /query route
+// over a pool needs the issuer (its only user access-token verifier).
+func withIssuer(key string) string {
+	if key == accessTokenIssuerEnvVar {
+		return accessTestIssuer
+	}
+	return os.Getenv(key)
+}

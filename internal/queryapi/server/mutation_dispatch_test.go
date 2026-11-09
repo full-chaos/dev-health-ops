@@ -118,7 +118,7 @@ func TestNewQueryHandlerPairTreatsARegisteredMutationDifferently(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	serve, proof, _, _, _ := newQueryHandler(nil, pool, verifier, "schema-digest", os.Getenv)
+	serve, proof, _, _, _ := newQueryHandler(nil, pool, verifier, "schema-digest", withIssuer)
 
 	for _, tc := range []struct {
 		name         string

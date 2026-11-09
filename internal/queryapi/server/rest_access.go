@@ -25,18 +25,14 @@ func legacyClaims(orgID string) authctx.Claims {
 // refusal is the same 401 "Invalid or expired token"; a valid token with no
 // organization is 403 unless the caller is a superuser; a check that could not
 // be made is policy.WriteAuthFailure's 503 (unavailable) or 500, never a pass.
-// An accepted user access token then asks the request's PDP gate; an accepted
-// edge token is on the exempt list and is counted.
+// An accepted user access token then asks the request's PDP gate. The routed
+// validator accepts no other class: an HS256 edge token is refused
+// alg_not_allowed.
 func authenticateRESTRouted(w http.ResponseWriter, r *http.Request, edgeVerifier *principal.EdgeVerifier, token, component string) (authctx.Claims, bool) {
 	ctx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
 	claims, err := edgeVerifier.VerifyRouted(ctx, routeProfile(r), token)
 	if err == nil {
 		gate := pdp.FromContext(r.Context())
-		if principal.AccessClassOf(token) != principal.AccessClassUser {
-			gate.CountExempt(r.Context(), pdp.ClassHS256, routeProfile(r))
-			observeRESTShadow(r, token, claims.OrgID, claims.Caller, claims.Delegated, true)
-			return legacyClaims(claims.OrgID), true
-		}
 		scope, denied := gate.Authorize(r.Context(), routeProfile(r), token, claims.OrgID)
 		if denied != nil {
 			writePDPDenied(w, r, component, denied)

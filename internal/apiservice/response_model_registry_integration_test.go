@@ -130,12 +130,8 @@ func TestRouteResponseModelsMatchTheFrozenFastAPITable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(sessionKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	routes = append(routes, markResponseModels(session.Routes(session.Deps{Pool: &pgxpool.Pool{}, Guard: guard,
-		Auth: &policy.Authenticator{}, Verifier: verifier, Signer: signer}))...)
+		Auth: &policy.Authenticator{}, Verifier: verifier}))...)
 	// sso mounts only with a pool; its route list does not use it.
 	routes = append(routes, markResponseModels(sso.Routes(sso.Deps{Pool: &pgxpool.Pool{}, Guard: guard, Logger: logger}))...)
 	patterns := map[string]httpapi.Route{}

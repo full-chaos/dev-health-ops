@@ -64,10 +64,16 @@ func outcomeOf(err error) string {
 	}
 }
 
-// A token auth-service issued carries sid: it is good only while that
-// session is live and belongs to the token's subject. A token without sid
-// (go-api's own) is decided as before and reads no session.
-func TestCheckClaimsEndsATokenWhoseSessionIsRevoked(t *testing.T) {
+// routedCheck is the routed access check (fixtureValidator, then the users row
+// and the session the sid claim names) on a sign() fixture.
+func routedCheck(t *testing.T, store Store, token string) (*User, error) {
+	t.Helper()
+	return authenticator(t, store).Authenticate(context.Background(), token)
+}
+
+// A user access token carries sid: it is good only while that session is live,
+// belongs to the token's subject and is pinned at the user's token_version.
+func TestTheRoutedCheckEndsATokenWhoseSessionIsRevoked(t *testing.T) {
 	other := uuid.MustParse("88888888-8888-4888-8888-888888888888")
 	for _, test := range []struct {
 		name      string
@@ -76,7 +82,6 @@ func TestCheckClaimsEndsATokenWhoseSessionIsRevoked(t *testing.T) {
 		want      string
 		wantReads int
 	}{
-		{name: "no sid", want: "ok", wantReads: 0},
 		{name: "live session", claims: withSID(liveSessionID), want: "ok", wantReads: 1},
 		{name: "revoked session", claims: withSID(liveSessionID), store: func(s *sessionStore) {
 			s.rows[liveSessionID] = SessionRow{PrincipalID: userID, Revoked: true}
@@ -102,7 +107,7 @@ func TestCheckClaimsEndsATokenWhoseSessionIsRevoked(t *testing.T) {
 			if test.store != nil {
 				test.store(store)
 			}
-			_, err := authenticator(t, store).Authenticate(context.Background(), sign(t, claims(test.claims)))
+			_, err := routedCheck(t, store, sign(t, claims(test.claims)))
 			if got := outcomeOf(err); got != test.want {
 				t.Fatalf("outcome %s (%v), want %s", got, err, test.want)
 			}
@@ -113,18 +118,6 @@ func TestCheckClaimsEndsATokenWhoseSessionIsRevoked(t *testing.T) {
 				t.Fatalf("read session %s, want %s", store.lastID, liveSessionID)
 			}
 		})
-	}
-}
-
-// A store that cannot read sessions refuses every token that carries sid:
-// never a pass for want of the check.
-func TestCheckClaimsRefusesASidTokenItCannotCheck(t *testing.T) {
-	_, err := authenticator(t, newStore()).Authenticate(context.Background(), sign(t, claims(withSID(liveSessionID))))
-	if got := outcomeOf(err); got != "refused" {
-		t.Fatalf("outcome %s (%v), want refused", got, err)
-	}
-	if _, err := authenticator(t, newStore()).Authenticate(context.Background(), sign(t, claims(nil))); err != nil {
-		t.Fatalf("a token without sid: %v", err)
 	}
 }
 
@@ -143,22 +136,14 @@ func TestAuthSchemaFromEnv(t *testing.T) {
 }
 
 // The principal carries the session its sid names, checked live, so a route
-// can name the caller's own session (switch-org supersedes it, CHAOS-12085);
-// a token without sid carries none.
+// can name the caller's own session (switch-org supersedes it, CHAOS-12085).
 func TestTheCheckedSessionIsOnThePrincipal(t *testing.T) {
 	store := newSessionStore()
-	user, err := authenticator(t, store).Authenticate(context.Background(), sign(t, claims(withSID(liveSessionID))))
+	user, err := routedCheck(t, store, sign(t, claims(withSID(liveSessionID))))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if user.SessionID == nil || *user.SessionID != liveSessionID {
 		t.Fatalf("SessionID %v, want %s", user.SessionID, liveSessionID)
-	}
-	user, err = authenticator(t, newSessionStore()).Authenticate(context.Background(), sign(t, claims(nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user.SessionID != nil {
-		t.Fatalf("a token without sid carries SessionID %s", *user.SessionID)
 	}
 }

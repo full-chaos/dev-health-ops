@@ -20,7 +20,7 @@ func graphQLEnforce() graph.OperationEnforce {
 	return graph.OperationEnforce{Authorize: func(ctx context.Context, claims authctx.Claims, roots []graph.EnforceRoot) (map[string]pepgate.Scope, *graph.EnforceRefusal) {
 		asked := make([]pdp.Root, len(roots))
 		for i, root := range roots {
-			asked[i] = pdp.Root{Key: root.Key, Action: root.Action}
+			asked[i] = pdp.Root{Key: root.Key, Action: root.Action, LegacyRefuses: root.LegacyRefuses}
 		}
 		caller := graphQLCaller(ctx)
 		caller.Unscoped = claims.Scope.Kind() == pepgate.KindNone
@@ -38,8 +38,8 @@ func graphQLEnforce() graph.OperationEnforce {
 }
 
 // graphQLCaller is the class of the operation's caller, from the bearer its ingress authenticated (the subject #5781
-// carries): a user access token is decided; another bearer is an exempt class; no bearer is the X-DH-Internal-* header
-// carrier (D6721), which has its own cells.
+// carries): a user access token is decided; the envelope is the exempt class (an HS256 token never authenticates: its
+// class is retired); no bearer is the X-DH-Internal-* header carrier (D6721), which has its own cells.
 func graphQLCaller(ctx context.Context) pdp.Caller {
 	subject, _ := graph.ShadowSubjectFrom(ctx)
 	switch {
@@ -47,8 +47,6 @@ func graphQLCaller(ctx context.Context) pdp.Caller {
 		return pdp.Caller{Class: pdp.CallerHeaders}
 	case subject.UserAccessToken:
 		return pdp.Caller{Class: pdp.CallerUser, Bearer: subject.Bearer}
-	case subject.SkipReason == policy.ShadowReasonHS256:
-		return pdp.Caller{Class: pdp.CallerExempt, ExemptClass: pdp.ClassHS256}
 	case subject.SkipReason == policy.ShadowReasonEnvelope:
 		return pdp.Caller{Class: pdp.CallerExempt, ExemptClass: pdp.ClassEnvelope}
 	}

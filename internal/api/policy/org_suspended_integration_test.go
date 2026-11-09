@@ -37,7 +37,8 @@ func TestLegacyGuardRefusesAMemberOfASuspendedOrganization(t *testing.T) {
 	pgseed.Org(ctx, t, pool, org.String(), "free")
 	pgseed.Membership(ctx, t, pool, uuid.NewString(), user.String(), org.String(), "admin")
 
-	auth := authenticator(t, PGStore{Pool: pool})
+	// The auth session read is faked (pgAuthenticator): the subject is the organization row, not session liveness.
+	auth := pgAuthenticator(t, PGStore{Pool: pool})
 	scope := NewScope(auth, quiet())
 	scope.DeclaredRows(func(string) (BearerRow, bool) { return BearerRow{AccessToken: true}, true })
 	chain := func(level Authz) http.Handler {
@@ -63,11 +64,13 @@ func TestLegacyGuardRefusesAMemberOfASuspendedOrganization(t *testing.T) {
 		}
 	}
 	setActive(false)
-	for _, level := range []Authz{Authenticated, Admin, AdminOrg} {
-		if got := call(level); got.status != http.StatusForbidden || got.body != denied {
-			t.Fatalf("suspended org, level %v: %d %q, want the X-Org-Id refusal", level, got.status, got.body)
+	t.Run("suspended org: the legacy answer", func(t *testing.T) {
+		for _, level := range []Authz{Authenticated, Admin, AdminOrg} {
+			if got := call(level); got.status != http.StatusForbidden || got.body != denied {
+				t.Fatalf("suspended org, level %v: %d %q, want the X-Org-Id refusal", level, got.status, got.body)
+			}
 		}
-	}
+	})
 	role, member, orgFound, err := (PGStore{Pool: pool}).OrgMembership(ctx, user, org)
 	if err != nil || role != "" || member || !orgFound {
 		t.Fatalf("OrgMembership of a suspended org = %q %v %v %v, want no role, not a member, the org found", role, member, orgFound, err)

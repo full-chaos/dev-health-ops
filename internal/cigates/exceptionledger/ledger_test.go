@@ -1,6 +1,7 @@
 package exceptionledger_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,9 +35,20 @@ func TestTheRealTreeMatchesTheLedger(t *testing.T) {
 	for _, defect := range defects {
 		t.Error(defect)
 	}
-	// Check refuses a one-sided loss (a site with no row, a row with no site), and a removed exception takes its row
-	// with it, so the counts shrink by design. What Check cannot see is a census that is empty on both sides; the
-	// bound is the ledger's own data lines and a non-empty scan of both site kinds, never a fixed count.
+	sites, err := exceptionledger.Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg := vacuity(ledger, sites); msg != "" {
+		t.Fatal(msg)
+	}
+}
+
+// vacuity bounds what Check cannot see: a census empty on both sides. Check refuses a one-sided loss, and a removed
+// exception takes its row with it, so the counts shrink by design. The bound is the ledger's own data lines, a
+// non-empty exact scan, and a marker site while the ledger still holds a marker row (a lost marker scan would let
+// those rows pass as plain anchors); never a fixed count.
+func vacuity(ledger []byte, sites []exceptionledger.Site) string {
 	rows, _ := exceptionledger.ParseLedger(ledger)
 	dataLines := 0
 	for _, line := range strings.Split(string(ledger), "\n") {
@@ -44,9 +56,11 @@ func TestTheRealTreeMatchesTheLedger(t *testing.T) {
 			dataLines++
 		}
 	}
-	sites, err := exceptionledger.Discover(root)
-	if err != nil {
-		t.Fatal(err)
+	markerRows := 0
+	for _, row := range rows {
+		if exceptionledger.MarkerRow(row) {
+			markerRows++
+		}
 	}
 	exact := 0
 	for _, site := range sites {
@@ -54,8 +68,85 @@ func TestTheRealTreeMatchesTheLedger(t *testing.T) {
 			exact++
 		}
 	}
-	if len(rows) == 0 || len(rows) != dataLines || exact == 0 || len(sites) == exact {
-		t.Fatalf("vacuous census: %d rows of %d ledger data lines, %d sites (%d exact); the scan or the ledger lost its rows", len(rows), dataLines, len(sites), exact)
+	markers := len(sites) - exact
+	switch {
+	case len(rows) == 0 || len(rows) != dataLines:
+		return fmt.Sprintf("vacuous census: %d rows of %d ledger data lines; the ledger lost its rows", len(rows), dataLines)
+	case exact == 0:
+		return fmt.Sprintf("vacuous census: %d sites, none exact; the exact scan lost its sites", len(sites))
+	case markerRows > 0 && markers == 0:
+		return fmt.Sprintf("vacuous census: %d marker rows in the ledger, 0 marker sites; the marker scan lost its sites", markerRows)
+	}
+	return ""
+}
+
+func TestCensusVacuity(t *testing.T) {
+	exactSite := exceptionledger.Site{Path: "internal/queryapi/pdp/pdp.go", Key: "ExemptClasses:ClassHS256", Exact: true}
+	markerSite := exceptionledger.Site{Path: "internal/auth/writer.go", Line: 3, Key: "// TEMPORARY: the legacy writer row."}
+	anchorOnly := "anchor-only\ttemporary\tci/closure.tsv\tgithub.com/x/jwt\tCHAOS-26\topen\tlinked module\n"
+	exactRow := "pdp-hs256\ttemporary\tinternal/queryapi/pdp/pdp.go\tExemptClasses:ClassHS256\tCHAOS-24\topen\texempt class\n"
+	cells := []struct {
+		name   string
+		ledger string
+		sites  []exceptionledger.Site
+		want   string
+	}{
+		{"marker rows with a marker site", baseLedger, []exceptionledger.Site{exactSite, markerSite}, ""},
+		{"no marker row and no marker site", "# fixture\n" + exactRow + anchorOnly, []exceptionledger.Site{exactSite}, ""},
+		{"no exact site", baseLedger, []exceptionledger.Site{markerSite}, "none exact"},
+		{"marker rows and no marker site", baseLedger, []exceptionledger.Site{exactSite}, "0 marker sites"},
+		{"a ledger row that does not parse", baseLedger + "broken row\n", []exceptionledger.Site{exactSite, markerSite}, "ledger data lines"},
+		{"an empty ledger", "# fixture\n", []exceptionledger.Site{exactSite}, "ledger data lines"},
+	}
+	for _, cell := range cells {
+		t.Run(cell.name, func(t *testing.T) {
+			got := vacuity([]byte(cell.ledger), cell.sites)
+			if cell.want == "" && got != "" {
+				t.Fatalf("vacuity = %q, want none", got)
+			}
+			if cell.want != "" && !strings.Contains(got, cell.want) {
+				t.Fatalf("vacuity = %q, want one naming %q", got, cell.want)
+			}
+		})
+	}
+}
+
+// A marker scan that lost its sites must not pass as clean: in a tree whose marker files are gone the ledger's marker
+// rows leave the census vacuous, and a single planted marker is found exactly once.
+func TestTheMarkerScanFindsAPlantedMarker(t *testing.T) {
+	scan := func(t *testing.T, files map[string]string) []exceptionledger.Site {
+		t.Helper()
+		root := t.TempDir()
+		for rel, body := range files {
+			path := filepath.Join(root, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sites, err := exceptionledger.Discover(root)
+		if err != nil {
+			t.Fatalf("Discover: %v", err)
+		}
+		return sites
+	}
+	files := fixture()
+	files["internal/testsupport/authrows/quirks.go"] = "package authrows\n"
+	files["internal/auth/writer.go"] = "package writerinventory\n"
+	if msg := vacuity([]byte(baseLedger), scan(t, files)); !strings.Contains(msg, "0 marker sites") {
+		t.Fatalf("marker rows with no marker in the tree: vacuity = %q, want the marker scan named", msg)
+	}
+	files["internal/auth/planted.go"] = "package auth\n\n// TEMPORARY: the planted marker.\nvar P = 1\n"
+	var markers []exceptionledger.Site
+	for _, site := range scan(t, files) {
+		if !site.Exact {
+			markers = append(markers, site)
+		}
+	}
+	if len(markers) != 1 || markers[0].Path != "internal/auth/planted.go" || markers[0].Line != 3 {
+		t.Fatalf("marker sites = %v, want exactly internal/auth/planted.go:3", markers)
 	}
 }
 

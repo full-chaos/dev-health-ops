@@ -1,9 +1,11 @@
 package authruntime
 
 import (
+	"errors"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -11,56 +13,49 @@ import (
 	"testing"
 )
 
-const edgetokenImport = "github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+const edgetokenDir = "internal/auth/edgetoken"
 
-// edgetokenImporters are the production files that may still import the HS256 package: go-api's local logout and
-// start check (CHAOS-13386 deletes them). auth-service holds no HS256 key.
-var edgetokenImporters = map[string]bool{
-	"internal/api/session/session.go": true,
-	"internal/apiservice/deps.go":     true,
-	"internal/apiservice/service.go":  true,
-}
-
-// No non-test Go file outside the allow list imports internal/auth/edgetoken: auth-service verifies no HS256 token,
-// and the token lifetimes and the retired alg are named where they are used.
-func TestNoProductionFileImportsTheHS256TokenPackage(t *testing.T) {
+// The HS256 token package is gone: its directory does not exist and no Go file, test or not, imports it. auth-service
+// and go-api verify no HS256 token, and the token lifetimes and the retired alg are named where they are used.
+func TestNoGoFileImportsTheRetiredHS256TokenPackage(t *testing.T) {
 	root := "../../.."
+	if _, err := os.Stat(filepath.Join(root, edgetokenDir)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("%s still exists (stat error %v)", edgetokenDir, err)
+	}
 	var bad []string
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() && d.Name() == "testdata" {
-			return filepath.SkipDir
-		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if strings.HasPrefix(rel, "internal/auth/edgetoken/") {
-			return nil
-		}
-		file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-		if err != nil {
-			return err
-		}
-		for _, spec := range file.Imports {
-			if value, _ := strconv.Unquote(spec.Path.Value); value == edgetokenImport && !edgetokenImporters[rel] {
-				bad = append(bad, rel)
+	for _, dir := range []string{"internal", "cmd", "deploy"} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
 			}
+			if d.IsDir() && d.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			if d.IsDir() || !strings.HasSuffix(path, ".go") {
+				return nil
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+			if err != nil {
+				return err
+			}
+			for _, spec := range file.Imports {
+				if value, _ := strconv.Unquote(spec.Path.Value); value == "github.com/full-chaos/dev-health-ops/"+edgetokenDir {
+					bad = append(bad, filepath.ToSlash(rel))
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	if len(bad) > 0 {
 		sort.Strings(bad)
-		t.Fatalf("production files import %s:\n%s", edgetokenImport, strings.Join(bad, "\n"))
+		t.Fatalf("Go files import %s:\n%s", edgetokenDir, strings.Join(bad, "\n"))
 	}
 }

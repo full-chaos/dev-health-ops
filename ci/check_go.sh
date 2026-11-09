@@ -2031,7 +2031,7 @@ venue_oracle_known_summary() {
 # each, from `go list -deps -test` over this tree (CHAOS-13101: derived, never committed). Its output goes to stderr.
 venue_oracle_closure_derive() {
   (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off VENUE_CLOSURE_WRITE=1 VENUE_CLOSURE_DIR="$1" \
-    go test -count=1 -run '^TestClosureFilesMatchTheTestBinaryDependencies$' ./internal/testsupport/venuechanged >&2) \
+    go test -mod=readonly -trimpath -count=1 -run '^TestClosureFilesMatchTheTestBinaryDependencies$' ./internal/testsupport/venuechanged >&2) \
     || die "venue-oracles --changed: could not derive the venue test closures into $1 (see above)"
   [ -d "$1" ] || die "venue-oracles --changed: the derivation of the venue test closures wrote no $1"
 }

@@ -279,9 +279,9 @@ func venueListingViolations(file, text string) []string {
 	return out
 }
 
-// TestVenueOracleListingIsNeverPipedAway: in both CI systems the listing call runs as its own command, so its failure
+// TestClosureListingCallIsNeverPipedAway: in both CI systems the listing call runs as its own command, so its failure
 // (derivation, registry or trigger file) fails the job instead of reading as "nothing selected".
-func TestVenueOracleListingIsNeverPipedAway(t *testing.T) {
+func TestClosureListingCallIsNeverPipedAway(t *testing.T) {
 	root := repoRoot(t)
 	files := []string{".gitlab-ci.yml"}
 	for _, ext := range []string{"*.yml", "*.yaml"} {

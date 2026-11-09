@@ -339,18 +339,19 @@ func TestRESTShadowObserveSeam(t *testing.T) {
 }
 
 // 2h and the acp condition: EVERY legacy-allow request on a mapped route is observed, whatever the credential class.
-// A user token asks the PDP (match); the envelope is counted skipped; the #5679 exempt counter is unchanged.
+// A user token asks the PDP (match). The envelope is a retired class on both paths: the 401 of an unaccepted bearer,
+// nothing to observe, no PDP call and no exempt count.
 func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
-	skippedEnvelope := map[string]int64{shadowResultsMetric + "|reason=envelope,result=skipped": 1}
 	matched := map[string]int64{shadowResultsMetric + "|reason=none,result=match": 1}
 	for name, routed := range map[string]bool{"routed": true, "unrouted": false} {
 		for class, tc := range map[string]struct {
-			token func(*gatedREST, *testing.T) string
-			want  map[string]int64
-			calls int
+			token   func(*gatedREST, *testing.T) string
+			want    map[string]int64
+			calls   int
+			retired bool
 		}{
-			"user token": {func(g *gatedREST, _ *testing.T) string { return g.userToken() }, matched, 1},
-			"envelope":   {func(g *gatedREST, _ *testing.T) string { return g.f.envelope }, skippedEnvelope, 0},
+			"user token": {func(g *gatedREST, _ *testing.T) string { return g.userToken() }, matched, 1, false},
+			"envelope":   {func(g *gatedREST, _ *testing.T) string { return g.f.envelope }, nil, 0, true},
 		} {
 			if class == "user token" && !routed {
 				continue
@@ -371,6 +372,21 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 					Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 				g := &gatedREST{handler: planeHandler(f.handler.(*http.ServeMux), gate), reader: reader, gate: gate, f: f, minter: m}
 				before := shadowCounters(t)
+				if tc.retired {
+					if got, _ := g.get(tc.token(g, t)); got != (answer{http.StatusUnauthorized, restRefusal}) {
+						t.Fatalf("answer %+v, want 401 refusal", got)
+					}
+					if d := settleQuiet(t, before); len(d) != 0 {
+						t.Fatalf("5.12 counters %v, want none for a refused token", d)
+					}
+					if n := len(srv.Requests()); n != 0 {
+						t.Fatalf("PDP asked %d times for a refused token", n)
+					}
+					if got := g.counter(t, "dev_health_query_api_pdp_exempt_total"); len(got) != 0 {
+						t.Fatalf("exempt counter %v, want none", got)
+					}
+					return
+				}
 				if got, _ := g.get(tc.token(g, t)); got.Status != http.StatusOK {
 					t.Fatalf("status %d, want 200", got.Status)
 				}
@@ -379,11 +395,6 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 				}
 				if n := len(srv.Requests()); n != tc.calls {
 					t.Fatalf("PDP asked %d times, want %d", n, tc.calls)
-				}
-				if class != "user token" {
-					if got := g.counter(t, "dev_health_query_api_pdp_exempt_total"); len(got) != 1 {
-						t.Fatalf("exempt counter %v, want one series as before", got)
-					}
 				}
 			})
 		}

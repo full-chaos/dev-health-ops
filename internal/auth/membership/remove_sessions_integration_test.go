@@ -127,10 +127,11 @@ func (s *sessionEnv) sessionAuditRows(t *testing.T, ctx context.Context, princip
 	return s.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type LIKE 'auth.session.%' AND subject_principal_id = $1`, principal.String())
 }
 
-// A removal ends the member's sessions and go-api refresh tokens of that
-// organization in its own commit; its sessions of other organizations, its
-// sessions with no organization and other members' sessions stay live. The
-// removal's audit row is the only audit row.
+// A removal ends the member's sessions of that organization in its own commit;
+// its sessions of other organizations, its sessions with no organization and
+// other members' sessions stay live, and go-api's refresh tokens are go-api's
+// own (auth-service holds no privilege on them). The removal's audit row is
+// the only audit row.
 func TestRemoveEndsTheMembersSessionsOfThatOrganizationOnly(t *testing.T) {
 	s := newSessionEnv(t)
 	ctx := context.Background()
@@ -160,12 +161,8 @@ func TestRemoveEndsTheMembersSessionsOfThatOrganizationOnly(t *testing.T) {
 			t.Errorf("session (%s) %s was touched", name, id)
 		}
 	}
-	for _, id := range goInOrg {
-		if !s.goTokenRevoked(t, ctx, id) {
-			t.Errorf("go-api refresh token %s of the removed member in the organization is not revoked", id)
-		}
-	}
-	for name, id := range map[string]uuid.UUID{"other organization": goInOther, "no organization": goNoOrg, "other member": goPeer} {
+	for name, id := range map[string]uuid.UUID{"in the organization": goInOrg[0], "in the organization, second": goInOrg[1],
+		"other organization": goInOther, "no organization": goNoOrg, "other member": goPeer} {
 		if s.goTokenRevoked(t, ctx, id) {
 			t.Errorf("go-api refresh token (%s) %s was revoked", name, id)
 		}
@@ -358,15 +355,15 @@ func TestARemovalRacingAnExchangeEndsTheNewCredentialWithoutADeadlock(t *testing
 	}
 }
 
-// A go-api refresh token row another writer holds is met like a held session:
-// the removal gives up after its attempts with nothing written.
-func TestARemovalThatFindsAGoAPIRefreshTokenLockedGivesUpWithNothingWritten(t *testing.T) {
+// A go-api refresh token row another writer holds does not stop a removal:
+// the removal never reads go-api's refresh tokens.
+func TestARemovalIgnoresAGoAPIRefreshTokenAnotherWriterHolds(t *testing.T) {
 	s := newSessionEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	org, user, owner := s.seedOrg(t, ctx), s.seedUser(t, ctx), s.seedUser(t, ctx)
 	s.add(t, ctx, org, owner, "owner")
-	m := s.add(t, ctx, org, user, "member")
+	s.add(t, ctx, org, user, "member")
 	sess, goTok := s.open(t, ctx, user, &org), s.goToken(t, ctx, user, &org)
 	tx, err := s.admin.Begin(ctx)
 	if err != nil {
@@ -376,24 +373,23 @@ func TestARemovalThatFindsAGoAPIRefreshTokenLockedGivesUpWithNothingWritten(t *t
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM public.refresh_tokens WHERE id = $1 FOR UPDATE`, goTok); err != nil {
 		t.Fatalf("lock the go-api refresh token: %v", err)
 	}
-	_, err = s.members.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll})
-	if !errors.Is(err, ErrStore) || !errors.Is(err, errSessionsBusy) {
-		t.Fatalf("Remove with the go-api refresh token held = %v, want ErrStore after the busy attempts", err)
+	if _, err := s.members.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); err != nil {
+		t.Fatalf("Remove with the go-api refresh token held: %v", err)
 	}
-	if n := s.replanned(t); n != planAttempts {
-		t.Fatalf("replanned attempts = %d, want %d", n, planAttempts)
+	if n := s.replanned(t); n != 0 {
+		t.Fatalf("replanned attempts = %d, want 0", n)
 	}
-	if got := s.rows(t, ctx, org, user); got != (rows{"member", "active", "member"}) {
-		t.Fatalf("rows = %+v, want unchanged", got)
+	if got := s.rows(t, ctx, org, user); got != (rows{"", "removed", "member"}) {
+		t.Fatalf("rows after remove = %+v", got)
 	}
-	if !s.sessionLive(t, ctx, sess) {
-		t.Fatal("the session ended although the removal wrote nothing")
+	if !s.sessionEnded(t, ctx, sess) {
+		t.Fatal("the session is not ended")
 	}
-	if n := s.auditRows(t, ctx, "auth.membership.removed", org); n != 0 {
-		t.Fatalf("audit rows = %d, want 0", n)
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
 	}
-	if n := s.outboxRows(t, ctx, "membership.removed", m.ID); n != 0 {
-		t.Fatalf("outbox rows = %d, want 0", n)
+	if s.goTokenRevoked(t, ctx, goTok) {
+		t.Fatal("the removal revoked the go-api refresh token")
 	}
 }
 
@@ -517,74 +513,5 @@ func TestAnExchangeWaitingOnTheRemovalIsRefusedWhenTheRemovalCommits(t *testing.
 	}
 	if !s.sessionEnded(t, ctx, issued.Session.ID) {
 		t.Fatal("the session is not ended")
-	}
-}
-
-// legacyToken seeds a live go-api refresh token in a family and returns its id and jti.
-func (s *sessionEnv) legacyToken(t *testing.T, ctx context.Context, user uuid.UUID, org *uuid.UUID, family uuid.UUID) (uuid.UUID, string) {
-	t.Helper()
-	id := uuid.New()
-	jti := id.String()
-	digest := sha256.Sum256([]byte(jti))
-	if _, err := s.admin.Exec(ctx, `INSERT INTO public.refresh_tokens (id, user_id, org_id, token_hash, family_id, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, now() + interval '1 day', now())`, id, user, org, hex.EncodeToString(digest[:]), family); err != nil {
-		t.Fatalf("seed go-api refresh token: %v", err)
-	}
-	return id, jti
-}
-
-// A go-api refresh token the removal revoked is presented at once, inside
-// GraceWindow of that revocation: it is refused as reuse, whether or not it was
-// exchanged before, no session is minted or replayed, and its family is revoked
-// (the family's row of another organization, which the removal left live).
-func TestAGoAPIRefreshTokenTheRemovalRevokedIsRefusedInsideTheGraceWindow(t *testing.T) {
-	for name, exchangedFirst := range map[string]bool{"never exchanged": false, "exchanged before the removal": true} {
-		t.Run(name, func(t *testing.T) {
-			s := newSessionEnv(t)
-			ctx := context.Background()
-			org, other, user, owner := s.seedOrg(t, ctx), s.seedOrg(t, ctx), s.seedUser(t, ctx), s.seedUser(t, ctx)
-			s.add(t, ctx, org, owner, "owner")
-			s.add(t, ctx, other, owner, "owner")
-			s.add(t, ctx, org, user, "member")
-			s.add(t, ctx, other, user, "member")
-			family := uuid.New()
-			token, jti := s.legacyToken(t, ctx, user, &org, family)
-			sibling, _ := s.legacyToken(t, ctx, user, &other, family)
-			legacy := session.LegacyRefresh{PrincipalID: user, OrganizationID: &org, JTI: contracts.NewSecretString(jti)}
-			var first uuid.UUID
-			if exchangedFirst {
-				result, err := s.sessions.ExchangeLegacy(ctx, legacy)
-				if err != nil || result.Reason != session.ReasonAccepted {
-					t.Fatalf("first ExchangeLegacy = %q, %v", result.Reason, err)
-				}
-				first = result.Issued.Session.ID
-			}
-			if _, err := s.members.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); err != nil {
-				t.Fatalf("Remove: %v", err)
-			}
-			if !s.goTokenRevoked(t, ctx, token) {
-				t.Fatal("the removal left the go-api refresh token live")
-			}
-			if s.goTokenRevoked(t, ctx, sibling) {
-				t.Fatal("the removal revoked the family's row of another organization")
-			}
-			if exchangedFirst && !s.sessionEnded(t, ctx, first) {
-				t.Fatal("the removal left the exchanged session live")
-			}
-			sessions := s.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user)
-			result, err := s.sessions.ExchangeLegacy(ctx, legacy)
-			if err != nil {
-				t.Fatalf("ExchangeLegacy after the removal: %v", err)
-			}
-			if result.Reason != session.ReasonRefreshReused {
-				t.Fatalf("ExchangeLegacy after the removal = %q, want %q", result.Reason, session.ReasonRefreshReused)
-			}
-			if after := s.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user); after != sessions {
-				t.Fatalf("sessions of the member %d -> %d, want no new session", sessions, after)
-			}
-			if !s.goTokenRevoked(t, ctx, sibling) {
-				t.Fatal("the family was not revoked")
-			}
-		})
 	}
 }

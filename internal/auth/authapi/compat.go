@@ -17,7 +17,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
@@ -42,7 +41,6 @@ const (
 type CompatSessions interface {
 	GuardedSessions
 	RevokeByCredential(ctx context.Context, credential contracts.SecretString, actor session.Actor) (bool, error)
-	RevokeLegacy(ctx context.Context, legacy session.LegacyRefresh, actor session.Actor) (bool, error)
 	IssueSessions
 }
 
@@ -525,9 +523,7 @@ func refreshUserInfo(id uuid.UUID, user UserState, orgID, role string) *pyjson.O
 // (internal/api/session/routes.go logout): {"refresh_token"} in, and the same
 // 200 whether or not the credential revoked a session, so the answer says
 // nothing about the credential. The session's revocation is audited by the
-// session store. A go-api refresh JWT ends its whole go-api lineage (the live
-// refresh rows of its family and the sessions exchanged from it), which is
-// stricter than go-api's logout, so a refresh after sign-out is refused.
+// session store. A go-api refresh JWT revokes nothing: no route accepts one.
 func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
 	// go-api's logout row commits with the revocation and its auth.session.revoked
 	// row, with the user and organization of the revoked session; a credential that
@@ -541,9 +537,7 @@ func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
 	actor := session.Actor{RequestID: requestid.Audit(ctx)}
 	var revoked bool
 	var err error
-	if isJWT(token) {
-		revoked, err = h.revokeLegacy(r, token, actor)
-	} else {
+	if !isJWT(token) {
 		revoked, err = h.Sessions.RevokeByCredential(ctx, contracts.NewSecretString(token), actor)
 	}
 	if err != nil {
@@ -558,21 +552,6 @@ func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
 	out := pyjson.NewObject()
 	out.Set("message", textLogoutDone)
 	writeCompatModel(w, out)
-}
-
-// revokeLegacy verifies a go-api refresh JWT and ends its lineage. A token that
-// does not verify revokes nothing, as an unknown opaque credential does, and so
-// does every such token once the Issuer holds no legacy key: an unverified jti
-// never revokes. No principal is projected, since the go-api rows exist without it.
-func (h compatHandlers) revokeLegacy(r *http.Request, token string, actor session.Actor) (bool, error) {
-	ctx := r.Context()
-	legacy, err := h.Issuer.VerifyLegacyRefresh(token)
-	if err != nil {
-		h.rec.logger.DebugContext(ctx, "legacy refresh token refused at logout", "reason", edgetoken.ReasonOf(err))
-		return false, nil
-	}
-	legacyLogoutAccepted.Load().Accepted(ctx)
-	return h.Sessions.RevokeLegacy(ctx, legacy, actor)
 }
 
 // writeCompatModel writes a 200 response_model body as go-api does, marked

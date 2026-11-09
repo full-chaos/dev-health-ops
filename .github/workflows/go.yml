@@ -148,6 +148,8 @@ on:
       # CHAOS-11418: the go-quality leg list; a change to it alone changes which legs go-quality starts
       - 'ci/go_quality_legs.json'
       - 'ci/*.d/**'
+      # the users-writer census (internal/auth/writerinventory) reads this seed's INSERT INTO users
+      - 'ci/pdp_load_k3s/*.sql'
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.

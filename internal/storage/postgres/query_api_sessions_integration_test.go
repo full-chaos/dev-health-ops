@@ -288,3 +288,59 @@ func TestQueryAPIPostureRefusesAnExtraOrMissingPlatformColumn(t *testing.T) {
 		}
 	}
 }
+
+// With real column privileges: the widened session read, granted on top of the
+// old one, is ready; one more auth column, or a part of the widening, is refused
+// and the refusal names the column.
+func TestQueryAPIPostureAcceptsTheWidenedSessionReadExactly(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	h := startQueryAPISessionsHarness(t, ctx, true)
+	for _, statement := range []string{
+		"ALTER TABLE auth.sessions ADD COLUMN created_at timestamptz, ADD COLUMN web_session_id uuid",
+		"CREATE TABLE auth.users (principal_id uuid PRIMARY KEY, password_updated_at timestamptz, password_hash text)",
+	} {
+		if _, err := h.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	read := QueryAPISessionReadFor("auth", false)
+	if err := h.applyLeg(ctx, &read); err != nil {
+		t.Fatalf("the migrate leg: %v", err)
+	}
+	if err := h.check(t, ctx, &read); err != nil {
+		t.Fatalf("the old session read must be ready: %v", err)
+	}
+	for _, statement := range []string{
+		"GRANT SELECT (created_at, web_session_id) ON auth.sessions TO " + h.role,
+		"GRANT SELECT (principal_id, password_updated_at) ON auth.users TO " + h.role,
+	} {
+		if _, err := h.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	if err := h.check(t, ctx, &read); err != nil {
+		t.Fatalf("the widened session read must be ready: %v", err)
+	}
+	exec := func(statement string) {
+		t.Helper()
+		if _, err := h.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	refused := func(after, want string) {
+		t.Helper()
+		err := h.check(t, ctx, &read)
+		if err == nil || !errors.Is(err, ErrPostureRefused) || !strings.Contains(err.Error(), want) {
+			t.Errorf("after %s: %v, want a refusal naming %s", after, err, want)
+		}
+	}
+	exec("GRANT SELECT (password_hash) ON auth.users TO " + h.role)
+	refused("the widened read plus users.password_hash", "auth.users.password_hash")
+	exec("REVOKE SELECT (password_hash) ON auth.users FROM " + h.role)
+	if err := h.check(t, ctx, &read); err != nil {
+		t.Fatalf("the widened session read again: %v", err)
+	}
+	exec("REVOKE SELECT (web_session_id) ON auth.sessions FROM " + h.role)
+	refused("a part of the widening", "auth.sessions.web_session_id")
+}

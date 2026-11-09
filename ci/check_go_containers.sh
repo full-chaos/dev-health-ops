@@ -308,7 +308,8 @@ smoke_target() {
   startup_args=()
   case "${target}" in
     auth-service)
-      # auth-service refuses to start without a DSN and a key id (syntactic
+      # auth-service refuses to start without a DSN, a key id and, for the
+      # eddsa class (the default), the token issuer URL (syntactic
       # configuration faults) but starts and fails /readyz CLOSED when the
       # database or the key file is unusable (dependency faults). The DSN
       # points at a closed local port and the key file does not exist, so the
@@ -319,6 +320,8 @@ smoke_target() {
         --env "AUTH_DATABASE_URI=postgres://smoke:smoke@127.0.0.1:1/smoke?sslmode=disable"
         --env "AUTH_SIGNING_KEY_FILE=/nonexistent/signing-key.pem"
         --env "AUTH_SIGNING_KEY_ID=container-smoke"
+        --env "AUTH_ACCESS_TOKEN_CLASS=eddsa"
+        --env "AUTH_TOKEN_ISSUER_URL=https://auth.container-smoke.example"
         --env "AUTH_SERVICE_OPERATOR_HTTP_ADDR=:8080"
         --env "AUTH_SERVICE_HEALTH_CHECK_TIMEOUT=200ms"
       )

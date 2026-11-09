@@ -140,6 +140,7 @@ internal/cigates/workflows	auth_corpus_closure_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_retry_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_test.go	unexpressed
+internal/cigates/workflows	auth_corpus_link_purge_behaviour_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_queue_test.go	cmd/auth-service
 internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed
 internal/cigates/workflows	auth_relevance_step_test.go	unexpressed

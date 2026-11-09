@@ -67,6 +67,7 @@ internal/auth/authruntime	authorize_corpus_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
 internal/auth/authruntime	query_api_accepts_integration_test.go
+internal/auth/authruntime	queryapi_enforce_parity_integration_test.go
 internal/auth/authruntime	session_routes_integration_test.go
 internal/auth/contracts	access_token_goldens_test.go
 internal/auth/contracts	audit_attribute_parity_test.go
@@ -143,6 +144,7 @@ internal/auth/workloadexchange	tokenreview.go
 internal/auth/workloadinput	workloadinput.go
 internal/auth/writerinventory	membership_census_test.go
 internal/auth/writerinventory	scan_test.go
+internal/auth/writerinventory	users_guard_census_test.go
 internal/auth/writerinventory	usersowned_census_shapes_test.go
 internal/auth/writerinventory	usersowned_census_test.go
 internal/authzenforce	census_test.go

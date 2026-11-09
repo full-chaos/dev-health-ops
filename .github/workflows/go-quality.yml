@@ -420,6 +420,7 @@ jobs:
           bash ci/go_worker_fixture_test.sh
           bash ci/pull_base_image_test.sh
           bash ci/retry_test.sh
+          bash ci/fetch_pinned_release_test.sh
           bash ci/ghcr_login_test.sh
           bash ci/auth_rotation_probe_test.sh
           bash ci/rehearse_auth_key_rotation_test.sh
@@ -589,7 +590,10 @@ jobs:
         # the nondeterminism this pins away. Checksum-verified, because an
         # unverified download is a pin on a name rather than on bytes.
         # Installed under RUNNER_TEMP and put on PATH via GITHUB_PATH so no
-        # step needs sudo.
+        # step needs sudo. CHAOS-13426: the download is authenticated with the
+        # job token (contents: read) and retried (ci/lib/fetch_pinned_release.sh).
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version=0.11.0
@@ -627,7 +631,7 @@ jobs:
               ;;
           esac
           tarball="shellcheck-v${version}.linux.${arch}.tar.gz"
-          curl -fsSL -o "${RUNNER_TEMP}/${tarball}" "https://github.com/koalaman/shellcheck/releases/download/v${version}/${tarball}"
+          bash ci/lib/fetch_pinned_release.sh koalaman/shellcheck "v${version}" "${tarball}" "${sha}" "${RUNNER_TEMP}/${tarball}"
           echo "${sha}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
           tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}"
           mkdir -p "${RUNNER_TEMP}/bin"

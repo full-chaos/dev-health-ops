@@ -568,6 +568,11 @@ func skipDir(path, name string) bool {
 
 // Scan walks root and returns every writer of a watched table in non-test Go files of the root module (nested modules, vendor and testdata are skipped).
 func Scan(root string, watched map[string]bool) ([]Writer, error) {
+	return scanVisit(root, watched, nil)
+}
+
+// scanVisit is Scan that also calls visit with each SQL string that holds a watched writer.
+func scanVisit(root string, watched map[string]bool, visit func(w Writer, sql string)) ([]Writer, error) {
 	byDir := map[string][]string{}
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -592,6 +597,9 @@ func Scan(root string, watched map[string]bool) ([]Writer, error) {
 		for _, tv := range sqlWriters(sql, watched) {
 			w := Writer{File: file, Func: fn, Table: tv[0], Verb: tv[1]}
 			seen[w.Key()] = w
+			if visit != nil {
+				visit(w, sql)
+			}
 		}
 	}
 	fset := token.NewFileSet()

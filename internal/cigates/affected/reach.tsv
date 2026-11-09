@@ -819,7 +819,6 @@ internal/testsupport/bigboydir	bigboydir.go	internal/cigates/chpin
 internal/testsupport/bigboydir	bigboydir.go	internal/cigates/routing
 internal/testsupport/bigboydir	bigboydir.go	internal/ingressplanes
 internal/testsupport/bigboydir	bigboydir.go	internal/testsupport/bigboydir
-internal/testsupport/corpusmatrix	matrix.go	internal/testsupport/corpusmatrix
 internal/testsupport/goldenscan	tree.go	internal/cigates/gitleaksignore
 internal/testsupport/goldenscan	tree.go	internal/testsupport/goldenscan/treegate
 internal/testsupport/goldenscan	tree.go	internal/testsupport/recordedfiles/manifest
@@ -837,11 +836,6 @@ internal/testsupport/ratchet	ratchet.go	internal/testsupport/ratchet/cmd/ratchet
 internal/testsupport/recordedfiles	recordedfiles.go	internal/testsupport/goldenscan/treegate
 internal/testsupport/recordedfiles	recordedfiles.go	internal/testsupport/recordedfiles
 internal/testsupport/recordedfiles	recordedfiles.go	internal/testsupport/recordedfiles/manifest
-internal/testsupport/sessionscenario	quirks.go	internal/testsupport/sessionscenario
-internal/testsupport/sessionscenario	sessionscenario.go	internal/api/session
-internal/testsupport/sessionscenario	sessionscenario.go	internal/auth/identity/local
-internal/testsupport/sessionscenario	sessionscenario.go	internal/testsupport/corpusmatrix
-internal/testsupport/sessionscenario	sessionscenario.go	internal/testsupport/sessionscenario
 internal/testsupport/venueoracle	external.go	internal/api/githubapp
 internal/testsupport/venueoracle	external.go	internal/api/integrationsadmin/backfillvenue
 internal/testsupport/venueoracle	external.go	internal/api/integrationsadmin/discoveryvenue

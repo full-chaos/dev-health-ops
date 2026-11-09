@@ -77,8 +77,8 @@ func TestTheRateLimitKeyIsRequiredWhateverTheRetiredHS256KeyHolds(t *testing.T) 
 	delete(env, EnvRateLimitKey)
 	env[retiredHS256Key] = strings.Repeat("leftover-hs256-", 3)
 	_, err := Load(Spec{LookupEnv: lookupFrom(env)})
-	if err == nil || !strings.Contains(err.Error(), EnvRateLimitKey) {
-		t.Fatalf("got %v, want a refusal naming %s", err, EnvRateLimitKey)
+	if err == nil || !strings.Contains(err.Error(), EnvRateLimitKey+" is required") {
+		t.Fatalf("got %v, want a refusal saying %s is required", err, EnvRateLimitKey)
 	}
 	if strings.Contains(err.Error(), "leftover-hs256-") || strings.Contains(err.Error(), retiredKeySuccessorKey) {
 		t.Fatal("the refusal quotes a secret")

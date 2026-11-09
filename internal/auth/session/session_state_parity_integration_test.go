@@ -226,9 +226,14 @@ func TestSessionStateParityOnWriterRows(t *testing.T) {
 	type row struct {
 		name           string
 		principal, sid uuid.UUID
+		// wantOld, wantNew are set only on the one named row whose mint refusal class moves (acp: not an
+		// answer change; the refusal stays); every other row must answer the same.
+		wantOld, wantNew string
 	}
 	var rows []row
-	add := func(name string, principal, sid uuid.UUID) { rows = append(rows, row{name, principal, sid}) }
+	add := func(name string, principal, sid uuid.UUID) {
+		rows = append(rows, row{name: name, principal: principal, sid: sid})
+	}
 
 	p := e.principal(t, ctx)
 	live, err := e.sessions.Create(ctx, p, nil, []string{"pwd"})
@@ -266,7 +271,11 @@ func TestSessionStateParityOnWriterRows(t *testing.T) {
 	if _, err := e.identity.SetPasswordHashFor(ctx, changed, "parity-hash-2", identity.Actor{}, identity.PasswordChanged, nil); err != nil {
 		t.Fatalf("SetPasswordHashFor: %v", err)
 	}
-	add("password changed after the session (identity.SetPasswordHashFor, no session end)", changed, before.Session.ID)
+	// The writer stamps the password and bumps the public token_version in one transaction: go-api refuses
+	// the older session either way (pin, now revoke: the same 401); the CI mint pre-check refuses it either way,
+	// its class moving from ErrSessionPin to ErrSessionNotLive (acp ruling: accepted, named here).
+	rows = append(rows, row{name: "password changed after the session (identity.SetPasswordHashFor, no session end)", principal: changed, sid: before.Session.ID,
+		wantOld: "refused | mint refused (stale pin)", wantNew: "refused | mint refused (not live)"})
 	after, err := e.sessions.Create(ctx, changed, nil, []string{"pwd"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -276,7 +285,12 @@ func TestSessionStateParityOnWriterRows(t *testing.T) {
 	for _, r := range rows {
 		old, now := e.both(t, ctx, r.principal, r.sid)
 		t.Logf("%s: old %q, new %q", r.name, old, now)
-		if old != now {
+		switch {
+		case r.wantOld != "":
+			if old != r.wantOld || now != r.wantNew {
+				t.Errorf("STOP (rule 1): %s: old %q, new %q; want exactly old %q, new %q", r.name, old, now, r.wantOld, r.wantNew)
+			}
+		case old != now:
 			t.Errorf("STOP (rule 1): %s: old %q, new %q", r.name, old, now)
 		}
 	}

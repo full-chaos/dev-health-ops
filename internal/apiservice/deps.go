@@ -227,8 +227,12 @@ type Deps struct {
 	// OrgState reads the organization's state in auth-service whose revision the two verbs above send; set with them.
 	OrgState orgreactivate.StateReader
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the go-api
-	// routes and verbs that write public.users refuse.
+	// routes and verbs that write public.users refuse; the admin users routes
+	// send their writes to auth-service through UsersAdmin.
 	UsersOwned bool
+	// UsersAdmin is the client of auth-service's user-admin routes while users
+	// are owned, built from the shared workload token; nil otherwise.
+	UsersAdmin authprovision.UsersAdmin
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
 	// from the auth platform role assignments and a public is_superuser write
 	// refuses.

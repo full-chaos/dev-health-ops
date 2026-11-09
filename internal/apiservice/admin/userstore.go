@@ -293,8 +293,9 @@ func (s pgStore) updateUser(ctx context.Context, id uuid.UUID, patch userUpdate)
 	if err != nil || existing == nil {
 		return existing, err
 	}
+	decided := decideUserUpdate(existing, patch)
 	email := existing.Email
-	if patch.Email != nil && *patch.Email != "" && pythonparity.Lower(*patch.Email) != existing.Email {
+	if decided.EmailCheck {
 		if other, err := s.userByEmail(ctx, *patch.Email); err != nil {
 			return nil, err
 		} else if other != nil {
@@ -305,11 +306,7 @@ func (s pgStore) updateUser(ctx context.Context, id uuid.UUID, patch userUpdate)
 	username := existing.Username
 	if patch.Username != nil {
 		if *patch.Username != "" {
-			currentLower := ""
-			if existing.Username != nil {
-				currentLower = pythonparity.Lower(*existing.Username)
-			}
-			if pythonparity.Lower(*patch.Username) != currentLower {
+			if decided.UsernameCheck {
 				if other, err := s.userByUsername(ctx, *patch.Username); err != nil {
 					return nil, err
 				} else if other != nil {

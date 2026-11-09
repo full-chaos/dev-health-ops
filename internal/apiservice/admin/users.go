@@ -244,10 +244,6 @@ var createUserRoles = map[string]bool{"admin": true, "member": true, "viewer": t
 // transaction, because the org Users list reads users JOIN memberships. A
 // superuser with no org scope creates a platform user with no membership.
 func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
-	if err := h.store.refuseWhileUsersOwned(); err != nil {
-		writeUsersOwned(w)
-		return
-	}
 	caller := policy.UserFrom(r.Context())
 	ctx := r.Context()
 	body := bodyFromContext(ctx)
@@ -282,7 +278,7 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
-	if refuseSuperuserWhileOwned(h.store.PlatformRolesOwned, isSuperuser) != nil {
+	if !h.store.UsersOwned && refuseSuperuserWhileOwned(h.store.PlatformRolesOwned, isSuperuser) != nil {
 		writePlatformRolesOwned(w)
 		return
 	}
@@ -298,9 +294,7 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		providerID = &authProviderID
 	}
 	if identity.RefuseInvalidProviderID(provider, providerID) != nil {
-		invalid := pybody.Errors{{Type: "value_error", Loc: []pyjson.Value{"body", "auth_provider_id"},
-			Msg: "Value error, auth_provider_id must be a valid provider id when auth_provider is not local"}}
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(invalid), nil)
+		writeInvalidProviderID(w)
 		return
 	}
 
@@ -337,6 +331,10 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if authProviderIDPresent {
 		in.AuthProviderID = &authProviderID
+	}
+	if h.store.UsersOwned {
+		h.createUserInAuth(ctx, w, r, caller, in, password, orgID, role)
+		return
 	}
 	h.superuserGuardedWrite(ctx, w, policy.UserFrom(ctx), &isSuperuser, "create_user", func(g *superuserTx) func() {
 		if g.refuse() {
@@ -437,10 +435,6 @@ func (h *handlers) insertUserWithMembership(ctx context.Context, r *http.Request
 
 // updateUser is users.py's update_user.
 func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
-	if err := h.store.refuseWhileUsersOwned(); err != nil {
-		writeUsersOwned(w)
-		return
-	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
 	orgIDRaw, ok := orgIDForNonSuperuser(ctx, w, user)
@@ -457,7 +451,7 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
-	if refuseSuperuserWhileOwned(h.store.PlatformRolesOwned, patch.IsSuperuser != nil) != nil {
+	if !h.store.UsersOwned && refuseSuperuserWhileOwned(h.store.PlatformRolesOwned, patch.IsSuperuser != nil) != nil {
 		writePlatformRolesOwned(w)
 		return
 	}
@@ -477,6 +471,10 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.ensureUserInScope(ctx, w, user, orgID, targetID) {
+		return
+	}
+	if h.store.UsersOwned {
+		h.updateUserInAuth(ctx, w, user, orgID, existing, patch)
 		return
 	}
 
@@ -515,10 +513,6 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 // (ADMIN_PASSWORD_LIMIT), requires the ACTING admin's own password, and
 // audits the change.
 func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
-	if err := h.store.refuseWhileUsersOwned(); err != nil {
-		writeUsersOwned(w)
-		return
-	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
 	orgIDRaw, ok := orgIDForNonSuperuser(ctx, w, user)
@@ -564,6 +558,10 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.ensureUserInScope(ctx, w, user, orgID, targetID) {
+		return
+	}
+	if h.store.UsersOwned {
+		h.setUserPasswordInAuth(ctx, w, r, user, target, orgID, adminPassword, newPassword)
 		return
 	}
 	// The guard, the password UPDATE, the refresh_tokens revocation, and the
@@ -666,10 +664,6 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 // stays, is_active false; a repeat answers 404 like a deleted user); ?force=true deletes the row for good and keeps the audit, billing-audit and refund rows with a null
 // user. The answer is {"deleted": true} in both modes.
 func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
-	if err := h.store.refuseWhileUsersOwned(); err != nil {
-		writeUsersOwned(w)
-		return
-	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
 	orgIDRaw, ok := orgIDForNonSuperuser(ctx, w, user)
@@ -692,6 +686,10 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 			mode = DeleteForce
 		}
 	}
+	if h.store.UsersOwned && mode == DeleteForce {
+		writeUsersOwned(w)
+		return
+	}
 	existing, err := h.store.fullUserByID(ctx, targetID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: delete user lookup failed", "error", err)
@@ -708,6 +706,10 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.ensureUserInScope(ctx, w, user, orgID, targetID) {
+		return
+	}
+	if h.store.UsersOwned {
+		h.deleteUserInAuth(ctx, w, user, orgID, existing)
 		return
 	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "delete_user", func(g *superuserTx) func() {

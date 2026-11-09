@@ -453,8 +453,9 @@ func TestOnlyAdminOrgsIsThePlatformAdminPath(t *testing.T) {
 	}
 }
 
-// Each refusal ahead of the platform question still holds for a platform admin: a delegated bearer, a live
-// impersonation session and a token with no organization send no revoke and read no membership.
+// Each refusal ahead of the platform question still holds for a platform admin: a delegated bearer (here admitted by
+// its row, so the handler's own refusal decides), a live impersonation session and a token with no organization send
+// no revoke and read no membership.
 func TestAPlatformAdminKeepsTheRefusals(t *testing.T) {
 	user, org, actor := uuid.New(), uuid.New(), uuid.New()
 	cases := []struct {
@@ -462,7 +463,10 @@ func TestAPlatformAdminKeepsTheRefusals(t *testing.T) {
 		plant func(*fixture) string
 		body  string
 	}{
-		{"delegated bearer", func(f *fixture) string { return f.sign(user, org.String(), &actor) }, bodyImpersonal},
+		{"delegated bearer", func(f *fixture) string {
+			f.auth.DelegatedRows(func(string) bool { return true })
+			return f.sign(user, org.String(), &actor)
+		}, bodyImpersonal},
 		{"live impersonation session", func(f *fixture) string {
 			f.store.sessions[user] = &policy.Impersonation{ID: uuid.New(), AdminUserID: user, TargetUserID: uuid.New(), TargetOrgID: org,
 				TargetRole: "member", ExpiresAt: time.Now().Add(time.Hour)}

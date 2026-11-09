@@ -17,6 +17,7 @@ internal/api/integrationsadmin/discoveryvenue	discover_venue_oracle_integration_
 internal/api/policy	accessroute_test.go	.	tree	*.go
 internal/api/policy	delegated_test.go	internal/api	tree	*
 internal/api/policy	delegated_test.go	internal/apiservice	tree	*
+internal/api/policy	platform_question_no_decision_point_cells_test.go	internal/api/policy	dir	*
 internal/api/policy	principalonce_test.go	unexpressed	-	-
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/syncadmin	dataset_writer_census_test.go	unexpressed	-	*.go
@@ -152,6 +153,7 @@ internal/chmigrate	archive_test.go	internal/chmigrate/archive/sql	dir	*
 internal/chmigrate	rollback_version_row_test.go	internal/chmigrate/rollback	dir	*
 internal/cigates/abstime	abstime.go	unexpressed	-	-
 internal/cigates/affected	plan.go	unexpressed	-	-
+internal/cigates/affected	reach.go	unexpressed	-	-
 internal/cigates/affected	reachcache.go	unexpressed	-	-
 internal/cigates/affected	scan.go	unexpressed	-	*.go
 internal/cigates/affected	scan.go	unexpressed	-	-
@@ -521,7 +523,6 @@ internal/testsupport/idpstub	boundary_test.go	internal/testsupport/idpstub	tree	
 internal/testsupport/moduleroot	moduleroot_test.go	unexpressed	-	*.go
 internal/testsupport/providerstub	stub.go	unexpressed	-	-
 internal/testsupport/recordedfiles	recordedfiles.go	unexpressed	-	-
-internal/testsupport/venuechanged	closure_test.go	ci/venue_oracle_closure.d	dir	*
 internal/testsupport/venuechanged	closure_test.go	ci/venue_oracle_registry.d	dir	*
 internal/testsupport/venuechanged	trigger_coverage_test.go	ci/venue_oracle_registry.d	dir	*
 internal/testsupport/venuechanged	trigger_coverage_test.go	unexpressed	-	-

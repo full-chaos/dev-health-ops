@@ -29,10 +29,8 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/google/uuid"
 )
@@ -198,14 +196,15 @@ func restBoundDetail(bound chclient.Bound) string {
 // attach to the request context, matching every REST route's existing
 // entryHandler shape.
 //
-// edgeVerifier is nil when AUTH_ACCESS_TOKEN_ISSUER is unset; then every
-// bearer token goes through the envelope verifier alone. When it is set, a
-// user access token or a retired HS256 edge token (principal.AccessClassOf)
-// goes to the routed verifier, which refuses the HS256 one alg_not_allowed;
-// every other token is verified by the envelope verifier as before. Either
-// refusal answers the identical "Invalid or expired token" body:
-// get_current_user never distinguishes WHY a token was rejected, only THAT it
-// was.
+// edgeVerifier is nil when AUTH_ACCESS_TOKEN_ISSUER is unset; then no bearer
+// is accepted. When it is set, a user access token or a retired HS256 edge
+// token (principal.AccessClassOf) goes to the routed verifier, which judges
+// the user access token by the route's row and refuses the HS256 one
+// alg_not_allowed. Every other bearer, the retired effective-principal
+// envelope included, is an unaccepted class. Each refusal answers the
+// identical "Invalid or expired token" body: get_current_user never
+// distinguishes WHY a token was rejected, only THAT it was. verifier is not
+// read: the envelope class is retired and no route verifies it any more.
 func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier, edgeVerifier *principal.EdgeVerifier, component string) (authctx.Claims, bool) {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
@@ -222,15 +221,8 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 		return authenticateRESTRouted(w, r, edgeVerifier, token, component)
 	}
 
-	verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-	claims, err := verifier.Verify(verifyCtx, token)
-	if err != nil {
-		writeRESTUnauthorized(w, r, component, "Invalid or expired token")
-		return authctx.Claims{}, false
-	}
-	pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassEnvelope, routeProfile(r))
-	observeRESTShadow(r, token, claims.OrgID, policy.ShadowCallerMember, claims.ImpersonationActive || (claims.ImpersonatedBy != nil && *claims.ImpersonatedBy != ""), true)
-	return legacyClaims(claims.OrgID), true
+	writeRESTUnauthorized(w, r, component, "Invalid or expired token")
+	return authctx.Claims{}, false
 }
 
 // echoRequestID puts the caller's X-Request-Id on the response so an operator

@@ -335,13 +335,13 @@ func (e *Enforcer) askBatch(ctx context.Context, requests []pep.Request) (decisi
 	return e.decider.DecideBatch(ctx, requests), false
 }
 
-// unjudgedReason says why the decision point cannot judge a request, or "" when it can. A token that is not a user
-// access token comes first: nothing else can be said of it. A served organization that parses as no UUID is no_org:
+// unjudgedReason says why the decision point cannot judge a request, or "" when it can. No bearer, or a token that is
+// not a user access token, comes first: nothing else can be said of it. A served organization that parses as no UUID is no_org:
 // its handler refuses it.
 func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
 	switch {
 	case o.bearer == "" || !o.userAccessToken:
-		return enforceUnjudgedHS256
+		return enforceUnjudgedNoUserBearer
 	case row.ResourceType == policycatalog.ScopeOrganization && org == "", o.served.against(org) == servedOrgUnparsed:
 		return enforceUnjudgedNoOrg
 	}

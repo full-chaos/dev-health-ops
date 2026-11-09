@@ -135,10 +135,10 @@ func TestEnforcedFiveXXIsEqualPastTheGuardOnlyWithTheAllowProof(t *testing.T) {
 	t.Run("an unjudged count of another reason on the route", func(t *testing.T) {
 		run := fiveXXRun(500)
 		run.in.Log = adminLines(t, run, "match", "dec_ALLOW"+strings.Repeat("A", 20))
-		run.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"), unjudged(teamsKey, "hs256", "1"))
+		run.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"), unjudged(teamsKey, "no_user_bearer", "1"))
 		rep := run.judge()
 		if rep.VerdictCounts()[VerdictVoidParity] != 3 || rep.VerdictCounts()[VerdictEqualPastGuard] != 0 {
-			t.Fatalf("an hs256 unjudged count on the route did not void the parity: %v", rep.VerdictCounts())
+			t.Fatalf("a no_user_bearer unjudged count on the route did not void the parity: %v", rep.VerdictCounts())
 		}
 	})
 	for name, outcome := range map[string]string{"an error line": "error", "a dropped line": "dropped"} {

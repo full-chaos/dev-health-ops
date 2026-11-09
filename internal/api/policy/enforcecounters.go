@@ -42,8 +42,9 @@ func countEnforce(ctx context.Context, namespace, outcome string) {
 }
 
 const (
-	enforceUnjudgedHS256 = "hs256"
-	enforceUnjudgedNoOrg = "no_org"
+	// enforceUnjudgedNoUserBearer: the request has no bearer, or its token is not a user access token.
+	enforceUnjudgedNoUserBearer = "no_user_bearer"
+	enforceUnjudgedNoOrg        = "no_org"
 	// enforceUnjudgedServedOrg: the request serves another organization than the token's, or the token has none.
 	enforceUnjudgedServedOrg = "served_org"
 	// enforceUnjudgedImpersonation: a read by a caller with a live go-api impersonation row. The legacy answer stands
@@ -52,7 +53,7 @@ const (
 )
 
 // enforceUnjudgedReasons is the closed reason set of the unjudged counter.
-var enforceUnjudgedReasons = []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg, enforceUnjudgedServedOrg, enforceUnjudgedImpersonation}
+var enforceUnjudgedReasons = []string{enforceUnjudgedNoUserBearer, enforceUnjudgedNoOrg, enforceUnjudgedServedOrg, enforceUnjudgedImpersonation}
 
 type enforceUnjudgedAdder func(ctx context.Context, route, reason string)
 

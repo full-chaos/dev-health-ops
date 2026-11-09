@@ -1,6 +1,8 @@
 package devhealth_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -111,7 +113,7 @@ func TestSessionIssueCredentialWorkloadWithBootstrapRendersOneCredential(t *test
 }
 
 func TestSessionIssueCredentialSchemaRefusesOtherValues(t *testing.T) {
-	for _, set := range []string{"goApi.sessionIssue.credential=session_compat", "goApi.sessionIssue.credential=", "goApi.sessionIssue.credential=Workload"} {
+	for _, set := range []string{"goApi.sessionIssue.credential=session_compat", "goApi.sessionIssue.credential=token", "goApi.sessionIssue.credential=Workload"} {
 		_, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", set}, issueSessionsOn...)...)...)
 		if err == nil {
 			t.Errorf("%s was accepted", set)
@@ -138,8 +140,8 @@ func TestSessionIssueCredentialWorkloadSessionsOffRendersNothing(t *testing.T) {
 	}
 }
 
-// The chart schema admits only credential=workload, so "" cannot be rendered: the unset render is compared with the explicit-default block,
-// checked structurally, and the empty value is checked to be refused.
+// credential "" is the key absent (CHAOS-13467: a venue that layers values.prod.yaml unsets it this way): the unset render is compared
+// with the explicit-default block and with every way to write "", byte for byte, and checked structurally.
 func TestSessionIssueCredentialUnsetRendersTokenMode(t *testing.T) {
 	explicit := []string{"--set", "goApi.sessionIssue.secretName=", "--set", "goApi.sessionIssue.secretKey=AUTH_SESSION_ISSUE_TOKEN"}
 	cases := []struct {
@@ -172,11 +174,18 @@ func TestSessionIssueCredentialUnsetRendersTokenMode(t *testing.T) {
 		if (env["AUTH_SESSION_ISSUE_CREDENTIAL"] != nil) != c.cred {
 			t.Errorf("%s: AUTH_SESSION_ISSUE_CREDENTIAL present = %v, want %v", c.name, env["AUTH_SESSION_ISSUE_CREDENTIAL"] != nil, c.cred)
 		}
-		_, emptyOut, err := renderAuth(t, goAPIWithAuth(append(append([]string{}, c.sets...), "--set", "goApi.sessionIssue.credential=")...)...)
-		if err == nil {
-			t.Errorf("%s: credential=\"\" was accepted", c.name)
-		} else if !strings.Contains(emptyOut, "credential") {
-			t.Errorf("%s: the refusal does not name credential:\n%.400s", c.name, emptyOut)
+		for _, empty := range [][]string{
+			{"--set", "goApi.sessionIssue.credential="},
+			{"--set-string", "goApi.sessionIssue.credential="},
+			{"--set-json", `goApi.sessionIssue.credential=""`},
+			{"-f", emptyCredentialValues(t)},
+		} {
+			_, emptyOut, err := renderAuth(t, goAPIWithAuth(append(append([]string{}, c.sets...), empty...)...)...)
+			if err != nil {
+				t.Errorf("%s: credential \"\" (%s) was refused: %v\n%.400s", c.name, empty[0], err, emptyOut)
+			} else if emptyOut != unset {
+				t.Errorf("%s: credential \"\" (%s) differs from the key absent", c.name, empty[0])
+			}
 		}
 	}
 }
@@ -187,5 +196,37 @@ func TestSessionIssueCredentialWorkloadAcceptsOtherCaseSpellings(t *testing.T) {
 		if err != nil {
 			t.Errorf("extraEnv %q is a different variable in a container and was refused: %v\n%.400s", name, err, out)
 		}
+	}
+}
+
+// emptyCredentialValues is a values file that sets goApi.sessionIssue.credential to "", the form a venue values file uses.
+func emptyCredentialValues(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "empty-credential.yaml")
+	if err := os.WriteFile(p, []byte("goApi:\n  sessionIssue:\n    credential: \"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// The workload render is unchanged by the "" admission: the same env as before, one AUTH_SESSION_ISSUE_CREDENTIAL, no token reference.
+func TestSessionIssueCredentialWorkloadRenderUnchangedByEmptyAdmission(t *testing.T) {
+	docs, out, err := renderAuth(t, goAPIWithAuth(issueSets(issueWorkload...)...)...)
+	if err != nil {
+		t.Fatalf("render failed: %v\n%.400s", err, out)
+	}
+	env := siGoAPIEnv(t, docs)
+	if at(env["AUTH_SESSION_ISSUE_CREDENTIAL"], "value") != "workload" || env["AUTH_SESSION_ISSUE_TOKEN"] != nil {
+		t.Errorf("credential=workload render changed: %v", env)
+	}
+	if n := strings.Count(out, "name: AUTH_SESSION_ISSUE_CREDENTIAL"); n != 1 {
+		t.Errorf("AUTH_SESSION_ISSUE_CREDENTIAL rendered %d times, want 1", n)
+	}
+	_, unset, err := renderAuth(t, goAPIWithAuth(issueSets()...)...)
+	if err != nil {
+		t.Fatalf("render failed: %v\n%.400s", err, unset)
+	}
+	if unset == out {
+		t.Error("credential=workload renders the same as the key absent")
 	}
 }

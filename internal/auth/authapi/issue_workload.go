@@ -29,9 +29,9 @@ const (
 	// workload audience the registry gives the go-api workload.
 	issueWorkloadAudience = "auth-service"
 
-	// maxIssueBearerBytes bounds the bearer before any header is decoded. A
-	// workload token is under 600 bytes.
-	maxIssueBearerBytes = 2048
+	// maxIssueBearerBytes bounds the bearer before any header is decoded: the
+	// workload token bound, the one class these routes take.
+	maxIssueBearerBytes = contracts.WorkloadTokenMaxBytes
 )
 
 // issueRefusedPrefixes are the credential classes the issue route never takes:

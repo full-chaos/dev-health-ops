@@ -132,17 +132,19 @@ func normalize(t *testing.T, stdout string, clickhouse bool) string {
 // was recorded: table -> the migration that added it. The same tables are
 // named in internal/apiservice/admin's clickHouseOrgTablesAfterThePythonFreeze.
 var orgDeleteTablesAfterThePythonFreeze = map[string]string{
-	"work_item_dependency_first_seen":   "102_work_item_dependency_first_seen.sql",    // CHAOS-8574
-	"work_item_relations_read":          "103_work_item_relation_writer_and_read.sql", // CHAOS-8578
-	"work_item_blocked_durations_daily": "104_work_item_blocked_durations.sql",        // CHAOS-8489
-	"daily_metrics_run_marker":          "105_daily_metrics_run_marker.sql",           // CHAOS-8710
-	"daily_metrics_touched_days":        "108_daily_metrics_touched_days.sql",         // CHAOS-8813
-	"work_unit_investment_shadow":       "109_work_unit_investment_shadow.sql",        // CHAOS-8868
-	"llm_categorization_attempts":       "110_llm_categorization_attempts.sql",        // CHAOS-8868
-	"work_item_completion_daily":        "119_work_item_completion_daily.sql",         // CHAOS-9264
-	"work_item_measure_capability":      "111_work_item_measure_capability.sql",       // CHAOS-8895
-	"repo_change_failure_daily":         "112_change_failure_rate_incident_basis.sql", // CHAOS-8981
-	"work_unit_issue_size":              "130_work_unit_issue_size.sql",               // CHAOS-9807
+	"work_item_dependency_first_seen":       "102_work_item_dependency_first_seen.sql",    // CHAOS-8574
+	"work_item_relations_read":              "103_work_item_relation_writer_and_read.sql", // CHAOS-8578
+	"work_item_blocked_durations_daily":     "104_work_item_blocked_durations.sql",        // CHAOS-8489
+	"daily_metrics_run_marker":              "105_daily_metrics_run_marker.sql",           // CHAOS-8710
+	"daily_metrics_touched_days":            "108_daily_metrics_touched_days.sql",         // CHAOS-8813
+	"work_unit_investment_shadow":           "109_work_unit_investment_shadow.sql",        // CHAOS-8868
+	"llm_categorization_attempts":           "110_llm_categorization_attempts.sql",        // CHAOS-8868
+	"work_item_completion_daily":            "119_work_item_completion_daily.sql",         // CHAOS-9264
+	"work_item_measure_capability":          "111_work_item_measure_capability.sql",       // CHAOS-8895
+	"repo_change_failure_daily":             "112_change_failure_rate_incident_basis.sql", // CHAOS-8981
+	"work_unit_issue_size":                  "130_work_unit_issue_size.sql",               // CHAOS-9807
+	"project_team_ownership_groups_log":     "147_project_team_ownership_groups.sql",      // CHAOS-6347
+	"project_team_ownership_groups_current": "147_project_team_ownership_groups.sql",      // CHAOS-6347
 }
 
 // orgDeletePostgresTablesAfterThePythonFreeze names each PostgreSQL org-scoped table column a migration added

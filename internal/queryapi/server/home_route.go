@@ -29,7 +29,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -151,7 +150,7 @@ func buildHomeRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.Ha
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("home: build envelope verifier: %w", err)
 	}

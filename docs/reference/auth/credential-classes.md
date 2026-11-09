@@ -175,9 +175,9 @@ lifetime is at most 60 min, the ceiling of the retired HS256 token. The class is
 `unconsumed`: nothing mints or verifies it yet.
 The audiences `acr-api` and `acr-mcp` (scopes `acr:api` and `acr:mcp`) are ACR's: acr-api accepts `acr-api` only and acr-mcp `acr-mcp`
 only. go-api, query-api and auth-service refuse both. No ops platform token
-carries one: the session token settings (`AUTH_JWT_AUDIENCE`,
-`AUTH_LEGACY_JWT_AUDIENCE`, go-api's `JWT_AUDIENCE`), the HS256 edge-token
-verifier and signer, the envelope verifier and both minters refuse them. The
+carries one: the session token settings (`AUTH_JWT_AUDIENCE`, go-api's
+`JWT_AUDIENCE`), go-api's HS256 refresh-token verifier, the envelope verifier
+and both minters refuse them. The
 mint that will issue them is a separate one not built yet.
 
 **`workload_token`.** The EdDSA workload token of TRD section 11

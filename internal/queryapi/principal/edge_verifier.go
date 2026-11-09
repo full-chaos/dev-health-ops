@@ -5,13 +5,12 @@ import (
 	"fmt"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
-// EdgeAlgorithm is the alg of the retired HS256 edge access token
-// (edgetoken.Algorithm). AccessClassOf reads it from the header only, so such a
-// token reaches the routed validator, which refuses it alg_not_allowed.
-const EdgeAlgorithm = edgetoken.Algorithm
+// EdgeAlgorithm is the alg of the retired HS256 edge access token. AccessClassOf
+// reads it from the header only, so such a token reaches the routed validator,
+// which refuses it alg_not_allowed.
+const EdgeAlgorithm = "HS256"
 
 // OrgRequiredError is VerifyRouted's refusal of a valid token that names no
 // organization when the live users row is not a superuser's.

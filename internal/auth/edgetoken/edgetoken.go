@@ -24,6 +24,8 @@ const (
 	Algorithm = "HS256"
 	// MinSecretLength is _get_jwt_secret's floor.
 	MinSecretLength = 32
+	// RefreshType is the "type" claim of a refresh token.
+	RefreshType = "refresh"
 )
 
 // Rejection reasons. They name the class of failure, never the token.

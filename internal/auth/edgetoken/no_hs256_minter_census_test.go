@@ -12,8 +12,8 @@ import (
 // token.
 var hs256MinterAllowed = map[string]bool{"internal/api/githubapp/state.go": true}
 
-// No production file mints an HS256 access token: edgetoken.NewSigner has no caller and no file signs with
-// jwt.SigningMethodHS256 outside the allow list (CHAOS-13155).
+// No production file mints an HS256 access token: no file signs with jwt.SigningMethodHS256 outside the allow list
+// (CHAOS-13155), and the one refresh-token minter left is the test-only internal/testsupport/legacyjwt.
 func TestNoProductionFileMintsAnHS256AccessToken(t *testing.T) {
 	root := "../../.."
 	var bad []string
@@ -37,8 +37,8 @@ func TestNoProductionFileMintsAnHS256AccessToken(t *testing.T) {
 		if !hs256MinterAllowed[rel] && strings.Contains(text, "SigningMethodHS256") {
 			bad = append(bad, rel+": SigningMethodHS256")
 		}
-		if !strings.HasPrefix(rel, "internal/auth/edgetoken/") && strings.Contains(text, "edgetoken.NewSigner(") {
-			bad = append(bad, rel+": edgetoken.NewSigner")
+		if strings.Contains(text, "legacyjwt.NewSigner(") {
+			bad = append(bad, rel+": legacyjwt.NewSigner")
 		}
 		return nil
 	})

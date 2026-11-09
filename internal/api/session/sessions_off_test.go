@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/legacyjwt"
 )
 
 // With no session issuer (AUTH_PROXY_SESSIONS off) the routes that hand out a token pair answer 503 naming
@@ -77,11 +77,11 @@ func TestWithASessionIssuerNoRouteAnswersTheSessionsOffRefusal(t *testing.T) {
 func TestSessionsOffRefreshAnswersAValidGoAPIRefreshJWTWith503(t *testing.T) {
 	deps := completeDeps(t)
 	deps.Issuer = nil
-	signer, err := edgetoken.NewSigner("wiring-test-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
+	signer, err := legacyjwt.NewSigner("wiring-test-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := signer.Refresh(edgetoken.RefreshClaims{UserID: uuid.NewString(), OrgID: uuid.NewString(), FamilyID: uuid.NewString()},
+	token, err := signer.Refresh(legacyjwt.RefreshClaims{UserID: uuid.NewString(), OrgID: uuid.NewString(), FamilyID: uuid.NewString()},
 		time.Now(), uuid.NewString())
 	if err != nil {
 		t.Fatal(err)

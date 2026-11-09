@@ -62,14 +62,13 @@ var (
 // package: not logged, not exported, not part of any value.
 const rateLimitKeyInfo = "dev-health/auth-service/ratelimit-key/v1"
 
-// minRateLimitSecretBytes is authconfig's floor for AUTH_JWT_SECRET_KEY and AUTH_RATE_LIMIT_KEY.
+// minRateLimitSecretBytes is authconfig's floor for AUTH_RATE_LIMIT_KEY.
 const minRateLimitSecretBytes = 32
 
 // Limits is what a limited route counts with: the shared counter store and the
 // key that digests an e-mail, a link secret or a principal id before it is
 // part of a counter key. The key is HKDF-SHA256 of the secret NewLimits is
-// given (AUTH_RATE_LIMIT_KEY, else the session signing secret
-// AUTH_JWT_SECRET_KEY); rotating it resets the buckets.
+// given (AUTH_RATE_LIMIT_KEY); rotating it resets the buckets.
 type Limits struct {
 	store httpapi.CounterStore
 	key   []byte

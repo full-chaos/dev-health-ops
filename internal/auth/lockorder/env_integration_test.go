@@ -47,6 +47,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/legacyjwt"
 )
 
 // env is one Postgres with go-api's schema and the auth schema, the auth
@@ -81,7 +82,7 @@ type env struct {
 	// issuePlane is go-api's workload principal and its token key: the session
 	// issue route takes only the go-api workload token.
 	issuePlane *issuePlane
-	signer     *edgetoken.Signer
+	signer     *legacyjwt.Signer
 	// tokens mints the routed EdDSA user access tokens go-api's routes verify.
 	tokens     *edtokens.Issuer
 	linkSecret string
@@ -216,7 +217,7 @@ func newEnv(t *testing.T) (*env, error) {
 	if err != nil {
 		return nil, err
 	}
-	if e.signer, err = edgetoken.NewSigner(jwtKey, "dev-health-ops", "dev-health-api"); err != nil {
+	if e.signer, err = legacyjwt.NewSigner(jwtKey, "dev-health-ops", "dev-health-api"); err != nil {
 		return nil, err
 	}
 	logger := slog.New(slog.NewTextHandler(e.goLog, nil))

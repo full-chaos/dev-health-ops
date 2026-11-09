@@ -13,12 +13,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 // accessExpiresIn is TokenPair.expires_in and the refresh route's
-// expires_in: JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60.
-const accessExpiresIn = int64(edgetoken.AccessLifetime / time.Second)
+// expires_in: JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60 (60 minutes).
+const accessExpiresIn = int64(60 * time.Minute / time.Second)
 
 // tokenPair is a sign-in's tokens; session is auth-service's session-route
 // token under its eddsa class, empty otherwise.

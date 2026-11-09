@@ -85,7 +85,7 @@ func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, r
 		t.Fatal(err)
 	}
 	signer := token.NewFileSigner(token.FileConfig{KeyPath: keyPath, KeyID: "k1"})
-	issuer, err := authapi.NewEdDSAIssuer(random(), "dev-health-ops", "dev-health-api", signer, "https://auth.example.test")
+	issuer, err := authapi.NewEdDSAIssuer("dev-health-api", signer, "https://auth.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}

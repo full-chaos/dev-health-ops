@@ -10,6 +10,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -30,7 +31,7 @@ func newLegacyMinter(secret, issuer, audience string) (*legacyMinter, error) {
 
 func (m *legacyMinter) Access(grant Grant) (string, error) {
 	now := m.now()
-	expires, err := grantExpiry(grant, now, edgetoken.AccessLifetime)
+	expires, err := grantExpiry(grant, now, contracts.AccessTokenLifetimeCeiling)
 	if err != nil {
 		return "", err
 	}

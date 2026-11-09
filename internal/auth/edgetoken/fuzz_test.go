@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/legacyjwt"
 )
 
 // FuzzVerifyToken drives the HS256 refresh-token verifier with arbitrary
@@ -18,15 +20,15 @@ func FuzzVerifyToken(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	signer, err := NewSigner(secret, "issuer", "audience")
+	signer, err := legacyjwt.NewSigner(secret, "issuer", "audience")
 	if err != nil {
 		f.Fatal(err)
 	}
-	refresh, err := signer.Refresh(RefreshClaims{UserID: "u1", OrgID: "o1", FamilyID: "f1"}, time.Now(), "jti-1")
+	refresh, err := signer.Refresh(legacyjwt.RefreshClaims{UserID: "u1", OrgID: "o1", FamilyID: "f1"}, time.Now(), "jti-1")
 	if err != nil {
 		f.Fatal(err)
 	}
-	expired, err := signer.RefreshUntil(RefreshClaims{UserID: "u1"}, time.Now().Add(-48*time.Hour), time.Now().Add(-47*time.Hour), "jti-2")
+	expired, err := signer.RefreshUntil(legacyjwt.RefreshClaims{UserID: "u1"}, time.Now().Add(-48*time.Hour), time.Now().Add(-47*time.Hour), "jti-2")
 	if err != nil {
 		f.Fatal(err)
 	}

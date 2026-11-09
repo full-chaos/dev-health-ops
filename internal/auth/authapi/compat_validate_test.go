@@ -37,6 +37,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/legacyjwt"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
@@ -124,7 +125,7 @@ type validateFixture struct {
 	pgUsers   Users // replaces users when set
 	rows      *sessionRows
 	issuer    *Issuer
-	hs256     *edgetoken.Signer
+	hs256     *legacyjwt.Signer
 	signer    *token.Signer
 	logs      *bytes.Buffer
 	counters  httpapi.CounterStore
@@ -146,7 +147,7 @@ func newValidateFixture(t *testing.T, eddsa bool) *validateFixture {
 		LegacyTokenVersion: &pin}
 	admin, username := "admin", "ada"
 	issuer := newTestIssuer(t)
-	hs256, err := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
+	hs256, err := legacyjwt.NewSigner(testSecret, testIssuer, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +360,7 @@ func hs256AccessToken(t testing.TB, subject, org string, tv int64, sid *string) 
 // the session-route token of the same mint).
 func (f *validateFixture) eddsaToken(audience string) string {
 	f.t.Helper()
-	issuer, err := NewEdDSAIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience, f.signer, goldenIssuer)
+	issuer, err := NewEdDSAIssuer(contracts.PlatformAPIAudience, f.signer, goldenIssuer)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -488,7 +489,7 @@ func TestValidateCompatC3EndedSessionsAndStaleVersionsAreRefused(t *testing.T) {
 // and the recorded Python answers where the corpus has them.
 func TestValidateCompatC4RefusedInputsAnswerGoAPIsStatusAndBody(t *testing.T) {
 	f := newValidateFixture(t, true)
-	refresh, err := f.hs256.Refresh(edgetoken.RefreshClaims{UserID: f.principal.String(), OrgID: f.org.String()}, time.Now(), uuid.NewString())
+	refresh, err := f.hs256.Refresh(legacyjwt.RefreshClaims{UserID: f.principal.String(), OrgID: f.org.String()}, time.Now(), uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
 	}

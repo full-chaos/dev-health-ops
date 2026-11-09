@@ -38,7 +38,7 @@ func classConfigWith(t *testing.T, class string, extra map[string]string) authco
 		authconfig.EnvAccessTokenAudience: audience,
 		authconfig.EnvTokenIssuerURL:      "https://auth.example.test",
 		authconfig.EnvValkeyURI:           testValkeyURI,
-		authconfig.EnvAccessTokenSecret:   "class-test-access-secret-0123456789abcdef",
+		authconfig.EnvRateLimitKey:        "class-test-rate-limit-key-0123456789abcdef",
 		authconfig.EnvSessionSuccessorKey: base64.RawURLEncoding.EncodeToString([]byte("class-test-successor-key-0032-ab")),
 	}
 	for name, value := range extra {

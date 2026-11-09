@@ -25,15 +25,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
-
-const proxyTestKey = "fixture-key-fixture-key-fixture-key-"
 
 // proxyOrigin is the fixture's one CORS origin; register checks it.
 const proxyOrigin = "https://app.example"
@@ -205,17 +202,13 @@ func proxyFixtureRoutes(t *testing.T, cfg AuthProxyConfig) []httpapi.Route {
 
 func proxyFixtureRoutesLogging(t *testing.T, cfg AuthProxyConfig, logger *slog.Logger) []httpapi.Route {
 	t.Helper()
-	verifier, err := edgetoken.New(proxyTestKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth := proxyTokens.AuthenticatorOver(t, scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable&connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	return Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
+	return Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 		AuthProxy: cfg, Limits: httpapi.NewMemoryCounters(time.Now)}, logger)
 }
 

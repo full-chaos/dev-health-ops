@@ -16,7 +16,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
@@ -25,10 +24,6 @@ import (
 // impersonation refusal carries the mux pattern as its path, never the raw
 // request path.
 func TestSwitchOrgRefusalWarnNamesTheRoutePattern(t *testing.T) {
-	verifier, err := edgetoken.New(strings.Repeat("fixture-key-", 3), "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	tokens := edtokens.New(t)
 	store := &endableSessionStore{legacySessionStore: legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}}
 	auth := tokens.AuthenticatorOver(t, store, quietLogger())
@@ -55,7 +50,7 @@ func TestSwitchOrgRefusalWarnNamesTheRoutePattern(t *testing.T) {
 	t.Cleanup(pool.Close)
 	var logs bytes.Buffer
 	guardLogger := slog.New(slog.NewJSONHandler(&logs, nil))
-	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, guardLogger), Verifier: verifier,
+	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, guardLogger),
 		AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 	server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 	if err != nil {

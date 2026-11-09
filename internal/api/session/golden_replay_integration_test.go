@@ -24,7 +24,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -265,10 +264,6 @@ func startStackRouted(t *testing.T, ctx context.Context, mail authmail.Config, i
 	t.Setenv("SOCIAL_GOOGLE_CLIENT_SECRET", "")
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	verifier, err := edgetoken.New(sessionscenario.Key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	routesPool := pool
 	if routePool != nil {
 		routesPool = routePool(t, ctx, pool, pg.URI)
@@ -279,7 +274,7 @@ func startStackRouted(t *testing.T, ctx context.Context, mail authmail.Config, i
 	if issuer == nil {
 		issuer = stubIssuer{}
 	}
-	routes := session.Routes(session.Deps{Pool: routesPool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
+	routes := session.Routes(session.Deps{Pool: routesPool, Guard: policy.NewGuard(auth, logger), Auth: auth,
 		Mail: mail, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger,
 		Issuer: issuer, Provision: provision})
 	mux := http.NewServeMux()

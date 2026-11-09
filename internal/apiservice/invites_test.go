@@ -48,7 +48,7 @@ func TestInviteConfigCarriesTheLinkSecrets(t *testing.T) {
 	t.Setenv("EMAIL_PROVIDER", "console")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := config.Config{
-		APIJWTSecret: secrets.NewValue("jwt-key"), LinkTokenSecret: secrets.NewValue("link-new"),
+		LinkTokenSecret:         secrets.NewValue("link-new"),
 		LinkTokenSecretPrevious: secrets.NewValue("link-old"),
 	}
 	got := inviteConfig(cfg, logger, inviteLookup(nil))

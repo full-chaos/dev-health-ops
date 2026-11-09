@@ -4,9 +4,10 @@
 # p90 is the largest). Rows: every package of p90 >= 20 s, and every package that already had a row. A package with no row weighs 1. The weights only need to be roughly right: a wrong one
 # costs balance, never coverage (the shards always partition `go list ./...`). Key = import path relative to the module root.
 # Sorted (LC_ALL=C), no duplicates; internal/cigates/testshard checks each row names a real package.
+# CHAOS-13356: deploy/helm/dev-health, internal/cigates/outboundtransport and internal/gqlgenguard re-measured by the same rule over the go-quality test-1 legs of main 42566456600, 42560896652, 42559790848 and PR #5968 run 42566503520 (4 values each, so p90 is the largest).
 cmd/dho	93
 cmd/gqlgen-guard	64
-deploy/helm/dev-health	785
+deploy/helm/dev-health	993
 internal/api/credentials	31
 internal/api/policy	74
 internal/api/syncadmin	141
@@ -32,7 +33,7 @@ internal/cigates/docs	62
 internal/cigates/docstools	60
 internal/cigates/emitscan	24
 internal/cigates/integrationshards	753
-internal/cigates/outboundtransport	390
+internal/cigates/outboundtransport	410
 internal/cigates/proofteardown	39
 internal/cigates/racescope	69
 internal/cigates/raceunweighted	164
@@ -48,7 +49,7 @@ internal/cli	14
 internal/fixturescli	32
 internal/goapicli/restprove	15
 internal/goapiproof	51
-internal/gqlgenguard	399
+internal/gqlgenguard	319
 internal/httpguard	119
 internal/joboutbox	34
 internal/jobruntime	5

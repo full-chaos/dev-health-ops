@@ -295,7 +295,6 @@ func gateDivergences(t *testing.T) map[string]string {
 // than the Authorization header), reads no signing key and no store row, asks the shadow PDP nothing, and on a
 // protected row is a 4xx. The accept controls show the rig tells an accepted class from a refused one.
 func runGoAPIGate(t *testing.T, divergences map[string]string, errorf func(format string, args ...any)) wrongclass.Census {
-	t.Helper()
 	rig := newGateRig(t)
 	rows, err := wrongclass.LoadRows(authv1.GoAPIEndpointProfiles)
 	if err != nil {
@@ -429,5 +428,26 @@ func TestWrongClassGateFailsOnAStaleDivergence(t *testing.T) {
 	want := "ledger stale-probe (CHAOS-0) names " + stale + ", whose wrong-class cells all answer 4xx (or no such row): remove the ledger row"
 	if len(failures) != 1 || failures[0] != want {
 		t.Fatalf("failures %q, want exactly %q", failures, want)
+	}
+}
+
+// With no ledger row, every G3 cell of the rows the ledger names fails, and nothing else does: the ledger excuses
+// exactly its named rows.
+func TestWrongClassGateExcusesOnlyTheNamedRows(t *testing.T) {
+	named := gateDivergences(t)
+	var failures []string
+	runGoAPIGate(t, map[string]string{}, func(format string, args ...any) { failures = append(failures, fmt.Sprintf(format, args...)) })
+	failed := map[string]bool{}
+	for _, failure := range failures {
+		profile, _, _ := strings.Cut(failure, " [")
+		if _, ok := named[profile]; !ok || !strings.HasSuffix(failure, "want a 4xx refusal") {
+			t.Errorf("a failure outside the named G3 cells: %s", failure)
+		}
+		failed[profile] = true
+	}
+	for profile := range named {
+		if !failed[profile] {
+			t.Errorf("%s: no G3 failure without its ledger row", profile)
+		}
 	}
 }

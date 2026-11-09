@@ -151,9 +151,10 @@ test("the row schema (strict ajv) requires class_disambiguator on a row that acc
   const ajv = new Ajv2020({ strict: true, allErrors: true });
   addFormats(ajv);
   const validate = ajv.compile(JSON.parse(readFileSync(path.join(v1, "endpoint-profile.schema.json"), "utf8")));
-  const document = JSON.parse(readFileSync(path.join(v1, "endpoint-profiles.query-api.json"), "utf8"));
+  // The go-api inventory: the query-api one holds no row that accepts two classes since its envelope class was retired.
+  const document = JSON.parse(readFileSync(path.join(v1, "endpoint-profiles.go-api.json"), "utf8"));
   assert.equal(validate(document), true, JSON.stringify(validate.errors));
-  const row = document.rows.find((r) => r.class_disambiguator);
+  const row = document.rows.find((r) => r.class_disambiguator && r.accepted_credential_classes.length > 1);
   delete row.class_disambiguator;
   assert.equal(validate(document), false);
 });
@@ -206,7 +207,8 @@ test("the row schema (strict ajv) rejects a row that omits accepted_credential_c
   const ajv = new Ajv2020({ strict: true, allErrors: true });
   addFormats(ajv);
   const validate = ajv.compile(JSON.parse(readFileSync(path.join(v1, "endpoint-profile.schema.json"), "utf8")));
-  const read = () => JSON.parse(readFileSync(path.join(v1, "endpoint-profiles.query-api.json"), "utf8"));
+  // The go-api inventory holds rows with and without a selector; the query-api one has none with a selector.
+  const read = () => JSON.parse(readFileSync(path.join(v1, "endpoint-profiles.go-api.json"), "utf8"));
   assert.equal(validate(read()), true, JSON.stringify(validate.errors));
   for (const withSelector of [true, false]) {
     const document = read();

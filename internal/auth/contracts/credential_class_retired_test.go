@@ -10,6 +10,8 @@ import (
 	"testing"
 )
 
+const envelopeClass = "effective_principal_envelope"
+
 // endpointProfileInventories are the three ops inventories; a missing one is a gate failure, not a pass.
 var endpointProfileInventories = []string{"endpoint-profiles.go-api.json", "endpoint-profiles.query-api.json", "endpoint-profiles.auth-service.json"}
 
@@ -84,6 +86,18 @@ func TestTheHS256AccessTokenClassIsRetired(t *testing.T) {
 	}
 	if !retired[legacyHS256Class] {
 		t.Fatalf("%s is not status retired in credential-classes.json", legacyHS256Class)
+	}
+}
+
+// The effective-principal envelope is retired: no endpoint-profile row may accept it, and query-api refuses it on every
+// plane with the answer an unaccepted bearer gets there.
+func TestTheEnvelopeClassIsRetired(t *testing.T) {
+	retired, err := retiredClassIDs(readContractFile(t, "credential-classes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retired[envelopeClass] {
+		t.Fatalf("%s is not status retired in credential-classes.json", envelopeClass)
 	}
 }
 

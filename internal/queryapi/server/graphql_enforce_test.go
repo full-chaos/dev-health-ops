@@ -618,21 +618,20 @@ func TestGraphQLEnforceDelegatedBearerIsJudgedForTheTargetOrg(t *testing.T) {
 	}
 }
 
-// G13 (as superseded by the caller-class split): the envelope is an exempt class on every server: with every cell on
-// it asks nothing, runs as today and counts once per action on the exempt counter.
-func TestGraphQLEnforceEnvelopeIsExempt(t *testing.T) {
+// G13, after the envelope class was retired: every ingress refuses the envelope, so it never reaches an operation. A
+// subject with the envelope's skip reason that did reach one names no class: with every cell on it is refused
+// (authz_enforce_no_principal) before any read, asks nothing and counts nothing on the exempt counter.
+func TestGraphQLEnforceEnvelopeIsNotAnExemptClass(t *testing.T) {
 	claims := authctx.Claims{OrgID: ecOrg.String(), Role: "admin", Scope: pepgate.Legacy(ecOrg.String())}
 	envelope := graph.ShadowSubject{Bearer: "envelope.jws.value", SkipReason: policy.ShadowReasonEnvelope}
-	legacy, _, _ := runRootsAs(t, nil, nil, claims, envelope, enforceDocTwo)
 	decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
 	gate, reader := enforceGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
 	got, asks, _ := runRootsAs(t, gate, decider, claims, envelope, enforceDocTwo)
-	if got != legacy || asks != 0 {
-		t.Fatalf("got %+v with %d asks, want today's %+v and no ask", got, asks, legacy)
+	if !strings.Contains(got.body, `"reason":"`+string(pdp.ReasonNoPrincipal)+`"`) || got.statements != 0 || asks != 0 {
+		t.Fatalf("got %+v with %d asks, want the authz_enforce_no_principal refusal, no read and no ask", got, asks)
 	}
-	exempt := (&gatedREST{reader: reader}).counter(t, "dev_health_query_api_pdp_exempt_total")
-	if exempt["action=analytics.read,class="+pdp.ClassEnvelope] != 1 || exempt["action=metrics.read,class="+pdp.ClassEnvelope] != 1 || len(exempt) != 2 {
-		t.Fatalf("exempt counts %v, want one per action for %s", exempt, pdp.ClassEnvelope)
+	if exempt := (&gatedREST{reader: reader}).counter(t, "dev_health_query_api_pdp_exempt_total"); len(exempt) != 0 {
+		t.Fatalf("exempt counts %v, want none", exempt)
 	}
 }
 

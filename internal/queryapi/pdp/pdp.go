@@ -51,10 +51,6 @@ const (
 	// ClientService names query-api to the PDP; it confers nothing.
 	ClientService = "dev-health-query-api"
 
-	// ClassEnvelope is the credential class that stays on today's authorization path, never asking the PDP, until the
-	// envelope retires (W11).
-	ClassEnvelope = "effective_principal_envelope"
-
 	callTimeout    = 2 * time.Second
 	unknownAction  = "unknown"
 	profileService = "dev-health-query-api"
@@ -67,8 +63,9 @@ const (
 	configInvalidMetric = "dev_health_query_api_pdp_config_invalid"
 )
 
-// ExemptClasses is the explicit exempt list.
-var ExemptClasses = []string{ClassEnvelope}
+// ExemptClasses is the explicit exempt list. It is empty: the HS256 access token and the effective-principal envelope,
+// the classes it held, are retired, and query-api accepts neither.
+var ExemptClasses = []string{}
 
 // Results are the closed values of the result label.
 const (

@@ -44,7 +44,8 @@ func mountedAdminRoutes(t *testing.T) []httpapi.Route {
 	}
 	t.Cleanup(pool.Close)
 	var out []httpapi.Route
-	for _, route := range Routes(Deps{Guard: policy.NewGuard(nil, nil), Pool: pool, ClickHouse: nilConn{}}, quietLogger()) {
+	// ServiceAccounts set: the lifecycle routes mount only with AUTH_PROXY_SERVICE_ACCOUNT_KEYS on.
+	for _, route := range Routes(Deps{Guard: policy.NewGuard(nil, nil), Pool: pool, ClickHouse: nilConn{}, ServiceAccounts: stubAccounts{}}, quietLogger()) {
 		if route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/") {
 			out = append(out, route)
 		}

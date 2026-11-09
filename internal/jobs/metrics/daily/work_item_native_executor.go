@@ -87,35 +87,36 @@ func (executor *WorkItemExecutor) ComputeFamily(
 	// more than the precision of computed_at apart; nothing here depends on
 	// it for which keys of the day hold a measure (see RunStaleKeyRetractor).
 	computedAt := executor.nowUTC()
-	read, triplet, err := computeWorkItemTriplet(ctx, executor.conn, run, partition, scope)
+	read, views, err := computeWorkItemTriplet(ctx, executor.conn, run, partition, scope)
 	if err != nil {
 		return 0, err
 	}
-	if len(read.Items) == 0 {
+	if read.empty() {
 		return 0, nil
 	}
 	slog.Default().DebugContext(ctx, "work_item_user_metrics_rows",
 		"org_id", run.OrganizationID, "day", scope.day.Format("2006-01-02"),
-		"user_rows", len(triplet.UserMetricsDaily), "persons_spanning_teams", triplet.UserRowsSpanningTeams)
-	recordUserRowsSpanningTeams(ctx, triplet.SpanningTeamsByProvider)
+		"user_rows", len(views.Org.UserMetricsDaily), "persons_spanning_teams", views.Org.UserRowsSpanningTeams)
+	recordUserRowsSpanningTeams(ctx, views.Org.SpanningTeamsByProvider)
 
 	// Each Write* call reports its true row count on an ambiguous Send error,
-	// so the count is added before the error check.
+	// so the count is added before the error check. Each view's rows are
+	// written under that view; cycle times are per item, from the org set.
 	total, err := WriteWorkItemMetricsDaily(
-		ctx, executor.conn, run.OrganizationID, scope.day, triplet.MetricsDaily, computedAt,
+		ctx, executor.conn, run.OrganizationID, scope.day, views.Org.MetricsDaily, views.Scope.MetricsDaily, computedAt,
 	)
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
 	written, err := WriteWorkItemUserMetricsDaily(
-		ctx, executor.conn, run.OrganizationID, scope.day, triplet.UserMetricsDaily, computedAt,
+		ctx, executor.conn, run.OrganizationID, scope.day, views.Org.UserMetricsDaily, views.Scope.UserMetricsDaily, computedAt,
 	)
 	total += written
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
 	written, err = WriteWorkItemCycleTimes(
-		ctx, executor.conn, run.OrganizationID, triplet.CycleTimes, computedAt,
+		ctx, executor.conn, run.OrganizationID, views.Org.CycleTimes, computedAt,
 	)
 	total += written
 	if err != nil {
@@ -124,22 +125,32 @@ func (executor *WorkItemExecutor) ComputeFamily(
 	return total, nil
 }
 
+// workItemTripletViews are the work_item rows of the day of each view: Org
+// from the org set, Scope from the scope set (see workItemScopeRead).
+type workItemTripletViews struct {
+	Org, Scope workitemmetrics.Triplet
+}
+
 // computeWorkItemTriplet reads the work scopes of the partition's repositories
-// and computes the work_item rows of the day. It writes nothing. The family
-// calls it for one partition; the run-level retraction of stale team keys
-// calls it for every repository of the run (RunStaleKeyRetractor), so both
-// derive the keys of the day from one compute.
+// and computes the work_item rows of the day, once per view. It writes
+// nothing. The family calls it for one partition; the run-level retraction of
+// stale team keys calls it for every repository of the run
+// (RunStaleKeyRetractor), so both derive the keys of the day from one compute.
 func computeWorkItemTriplet(
-	ctx context.Context, conn driver.Conn, run Run, partition Partition, scope workItemPartitionScope,
-) (workItemScopeRead, workitemmetrics.Triplet, error) {
+	ctx context.Context, conn repositoryRows, run Run, partition Partition, scope workItemPartitionScope,
+) (workItemScopeRead, workItemTripletViews, error) {
 	read, err := loadWorkItemScopeRead(ctx, conn, "work_item", run, partition, scope, true, true, true)
 	if err != nil {
-		return workItemScopeRead{}, workitemmetrics.Triplet{}, err
+		return workItemScopeRead{}, workItemTripletViews{}, err
 	}
-	if len(read.Items) == 0 {
-		return read, workitemmetrics.Triplet{}, nil
+	var views workItemTripletViews
+	if len(read.Items) > 0 {
+		views.Org = tripletFromWorkItemRows(scope.day, read.Items, read.Transitions, read.Attributions)
 	}
-	return read, tripletFromWorkItemRows(scope.day, read.Items, read.Transitions, read.Attributions), nil
+	if len(read.ScopeItems) > 0 {
+		views.Scope = tripletFromWorkItemRows(scope.day, read.ScopeItems, read.Transitions, read.ScopeAttributions)
+	}
+	return read, views, nil
 }
 
 // tripletFromWorkItemRows is the compute of the work_item family over loaded
@@ -165,6 +176,7 @@ func storedItemsOfRows(rows []workItemMetricsRow) []workitemmetrics.StoredItem {
 			ProjectKey: row.ProjectKey, ProjectID: row.ProjectID, NativeTeamKey: row.NativeTeamKey, ProjectName: row.ProjectName,
 			CreatedAt: row.CreatedAt, CompletedAt: row.CompletedAt,
 			Type: row.Type, Assignees: row.Assignees, StartedAt: row.StartedAt, ClosedAt: row.ClosedAt, StoryPoints: row.StoryPoints,
+			Scope: row.attributionScope,
 		})
 	}
 	return items

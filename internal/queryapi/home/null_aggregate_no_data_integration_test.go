@@ -54,7 +54,7 @@ func TestHomeMetricOverRowsWithNoValueIsNoDataNotAMeasuredZero(t *testing.T) {
 	workItems := func(day time.Time, row workitemmetrics.MetricsDailyRow) {
 		t.Helper()
 		row.Day, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName = day, "jira", "scope-1", "team-1", "Team One"
-		if _, err := daily.WriteWorkItemMetricsDaily(ctx, admin, orgID, day, []workitemmetrics.MetricsDailyRow{row}, computedAt); err != nil {
+		if _, err := daily.WriteWorkItemMetricsDaily(ctx, admin, orgID, day, []workitemmetrics.MetricsDailyRow{row}, []workitemmetrics.MetricsDailyRow{row}, computedAt); err != nil {
 			t.Fatal(err)
 		}
 	}

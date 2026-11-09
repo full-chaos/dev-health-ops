@@ -81,7 +81,7 @@ func fileSigner(t *testing.T) (*token.Signer, string, string) {
 
 func newEdDSAIssuer(t *testing.T, signer AccessSigner, audience string) *Issuer {
 	t.Helper()
-	issuer, err := NewEdDSAIssuer(testSecret, testIssuer, audience, signer, goldenIssuer)
+	issuer, err := NewEdDSAIssuer(audience, signer, goldenIssuer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestEdDSAIssuerIsByteExactAboutIss(t *testing.T) {
 			t.Errorf("a verifier pinned to %q accepted a token whose iss is %q", other, goldenIssuer)
 		}
 	}
-	slashed, err := NewEdDSAIssuer(testSecret, testIssuer, testAudience, signer, goldenIssuer+"/")
+	slashed, err := NewEdDSAIssuer(testAudience, signer, goldenIssuer+"/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestAnIssuerMintsTheEdDSAClassOnly(t *testing.T) {
 		t.Fatal("the EdDSA issuer's token verifies as HS256")
 	}
 
-	none := &Issuer{verifier: ed.verifier, now: time.Now}
+	none := &Issuer{now: time.Now}
 	if token, err := none.AccessContext(context.Background(), grant); err == nil || token != "" {
 		t.Fatalf("an issuer with no class minted (%d bytes, err %v)", len(token), err)
 	}
@@ -388,14 +388,14 @@ func TestEdDSACustodyFailureMintsNothingAndNeverFallsBackToHS256(t *testing.T) {
 func TestEdDSAIssuerRefusesWhatCannotFormAUserAccessToken(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	for _, audience := range []string{"", "query-api", "dev-health-api ", "Dev-Health-API", "other"} {
-		if _, err := NewEdDSAIssuer(testSecret, testIssuer, audience, signer, goldenIssuer); err == nil {
+		if _, err := NewEdDSAIssuer(audience, signer, goldenIssuer); err == nil {
 			t.Errorf("audience %q accepted", audience)
 		}
 	}
-	if _, err := NewEdDSAIssuer(testSecret, testIssuer, testAudience, nil, goldenIssuer); err == nil {
+	if _, err := NewEdDSAIssuer(testAudience, nil, goldenIssuer); err == nil {
 		t.Error("no signer accepted")
 	}
-	if _, err := NewEdDSAIssuer(testSecret, testIssuer, testAudience, signer, ""); err == nil {
+	if _, err := NewEdDSAIssuer(testAudience, signer, ""); err == nil {
 		t.Error("no issuer URL accepted")
 	}
 	issuer := newEdDSAIssuer(t, signer, testAudience)
@@ -499,7 +499,7 @@ func TestEveryAccessAudienceTheMinterKnowsIsAUserTokenRowOfTheVocabulary(t *test
 		if minted[audience] {
 			t.Errorf("this minter knows the ACR audience %q", audience)
 		}
-		if _, err := NewEdDSAIssuer(testSecret, testIssuer, audience, signer, goldenIssuer); err == nil {
+		if _, err := NewEdDSAIssuer(audience, signer, goldenIssuer); err == nil {
 			t.Errorf("an EdDSA session issuer was built for the ACR audience %q", audience)
 		}
 	}

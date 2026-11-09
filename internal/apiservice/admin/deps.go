@@ -180,6 +180,7 @@ func (h *handlers) routes() []httpapi.Route {
 	out = append(out, h.orgRoutes()...)
 	out = append(out, h.governanceRoutes()...)
 	out = append(out, h.serviceAccountKeyRoutes()...)
+	out = append(out, h.serviceAccountRoutes()...)
 	return out
 }
 

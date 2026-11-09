@@ -10,13 +10,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 const (
@@ -84,20 +83,9 @@ var saRoutePatterns = []string{
 // handler) over accounts, as mountedKeyRoutes does for the key routes.
 func mountedAccountRoutes(t *testing.T, store saKeyStore, accounts authprovision.ServiceAccounts) (*httptest.Server, string, *bool, uuid.UUID) {
 	t.Helper()
-	const key = "service-account-route-test-key-32bytes!!"
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	logger := slog.New(slog.DiscardHandler)
-	auth, err := policy.NewAuthenticator(verifier, store, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.AuthenticatorOver(t, store, logger)
 	touched := new(bool)
 	h := &handlers{store: pgStore{Pool: touchedDB{touched}}, guard: policy.NewGuard(auth, logger), logger: logger, serviceAccounts: accounts}
 	mux := http.NewServeMux()
@@ -107,14 +95,11 @@ func mountedAccountRoutes(t *testing.T, store saKeyStore, accounts authprovision
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	caller := uuid.New()
-	claims := edgetoken.AccessClaims{UserID: caller.String(), Email: "caller@example.test", IsSuperuser: store.superuser}
+	claims := edtokens.Claims{UserID: caller}
 	if store.admin {
-		claims.OrgID, claims.Role = uuid.NewString(), "admin"
+		claims.OrgID = uuid.NewString()
 	}
-	bearer, err := signer.Access(claims, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	bearer := tokens.MustMint(t, claims)
 	return server, bearer, touched, caller
 }
 

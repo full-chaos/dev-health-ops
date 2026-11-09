@@ -20,8 +20,8 @@ type PublicRow func(ctx context.Context, tx audit.TxOps, principal uuid.UUID, or
 
 type publicRowKey struct{}
 
-// WithPublicRow binds public to ctx: CreateAudited, ExchangeGuarded,
-// ExchangeLegacy, RevokeByCredential and RevokeLegacy called with ctx run it as
+// WithPublicRow binds public to ctx: CreateAudited, ExchangeGuarded and
+// RevokeByCredential called with ctx run it as
 // their *With form does. A compatibility route binds go-api's row this way,
 // so its session interface stays the one the native routes use.
 func WithPublicRow(ctx context.Context, public PublicRow) context.Context {
@@ -34,7 +34,7 @@ func publicRowOf(ctx context.Context) PublicRow {
 }
 
 // EventSessionRefreshed is an accepted refresh exchange: one rotation of a
-// session's refresh credential (or a go-api refresh token's first exchange).
+// session's refresh credential.
 // A refusal and a grace replay rotate nothing and write none.
 const EventSessionRefreshed = "auth.session.refreshed"
 

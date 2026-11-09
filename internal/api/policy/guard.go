@@ -359,14 +359,59 @@ const msgImpersonationDenied = "Not allowed in an impersonation session"
 // session.
 const stopImpersonationPattern = "POST /api/v1/admin/impersonate/stop"
 
+// RefuseImpersonatingCaller returns next behind the impersonation write
+// refusal (403) for a caller whose bearer, authenticated as the route's row
+// does (the user access token), belongs to an admin with an active
+// impersonation session. It is for a route the scope layers
+// skip, so it reads the session itself. It follows the live row, not the
+// caller's admin.impersonate. A bearer go-api cannot verify (auth-service's)
+// passes through. A failed read (users row or session) answers 503 and does
+// not forward (fail closed).
+func (g *Guard) RefuseImpersonatingCaller(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := BearerToken(r.Header.Get("Authorization"))
+		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		user, err := g.auth.Authenticate(g.auth.routeCtx(r), token)
+		if isRefusal(err) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		var session *Impersonation
+		if err == nil {
+			session, err = g.auth.activeImpersonation(r.Context(), user.ID)
+		}
+		switch {
+		case err != nil:
+			g.logger.ErrorContext(r.Context(), "api guard: impersonation lookup failed; refusing the request",
+				slog.Bool("unavailable", isUnavailable(err)), slog.Any("error", err))
+			WriteAuthFailure(w, "", ErrUnavailable)
+		case session != nil:
+			g.logger.WarnContext(r.Context(), "api guard: route refused in an impersonation session",
+				slog.String("path", r.Pattern), slog.String("admin_user_id", session.AdminUserID.String()))
+			WriteDetail(w, http.StatusForbidden, msgImpersonationReadOnly, nil)
+		default:
+			next.ServeHTTP(w, r)
+		}
+	})
+}
+
 // ImpersonationHandoffConsumePattern is the platform route that admits the
 // start handoff of the caller's own impersonation session, once. The session
 // row is live when it is called.
 const ImpersonationHandoffConsumePattern = "POST /api/v1/admin/impersonate/handoff/consume"
 
-// liveRowExemptPatterns are the platform routes that stay reachable while the
-// caller's impersonation row is live. Every live-row refusal reads this set
-// through liveRowExempt.
-var liveRowExemptPatterns = map[string]bool{stopImpersonationPattern: true, ImpersonationHandoffConsumePattern: true}
+// statusImpersonationPattern is the route that reads the caller's impersonation
+// session.
+const statusImpersonationPattern = "GET /api/v1/admin/impersonate/status"
+
+// liveRowExemptPatterns are the routes that stay reachable while the caller's
+// impersonation row is live: the admin's own bearer reads the session, admits
+// its start handoff and ends it. Every live-row refusal, the scope's legacy
+// refusal included, reads this one set through liveRowExempt. Status takes no
+// platform action and is never enforced, so only the scope's refusal meets it.
+var liveRowExemptPatterns = map[string]bool{statusImpersonationPattern: true, stopImpersonationPattern: true, ImpersonationHandoffConsumePattern: true}
 
 func liveRowExempt(pattern string) bool { return liveRowExemptPatterns[pattern] }

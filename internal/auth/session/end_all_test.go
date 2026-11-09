@@ -33,7 +33,7 @@ func TestRecordEndedAdvancesTheRevocationCounterByTheRevokedCount(t *testing.T) 
 		}
 		return sum
 	}
-	s.RecordEnded(context.Background(), Ended{Sessions: 0, RefreshTokens: 5})
+	s.RecordEnded(context.Background(), Ended{Sessions: 0})
 	if got := total(); got != 0 {
 		t.Fatalf("counter = %d after an end that revoked no session, want 0", got)
 	}

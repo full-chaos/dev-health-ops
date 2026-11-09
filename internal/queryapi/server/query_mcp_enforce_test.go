@@ -232,15 +232,18 @@ func TestHeaderCarrierWithItsCellOnIsRefused(t *testing.T) {
 	}
 }
 
-// E6 (Q11): the exempt class on /query (the envelope) is served on today's path with the cell on, and never asks.
-func TestQueryExemptClassesAreNotAsked(t *testing.T) {
+// E6 (Q11): /query has no exempt class: the HS256 edge token and the envelope, the classes the exempt list held, are
+// retired. With the cell on, the envelope is refused (401) before any read, and it asks nothing.
+func TestQueryRetiredClassesAreNotAsked(t *testing.T) {
 	srv := pdptest.New(t)
 	env := qmEnv(t, srv, pdp.ModeEnforce, "analytics", "")
 	p := newQMPlane(t, env, enforceDocAnalytics)
 	envelope := iaEnvelope(t, p.envelopeKey, principal.Claims{OrgID: ecOrg.String(), Role: "member"})
-	p.queryRun(t, "/query", enforceDocAnalytics, qmBearer(envelope)).served(t)
+	if got := p.queryRun(t, "/query", enforceDocAnalytics, qmBearer(envelope)); got.code != http.StatusUnauthorized || got.statements != 0 || got.roots != 0 {
+		t.Fatalf("envelope (a retired class): %d %q with %d statements, want 401 and nothing read", got.code, got.body, got.statements)
+	}
 	if n := len(asks(srv)); n != 0 {
-		t.Fatalf("the PDP was asked %d times for an exempt credential", n)
+		t.Fatalf("the PDP was asked %d times for a retired class", n)
 	}
 }
 

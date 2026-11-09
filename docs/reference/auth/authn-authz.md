@@ -76,7 +76,6 @@ query-api:
 | Class | Rows |
 | --- | --- |
 | `user_access_token` | 35 |
-| `effective_principal_envelope` | 34 |
 
 auth-service:
 
@@ -101,7 +100,7 @@ go-api and query-api take a bearer access token. Four access-token shapes exist.
 | Legacy edge token | `ops_access_token_hs256` | `alg` HS256 | none: the class is `retired`, every row refuses it (`alg_not_allowed`) |
 | User access token | `user_access_token` | `alg` EdDSA, `typ` `at+jwt`, audience `dev-health-api` | go-api (196 rows), query-api only when `AUTH_ACCESS_TOKEN_ISSUER` is set, auth-service lists the class on 6 session, identity and change-password rows, but the validator text of those rows describes an HS256 token only |
 | Workload token | `workload_token` | `typ` `workload+jwt` | go-api (4 rows), auth-service internal routes |
-| Effective principal envelope | `effective_principal_envelope` | `alg` EdDSA | query-api |
+| Effective principal envelope | `effective_principal_envelope` | `alg` EdDSA | none: the class is `retired`, query-api refuses it on every route as an unaccepted bearer |
 
 Sources: `class_disambiguator` and `access_token_validation` in `endpoint-profiles.go-api.json`; the validator text of `endpoint-profiles.query-api.json`; `internal/queryapi/server/rest_error_response.go` (`authenticateRESTRequest`).
 
@@ -177,6 +176,8 @@ Each go-api row carries `tenant_requirement`: `org_scoped` (185), `none` (41), `
 ### Impersonation
 
 A superuser with a live impersonation session acts in the target organization. `EffectiveOrgID` in `internal/api/policy/scope.go` decides this on every request. It reads the session after a live check. It never carries the session between requests. At the `Admin` and `AdminOrg` levels the guard swaps the caller's organization for the effective one before the admin test.
+
+With `AUTH_PROXY_IMPERSONATION` on (`AuthProxyConfig.ImpersonationOn` in `internal/apiservice/authproxy.go`: the switch and `AUTH_PROXY_URL`), impersonation is a delegated session: its own bearer is the target, with the admin as its actor. auth-service still writes go-api's session row, so the `Impersonation` step refuses the legacy caller (the admin's own bearer while that row is live) with `403` `Not allowed in an impersonation session` before the route runs (`RefuseLegacyImpersonation`, wired in `newProtection` in `internal/apiservice/service.go`). Three routes are the exception, and the session applies there as before: `GET /api/v1/admin/impersonate/status`, `POST /api/v1/admin/impersonate/handoff/consume` and `POST /api/v1/admin/impersonate/stop`. They are the one set the guard's live-row refusals also exempt (`liveRowExemptPatterns`, `internal/api/policy/guard.go`). The match is the route template the request reaches and the request's own method, exactly: a `HEAD`, another method, a longer path or a path no route matches is refused. The refusal does not carry `X-Impersonating`. It follows the live row, not the caller's `admin.impersonate`: a caller whose action was revoked while its row is live is refused on a write too. Its row is read on writes only (the read limit of `RefuseImpersonation`); it is never applied to it, so its reads answer as the caller itself. A caller without a live row and the delegated bearer are not changed; a session read failure is `503` `Database temporarily unavailable`. With the switch off, nothing changes. query-api builds its own scope and is not changed by this switch. `POST /api/v1/auth/switch-org` is refused the same way, with the switch and the sessions proxy on or off, for an admin bearer with a live go-api session row, before auth-service is called (`Guard.RefuseImpersonatingCaller` when the route is proxied, `Guard.RefuseImpersonation` when go-api serves it), also when the caller no longer holds `admin.impersonate`.
 
 Each go-api row carries `impersonation_policy`: `subject_to_impersonation_override` (175), `exempt_no_org_context` (31), `not_applicable_non_main_app` (3), unset (33, the public rows).
 

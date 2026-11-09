@@ -7,7 +7,6 @@ import (
 
 	"github.com/full-chaos/dev-health-go/pep"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
@@ -38,8 +37,9 @@ func graphQLEnforce() graph.OperationEnforce {
 }
 
 // graphQLCaller is the class of the operation's caller, from the bearer its ingress authenticated (the subject #5781
-// carries): a user access token is decided; the envelope is the exempt class (an HS256 token never authenticates: its
-// class is retired); no bearer is the X-DH-Internal-* header carrier (D6721), which has its own cells.
+// carries): a user access token is decided; no bearer is the X-DH-Internal-* header carrier (D6721), which has its own
+// cells. No other bearer authenticates (the HS256 token and the envelope are retired classes), so any other subject is
+// CallerUnknown and refused while a cell of its roots is on.
 func graphQLCaller(ctx context.Context) pdp.Caller {
 	subject, _ := graph.ShadowSubjectFrom(ctx)
 	switch {
@@ -47,8 +47,6 @@ func graphQLCaller(ctx context.Context) pdp.Caller {
 		return pdp.Caller{Class: pdp.CallerHeaders}
 	case subject.UserAccessToken:
 		return pdp.Caller{Class: pdp.CallerUser, Bearer: subject.Bearer}
-	case subject.SkipReason == policy.ShadowReasonEnvelope:
-		return pdp.Caller{Class: pdp.CallerExempt, ExemptClass: pdp.ClassEnvelope}
 	}
 	return pdp.Caller{Class: pdp.CallerUnknown}
 }

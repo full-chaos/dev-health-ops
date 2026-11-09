@@ -184,8 +184,15 @@ func TestGrantOptionPrecheckSkipsGrantsTheSwitchTurnsOff(t *testing.T) {
 	env := newOwnerMoveEnv(t, ctx, false)
 	env.move(t, ctx, env.moveOptions(true))
 	revokeWidenedUsersUpdate(t, ctx, env)
-	if _, err := Apply(ctx, env.migrator, env.options(false)); err != nil {
-		t.Fatalf("Apply with the switch off and no option on the users write columns: %v", err)
+	off := env.options(false)
+	_, err := Apply(ctx, env.migrator, off)
+	var narrowed *NarrowingError
+	if errors.Is(err, ErrMigratorGrantOptionMissing) || !errors.As(err, &narrowed) {
+		t.Fatalf("Apply with the switch off: err = %v, want only the narrowing refusal (the fixture's runtime role held the users write grant)", err)
+	}
+	off.AcknowledgeNarrowing = narrowed.Digest
+	if _, err := Apply(ctx, env.migrator, off); err != nil {
+		t.Fatalf("Apply with the switch off, no option on the users write columns, narrowing acknowledged: %v", err)
 	}
 }
 

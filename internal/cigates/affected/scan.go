@@ -39,7 +39,7 @@ const (
 	ReadDyn  = "dyn"
 	ReadWalk = "walk"
 	ReadEdge = "edge"
-	// ReadOpaque: a file the call graph of reach.tsv cannot see through (go:linkname, cgo, plugin); its tables are
+	// ReadOpaque: a file the call graph of reach.d cannot see through (go:linkname, cgo, plugin); its tables are
 	// defective, so every plan is FULL.
 	ReadOpaque = "opaque"
 	// ReadPattern: a read whose path the tool cannot bound but whose code names a pattern a Markdown file can match
@@ -276,7 +276,7 @@ func opaqueReads(fset *token.FileSet, f *ast.File, rel string, src []byte) []Rea
 			add(bytes.Count(src[:loc[0]], []byte("\n"))+1, "go:linkname")
 		}
 	}
-	// reach.tsv loads the module with the integration tag only: an untagged build is a subset of that build unless a
+	// reach.d loads the module with the integration tag only: an untagged build is a subset of that build unless a
 	// file is built only without the tag.
 	if bytes.Contains(src, []byte("integration")) {
 		if loc := notIntegration.FindIndex(src); loc != nil {
@@ -508,28 +508,29 @@ func checkReads(root string, t *tables, reads []Read) guardResult {
 			}
 		}
 	}
-	// reach.tsv places every code-scope site and no other; its reachers are checked by plan-reads --reach.
+	// reach.d places every code-scope site and no other; its reachers are checked by plan-reads --reach.
 	sites := codeSites(reads)
 	for _, k := range sortedKeys(sites) {
 		if _, ok := t.reach[k]; !ok {
-			report(fmt.Sprintf("%s: %s has no %s row; run cigate plan-reads --root . --write", strings.SplitN(k, "\t", 2)[0], sites[k][0], reachFile))
+			pkg := strings.SplitN(k, "\t", 2)[0]
+			report(fmt.Sprintf("%s: %s has no %s/%s row; run cigate plan-reads --root . --write", pkg, sites[k][0], reachDir, reachFileOf(pkg)))
 		}
 	}
 	for _, row := range sortedKeys(t.reachRows) {
 		f := strings.SplitN(row, "\t", 3)
 		if _, ok := sites[f[0]+"\t"+f[1]]; !ok {
-			report(fmt.Sprintf("%s:%s: %s names no code-scope site the tool cannot bound; run cigate plan-reads --root . --write", reachFile, t.reachRows[row], row))
+			report(fmt.Sprintf("%s: %s names no code-scope site the tool cannot bound; run cigate plan-reads --root . --write", t.reachRows[row], row))
 		}
 	}
 	for _, r := range reads {
 		if r.Kind == ReadOpaque {
-			report(fmt.Sprintf("%s:%d: %s hides calls from the call graph of %s: every plan is FULL", r.File, r.Line, r.Literal, reachFile))
+			report(fmt.Sprintf("%s:%d: %s hides calls from the call graph of %s: every plan is FULL", r.File, r.Line, r.Literal, reachDir))
 		}
 	}
 	return g
 }
 
-// checkReach recomputes reach.tsv and returns one defect per differing row.
+// checkReach recomputes reach.d and returns one defect per differing row.
 func checkReach(root string, t *tables, reads []Read) ([]string, reachStats, error) {
 	want, st, err := reachRows(root, reads)
 	if err != nil {
@@ -538,17 +539,17 @@ func checkReach(root string, t *tables, reads []Read) ([]string, reachStats, err
 	return reachDefects(t, want), st, nil
 }
 
-// reachDefects compares the reach rows the call graph calls for with the rows of reach.tsv.
+// reachDefects compares the reach rows the call graph calls for with the rows of reach.d.
 func reachDefects(t *tables, want map[string]bool) []string {
 	var defects []string
 	for _, row := range sortedKeys(want) {
 		if _, ok := t.reachRows[row]; !ok {
-			defects = append(defects, fmt.Sprintf("%s: missing row %s (run cigate plan-reads --root . --write)", reachFile, row))
+			defects = append(defects, fmt.Sprintf("%s/%s: missing row %s (run cigate plan-reads --root . --write)", reachDir, reachFileOf(strings.SplitN(row, "\t", 2)[0]), row))
 		}
 	}
 	for _, row := range sortedKeys(t.reachRows) {
 		if !want[row] {
-			defects = append(defects, fmt.Sprintf("%s:%s: %s is a row the call graph does not call for (run cigate plan-reads --root . --write)", reachFile, t.reachRows[row], row))
+			defects = append(defects, fmt.Sprintf("%s: %s is a row the call graph does not call for (run cigate plan-reads --root . --write)", t.reachRows[row], row))
 		}
 	}
 	return defects
@@ -619,8 +620,8 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	root := fs.String("root", "", "repository root")
 	tablesDir := fs.String("tables", "", "directory of the read tables (default ROOT/internal/cigates/affected)")
-	write := fs.Bool("write", false, "write walks.tsv, dynreads.tsv, edges.tsv and reach.tsv from the code, then check")
-	checkCallGraph := fs.Bool("reach", false, "also recompute reach.tsv from the call graph (go/packages, SSA, RTA) and fail on any difference")
+	write := fs.Bool("write", false, "write walks.tsv, dynreads.tsv, edges.tsv and reach.d/ from the code, then check")
+	checkCallGraph := fs.Bool("reach", false, "also recompute reach.d/ from the call graph (go/packages, SSA, RTA) and fail on any difference")
 	reachCache := fs.String("reach-cache", "", "with --reach: directory of a reach store; reuse the rows stored for an identical input hash, store them after a green computed run")
 	reachFresh := fs.Bool("reach-cache-fresh", false, "with --reach-cache: never read the store; compute, and store a green result (merge queue and main pushes)")
 	listSpreads := fs.Bool("list-unresolved-spreads", false, "print file:line of every exec whose spread arguments the scan cannot resolve, and exit")
@@ -730,7 +731,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 }
 
 // checkReachStored is checkReach with the reach store of --reach-cache: a store of the same input hash stands in for the
-// computation and is compared with reach.tsv like it; a green computed run stores its rows. Any doubt recomputes.
+// computation and is compared with reach.d like it; a green computed run stores its rows. Any doubt recomputes.
 func checkReachStored(root, cacheDir string, fresh bool, budgetMiB int64, t *tables, reads []Read, readsGreen bool, stdout io.Writer) ([]string, error) {
 	key := ""
 	if cacheDir != "" {
@@ -785,7 +786,7 @@ func checkReachBudget(st reachStats, budgetMiB int64) error {
 }
 
 func printReachStats(w io.Writer, st reachStats) {
-	fmt.Fprintf(w, "plan-reads: reach.tsv over %d code-scope site file(s), %d program run(s) over %d tag set(s): %s wall, peak RSS %d MiB\n",
+	fmt.Fprintf(w, "plan-reads: reach.d over %d code-scope site file(s), %d program run(s) over %d tag set(s): %s wall, peak RSS %d MiB\n",
 		st.sites, st.programs, len(reachTags), st.wall.Round(time.Second), st.peakRSSMiB)
 }
 

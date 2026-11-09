@@ -22,7 +22,7 @@ import (
 
 // typedScope is the code the census type-checks. A writer outside it, or an
 // exported function on a path that a selector outside it names, fails the cell.
-var typedScope = []string{"./internal/api/...", "./internal/apiservice/...", "./internal/auth/...", "./internal/testsupport/..."}
+var typedScope = []string{"./internal/adminops/...", "./internal/api/...", "./internal/apiservice/...", "./internal/auth/...", "./internal/testsupport/..."}
 
 // A notPasswordSetting row ends a path that writes a password-hash column but
 // sets no password a person chose. Kinds: "writer" (the function holding the SQL),
@@ -69,9 +69,11 @@ var reviewed = []notPasswordSetting{
 	{kind: "uncalled", fn: mod + "internal/auth/identity.Store.SetPasswordHash", at: "internal/auth/identity/local.go:188",
 		why: "only tests call it; a non-test caller must be walked"},
 	{kind: "hop", fn: mod + "internal/auth/authapi.provisioningHandlers.usersCreate", at: "internal/auth/authapi/provisioning_users.go:275",
-		route: "/internal/v1/users/create", why: "internal HTTP: go-api posts the hash after its own policy check"},
+		route: "/internal/v1/users/create", why: "internal HTTP: go-api posts the hash after its own policy check",
+		callers: []string{mod + "internal/api/authprovision.UsersClient.CreateUser"}},
 	{kind: "hop", fn: mod + "internal/auth/authapi.provisioningHandlers.usersPassword", at: "internal/auth/authapi/provisioning_users.go:410",
-		route: "/internal/v1/users/password", why: "internal HTTP: go-api posts the hash after its own policy check"},
+		route: "/internal/v1/users/password", why: "internal HTTP: go-api posts the hash after its own policy check",
+		callers: []string{mod + "internal/api/authprovision.UsersClient.SetUserPassword"}},
 }
 
 // Every path that writes a user's password hash (the shared census matcher,

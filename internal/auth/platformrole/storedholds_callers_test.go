@@ -11,9 +11,10 @@ import (
 	"testing"
 )
 
-// The stored holding is no authority read, so only go-api's admin users view reads it: rule.StoredHoldsSQL only
-// through policy.PlatformRoleRead.StoredSuperuser, that only through the admin store's userColumns, and userColumns
-// only from the five view reads. A new caller could decide by it as if it were the authority rule.
+// The stored holding is no authority read, so only go-api's admin users view and its superuser TARGET protections read
+// it: rule.StoredHoldsSQL only through policy.PlatformRoleRead.StoredSuperuser, that only from the admin store's
+// userColumns (the five view reads) and the three target reads (impersonation target, guarded-write targets, transfer
+// target). A new caller could decide by it as if it were the authority rule.
 func TestStoredHoldingIsReadOnlyByTheAdminUsersView(t *testing.T) {
 	sites := func(call *regexp.Regexp) []string {
 		t.Helper()
@@ -54,8 +55,13 @@ func TestStoredHoldingIsReadOnlyByTheAdminUsersView(t *testing.T) {
 		call *regexp.Regexp
 		want []string
 	}{
-		"StoredHoldsSQL":  {regexp.MustCompile(`\bStoredHoldsSQL\(`), []string{"../../api/policy/store.go StoredSuperuser"}},
-		"StoredSuperuser": {regexp.MustCompile(`\.StoredSuperuser\(`), []string{"../../apiservice/admin/userstore.go userColumns"}},
+		"StoredHoldsSQL": {regexp.MustCompile(`\bStoredHoldsSQL\(`), []string{"../../api/policy/store.go StoredSuperuser"}},
+		"StoredSuperuser": {regexp.MustCompile(`\.StoredSuperuser\(`), []string{"../../apiservice/admin/guards.go targetsSuperuserSQL",
+			"../../apiservice/admin/orgs_provision.go isSuperuserSQL", "../../apiservice/admin/store.go targetUserSQL",
+			"../../apiservice/admin/userstore.go userColumns"}},
+		"targetUserSQL":       {regexp.MustCompile(`\.targetUserSQL\(`), []string{"../../apiservice/admin/store.go userByID"}},
+		"targetsSuperuserSQL": {regexp.MustCompile(`\.targetsSuperuserSQL\(`), []string{"../../apiservice/admin/guards.go refuse"}},
+		"isSuperuserSQL":      {regexp.MustCompile(`\.isSuperuserSQL\(`), []string{"../../apiservice/admin/orgs_provision.go isSuperuser"}},
 		"userColumns": {regexp.MustCompile(`\.userColumns\(`), []string{"../../apiservice/admin/userstore.go fullUserByID",
 			"../../apiservice/admin/userstore.go listAllUsers", "../../apiservice/admin/userstore.go listUsersByOrg",
 			"../../apiservice/admin/userstore.go userByEmail", "../../apiservice/admin/userstore.go userByUsername"}},

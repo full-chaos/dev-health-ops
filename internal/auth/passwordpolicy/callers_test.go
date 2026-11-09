@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ import (
 )
 
 // typedScope is the code the census type-checks. A writer outside it, or an
-// exported function on a path referenced by name outside it, fails the cell.
+// exported function on a path that a selector outside it names, fails the cell.
 var typedScope = []string{"./internal/api/...", "./internal/apiservice/...", "./internal/auth/...", "./internal/testsupport/..."}
 
 // A notPasswordSetting row ends a path that writes a password-hash column but
@@ -345,11 +346,15 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting)
 	}
 
 	var outside map[string][]string
-	outsideRefs := func(name string) []string {
+	checkedOutside := map[string]bool{}
+	outsideRefs := func(pf *pathFunc) []string {
 		if outside == nil {
-			outside = namesOutside(root, inScope, &res)
+			outside = refsOutside(root, inScope, &res)
 		}
-		return outside[name]
+		if pf.recv {
+			return outside["."+pf.name]
+		}
+		return outside[pf.key]
 	}
 
 	writers := map[string]bool{}
@@ -398,9 +403,10 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting)
 				return
 			}
 			pf := funcs[key]
-			if pf != nil && pf.name != "<package-level>" && token.IsExported(pf.name) {
-				for _, ref := range outsideRefs(pf.name) {
-					fail("%s is on a password path and %s names %s outside the typed scope: widen typedScope", key, ref, pf.name)
+			if pf != nil && pf.name != "<package-level>" && token.IsExported(pf.name) && !checkedOutside[key] {
+				checkedOutside[key] = true
+				if refs := outsideRefs(pf); len(refs) > 0 {
+					fail("%s is on a password path and %d site(s) outside the typed scope name it (%s): widen typedScope", key, len(refs), strings.Join(refs[:min(3, len(refs))], ", "))
 				}
 			}
 			var up []string
@@ -478,9 +484,10 @@ func shape(sig *types.Signature, q types.Qualifier) string {
 	return b.String()
 }
 
-// namesOutside maps each identifier name to the file:line sites that name it in the
-// module's non-test Go files outside the typed scope.
-func namesOutside(root string, inScope map[string]bool, res *censusResult) map[string][]string {
+// refsOutside maps the selectors of the module's non-test Go files outside the
+// typed scope to their file:line sites: "<import path>.<name>" for a package
+// selector, ".<name>" for every selector (a method can be reached from any value).
+func refsOutside(root string, inScope map[string]bool, res *censusResult) map[string][]string {
 	out := map[string][]string{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -505,9 +512,28 @@ func namesOutside(root string, inScope map[string]bool, res *censusResult) map[s
 		if err != nil {
 			return err
 		}
+		imports := map[string]string{}
+		for _, spec := range file.Imports {
+			ipath, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				return err
+			}
+			name := ipath[strings.LastIndex(ipath, "/")+1:]
+			if spec.Name != nil {
+				name = spec.Name.Name
+			}
+			imports[name] = ipath
+		}
 		ast.Inspect(file, func(n ast.Node) bool {
-			if id, ok := n.(*ast.Ident); ok {
-				out[id.Name] = append(out[id.Name], fmt.Sprintf("%s:%d", rel, fset.Position(id.Pos()).Line))
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			at := fmt.Sprintf("%s:%d", rel, fset.Position(sel.Sel.Pos()).Line)
+			out["."+sel.Sel.Name] = append(out["."+sel.Sel.Name], at)
+			if x, ok := sel.X.(*ast.Ident); ok && imports[x.Name] != "" {
+				key := imports[x.Name] + "." + sel.Sel.Name
+				out[key] = append(out[key], at)
 			}
 			return true
 		})

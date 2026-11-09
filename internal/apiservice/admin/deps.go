@@ -103,6 +103,9 @@ type Deps struct {
 	// Delegator starts and ends the admin impersonation session at auth-service (AUTH_PROXY_IMPERSONATION). Nil leaves
 	// go-api the writer of the session.
 	Delegator sessionissue.Delegator
+	// ServiceAccountKeys is the client of auth-service's service account key routes (AUTH_PROXY_SERVICE_ACCOUNT_KEYS).
+	// Nil leaves the key routes mounted, answering 503 config_missing.
+	ServiceAccountKeys authprovision.ServiceAccountKeys
 }
 
 // Routes is the admin area's route set.
@@ -127,27 +130,28 @@ func Routes(deps Deps) []httpapi.Route {
 		write = httpapi.WriteError
 	}
 	area := &handlers{
-		store:           store,
-		audit:           auditWriter,
-		cache:           cache,
-		handoffs:        valkeyHandoffs{client: deps.Valkey},
-		guard:           deps.Guard,
-		logger:          logger,
-		clickHouseDSN:   deps.ClickHouseDSN,
-		decryptor:       deps.Decryptor,
-		pagerDuty:       deps.PagerDuty,
-		httpDoer:        httpDoer,
-		upstreamDoer:    deps.HTTPDoer,
-		modelCache:      newLLMModelListCache(),
-		write:           write,
-		passwordLimiter: httpapi.NewKeyedLimiter(limits, passwordLimit),
-		inviteLimiter:   httpapi.NewKeyedLimiter(limits, inviteLimit),
-		invites:         deps.Invites,
-		orgReactivator:  deps.OrgReactivator,
-		orgProvision:    deps.OrgProvisioner,
-		orgSuspender:    deps.OrgSuspender,
-		orgState:        deps.OrgState,
-		delegator:       deps.Delegator,
+		store:              store,
+		audit:              auditWriter,
+		cache:              cache,
+		handoffs:           valkeyHandoffs{client: deps.Valkey},
+		guard:              deps.Guard,
+		logger:             logger,
+		clickHouseDSN:      deps.ClickHouseDSN,
+		decryptor:          deps.Decryptor,
+		pagerDuty:          deps.PagerDuty,
+		httpDoer:           httpDoer,
+		upstreamDoer:       deps.HTTPDoer,
+		modelCache:         newLLMModelListCache(),
+		write:              write,
+		passwordLimiter:    httpapi.NewKeyedLimiter(limits, passwordLimit),
+		inviteLimiter:      httpapi.NewKeyedLimiter(limits, inviteLimit),
+		invites:            deps.Invites,
+		orgReactivator:     deps.OrgReactivator,
+		orgProvision:       deps.OrgProvisioner,
+		orgSuspender:       deps.OrgSuspender,
+		orgState:           deps.OrgState,
+		delegator:          deps.Delegator,
+		serviceAccountKeys: deps.ServiceAccountKeys,
 	}
 	if deps.ClickHouse != nil {
 		area.spend = clickhouseSpend{conn: deps.ClickHouse}
@@ -222,6 +226,8 @@ type handlers struct {
 	orgState orgreactivate.StateReader
 	// delegator is Deps.Delegator; non-nil routes the impersonation start and stop through auth-service.
 	delegator sessionissue.Delegator
+	// serviceAccountKeys is Deps.ServiceAccountKeys; nil answers the key routes 503 config_missing.
+	serviceAccountKeys authprovision.ServiceAccountKeys
 }
 
 // passwordLimit is users.py's `@limiter.limit(ADMIN_PASSWORD_LIMIT =

@@ -35,22 +35,16 @@ import (
 // "malformed" (authverify.ErrInvalidJWKS) -- because they are genuinely
 // different code paths inside authverify.Ed25519JWKSVerifier.Keys() and
 // a fix could easily close only one.
-
-// TestBuildQueryRoute_FailsFastOnMissingJWKS is the eager-check RED-FIRST
-// proof for the "missing" shape: ClickHouse is REAL and reachable (so the
-// existing eager ClickHouse ping does not fail this build for the wrong
-// reason -- same discipline TestBuildQueryRoute_FailsFastOnWrongClickHouseProtocol
-// and the Postgres-laziness test above apply), Postgres is a deliberately
-// unreachable-but-lazy placeholder (buildQueryRoute must never reach it --
-// the JWKS check fails first), and EnvelopeJWKSPath points at a path that
-// does not exist on disk.
 //
-// RED-on-parent (executed, mutation): with the eager
-// `verifier.CheckJWKS()` block in buildQueryRoute (query_route.go)
-// commented out, this test's `buildErr == nil` assertion fails --
-// buildQueryRoute mounts /query successfully against a JWKS path that
-// does not exist, exactly CHAOS-4708's defect.
-func TestBuildQueryRoute_FailsFastOnMissingJWKS(t *testing.T) {
+// The eager half is gone: the envelope key is optional and never fails
+// start (D6465). A key with no usable JWKS at start is no key: the build
+// succeeds with no query_jwks probe. The live half stays: a key usable at
+// start that goes bad later still fails query_jwks.
+
+// TestBuildQueryRoute_StartsOnAMissingJWKS: the envelope key is optional and never fails start (D6465). With
+// ClickHouse real and Postgres a lazy placeholder, a key whose JWKS path does not exist is no usable key: the build
+// succeeds, the envelope class is refused (nil verifier), and readiness has no query_jwks probe.
+func TestBuildQueryRoute_StartsOnAMissingJWKS(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -72,23 +66,11 @@ func TestBuildQueryRoute_FailsFastOnMissingJWKS(t *testing.T) {
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	_, _, _, buildErr := buildQueryRoute(withIssuer, cfg)
-	if buildErr == nil {
-		t.Fatal("buildQueryRoute succeeded against a JWKS path that does not exist on disk -- CHAOS-4708's defect: this instance would have mounted /query, answered /readyz with 'ready', and 401'd every authenticated request")
-	}
-	if !strings.Contains(buildErr.Error(), "JWKS") {
-		t.Fatalf("buildQueryRoute error = %v, want it to name the JWKS readiness check", buildErr)
-	}
+	assertStartsWithoutAUsableJWKS(t, cfg)
 }
 
-// TestBuildQueryRoute_FailsFastOnMalformedJWKS is the eager-check
-// RED-FIRST proof for the "malformed" shape -- same structure as the
-// missing-file test above, but the file exists and is readable, just not
-// a valid JWKS document (garbage bytes, not even JSON).
-//
-// RED-on-parent (executed, mutation): same as the missing-file test --
-// with the eager check commented out, buildErr is nil here too.
-func TestBuildQueryRoute_FailsFastOnMalformedJWKS(t *testing.T) {
+// TestBuildQueryRoute_StartsOnAMalformedJWKS is the same for a JWKS file that exists but is not a JWKS document.
+func TestBuildQueryRoute_StartsOnAMalformedJWKS(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -115,12 +97,24 @@ func TestBuildQueryRoute_FailsFastOnMalformedJWKS(t *testing.T) {
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	_, _, _, buildErr := buildQueryRoute(withIssuer, cfg)
-	if buildErr == nil {
-		t.Fatal("buildQueryRoute succeeded against a malformed (non-JSON) JWKS document -- CHAOS-4708's defect")
+	assertStartsWithoutAUsableJWKS(t, cfg)
+}
+
+// assertStartsWithoutAUsableJWKS builds /query over cfg and wants it built, with no query_jwks probe.
+func assertStartsWithoutAUsableJWKS(t *testing.T, cfg queryRouteConfig) {
+	t.Helper()
+	handlers, _, cleanup, buildErr := buildQueryRoute(withIssuer, cfg)
+	if buildErr != nil {
+		t.Fatalf("buildQueryRoute failed start over a key with no usable JWKS: %v", buildErr)
 	}
-	if !strings.Contains(buildErr.Error(), "JWKS") {
-		t.Fatalf("buildQueryRoute error = %v, want it to name the JWKS readiness check", buildErr)
+	t.Cleanup(cleanup)
+	if handlers.Query == nil {
+		t.Fatal("no /query handler")
+	}
+	for _, probe := range handlers.Probes {
+		if probe.Name == "query_jwks" {
+			t.Fatalf("a query_jwks probe without a usable envelope key: %v", handlers.Probes)
+		}
 	}
 }
 

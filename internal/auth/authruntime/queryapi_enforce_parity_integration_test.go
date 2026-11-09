@@ -97,24 +97,8 @@ type knownStricterRow struct {
 	legacy, enforced           qpAnswer
 }
 
-// qpDataHealthRefused is the same decision with two refusal shapes (CHAOS-13334): the legacy operator guard
-// (datahealth.RequireOperator) and the enforce deny. Not a narrowing: both refuse.
-var qpDataHealthRefused = knownStricterRow{
-	ticket:      "CHAOS-13334: dataHealth refusal body differs from legacy under enforce (same decision, different refusal shape; not a narrowing)",
-	legacyLabel: "200_AUTHORIZATION_ERROR", enforcedLabel: "200_FORBIDDEN",
-	legacy: qpAnswer{status: 200, contentType: "application/json",
-		body: []byte(`{"errors":[{"message":"Data health requires operator access","path":["dataHealth"],"extensions":{"code":"AUTHORIZATION_ERROR"}}],"data":null}`)},
-	enforced: qpAnswer{status: 200, contentType: "application/json",
-		body: []byte(`{"errors":[{"message":"Not authorized","extensions":{"code":"FORBIDDEN"}}],"data":null}`)},
-}
-
 // knownStricter is keyed by the cell path under the top test (class/plane/namespace/root, spaces as _).
-var knownStricter = map[string]knownStricterRow{
-	"member/graphql/integrations/Query.dataHealth": qpDataHealthRefused,
-	"member/query/integrations/Query.dataHealth":   qpDataHealthRefused,
-	"viewer/graphql/integrations/Query.dataHealth": qpDataHealthRefused,
-	"viewer/query/integrations/Query.dataHealth":   qpDataHealthRefused,
-}
+var knownStricter = map[string]knownStricterRow{}
 
 func TestQueryAPIEnforceParity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)

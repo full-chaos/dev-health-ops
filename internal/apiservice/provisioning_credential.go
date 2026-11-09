@@ -31,7 +31,7 @@ const (
 )
 
 // provisioningCredential is the provisioning clients' credential, made once at start-up: the workload token, set
-// whenever AUTH_PROXY_ORG_PROVISIONING is on. The zero value (the switch off) builds no client.
+// whenever AUTH_PROXY_ORG_PROVISIONING or AUTH_PROXY_SERVICE_ACCOUNT_KEYS is on. The zero value (the switch off) builds no client.
 type provisioningCredential struct {
 	workload *workloadtoken.Client
 }
@@ -61,6 +61,15 @@ func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (pr
 		}
 		provisioningAsks = true
 		asks = append(asks, workloadAsk{Flag: EnvAuthProxyOrgProvisioning, Selector: EnvAuthProvisioningCredential})
+	}
+	if cfg.ServiceAccountKeysOn() {
+		value, _ := lookup(EnvAuthProvisioningCredential)
+		if strings.TrimSpace(value) != "" && strings.TrimSpace(value) != credentialWorkload {
+			return provisioningCredential{}, sessionCredential{}, fmt.Errorf("%s is on: %s must be %s (the %s credential is retired on the provisioning routes)",
+				EnvAuthProxyServiceAccountKeys, EnvAuthProvisioningCredential, credentialWorkload, credentialSessionCompat)
+		}
+		provisioningAsks = true
+		asks = append(asks, workloadAsk{Flag: EnvAuthProxyServiceAccountKeys, Selector: EnvAuthProvisioningCredential})
 	}
 	if cfg.Enabled(AuthSessions) {
 		sessionsFlag := AuthProxyFlagEnv(AuthSessions)

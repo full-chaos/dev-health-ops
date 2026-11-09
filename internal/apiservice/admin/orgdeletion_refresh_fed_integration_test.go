@@ -238,6 +238,7 @@ func TestOrgDeletionLeavesNoGroupRowWhenARefreshRunsAfterEachTableDelete(t *test
 	if got := v.liveGroups(t, v.control); got != controlBefore {
 		t.Errorf("control organization: %d live group(s) after the delete, want %d (untouched)", got, controlBefore)
 	}
+	venueoracle.WriteGoOnlyProof(t, "CHAOS-6347 Go-only property: a refresh after each table delete leaves the deleted organization no group row; Python has no group tables")
 }
 
 // A refresh that read the current table before a delete of the group tables
@@ -285,6 +286,7 @@ func TestOrgDeletionDeletesGroupRowsWrittenAfterTheSecondDelete(t *testing.T) {
 	if passes := record.seen(); len(passes) == 0 || passes[len(passes)-1] != 3 {
 		t.Errorf("the current table was deleted on passes %v, want a last pass 3 (the read-back found the planted row)", passes)
 	}
+	venueoracle.WriteGoOnlyProof(t, "CHAOS-6347 Go-only property: a group row written after the second delete is deleted by the read-back; Python has no group tables")
 }
 
 // Rows that come back after every delete are never left silently: after the
@@ -316,6 +318,7 @@ func TestOrgDeletionReportsGroupRowsThatKeepComingBack(t *testing.T) {
 	if got, want := fmt.Sprint(record.seen()), "[1 2 3 4]"; got != want {
 		t.Errorf("the current table was deleted on passes %s, want %s (one delete, then three passes)", got, want)
 	}
+	venueoracle.WriteGoOnlyProof(t, "CHAOS-6347 Go-only property: group rows that keep coming back make the delete report the purge incomplete; Python has no group tables")
 }
 
 // viewTarget is the table after the first " TO " of a materialized view's

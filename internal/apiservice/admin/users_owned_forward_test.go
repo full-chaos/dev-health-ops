@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -351,6 +353,7 @@ func TestUsersOwnedPatchProfileFieldsForwardToAuth(t *testing.T) {
 // R23: an empty PATCH still reaches auth-service and answers the row (ledger row known-divergence-noop-patch-updated-at:
 // auth-service writes nothing for it, so updated_at keeps its value).
 func TestUsersOwnedNoOpPatchForwardsAndAnswers200(t *testing.T) {
+	mustLedgerRow(t, "known-divergence-noop-patch-updated-at")
 	db, users := ownedDB(activeStored()), &fakeUsersAdmin{}
 	code, body := ownedCall{route: "update", body: `{}`}.run(ownedHandlers(db, users, true))
 	if code != http.StatusOK || !strings.Contains(body, `"updated_at"`) {
@@ -375,6 +378,7 @@ func TestUsersOwnedSetPasswordForwardsToAuth(t *testing.T) {
 // R16 (Q8): the acting admin's password over bcrypt's 72 bytes is go-api's 500, before any call (ledger residual
 // row known-divergence-admin-password-no-hash-long).
 func TestUsersOwnedSetPasswordAdminPasswordOver72BytesIs500BeforeTheForward(t *testing.T) {
+	mustLedgerRow(t, "known-divergence-admin-password-no-hash-long")
 	db, users := ownedDB(activeStored()), &fakeUsersAdmin{}
 	long := strings.Repeat("a", 73)
 	code, body := ownedCall{route: "password", input: &setPasswordInput{AdminPassword: long, Password: "Correct-Horse-Battery-9"}}.run(ownedHandlers(db, users, true))
@@ -457,6 +461,7 @@ func TestUsersOwnedDuplicateFoundBeforeTheForwardIsTheGoAPI400(t *testing.T) {
 // R14 (D6908): a username auth-service finds taken after go-api's check passed is the race: 409 username_taken
 // (ledger row known-stricter-duplicate-race).
 func TestUsersOwnedUsernameRaceIs409UsernameTaken(t *testing.T) {
+	mustLedgerRow(t, "known-stricter-duplicate-race")
 	db, users := ownedDB(activeStored()), &fakeUsersAdmin{err: refusedWith(http.StatusConflict, "username_taken")}
 	code, body := ownedCall{route: "create", body: `{"email":"` + ownedNewEmail + `","username":"Neo"}`}.run(ownedHandlers(db, users, true))
 	mustOwnedAnswer(t, code, body, http.StatusConflict, `{"detail":{"message":"User with username Neo already exists","reason":"username_taken"}}`)
@@ -464,6 +469,7 @@ func TestUsersOwnedUsernameRaceIs409UsernameTaken(t *testing.T) {
 
 // R19 (D6908 class): the email race, the same row.
 func TestUsersOwnedEmailRaceIs409EmailTaken(t *testing.T) {
+	mustLedgerRow(t, "known-stricter-duplicate-race")
 	db, users := ownedDB(activeStored()), &fakeUsersAdmin{err: refusedWith(http.StatusConflict, "email_taken")}
 	code, body := ownedCall{route: "update", body: `{"email":"New@Example.com"}`}.run(ownedHandlers(db, users, true))
 	mustOwnedAnswer(t, code, body, http.StatusConflict, `{"detail":{"message":"Email New@Example.com already in use","reason":"email_taken"}}`)
@@ -472,6 +478,7 @@ func TestUsersOwnedEmailRaceIs409EmailTaken(t *testing.T) {
 // R20 (acp Q4): an org-scoped create on a missing organization is 404 (legacy: a 500 foreign-key failure; ledger
 // row known-stricter-create-missing-org).
 func TestUsersOwnedCreateOnAMissingOrgIs404OrganizationNotFound(t *testing.T) {
+	mustLedgerRow(t, "known-stricter-create-missing-org")
 	db, users := ownedDB(activeStored()), &fakeUsersAdmin{err: refusedWith(http.StatusNotFound, "organization_not_found")}
 	code, body := ownedCall{route: "create", body: `{"email":"` + ownedNewEmail + `"}`, header: map[string]string{"X-Org-Id": provOrg.String()}}.run(ownedHandlers(db, users, true))
 	mustOwnedAnswer(t, code, body, http.StatusNotFound, `{"detail":"Organization not found"}`)
@@ -486,6 +493,7 @@ func TestUsersOwnedStateChangedIs409(t *testing.T) {
 
 // R15: go-api's own superuser guard refuses a non-superuser's grant before any call.
 func TestUsersOwnedNonSuperuserGrantRefusedBeforeTheForward(t *testing.T) {
+	mustLedgerRow(t, "known-stricter-superuser-create-promote")
 	db, users := ownedDB(activeStored()), &fakeUsersAdmin{}
 	db.rows["SELECT role FROM memberships WHERE org_id = $1 AND user_id = $2"] = []any{"admin"}
 	code, body := ownedCall{route: "create", body: `{"email":"` + ownedNewEmail + `","is_superuser":true}`, caller: ownedOrgAdmin()}.run(ownedHandlers(db, users, true))
@@ -577,6 +585,28 @@ func TestUsersOwnedCreateReadBackMissingIs503(t *testing.T) {
 	delete(db.rows, ownedByIDSQL)
 	code, body := ownedCall{route: "create", body: `{"email":"` + ownedNewEmail + `"}`}.run(ownedHandlers(db, users, true))
 	mustOwnedAnswer(t, code, body, http.StatusServiceUnavailable, unavailableBody())
+}
+
+// mustLedgerRow fails unless ci/auth_exception_ledger.tsv holds the row id, anchored in a file of this tree that
+// holds its needle: the stricter or divergent answer a cell pins is named in the ledger.
+func mustLedgerRow(t *testing.T, id string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "ci", "auth_exception_ledger.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		cols := strings.Split(line, "\t")
+		if len(cols) != 7 || cols[0] != id {
+			continue
+		}
+		anchor, err := os.ReadFile(filepath.Join("..", "..", "..", filepath.FromSlash(cols[2])))
+		if err != nil || !strings.Contains(string(anchor), cols[3]) {
+			t.Fatalf("ledger row %s: anchor %s does not hold its needle (%v)", id, cols[2], err)
+		}
+		return
+	}
+	t.Fatalf("ci/auth_exception_ledger.tsv has no row %s", id)
 }
 
 func movedBody() string {

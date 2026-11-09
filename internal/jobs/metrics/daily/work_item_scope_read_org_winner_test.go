@@ -398,3 +398,52 @@ func TestWorkItemOrgWinnerReadSQLShape(t *testing.T) {
 		}
 	}
 }
+
+// The org winner of each item, per partition: the kept row (scope and
+// repository), not a count. "tie-newer" is stored in three scopes: under A
+// (scope p, older), and under B (scope q) and D (scope r) at one newer
+// last_synced, so B wins (the newest, then the lower repository id) and only
+// the partition of scope q counts it. "tie-only" is stored under A (scope p)
+// and C (scope r) at one last_synced, so A wins, in scope p.
+func TestWorkItemScopeReadKeepsTheOrgWinnerRowOfEachItem(t *testing.T) {
+	older := orgWinnerDay.Add(-2 * time.Hour)
+	newer := orgWinnerDay.Add(-time.Hour)
+	store := func() *orgWinnerConn {
+		return &orgWinnerConn{rows: []orgWinnerStoredRow{
+			{repo: orgWinnerRepoD, id: "tie-newer", projectID: "r", lastSynced: newer},
+			{repo: orgWinnerRepoA, id: "tie-newer", projectID: "p", lastSynced: older},
+			{repo: orgWinnerRepoB, id: "tie-newer", projectID: "q", lastSynced: newer},
+			{repo: orgWinnerRepoC, id: "tie-only", projectID: "r", lastSynced: older},
+			{repo: orgWinnerRepoA, id: "tie-only", projectID: "p", lastSynced: older},
+		}}
+	}
+	winners := func(read workItemScopeRead) map[string]string {
+		kept := map[string]string{}
+		for _, item := range read.Items {
+			kept[item.WorkItemID] = item.workScopeID() + "/" + item.Type
+		}
+		return kept
+	}
+	at := func(scope string, repo uuid.UUID) string { return scope + "/" + repo.String() }
+	for _, test := range []struct {
+		name  string
+		every bool
+		repos []uuid.UUID
+		want  map[string]string
+	}{
+		{name: "listed {p} by A", repos: []uuid.UUID{orgWinnerRepoA},
+			want: map[string]string{"tie-only": at("p", orgWinnerRepoA)}},
+		{name: "listed {q} by B", repos: []uuid.UUID{orgWinnerRepoB},
+			want: map[string]string{"tie-newer": at("q", orgWinnerRepoB)}},
+		{name: "listed {r} by C", repos: []uuid.UUID{orgWinnerRepoC}, want: map[string]string{}},
+		{name: "listed {r} by D", repos: []uuid.UUID{orgWinnerRepoD}, want: map[string]string{}},
+		{name: "full run", every: true,
+			want: map[string]string{"tie-newer": at("q", orgWinnerRepoB), "tie-only": at("p", orgWinnerRepoA)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := winners(readOrgWinnerScope(t, store(), test.every, test.repos...)); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("kept rows (scope/repository) = %v, want %v", got, test.want)
+			}
+		})
+	}
+}

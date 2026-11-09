@@ -84,13 +84,16 @@ func TestDiffQueryAPIGrantsWithSessionsRequiresAndAllowsExactlyTheSessionRead(t 
 func TestQueryAPIManifestHoldsThePlatformReadOnlyWhileOwned(t *testing.T) {
 	t.Parallel()
 	off, on := QueryAPISessionReadFor("auth", false), QueryAPISessionReadFor("auth", true)
-	session := QueryAPIAuthTable{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
-	if got := off.Tables(); !reflect.DeepEqual(got, []QueryAPIAuthTable{session}) {
+	session := []QueryAPIAuthTable{
+		{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version", "created_at", "web_session_id"}},
+		{Table: "users", Columns: []string{"principal_id", "password_updated_at"}},
+	}
+	if got := off.Tables(); !reflect.DeepEqual(got, session) {
 		t.Fatalf("off: %+v", got)
 	}
-	want := []QueryAPIAuthTable{session,
-		{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
-		{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}}}
+	want := append(append([]QueryAPIAuthTable(nil), session...),
+		QueryAPIAuthTable{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
+		QueryAPIAuthTable{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}})
 	if got := on.Tables(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("on: %+v, want %+v", got, want)
 	}

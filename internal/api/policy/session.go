@@ -102,6 +102,11 @@ func (a *Authenticator) checkSession(ctx context.Context, sid string, subject uu
 // sid, this query changes first.
 const sessionStateQuery = `SELECT principal_id, revoked_at IS NOT NULL, legacy_token_version FROM {auth_schema}.sessions WHERE id = $1`
 
+// sessionStateSQL is sessionStateQuery in the quoted auth schema.
+func sessionStateSQL(quotedSchema string) string {
+	return strings.ReplaceAll(sessionStateQuery, "{auth_schema}", quotedSchema)
+}
+
 // SessionState reads the session id names, in the auth schema AuthSchema
 // names: its principal, whether it is revoked and its token_version pin.
 func (s PGStore) SessionState(ctx context.Context, id uuid.UUID) (SessionRow, bool, error) {
@@ -116,8 +121,7 @@ func (s PGStore) SessionState(ctx context.Context, id uuid.UUID) (SessionRow, bo
 	var principal uuid.UUID
 	var revoked bool
 	var pin *int64
-	query := strings.ReplaceAll(sessionStateQuery, "{auth_schema}", pgx.Identifier{name}.Sanitize())
-	err := s.Pool.QueryRow(ctx, query, id).Scan(&principal, &revoked, &pin)
+	err := s.Pool.QueryRow(ctx, sessionStateSQL(pgx.Identifier{name}.Sanitize()), id).Scan(&principal, &revoked, &pin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SessionRow{}, false, nil
 	}

@@ -116,3 +116,20 @@ func TestAnAliasThatIsNotAnIdentifierIsRefused(t *testing.T) {
 	}()
 	rule(t).Live("s; DROP TABLE x", "now()")
 }
+
+// The revoke fragment without a lifetime is the rule's, byte for byte.
+func TestRevocationIsTheRulesRevokeWithoutALifetime(t *testing.T) {
+	if _, err := NewRevocation(""); err == nil {
+		t.Error("an empty schema was accepted")
+	}
+	v, err := NewRevocation(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Revoked("s"); got != wantRevoked {
+		t.Errorf("Revocation.Revoked changed:\n got %q\nwant %q", got, wantRevoked)
+	}
+	if got, want := v.Revoked("x"), rule(t).Revoked("x"); got != want {
+		t.Errorf("Revocation.Revoked(x) = %q, Rule.Revoked(x) = %q", got, want)
+	}
+}

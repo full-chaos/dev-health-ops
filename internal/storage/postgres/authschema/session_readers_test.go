@@ -6,11 +6,16 @@ import (
 )
 
 // The session readers' grant is the reviewed one, written out here
-// independently of SessionReaderColumns.
+// independently of SessionReaderColumns: the columns sessionrule.Revoked reads
+// on the row and on its web session, then the principal's password stamp.
 func TestSessionReaderColumnsAreTheReviewedOnes(t *testing.T) {
-	want := ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+	want := ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version", "created_at", "web_session_id"}}
 	if got := SessionReaderColumns(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("SessionReaderColumns() = %+v, want %+v", got, want)
+	}
+	stamp := ColumnGrant{Table: "users", Columns: []string{"principal_id", "password_updated_at"}}
+	if got := SessionReaderReads(false); !reflect.DeepEqual(got, []ColumnGrant{want, stamp}) {
+		t.Fatalf("SessionReaderReads(false) = %+v, want %+v", got, []ColumnGrant{want, stamp})
 	}
 }
 
@@ -45,11 +50,14 @@ func TestPlatformRoleReaderColumnsAreTheReviewedOnes(t *testing.T) {
 	if got := PlatformRoleReaderColumns(); !reflect.DeepEqual(got, platform) {
 		t.Fatalf("PlatformRoleReaderColumns() = %+v, want %+v", got, platform)
 	}
-	session := ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
-	if got := SessionReaderReads(false); !reflect.DeepEqual(got, []ColumnGrant{session}) {
+	session := []ColumnGrant{
+		{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version", "created_at", "web_session_id"}},
+		{Table: "users", Columns: []string{"principal_id", "password_updated_at"}},
+	}
+	if got := SessionReaderReads(false); !reflect.DeepEqual(got, session) {
 		t.Errorf("SessionReaderReads(false) = %+v, want the session read alone", got)
 	}
-	if got, want := SessionReaderReads(true), append([]ColumnGrant{session}, platform...); !reflect.DeepEqual(got, want) {
+	if got, want := SessionReaderReads(true), append(append([]ColumnGrant(nil), session...), platform...); !reflect.DeepEqual(got, want) {
 		t.Errorf("SessionReaderReads(true) = %+v, want %+v", got, want)
 	}
 }

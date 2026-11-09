@@ -35,6 +35,25 @@ func New(quotedSchema string, refreshTTL time.Duration) (Rule, error) {
 	return Rule{schema: quotedSchema, ttlMicros: refreshTTL.Microseconds()}, nil
 }
 
+// Revocation builds the revoke fragment alone, for a reader that decides no expiry:
+// it takes no refresh lifetime.
+type Revocation struct {
+	schema string
+}
+
+// NewRevocation returns the revoke fragment over quotedSchema (a quoted auth schema identifier).
+func NewRevocation(quotedSchema string) (Revocation, error) {
+	if quotedSchema == "" {
+		return Revocation{}, errors.New("sessionrule: an auth schema is required")
+	}
+	return Revocation{schema: quotedSchema}, nil
+}
+
+// Revoked is Rule.Revoked: the same text, without a refresh lifetime.
+func (v Revocation) Revoked(a string) string {
+	return ""
+}
+
 var aliasPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 func checkAlias(a string) string {

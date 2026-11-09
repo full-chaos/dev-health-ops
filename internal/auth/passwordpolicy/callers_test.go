@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"go/types"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -28,8 +29,28 @@ var typedScope = []string{"./internal/api/...", "./internal/apiservice/...", "./
 // "edge" (one call of a writer: caller -> callee), "uncalled" (a function with no
 // non-test caller; the row fails once it has one). at is a file:line inside fn
 // (for an edge: the call line inside caller). A row that matches nothing fails.
+//
+// Kind "hop" ends at fn, an auth-service handler that go-api reaches over internal
+// HTTP: the walk cannot follow the request, so it goes on from every function
+// outside internal/auth that names the route constant (a hopRoutes entry). That
+// set must equal callers (sorted function keys; empty while no go-api caller
+// exists), and each of them must reach a guard.
 type notPasswordSetting struct {
 	kind, fn, callee, at, why string
+	route                     string
+	callers                   []string
+}
+
+// A hopRoute is an internal route that carries a password hash from go-api to
+// auth-service. Outside internal/auth its path is named only through constant
+// (pkgpath.Name); its literal anywhere else fails TestHopRouteLiteralsOnlyThroughTheirConstant.
+type hopRoute struct {
+	path, constant string
+}
+
+var hopRoutes = []hopRoute{
+	{path: "/internal/v1/users/create", constant: mod + "internal/api/authprovision.PathUsersCreate"},
+	{path: "/internal/v1/users/password", constant: mod + "internal/api/authprovision.PathUsersPassword"},
 }
 
 const mod = "github.com/full-chaos/dev-health-ops/"
@@ -60,7 +81,7 @@ func TestEveryPasswordSettingPathCallsTheSharedPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := censusPasswordPaths(root, typedScope, reviewed)
+	res := censusPasswordPaths(root, typedScope, reviewed, hopRoutes, 100)
 	for _, p := range res.problems {
 		t.Error(p)
 	}
@@ -76,16 +97,149 @@ func TestPasswordPathCensusFailsOnABrokenLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := censusPasswordPaths(root, []string{"./..."}, nil)
+	res := censusPasswordPaths(root, []string{"./..."}, nil, nil, 1)
 	t.Log(res.problems)
 	if len(res.paths) != 0 || !hasPrefix(res.problems, "load: brokenload: ") {
 		t.Fatalf("a package with a type error gave paths %v, problems %v; want a load problem and no path", res.paths, res.problems)
 	}
-	res = censusPasswordPaths(root, []string{"./nosuchdir/..."}, nil)
+	res = censusPasswordPaths(root, []string{"./nosuchdir/..."}, nil, nil, 1)
 	t.Log(res.problems)
 	if !hasPrefix(res.problems, "load: ") {
 		t.Fatalf("a pattern that loads nothing gave problems %v; want a load problem", res.problems)
 	}
+}
+
+// Outside internal/auth a hop route path is written only as its constant's value:
+// a literal copy would reach auth-service with no caller the hop rows can see.
+func TestHopRouteLiteralsOnlyThroughTheirConstant(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems, scanned := hopLiterals(root, hopRoutes)
+	if scanned < 100 {
+		t.Fatalf("scanned %d Go files outside internal/auth; the scan walked too little of the module", scanned)
+	}
+	for _, p := range problems {
+		t.Error(p)
+	}
+}
+
+// The hop-row mechanism on a fixture module (testdata/hopfixture): a go-api
+// handler checks the policy and posts through the route constant; auth-service's
+// handler for that route writes the hash. Each case adds one file to a copy.
+func TestPasswordPathCensusHopRows(t *testing.T) {
+	createRow := notPasswordSetting{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersCreate", at: "internal/auth/authapi/routes.go:15",
+		route: "/internal/v1/users/create", callers: []string{mod + "internal/api/authprovision.PostCreate"}, why: "internal HTTP"}
+	passwordRow := notPasswordSetting{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersPassword", at: "internal/auth/authapi/routes.go:17",
+		route: "/internal/v1/users/password", callers: []string{mod + "internal/api/authprovision.PostPassword"}, why: "internal HTTP"}
+	both := []notPasswordSetting{createRow, passwordRow}
+	noCreateCaller, ghostCaller, dormantPassword := createRow, createRow, passwordRow
+	noCreateCaller.callers = nil
+	dormantPassword.callers = nil
+	ghostCaller.callers = []string{mod + "internal/api/authprovision.PostCreate", mod + "internal/api/authprovision.postGhost"}
+	cases := []struct {
+		name   string
+		files  map[string]string // written over the copy
+		remove []string
+		rows   []notPasswordSetting
+		want   string // "" = no problem
+	}{
+		{name: "both hops pinned", rows: both},
+		{name: "no go-api caller yet, pinned empty", rows: []notPasswordSetting{noCreateCaller, dormantPassword},
+			remove: []string{"internal/apiservice/admin/users.go"},
+			files: map[string]string{
+				"internal/api/authprovision/authprovision.go": "package authprovision\n\nconst (\n\tPathUsersCreate   = \"/internal/v1/users/create\"\n" +
+					"\tPathUsersPassword = \"/internal/v1/users/password\"\n)\n",
+				// a guarded writer keeps one known-good path, so the walk is not vacuous
+				"internal/auth/identity/local.go": "package identity\n\nimport \"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy\"\n\n" +
+					"func changeLocal(x Exec, pw string) {\n\tif len(passwordpolicy.ValidateForHash(pw)) > 0 {\n\t\treturn\n\t}\n" +
+					"\tx(`UPDATE public.users SET password_hash = $2, token_version = token_version + 1 WHERE id = $1`, pw)\n}\n"}},
+		{name: "no hop rows", rows: nil, want: "password path reaches no ValidateForHash call: " + mod + "internal/auth/identity.InsertUser"},
+		{name: "pinned set misses a caller", rows: []notPasswordSetting{noCreateCaller, passwordRow},
+			want: "reviewed row hop " + mod + "internal/auth/authapi.handlers.usersCreate: functions outside internal/auth that name"},
+		{name: "pinned set names an absent caller", rows: []notPasswordSetting{ghostCaller, passwordRow},
+			want: "reviewed row hop " + mod + "internal/auth/authapi.handlers.usersCreate: functions outside internal/auth that name"},
+		{name: "unguarded caller of the route client", rows: both, files: map[string]string{"internal/apiservice/admin/force.go": "package admin\n\n" +
+			"import \"github.com/full-chaos/dev-health-ops/internal/api/authprovision\"\n\nfunc forceSet(pw string) { authprovision.PostPassword(pw) }\n"},
+			want: "password path reaches no ValidateForHash call: " + mod + "internal/auth/identity.SetPassword"},
+		{name: "new caller names the constant", rows: both, files: map[string]string{"internal/api/authprovision/other.go": "package authprovision\n\n" +
+			"func postOther(hash string) { post(PathUsersPassword, hash) }\n"},
+			want: "reviewed row hop " + mod + "internal/auth/authapi.handlers.usersPassword: functions outside internal/auth that name"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := copyFixture(t, "testdata/hopfixture")
+			for _, f := range c.remove {
+				if err := os.Remove(filepath.Join(root, filepath.FromSlash(f))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for f, src := range c.files {
+				if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(f)), []byte(src), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			res := censusPasswordPaths(root, []string{"./..."}, c.rows, fixtureRoutes, 1)
+			t.Log(res.problems)
+			switch {
+			case c.want == "" && len(res.problems) > 0:
+				t.Fatalf("problems %v, want none", res.problems)
+			case c.want == "" && len(res.paths) == 0:
+				t.Fatal("no path walked")
+			case c.want != "" && !hasPrefix(res.problems, c.want):
+				t.Fatalf("problems %v, want one that starts %q", res.problems, c.want)
+			}
+		})
+	}
+	t.Run("route literal outside internal/auth", func(t *testing.T) {
+		root := copyFixture(t, "testdata/hopfixture")
+		if problems, _ := hopLiterals(root, fixtureRoutes); len(problems) != 0 {
+			t.Fatalf("the fixture as is: %v, want none", problems)
+		}
+		// a constant of the same name in another package is not the route's own declaration
+		src := "package admin\n\nconst PathUsersPassword = \"/internal/v1/users/password\"\n"
+		if err := os.WriteFile(filepath.Join(root, "internal", "apiservice", "admin", "raw.go"), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		problems, _ := hopLiterals(root, fixtureRoutes)
+		t.Log(problems)
+		if !hasPrefix(problems, "internal/apiservice/admin/raw.go:3 names the route /internal/v1/users/password as a literal") {
+			t.Fatalf("problems %v, want the raw.go literal", problems)
+		}
+	})
+}
+
+var fixtureRoutes = []hopRoute{
+	{path: "/internal/v1/users/create", constant: mod + "internal/api/authprovision.PathUsersCreate"},
+	{path: "/internal/v1/users/password", constant: mod + "internal/api/authprovision.PathUsersPassword"},
+}
+
+// copyFixture copies the fixture module dir into a new temporary directory.
+func copyFixture(t *testing.T, dir string) string {
+	t.Helper()
+	dst := t.TempDir()
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dst, rel), data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dst
 }
 
 func hasPrefix(lines []string, prefix string) bool {
@@ -109,6 +263,7 @@ type pathFunc struct {
 	file   string
 	lo, hi int
 	refs   map[string]bool // every function it references
+	consts map[string]bool // every constant it names
 	calls  map[string]bool // every function it calls
 	ifaces []ifaceRef      // interface methods it references
 }
@@ -143,7 +298,7 @@ func funcKey(f *types.Func) string {
 	return types.TypeString(t, nil) + "." + f.Name()
 }
 
-func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting) (res censusResult) {
+func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting, routes []hopRoute, minFiles int) (res censusResult) {
 	fail := func(format string, args ...any) { res.problems = append(res.problems, fmt.Sprintf(format, args...)) }
 	sites, scanned, err := writerSites(root)
 	if err != nil {
@@ -172,7 +327,7 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting)
 	if len(res.problems) > 0 {
 		return res
 	}
-	if scanned < 100 || len(sites) == 0 {
+	if scanned < minFiles || len(sites) == 0 {
 		fail("census: scanned %d Go files, found %d password-hash writes; the census walked too little of the module", scanned, len(sites))
 	}
 
@@ -189,7 +344,7 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting)
 			rel = filepath.ToSlash(rel)
 			inScope[rel] = true
 			for _, decl := range file.Decls {
-				pf := &pathFunc{refs: map[string]bool{}, calls: map[string]bool{}, file: rel}
+				pf := &pathFunc{refs: map[string]bool{}, consts: map[string]bool{}, calls: map[string]bool{}, file: rel}
 				var body ast.Node = decl
 				if fd, ok := decl.(*ast.FuncDecl); ok {
 					obj, _ := pkg.TypesInfo.Defs[fd.Name].(*types.Func)
@@ -206,6 +361,9 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting)
 				ast.Inspect(body, func(n ast.Node) bool {
 					switch x := n.(type) {
 					case *ast.Ident:
+						if c, ok := pkg.TypesInfo.Uses[x].(*types.Const); ok && c.Pkg() != nil {
+							pf.consts[c.Pkg().Path()+"."+c.Name()] = true
+						}
 						f, ok := pkg.TypesInfo.Uses[x].(*types.Func)
 						if !ok {
 							return true
@@ -235,6 +393,9 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting)
 				if prev, ok := funcs[pf.key]; ok && prev.name == "<package-level>" {
 					for k := range pf.refs {
 						prev.refs[k] = true
+					}
+					for k := range pf.consts {
+						prev.consts[k] = true
 					}
 					prev.ifaces = append(prev.ifaces, pf.ifaces...)
 				} else {
@@ -336,6 +497,29 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting)
 		}
 		return false
 	}
+	routeConst := map[string]string{}
+	for _, r := range routes {
+		routeConst[r.path] = r.constant
+	}
+	hopRow := func(key string) (int, bool) {
+		for i, r := range rows {
+			if r.kind == "hop" && r.fn == key {
+				return i, true
+			}
+		}
+		return 0, false
+	}
+	// hopCallers are the functions outside internal/auth that name constant.
+	hopCallers := func(constant string) []string {
+		var out []string
+		for k, pf := range funcs {
+			if pf.consts[constant] && !strings.HasPrefix(k, mod+"internal/auth/") {
+				out = append(out, k)
+			}
+		}
+		sort.Strings(out)
+		return out
+	}
 	uncalledRow := func(key string) (int, bool) {
 		for i, r := range rows {
 			if r.kind == "uncalled" && r.fn == key {
@@ -402,6 +586,29 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting)
 				res.paths = append(res.paths, strings.Join(chain, " <- ")+" ["+g+"]")
 				return
 			}
+			if i, ok := hopRow(key); ok {
+				r := rows[i]
+				used[i] = true
+				rowAt(i, key)
+				constant, known := routeConst[r.route]
+				if !known {
+					fail("reviewed row hop %s: route %q is not a hopRoutes entry", key, r.route)
+					return
+				}
+				want := append([]string(nil), r.callers...)
+				sort.Strings(want)
+				found := hopCallers(constant)
+				if strings.Join(found, ",") != strings.Join(want, ",") {
+					fail("reviewed row hop %s: functions outside internal/auth that name %s = %v, want %v", key, constant, found, want)
+				}
+				if len(found) == 0 {
+					res.paths = append(res.paths, strings.Join(chain, " <- ")+" [hop "+r.route+": no caller]")
+				}
+				for _, c := range found {
+					walk(c, append(chain, "<HTTP "+r.route+">"))
+				}
+				return
+			}
 			pf := funcs[key]
 			if pf != nil && pf.name != "<package-level>" && token.IsExported(pf.name) && !checkedOutside[key] {
 				checkedOutside[key] = true
@@ -444,6 +651,75 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting)
 		}
 	}
 	return res
+}
+
+// hopLiterals reports every string literal in root's non-test Go files outside
+// internal/auth that holds a hop route path, other than the value of that route's
+// own constant declaration.
+func hopLiterals(root string, routes []hopRoute) (problems []string, scanned int) {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != root && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "testdata") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") || strings.HasPrefix(rel, "internal/auth/") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		scanned++
+		own := map[ast.Node]bool{}
+		for _, decl := range file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, name := range vs.Names {
+					for _, r := range routes {
+						if i < len(vs.Values) && r.constant == mod+filepath.ToSlash(filepath.Dir(rel))+"."+name.Name {
+							own[vs.Values[i]] = true
+						}
+					}
+				}
+			}
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING || own[lit] {
+				return true
+			}
+			text, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				return true
+			}
+			for _, r := range routes {
+				if strings.Contains(text, r.path) {
+					problems = append(problems, fmt.Sprintf("%s:%d names the route %s as a literal: use %s", rel, fset.Position(lit.Pos()).Line, r.path, r.constant))
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("census: %v", err))
+	}
+	return problems, scanned
 }
 
 // writerSites runs the shared password-writer census over root's non-test Go

@@ -5216,7 +5216,7 @@ auth_scope_candidates() {
 check_auth_scope_selftest() {
   local exempt="${ROOT}/ci/auth_gate_scope_exempt.txt" dir rc=0
   # Files, not <(...): `go run` starts the built binary without the shell's extra fds.
-  dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-auth-scope.XXXXXX")" || die "auth scope: no temp dir"
+  dir="$(mktemp -d -t dev-health-auth-scope.XXXXXX)" || die "auth scope: no temp dir"
   auth_go list -mod=readonly "${AUTH_PACKAGES[@]}" | LC_ALL=C sort -u >"${dir}/gated" || rc=$?
   [ "${rc}" -eq 0 ] && { auth_scope_candidates -sources >"${dir}/sources" || rc=$?; }
   [ "${rc}" -eq 0 ] && { auth_go run -trimpath -mod=readonly ./cmd/cigate scope-verdict \

@@ -204,11 +204,18 @@ func AuthScopeVerdict(gated, sources, exempt io.Reader, stdout, stderr io.Writer
 	if len(missing) > 0 {
 		return fail("package(s) look like auth or import the auth schema but are neither in the gate nor exempt with a reason in ci/auth_gate_scope_exempt.txt: %s", strings.Join(missing, " "))
 	}
-	var classless []string
+	var classless, duplicate []string
+	rowCount := map[string]int{}
 	for _, r := range rows {
 		if r.class != ExemptTestOnly && r.class != ExemptPackage {
 			classless = append(classless, r.pkg)
 		}
+		if rowCount[r.pkg]++; rowCount[r.pkg] == 2 {
+			duplicate = append(duplicate, r.pkg)
+		}
+	}
+	if len(duplicate) > 0 {
+		return fail("duplicate exemption row(s) (one row per package): %s", strings.Join(duplicate, " "))
 	}
 	if len(classless) > 0 {
 		return fail("exemption row(s) with no or unknown class (want package<TAB>%s|%s<TAB>reason): %s", ExemptTestOnly, ExemptPackage, strings.Join(classless, " "))

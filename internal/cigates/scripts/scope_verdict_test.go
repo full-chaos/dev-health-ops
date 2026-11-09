@@ -36,6 +36,8 @@ func TestAuthScopeVerdict(t *testing.T) {
 		{"package row with test imports only is over-broad", keys, keys + "\tsegment\n" + sso + "\ttestimport", sso + "\tpackage\tan integration test", 2, "over-broad exemption(s) (test imports only; use test-only): " + sso},
 		{"row without a class fails", keys, keys + "\tsegment\n" + sso + "\ttestimport", sso + "\tan integration test reads the auth schema", 2, "exemption row(s) with no or unknown class"},
 		{"row with an unknown class fails", keys, keys + "\tsegment\n" + sso + "\ttestimport", sso + "\ttests-only\tan integration test", 2, "exemption row(s) with no or unknown class"},
+		{"duplicate row fails", keys, keys + "\tsegment\n" + sso + "\ttestimport", sso + "\ttest-only\tan integration test\n" + sso + "\ttest-only\tan integration test", 2, "duplicate exemption row(s) (one row per package): " + sso},
+		{"duplicate row with a different class fails", keys, keys + "\tsegment\n" + sso + "\ttestimport", sso + "\ttest-only\tan integration test\n" + sso + "\tpackage\tthe whole package", 2, "duplicate exemption row(s) (one row per package): " + sso},
 		{"empty gate list fails", "", keys + "\tsegment", "", 2, "the gate selects no package"},
 		{"empty sources fail", keys, "", "", 2, "no candidate package found"},
 		{"blank-only sources fail", keys, "\n \n\t\n", "", 2, "no candidate package found"},

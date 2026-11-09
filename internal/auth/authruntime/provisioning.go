@@ -1,6 +1,8 @@
 package authruntime
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -85,22 +87,39 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 }
 
 // usersAdminRoutes builds the user-admin routes go-api calls for its admin users writes while auth-service owns users
-// (AUTH_USERS_OWNED), and none otherwise. They are not behind AUTH_MEMBERSHIP_ROUTES: each mounts only with its
-// endpoint-profile row (authapi.UsersAdminRoutes), on the provisioning routes' workload path.
+// (AUTH_USERS_OWNED), and none otherwise. They are not behind AUTH_MEMBERSHIP_ROUTES: they mount only with their
+// endpoint-profile rows (authapi.UsersAdminRoutes), on the provisioning routes' workload path. A missing row is no
+// start refusal (product rule 3): the one INFO line "users routes" says how many are mounted and, when none is, why.
 func usersAdminRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	identities *identity.Store, workload *authapi.SessionIssueWorkload) ([]httpapi.Route, error) {
 	if !cfg.UsersOwned {
+		logUsersAdminMount(logger, 0, "reason", "users_not_owned")
 		return nil, nil
 	}
 	roles, err := platformrole.New(platformrole.Config{Pool: pool, Schema: schema, Logger: logger})
 	if err != nil {
 		return nil, err
 	}
-	return authapi.UsersAdminRoutes(authapi.ProvisioningDeps{
+	routes, err := authapi.UsersAdminRoutes(authapi.ProvisioningDeps{
 		Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities, Workload: workload, Logger: logger,
 		ProfileRows:      provisioningProfileRows,
 		UsersAdminStores: authapi.UsersAdminStores{UsersAdmin: identities, PlatformRoles: authapi.PlatformRoleStore{Store: roles}},
 	})
+	if err != nil {
+		return nil, err
+	}
+	var missing *authapi.ProvisioningRowError
+	if len(routes) == 0 && errors.As(authapi.UsersAdminRowsError(provisioningProfileRows), &missing) {
+		logUsersAdminMount(logger, 0, append([]any{"reason", missing.DependencyReason()}, missing.DependencyAttrs()...)...)
+		return routes, nil
+	}
+	logUsersAdminMount(logger, len(routes))
+	return routes, nil
+}
+
+// logUsersAdminMount writes the user-admin routes' start line: mounted=<n>/<all> and attrs.
+func logUsersAdminMount(logger *slog.Logger, mounted int, attrs ...any) {
+	logger.Info("users routes", append([]any{"mounted", fmt.Sprintf("%d/%d", mounted, authapi.UsersAdminRouteCount())}, attrs...)...)
 }
 
 // goAPIInternalRoutes are the internal routes go-api calls: the provisioning routes (AUTH_MEMBERSHIP_ROUTES) and, apart

@@ -47,7 +47,7 @@ func usersAnswerOf(t *testing.T, body []byte) map[string]any {
 func TestUsersAdminRoutesMountWithTheirRows(t *testing.T) {
 	t.Parallel()
 	with := newUsersAdminFixture(t)
-	without := newProvFixture(t)
+	without := newProvFixtureWith(t, embeddedDocWithoutRoutes(t, usersAdminPaths...))
 	for _, path := range usersAdminPaths {
 		expectRefusal(t, with.post(path, `{}`, nil), http.StatusBadRequest, reasonMalformed)
 		if got := without.post(path, `{}`, nil).Code; got != http.StatusNotFound {

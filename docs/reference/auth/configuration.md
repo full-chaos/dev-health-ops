@@ -161,6 +161,16 @@ With `AUTH_MEMBERSHIP_ROUTES=true`, auth-service serves the membership, invite a
 
   The exchange goes to the origin of `AUTH_PROXY_URL` (`POST /internal/v1/token/exchange`, which auth-service mounts only while `AUTH_WORKLOAD_EXCHANGE` or `AUTH_WORKLOAD_BOOTSTRAP` is `true`; see [workload-token exchange](#workload-token-exchange)); the subject file is read again for every exchange, and one exchange serves all the clients that selected `workload` (the provisioning clients and the session issue client). With the switch on, a missing or invalid input is a start-up error naming it. A failed exchange fails that call (503) with no request to the provisioning routes; there is no fallback to `svc_authsess_`.
 
+### User-admin routes
+
+With `AUTH_USERS_OWNED=true`, auth-service serves the writes of go-api's `/api/v1/admin/users` routes: `POST /internal/v1/users/{create,update,password,delete}`. They are not behind `AUTH_MEMBERSHIP_ROUTES`.
+
+- Each route has a row in `contracts/auth/v1/endpoint-profiles.auth-service.json` that admits the go-api workload token (`workload_token`) only, and the binary embeds that document. The four routes mount together or not at all: a document that lacks one row, or a row that lists another class, leaves all four unmounted (404). This is no start refusal.
+- At start, auth-service logs one INFO line `users routes` with `mounted` (`4/4` or `0/4`). With `0/4` it adds `reason`: `users_not_owned`, or `auth_provisioning_profile_row_missing` with the `route` that has no row.
+- The caller presents the go-api workload token as on the provisioning routes: audience `auth-service` and `sub` equal to `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT`. Any other bearer is the one `401 invalid_credentials`: a workload token of another subject or audience, a user token, the retired `svc_authsess_` credential, or no token.
+- The tenant class is `org_scoped`, as the go-api rows of `/api/v1/admin/users`: the actor is an active platform admin, or an owner or admin of the organization the body names. The rule runs again after the platform role write lock.
+- go-api does not call these routes yet.
+
 ### Delegated impersonation (go-api)
 
 - `AUTH_PROXY_IMPERSONATION` (go-api; chart value `goApi.authProxy.impersonation`, default off; `true` or `false`, or any other value `strconv.ParseBool` reads (`1`, `t`, `T`, `TRUE`, `True`; `0`, `f`, `F`, `FALSE`, `False`), as for every `AUTH_PROXY_*` flag; any other value leaves the switch off and go-api starts, with one WARN line that names the variable and the value's length, never the value). On, go-api's `POST /api/v1/admin/impersonate` asks auth-service to start a [delegated session](delegated-sessions.md) of the caller's own session, and `POST /api/v1/admin/impersonate/stop` ends it there. auth-service writes go-api's impersonation row and its audit rows; go-api writes neither. Off (or unset), go-api starts and ends its own impersonation row as before.

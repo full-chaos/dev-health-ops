@@ -49,6 +49,19 @@ const (
 // usersAdminPatterns are the user-admin routes; they mount together, only when each has its row (UsersAdminRoutes).
 var usersAdminPatterns = []string{PatternUsersCreate, PatternUsersUpdate, PatternUsersPassword, PatternUsersDelete}
 
+// UsersAdminRouteCount is the number of user-admin routes.
+func UsersAdminRouteCount() int { return len(usersAdminPatterns) }
+
+// UsersAdminRowsError is nil when the endpoint-profile document (nil: the one the binary embeds) holds, for every
+// user-admin route, a row that admits exactly the go-api workload token; otherwise it is the *ProvisioningRowError of
+// the first route without one.
+func UsersAdminRowsError(raw []byte) error {
+	if raw == nil {
+		raw = authv1.AuthServiceEndpointProfiles
+	}
+	return rowsExactFor(raw, usersAdminPatterns, []string{workloadTokenClass})
+}
+
 // maxUsersAdminBody bounds a user-admin body: a create carries a verifier and request metadata.
 const maxUsersAdminBody = 8 << 10
 
@@ -105,11 +118,7 @@ func UsersAdminRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	if deps.Users == nil || deps.Reader == nil || deps.Organizations == nil || deps.UsersAdmin == nil || deps.PlatformRoles == nil {
 		return nil, errors.New("authapi: the user-admin routes need users, a reader, organizations, the user-admin store and the platform role store")
 	}
-	rows := deps.ProfileRows
-	if rows == nil {
-		rows = authv1.AuthServiceEndpointProfiles
-	}
-	if rowsExactFor(rows, usersAdminPatterns, []string{workloadTokenClass}) != nil {
+	if UsersAdminRowsError(deps.ProfileRows) != nil {
 		return nil, nil
 	}
 	if deps.Logger == nil {

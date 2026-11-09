@@ -303,6 +303,7 @@ type provFixture struct {
 	usersAdmin                                  *fakeUsersAdmin
 	roles                                       *fakePlatformRoles
 	reader                                      *sdkmetric.ManualReader
+	usersReader                                 *sdkmetric.ManualReader // a reader binds to one provider: the user-admin routes' own
 	logs                                        *bytes.Buffer
 	mux                                         *http.ServeMux
 	org, admin, owner, viewer, super, target, x uuid.UUID
@@ -372,7 +373,7 @@ func buildProvFixture(t *testing.T, profileRows []byte, w *workloadIssueFixture)
 	}
 	f := &provFixture{t: t, w: w, orgs: &fakeEnsurer{}, members: &fakeMembers{}, invites: &fakeInvites{},
 		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, sa: &fakeServiceAccounts{}, grants: &fakeGrants{}, reads: &fakeReads{}, grantReads: &fakeGrantReads{}, usersAdmin: &fakeUsersAdmin{}, roles: &fakePlatformRoles{},
-		reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
+		reader: sdkmetric.NewManualReader(), usersReader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
 		org: uuid.New(), admin: uuid.New(), owner: uuid.New(), viewer: uuid.New(), super: uuid.New(), target: uuid.New(), x: uuid.New()}
 	f.account()
 	f.grants.principal = f.target
@@ -402,7 +403,7 @@ func buildProvFixture(t *testing.T, profileRows []byte, w *workloadIssueFixture)
 	usersRoutes, err := UsersAdminRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs, ProfileRows: profileRows,
 		UsersAdminStores: UsersAdminStores{UsersAdmin: f.usersAdmin, PlatformRoles: f.roles}, Workload: workload,
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
+		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.usersReader)).Meter("test")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,19 +434,21 @@ func (f *provFixture) storeCalls() int {
 
 func (f *provFixture) refusals(op string) (int64, bool) {
 	f.t.Helper()
-	var rm metricdata.ResourceMetrics
-	if err := f.reader.Collect(context.Background(), &rm); err != nil {
-		f.t.Fatal(err)
-	}
-	for _, scope := range rm.ScopeMetrics {
-		for _, m := range scope.Metrics {
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			if m.Name != "auth.provisioning.retired_credential_refusals" || !ok {
-				continue
-			}
-			for _, point := range sum.DataPoints {
-				if got, _ := point.Attributes.Value(attribute.Key("operation")); got.AsString() == op {
-					return point.Value, true
+	for _, reader := range []*sdkmetric.ManualReader{f.reader, f.usersReader} {
+		var rm metricdata.ResourceMetrics
+		if err := reader.Collect(context.Background(), &rm); err != nil {
+			f.t.Fatal(err)
+		}
+		for _, scope := range rm.ScopeMetrics {
+			for _, m := range scope.Metrics {
+				sum, ok := m.Data.(metricdata.Sum[int64])
+				if m.Name != "auth.provisioning.retired_credential_refusals" || !ok {
+					continue
+				}
+				for _, point := range sum.DataPoints {
+					if got, _ := point.Attributes.Value(attribute.Key("operation")); got.AsString() == op {
+						return point.Value, true
+					}
 				}
 			}
 		}

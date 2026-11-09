@@ -28,9 +28,10 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf '\''%s\n'\'' "$*" >> "${FAKE_ARGV}"' \
   'env >> "${FAKE_ENV}"' \
-  'out="" url="" cfg="" accept="" argv_bearer=""' \
+  'out="" url="" cfg="" accept="" argv_bearer="" lt=""' \
   'while [ "$#" -gt 0 ]; do' \
   '  case "$1" in' \
+  '    --location-trusted) lt=1; shift ;;' \
   '    -o | --output) out="$2"; shift 2 ;;' \
   '    -K | --config) if [ "$2" = - ]; then cfg="$(cat)"; else cfg="$(cat "$2")"; fi; shift 2 ;;' \
   '    -H | --header)' \
@@ -44,6 +45,8 @@ printf '%s\n' \
   '  esac' \
   'done' \
   'case "${cfg}" in *'\''ccept: application/octet-stream'\''*) accept=1 ;; esac' \
+  '# t9b: a request that carries an Authorization header must not use --location-trusted' \
+  '[ -z "${lt}" ] || case "${cfg}" in *[Aa]uthorization:*) printf '\''%s\n'\'' "$*" >> "${FAKE_LT}" ;; *) [ -z "${argv_bearer}" ] || printf '\''%s\n'\'' "$*" >> "${FAKE_LT}" ;; esac' \
   'authed=""' \
   'bearer="$(printf '\''%s\n'\'' "${cfg}" | sed -n '\''s/^header = "Authorization: Bearer \(.*\)"$/\1/p'\'' | head -1)"' \
   '# A token on argv authenticates too, so a helper that leaks it there still downloads and is caught by t2, not by t1.' \
@@ -85,10 +88,10 @@ call() {
   flags=("$@")
   local d="${T}/d.${mode}.${name}"
   rm -rf "${d}"; mkdir -p "${d}"
-  : > "${d}/sleeps"; : > "${d}/argv"; : > "${d}/env"
+  : > "${d}/sleeps"; : > "${d}/argv"; : > "${d}/env"; : > "${d}/lt"
   local base=(PATH="${T}/bin:/usr/bin:/bin" HOME="${T}" TMPDIR="${T}" LC_ALL=C GH_TOKEN="${TOKEN}"
     FAKE_TOKEN_SHA="${TOKEN_SHA}" FAKE_ASSET_NAME="${ASSET}" FAKE_BYTES="${T}/asset" FAKE_COUNT="${d}/count"
-    FAKE_SLEEP_LOG="${d}/sleeps" FAKE_ARGV="${d}/argv" FAKE_ENV="${d}/env")
+    FAKE_SLEEP_LOG="${d}/sleeps" FAKE_ARGV="${d}/argv" FAKE_ENV="${d}/env" FAKE_LT="${d}/lt")
   [ "${mode}" = hosted ] && base+=("${HOSTED[@]}")
   set +e
   env -i "${base[@]}" "${extra[@]}" timeout 60 bash "${flags[@]}" "${SCRIPT}" \
@@ -98,7 +101,7 @@ call() {
   OUT="$(cat "${d}/out")"
   CALLS="$(wc -l < "${d}/argv" | tr -d ' ')"
   SLEEPS="$(tr '\n' ' ' < "${d}/sleeps" | sed 's/ $//')"
-  ARGV="$(cat "${d}/argv")"; DENV="$(cat "${d}/env")"
+  ARGV="$(cat "${d}/argv")"; DENV="$(cat "${d}/env")"; LT="$(cat "${d}/lt")"
   GOT=0; GOTSHA=""
   if [ -f "${d}/tool.tgz" ]; then GOT=1; GOTSHA="$(sha256sum "${d}/tool.tgz" | cut -d' ' -f1)"; fi
 }
@@ -132,6 +135,8 @@ for mode in plain hosted; do
   call "${mode}" t7b "${OTHER_SHA}" GH_TOKEN= FAKE_ANON=ok --
   if [ "${RC}" != 0 ] && [ "${GOT}" = 0 ]; then ok "${mode} t7b no token, wrong sha256: fails closed"; else bad "${mode} t7b rc=${RC} got=${GOT}"; fi
 
+  call "${mode}" t9b "${GOOD_SHA}" --
+  if [ "${RC}" = 0 ] && [ -z "${LT}" ]; then ok "${mode} t9b no curl call with an Authorization header uses --location-trusted"; else bad "${mode} t9b rc=${RC} --location-trusted with an Authorization header: ${LT}"; fi
   call "${mode}" t9 "${GOOD_SHA}" FAKE_ASSET_NAME=renamed.tar.gz --
   if [ "${RC}" != 0 ] && [ "${GOT}" = 0 ]; then ok "${mode} t9 the release has no asset of that name: fails"; else bad "${mode} t9 rc=${RC} got=${GOT}"; fi
 done

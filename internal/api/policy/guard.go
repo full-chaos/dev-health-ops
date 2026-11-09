@@ -361,7 +361,7 @@ const stopImpersonationPattern = "POST /api/v1/admin/impersonate/stop"
 
 // RefuseImpersonatingCaller returns next behind the impersonation write
 // refusal (403) for a caller whose bearer, authenticated as the route's row
-// does (HS256 and user access token), belongs to an admin with an active
+// does (the user access token), belongs to an admin with an active
 // impersonation session. It is for a route the scope layers
 // skip, so it reads the session itself. It follows the live row, not the
 // caller's admin.impersonate. A bearer go-api cannot verify (auth-service's)

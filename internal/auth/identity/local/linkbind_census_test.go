@@ -1,6 +1,10 @@
 package local
 
 import (
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -42,7 +46,31 @@ func TestEveryPasswordWriteOfPublicUsersRaisesTokenVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sites, scanned, err := passwordwriters.Sites(root)
+	var sites []passwordwriters.Site
+	scanned := 0
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != root && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "testdata") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		scanned++
+		sites = append(sites, passwordwriters.FileSites(fset, file, filepath.ToSlash(rel))...)
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

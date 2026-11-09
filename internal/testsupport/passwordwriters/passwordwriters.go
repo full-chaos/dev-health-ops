@@ -5,10 +5,7 @@ package passwordwriters
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"io/fs"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -34,7 +31,7 @@ const (
 )
 
 // A Site is one SQL text that writes password_hash of a users table. File is
-// slash-separated and relative to the scanned root; Line is the line of the literal
+// the path the caller gave; Line is the line of the literal
 // (or of the joined expression) in that file. SQL is the text as matched; a part
 // joined in at run time reads as RuntimePart.
 type Site struct {
@@ -70,70 +67,44 @@ func Match(sql string) (table Table, kind Kind, ok bool) {
 	return "", "", false
 }
 
-// Sites walks root's non-test Go files (dot dirs, node_modules, vendor and
-// testdata skipped) and returns every site, with the number of files parsed.
-// Each string literal is matched alone; each outermost + join of strings that
+// FileSites returns the sites of one parsed file; rel is the slash-separated path
+// a Site carries. Each string literal is matched alone; each outermost + join that
 // holds a string literal is matched once more as one text, a non-literal part
-// read as RuntimePart.
-func Sites(root string) (sites []Site, scanned int, err error) {
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+// read as RuntimePart. The caller walks the files (the read stays in its test).
+func FileSites(fset *token.FileSet, file *ast.File, rel string) []Site {
+	var sites []Site
+	add := func(pos token.Pos, sql string) {
+		if table, kind, ok := Match(sql); ok {
+			sites = append(sites, Site{File: rel, Line: fset.Position(pos).Line, Table: table, Kind: kind, SQL: sql})
 		}
-		if d.IsDir() {
-			if name := d.Name(); path != root && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "testdata") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		scanned++
-		add := func(pos token.Pos, sql string) {
-			if table, kind, ok := Match(sql); ok {
-				sites = append(sites, Site{File: rel, Line: fset.Position(pos).Line, Table: table, Kind: kind, SQL: sql})
-			}
-		}
-		var visit func(n ast.Node) bool
-		visit = func(n ast.Node) bool {
-			switch x := n.(type) {
-			case *ast.BasicLit:
-				if x.Kind == token.STRING {
-					if sql, err := strconv.Unquote(x.Value); err == nil {
-						add(x.Pos(), sql)
-					}
-				}
-			case *ast.BinaryExpr:
-				if x.Op != token.ADD {
-					return true
-				}
-				if sql, joined := join(x); joined {
+	}
+	var visit func(n ast.Node) bool
+	visit = func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.BasicLit:
+			if x.Kind == token.STRING {
+				if sql, err := strconv.Unquote(x.Value); err == nil {
 					add(x.Pos(), sql)
 				}
-				var operands []ast.Expr
-				flatten(x, &operands)
-				for _, o := range operands {
-					ast.Inspect(o, visit)
-				}
-				return false
 			}
-			return true
+		case *ast.BinaryExpr:
+			if x.Op != token.ADD {
+				return true
+			}
+			if sql, joined := join(x); joined {
+				add(x.Pos(), sql)
+			}
+			var operands []ast.Expr
+			flatten(x, &operands)
+			for _, o := range operands {
+				ast.Inspect(o, visit)
+			}
+			return false
 		}
-		ast.Inspect(file, visit)
-		return nil
-	})
-	return sites, scanned, err
+		return true
+	}
+	ast.Inspect(file, visit)
+	return sites
 }
 
 func flatten(e ast.Expr, out *[]ast.Expr) {

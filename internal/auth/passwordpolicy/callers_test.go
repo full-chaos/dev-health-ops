@@ -49,7 +49,7 @@ var reviewed = []notPasswordSetting{
 		why: "only tests call it; a non-test caller must be walked"},
 }
 
-// Every path that writes a user's password hash (the shared census,
+// Every path that writes a user's password hash (the shared census matcher,
 // internal/testsupport/passwordwriters, public.users and auth.users) reaches
 // passwordpolicy.ValidateForHash: walking up from each writing function through
 // its callers (go/types references, method values and interface methods it
@@ -145,7 +145,7 @@ func funcKey(f *types.Func) string {
 
 func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting) (res censusResult) {
 	fail := func(format string, args ...any) { res.problems = append(res.problems, fmt.Sprintf(format, args...)) }
-	sites, scanned, err := passwordwriters.Sites(root)
+	sites, scanned, err := writerSites(root)
 	if err != nil {
 		fail("census: %v", err)
 	}
@@ -444,6 +444,38 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting)
 		}
 	}
 	return res
+}
+
+// writerSites runs the shared password-writer census over root's non-test Go
+// files (dot dirs, node_modules, vendor and testdata skipped).
+func writerSites(root string) (sites []passwordwriters.Site, scanned int, err error) {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != root && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "testdata") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		scanned++
+		sites = append(sites, passwordwriters.FileSites(fset, file, filepath.ToSlash(rel))...)
+		return nil
+	})
+	return sites, scanned, err
 }
 
 // implementsByName reports whether recv (or *recv) has every method of iface with

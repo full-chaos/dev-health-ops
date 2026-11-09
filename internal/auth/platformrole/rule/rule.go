@@ -68,6 +68,13 @@ func HoldsSQL(schema, principalExpr, roleExpr string) string {
 		` AND pra_held.role_key = ` + roleExpr + ` AND ` + ActiveRule("pra_held", "pra_holder") + `)`
 }
 
+// StoredHoldsSQL is the stored holding of the platform role roleExpr by principalExpr: an unexpired assignment, whatever
+// the principal's state (platformrole.Store.HeldOn's condition). It is no authority read: go-api's admin users view
+// shows it as legacy showed its stored is_superuser column; a decision reads HoldsSQL.
+func StoredHoldsSQL(schema, principalExpr, roleExpr string) string {
+	return HoldsSQL(schema, principalExpr, roleExpr)
+}
+
 // PublicActiveRule is ActiveRule for a decision input: the holder is a public.users row that is active, in place of an
 // auth.principals row (D6651: public.users is the authority, auth.principals a copy). user is the alias of the
 // public.users row.

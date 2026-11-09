@@ -7,8 +7,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
-// The admin users reads take is_superuser by the platform roles switch:
-// byte-equal while off, the platform role rule while on.
+// The admin users view takes is_superuser by the platform roles switch: byte-equal while off; while on, the STORED
+// holding (rule.StoredHoldsSQL: any principal state, as legacy's stored column), never the authority rule.
 func TestAdminUsersReadsFollowTheSwitch(t *testing.T) {
 	off := pgStore{}
 	for alias, want := range map[string]string{"": fullUserColumns, "u": prefixColumns("u", fullUserColumns)} {
@@ -19,7 +19,8 @@ func TestAdminUsersReadsFollowTheSwitch(t *testing.T) {
 	on := pgStore{PlatformRolesOwned: true}
 	for alias, id := range map[string]string{"": "users.id", "u": "u.id"} {
 		got, err := on.userColumns(alias)
-		if err != nil || !strings.Contains(got, rule.HoldsSQL(`"auth"`, id, "'platform_admin'")) || strings.Contains(got, "is_superuser") {
+		if err != nil || !strings.Contains(got, rule.StoredHoldsSQL(`"auth"`, id, "'platform_admin'")) || strings.Contains(got, "is_superuser") ||
+			strings.Contains(got, "disabled_at") || strings.Contains(got, ".principals") {
 			t.Errorf("on (%q): %q %v", alias, got, err)
 		}
 	}

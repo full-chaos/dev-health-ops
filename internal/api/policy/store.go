@@ -69,6 +69,13 @@ func (p PlatformRoleRead) Superuser(offExpr, idExpr string) (string, error) {
 	return rule.HoldsSQL(pgx.Identifier{name}.Sanitize(), idExpr, "'"+rule.PlatformAdmin+"'"), nil
 }
 
+// StoredSuperuser is the is_superuser expression of go-api's admin users view: offExpr while not Owned, else whether
+// the users row idExpr has a stored, unexpired platform_admin assignment, whatever its principal's state (legacy's
+// stored column). It is no authority read: a decision reads Superuser.
+func (p PlatformRoleRead) StoredSuperuser(offExpr, idExpr string) (string, error) {
+	return p.Superuser(offExpr, idExpr)
+}
+
 // superuserColumn is the is_superuser column of the users reads: public
 // users.is_superuser, or while PlatformRolesOwned the platform role rule over
 // the auth schema in the same statement (a failure of it fails the read).

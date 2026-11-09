@@ -89,9 +89,15 @@ func (f *fakeUsersAdmin) AdminSoftDeleteUser(ctx context.Context, req identity.A
 
 // fakePlatformRoles records the platform role writes; its locks do nothing.
 type fakePlatformRoles struct {
-	locks, sharedLocks  int
-	grants, revokes     []uuid.UUID
-	grantErr, revokeErr error
+	locks, sharedLocks                int
+	grants, revokes                   []uuid.UUID
+	grantErr, revokeErr, lastAdminErr error
+	lastAdminChecks                   []uuid.UUID
+}
+
+func (f *fakePlatformRoles) RefuseLastPlatformAdmin(_ context.Context, _ audit.TxOps, principal uuid.UUID) error {
+	f.lastAdminChecks = append(f.lastAdminChecks, principal)
+	return f.lastAdminErr
 }
 
 func (f *fakePlatformRoles) LockWrites(context.Context, audit.TxOps) error { f.locks++; return nil }

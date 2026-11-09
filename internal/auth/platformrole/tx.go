@@ -67,3 +67,29 @@ func IsRefusal(err error) bool {
 	}
 	return false
 }
+
+// RefuseLastPlatformAdmin is the guard of an erase of principal (an admin user delete) on the caller's transaction,
+// after the caller took LockWrites: when principal holds an active platform_admin assignment and no other active one
+// exists, it is ErrLastPlatformAdmin, the refusal Revoke gives (pm D6878: kept on demote and on erase). The principal
+// rows of every holder are share-locked first, as Revoke locks them, so the count reads a clock after the waits.
+func (s *Store) RefuseLastPlatformAdmin(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error {
+	if err := lockPrincipals(ctx, tx, s.q); err != nil {
+		return err
+	}
+	var holds bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments r JOIN `+s.q+`.principals p ON p.id = r.principal_id
+WHERE r.principal_id = $1 AND r.role_key = $2 AND `+activeSQL+`)`, principal, PlatformAdmin).Scan(&holds); err != nil {
+		return err
+	}
+	if !holds {
+		return nil
+	}
+	admins, err := s.activeAdmins(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if admins <= 1 {
+		return ErrLastPlatformAdmin
+	}
+	return nil
+}

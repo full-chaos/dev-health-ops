@@ -81,6 +81,8 @@ type PlatformRoles interface {
 	RevokeOn(ctx context.Context, tx audit.TxOps, in platformrole.RevokeInput) error
 	Grant(ctx context.Context, in platformrole.GrantInput) (uuid.UUID, error)
 	Revoke(ctx context.Context, in platformrole.RevokeInput) error
+	// RefuseLastPlatformAdmin refuses an erase of the last active platform_admin, after LockWrites.
+	RefuseLastPlatformAdmin(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error
 }
 
 // PlatformRoleStore is PlatformRoles over the store.
@@ -193,6 +195,21 @@ func (h provisioningHandlers) usersAuthorize(actor uuid.UUID, orgID *uuid.UUID, 
 			return err
 		}
 		return h.usersActorRule(ctx, tx, actor, orgID, superuserWrite, target)
+	}
+}
+
+// usersDeleteAuthorize is a delete's Authorize: the platform role write lock exclusive (an erase can remove the last
+// platform_admin, so it serializes with every grant and revoke), usersActorRule on the transaction, then the last
+// platform_admin guard (pm D6878).
+func (h provisioningHandlers) usersDeleteAuthorize(actor uuid.UUID, orgID *uuid.UUID, target uuid.UUID) func(context.Context, audit.TxOps) error {
+	return func(ctx context.Context, tx audit.TxOps) error {
+		if err := h.PlatformRoles.LockWrites(ctx, tx); err != nil {
+			return err
+		}
+		if err := h.usersActorRule(ctx, tx, actor, orgID, false, &target); err != nil {
+			return err
+		}
+		return h.PlatformRoles.RefuseLastPlatformAdmin(ctx, tx, target)
 	}
 }
 
@@ -444,7 +461,7 @@ func (h provisioningHandlers) usersDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	result, err := h.UsersAdmin.AdminSoftDeleteUser(ctx, identity.AdminSoftDeleteRequest{Principal: target, Actor: actor,
-		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, false, &target)})
+		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersDeleteAuthorize(actor, orgID, target)})
 	if err != nil {
 		h.answerUsersError(w, r, opUsersDelete, err)
 		return

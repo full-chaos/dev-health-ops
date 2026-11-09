@@ -92,3 +92,17 @@ func TestUsersUpdateForwardsTheProfileFields(t *testing.T) {
 		t.Fatalf("store got username %v full_name %v avatar_url %v", got.Username, got.FullName, got.AvatarURL)
 	}
 }
+
+// An erase (the admin soft delete) of the last active platform_admin is refused 409 last_platform_admin, as the demote
+// is (pm D6878): the delete takes the platform role write lock exclusively and runs the guard on its transaction.
+func TestUsersDeleteOfTheLastPlatformAdminIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newUsersAdminFixture(t)
+	f.roles.lastAdminErr = platformrole.ErrLastPlatformAdmin
+	body := map[string]any{"actor_principal_id": f.super.String(), "principal_id": f.super.String(), "mode": "soft"}
+	expectRefusal(t, f.post(usersDeletePath, encode(body), nil), http.StatusConflict, reasonLastPlatformAdmin)
+	if len(f.roles.lastAdminChecks) != 1 || f.roles.lastAdminChecks[0] != f.super || f.roles.locks != 1 || f.roles.sharedLocks != 0 {
+		t.Fatalf("guard checks %v, exclusive locks %d, shared %d; want one check of the target under the exclusive lock",
+			f.roles.lastAdminChecks, f.roles.locks, f.roles.sharedLocks)
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -155,21 +156,34 @@ func startParityEnv(t *testing.T, ctx context.Context) *parityEnv {
 	return e
 }
 
-// principal makes one user: auth principal and users row (password stamped three hours ago, before
-// any session of the cell), public users row at token_version 2 and an admin membership.
+// parityHash is a bcrypt verifier, the only class identity writes (validBcrypt).
+func parityHash(t *testing.T) string {
+	t.Helper()
+	h, err := bcrypt.GenerateFromPassword([]byte(uuid.NewString()), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(h)
+}
+
+// principal makes one local user with the rows identity.ProvisionLocal writes, as two password changes later
+// (identity.SetPasswordHashFor) leave them: the stamp three hours ago, before any session of the cell, and
+// token version 2 in both schemas. A public admin membership, as go-api's member add writes it.
 func (e *parityEnv) principal(t *testing.T, ctx context.Context) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
-	name := "parity-" + id.String()[:8]
-	e.guardedRow(t, ctx, `INSERT INTO acp.principals (id, kind, display_name) VALUES ($1, 'user', 'parity')`, []any{id}, nil)
-	e.guardedRow(t, ctx, `INSERT INTO acp.users (principal_id, email, email_lower, password_hash, password_algorithm, password_updated_at)
-VALUES ($1, $2, $2, 'parity-hash', 'parity-algorithm', now() - interval '3 hours')`, []any{id, name + "@example.test"}, nil)
+	email := "parity-" + id.String()[:8] + "@example.test"
+	hash := parityHash(t)
+	e.guardedRow(t, ctx, `INSERT INTO acp.principals (id, kind, display_name) VALUES ($1, 'user', 'Parity User')`, []any{id}, nil)
+	e.guardedRow(t, ctx, `INSERT INTO acp.users (principal_id, email, email_lower, password_hash, password_algorithm, password_updated_at, legacy_token_version)
+VALUES ($1, $2, $2, $3, 'bcrypt', now() - interval '3 hours', 2)`, []any{id, email, hash}, nil)
 	for _, statement := range []struct {
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO public.users (id, email, username, full_name, token_version) VALUES ($1, $2, $3, 'Parity User', 2)`, []any{id, name + "@example.test", name}},
-		{`INSERT INTO public.memberships (id, user_id, org_id, role) VALUES (gen_random_uuid(), $1, $2, 'admin')`, []any{id, e.org}},
+		{`INSERT INTO public.users (id, email, password_hash, full_name, auth_provider, is_active, is_verified, token_version, created_at, updated_at)
+VALUES ($1, $2, $3, 'Parity User', 'local', true, false, 2, now(), now())`, []any{id, email, hash}},
+		{`INSERT INTO public.memberships (id, org_id, user_id, role, joined_at, created_at, updated_at) VALUES (gen_random_uuid(), $1, $2, 'admin', now(), now(), now())`, []any{e.org, id}},
 	} {
 		if _, err := e.admin.Exec(ctx, statement.sql, statement.args...); err != nil {
 			t.Fatalf("%s: %v", statement.sql, err)
@@ -178,21 +192,50 @@ VALUES ($1, $2, $2, 'parity-hash', 'parity-algorithm', now() - interval '3 hours
 	return id
 }
 
-// seed writes a session row directly (a state a writer reaches by time, or one no writer makes).
-func (e *parityEnv) seed(t *testing.T, ctx context.Context, principal uuid.UUID, created, expires string, revoked bool, pin int64, parent *uuid.UUID) uuid.UUID {
+// tokenHash is a session token_hash as the writer stores it: the digest of a fresh credential.
+func tokenHash(t *testing.T) []byte {
 	t.Helper()
-	var org *uuid.UUID
-	if parent != nil {
-		org = &e.org
+	handle, err := newCredential()
+	if err != nil {
+		t.Fatal(err)
 	}
-	revokedAt := "NULL"
+	return hashCredential(handle)
+}
+
+// seed writes a web session row directly with the columns session.Store.Create writes (insertSessionAs), at a
+// created stamp of its own (a state a writer reaches by time, or one no writer makes); revoked, it carries
+// what Store.Revoke writes. created and expires are SQL expressions.
+func (e *parityEnv) seed(t *testing.T, ctx context.Context, principal uuid.UUID, org *uuid.UUID, created, expires string, revoked bool, pin int64) uuid.UUID {
+	t.Helper()
+	revokedAt, updatedAt := "NULL", "c.at"
+	var reason *string
 	if revoked {
-		revokedAt = "now()"
+		revokedAt, updatedAt = "now()", "now()"
+		r := revokedByCaller
+		reason = &r
 	}
 	var id uuid.UUID
-	e.guardedRow(t, ctx, `INSERT INTO acp.sessions (principal_id, organization_id, token_hash, created_at, expires_at, revoked_at, legacy_token_version, web_session_id)
-VALUES ($1, $2, $3, `+created+`, `+expires+`, `+revokedAt+`, $4, $5) RETURNING id`,
-		[]any{principal, org, []byte(uuid.NewString()), pin, parent}, func(r pgx.Row) error { return r.Scan(&id) })
+	e.guardedRow(t, ctx, `INSERT INTO acp.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr,
+	legacy_token_version, revoked_at, revoked_reason)
+SELECT $1::uuid, $2::uuid, $3::bytea, c.at, c.at, `+updatedAt+`, `+expires+`, c.at, ARRAY['pwd'], $4::bigint, `+revokedAt+`, $5::text
+FROM (SELECT `+created+` AS at) c RETURNING id`,
+		[]any{principal, org, tokenHash(t), pin, reason}, func(r pgx.Row) error { return r.Scan(&id) })
+	return id
+}
+
+// client writes a browser client's session under web with the row session.Store.InsertClientSession writes
+// (linked): principal, organization, pin, auth_time and amr are the web session's, created now. It skips the
+// writer's liveness check on web, so the row is one no writer makes once web has ended.
+func (e *parityEnv) client(t *testing.T, ctx context.Context, web uuid.UUID) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	e.guardedRow(t, ctx, `INSERT INTO acp.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at,
+	auth_time, amr, legacy_token_version, web_session_id)
+SELECT w.principal_id, w.organization_id, $2::bytea, t.at, t.at, t.at, t.at + make_interval(secs => $3::double precision),
+	w.auth_time, w.amr, w.legacy_token_version, w.id
+FROM acp.sessions w CROSS JOIN (SELECT clock_timestamp() AS at) t
+WHERE w.id = $1::uuid AND w.web_session_id IS NULL
+RETURNING id`, []any{web, tokenHash(t), ClientSessionLifetime.Seconds()}, func(r pgx.Row) error { return r.Scan(&id) })
 	return id
 }
 
@@ -267,8 +310,8 @@ func TestSessionStateParityOnWriterRows(t *testing.T) {
 		t.Fatalf("Revoke: %v", err)
 	}
 	add("own revoke (session.Store.Revoke)", p, revoked.Session.ID)
-	add("expired by time (expires_at passed, unlinked)", p, e.seed(t, ctx, p, "now() - interval '2 hours'", "now() - interval '1 second'", false, 2, nil))
-	add("expired and revoked", p, e.seed(t, ctx, p, "now() - interval '2 hours'", "now() - interval '1 second'", true, 2, nil))
+	add("expired by time (expires_at passed, unlinked)", p, e.seed(t, ctx, p, nil, "now() - interval '2 hours'", "now() - interval '1 second'", false, 2))
+	add("expired and revoked", p, e.seed(t, ctx, p, nil, "now() - interval '2 hours'", "now() - interval '1 second'", true, 2))
 	add("unknown session id", p, uuid.New())
 
 	stale := e.principal(t, ctx)
@@ -276,7 +319,9 @@ func TestSessionStateParityOnWriterRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET token_version = token_version + 1 WHERE id = $1`, stale); err != nil {
+	// go-api's own password set (internal/apiservice/admin userstore.go setUserPassword) moves the public row only.
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET password_hash = $2, token_version = token_version + 1, updated_at = now() WHERE id = $1`,
+		stale, parityHash(t)); err != nil {
 		t.Fatal(err)
 	}
 	add("token_version bumped after the session (stale pin)", stale, staleSession.Session.ID)
@@ -286,7 +331,7 @@ func TestSessionStateParityOnWriterRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := e.identity.SetPasswordHashFor(ctx, changed, "parity-hash-2", identity.Actor{}, identity.PasswordChanged, nil); err != nil {
+	if _, err := e.identity.SetPasswordHashFor(ctx, changed, parityHash(t), identity.Actor{}, identity.PasswordChanged, nil); err != nil {
 		t.Fatalf("SetPasswordHashFor: %v", err)
 	}
 	// The writer stamps the password and bumps the public token_version in one transaction: go-api refuses
@@ -321,10 +366,11 @@ func TestSessionStateDiffersOnlyOnStatesNoWriterMakes(t *testing.T) {
 	defer cancel()
 	e := startParityEnv(t, ctx)
 	p := e.principal(t, ctx)
-	parentRevoked := e.seed(t, ctx, p, "now() - interval '2 hours'", "now() + interval '1 hour'", true, 2, nil)
-	parentExpired := e.seed(t, ctx, p, "now() - interval '2 hours'", "now() - interval '1 second'", false, 2, nil)
-	clientOfRevoked := e.seed(t, ctx, p, "now()", "now() + interval '1 hour'", false, 2, &parentRevoked)
-	clientOfExpired := e.seed(t, ctx, p, "now()", "now() + interval '1 hour'", false, 2, &parentExpired)
+	// A client session's web session carries an organization (InsertClientSession refuses one without).
+	parentRevoked := e.seed(t, ctx, p, &e.org, "now() - interval '2 hours'", "now() + interval '1 hour'", true, 2)
+	parentExpired := e.seed(t, ctx, p, &e.org, "now() - interval '2 hours'", "now() - interval '1 second'", false, 2)
+	clientOfRevoked := e.client(t, ctx, parentRevoked)
+	clientOfExpired := e.client(t, ctx, parentExpired)
 
 	for _, c := range []struct {
 		name, why      string
@@ -347,7 +393,7 @@ func TestSessionStateDiffersOnlyOnStatesNoWriterMakes(t *testing.T) {
 	// public token_version in the same transaction, and the signup stamps (local.go, cliuser.go) precede any
 	// session, so no writer leaves this row.
 	q := e.principal(t, ctx)
-	stampAfter := e.seed(t, ctx, q, "now() - interval '2 hours'", "now() + interval '1 hour'", false, 2, nil)
+	stampAfter := e.seed(t, ctx, q, nil, "now() - interval '2 hours'", "now() + interval '1 hour'", false, 2)
 	e.guardedRow(t, ctx, `UPDATE acp.users SET password_updated_at = now() - interval '1 hour' WHERE principal_id = $1`, []any{q}, nil)
 	old, now := e.both(t, ctx, q, stampAfter)
 	t.Logf("password stamp after the session, pin current: old %q, new %q", old, now)

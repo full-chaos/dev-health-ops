@@ -15,9 +15,10 @@
 --                                          compares it with current, and appends only what changed: a group whose
 --                                          content_hash differs or that is new (is_deleted = 0), and a group that
 --                                          is gone (is_deleted = 1). A refresh with no source change appends nothing.
---                                          is_deleted is a plain column, not the engine's deletion flag: FINAL must
---                                          return the deleted latest row, never hide it or fall back to an older
---                                          live row, or a gone group would be appended as deleted on every refresh.
+--                                          The comparison reads each group's latest row of current by
+--                                          argMax(..., stored_at) under GROUP BY (org_id, row_key), deleted rows
+--                                          included (is_deleted is a plain column), so it is one row per group
+--                                          whatever the part and merge state; it does not rest on FINAL.
 --
 -- The group build is the reader's per-organization group statement with org_id carried through every window,
 -- join and GROUP BY, and conflict_identities sorted (a set; groupUniqArray order is not stable, and the hash must
@@ -238,12 +239,16 @@ FROM (
     )
 ) AS g
 FULL OUTER JOIN (
-    SELECT org_id AS c_org_id, row_key AS c_row_key, project_id AS c_project_id, team_id AS c_team_id,
-        source_name AS c_source_name, provider AS c_provider, first_valid_from AS c_first_valid_from,
-        latest_is_open AS c_latest_is_open, latest_valid_to AS c_latest_valid_to, observed_at AS c_observed_at,
-        edge_suppressed AS c_edge_suppressed, conflict_identities AS c_conflict_identities,
-        conflicting_identity_present AS c_conflicting_identity_present, content_hash AS c_content_hash, is_deleted AS c_is_deleted
-    FROM project_team_ownership_groups_current FINAL
+    SELECT org_id AS c_org_id, row_key AS c_row_key,
+        argMax(tuple(project_id, team_id, source_name, provider, first_valid_from, latest_is_open, latest_valid_to,
+            observed_at, edge_suppressed, conflict_identities, conflicting_identity_present, content_hash, is_deleted),
+            stored_at) AS c_latest,
+        c_latest.1 AS c_project_id, c_latest.2 AS c_team_id, c_latest.3 AS c_source_name, c_latest.4 AS c_provider,
+        c_latest.5 AS c_first_valid_from, c_latest.6 AS c_latest_is_open, c_latest.7 AS c_latest_valid_to,
+        c_latest.8 AS c_observed_at, c_latest.9 AS c_edge_suppressed, c_latest.10 AS c_conflict_identities,
+        c_latest.11 AS c_conflicting_identity_present, c_latest.12 AS c_content_hash, c_latest.13 AS c_is_deleted
+    FROM project_team_ownership_groups_current
+    GROUP BY org_id, row_key
 ) AS c ON g.g_org_id = c.c_org_id AND g.g_row_key = c.c_row_key
 WHERE (g_row_key != '' AND (c_row_key = '' OR c_is_deleted = 1 OR c_content_hash != g_content_hash))
    OR (g_row_key = '' AND c_row_key != '' AND c_is_deleted = 0);

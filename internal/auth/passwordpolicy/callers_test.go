@@ -27,8 +27,9 @@ var typedScope = []string{"./internal/api/...", "./internal/apiservice/...", "./
 // A notPasswordSetting row ends a path that writes a password-hash column but
 // sets no password a person chose. Kinds: "writer" (the function holding the SQL),
 // "edge" (one call of a writer: caller -> callee), "uncalled" (a function with no
-// non-test caller; the row fails once it has one). at is a file:line inside fn
-// (for an edge: the call line inside caller). A row that matches nothing fails.
+// non-test caller; the row fails once it has one). A row is anchored by fn (and,
+// for an edge, callee), never by a line, so a line move cannot break it. A row
+// that matches nothing fails.
 //
 // Kind "hop" ends at fn, an auth-service handler that go-api reaches over internal
 // HTTP: the walk cannot follow the request, so it goes on from every function
@@ -36,9 +37,9 @@ var typedScope = []string{"./internal/api/...", "./internal/apiservice/...", "./
 // set must equal callers (sorted function keys; empty while no go-api caller
 // exists), and each of them must reach a guard.
 type notPasswordSetting struct {
-	kind, fn, callee, at, why string
-	route                     string
-	callers                   []string
+	kind, fn, callee, why string
+	route                 string
+	callers               []string
 }
 
 // A hopRoute is an internal route that carries a password hash from go-api to
@@ -56,21 +57,21 @@ var hopRoutes = []hopRoute{
 const mod = "github.com/full-chaos/dev-health-ops/"
 
 var reviewed = []notPasswordSetting{
-	{kind: "writer", fn: mod + "internal/api/session.handlers.createSocialUser", at: "internal/api/session/social.go:223",
+	{kind: "writer", fn: mod + "internal/api/session.handlers.createSocialUser",
 		why: "the INSERT writes the literal NULL as password_hash"},
 	{kind: "edge", fn: mod + "internal/auth/identity.Store.provisionFederated", callee: mod + "internal/auth/identity.insertPublicUser",
-		at: "internal/auth/identity/identities.go:358", why: "federatedPublicUser (publicusers.go:122) sets no PasswordHash"},
-	{kind: "writer", fn: mod + "internal/auth/identity.Store.insertBackfill", at: "internal/auth/identity/backfill.go:289",
-		why: "copies the verifier usersbackfill read from public.users (usersbackfill/source.go:41); no new password"},
-	{kind: "writer", fn: mod + "internal/auth/identity.Store.applyBackfillCredentials", at: "internal/auth/identity/backfill.go:329",
-		why: "copies the verifier usersbackfill read from public.users (usersbackfill/source.go:41); no new password"},
-	{kind: "writer", fn: mod + "internal/testsupport/sessionscenario.Seed", at: "internal/testsupport/sessionscenario/sessionscenario.go:183",
+		why: "federatedPublicUser (publicusers.go) sets no PasswordHash"},
+	{kind: "writer", fn: mod + "internal/auth/identity.Store.insertBackfill",
+		why: "copies the verifier usersbackfill read from public.users (usersbackfill/source.go); no new password"},
+	{kind: "writer", fn: mod + "internal/auth/identity.Store.applyBackfillCredentials",
+		why: "copies the verifier usersbackfill read from public.users (usersbackfill/source.go); no new password"},
+	{kind: "writer", fn: mod + "internal/testsupport/sessionscenario.Seed",
 		why: "test fixture seed: takes *testing.T and a fixed hash"},
-	{kind: "uncalled", fn: mod + "internal/auth/identity.Store.SetPasswordHash", at: "internal/auth/identity/local.go:188",
+	{kind: "uncalled", fn: mod + "internal/auth/identity.Store.SetPasswordHash",
 		why: "only tests call it; a non-test caller must be walked"},
-	{kind: "hop", fn: mod + "internal/auth/authapi.provisioningHandlers.usersCreate", at: "internal/auth/authapi/provisioning_users.go:273",
+	{kind: "hop", fn: mod + "internal/auth/authapi.provisioningHandlers.usersCreate",
 		route: "/internal/v1/users/create", why: "internal HTTP: go-api posts the hash after its own policy check"},
-	{kind: "hop", fn: mod + "internal/auth/authapi.provisioningHandlers.usersPassword", at: "internal/auth/authapi/provisioning_users.go:416",
+	{kind: "hop", fn: mod + "internal/auth/authapi.provisioningHandlers.usersPassword",
 		route: "/internal/v1/users/password", why: "internal HTTP: go-api posts the hash after its own policy check"},
 }
 
@@ -139,9 +140,9 @@ func TestHopRouteLiteralsOnlyThroughTheirConstant(t *testing.T) {
 // handler checks the policy and posts through the route constant; auth-service's
 // handler for that route writes the hash. Each case adds one file to a copy.
 func TestPasswordPathCensusHopRows(t *testing.T) {
-	createRow := notPasswordSetting{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersCreate", at: "internal/auth/authapi/routes.go:15",
+	createRow := notPasswordSetting{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersCreate",
 		route: "/internal/v1/users/create", callers: []string{mod + "internal/api/authprovision.PostCreate"}, why: "internal HTTP"}
-	passwordRow := notPasswordSetting{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersPassword", at: "internal/auth/authapi/routes.go:17",
+	passwordRow := notPasswordSetting{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersPassword",
 		route: "/internal/v1/users/password", callers: []string{mod + "internal/api/authprovision.PostPassword"}, why: "internal HTTP"}
 	both := []notPasswordSetting{createRow, passwordRow}
 	noCreateCaller, ghostCaller, dormantPassword := createRow, createRow, passwordRow
@@ -251,13 +252,13 @@ const extraIdentity = "package identity\n\nimport \"github.com/full-chaos/dev-he
 func extraRows() []notPasswordSetting {
 	id := mod + "internal/auth/identity."
 	return []notPasswordSetting{
-		{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersCreate", at: "internal/auth/authapi/routes.go:15",
+		{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersCreate",
 			route: "/internal/v1/users/create", callers: []string{mod + "internal/api/authprovision.PostCreate"}, why: "internal HTTP"},
-		{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersPassword", at: "internal/auth/authapi/routes.go:17",
+		{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersPassword",
 			route: "/internal/v1/users/password", callers: []string{mod + "internal/api/authprovision.PostPassword"}, why: "internal HTTP"},
-		{kind: "writer", fn: id + "seedFixed", at: "internal/auth/identity/extra.go:6", why: "fixed hash"},
-		{kind: "edge", fn: id + "backfill", callee: id + "writeCopied", at: "internal/auth/identity/extra.go:10", why: "copies a hash"},
-		{kind: "uncalled", fn: id + "orphan", at: "internal/auth/identity/extra.go:25", why: "no caller"},
+		{kind: "writer", fn: id + "seedFixed", why: "fixed hash"},
+		{kind: "edge", fn: id + "backfill", callee: id + "writeCopied", why: "copies a hash"},
+		{kind: "uncalled", fn: id + "orphan", why: "no caller"},
 	}
 }
 
@@ -278,6 +279,56 @@ func TestPasswordPathCensusRowsSurviveALineShift(t *testing.T) {
 			t.Log(res.problems)
 			if len(res.problems) > 0 || len(res.paths) == 0 {
 				t.Fatalf("problems %v, paths %v; want no problem and a walked path", res.problems, res.paths)
+			}
+		})
+	}
+}
+
+// With no line in the row, the symbol is the whole anchor: a row naming the
+// wrong function, or the wrong callee, still fails after a line shift.
+func TestPasswordPathCensusWrongSymbolStillFails(t *testing.T) {
+	id := mod + "internal/auth/identity."
+	cases := []struct {
+		name string
+		row  int
+		edit func(r *notPasswordSetting)
+		want []string
+	}{
+		{name: "hop row names a function that does not exist", row: 0,
+			edit: func(r *notPasswordSetting) { r.fn = mod + "internal/auth/authapi.handlers.usersCreat" },
+			want: []string{"reviewed row hop " + mod + "internal/auth/authapi.handlers.usersCreat matches no path: remove it",
+				"password path reaches no ValidateForHash call: " + id + "InsertUser"}},
+		{name: "edge row names the wrong callee", row: 3,
+			edit: func(r *notPasswordSetting) { r.callee = id + "seedFixed" },
+			want: []string{"reviewed row edge " + id + "backfill matches no path: remove it",
+				"password path reaches no ValidateForHash call: " + id + "writeCopied <- " + id + "backfill"}},
+		{name: "writer row names a function of the same file that writes nothing", row: 2,
+			edit: func(r *notPasswordSetting) { r.fn = id + "backfill" },
+			want: []string{"reviewed row writer " + id + "backfill matches no path: remove it",
+				"password path reaches no ValidateForHash call: " + id + "seedFixed"}},
+		{name: "uncalled row names a called function", row: 4,
+			edit: func(r *notPasswordSetting) { r.fn = id + "writeCopied" },
+			want: []string{"reviewed row uncalled " + id + "writeCopied: it has callers",
+				"password path reaches no ValidateForHash call: " + id + "orphan"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := copyFixture(t, "testdata/hopfixture")
+			extra := filepath.Join(root, "internal", "auth", "identity", "extra.go")
+			if err := os.WriteFile(extra, []byte(extraIdentity), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range []string{"internal/auth/authapi/routes.go", "internal/auth/identity/store.go", "internal/auth/identity/extra.go"} {
+				shiftLines(t, filepath.Join(root, filepath.FromSlash(f)), 20)
+			}
+			rows := extraRows()
+			c.edit(&rows[c.row])
+			res := censusPasswordPaths(root, []string{"./..."}, rows, fixtureRoutes, 1)
+			t.Log(res.problems)
+			for _, w := range c.want {
+				if !hasPrefix(res.problems, w) {
+					t.Errorf("problems %v, want one that starts %q", res.problems, w)
+				}
 			}
 		})
 	}
@@ -561,19 +612,10 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting,
 	}
 
 	used := make([]bool, len(rows))
-	rowAt := func(i int, fn string) {
-		r := rows[i]
-		file, line, ok := splitAt(r.at)
-		pf := funcs[fn]
-		if !ok || pf == nil || pf.file != file || line < pf.lo || line > pf.hi {
-			fail("reviewed row %s %s: at %s is not inside %s", r.kind, r.fn, r.at, fn)
-		}
-	}
 	writerRow := func(key string) bool {
 		for i, r := range rows {
 			if r.kind == "writer" && r.fn == key {
 				used[i] = true
-				rowAt(i, key)
 				return true
 			}
 		}
@@ -583,7 +625,6 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting,
 		for i, r := range rows {
 			if r.kind == "edge" && r.fn == caller && r.callee == callee {
 				used[i] = true
-				rowAt(i, caller)
 				return true
 			}
 		}
@@ -681,7 +722,6 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting,
 			if i, ok := hopRow(key); ok {
 				r := rows[i]
 				used[i] = true
-				rowAt(i, key)
 				constant, known := routeConst[r.route]
 				if !known {
 					fail("reviewed row hop %s: route %q is not a hopRoutes entry", key, r.route)
@@ -717,7 +757,6 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting,
 			if i, ok := uncalledRow(key); ok {
 				if len(up) == 0 {
 					used[i] = true
-					rowAt(i, key)
 					res.paths = append(res.paths, strings.Join(chain, " <- ")+" [reviewed: uncalled]")
 					return
 				}
@@ -739,7 +778,7 @@ func censusPasswordPaths(root string, scope []string, rows []notPasswordSetting,
 	}
 	for i, r := range rows {
 		if !used[i] {
-			fail("reviewed row %s %s (%s) matches no path: remove it", r.kind, r.fn, r.at)
+			fail("reviewed row %s %s matches no path: remove it", r.kind, r.fn)
 		}
 	}
 	return res
@@ -943,18 +982,6 @@ func refsOutside(root string, inScope map[string]bool, res *censusResult) map[st
 		res.problems = append(res.problems, fmt.Sprintf("census: %v", err))
 	}
 	return out
-}
-
-func splitAt(at string) (string, int, bool) {
-	i := strings.LastIndex(at, ":")
-	if i < 0 {
-		return "", 0, false
-	}
-	var line int
-	if _, err := fmt.Sscanf(at[i+1:], "%d", &line); err != nil {
-		return "", 0, false
-	}
-	return at[:i], line, true
 }
 
 func dedupe(s []string) []string {

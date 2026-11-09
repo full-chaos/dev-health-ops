@@ -106,6 +106,9 @@ type Deps struct {
 	// ServiceAccountKeys is the client of auth-service's service account key routes (AUTH_PROXY_SERVICE_ACCOUNT_KEYS).
 	// Nil leaves the key routes mounted, answering 503 config_missing.
 	ServiceAccountKeys authprovision.ServiceAccountKeys
+	// UsersAdmin is the client of auth-service's user-admin routes, built while users are owned (AUTH_USERS_OWNED).
+	// Owned with no client, the admin users writes answer 503.
+	UsersAdmin authprovision.UsersAdmin
 }
 
 // Routes is the admin area's route set.
@@ -152,6 +155,7 @@ func Routes(deps Deps) []httpapi.Route {
 		orgState:           deps.OrgState,
 		delegator:          deps.Delegator,
 		serviceAccountKeys: deps.ServiceAccountKeys,
+		usersAdmin:         deps.UsersAdmin,
 	}
 	if deps.ClickHouse != nil {
 		area.spend = clickhouseSpend{conn: deps.ClickHouse}
@@ -229,6 +233,8 @@ type handlers struct {
 	delegator sessionissue.Delegator
 	// serviceAccountKeys is Deps.ServiceAccountKeys; nil answers the key routes 503 config_missing.
 	serviceAccountKeys authprovision.ServiceAccountKeys
+	// usersAdmin is Deps.UsersAdmin: while users are owned, the admin users writes go to auth-service through it.
+	usersAdmin authprovision.UsersAdmin
 }
 
 // passwordLimit is users.py's `@limiter.limit(ADMIN_PASSWORD_LIMIT =

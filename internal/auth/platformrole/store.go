@@ -129,6 +129,18 @@ func (s *Store) ResolveOn(ctx context.Context, q RowQuerier, principal uuid.UUID
 	return a, nil
 }
 
+// HeldOn reports whether principal has a stored, unexpired assignment of role, whatever the principal's state: it is
+// what an admin update compares is_superuser with, as go-api compares with its stored column. It is no authority
+// read: a disabled principal's assignment gives nothing (Resolve, ResolveOn).
+func (s *Store) HeldOn(ctx context.Context, q RowQuerier, principal uuid.UUID, role string) (bool, error) {
+	var held bool
+	if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments
+WHERE principal_id = $1 AND role_key = $2 AND (expires_at IS NULL OR expires_at > statement_timestamp()))`, principal, role).Scan(&held); err != nil {
+		return false, s.storeErr(ctx, "read the stored assignment", err)
+	}
+	return held, nil
+}
+
 // Resolve is the platform authority principal holds now. Any read failure is
 // the zero Authority and an error: no authority is ever assumed.
 func (s *Store) Resolve(ctx context.Context, principal uuid.UUID) (Authority, error) {

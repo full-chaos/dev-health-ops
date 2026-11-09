@@ -3,8 +3,6 @@ package authapi
 import (
 	"net/http"
 	"testing"
-
-	"github.com/google/uuid"
 )
 
 // Every PATCH is one AdminUpdateUser, a no-op and a platform role change only included: go-api bumps updated_at on
@@ -63,7 +61,7 @@ func TestUsersUpdateGrantAllowsADisabledTarget(t *testing.T) {
 func TestUsersUpdateDecidesTheRoleChangeFromTheStoredAssignment(t *testing.T) {
 	t.Parallel()
 	f := newUsersAdminFixture(t)
-	f.roles.held = map[uuid.UUID]bool{f.target: true}
+	f.roles.held[f.target] = true
 	post := func(superuser bool) {
 		t.Helper()
 		body := map[string]any{"actor_principal_id": f.super.String(), "principal_id": f.target.String(), "is_superuser": superuser}

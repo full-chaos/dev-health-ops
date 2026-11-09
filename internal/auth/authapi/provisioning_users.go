@@ -80,6 +80,8 @@ type PlatformRoles interface {
 	LockWritesShared(ctx context.Context, tx audit.TxOps) error
 	GrantOn(ctx context.Context, tx audit.TxOps, in platformrole.GrantInput) (uuid.UUID, error)
 	RevokeOn(ctx context.Context, tx audit.TxOps, in platformrole.RevokeInput) error
+	// HeldOn reads the stored assignment, whatever the principal's state: the update's role change is decided from it.
+	HeldOn(ctx context.Context, q platformrole.RowQuerier, principal uuid.UUID, role string) (bool, error)
 	Grant(ctx context.Context, in platformrole.GrantInput) (uuid.UUID, error)
 	Revoke(ctx context.Context, in platformrole.RevokeInput) error
 	// RefuseLastPlatformAdmin refuses an erase of the last active platform_admin, after LockWrites.
@@ -348,12 +350,14 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 		h.answerUsersError(w, r, opUsersUpdate, err)
 		return
 	}
-	state, _, err := h.Users.StateOn(ctx, h.Reader, target)
+	// The stored assignment, not the active authority: an inactive user who still holds platform_admin and is sent
+	// is_superuser true is no change, and sent false is a revoke, as go-api writes its stored column.
+	held, err := h.PlatformRoles.HeldOn(ctx, h.Reader, target, platformrole.PlatformAdmin)
 	if err != nil {
 		h.answerUsersError(w, r, opUsersUpdate, err)
 		return
 	}
-	roleChange := superuser != nil && *superuser != state.Holds(actionAdminUsers)
+	roleChange := superuser != nil && *superuser != held
 	decided := identity.DecideAdminUpdate(cur, identity.AdminUpdatePatch{Email: email, Verified: verified, Username: username,
 		FullName: fullName, AvatarURL: avatarURL})
 	var superuserWrite func(context.Context, audit.TxOps) error

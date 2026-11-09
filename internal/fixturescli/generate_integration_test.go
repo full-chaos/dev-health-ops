@@ -266,12 +266,19 @@ func derivedTables(t *testing.T, dsn string) map[string]bool {
 // into it, in the capture and after a load alike.
 // stopMerges stops the merges of the tables of the DSN's database only: the package runs on a shared
 // ClickHouse server, where a server-wide SYSTEM STOP MERGES would outlive the test and stop every later one.
+// It also stops the database's refreshable materialized views, for the same reason: a refresh appends rows
+// on the server clock (stamped with the server time), so whether a capture or a load holds them would
+// depend on how long the run took. Each view is stopped by name, never by a server-wide SYSTEM STOP VIEWS.
 func stopMerges(t *testing.T, dsn string) {
 	t.Helper()
 	database := strings.TrimSpace(clickHouseHTTP(t, dsn, "SELECT currentDatabase() FORMAT TSV"))
 	tables := clickHouseHTTP(t, dsn, "SELECT name FROM system.tables WHERE database = currentDatabase() AND engine LIKE '%MergeTree%' FORMAT TSV")
 	for _, name := range strings.Fields(tables) {
 		clickHouseHTTP(t, dsn, "SYSTEM STOP MERGES `"+database+"`.`"+name+"`")
+	}
+	views := clickHouseHTTP(t, dsn, "SELECT view FROM system.view_refreshes WHERE database = currentDatabase() FORMAT TSV")
+	for _, name := range strings.Fields(views) {
+		clickHouseHTTP(t, dsn, "SYSTEM STOP VIEW `"+database+"`.`"+name+"`")
 	}
 }
 

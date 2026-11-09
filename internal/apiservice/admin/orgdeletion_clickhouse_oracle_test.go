@@ -201,4 +201,10 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// written by the investment worker, so an organization's rows must go when
 	// the organization is deleted.
 	"work_unit_issue_size": "130_work_unit_issue_size.sql",
+	// Every change of each project -> team ownership group, and the latest row
+	// of each group (CHAOS-6347). Keyed by org_id and filled by a refreshable
+	// view from projects, teams and team_project_ownership, so an
+	// organization's group rows must go when the organization is deleted.
+	"project_team_ownership_groups_log":     "147_project_team_ownership_groups.sql",
+	"project_team_ownership_groups_current": "147_project_team_ownership_groups.sql",
 }

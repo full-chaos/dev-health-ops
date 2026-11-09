@@ -108,7 +108,7 @@ var optionRegistry = []Option{
 	{
 		Flag: "http-addr", Env: EnvAPIAddress, Kind: KindString,
 		Default: defaultAPIAddress, Group: GroupHTTP,
-		Usage: "host:port for the auth API surface (the session routes mount only when both session secrets are set)",
+		Usage: "host:port for the auth API surface (the session routes mount only when the session secrets are set)",
 	},
 	{
 		Flag: "operator-http-addr", Env: EnvOperatorAddress, Kind: KindString,
@@ -236,8 +236,9 @@ var optionRegistry = []Option{
 	{
 		Env: EnvAccessTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "HS256 key of the compatibility access token (go-api's JWT_SECRET_KEY value, at least 32 characters); " +
-			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Set together with " +
-			EnvSessionSuccessorKey + "; with neither, no session route is mounted",
+			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Under hs256_compat set together with " +
+			EnvSessionSuccessorKey + "; with neither, no session route is mounted. Under eddsa optional (it only verifies go-api's HS256 token) and it needs " +
+			EnvSessionSuccessorKey,
 	},
 	{
 		Env: EnvSessionSuccessorKey, Kind: KindString, Secret: true, Group: GroupSession,
@@ -256,8 +257,7 @@ var optionRegistry = []Option{
 	},
 	{
 		Env: EnvLegacyJWTAudience, Kind: KindString, Default: contracts.PlatformAPIAudience, Group: GroupSession,
-		Usage: "aud that the eddsa access token class checks go-api's HS256 compatibility token with (go-api's JWT_AUDIENCE); hs256_compat uses " +
-			EnvAccessTokenAudience + ". Set but empty is refused at start",
+		Usage: "aud that the eddsa access token class checks go-api's HS256 compatibility token with (go-api's JWT_AUDIENCE). Set but empty is refused at start",
 	},
 	{
 		Env: EnvAuthorizeCallerSubjects, Kind: KindString, Group: GroupSession,
@@ -266,7 +266,8 @@ var optionRegistry = []Option{
 	},
 	{
 		Env: EnvSessionIssueWorkloadSubject, Kind: KindString, Group: GroupSession,
-		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. Needs " +
+		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. " +
+			EnvSessionIssueWorkloadSubject + "_FILE reads it from a mounted file instead (the two are mutually exclusive). Needs " +
 			EnvTokenIssuerURL,
 	},
 	{
@@ -283,7 +284,7 @@ var optionRegistry = []Option{
 		Env: EnvRateLimitKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "key the rate-limit counters digest identifiers with, at least 32 characters; " + EnvRateLimitKey +
 			"_FILE reads it from a mounted file instead. Unset, the limiter is keyed from " + EnvAccessTokenSecret +
-			"; needs the session secrets",
+			"; required while that is unset; needs the session secrets",
 	},
 	{
 		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,
@@ -322,7 +323,7 @@ var optionRegistry = []Option{
 	{
 		Flag: "membership-routes", Env: EnvMembershipRoutes, Kind: KindString, Group: GroupSession, Default: "false",
 		Usage: "\"true\" mounts the internal membership, invite and organization deprovision routes go-api calls with its service credential; needs " +
-			EnvInviteTokenSecret + " and " + EnvInviteTokenSecretPrevious,
+			EnvInviteTokenSecret + " (" + EnvInviteTokenSecretPrevious + " is optional)",
 	},
 	{
 		Env: EnvInviteTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
@@ -332,7 +333,7 @@ var optionRegistry = []Option{
 	{
 		Env: EnvInviteTokenSecretPrevious, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "retired invite token key, accepted and never used to sign (go-api's LINK_TOKEN_SECRET_PREVIOUS); " +
-			EnvInviteTokenSecretPrevious + "_FILE reads it from a mounted file instead. Required while " + EnvMembershipRoutes + " is true",
+			EnvInviteTokenSecretPrevious + "_FILE reads it from a mounted file instead. Optional: unset or empty, no previous key is accepted",
 	},
 	{
 		Flag: "social-github-client-id", Env: "SOCIAL_GITHUB_CLIENT_ID", Kind: KindString, Group: GroupSession,

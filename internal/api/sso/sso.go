@@ -44,7 +44,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
@@ -74,17 +73,13 @@ type Deps struct {
 	// this ever being configured.
 	Cipher credentials.Cipher
 	// StateSecret derives (via HKDF, state.go) the AES-256-GCM key that
-	// AEAD-encrypts the opaque OIDC state value (D2727-amended): the
-	// SSO_STATE_SECRET, else the api's JWT_SECRET_KEY
-	// (apiservice.statePurposeSecrets), never the same key as any other
-	// purpose. Routes does not mount the real OIDC handlers
-	// without it, since an empty secret can mint no state a callback
-	// could ever verify.
-	StateSecret, StateSecretFallback string // fallback: the key before the successor; verify only
-	// Signer mints the SSOLoginResponse token pair on a successful
-	// callback: the same edgetoken.Signer newProtection built from the
-	// api's own JWT_SECRET_KEY.
-	Signer *edgetoken.Signer
+	// AEAD-encrypts the opaque OIDC state value (D2727-amended):
+	// SSO_STATE_SECRET only (apiservice.statePurposeSecrets), never the
+	// same key as any other purpose. Without it the eight sign-in routes
+	// (OIDC, SAML, OAuth) answer 503 config_missing, since an empty secret
+	// can mint no state a callback could ever verify; the process still
+	// starts (D6465).
+	StateSecret string
 	// HTTPClient reaches the IdP's discovery document, token endpoint,
 	// JWKS and userinfo endpoint; nil means a client over
 	// externalurl.GuardedTransport() (the SSRF guard credentials.Routes
@@ -97,7 +92,8 @@ type Deps struct {
 	// serves local.
 	Inner func(pattern string, local http.Handler) http.Handler
 	// Issuer, set when auth-service owns sessions (AUTH_PROXY_SESSIONS), issues the SSO login's
-	// token pair; go-api then mints none and writes no refresh_tokens row. nil mints in go-api.
+	// token pair; go-api mints none and writes no refresh_tokens row. nil: the sign-in routes answer 503
+	// naming AUTH_PROXY_SESSIONS.
 	Issuer sessionissue.Issuer
 	// PlatformRoles is how the sign-in reads take is_superuser (AUTH_PLATFORM_ROLES_OWNED).
 	PlatformRoles policy.PlatformRoleRead
@@ -125,9 +121,9 @@ func Routes(deps Deps) []httpapi.Route {
 	// -- gets the same process-tier-only shim the other 15 routes still
 	// answer, rather than a route that mints a state no callback could
 	// ever decrypt.
-	oidcAuthorize := h.gated(body(oidcAuthRequest))
-	oidcCallbackHandler := h.gated(body(oidcCallbackRequest))
-	if deps.StateSecret != "" && deps.Signer != nil {
+	oidcAuthorize := h.orStateMissing(h.gated(body(oidcAuthRequest)))
+	oidcCallbackHandler := h.orStateMissing(h.gated(body(oidcCallbackRequest)))
+	if h.signIn() {
 		oidcAuthorize = http.HandlerFunc(h.initiateOIDCAuth)
 		oidcCallbackHandler = http.HandlerFunc(h.oidcCallback)
 	}
@@ -139,13 +135,17 @@ func Routes(deps Deps) []httpapi.Route {
 	// allow_idp_initiated=false would 500 on every initiate/callback
 	// instead of running for real, so both are required to mount the real
 	// handlers, matching OIDC's/OAuth's own gate shape.
-	samlMetadataHandler := h.gated(noInput)
-	samlInitiate := h.gated(body(samlAuthRequest))
-	samlACS := h.gated(body(samlCallbackRequest))
-	if deps.StateSecret != "" && deps.Signer != nil {
+	samlMetadataHandler := h.orStateMissing(h.gated(noInput))
+	samlInitiate := h.orStateMissing(h.gated(body(samlAuthRequest)))
+	samlACS := h.orStateMissing(h.gated(body(samlCallbackRequest)))
+	if h.signIn() {
 		samlMetadataHandler = http.HandlerFunc(h.samlMetadata)
 		samlInitiate = http.HandlerFunc(h.initiateSAMLAuth)
 		samlACS = http.HandlerFunc(h.samlACSCallback)
+	}
+	if h.sessionsOff() {
+		samlMetadataHandler, samlInitiate, samlACS = http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff)
+		oidcAuthorize, oidcCallbackHandler = http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff)
 	}
 	inner := func(path string, local http.Handler) http.Handler {
 		if deps.Inner == nil {
@@ -181,6 +181,14 @@ func Routes(deps Deps) []httpapi.Route {
 			ResponseModelFor: func(*http.Request) bool { return true }})
 	}
 	return routes
+}
+
+// orStateMissing is the 503 config_missing handler while SSO_STATE_SECRET is unset, else next; the process still starts.
+func (h handlers) orStateMissing(next http.Handler) http.Handler {
+	if h.StateSecret != "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { policy.WriteConfigMissing(w, "SSO_STATE_SECRET") })
 }
 
 // gated is a gated route: FastAPI validates the query and body (422), then
@@ -235,13 +243,16 @@ func (h handlers) oauthPair() http.Handler {
 	// and Signer (the login token pair, login.go's finishSSOLogin) to run
 	// for real; without either, these three stay the same process-tier-only
 	// shim the other two /oauth routes (providers PATCH) still answer.
-	oauthAuthorize := h.gated(body(oauthAuthRequest))
-	oauthCallbackHandler := h.gated(body(oauthCallbackRequest))
-	oauthByType := h.gated(byTypeQuery)
-	if h.StateSecret != "" && h.Signer != nil {
+	oauthAuthorize := h.orStateMissing(h.gated(body(oauthAuthRequest)))
+	oauthCallbackHandler := h.orStateMissing(h.gated(body(oauthCallbackRequest)))
+	oauthByType := h.orStateMissing(h.gated(byTypeQuery))
+	if h.signIn() {
 		oauthAuthorize = http.HandlerFunc(h.initiateOAuthAuth)
 		oauthCallbackHandler = http.HandlerFunc(h.oauthCallback)
 		oauthByType = http.HandlerFunc(h.initiateOAuthByType)
+	}
+	if h.sessionsOff() {
+		oauthAuthorize, oauthCallbackHandler, oauthByType = http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff), http.HandlerFunc(h.refuseSessionsOff)
 	}
 	routes := []pairRoute{
 		{http.MethodPatch, func(first, _ string) bool { return first == "providers" },
@@ -279,6 +290,18 @@ func (h handlers) oauthPair() http.Handler {
 }
 
 // newHandlers is what Routes builds its handlers from: the defaults of Deps, and the client every IdP call uses.
+// signIn reports whether the sign-in routes run for real: the state secret is set and auth-service issues the sessions.
+func (h handlers) signIn() bool { return h.StateSecret != "" && h.Issuer != nil }
+
+// sessionsOff reports a deployment whose sign-in routes would run but for AUTH_PROXY_SESSIONS being off.
+func (h handlers) sessionsOff() bool { return h.StateSecret != "" && h.Issuer == nil }
+
+// refuseSessionsOff answers 503 config_missing naming AUTH_PROXY_SESSIONS: go-api mints no login token pair.
+func (h handlers) refuseSessionsOff(w http.ResponseWriter, r *http.Request) {
+	h.Logger.ErrorContext(r.Context(), "sso route refused: AUTH_PROXY_SESSIONS is not on", "path", r.Pattern)
+	policy.WriteConfigMissing(w, "AUTH_PROXY_SESSIONS")
+}
+
 func newHandlers(deps Deps) handlers {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()

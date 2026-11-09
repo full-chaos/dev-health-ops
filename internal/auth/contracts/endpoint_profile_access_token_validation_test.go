@@ -133,30 +133,52 @@ func TestInventoryRowsDeclareTheHS256OptInExplicitly(t *testing.T) {
 				t.Fatalf("%s does not satisfy endpoint-profile.schema.json: %v", file, err)
 			}
 			rows := readJSONFile(t, path)["rows"].([]any)
-			legacy, plain := -1, -1
+			user, plain := -1, -1
 			for i, item := range rows {
 				accepted := anyStrings(item.(map[string]any)["accepted_credential_classes"])
 				switch {
-				case slices.Contains(accepted, legacyHS256Class) && legacy < 0:
-					legacy = i
+				case slices.Contains(accepted, legacyHS256Class):
+					t.Fatalf("%s row %d accepts the retired %s", file, i, legacyHS256Class)
+				case slices.Equal(accepted, []string{UserAccessTokenClass}) && user < 0:
+					user = i
 				case !slices.ContainsFunc(accepted, func(c string) bool { return slices.Contains(classes, c) }) && plain < 0:
 					plain = i
 				}
 			}
-			if legacy < 0 || plain < 0 {
-				t.Fatalf("%s has no HS256 row (%d) or no row without an access-token class (%d) to probe", file, legacy, plain)
+			if user < 0 || plain < 0 {
+				t.Fatalf("%s has no user-token-only row (%d) or no row without an access-token class (%d) to probe", file, user, plain)
+			}
+			// No row accepts the retired HS256 class any more: the HS256 probes plant it on a user-token-only row,
+			// and the planted row itself must validate, so each probe fails for its own rule.
+			plantHS256 := func(row map[string]any) {
+				row["accepted_credential_classes"] = []any{legacyHS256Class, UserAccessTokenClass}
+				row["class_disambiguator"] = map[string]any{"kind": "jwt_header_alg", "name": "EdDSA"}
+				row["access_token_validation"] = map[string]any{"legacy_hs256": true}
+			}
+			planted := readJSONFile(t, path)
+			plantHS256(planted["rows"].([]any)[user].(map[string]any))
+			if err := resolved.Validate(planted); err != nil {
+				t.Fatalf("the planted HS256 row does not validate, so no probe below is about its rule: %v", err)
 			}
 			for _, probe := range []struct {
 				name   string
 				row    int
 				mutate func(row map[string]any)
 			}{
-				{"an HS256 row without access_token_validation", legacy, func(row map[string]any) { delete(row, "access_token_validation") }},
-				{"an HS256 row with legacy_hs256 false", legacy, func(row map[string]any) {
+				{"an HS256 row without access_token_validation", user, func(row map[string]any) {
+					plantHS256(row)
+					delete(row, "access_token_validation")
+				}},
+				{"an HS256 row with legacy_hs256 false", user, func(row map[string]any) {
+					plantHS256(row)
 					row["access_token_validation"] = map[string]any{"legacy_hs256": false}
 				}},
-				{"an HS256 row whose object repeats the classes", legacy, func(row map[string]any) {
+				{"an HS256 row whose object repeats the classes", user, func(row map[string]any) {
+					plantHS256(row)
 					row["access_token_validation"] = map[string]any{"legacy_hs256": true, "classes": []any{legacyHS256Class}}
+				}},
+				{"an HS256 opt-in on a user-token-only row", user, func(row map[string]any) {
+					row["access_token_validation"] = map[string]any{"legacy_hs256": true}
 				}},
 				{"access_token_validation on a row with no access-token class", plain, func(row map[string]any) {
 					row["access_token_validation"] = map[string]any{"legacy_hs256": false}

@@ -33,7 +33,6 @@ internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/copyproject
 internal/auth/delegationend
-internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/identity
 internal/auth/passwordhash
@@ -47,6 +46,7 @@ internal/auth/requestid
 internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
+internal/auth/workloadinput
 internal/authzenforce
 internal/chmigrate
 internal/cli
@@ -105,6 +105,7 @@ internal/testsupport/moduleroot
 internal/testsupport/pgseed
 internal/testsupport/pydanticecho
 internal/testsupport/venueoracle
+internal/testsupport/workloadclient
 ~contracts/auth/v1/jsonschema
 ~internal/auth/passwordpolicy/data
 ~internal/chmigrate/baseline

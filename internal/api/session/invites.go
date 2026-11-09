@@ -39,7 +39,7 @@ type pendingInvite struct {
 // invite is marked expired there, but the route then refuses the request
 // and the session rolls back, so the mark is never written.
 func (h handlers) validateInvite(ctx context.Context, tx pgx.Tx, token string, now time.Time) (*pendingInvite, error) {
-	valid, err := h.Mail.Valid(ctx, invitePurpose, token)
+	valid, err := signedtoken.ValidAny(token, h.Mail.AcceptSecrets())
 	if err != nil || !valid {
 		return nil, err
 	}
@@ -169,6 +169,9 @@ func (h handlers) callerRow(w http.ResponseWriter, r *http.Request, tx pgx.Tx) (
 // joinByInvite validates token, accepts it for user and audits the join. It
 // writes the refusal itself and returns false on any failure.
 func (h handlers) joinByInvite(w http.ResponseWriter, r *http.Request, tx pgx.Tx, user *userRow, token, description string, now time.Time) (*membershipRow, string, bool) {
+	if h.Mail.RefuseUnconfigured(w) {
+		return nil, "", false
+	}
 	ctx := r.Context()
 	invite, err := h.validateInvite(ctx, tx, token, now)
 	if err != nil {

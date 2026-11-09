@@ -14,6 +14,7 @@ deploy/helm/dev-health	test	contracts
 deploy/helm/dev-health	test	deploy
 deploy/helm/dev-health	test	docs
 internal/api/githubapp	test	ci
+internal/api/policy	test	deploy
 internal/api/session	test	ci
 internal/api/sso	test	ci
 internal/api/webhookintake	test	contracts
@@ -42,6 +43,7 @@ internal/auth/ratelimitvalkey	test	deploy
 internal/auth/ratelimitvalkey	test	docs
 internal/auth/repoidentityprojection	test	contracts
 internal/auth/revisionfeed	test	contracts
+internal/auth/writerinventory	test	ci
 internal/bigboycompose	test	.env.example
 internal/bigboycompose	test	ci
 internal/bigboycompose	test	compose.yml
@@ -246,3 +248,4 @@ internal/workersctl	code	deploy
 internal/workerservice	code	contracts
 internal/workerservice	test	deploy
 internal/auth/grant	test	contracts
+internal/queryapi/pdp	test	docs

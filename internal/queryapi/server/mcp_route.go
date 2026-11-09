@@ -314,7 +314,7 @@ func newMCPGraphQLServer(es graphql.ExecutableSchema, limits mcpLimits) *gqlhand
 	gql.Use(depthLimit{Max: limits.depth})
 	gql.Use(mcpOperationGuard{})
 	gql.AroundFields(graph.RefuseNullForNonNullArguments)
-	gql.Use(graph.OperationOrgGuard{})
+	useGraphQLGuards(gql)
 	gql.AroundResponses(recordErrorCount)
 	gql.SetErrorPresenter(safeGraphQLErrorPresenter("mcp", func(ctx context.Context) {
 		if obs := mcpObservationFrom(ctx); obs != nil {
@@ -552,7 +552,7 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	dispatched.Body = io.NopCloser(bytes.NewReader(body))
 
 	buffered := &mcpBufferedResponse{header: http.Header{}, status: http.StatusOK}
-	h.gql.ServeHTTP(buffered, dispatched)
+	serveMCPGraphQL(h.gql, buffered, dispatched)
 	req.clickHouse = obs.callCount()
 
 	if budget := obs.budgetReason(); budget != "" {
@@ -619,7 +619,7 @@ func mcpAuthenticate(r *http.Request) (authctx.Claims, int, string) {
 			"caller_class", mcpCallerClass, "claims", strings.Join(elevated, ","), "remote_addr", r.RemoteAddr)
 		return authctx.Claims{}, http.StatusForbidden, mcpReasonElevatedClaim
 	}
-	return authctx.Claims{OrgID: claims.OrgID}, 0, ""
+	return legacyClaims(claims.OrgID), 0, ""
 }
 
 // mcpRootFields lists the operation's root field names in order, following
@@ -1096,7 +1096,7 @@ func (req *mcpRequest) emit(r *http.Request) {
 	mcpRequestDuration.Record(r.Context(), duration.Seconds(), attrs)
 	log.Printf("query-api: mcp request: caller_class=%s outcome=%s reason=%s status=%d document_digest=%s root_fields=%s aliases=%d depth=%d complexity=%d clickhouse_queries=%d duration_ms=%d request_id=%s",
 		mcpCallerClass, req.outcome, req.reason, req.status, req.documentDigest, strings.Join(roots, ","),
-		req.aliases, req.depth, req.complexity, req.clickHouse, duration.Milliseconds(), envelopeRequestID(r))
+		req.aliases, req.depth, req.complexity, req.clickHouse, duration.Milliseconds(), logSafeRequestID(envelopeRequestID(r)))
 }
 
 var (

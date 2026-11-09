@@ -63,10 +63,10 @@ func SocialLinkRoutes(deps SocialLinkDeps) ([]httpapi.Route, error) {
 	}
 	h := socialLinkHandlers{handlers: handlers{Deps: Deps{Sessions: deps.Sessions, Users: deps.Users, Issuer: deps.Issuer, Logger: deps.Logger, Meter: meter}, rec: rec}, social: deps.Social,
 		limits: deps.Limits, limiter: deps.Limits.limiter(socialLinkLimit)}
-	return []httpapi.Route{
+	return mountBearerRoutes(deps.Issuer, deps.Logger, "social-link", []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternSocialLink, Handler: http.HandlerFunc(h.link)},
 		{Method: http.MethodDelete, Pattern: PatternSocialUnlink, Handler: http.HandlerFunc(h.unlink)},
-	}, nil
+	}, "POST "+PatternSocialLink, "DELETE "+PatternSocialUnlink), nil
 }
 
 type socialLinkHandlers struct {

@@ -426,9 +426,9 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 		mountProofWriteRoute(getenv, internalMux, nil)
 	}
 
-	// The live users-row store behind every edge-verified REST route below
-	// (CHAOS-6290): PGStore over the /query route's ONE registry pool, not a
-	// pool of its own; an error (edge secret set, no pool) refuses to start.
+	// The live users-row store behind every edge-verified REST route below (CHAOS-6290): PGStore over the
+	// /query route's ONE registry pool; an error (issuer set, no pool) refuses to start.
+	warnUnusedEdgeSecret(getenv, slog.Default())
 	edgeUsers, err := newEdgeUserStore(getenv, registryPool)
 	if err != nil {
 		log.Printf("query-api: build edge users store: %v", err)
@@ -474,20 +474,9 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// caller either way.
 	mux.HandleFunc("/api/v1/", apiV1CatchAllNotFound)
 
-	handler, gate := gatedPlaneHandler(lookup, mux)
+	handler, internal, mcp, gate := gatedListenerHandlers(lookup, mux, internalMux, mcpMux)
 	cleanups = append(cleanups, gate.Wait)
-	// CHAOS-7096: internalMux already carries /query/proof-write (mounted
-	// above, in the same scope as handlers.ProofWrite) when that route is
-	// configured. This fallthrough registration makes every OTHER path
-	// behave identically to the public listener -- a route only the
-	// internal listener should serve is registered directly on internalMux
-	// BEFORE this call (Go's ServeMux matches the longest registered
-	// pattern regardless of registration order, so /query/proof-write
-	// still wins over this "/" catch-all) -- and it structurally CANNOT be
-	// reachable through the public listener, which is built from handler
-	// and never sees internalMux at all.
-	internalMux.Handle("/", handler)
-	return &Plane{Handler: handler, InternalHandler: internalMux, MCPHandler: mcpMux, Ready: ready, Probes: probes, Close: closeAll}, nil
+	return &Plane{Handler: handler, InternalHandler: internal, MCPHandler: mcp, Ready: ready, Probes: probes, Close: closeAll}, nil
 }
 
 // recordErrorCount stamps the number of errors a GraphQL response carried on

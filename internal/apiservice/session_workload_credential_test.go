@@ -53,19 +53,34 @@ func workloadEnv(t *testing.T, extra map[string]string) map[string]string {
 	return env
 }
 
-// Unset, empty and session_compat build no workload client: today's constructor runs.
-func TestSessionCredentialDefaultsToTheSessionCredential(t *testing.T) {
+// With AUTH_PROXY_SESSIONS on, unset and empty take the workload credential; session_compat is retired on the session
+// issue routes and is a start-up error that names the selector, as is session_compat with workload inputs.
+func TestSessionCredentialIsTheWorkloadCredentialWhenSessionsAreOn(t *testing.T) {
 	cfg := sessionsOn(t, "http://auth-service:8095")
 	for name, env := range map[string]map[string]string{
-		"unset":                {},
-		"empty":                {EnvAuthSessionIssueCredential: ""},
-		"session_compat":       {EnvAuthSessionIssueCredential: "session_compat"},
-		"session_compat+files": {EnvAuthSessionIssueCredential: "session_compat", EnvAuthWorkloadSubjectFile: "/nonexistent", EnvAuthWorkloadIssuer: "x"},
+		"unset": workloadEnv(t, nil),
+		"empty": workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: ""}),
 	} {
 		_, session, err := newCredentials(cfg, issueEnv(env))
-		if err != nil || session.workload != nil {
-			t.Errorf("%s: %v %v, want no workload client and no error", name, session.workload, err)
+		if err != nil || session.workload == nil {
+			t.Errorf("%s: %v %v, want the workload client", name, session.workload, err)
 		}
+	}
+	for name, env := range map[string]map[string]string{
+		"session_compat":        {EnvAuthSessionIssueCredential: "session_compat"},
+		"session_compat+inputs": workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: "session_compat"}),
+	} {
+		_, session, err := newCredentials(cfg, issueEnv(env))
+		if err == nil || session.workload != nil {
+			t.Errorf("%s: %v %v, want a start-up error and no client", name, session.workload, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), EnvAuthSessionIssueCredential) || !strings.Contains(err.Error(), "retired") {
+			t.Errorf("%s: error %q must name the selector and say the credential is retired", name, err)
+		}
+	}
+	if _, _, err := newCredentials(cfg, issueEnv(map[string]string{})); err == nil || !strings.Contains(err.Error(), EnvAuthWorkloadSubjectFile) {
+		t.Errorf("unset with no workload inputs: err %v, want a start-up error naming the missing input", err)
 	}
 }
 
@@ -130,18 +145,18 @@ func TestSessionCredentialWorkloadNeedsItsInputsByName(t *testing.T) {
 	}
 }
 
-// With the workload credential the session issuer needs no AUTH_SESSION_ISSUE_TOKEN.
+// The session issuer needs no AUTH_SESSION_ISSUE_TOKEN: it presents the workload token.
 func TestSessionIssuerWorkloadNeedsNoSessionToken(t *testing.T) {
 	cfg := sessionsOn(t, "http://auth-service:8095")
 	_, session, err := newCredentials(cfg, issueEnv(workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: "workload"})))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if issuer, err := sessionIssuer(cfg, issueEnv(map[string]string{}), session); issuer == nil || err != nil {
+	if issuer, err := sessionIssuer(cfg, session); issuer == nil || err != nil {
 		t.Fatalf("workload session issuer: %v %v, want one", issuer, err)
 	}
 	off := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
-	if issuer, err := sessionIssuer(off, issueEnv(map[string]string{}), session); issuer != nil || err != nil {
+	if issuer, err := sessionIssuer(off, session); issuer != nil || err != nil {
 		t.Fatalf("sessions off: %v %v, want none", issuer, err)
 	}
 }
@@ -195,10 +210,13 @@ func newCredServer(t *testing.T) *credServer {
 			dump.WriteString(name + ": " + strings.Join(values, ",") + "\n")
 			if name == "Authorization" {
 				for i, value := range values {
-					if strings.HasPrefix(value, "Bearer svc_authsess_") {
-						rec.Headers[name][i] = "Bearer svc_authsess_<PLACEHOLDER>"
-					} else {
-						rec.Headers[name][i] = "Bearer <NOT-svc_authsess_>"
+					switch {
+					case strings.HasPrefix(value, "Bearer svc_"):
+						rec.Headers[name][i] = "Bearer svc_<RETIRED-CREDENTIAL>"
+					case strings.HasPrefix(value, "Bearer ") && strings.Count(value, ".") == 2:
+						rec.Headers[name][i] = "Bearer <WORKLOAD-TOKEN>"
+					default:
+						rec.Headers[name][i] = "Bearer <OTHER>"
 					}
 				}
 			}
@@ -254,8 +272,9 @@ func (s *credServer) issueAll(t *testing.T, issuer sessionissue.Issuer) {
 	}
 }
 
-// Unset and session_compat send the exact bytes the golden pins, and exactly the AUTH_SESSION_ISSUE_TOKEN value.
-func TestUnsetAndSessionCompatSendTheIssueGolden(t *testing.T) {
+// Unset and workload send the exact bytes the golden pins, and exactly the workload token, even with
+// AUTH_SESSION_ISSUE_TOKEN set.
+func TestUnsetAndWorkloadSendTheIssueGolden(t *testing.T) {
 	raw, err := os.ReadFile(issueGoldenFile)
 	if err != nil {
 		t.Fatal(err)
@@ -264,10 +283,10 @@ func TestUnsetAndSessionCompatSendTheIssueGolden(t *testing.T) {
 	if err := json.Unmarshal(raw, &want); err != nil {
 		t.Fatal(err)
 	}
-	for name, selector := range map[string]map[string]string{"unset": {}, "session_compat": {EnvAuthSessionIssueCredential: "session_compat"}} {
+	for name, selector := range map[string]map[string]string{"unset": {}, "workload": {EnvAuthSessionIssueCredential: "workload"}} {
 		s := newCredServer(t)
-		token := testIssueToken(t)
-		env := map[string]string{sessionissue.EnvToken: token}
+		token := s.tokenAnswer(t)
+		env := workloadEnv(t, map[string]string{sessionissue.EnvToken: testIssueToken(t)})
 		for k, v := range selector {
 			env[k] = v
 		}
@@ -276,7 +295,7 @@ func TestUnsetAndSessionCompatSendTheIssueGolden(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		issuer, err := sessionIssuer(cfg, issueEnv(env), session)
+		issuer, err := sessionIssuer(cfg, session)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -289,11 +308,14 @@ func TestUnsetAndSessionCompatSendTheIssueGolden(t *testing.T) {
 		}
 		for i, r := range s.issue {
 			if len(r.auth) != 1 || r.auth[0] != "Bearer "+token {
-				t.Errorf("%s: request %d Authorization is not exactly the AUTH_SESSION_ISSUE_TOKEN value", name, i)
+				t.Errorf("%s: request %d Authorization is not exactly the workload token", name, i)
+			}
+			if strings.Contains(r.dump, "svc_authsess_") {
+				t.Errorf("%s: request %d holds svc_authsess_ bytes", name, i)
 			}
 		}
-		if s.exchanges != 0 {
-			t.Errorf("%s: %d exchanges, want 0", name, s.exchanges)
+		if s.exchanges != 1 {
+			t.Errorf("%s: %d exchanges, want 1", name, s.exchanges)
 		}
 		s.mu.Unlock()
 	}
@@ -320,7 +342,7 @@ func TestWorkloadSessionSelectorSendsOnlyTheWorkloadToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuer, err := sessionIssuer(cfg, issueEnv(env), session)
+	issuer, err := sessionIssuer(cfg, session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +378,7 @@ func TestWorkloadSessionSelectorIgnoresThePlaceholderSessionToken(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuer, err := sessionIssuer(cfg, issueEnv(env), session)
+	issuer, err := sessionIssuer(cfg, session)
 	if err != nil {
 		t.Fatalf("workload mode with the placeholder token: %v", err)
 	}
@@ -383,7 +405,7 @@ func TestWorkloadSessionSelectorExchangeFailureSendsNothing(t *testing.T) {
 	env := workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: "workload", sessionissue.EnvToken: testIssueToken(t)})
 	cfg := sessionsOn(t, s.URL)
 	_, session, _ := newCredentials(cfg, issueEnv(env))
-	issuer, err := sessionIssuer(cfg, issueEnv(env), session)
+	issuer, err := sessionIssuer(cfg, session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,11 +434,11 @@ func TestBothSelectorsWorkloadShareOneClientAndOneExchange(t *testing.T) {
 	if provisioning.workload == nil || provisioning.workload != session.workload {
 		t.Fatal("the session and provisioning credentials do not share one workload client")
 	}
-	issuer, err := sessionIssuer(cfg, issueEnv(env), session)
+	issuer, err := sessionIssuer(cfg, session)
 	if err != nil {
 		t.Fatal(err)
 	}
-	prov, err := orgProvisioner(cfg, issueEnv(env), provisioning)
+	prov, err := orgProvisioner(cfg, provisioning)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,53 +461,6 @@ func TestBothSelectorsWorkloadShareOneClientAndOneExchange(t *testing.T) {
 	}
 }
 
-// One workload and one session_compat: each client presents its own class.
-func TestMixedSelectorsEachClientPresentsItsOwnClass(t *testing.T) {
-	for name, selectors := range map[string]struct{ session, provisioning string }{
-		"session workload, provisioning compat": {"workload", "session_compat"},
-		"session compat, provisioning workload": {"session_compat", "workload"},
-	} {
-		s := newCredServer(t)
-		workload := s.tokenAnswer(t)
-		sessionToken := testIssueToken(t)
-		env := workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: selectors.session, EnvAuthProvisioningCredential: selectors.provisioning,
-			sessionissue.EnvToken: sessionToken})
-		cfg := sessionAndProvisioningOn(t, s.URL)
-		provisioning, session, err := newCredentials(cfg, issueEnv(env))
-		if err != nil {
-			t.Fatal(err)
-		}
-		issuer, err := sessionIssuer(cfg, issueEnv(env), session)
-		if err != nil {
-			t.Fatal(err)
-		}
-		prov, err := orgProvisioner(cfg, issueEnv(env), provisioning)
-		if err != nil {
-			t.Fatal(err)
-		}
-		s.issueAll(t, issuer)
-		if err := prov.Deprovision(context.Background(), uuid.MustParse("11111111-1111-4111-8111-111111111111"), uuid.New()); err != nil {
-			t.Fatal(err)
-		}
-		wantIssue, wantProv := "Bearer "+workload, "Bearer "+sessionToken
-		if selectors.session != "workload" {
-			wantIssue, wantProv = "Bearer "+sessionToken, "Bearer "+workload
-		}
-		s.mu.Lock()
-		for _, r := range s.issue {
-			if len(r.auth) != 1 || r.auth[0] != wantIssue {
-				t.Errorf("%s: an issue request carries the wrong class", name)
-			}
-		}
-		for _, r := range s.prov {
-			if len(r.auth) != 1 || r.auth[0] != wantProv {
-				t.Errorf("%s: a provisioning request carries the wrong class", name)
-			}
-		}
-		s.mu.Unlock()
-	}
-}
-
 // With the session selector on workload the exchange answers a redirect without following it.
 func TestSessionWorkloadExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	probe := redirectprobe.New(t)
@@ -495,7 +470,7 @@ func TestSessionWorkloadExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuer, err := sessionIssuer(cfg, issueEnv(env), session)
+	issuer, err := sessionIssuer(cfg, session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +480,7 @@ func TestSessionWorkloadExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.
 	probe.Assert(t)
 }
 
-// The session selector takes the exact value: unset, empty, session_compat and workload only. A padded or
+// The session selector takes the exact value: unset, empty and workload only (session_compat is retired). A padded or
 // whitespace-only value is a start-up error naming the selector, never read as another value.
 func TestSessionSelectorRefusesPaddedAndWhitespaceOnlyValues(t *testing.T) {
 	cfg := sessionsOn(t, "http://auth-service:8095")
@@ -518,6 +493,7 @@ func TestSessionSelectorRefusesPaddedAndWhitespaceOnlyValues(t *testing.T) {
 		"workload trailing space":    "workload ",
 		"workload surrounded":        " workload ",
 		"workload trailing newline":  "workload\n",
+		"session_compat":             "session_compat",
 		"session_compat leading":     " session_compat",
 		"session_compat trailing":    "session_compat ",
 		"session_compat surrounded":  " session_compat ",
@@ -532,7 +508,7 @@ func TestSessionSelectorRefusesPaddedAndWhitespaceOnlyValues(t *testing.T) {
 			t.Errorf("%s (%q): err %v, want a start-up error naming the selector", name, value, err)
 		}
 	}
-	for name, value := range map[string]string{"unset": "", "session_compat": "session_compat", "workload": "workload"} {
+	for name, value := range map[string]string{"unset": "", "workload": "workload"} {
 		env := map[string]string{}
 		if name != "unset" {
 			env[EnvAuthSessionIssueCredential] = value
@@ -541,14 +517,14 @@ func TestSessionSelectorRefusesPaddedAndWhitespaceOnlyValues(t *testing.T) {
 			env[k] = v
 		}
 		_, session, err := newCredentials(cfg, issueEnv(env))
-		if err != nil || (session.workload != nil) != (name == "workload") {
+		if err != nil || session.workload == nil {
 			t.Errorf("%s: err %v, workload client built = %v", name, err, session.workload != nil)
 		}
 	}
 }
 
-// The provisioning selector keeps main's trimmed reading (the value was trimmed since the provisioning change): the
-// 13 values of the matrix are accepted or refused exactly as on main.
+// The provisioning selector keeps its trimmed reading: unset or blank and workload (padded or not) build the workload
+// client; session_compat (padded or not, retired), another case, a boolean and a combined value are start-up errors.
 func TestProvisioningSelectorKeepsMainsTrimmedReading(t *testing.T) {
 	cfg := provisioningOn(t, "http://auth-service:8095")
 	good := workloadEnv(t, nil)
@@ -557,18 +533,18 @@ func TestProvisioningSelectorKeepsMainsTrimmedReading(t *testing.T) {
 		workload bool
 		refused  bool
 	}{
-		"unset":                {"", false, false},
-		"space only":           {" ", false, false},
-		"tab only":             {"\t", false, false},
-		"newline only":         {"\n", false, false},
+		"unset":                {"", true, false},
+		"space only":           {" ", true, false},
+		"tab only":             {"\t", true, false},
+		"newline only":         {"\n", true, false},
 		"workload":             {"workload", true, false},
 		"workload leading":     {" workload", true, false},
 		"workload trailing":    {"workload ", true, false},
 		"workload surrounding": {" workload ", true, false},
-		"compat":               {"session_compat", false, false},
-		"compat leading":       {" session_compat", false, false},
-		"compat trailing":      {"session_compat ", false, false},
-		"compat surrounding":   {" session_compat ", false, false},
+		"compat":               {"session_compat", false, true},
+		"compat leading":       {" session_compat", false, true},
+		"compat trailing":      {"session_compat ", false, true},
+		"compat surrounding":   {" session_compat ", false, true},
 		"wrong case":           {"Workload", false, true},
 		"boolean":              {"true", false, true},
 		"combined":             {"workload session_compat", false, true},

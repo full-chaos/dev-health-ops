@@ -30,37 +30,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/orgdeprovision"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 const provisioningToken = "svc_authsess_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-
-type fakeScopeCredentials struct {
-	refusal servicecred.Refusal
-	err     error
-	scopes  []string
-	// held, when set, is the scope list of the credential: a scope outside it is refused.
-	held []string
-}
-
-func (f *fakeScopeCredentials) CheckScope(_ context.Context, token contracts.SecretString, scope string) (servicecred.Credential, servicecred.Refusal, error) {
-	f.scopes = append(f.scopes, scope)
-	if f.err != nil {
-		return servicecred.Credential{}, "", f.err
-	}
-	if f.held != nil && !slices.Contains(f.held, scope) {
-		return servicecred.Credential{}, servicecred.RefusedScope, nil
-	}
-	if f.refusal != "" || token.Reveal() != provisioningToken {
-		refusal := f.refusal
-		if refusal == "" {
-			refusal = servicecred.RefusedUnknown
-		}
-		return servicecred.Credential{}, refusal, nil
-	}
-	return servicecred.Credential{ID: "cred-1"}, "", nil
-}
 
 // fakeProvUsers answers the actor and target reads. inTx, when set, answers
 // the reads made inside a verb's transaction (an audit.TxOps queryer).
@@ -316,7 +289,7 @@ func (f *fakeReactivate) ReactivateAuthorized(ctx context.Context, id uuid.UUID,
 
 type provFixture struct {
 	t                                           *testing.T
-	creds                                       *fakeScopeCredentials
+	w                                           *workloadIssueFixture
 	users                                       *fakeProvUsers
 	orgs                                        *fakeEnsurer
 	members                                     *fakeMembers
@@ -373,11 +346,29 @@ func newProvFixtureWith(t *testing.T, profileRows []byte) *provFixture {
 	return newProvFixtureFor(t, profileRows, nil)
 }
 
-// newProvFixtureFor is newProvFixtureWith with the go-api workload path
-// (nil refuses every workload token).
-func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueWorkload) *provFixture {
+// newProvFixtureOff builds the routes with no go-api workload path: every bearer is refused.
+func newProvFixtureOff(t *testing.T, profileRows []byte) *provFixture {
 	t.Helper()
-	f := &provFixture{t: t, creds: &fakeScopeCredentials{}, orgs: &fakeEnsurer{}, members: &fakeMembers{}, invites: &fakeInvites{},
+	return buildProvFixture(t, profileRows, nil)
+}
+
+// newProvFixtureFor is newProvFixtureWith over the go-api workload path of w (nil builds one). post presents a
+// token of w unless it is given a header.
+func newProvFixtureFor(t *testing.T, profileRows []byte, w *workloadIssueFixture) *provFixture {
+	t.Helper()
+	if w == nil {
+		w = newWorkloadIssueFixture(t)
+	}
+	return buildProvFixture(t, profileRows, w)
+}
+
+func buildProvFixture(t *testing.T, profileRows []byte, w *workloadIssueFixture) *provFixture {
+	t.Helper()
+	var workload *SessionIssueWorkload
+	if w != nil {
+		workload = w.workload
+	}
+	f := &provFixture{t: t, w: w, orgs: &fakeEnsurer{}, members: &fakeMembers{}, invites: &fakeInvites{},
 		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, sa: &fakeServiceAccounts{}, grants: &fakeGrants{}, reads: &fakeReads{}, grantReads: &fakeGrantReads{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
 		org: uuid.New(), admin: uuid.New(), owner: uuid.New(), viewer: uuid.New(), super: uuid.New(), target: uuid.New(), x: uuid.New()}
 	f.account()
@@ -390,7 +381,7 @@ func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueW
 		},
 		roles: map[[2]uuid.UUID]string{{f.admin, f.org}: "admin", {f.owner, f.org}: "owner", {f.viewer, f.org}: "viewer"},
 	}
-	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+	routes, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, ProfileRows: profileRows,
 		Workload: workload,
 		Logger:   slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
@@ -398,7 +389,7 @@ func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueW
 	if err != nil {
 		t.Fatal(err)
 	}
-	readRoutes, err := ReadRoutes(ReadDeps{Credentials: f.creds, Reads: f.reads, GrantReads: f.grantReads, ProfileRows: profileRows, Workload: workload,
+	readRoutes, err := ReadRoutes(ReadDeps{Reads: f.reads, GrantReads: f.grantReads, ProfileRows: profileRows, Workload: workload,
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
 	if err != nil {
@@ -413,8 +404,8 @@ func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueW
 
 func (f *provFixture) post(path, body string, header map[string]string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-	if header == nil {
-		header = map[string]string{"Authorization": "Bearer " + provisioningToken}
+	if header == nil && f.w != nil {
+		header, _ = f.w.mint("workload+jwt", nil)
 	}
 	for k, v := range header {
 		request.Header.Set(k, v)
@@ -429,7 +420,7 @@ func (f *provFixture) storeCalls() int {
 		f.reactivate.renames
 }
 
-func (f *provFixture) uses(op string) (int64, bool) {
+func (f *provFixture) refusals(op string) (int64, bool) {
 	f.t.Helper()
 	var rm metricdata.ResourceMetrics
 	if err := f.reader.Collect(context.Background(), &rm); err != nil {
@@ -438,7 +429,7 @@ func (f *provFixture) uses(op string) (int64, bool) {
 	for _, scope := range rm.ScopeMetrics {
 		for _, m := range scope.Metrics {
 			sum, ok := m.Data.(metricdata.Sum[int64])
-			if m.Name != "auth.provisioning.compat_credential_uses" || !ok {
+			if m.Name != "auth.provisioning.retired_credential_refusals" || !ok {
 				continue
 			}
 			for _, point := range sum.DataPoints {
@@ -544,16 +535,15 @@ func routeCases() []routeCase {
 // fakeInviteID is the invite the revoke route case names.
 var fakeInviteID = uuid.MustParse("6f1b8f1e-7c43-4a7e-9b62-1d2a3c4e5f60")
 
-// Every route serves only the session issuer credential holding
-// memberships:write: any other bearer is a 401 with no read and no write, and
-// a failed credential lookup is a 503. Accepted uses are counted per route;
-// the counter is declared at 0 for every route.
-func TestProvisioningRoutesTakeOnlyTheMembershipsWriteCredential(t *testing.T) {
+// Every route serves only the go-api workload token. The retired session issuer credential (svc_authsess_) is
+// refused from the bearer text alone: the same 401 as any other bad bearer, no key-set read, no users read, no verb,
+// and the refusal is counted per route (declared at 0). The compatibility-use counter no longer exists.
+func TestProvisioningRoutesTakeOnlyTheWorkloadToken(t *testing.T) {
 	t.Parallel()
 	f := newProvFixture(t)
 	for _, c := range routeCases() {
-		if got, declared := f.uses(c.op); !declared || got != 0 {
-			t.Fatalf("%s: compat uses = %d (declared %v), want declared at 0", c.op, got, declared)
+		if got, declared := f.refusals(c.op); !declared || got != 0 {
+			t.Fatalf("%s: retired refusals = %d (declared %v), want declared at 0", c.op, got, declared)
 		}
 	}
 	for _, c := range routeCases() {
@@ -562,7 +552,6 @@ func TestProvisioningRoutesTakeOnlyTheMembershipsWriteCredential(t *testing.T) {
 			"no bearer":      {},
 			"basic":          {"Authorization": "Basic " + provisioningToken},
 			"empty bearer":   {"Authorization": "Bearer "},
-			"another token":  {"Authorization": "Bearer svc_authsess_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"},
 			"a user's token": {"Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.e30.x"},
 		} {
 			response := f.post(c.path, body, header)
@@ -571,33 +560,41 @@ func TestProvisioningRoutesTakeOnlyTheMembershipsWriteCredential(t *testing.T) {
 				t.Fatalf("%s %s: no WWW-Authenticate", c.op, name)
 			}
 		}
-		for _, refusal := range []servicecred.Refusal{servicecred.RefusedScope, servicecred.RefusedService, servicecred.RefusedRevoked,
-			servicecred.RefusedExpired, servicecred.RefusedMalformed} {
-			f.creds.refusal = refusal
-			expectRefusal(t, f.post(c.path, body, nil), http.StatusUnauthorized, reasonInvalidCredentials)
+		if got, _ := f.refusals(c.op); got != 0 {
+			t.Fatalf("%s: retired refusals after other bad bearers = %d, want 0", c.op, got)
 		}
-		f.creds.refusal, f.creds.err = "", errors.New("lookup failed")
-		expectRefusal(t, f.post(c.path, body, nil), http.StatusServiceUnavailable, reasonStoreUnavailable)
-		f.creds.err = nil
-		if got, _ := f.uses(c.op); got != 0 {
-			t.Fatalf("%s: compat uses after refused credentials = %d, want 0", c.op, got)
+		for _, token := range []string{provisioningToken, "svc_authsess_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"} {
+			response := f.post(c.path, body, map[string]string{"Authorization": "Bearer " + token})
+			expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
+			if response.Header().Get("WWW-Authenticate") == "" {
+				t.Fatalf("%s: no WWW-Authenticate on a retired credential", c.op)
+			}
 		}
-		if f.storeCalls() != 0 || f.users.reads != 0 {
-			t.Fatalf("%s: a refused credential reached the stores (%d calls, %d reads)", c.op, f.storeCalls(), f.users.reads)
+		if got, _ := f.refusals(c.op); got != 2 {
+			t.Fatalf("%s: retired refusals = %d, want 2", c.op, got)
 		}
-	}
-	for _, scope := range f.creds.scopes {
-		if scope != servicecred.ScopeMembershipsWrite {
-			t.Fatalf("a route asked for scope %q, want only %q", scope, servicecred.ScopeMembershipsWrite)
+		if f.storeCalls() != 0 || f.users.reads != 0 || f.w.keys.reads != 0 {
+			t.Fatalf("%s: a refused credential reached the key set or the stores (%d calls, %d reads, %d key reads)", c.op,
+				f.storeCalls(), f.users.reads, f.w.keys.reads)
+		}
+		if !strings.Contains(f.logs.String(), `"refusal":"retired_credential_class"`) {
+			t.Fatalf("%s: the retired refusal reason is not logged", c.op)
 		}
 	}
 	for _, c := range routeCases() {
-		response := f.post(c.path, encode(c.body(f, f.super)), nil)
-		if response.Code != http.StatusOK {
-			t.Fatalf("%s with the credential: %d %s", c.op, response.Code, response.Body)
+		if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusOK {
+			t.Fatalf("%s with the workload token: %d %s", c.op, response.Code, response.Body)
 		}
-		if got, _ := f.uses(c.op); got != 1 {
-			t.Fatalf("%s: compat uses = %d, want 1", c.op, got)
+	}
+	var rm metricdata.ResourceMetrics
+	if err := f.reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name == "auth.provisioning.compat_credential_uses" {
+				t.Fatal("the compatibility-use counter still exists")
+			}
 		}
 	}
 }
@@ -1092,7 +1089,7 @@ func TestOrgReactivateRefusalsAreNamedReasonCodes(t *testing.T) {
 func TestProvisioningRoutesNeedTheOrganizationVerb(t *testing.T) {
 	t.Parallel()
 	f := newProvFixture(t)
-	_, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+	_, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision})
 	if err == nil {
 		t.Fatal("ProvisioningRoutes accepted deps with no organization verb")
@@ -1205,7 +1202,7 @@ func TestOrgSuspendIsOnTheStartupGate(t *testing.T) {
 		t.Fatalf("provisioningPatterns = %v, want the suspend route", provisioningPatterns)
 	}
 	f := newProvFixture(t)
-	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+	routes, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
 		ProfileRows: embeddedDocWithoutRow(t, PatternOrgSuspend)})
 	if !errors.Is(err, errProvisioningRows) || routes != nil || !strings.Contains(err.Error(), "POST "+PatternOrgSuspend+" ") {

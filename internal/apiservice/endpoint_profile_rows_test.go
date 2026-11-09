@@ -137,20 +137,11 @@ var dispatchedLevels = map[string]string{
 	"POST /api/v1/admin/teams/{team_id}@api":        "AdminOrg",
 }
 
-// handlerValidatedAccessToken are the routes with no bearer guard whose
-// handler itself verifies a legacy access token; they are the only unguarded
-// routes whose row may accept the ops access token.
-var handlerValidatedAccessToken = map[string]bool{
-	"POST /api/v1/auth/validate@api": true,
-	"POST /api/v1/auth/logout@api":   true,
-}
-
 // TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard: each row's
 // source line is the line that registers its route, and the row agrees with the
 // guard level that registration names. A route behind policy.Admin,
-// AdminOrg, Authenticated, Superuser or Optional accepts the ops access token
-// and states its HS256 opt-in; a route with no policy guard never lists that
-// class, so the legacy token is impossible there.
+// AdminOrg, Authenticated, Superuser or Optional accepts the user access token
+// with no HS256 opt-in; no row lists the retired ops access token.
 func TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard(t *testing.T) {
 	regs := scanRegistrations(t, "../api", ".")
 	byKey := map[string]map[string]any{}
@@ -177,9 +168,10 @@ func TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard(t *testing.T
 			t.Errorf("%s: row source line %d, the registration is on line %d", route.key(), got, reg.Line)
 		}
 		classes, _ := row["accepted_credential_classes"].([]any)
-		hs256 := false
+		hs256, user := false, false
 		for _, class := range classes {
 			hs256 = hs256 || class == "ops_access_token_hs256"
+			user = user || class == "user_access_token"
 		}
 		validation, _ := row["access_token_validation"].(map[string]any)
 		level := reg.Level
@@ -191,11 +183,11 @@ func TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard(t *testing.T
 		case guarded[reg.Level]:
 			validator, _ := row["primary_validator"].(map[string]any)
 			description, _ := validator["description"].(string)
-			if row["classification"] != "protected" || !hs256 || validation["legacy_hs256"] != true || !strings.HasPrefix(description, "policy."+reg.Level+":") {
+			if row["classification"] != "protected" || hs256 || !user || validation["legacy_hs256"] != false || !strings.HasPrefix(description, "policy."+reg.Level+":") {
 				t.Errorf("%s: registered at policy.%s, row says %v %v %v %q", route.key(), reg.Level, row["classification"], classes, validation, description)
 			}
-		case hs256 && !(handlerValidatedAccessToken[route.key()] && validation["legacy_hs256"] == true):
-			t.Errorf("%s: no policy guard on its registration (%q) but the row accepts the ops access token", route.key(), reg.Level)
+		case hs256:
+			t.Errorf("%s: the row accepts the retired ops access token (registration level %q)", route.key(), reg.Level)
 		}
 		checked++
 	}

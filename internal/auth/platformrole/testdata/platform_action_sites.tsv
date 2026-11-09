@@ -28,8 +28,6 @@ internal/api/policy/scope.go	Scope.useTokenOrg	admin.orgs	4
 internal/api/policy/shadow_guard.go	shadowCallerKind	admin.orgs	handler
 internal/api/session/permissions.go	userPermissions	admin.orgs	2
 internal/api/session/permissions.go	userPermissions	admin.users	2
-internal/api/session/refresh.go	handlers.refreshRole	admin.orgs	4
-internal/api/session/refresh.go	handlers.refuseRevokedOfAGoneMember	admin.orgs	4
 internal/api/telemetry/report.go	handlers.requirePlatformRole	admin.telemetry	handler
 internal/api/telemetry/telemetry.go	handlers.withOrg	admin.telemetry	handler
 internal/apiservice/admin/auditlogs.go	handlers.auditLogRoutes	admin.audit	route
@@ -52,5 +50,7 @@ internal/auth/authapi/provisioning.go	provisioningHandlers.targetsRule	admin.use
 internal/auth/authapi/refresh.go	handlers.refresh	admin.orgs	4
 internal/queryapi/datahealth/datahealth.go	RequireOperator	admin.stats	6
 internal/queryapi/graph/operation_org_guard.go	operationOrgDecision	admin.orgs	handler
+internal/queryapi/graph/operation_shadow.go	OperationShadow.observe	admin.orgs	handler
 internal/queryapi/producttelemetry/platform.go	RequirePlatformAdmin	admin.telemetry	handler
+internal/queryapi/server/buildinfo_route.go	authenticateBuildInfo	admin.orgs	handler
 internal/queryapi/server/internal_auth.go	roleInOrg	admin.orgs	5

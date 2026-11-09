@@ -5,7 +5,6 @@ package server
 import (
 	"crypto/ed25519"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -31,15 +30,15 @@ func TestProductTelemetryRoute_GatesThroughTheSignedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 
 	input := map[string]any{"startDate": "2026-01-01", "endDate": "2026-01-08"}
 	platform := func(bearer string) (int, string) {
-		rec := postGraphQLWithVariables(t, handler, registeredProductTelemetryPlatformDashboardDocument, bearer, map[string]any{"input": input})
+		rec := postGraphQLWithVariables(t, handler, registeredProductTelemetryPlatformDashboardDocument, bearerCarrier(bearer), map[string]any{"input": input})
 		return rec.Code, rec.Body.String()
 	}
 	org := func(bearer, orgID string) (int, string) {
-		rec := postGraphQLWithVariables(t, handler, registeredProductTelemetryDashboardDocument, bearer, map[string]any{"orgId": orgID, "input": input})
+		rec := postGraphQLWithVariables(t, handler, registeredProductTelemetryDashboardDocument, bearerCarrier(bearer), map[string]any{"orgId": orgID, "input": input})
 		return rec.Code, rec.Body.String()
 	}
 	valid := time.Now().Add(time.Hour)

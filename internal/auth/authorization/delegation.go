@@ -123,6 +123,9 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 	}
 	d.Obligations.TenantScope, d.Obligations.MinimumAssurance = r.OrganizationID, del.Assurance
 	if r.ResourceKind == resourceRepository {
+		// A delegated repository allow covers the asked repository only, even where the subject's own allow is
+		// org-wide: the org-wide marker never reaches a delegated session.
+		d.Obligations.RepositoryScope = ""
 		d.Obligations.RepositoryAllowlist = []string{r.ResourceKey}
 		d.Obligations.RepositoryRestricted = true
 	}

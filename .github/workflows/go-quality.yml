@@ -424,6 +424,7 @@ jobs:
           bash ci/auth_rotation_probe_test.sh
           bash ci/rehearse_auth_key_rotation_test.sh
           bash ci/rehearse_auth_key_rotation_k3s_test.sh
+          bash ci/wait_pg_accepting_test.sh
 
       - name: Check the gqlgen output has not drifted from its hand-edits
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
@@ -525,6 +526,12 @@ jobs:
             [ -f "${f}" ] || continue
             jq -R -r 'fromjson? | select(type == "object" and ((.Test // "") != "") and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | [.Package, .Test, .Action, (.Elapsed // 0)] | @tsv' "${f}"
           done | gzip -9 > "go-test-timings/${{ matrix.name }}.tsv.gz"
+
+      - name: Write JUnit XML next to the providersync race slice's go test -json (race legs)
+        continue-on-error: true
+        if: always() && startsWith(matrix.name, 'race-') && steps.relevance.outputs.relevant == 'true'
+        # CHAOS-13193: the product tests sync reads .xml and .info members only; the .json stays.
+        run: bash ci/go_test_json_to_junit.sh go-test-json
 
       - name: Upload the providersync race slice's go test -json (race legs)
         continue-on-error: true

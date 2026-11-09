@@ -131,12 +131,20 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 				t.Fatalf("role %s has scope %q", r.Role, r.Scope)
 			}
 			want := r.Scope == a.Scope && contains(r.Actions, a.Action)
+			// A platform snapshot names no organization (unknown), where the platform_admin rule still admits a
+			// holder of admin.orgs to a flagged action (TestEvaluate_PlatformRoleSatisfiesOnlyFlaggedOrgActions).
+			byPlatformAdmin := r.Scope == "platform" && a.Scope == "organization" && a.PlatformAdmin == "allowed" &&
+				contains(r.Actions, "admin.orgs")
 			got := e.Evaluate(req, snap)
 			cells++
-			if got.Allowed != want {
-				t.Errorf("role %s action %s: allowed=%v want %v (%s)", r.Role, a.Action, got.Allowed, want, got.Reason)
+			if got.Allowed != (want || byPlatformAdmin) {
+				t.Errorf("role %s action %s: allowed=%v want %v (%s)", r.Role, a.Action, got.Allowed, want || byPlatformAdmin, got.Reason)
 			}
-			if got.Allowed {
+			if got.Allowed && byPlatformAdmin {
+				if got.Reason != ReasonAllowedByPlatformAdmin {
+					t.Errorf("role %s action %s: allow reason %s, want allowed_by_platform_admin", r.Role, a.Action, got.Reason)
+				}
+			} else if got.Allowed {
 				allowed++
 				if got.Reason != ReasonAllowedByRole {
 					t.Errorf("role %s action %s: allow reason %s", r.Role, a.Action, got.Reason)
@@ -587,7 +595,7 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 				rows = append(rows, liveGrant(fmt.Sprintf("o/r%03d", i)))
 			}
 			return repoSnapshot("member", rows...)
-		}(), ReasonRepositoryAllowlistTooLarge, nil},
+		}(), ReasonRepositoryAllowlistTooLarge, filteredOrgEvaluator()},
 		{"role unknown", orgRequest("org.read"), orgSnapshot("guest"), ReasonRoleUnknown, nil},
 		{"role scope mismatch", orgRequest("org.read"), orgSnapshot("platform_admin"), ReasonRoleScopeMismatch, nil},
 		{"role lacks action", orgRequest("org.delete"), orgSnapshot("viewer"), ReasonRoleLacksAction, nil},
@@ -709,31 +717,36 @@ func TestEvaluate_AcrContextReadIsAllowedToTheOrgRolesByDefault(t *testing.T) {
 	}
 }
 
-// acr.evidence.read and acr.credential.issue are catalog rows no role holds: every role is denied, whatever the membership default.
-func TestEvaluate_AcrEvidenceReadAndCredentialIssueDenyForEveryRole(t *testing.T) {
+// Catalog version 17 (legacy parity): every organization role reads ACR evidence (the membership default, as
+// acr.context.read) and issues an ACR credential. A platform admin with no membership row issues one (the flag, as
+// the executed legacy web cells answer); no platform role reads ACR evidence.
+func TestEvaluate_AcrEvidenceReadAndCredentialIssueAllowEveryOrganizationRole(t *testing.T) {
 	_, roles, _ := vocab(t)
 	e := NewEvaluator()
-	reqs := map[string]Request{
-		"acr.evidence.read":    {Action: "acr.evidence.read", ResourceKind: "repository", OrganizationID: testOrg, ResourceKey: "acme/api"},
-		"acr.credential.issue": orgRequest("acr.credential.issue"),
-	}
+	evidence := Request{Action: "acr.evidence.read", ResourceKind: "repository", OrganizationID: testOrg, ResourceKey: "acme/api"}
+	issue := orgRequest("acr.credential.issue")
 	for _, r := range roles {
 		if r.Scope == "platform" {
-			for action, req := range reqs {
-				if got := e.Evaluate(req, platformSnapshot(r.Role)); got.Allowed {
-					t.Errorf("role %s on %s: %+v, want deny", r.Role, action, got)
-				}
+			if got := e.Evaluate(evidence, platformSnapshot(r.Role)); got.Allowed {
+				t.Errorf("role %s on acr.evidence.read: %+v, want deny", r.Role, got)
+			}
+			got := e.Evaluate(issue, platformSnapshot(r.Role))
+			if want := r.Role == "platform_admin"; got.Allowed != want {
+				t.Errorf("role %s on acr.credential.issue: %+v, want allowed=%v", r.Role, got, want)
+			}
+			if r.Role == "platform_admin" && got.Reason != ReasonAllowedByPlatformAdmin {
+				t.Errorf("platform_admin on acr.credential.issue: reason %s, want %s", got.Reason, ReasonAllowedByPlatformAdmin)
 			}
 			continue
 		}
-		if got := e.Evaluate(reqs["acr.evidence.read"], repoSnapshot(r.Role)); got.Allowed {
-			t.Errorf("role %s on acr.evidence.read: %+v, want deny", r.Role, got)
+		if got := e.Evaluate(evidence, repoSnapshot(r.Role)); !got.Allowed {
+			t.Errorf("role %s on acr.evidence.read: %+v, want allow", r.Role, got)
 		}
-		if got := e.Evaluate(reqs["acr.credential.issue"], orgSnapshot(r.Role)); got.Allowed {
-			t.Errorf("role %s on acr.credential.issue: %+v, want deny", r.Role, got)
+		if got := e.Evaluate(issue, repoSnapshot(r.Role)); !got.Allowed || got.Reason != ReasonAllowedByRole {
+			t.Errorf("role %s on acr.credential.issue: %+v, want allowed_by_role", r.Role, got)
 		}
 	}
-	for action := range reqs {
+	for _, action := range []string{evidence.Action, issue.Action} {
 		if !contains(actionNames(t), action) {
 			t.Errorf("%s is not a catalog row", action)
 		}

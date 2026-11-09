@@ -33,10 +33,7 @@ var (
 	historyNames = map[string][]string{
 		"docs/contribute/architecture/auth-control-plane-adrs.md": {"internal/identity", "internal/keystore",
 			"src/lib/admin/server", "src/lib/billing/actions", "src/dev_health_ops/api", "ci/check_endpoint_profiles.py"},
-		"docs/contribute/architecture/auth-control-plane-decision-sheet.md": {"internal/identity", "internal/keystore",
-			"src/lib/admin/server", "src/lib/billing/actions", "src/dev_health_ops/api", "ci/check_endpoint_profiles.py"},
 		"docs/contribute/development/integration-suite-targets.md":           {"internal/testsupport/computeparity"},
-		"docs/contribute/development/lane-isolation-kiac.md":                 {"deploy/local/kiac.sh", "deploy/local/trial-data.sh", "deploy/vendor"},
 		"docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md": {"cmd/go-api-routing"},
 		"docs/contribute/architecture/auth-control-plane-database.md":        {"internal/storage/postgres/authschema/migrations/0001"},
 	}

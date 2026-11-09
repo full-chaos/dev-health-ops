@@ -33,7 +33,7 @@ func TestParseFlags_DefaultsBuildInfoURLFromQueryAPIURL(t *testing.T) {
 	f, err := parseFlags([]string{
 		"-query-api-url", "http://query-api:8090",
 		"-python-api-url", "http://api:8000",
-		"-candidate-bearer-exec", `["/bin/true"]`,
+		"-candidate-access-token-file", "/run/proof/access-token",
 		"-baseline-bearer-exec", `["/bin/true"]`,
 		"-org", "org-1",
 		"-recorded-by", "chris",
@@ -52,7 +52,7 @@ func TestParseFlags_DefaultsBuildInfoURLFromQueryAPIURL(t *testing.T) {
 func TestParseFlags_DryRunDoesNotRequirePostgresURI(t *testing.T) {
 	if _, err := parseFlags([]string{
 		"-python-api-url", "http://api:8000",
-		"-candidate-bearer-exec", `["/bin/true"]`,
+		"-candidate-access-token-file", "/run/proof/access-token",
 		"-baseline-bearer-exec", `["/bin/true"]`,
 		"-org", "org-1",
 		"-recorded-by", "chris",
@@ -70,7 +70,7 @@ func TestParseFlags_DryRunDoesNotRequirePostgresURI(t *testing.T) {
 func TestParseFlags_AcceptsAWellFormedBind(t *testing.T) {
 	f, err := parseFlags([]string{
 		"-python-api-url", "http://api:8000",
-		"-candidate-bearer-exec", `["/bin/true"]`,
+		"-candidate-access-token-file", "/run/proof/access-token",
 		"-baseline-bearer-exec", `["/bin/true"]`,
 		"-org", "org-1",
 		"-recorded-by", "chris",
@@ -104,7 +104,7 @@ func TestParseFlags_RejectsMalformedBind(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := parseFlags([]string{
 				"-python-api-url", "http://api:8000",
-				"-candidate-bearer-exec", `["/bin/true"]`,
+				"-candidate-access-token-file", "/run/proof/access-token",
 				"-baseline-bearer-exec", `["/bin/true"]`,
 				"-org", "org-1",
 				"-recorded-by", "chris",

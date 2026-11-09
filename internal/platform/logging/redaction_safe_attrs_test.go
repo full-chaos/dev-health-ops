@@ -42,6 +42,7 @@ func TestSafeAttrsRealConfigKeySetOnlyRedactsSensitiveKeys(t *testing.T) {
 				authconfig.EnvDatabaseURI:    "postgres://auth@localhost:5432/devhealth",
 				authconfig.EnvSigningKeyFile: "/run/secrets/auth-signing-key.pem",
 				authconfig.EnvSigningKeyID:   "auth-signing-key-v1",
+				authconfig.EnvTokenIssuerURL: "https://auth.example.test",
 			}
 			value, ok := values[key]
 			return value, ok

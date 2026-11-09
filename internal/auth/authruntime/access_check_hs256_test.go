@@ -19,12 +19,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
-// With the hs256_compat class and a token issuer URL set (the workload exchange needs the URL) the session routes
-// run the access check, not the HS256-only path. Every row of the auth-service access table must still pass a valid
-// web (HS256) session token and refuse a tampered one, on the production route sets; a row with no legacy opt-in
-// refuses the valid one too.
-func TestHS256WebTokenPassesEveryAccessRowWithAnIssuerURL(t *testing.T) {
-	cfg := classConfigWith(t, "hs256_compat", map[string]string{"AUTH_SOCIAL_LINK_ROUTES": "true"})
+// With the eddsa class the session routes run the access check, not the HS256-only path. ops_access_token_hs256 is retired: no row of the auth-service access
+// table opts in, so every row refuses a valid web (HS256) session token and a tampered one, on the production route
+// sets.
+func TestHS256WebTokenIsRefusedOnEveryAccessRowWithAnIssuerURL(t *testing.T) {
+	cfg := classConfigWith(t, "eddsa", map[string]string{"AUTH_SOCIAL_LINK_ROUTES": "true"})
 	dir := t.TempDir()
 	writeSigningKey(t, dir, "k1.pem")
 	signer := token.NewFileSigner(token.FileConfig{KeyPath: filepath.Join(dir, "k1.pem"), KeyID: "k1"})
@@ -53,14 +52,8 @@ func TestHS256WebTokenPassesEveryAccessRowWithAnIssuerURL(t *testing.T) {
 		mounted[route.Method+" "+route.Pattern] = true
 	}
 
-	web, err := authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valid, err := web.Access(authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	valid := legacyAccess(t, cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience,
+		authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
 	tampered := valid[:len(valid)-2] + "AA"
 	if tampered == valid {
 		tampered = valid[:len(valid)-2] + "BB"
@@ -86,20 +79,12 @@ func TestHS256WebTokenPassesEveryAccessRowWithAnIssuerURL(t *testing.T) {
 			if path == authapi.PatternChangePassword {
 				body = `{"current_password":"` + strings.Repeat("a", 24) + `","new_password":"` + strings.Repeat("b", 24) + `"}`
 			}
-			if !row.LegacyHS256 {
-				// A row with no legacy opt-in (POST /oauth/authorize) refuses the HS256 token itself.
-				if status, _ := routeAnswer(t, handler, method, path, body, valid); status != http.StatusUnauthorized {
-					t.Errorf("a valid HS256 web token answers %d on a row with no legacy opt-in, want 401", status)
-				}
-				return
-			}
-			if status, reason := routeAnswer(t, handler, method, path, body, valid); status == http.StatusUnauthorized {
-				t.Errorf("a valid HS256 web token is refused: %d %q", status, reason)
-			}
 			// change-password reaches its store before it answers a bad bearer, and the store is unreachable here: 503 is the only other answer.
-			status, _ := routeAnswer(t, handler, method, path, body, tampered)
-			if status != http.StatusUnauthorized && !(path == authapi.PatternChangePassword && status == http.StatusServiceUnavailable) {
-				t.Errorf("a tampered HS256 web token answers %d, want 401", status)
+			for name, bearer := range map[string]string{"valid": valid, "tampered": tampered} {
+				status, _ := routeAnswer(t, handler, method, path, body, bearer)
+				if status != http.StatusUnauthorized && !(path == authapi.PatternChangePassword && status == http.StatusServiceUnavailable) {
+					t.Errorf("a %s HS256 web token answers %d, want 401", name, status)
+				}
 			}
 		})
 	}
@@ -112,9 +97,9 @@ func TestHS256WebTokenPassesEveryAccessRowWithAnIssuerURL(t *testing.T) {
 // field token, not a bearer: the bearer probe above exempts it by name.
 const validateBodyTokenProfile = "POST " + authapi.PatternCompatValidate
 
-// probeValidateThroughTheBody sends the tokens in the body: the valid web token
-// passes verification and reaches the users store (unreachable here: 503), the
-// tampered one is go-api's refusal, 200 valid false.
+// probeValidateThroughTheBody sends the tokens in the body: both the valid web
+// token (its class is retired) and the tampered one are go-api's refusal, 200
+// valid false, before any users-store read.
 func probeValidateThroughTheBody(t *testing.T, handler http.Handler, valid, tampered string) bool {
 	t.Helper()
 	answer := func(token string) (int, string) {
@@ -122,8 +107,8 @@ func probeValidateThroughTheBody(t *testing.T, handler http.Handler, valid, tamp
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, authapi.PatternCompatValidate, strings.NewReader(`{"token":"`+token+`"}`)))
 		return response.Code, response.Body.String()
 	}
-	if status, body := answer(valid); status != http.StatusServiceUnavailable {
-		t.Errorf("a valid HS256 web token in the body answers %d %s, want 503 from the unreachable users store", status, body)
+	if status, body := answer(valid); status != http.StatusOK || !strings.Contains(body, `"valid":false`) {
+		t.Errorf("a valid HS256 web token in the body answers %d %s, want 200 valid false", status, body)
 	}
 	if status, body := answer(tampered); status != http.StatusOK || !strings.Contains(body, `"valid":false`) {
 		t.Errorf("a tampered HS256 web token in the body answers %d %s, want 200 valid false", status, body)

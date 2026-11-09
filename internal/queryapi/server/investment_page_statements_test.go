@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // pageStatements is a ClickHouse client that answers the statements of the
@@ -102,7 +103,7 @@ func investmentPage(t *testing.T, client *pageStatements, document string, batch
 	body, _ := json.Marshal(map[string]any{"query": document, "variables": map[string]any{"orgId": "org-1", "batch": batch}})
 	request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(string(body)))
 	request.Header.Set("Content-Type", "application/json")
-	request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1"}))
+	request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
 	var out struct {
@@ -304,7 +305,7 @@ func TestAWrongAnalyticsBatchIsAnErrorWhateverIsSelected(t *testing.T) {
 				body, _ := json.Marshal(map[string]any{"query": document, "variables": map[string]any{"orgId": "org-1", "batch": batch}})
 				request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(string(body)))
 				request.Header.Set("Content-Type", "application/json")
-				request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1"}))
+				request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 				recorder := httptest.NewRecorder()
 				server.ServeHTTP(recorder, request)
 				var out struct {

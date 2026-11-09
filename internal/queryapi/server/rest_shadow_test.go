@@ -128,7 +128,7 @@ func newShadowREST(t *testing.T, decider pep.Decider, env map[string]string) (*g
 	quietStdLog(t)
 	shadowCounters(t)
 	m := newAccessMinter(t)
-	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -245,7 +245,7 @@ func TestRESTShadowOffBuildsNothing(t *testing.T) {
 		quietStdLog(t)
 		before := shadowCounters(t)
 		m := newAccessMinter(t)
-		f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+		f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 		gate := pdp.New(pdp.Config{Mode: mode, Decider: pepOf(t, srv.URL)})
 		if gate.Shadow() != nil {
 			t.Fatalf("mode %q built a shadow", mode)
@@ -339,10 +339,8 @@ func TestRESTShadowObserveSeam(t *testing.T) {
 }
 
 // 2h and the acp condition: EVERY legacy-allow request on a mapped route is observed, whatever the credential class.
-// A user token asks the PDP (match); the HS256 edge token routed or not and the envelope are counted skipped; the
-// #5679 exempt counter is unchanged.
+// A user token asks the PDP (match); the envelope is counted skipped; the #5679 exempt counter is unchanged.
 func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
-	skippedHS256 := map[string]int64{shadowResultsMetric + "|reason=hs256,result=skipped": 1}
 	skippedEnvelope := map[string]int64{shadowResultsMetric + "|reason=envelope,result=skipped": 1}
 	matched := map[string]int64{shadowResultsMetric + "|reason=none,result=match": 1}
 	for name, routed := range map[string]bool{"routed": true, "unrouted": false} {
@@ -352,7 +350,6 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 			calls int
 		}{
 			"user token": {func(g *gatedREST, _ *testing.T) string { return g.userToken() }, matched, 1},
-			"edge token": {func(g *gatedREST, t *testing.T) string { return g.edgeToken(t) }, skippedHS256, 0},
 			"envelope":   {func(g *gatedREST, _ *testing.T) string { return g.f.envelope }, skippedEnvelope, 0},
 		} {
 			if class == "user token" && !routed {
@@ -366,7 +363,7 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 				if !routed {
 					setup = nil
 				}
-				f := newRESTFixture(t, newAccessStore(), setup, true)
+				f := newRESTFixture(t, newAccessStore(), setup)
 				reader := sdkmetric.NewManualReader()
 				provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 				t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -600,7 +597,7 @@ func TestRESTShadowCallerKindFromTheVerifiedCaller(t *testing.T) {
 	g, _ := newShadowREST(t, pepOf(t, srv.URL), nil)
 	store := newAccessStore()
 	store.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
-	g.f = newRESTFixture(t, store, testAccess(g.minter.keys, nil, accessTestNow), true)
+	g.f = newRESTFixture(t, store, testAccess(g.minter.keys, nil, accessTestNow))
 	g.handler = planeHandler(g.f.handler.(*http.ServeMux), g.gate)
 	before := shadowCounters(t)
 	if got, _ := g.get(g.userToken()); got != gatedOK {
@@ -656,7 +653,7 @@ func TestRESTShadowDecisionWithObligationsNeverChangesTheLegacyAnswerOrTheSQL(t 
 		t.Helper()
 		m := newAccessMinter(t)
 		client := &recordingHomeClient{}
-		f := newRESTFixtureServing(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true, newHomeGetHandler(client, nil))
+		f := newRESTFixtureServing(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), newHomeGetHandler(client, nil))
 		mux := f.handler.(*http.ServeMux)
 		var handler http.Handler = mux
 		if gate != nil {

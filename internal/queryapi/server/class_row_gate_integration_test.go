@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -60,7 +59,7 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	runOperation := markClassGated(handler) // what buildQueryRoute mounts at /query/run-operation
 	token := signTestEnvelope(t, priv, "org-1")
 	hotspots := mcpclass.Operation("hotspots")
@@ -90,7 +89,7 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 	})
 
 	t.Run("a dark class root does not gate the envelope caller (web)", func(t *testing.T) {
-		recorder := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
+		recorder := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, bearerCarrier(token), hotspotsVariables())
 		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "org/repo-a") {
 			t.Fatalf("the envelope caller was gated: status %d, body %s", recorder.Code, recorder.Body.String())
 		}

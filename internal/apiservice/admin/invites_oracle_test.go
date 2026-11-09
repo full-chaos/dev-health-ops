@@ -379,7 +379,7 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.
 		t.Fatalf("go mail sender: %v", err)
 	}
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
-		deps.Invites = admin.InviteConfig{Mail: goSender, TokenSecret: jwtKey, AppBaseURL: appBaseURL, AppBaseURLSet: true}
+		deps.Invites = admin.InviteConfig{Mail: goSender, LinkSecret: jwtKey, AppBaseURL: appBaseURL, AppBaseURLSet: true}
 	})
 
 	var goResponses []venueoracle.Response
@@ -483,7 +483,7 @@ FROM audit_logs WHERE action = 'member_invited'`
 		t.Fatal("the broken sender is supposed to fail against a closed port")
 	}
 	brokenBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
-		deps.Invites = admin.InviteConfig{Mail: brokenSender, TokenSecret: jwtKey}
+		deps.Invites = admin.InviteConfig{Mail: brokenSender, LinkSecret: jwtKey}
 	})
 	stranded := venueoracle.Do(t, brokenBase, post("invite with a failing mail sender", "owner", orgID, `{"email":"stranded@example.com"}`))
 	if stranded.Status != 201 {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 type uint64Scanner struct {
@@ -46,7 +47,7 @@ func (c sizedSunburstClient) Query(ctx context.Context, query string, bindings [
 func serveSunburst(t *testing.T, reader *investment.Reader, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, target, nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, newInvestmentSunburstGetHandler(reader), rec, req)
 	return rec

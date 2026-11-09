@@ -12,31 +12,80 @@ type rowClaim struct {
 	proofs []claimProof
 }
 
+var restResolverClaim = rowClaim{value: "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization", proofs: []claimProof{
+	{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return legacyClaims(claims.OrgID), true"}, anyOf: []string{}},
+}}
+
+var restDisclosureClaim = rowClaim{value: "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)", proofs: []claimProof{
+	{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "authenticateRESTRouted("}, anyOf: []string{}},
+	{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure("}, anyOf: []string{}},
+	{file: "rest_error_response.go", decl: "writeRESTUnauthorized", needles: []string{"http.StatusUnauthorized"}, anyOf: []string{}},
+	{file: "../../api/policy/principal.go", decl: "WriteAuthFailure", needles: []string{"http.StatusServiceUnavailable", "WriteInternal(w)"}, anyOf: []string{}},
+	{file: "rest_access_test.go", decl: "TestQueryAPIRESTOrgMissingIs403ForNonSuperuser", needles: []string{"\"user token\"", "http.StatusForbidden", "superuser %s with no org"}, anyOf: []string{}},
+}}
+
+var restValidatorClaim = rowClaim{value: "authenticateRESTRequest: bearer user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; an HS256 edge access token is refused (alg_not_allowed); a missing or failing credential answers 401; a valid user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure.", proofs: []claimProof{
+	{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "authenticateRESTRouted("}, anyOf: []string{}},
+	{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"edgeVerifier.VerifyRouted(ctx, routeProfile(r), token)", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure("}, anyOf: []string{}},
+	{file: "../principal/edge_access.go", decl: "AccessClassOf", needles: []string{"header.Typ == UserAccessTokenTyp"}, anyOf: []string{}},
+	{file: "../../auth/accessverify/accessverify.go", decl: "Validator.Validate", needles: []string{"default:\n\t\treturn nil, v.refuse(ctx, row.Service, row.Profile, ReasonAlgNotAllowed)"}, anyOf: []string{}},
+	{file: "access_verify.go", decl: "accessFromEnv", needles: []string{"accessTokenIssuer(getenv)"}, anyOf: []string{}},
+	{file: "rest_error_response.go", decl: "writeRESTUnauthorized", needles: []string{"http.StatusUnauthorized"}, anyOf: []string{}},
+	{file: "../../api/policy/principal.go", decl: "WriteAuthFailure", needles: []string{"http.StatusServiceUnavailable", "WriteInternal(w)"}, anyOf: []string{}},
+	{file: "rest_access_test.go", decl: "TestQueryAPIRESTUserTokenPath", needles: []string{"\"revoked session\"", "\"not a member of the org\""}, anyOf: []string{}},
+	{file: "rest_access_test.go", decl: "TestQueryAPIRESTOrgMissingIs403ForNonSuperuser", needles: []string{"http.StatusForbidden", "superuser %s with no org"}, anyOf: []string{}},
+}}
+
+var stateCellsProof = claimProof{file: "endpoint_profile_live_test.go", decl: "userStateCells", needles: []string{"\"users row deactivated after the first request\"", "\"session revoked after the first request\"", "\"token version moved after the first request\"", "\"membership removed after the first request\"", "http.StatusUnauthorized"}}
+
+var stackStateCellsProof = claimProof{file: "endpoint_profile_live_test.go", decl: "stackStateCellsAs", needles: []string{"range userStateCells", "cell.change(store)", "cell.after"}}
+
+var internalCacheProofs = []claimProof{
+	stateCellsProof, stackStateCellsProof,
+	{file: "endpoint_profile_live_test.go", decl: "driveInternal", needles: []string{"stackStateCells(t, o, listener+\": \", q)", "\": envelope, every store read failing\"", "\": envelope past its exp\"", "\"internal headers, every store read failing\""}},
+	{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"internalidentity.FromHeader(r.Header)", "verifier.Verify(verifyCtx, token)"}},
+}
+
+var restCacheClaim = rowClaim{value: "none: per-request read: a user access token's users row, session, token version and organization membership are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked and its claims are trusted until exp (60 s at issue); an enforced row asks the PDP on every request, with no allow cache", proofs: []claimProof{
+	stateCellsProof,
+	{file: "endpoint_profile_live_test.go", decl: "restStateCells", needles: []string{"range userStateCells", "cell.change(f.store)", "fixture(noStateRead)", "\"envelope past its exp\""}},
+	{file: "../pdp/uncached_test.go", decl: "TestPDPGateHoldsNoDecisionCache", needles: []string{"g.decider.(*pep.Client)", "each read asks the PDP"}},
+}}
+
+var restImpersonationClaim = rowClaim{value: "subject_to_impersonation_override", proofs: []claimProof{
+	{file: "endpoint_profile_live_test.go", decl: "restImpersonationCells", needles: []string{"\"act\"", "liveTargetOrg", "ImpersonationActive: true", "o.impersonationPolicy(true)"}},
+	{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"return authctx.Claims{OrgID: claims.OrgID, Scope: scope}, true"}},
+	{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return legacyClaims(claims.OrgID), true"}},
+}}
+
+var restIDDisclosureClaim = rowClaim{value: restDisclosureClaim.value + "; 404 for a path id with no row in the caller's organization, the same answer as an id that exists nowhere (the read binds the credential's organization)", proofs: append(append([]claimProof(nil), restDisclosureClaim.proofs...),
+	claimProof{file: "endpoint_profile_live_test.go", decl: "restIDCells", needles: []string{"\"a person id another organization holds\"", "\"a person id nothing holds\"", "foreign.body != unknown.body", "bindingValue(client.bindings[i], \"org_id\")"}},
+	claimProof{file: "../people/resolve.go", decl: "resolvePersonIdentity", needles: []string{"AND org_id = {org_id:String}", "{Name: \"org_id\", Value: orgID}"}},
+	claimProof{file: "workunit_explain_route.go", decl: "newWorkUnitExplainHandler", needles: []string{"OrgID:              org,", "writeWorkUnitExplainNotFound(w, r, org, workUnitID)"}},
+)}
+
+var queryCacheClaim = rowClaim{value: "none: per-request read: a user access token's users row, session, token version and organization membership, and the impersonation session, are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope and the internal identity headers read no state: the envelope's signature and exp are checked and its claims are trusted until exp (60 s at issue)", proofs: internalCacheProofs}
+
 var rowClaims = map[string]map[string]rowClaim{
 	"rest": {
-		"resource_resolver": {value: "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization", proofs: []claimProof{
-			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return legacyClaims(claims.OrgID), true"}, anyOf: []string{}},
-		}},
-		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)", proofs: []claimProof{
-			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure(", "authenticateRESTRouted("}, anyOf: []string{}},
-			{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure("}, anyOf: []string{}},
-			{file: "rest_error_response.go", decl: "writeRESTUnauthorized", needles: []string{"http.StatusUnauthorized"}, anyOf: []string{}},
-			{file: "../../api/policy/principal.go", decl: "WriteAuthFailure", needles: []string{"http.StatusServiceUnavailable", "WriteInternal(w)"}, anyOf: []string{}},
-			{file: "edge_users_test.go", decl: "TestOrglessEdgeTokenNeverReachesAPlantedRoute", needles: []string{"\"orgless superuser\""}, anyOf: []string{}},
-			{file: "rest_access_test.go", decl: "TestQueryAPIRESTOrgMissingIs403ForNonSuperuser", needles: []string{"\"user token\"", "http.StatusForbidden"}, anyOf: []string{}},
-		}},
-		"primary_validator": {value: "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure.", proofs: []claimProof{
-			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure(", "authenticateRESTRouted("}, anyOf: []string{}},
-			{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"edgeVerifier.VerifyRouted(ctx, routeProfile(r), token)", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure("}, anyOf: []string{}},
-			{file: "../principal/edge_access.go", decl: "AccessClassOf", needles: []string{"header.Typ == UserAccessTokenTyp"}, anyOf: []string{}},
-			{file: "access_verify.go", decl: "accessFromEnv", needles: []string{"accessTokenIssuer(getenv)"}, anyOf: []string{}},
-			{file: "rest_error_response.go", decl: "writeRESTUnauthorized", needles: []string{"http.StatusUnauthorized"}, anyOf: []string{}},
-			{file: "../../api/policy/principal.go", decl: "WriteAuthFailure", needles: []string{"http.StatusServiceUnavailable", "WriteInternal(w)"}, anyOf: []string{}},
-			{file: "edge_users_test.go", decl: "TestOrglessEdgeTokenNeverReachesAPlantedRoute", needles: []string{"\"orgless superuser\""}, anyOf: []string{}},
-			{file: "rest_access_test.go", decl: "TestQueryAPIRESTUserTokenPath", needles: []string{"\"revoked session\"", "\"not a member of the org\""}, anyOf: []string{}},
-		}},
+		"resource_resolver":            restResolverClaim,
+		"disclosure_behavior":          restDisclosureClaim,
+		"primary_validator":            restValidatorClaim,
+		"current_state_cache_behavior": restCacheClaim,
+		"impersonation_policy":         restImpersonationClaim,
+	},
+	"rest-id": {
+		"resource_resolver":            restResolverClaim,
+		"disclosure_behavior":          restIDDisclosureClaim,
+		"primary_validator":            restValidatorClaim,
+		"current_state_cache_behavior": restCacheClaim,
+		"impersonation_policy":         restImpersonationClaim,
 	},
 	"gql": {
+		"current_state_cache_behavior": {value: "none: per-request read: the users row, session, token version and organization membership, the membership of an X-Org-Id organization and the impersonation session are read on every request and nothing is cached between requests (a change between two requests answers the second)", proofs: []claimProof{
+			stateCellsProof, stackStateCellsProof,
+			{file: "endpoint_profile_live_test.go", decl: "driveGraphQL", needles: []string{"stackStateCells(t, o, listener+\": \", request(iaDocument, nil, \"\"))"}},
+		}},
 		"resource_resolver": {value: "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or a member of that organization), else the credential's organization (scope.OrgScope)", proofs: []claimProof{
 			{file: "../../api/policy/scope.go", decl: "Scope.OrgScope", needles: []string{"headerOrgID", "s.mayUseOrg(r.Context(), user, headerOrgID)", "resolved = headerOrgID", "case user != nil && user.OrgID != \"\":"}, anyOf: []string{}},
 			{file: "../../api/policy/scope.go", decl: "Scope.mayUseOrg", needles: []string{"user.Holds(ActionAdminOrgs) || orgID == user.OrgID", "s.auth.IsMember(ctx, user.UserID, orgID)"}, anyOf: []string{}},
@@ -57,6 +106,7 @@ var rowClaims = map[string]map[string]rowClaim{
 		}},
 	},
 	"query": {
+		"current_state_cache_behavior": queryCacheClaim,
 		"resource_resolver": {value: "organization_from_credential: claims.OrgID returned by authenticateInternalRequest", proofs: []claimProof{
 			{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"OrgID: claims.OrgID"}, anyOf: []string{}},
 		}},
@@ -71,6 +121,8 @@ var rowClaims = map[string]map[string]rowClaim{
 		}},
 	},
 	"proofw": {
+		"current_state_cache_behavior": {value: queryCacheClaim.value + "; the go_api_proof_orgs allowlist is read on every request", proofs: append(append([]claimProof(nil), internalCacheProofs...),
+			claimProof{file: "query_route.go", decl: "newProofOrgAllowed", needles: []string{"postgresstore.ProofOrgAllowed(ctx, pool, orgID)"}})},
 		"resource_resolver": {value: "organization_from_credential: claims.OrgID returned by authenticateInternalRequest; the organization must be on the go_api_proof_orgs allowlist", proofs: []claimProof{
 			{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"OrgID: claims.OrgID"}, anyOf: []string{}},
 			{file: "query_route.go", decl: "newProofOrgAllowed", needles: []string{"postgresstore.ProofOrgAllowed(ctx, pool, orgID)"}, anyOf: []string{}},
@@ -87,20 +139,36 @@ var rowClaims = map[string]map[string]rowClaim{
 		}},
 	},
 	"build": {
+		"current_state_cache_behavior": {value: "none: per-request read: a user access token's users row, session, token version and organization membership, and the impersonation session, are read on every request and nothing is cached between requests (a change between two requests answers the second); the effective-principal envelope reads no state: its signature and exp are checked; its claims are not read", proofs: []claimProof{
+			stateCellsProof,
+			{file: "buildinfo_route.go", decl: "authenticateBuildInfo", needles: []string{"authenticateInternalRequest(w, r, verifier, nil, nil)", "authenticateEdgeCarrier(w, r, edgeAuth, edgeStore, token)"}},
+			{file: "endpoint_profile_live_test.go", decl: "driveBuildInfo", needles: []string{"liveStack(t, noStateRead)", "\": envelope past its exp\"", "stackStateCellsAs(t, o, listener+\": platform admin, \", q, asSuperuser)"}},
+		}},
 		"resource_resolver": {value: "none: the response is the process's build identity; the credential's organization is not read", proofs: []claimProof{
-			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if _, ok := authenticateInternalRequest(w, r, verifier, nil, nil); !ok {", "json.NewEncoder(w).Encode(json.RawMessage(body))"}, anyOf: []string{}},
+			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if !authenticateBuildInfo(w, r, verifier, edgeAuth, edgeStore) {", "json.NewEncoder(w).Encode(json.RawMessage(body))"}, anyOf: []string{}},
 		}},
 		"impersonation_policy": {value: "exempt_no_org_context", proofs: []claimProof{
-			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if _, ok := authenticateInternalRequest(w, r, verifier, nil, nil); !ok {"}, anyOf: []string{}},
+			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if !authenticateBuildInfo(w, r, verifier, edgeAuth, edgeStore) {"}, anyOf: []string{}},
+			{file: "buildinfo_route.go", decl: "authenticateBuildInfo", needles: []string{"claims.ImpersonationActive || claims.Delegated"}},
 		}},
-		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateInternalRequest); any verified credential receives the same process build identity", proofs: []claimProof{
+		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateInternalRequest), and for a user access token whose live users row is not a platform admin (admin.orgs), that has an active impersonation session or that is delegated (authenticateBuildInfo); any accepted credential receives the same process build identity", proofs: []claimProof{
 			{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"http.Error(w, \"unauthorized\", http.StatusUnauthorized)"}, anyOf: []string{}},
-			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if _, ok := authenticateInternalRequest(w, r, verifier, nil, nil); !ok {", "json.NewEncoder(w).Encode(json.RawMessage(body))"}, anyOf: []string{}},
+			{file: "buildinfo_route.go", decl: "authenticateBuildInfo", needles: []string{"!claims.Holds(rule.ActionAdminOrgs) || claims.ImpersonationActive || claims.Delegated", "refuseInternal(w, r, \"buildinfo_not_platform_admin\", \"edge\")"}},
+			{file: "endpoint_profile_live_test.go", decl: "buildInfoUserTokenCells", needles: []string{"\"platform-admin user token\"", "\"delegated platform-admin user token\"", "\"viewer\", \"member\", \"admin\", \"owner\""}},
+			{file: "buildinfo_route.go", decl: "newBuildInfoHandler", needles: []string{"if !authenticateBuildInfo(w, r, verifier, edgeAuth, edgeStore) {", "json.NewEncoder(w).Encode(json.RawMessage(body))"}, anyOf: []string{}},
 		}},
 	},
 	"mcp": {
+		"impersonation_policy": {value: "not_applicable_non_main_app", proofs: []claimProof{
+			{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"http.StatusForbidden, mcpReasonElevatedClaim"}},
+			{file: "endpoint_profile_live_test.go", decl: "driveMCP", needles: []string{"mcpHeaders(mcpTestOrg, \"member\", \"false\", \"true\")", "reason != mcpReasonElevatedClaim", "\"not_applicable_non_main_app\""}},
+		}},
+		"current_state_cache_behavior": {value: "none: no state read: the internal identity headers state the identity on every request; nothing is read or cached", proofs: []claimProof{
+			{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"internalidentity.FromHeader(r.Header)"}},
+			{file: "endpoint_profile_live_test.go", decl: "driveMCP", needles: []string{"\"a valid identity again after a refused one\""}},
+		}},
 		"resource_resolver": {value: "organization_from_credential: the organization of the internal identity headers (mcpAuthenticate); a bearer token is refused", proofs: []claimProof{
-			{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"return authctx.Claims{OrgID: claims.OrgID}, 0, \"\"", "http.StatusUnauthorized, mcpReasonAuthorization"}, anyOf: []string{}},
+			{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"return legacyClaims(claims.OrgID), 0, \"\"", "http.StatusUnauthorized, mcpReasonAuthorization"}, anyOf: []string{}},
 		}},
 		"disclosure_behavior": {value: "401 for a missing or invalid identity; 403 for an identity carrying superuser, impersonation or an operator role; 403 for a root field outside the allowlist or an orgId argument that does not name the caller's organization; 404 for a root field not enabled for the MCP caller class", proofs: []claimProof{
 			{file: "mcp_route.go", decl: "mcpAuthenticate", needles: []string{"http.StatusUnauthorized, mcpReasonNoCarrier", "http.StatusForbidden, mcpReasonElevatedClaim"}, anyOf: []string{}},

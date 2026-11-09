@@ -21,7 +21,6 @@ func TestNoWriterOfTheIngestedAtTablesSendsIngestedAt(t *testing.T) {
 		"projectmembership/membership.go":                             1,
 		"providersync/github_work_items_direct_effects_clickhouse.go": 1,
 		"providersync/linear_work_items_effects.go":                   1,
-		"streamhandlers/internal_ingest.go":                           1,
 		"streamhandlers/external_clickhouse.go":                       1,
 	}
 	got := map[string]int{}

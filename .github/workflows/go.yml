@@ -148,6 +148,8 @@ on:
       # CHAOS-11418: the go-quality leg list; a change to it alone changes which legs go-quality starts
       - 'ci/go_quality_legs.json'
       - 'ci/*.d/**'
+      # the users-writer census (internal/auth/writerinventory) reads this seed's INSERT INTO users
+      - 'ci/pdp_load_k3s/*.sql'
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
@@ -172,6 +174,7 @@ on:
       - 'ci/auth_webproof_compose.override.yml'
       - 'ci/auth_session_issue_workload.override.yml'
       - 'ci/auth_webproof_smtp_sink.mjs'
+      - 'ci/auth_webproof_issuer_forward.mjs'
       # CHAOS-10160: the external auth corpus job (venue-oracles.yml) and the files it runs.
       - 'ci/auth_corpus_external.sh'
       - 'ci/auth_corpus_set_env.sh'
@@ -762,6 +765,12 @@ jobs:
 
       - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
         run: bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
+
+      - name: Write JUnit XML next to the per-test json
+        continue-on-error: true
+        if: always() && matrix.target == 'providersync'
+        # CHAOS-13193: the product tests sync reads .xml and .info members only; the .json stays for the shard weights.
+        run: bash ci/go_test_json_to_junit.sh go-test-json
 
       - name: Upload per-test timing json
         continue-on-error: true

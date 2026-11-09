@@ -67,8 +67,10 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if issuer != "" {
 		env[authconfig.EnvTokenIssuerURL] = issuer
 		// The workload-token exchange needs the token issuer: the probe turns it
-		// on whenever an issuer is set.
+		// on whenever an issuer is set, and the go-api workload subject, which
+		// mounts the session issue routes, with it.
 		exchangeEnvironment(t, env)
+		workloadIssueEnvironment(env)
 	}
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(provisioningEnvironment(ssoEnvironment(compatEnvironment(env))))})
 	if err != nil {
@@ -110,11 +112,12 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, nil, mustLimits(t), nil)
+	signer := keySigner(t)
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, signer, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), nil)
+	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), signer)
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}
@@ -546,22 +549,6 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) 
 		if len(missing) != 1 || missing[0] != key || len(stale) != 0 {
 			t.Errorf("rows without %s: missing %v stale %v, want exactly it missing", key, missing, stale)
 		}
-	}
-}
-
-// TestWithoutAnIssuerTheDiscoveryRowsAreStale pins that the probe really mounts
-// the discovery document: with AUTH_TOKEN_ISSUER_URL unset only the JWKS is
-// served, so the two discovery rows are reported as rows for routes nothing serves.
-func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
-	served := servedAuthRoutesWithIssuer(t, "")
-	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
-	// The workload-token exchange and the OAuth authorization server need the issuer too, so their rows are stale as well.
-	wantStale := []string{"GET /.well-known/oauth-authorization-server/oauth@api", "GET /.well-known/openid-configuration@api", "GET /oauth/.well-known/jwks.json@api", "GET /oauth/.well-known/openid-configuration@api", "GET /oauth/authorize@api", "HEAD /.well-known/openid-configuration@api", "POST /internal/v1/token/exchange@api", "POST /oauth/authorize@api"}
-	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
-		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)
-	}
-	if served["GET /.well-known/jwks.json@api"] != true || served["HEAD /.well-known/jwks.json@api"] != true {
-		t.Error("the JWKS must be served without an issuer")
 	}
 }
 

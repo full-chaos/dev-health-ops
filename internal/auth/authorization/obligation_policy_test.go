@@ -15,7 +15,7 @@ func grantOf(role, key string) Grant {
 
 func orgAllowObligations(t *testing.T, role string, grants ...Grant) *Obligations {
 	t.Helper()
-	d := NewEvaluator().Evaluate(orgRequest(filteredOrgAction), repoSnapshot(role, grants...))
+	d := filteredOrgEvaluator().Evaluate(orgRequest(filteredOrgAction), repoSnapshot(role, grants...))
 	if !d.Allowed {
 		t.Fatalf("%s asking %s: %+v", role, filteredOrgAction, d)
 	}
@@ -27,12 +27,12 @@ func orgAllowObligations(t *testing.T, role string, grants ...Grant) *Obligation
 
 func TestOrgAllowCarriesTheTenantScope(t *testing.T) {
 	for _, action := range []string{"org.read", "analytics.read", "teams.read"} {
-		d := NewEvaluator().Evaluate(orgRequest(action), repoSnapshot("member"))
+		d := filteredOrgEvaluator().Evaluate(orgRequest(action), repoSnapshot("member"))
 		if !d.Allowed || d.Obligations == nil || d.Obligations.TenantScope != testOrg {
 			t.Errorf("%s: want an allow with tenant_scope %s, got %+v %+v", action, testOrg, d, d.Obligations)
 		}
 	}
-	d := NewEvaluator().Evaluate(platformRequest("admin.users"), platformSnapshot("platform_admin"))
+	d := filteredOrgEvaluator().Evaluate(platformRequest("admin.users"), platformSnapshot("platform_admin"))
 	if !d.Allowed || d.Obligations != nil {
 		t.Errorf("a platform allow carries no tenant scope: %+v %+v", d, d.Obligations)
 	}
@@ -97,7 +97,7 @@ func TestARestrictedAllowCarriesNoRepositoryScope(t *testing.T) {
 
 func TestAnUnfilteredOrgAllowCarriesNoRepositoryMember(t *testing.T) {
 	for _, action := range []string{"org.read", "teams.read", "settings.read"} {
-		d := NewEvaluator().Evaluate(orgRequest(action), repoSnapshot("member", liveGrant("acme/api")))
+		d := filteredOrgEvaluator().Evaluate(orgRequest(action), repoSnapshot("member", liveGrant("acme/api")))
 		if !d.Allowed {
 			t.Fatalf("%s: %+v", action, d)
 		}
@@ -116,7 +116,7 @@ func TestGrantsThatAreNotLiveLeaveNoneNotUnrestricted(t *testing.T) {
 		"only another org":       {other},
 		"expired at the instant": {func() Grant { g := liveGrant("acme/api"); g.ExpiresAtUnixNano = nowNano; return g }()},
 	} {
-		o := NewEvaluator().Evaluate(orgRequest(filteredOrgAction), repoSnapshot("member", rows...)).Obligations
+		o := filteredOrgEvaluator().Evaluate(orgRequest(filteredOrgAction), repoSnapshot("member", rows...)).Obligations
 		if name == "only another org" {
 			wantOrganizationScope(t, name+": rows of another organization are ignored, the pair has no row", o)
 			continue
@@ -128,18 +128,19 @@ func TestGrantsThatAreNotLiveLeaveNoneNotUnrestricted(t *testing.T) {
 }
 
 func TestAGrantWhoseRoleLacksTheActionIsLeftOut(t *testing.T) {
-	d := NewEvaluator().Evaluate(orgRequest("analytics.export"), repoSnapshot("member", grantOf("viewer", "acme/v"), grantOf("member", "acme/m")))
+	d := filteredOrgEvaluator().Evaluate(orgRequest("analytics.export"), repoSnapshot("member", grantOf("viewer", "acme/v"), grantOf("member", "acme/m")))
 	if !d.Allowed || d.Obligations == nil || !slices.Equal(d.Obligations.RepositoryAllowlist, []string{"acme/m"}) {
 		t.Fatalf("analytics.export: %+v %+v, want only the member grant (viewer lacks export)", d, d.Obligations)
 	}
 }
 
+// An allow by an exact grant carries its one key; an org-wide allow (membership default, wildcard grant) carries
+// repository_scope organization instead (TestRepositoryAllowCarriesTheOrganizationScopeWhenOrgWideInFact).
 func TestRepositoryAllowCarriesItsOneKey(t *testing.T) {
 	for name, s := range map[string]grantFake{
-		"live grant":         repoSnapshot("member", liveGrant("acme/api")),
-		"membership default": repoSnapshot("member"),
+		"live grant": repoSnapshot("member", liveGrant("acme/api")),
 	} {
-		d := NewEvaluator().Evaluate(repoRequest("acme/api"), s)
+		d := filteredOrgEvaluator().Evaluate(repoRequest("acme/api"), s)
 		if !d.Allowed || d.Obligations == nil || d.Obligations.TenantScope != testOrg || !d.Obligations.RepositoryRestricted ||
 			!slices.Equal(d.Obligations.RepositoryAllowlist, []string{"acme/api"}) {
 			t.Errorf("%s: %+v %+v, want tenant scope and [acme/api]", name, d, d.Obligations)
@@ -152,7 +153,7 @@ func TestAWildcardRepositoryKeyIsRefused(t *testing.T) {
 		"membership default": repoSnapshot("owner"),
 		"wildcard grant":     repoSnapshot("member", liveGrant("*")),
 	} {
-		wantDeny(t, name, NewEvaluator().Evaluate(repoRequest("*"), s), ReasonInvalidRequest)
+		wantDeny(t, name, filteredOrgEvaluator().Evaluate(repoRequest("*"), s), ReasonInvalidRequest)
 	}
 }
 
@@ -170,7 +171,7 @@ func TestAnAllowlistOverTheBoundIsDeniedNotTruncated(t *testing.T) {
 	if o := orgAllowObligations(t, "member", build(MaxRepositoryAllowlist)...); len(o.RepositoryAllowlist) != MaxRepositoryAllowlist {
 		t.Errorf("at the bound: %d keys, want %d", len(o.RepositoryAllowlist), MaxRepositoryAllowlist)
 	}
-	d := NewEvaluator().Evaluate(orgRequest(filteredOrgAction), repoSnapshot("member", build(MaxRepositoryAllowlist+1)...))
+	d := filteredOrgEvaluator().Evaluate(orgRequest(filteredOrgAction), repoSnapshot("member", build(MaxRepositoryAllowlist+1)...))
 	wantDeny(t, "one over the bound", d, ReasonRepositoryAllowlistTooLarge)
 	if d.Obligations != nil || d.CacheClass != CacheNone {
 		t.Errorf("a deny carries no obligations and is never cached: %+v", d)
@@ -181,13 +182,13 @@ func TestAnAllowlistOverTheBoundIsDeniedNotTruncated(t *testing.T) {
 }
 
 func TestAFilteredOrgActionNeedsASnapshotThatReportsGrants(t *testing.T) {
-	wantDeny(t, "plain snapshot", NewEvaluator().Evaluate(orgRequest(filteredOrgAction), orgSnapshot("member")), ReasonGrantAbsent)
+	wantDeny(t, "plain snapshot", filteredOrgEvaluator().Evaluate(orgRequest(filteredOrgAction), orgSnapshot("member")), ReasonGrantAbsent)
 }
 
 // The decision and the obligation never disagree: a key is in the obligation exactly when the
 // repository decision of the same principal, action and key allows it (evaluateRepository).
 func TestObligationEqualsTheRepositoryDecisionForEveryRoleClass(t *testing.T) {
-	e := NewEvaluator()
+	e := filteredOrgEvaluator()
 	keys := []string{"acme/api", "acme/web", "acme/old", "acme/gone", "acme/other-role", "acme/never"}
 	expiredRow, revokedRow := expiredGrant("acme/old"), revokedGrant("acme/gone")
 	rowSets := map[string][]Grant{
@@ -232,7 +233,7 @@ func TestObligationEqualsTheRepositoryDecisionForEveryRoleClass(t *testing.T) {
 }
 
 func TestNoEmittedAllowlistHoldsAWildcard(t *testing.T) {
-	e := NewEvaluator()
+	e := filteredOrgEvaluator()
 	for _, rows := range [][]Grant{nil, {liveGrant("*")}, {liveGrant("*"), liveGrant("acme/api")}, {liveGrant("acme/api")}, {revokedGrant("*")}} {
 		for _, req := range []Request{orgRequest(filteredOrgAction), repoRequest("acme/api")} {
 			d := e.Evaluate(req, repoSnapshot("member", rows...))
@@ -244,7 +245,7 @@ func TestNoEmittedAllowlistHoldsAWildcard(t *testing.T) {
 }
 
 func TestADeniedDecisionCarriesNoObligations(t *testing.T) {
-	e := NewEvaluator()
+	e := filteredOrgEvaluator()
 	cases := map[string]Decision{
 		"suspended principal": e.Evaluate(orgRequest(filteredOrgAction), func() grantFake { s := repoSnapshot("member"); s.principal = StatusSuspended; return s }()),
 		"role lacks":          e.Evaluate(orgRequest("analytics.export"), repoSnapshot("viewer")),
@@ -259,7 +260,7 @@ func TestADeniedDecisionCarriesNoObligations(t *testing.T) {
 }
 
 func TestDelegatedFilteredAllowKeepsItsAllowlist(t *testing.T) {
-	e := NewEvaluator()
+	e := filteredOrgEvaluator()
 	d := e.Evaluate(orgRequest(filteredOrgAction), delegatedRepo([]string{filteredOrgAction}, liveGrant("acme/api")))
 	if !d.Allowed || d.Obligations == nil || d.Obligations.MinimumAssurance == "" ||
 		!d.Obligations.RepositoryRestricted || !slices.Equal(d.Obligations.RepositoryAllowlist, []string{"acme/api"}) {

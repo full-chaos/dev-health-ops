@@ -121,14 +121,20 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 			return deny(ReasonPlatformRoleAbsent)
 		}
 	case policycatalog.ScopeOrganization:
-		if s.OrganizationStatus(r.OrganizationID) != StatusActive {
-			return deny(ReasonOrganizationInactive)
+		// The legacy paths admit a holder of admin.orgs before they read the membership row, in an active,
+		// suspended or unknown organization (no organization row); a removed organization still denies.
+		orgStatus := s.OrganizationStatus(r.OrganizationID)
+		if (orgStatus == StatusActive || orgStatus == StatusSuspended || orgStatus == StatusUnknown) && act.PlatformAdmin &&
+			e.cat.Allows(s.PlatformRole(), platformAdminAction) {
+			o := &Obligations{TenantScope: r.OrganizationID}
+			// A filtered action's allow names the repositories it covers; a platform admin reads them org-wide.
+			if act.RepositoryScope == policycatalog.RepositoryScopeFiltered {
+				o.RepositoryScope = RepositoryScopeOrganization
+			}
+			return Decision{Allowed: true, Reason: ReasonAllowedByPlatformAdmin, PolicyRevision: rev, Obligations: o}
 		}
-		// The legacy admin guard admits a holder of admin.orgs before it reads the membership row; the flagged
-		// actions are exactly the organization actions of its rows, so the holder gets the owner's allow shape.
-		if act.PlatformAdmin && e.cat.Allows(s.PlatformRole(), platformAdminAction) {
-			return Decision{Allowed: true, Reason: ReasonAllowedByPlatformAdmin, PolicyRevision: rev,
-				Obligations: &Obligations{TenantScope: r.OrganizationID}}
+		if orgStatus != StatusActive {
+			return deny(ReasonOrganizationInactive)
 		}
 		m, found := s.Membership(r.OrganizationID)
 		if !found {

@@ -18,13 +18,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	apisession "github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -146,19 +142,22 @@ type switchFixture struct {
 	store                 *fakeSwitchSessions
 	projector             *fakeProjector
 	issuer                *Issuer
+	bearerIssuer          *Issuer
 	logs                  *bytes.Buffer
 	counters              httpapi.CounterStore
 	document              []byte
 	server                http.Handler
 }
 
+// newSwitchFixture serves switch-org with the hs256_compat mint and the access
+// check over a key set (without the check the route is not mounted); the
+// bearer is the EdDSA session-route token of that key set.
 func newSwitchFixture(t *testing.T) *switchFixture {
 	t.Helper()
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return newSwitchFixtureWith(t, issuer)
+	issuer, minter := withSessionBearer(t, newTestIssuer(t))
+	f := newSwitchFixtureWith(t, issuer)
+	f.bearerIssuer = minter
+	return f
 }
 
 func newSwitchFixtureWith(t *testing.T, issuer *Issuer) *switchFixture {
@@ -180,7 +179,7 @@ func newSwitchFixtureWith(t *testing.T, issuer *Issuer) *switchFixture {
 		store:     &fakeSwitchSessions{records: sessions},
 		projector: &fakeProjector{orgs: map[uuid.UUID]bool{orgA: true, orgB: true}, gone: map[uuid.UUID]bool{}},
 		issuer:    issuer, logs: &bytes.Buffer{}, counters: httpapi.NewMemoryCounters(nil),
-		document: switchRows("ops_access_token_hs256"),
+		document: switchRows("user_access_token"),
 	}
 	f.build()
 	return f
@@ -231,7 +230,11 @@ func (f *switchFixture) grant() Grant {
 
 func (f *switchFixture) bearerOf(grant Grant) map[string]string {
 	f.t.Helper()
-	compact, err := f.issuer.Access(grant)
+	minter := f.issuer
+	if f.bearerIssuer != nil {
+		minter = f.bearerIssuer
+	}
+	compact, err := minter.Access(grant)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -339,8 +342,8 @@ func TestSwitchOrgHappyPath(t *testing.T) {
 		t.Fatalf("answer %s", r.Body)
 	}
 	claims := switchClaims(t, answer.AccessToken)
-	if claims["org_id"] != f.orgB.String() || claims["role"] != "member" || claims["sid"] != session.WireSessionID(issued.Session.ID) {
-		t.Fatalf("access claims org=%v role=%v sid=%v, want B, member and the successor", claims["org_id"], claims["role"], claims["sid"])
+	if claims["org_id"] != f.orgB.String() || claims["sid"] != session.WireSessionID(issued.Session.ID) {
+		t.Fatalf("access claims org=%v sid=%v, want B and the successor", claims["org_id"], claims["sid"])
 	}
 	if got := strings.Join(f.reads.calls, ","); got != "state,organization,membership" {
 		t.Fatalf("in-transaction reads %q, want state,organization,membership", got)
@@ -518,10 +521,12 @@ func TestSwitchOrgRefusalTable(t *testing.T) {
 			f.store.before = session.ErrPredecessorNotLive
 			return f.bearer()
 		}, http.StatusUnauthorized, switchBadToken, reasonSessionRevoked},
-		{"stale token version (bearer)", func(f *switchFixture) map[string]string {
-			grant := f.grant()
-			grant.User.TokenVersion = 3
-			return f.bearerOf(grant)
+		{"stale session pin (bearer)", func(f *switchFixture) map[string]string {
+			record := f.sessions.records[f.record.ID]
+			stale := int64(3)
+			record.LegacyTokenVersion = &stale
+			f.sessions.records[f.record.ID] = record
+			return f.bearer()
 		}, http.StatusUnauthorized, switchBadToken, reasonRevisionStale},
 		{"stale pin (in the transaction)", func(f *switchFixture) map[string]string {
 			user := f.reads.users[f.principal]
@@ -535,12 +540,12 @@ func TestSwitchOrgRefusalTable(t *testing.T) {
 			f.sessions.records[f.record.ID] = record
 			return f.bearer()
 		}, http.StatusForbidden, switchNotAllowed, reasonNotEntitled},
-		{"impersonation bearer", func(f *switchFixture) map[string]string {
+		{"HS256 impersonation bearer (class retired)", func(f *switchFixture) map[string]string {
 			grant := f.grant()
 			actor := uuid.New()
 			grant.Actor = &actor
-			return f.bearerOf(grant)
-		}, http.StatusForbidden, switchNotAllowed, reasonNotEntitled},
+			return map[string]string{"Authorization": "Bearer " + legacyAccess(f.t, grant)}
+		}, http.StatusUnauthorized, switchBadToken, reasonMalformed},
 		{"service account user", func(f *switchFixture) map[string]string {
 			user := f.reads.users[f.principal]
 			provider := "service"
@@ -613,8 +618,8 @@ func TestSwitchOrgDecidesOnTheInTransactionReads(t *testing.T) {
 	if err := json.Unmarshal(r.Body.Bytes(), &answer); err != nil {
 		t.Fatal(err)
 	}
-	if answer.User.Role != "owner" || switchClaims(t, answer.AccessToken)["role"] != "owner" {
-		t.Fatalf("role %q / claim %v, want the in-transaction read's owner", answer.User.Role, switchClaims(t, answer.AccessToken)["role"])
+	if answer.User.Role != "owner" {
+		t.Fatalf("role %q, want the in-transaction read's owner", answer.User.Role)
 	}
 	f = newSwitchFixture(t)
 	user := f.reads.users[f.principal]
@@ -660,9 +665,9 @@ func TestSwitchOrgStoreFaultIs503(t *testing.T) {
 }
 
 // The answer is go-api's LoginResponse: its members in its order, with
-// session_access_token last under the eddsa class only.
+// session_access_token last.
 func TestSwitchOrgAnswerShape(t *testing.T) {
-	want := "access_token,refresh_token,token_type,expires_in,needs_onboarding,user"
+	want := "access_token,refresh_token,token_type,expires_in,needs_onboarding,user,session_access_token"
 	wantUser := "id,email,username,full_name,org_id,role,is_superuser"
 	f := newSwitchFixture(t)
 	r := f.post(orgBody(f.orgB), f.bearer())
@@ -682,23 +687,6 @@ func TestSwitchOrgAnswerShape(t *testing.T) {
 	}
 	if !strings.Contains(string(answer["user"]), `"username":"ada","full_name":null,"org_id":"`+f.orgB.String()+`","role":"member","is_superuser":false`) {
 		t.Fatalf("user %s", answer["user"])
-	}
-
-	signer, _, _ := fileSigner(t)
-	e := newSwitchFixtureWith(t, newEdDSAIssuer(t, signer, testAudience))
-	legacy, err := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sid := session.WireSessionID(e.record.ID)
-	compact, err := legacy.Access(edgetoken.AccessClaims{UserID: e.principal.String(), Email: "ada@example.com", OrgID: e.orgA.String(),
-		Role: "admin", TokenVersion: 4, SessionID: &sid}, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	r = e.post(orgBody(e.orgB), map[string]string{"Authorization": "Bearer " + compact})
-	if got := strings.Join(memberOrder(t, r.Body.Bytes()), ","); r.Code != http.StatusOK || got != want+",session_access_token" {
-		t.Fatalf("eddsa members %q (%d %s), want %q", got, r.Code, r.Body, want+",session_access_token")
 	}
 }
 
@@ -832,9 +820,9 @@ func TestSwitchOrgNotMountedWithoutRow(t *testing.T) {
 		t.Fatalf("not-mounted line with the embedded row present: %s", f.logs)
 	}
 	for name, document := range map[string][]byte{
-		"empty":                   []byte(`{"rows":[]}`),
-		"another route's row":     validateRowsHS256,
-		"a row of no HS256 class": switchRows("user_access_token"),
+		"empty":                                 []byte(`{"rows":[]}`),
+		"another route's row":                   validateRowsUser,
+		"a row of only the retired HS256 class": switchRows("ops_access_token_hs256"),
 	} {
 		f.document = document
 		f.build()
@@ -844,78 +832,9 @@ func TestSwitchOrgNotMountedWithoutRow(t *testing.T) {
 	}
 	deps := f.deps()
 	deps.SwitchOrg = &SwitchOrgConfig{Sessions: f.store}
-	if _, err := compatRoutes(deps, switchRows("ops_access_token_hs256")); err == nil {
+	if _, err := compatRoutes(deps, switchRows("user_access_token")); err == nil {
 		t.Fatal("a switch-org config without its reads built")
 	}
-}
-
-// go-api's own switch-org handler and this route answer the refusals they
-// share with the same status, content type and bytes: the body refusals go-api
-// makes before its transaction and its guard's bearer refusals.
-func TestSwitchOrgSharedRefusalsAreGoAPIsBytes(t *testing.T) {
-	v := newValidateFixture(t, false)
-	f := newSwitchFixture(t)
-	f.principal, f.record = v.principal, v.record
-	f.sessions.records = map[uuid.UUID]session.Record{v.record.ID: v.record}
-	f.users = v.users
-	f.build()
-	goAPI := goAPISwitchHandler(t, v)
-	token := v.hs256Token(nil)
-	bearer := map[string]string{"Authorization": "Bearer " + token}
-	for _, c := range []struct {
-		name, body string
-		header     map[string]string
-	}{
-		{"missing org_id", `{}`, bearer},
-		{"org_id not a string", `{"org_id":5}`, bearer},
-		{"not an object", `[1]`, bearer},
-		{"not a UUID", `{"org_id":"acme"}`, bearer},
-		{"empty org_id", `{"org_id":""}`, bearer},
-		{"undecodable JSON", `{"org_id":`, bearer},
-		{"no Authorization", orgBody(v.org), nil},
-		{"not a bearer", orgBody(v.org), map[string]string{"Authorization": "Basic YWRhOnB3"}},
-		{"forged bearer", orgBody(v.org), map[string]string{"Authorization": "Bearer " + token + "x"}},
-	} {
-		compat := f.post(c.body, c.header)
-		request := httptest.NewRequest(http.MethodPost, PatternCompatSwitchOrg, strings.NewReader(c.body))
-		for k, value := range c.header {
-			request.Header.Set(k, value)
-		}
-		theirs := httptest.NewRecorder()
-		goAPI.ServeHTTP(theirs, request)
-		expectSamePlanes(t, c.name, compat, theirs)
-	}
-}
-
-// goAPISwitchHandler is go-api's own POST /api/v1/auth/switch-org over the
-// validate fixture's store, with a pool that reaches no database: the shared
-// refusals are answered before go-api opens its transaction.
-func goAPISwitchHandler(t *testing.T, v *validateFixture) http.Handler {
-	t.Helper()
-	verifier, err := edgetoken.New(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	logger := slog.New(slog.DiscardHandler)
-	auth, err := policy.NewAuthenticator(verifier, goAPIValidateStore{v}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool, err := pgxpool.New(context.Background(), "postgres://switch@127.0.0.1:1/none")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	for _, route := range apisession.Routes(apisession.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Auth: auth,
-		Verifier: verifier, Signer: v.hs256, Logger: logger, Limits: httpapi.NewMemoryCounters(nil)}) {
-		if route.Method == http.MethodPost && route.Pattern == PatternCompatSwitchOrg {
-			mux := http.NewServeMux()
-			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
-			return mux
-		}
-	}
-	t.Fatal("go-api mounts no switch-org route")
-	return nil
 }
 
 // The route over the production flag table (MarkResponseModels on the

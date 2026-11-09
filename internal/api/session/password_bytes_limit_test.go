@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"io"
 	"log/slog"
 	"net/http"
@@ -64,7 +65,7 @@ func registerWith(password string) (rec *httptest.ResponseRecorder, reached bool
 	rec = httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", nil)
 	r = r.WithContext(context.WithValue(r.Context(), registerInputKey{}, registerInput{email: "a@example.com", password: password}))
-	reached = reachesPool(func() { handlers{}.register(rec, r) })
+	reached = reachesPool(func() { handlers{Deps: Deps{Mail: authmail.Config{LinkSecret: testLinkSecret}}}.register(rec, r) })
 	return rec, reached
 }
 

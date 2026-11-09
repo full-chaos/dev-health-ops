@@ -1,6 +1,7 @@
 package authconfig
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -12,12 +13,12 @@ const (
 	// calls with its service credential.
 	EnvMembershipRoutes = "AUTH_MEMBERSHIP_ROUTES"
 	// EnvInviteTokenSecret signs new invite tokens: go-api's link signing key
-	// (LINK_TOKEN_SECRET, else its JWT_SECRET_KEY chain). Secret: environment
+	// (LINK_TOKEN_SECRET). Secret: environment
 	// or _FILE only. Required while the membership routes mount.
 	EnvInviteTokenSecret = "AUTH_INVITE_TOKEN_SECRET"
 	// EnvInviteTokenSecretPrevious verifies invite tokens only, never signs:
-	// go-api's LINK_TOKEN_SECRET_PREVIOUS. Secret. Required while the
-	// membership routes mount.
+	// go-api's LINK_TOKEN_SECRET_PREVIOUS. Secret. Optional: unset or empty,
+	// no previous key is accepted.
 	EnvInviteTokenSecretPrevious = "AUTH_INVITE_TOKEN_SECRET_PREVIOUS"
 )
 
@@ -26,29 +27,23 @@ type Provisioning struct {
 	// Routes is AUTH_MEMBERSHIP_ROUTES.
 	Routes bool
 	// InviteSecret signs new invite tokens; InviteSecretPrevious only
-	// verifies them. Both are set exactly when Routes is.
+	// verifies them. InviteSecret is set exactly when Routes is;
+	// InviteSecretPrevious may be empty.
 	InviteSecret         secrets.Value
 	InviteSecretPrevious secrets.Value
 }
 
 // InviteAcceptSecrets are the keys a presented invite token is checked
 // against, signing key first, as go-api's authmail.Config.AcceptSecrets: the
-// signing key, the previous key, then the JWT key (go-api's TokenSecret
-// chain, which signed links before a link key was set). Blanks and repeats are
-// left out. Nil when the routes are off.
+// signing key, then the previous key. No session or access key verifies an
+// invite. Blanks and repeats are left out. Nil when the routes are off.
 func (c Config) InviteAcceptSecrets() []string {
 	if !c.Provisioning.Routes {
 		return nil
 	}
 	out := []string{c.Provisioning.InviteSecret.Reveal()}
-	for _, secret := range []string{c.Provisioning.InviteSecretPrevious.Reveal(), c.Session.AccessSecret.Reveal()} {
-		seen := false
-		for _, have := range out {
-			seen = seen || have == secret
-		}
-		if secret != "" && !seen {
-			out = append(out, secret)
-		}
+	if previous := c.Provisioning.InviteSecretPrevious.Reveal(); previous != "" && previous != out[0] {
+		out = append(out, previous)
 	}
 	return out
 }
@@ -56,7 +51,7 @@ func (c Config) InviteAcceptSecrets() []string {
 // provisioning reads the routes switch and, when it is on, both invite keys.
 // A missing key is named by its variable only, never by a value. The routes
 // mount with the session routes, so they need the session secrets.
-func provisioning(lookup secrets.LookupEnv, sessionEnabled bool) (Provisioning, error) {
+func provisioning(lookup secrets.LookupEnv, session SessionTokens) (Provisioning, error) {
 	routes, err := strictBool(lookup, EnvMembershipRoutes)
 	if err != nil {
 		return Provisioning{}, err
@@ -65,24 +60,34 @@ func provisioning(lookup secrets.LookupEnv, sessionEnabled bool) (Provisioning, 
 	if err != nil {
 		return Provisioning{}, err
 	}
-	previous, hasPrevious, err := secrets.ResolveSecret(EnvInviteTokenSecretPrevious, lookup)
+	previous, hasPrevious, err := resolveOptionalSecret(EnvInviteTokenSecretPrevious, lookup)
 	if err != nil {
 		return Provisioning{}, err
 	}
 	if !routes {
 		return Provisioning{}, nil
 	}
-	if !sessionEnabled {
-		return Provisioning{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
-			EnvMembershipRoutes, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+	if !session.Enabled {
+		return Provisioning{}, fmt.Errorf("%s needs the session secrets (%s)", EnvMembershipRoutes, sessionSecretNames(session.AccessClass))
 	}
-	for _, need := range []struct {
-		name string
-		set  bool
-	}{{EnvInviteTokenSecret, hasSecret && secret.Reveal() != ""}, {EnvInviteTokenSecretPrevious, hasPrevious && previous.Reveal() != ""}} {
-		if !need.set {
-			return Provisioning{}, fmt.Errorf("%s=true needs %s", EnvMembershipRoutes, need.name)
-		}
+	if !hasSecret || secret.Reveal() == "" {
+		return Provisioning{}, fmt.Errorf("%s=true needs %s", EnvMembershipRoutes, EnvInviteTokenSecret)
 	}
-	return Provisioning{Routes: true, InviteSecret: secret, InviteSecretPrevious: previous}, nil
+	out := Provisioning{Routes: true, InviteSecret: secret}
+	if hasPrevious {
+		out.InviteSecretPrevious = previous
+	}
+	return out, nil
+}
+
+// resolveOptionalSecret is secrets.ResolveSecret for a key that may be absent:
+// a key_FILE that is empty after the resolver's final-newline rule is the key
+// unset, not a refused start (D6465: a hygiene key never refuses a start). Every
+// other resolver error stands: an unreadable file, a key set twice.
+func resolveOptionalSecret(key string, lookup secrets.LookupEnv) (secrets.Value, bool, error) {
+	value, set, err := secrets.ResolveSecret(key, lookup)
+	if errors.Is(err, secrets.ErrEmptyValue) {
+		return secrets.Value{}, false, nil
+	}
+	return value, set, err
 }

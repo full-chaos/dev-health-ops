@@ -185,6 +185,18 @@ spec:
             - name: AUTH_PLATFORM_ROLES_OWNED
               value: "true"
             {{- end }}
+            {{- with (include "dev-health.queryApiPdpMode" .) }}
+            - name: QUERY_API_PDP_MODE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (include "dev-health.authzEnforceQueryApi" (dict "key" "queryApi" "context" .)) }}
+            - name: QUERY_API_AUTHZ_ENFORCE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (include "dev-health.authzEnforceQueryApi" (dict "key" "queryApiHeaders" "context" .)) }}
+            - name: QUERY_API_HEADERS_AUTHZ_ENFORCE
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.queryApi.internal.enabled }}
             {{- /*
             The internal listener: honours X-DH-Internal-* identity headers, serves

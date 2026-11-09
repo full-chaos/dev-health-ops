@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -91,6 +92,48 @@ func SessionReaderReads(platformRolesOwned bool) []ColumnGrant {
 		reads = append(reads, PlatformRoleReaderColumns()...)
 	}
 	return reads
+}
+
+// WorkloadReaderReads is what a workload reader role reads in the auth schema, on top of SessionReaderReads: the
+// workload registry row go-api's internal acr routes resolve the acr-api principal from (workloads: principal_id,
+// name, organization_id, audiences, disabled_at) and the principal's disabled mark (principals: id, disabled_at). No
+// credential, binding or key column.
+func WorkloadReaderReads() []ColumnGrant {
+	return []ColumnGrant{
+		{Table: "workloads", Columns: []string{"principal_id", "name", "organization_id", "audiences", "disabled_at"}},
+		{Table: "principals", Columns: []string{"id", "disabled_at"}},
+	}
+}
+
+// SessionReaderReadsWith is SessionReaderReads plus, for a workload reader role, WorkloadReaderReads: a table both
+// name is read once, with the union of the columns, in the order they first appear.
+func SessionReaderReadsWith(platformRolesOwned, workloadReader bool) []ColumnGrant {
+	reads := SessionReaderReads(platformRolesOwned)
+	if !workloadReader {
+		return reads
+	}
+	merged := make([]ColumnGrant, len(reads))
+	for i, read := range reads {
+		merged[i] = ColumnGrant{Table: read.Table, Columns: append([]string(nil), read.Columns...)}
+	}
+	for _, extra := range WorkloadReaderReads() {
+		found := false
+		for i := range merged {
+			if merged[i].Table != extra.Table {
+				continue
+			}
+			found = true
+			for _, column := range extra.Columns {
+				if !slices.Contains(merged[i].Columns, column) {
+					merged[i].Columns = append(merged[i].Columns, column)
+				}
+			}
+		}
+		if !found {
+			merged = append(merged, ColumnGrant{Table: extra.Table, Columns: append([]string(nil), extra.Columns...)})
+		}
+	}
+	return merged
 }
 
 // TableWriteGrant is a column-level SELECT and UPDATE grant on one ops-schema

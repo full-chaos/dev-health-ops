@@ -119,11 +119,10 @@ type Deps struct {
 	// Guard to wrap a handler with its authorization level.
 	Auth  *policy.Authenticator
 	Guard *policy.Guard
-	// Verifier and Signer are the access/refresh token keys (JWT_SECRET_KEY),
-	// nil without a pool: the session routes (internal/api/session) mint
-	// and verify with them.
+	// Verifier is the access/refresh token key (JWT_SECRET_KEY),
+	// nil without a pool: the session routes (internal/api/session) verify
+	// with it.
 	Verifier *edgetoken.Verifier
-	Signer   *edgetoken.Signer
 	// AccessVerify is the profile-routed access-token validator; nil when
 	// AUTH_ACCESS_TOKEN_ISSUER is unset. When set, Auth routes through it.
 	AccessVerify *accessverify.Validator
@@ -151,12 +150,12 @@ type Deps struct {
 	Decryptor providerfoundation.FernetDecryptor
 	// GitHubApp and GitHubStateSigner configure the GitHub App install
 	// routes (internal/api/githubapp): the App's identity read from
-	// GITHUB_APP_* when the api starts, and the JWT secret, issuer and
+	// GITHUB_APP_* when the api starts, and the GITHUB_APP_STATE_SECRET key, issuer and
 	// audience its install state is signed with.
 	GitHubApp         githubapp.Config
 	GitHubStateSigner githubapp.Signer
-	// SSOStateSecret keys the SSO login state (OIDC, OAuth, SAML): SSO_STATE_SECRET, else JWT_SECRET_KEY.
-	SSOStateSecret, SSOStateSecretFallback string
+	// SSOStateSecret keys the SSO login state (OIDC, OAuth, SAML): SSO_STATE_SECRET only.
+	SSOStateSecret string
 	// GitHubAppHTTPClient, GitHubAppURL and GitHubAppAPIURL are the install
 	// callback's outbound seam: nil/empty in production (github.com and
 	// api.github.com, no redirects); the venue oracle points them at a stub.

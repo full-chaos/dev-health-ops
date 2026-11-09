@@ -154,13 +154,13 @@ Bring-up, in this order (every command names its services; `-p dev-health ... --
 5. Once: `--profile auth run --rm acr-workload-bootstrap` (runs `acr-workload-volume` first). It prints the credential id and its
    `expires_at`; re-create before that time (a second `run` refuses while a credential is live: revoke it first with
    `auth-migrate workloads bootstrap-revoke -credential <id> -reason owner_request -apply`, or rotate with `bootstrap-rotate`). It is never a `depends_on`.
-6. The subject: read the principal of the workload acr-api,
-   `docker exec dev-health-postgres-1 psql -U devhealth -d devhealth -Atc "SELECT 'prn_' || rtrim(translate(encode(uuid_send(principal_id), 'base64'), '+/', '-_'), '=') FROM auth.workloads WHERE name = 'acr-api'"`,
-   and write it to `ops/.env` as `AUTH_ACR_WORKLOAD_SUBJECT=prn_...` (an id, not a secret). Unset, go-api refuses every workload token as
-   not configured.
+6. The subject: nothing to write. go-api reads the principal of the workload acr-api from the workload registry (the row `auth.workloads`
+   `name = 'acr-api'`); the venue grants its role that read (`AUTH_WORKLOAD_READER_ROLES=devhealth_api` on auth-migrate and auth-grants).
+   No live acr-api row, or an unreadable registry, and go-api refuses every workload token on the internal acr routes.
 7. Once: `--profile auth run --rm go-api-workload-bootstrap` (runs `go-api-workload-volume` first), then read the principal of the workload `api` as in step 6
    (`WHERE name = 'api'`) and write it to `ops/.env` as `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_...`. Recreate auth-service (`--profile auth up -d --no-deps --no-build auth-service`).
 8. Recreate go-api (`up -d --no-deps --no-build go-api`; it needs the api bootstrap file from step 7 to start), query-api and web, then acr-api (`--profile acr up -d --no-deps --no-build acr-api`).
+9. Platform roles (CHAOS-13282): auth-service has `AUTH_PLATFORM_ROLES_OWNED=true` in `compose.bigboy.yml` (the prod form: the PDP reads the role from `auth.platform_role_assignments`, not `users.is_superuser`), so a plain `up` keeps it. go-api stays not owned (the drift-S controls need legacy to read the flag), and `AUTH_USERS_OWNED` stays `false` (the venue has no mail settings: `auth_mail_config_invalid`). Before the first start with the setting on, run `BIGBOY_DRIFT_S_ID=<uuid> BIGBOY_ADMIN_AUTH_HDR=<0600 header file> ci/bigboy/bigboy-platform-admin-fixture.sh`: it runs `dho auth users-backfill` with the drift-S `is_superuser` flag off, puts the flag back, and reads back that the active platform_admin set is the flagged superusers other than drift-S and that `users-reconcile -platform-roles-gate` shows only the drift-S `platform_role_diff`. It is idempotent.
 
 ## Go-only stack (CHAOS-8361)
 
@@ -444,8 +444,11 @@ and the prover refuses by name if a Python plane answers the routed `/graphql`. 
 1. refuse unless `venue-prove`'s image is `go-api-tools:sha-<sha>` (prover build skew);
 2. derive the local org read-only (the single org of the local admin account; never printed);
 3. `dho goapi prove` for the local org -- read-only against org data, writes proof receipts only;
-   both credentials are minted in process (envelope key loaded from the mounted file inside the
-   container; `JWT_SECRET_KEY` by compose substitution from `ops/.env`);
+   the proof credential is the local admin's user access token (a platform admin), in a 0600/0400
+   file the operator stages and names by `BIGBOY_PROVE_ACCESS_TOKEN_FILE` (the script refuses a
+   file that is unset, missing, a symlink or of another mode, and never reads the value); it is
+   mounted read-only into the container and read there (`-proof-access-token-file`); the edge token
+   is still minted in process from `JWT_SECRET_KEY` (compose substitution from `ops/.env`);
 
 Full output names the org and stays under the devhealth-root `_records/bigboy-<sha8>/graphql-prove-<ts>/`.
 `BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the running tree the harness works in, the same

@@ -18,14 +18,13 @@ import (
 )
 
 // CHAOS-13073 r1 (acp ruling D6714 / 13106 option D): a delegated token is counted impersonation_refused before any skip
-// class, on the routed and the unrouted path, with or without an organization, for HS256, the EdDSA user access token
-// and the EdDSA envelope the PDP cannot judge. A non-delegated HS256 token is skipped/hs256, and an org-required
-// refusal is observed on both paths. The legacy answer of every cell is unchanged.
+// class, on the routed and the unrouted path, with or without an organization, for the EdDSA user access token and the
+// EdDSA envelope the PDP cannot judge, and an org-required refusal is observed. The retired HS256 class is the one
+// generic-401 cell of the plane (TestQueryAPIHS256IsRefusedOnEveryRow). Every other cell keeps its legacy answer.
 func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 	forbidden := answer{http.StatusForbidden, `{"detail":"Organization context required"}`}
 	served := answer{http.StatusOK, fmt.Sprintf(`{"org":%q}`, ecOrg.String())}
 	refused := shadowResultsMetric + "|reason=none,result=impersonation_refused"
-	skippedHS := shadowResultsMetric + "|reason=hs256,result=skipped"
 	delegate := uuid.NewString()
 	type cell struct {
 		name      string
@@ -41,9 +40,6 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 	for _, routed := range []bool{true, false} {
 		path := map[bool]string{true: "routed", false: "unrouted"}[routed]
 		cells = append(cells,
-			cell{path + " hs256 org delegated", routed, "hs256", true, true, served, refused},
-			cell{path + " hs256 orgless delegated", routed, "hs256", false, true, forbidden, refused},
-			cell{path + " hs256 orgless not delegated", routed, "hs256", false, false, forbidden, skippedHS},
 			cell{path + " envelope org delegated", routed, "envelope", true, true, served, refused},
 			cell{path + " envelope orgless delegated", routed, "envelope", false, true, envelopeOrgless, refused},
 		)
@@ -64,19 +60,13 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 			if tc.routed {
 				setup = testAccess(m.keys, nil, accessTestNow)
 			}
-			f := newRESTFixture(t, newAccessStore(), setup, true)
+			f := newRESTFixture(t, newAccessStore(), setup)
 			org := ""
 			if tc.org {
 				org = ecOrg.String()
 			}
 			var token string
 			switch tc.kind {
-			case "hs256":
-				claims := ecEdgeClaims{sub: ecUser.String(), orgID: org, tokenVersion: 5}
-				if tc.delegated {
-					claims.impersonatingUserID = delegate
-				}
-				token = ecMintEdgeToken(t, claims)
 			case "user":
 				extra := map[string]any{"act": map[string]any{"sub": wirePrincipal(uuid.MustParse(delegate))}}
 				if !tc.org {

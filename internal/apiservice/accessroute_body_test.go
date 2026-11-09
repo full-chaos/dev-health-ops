@@ -18,25 +18,22 @@ import (
 
 // TestIssuerSetBodyFirstRoutesKeepTheRouteProfile: on the real session routes
 // that decode the body before authenticating (BodyFirst), the token is still
-// validated against the route's own row: an HS256 token on the legacy
-// /auth/validate and /auth/logout rows is accepted there, never refused for
-// want of a profile.
+// validated against the route's own row: an HS256 token on /auth/validate and
+// /auth/logout is refused there for its retired class (alg_not_allowed), never
+// for want of a profile.
 func TestIssuerSetBodyFirstRoutesKeepTheRouteProfile(t *testing.T) {
 	verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, newProbeStore(), quietLogger())
+	auth, err := policy.NewAuthenticator(newProbeStore(), quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
 	reader := sdkmetric.NewManualReader()
-	validator, err := accessverify.New(accessverify.Config{Rows: realRows(t), Legacy: legacyVerifier(auth.AuthenticateLegacy),
-		Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"), Logger: quietLogger()})
+	validator, err := accessverify.New(accessverify.Config{Rows: realRows(t),
+		// The SDK's default limit of 2000 series per instrument folds most of the refused counter (10 reasons per row) into overflow.
+		Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithCardinalityLimit(10000)).Meter("test"), Logger: quietLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +50,7 @@ func TestIssuerSetBodyFirstRoutesKeepTheRouteProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = clickHouse.Close() })
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier}
 	scope := policy.NewScope(auth, quietLogger())
 	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), scope.Layers()...)
 	if err != nil {
@@ -65,8 +62,8 @@ func TestIssuerSetBodyFirstRoutesKeepTheRouteProfile(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"valid":true`) {
-		t.Errorf("validate: %d %s, want valid:true", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"valid":false`) {
+		t.Errorf("validate: %d %s, want valid:false (the HS256 class is retired)", recorder.Code, recorder.Body.String())
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", strings.NewReader(`{"refresh_token":"r"}`))
@@ -76,8 +73,8 @@ func TestIssuerSetBodyFirstRoutesKeepTheRouteProfile(t *testing.T) {
 
 	counters := (&routedFixture{reader: reader}).counters(t)
 	for _, profile := range []string{"POST /api/v1/auth/validate", "POST /api/v1/auth/logout"} {
-		if counters[accessverify.AcceptedMetric+"|class=ops_access_token_hs256,profile="+profile+",service="+goAPIAccessService] == 0 {
-			t.Errorf("%s: no legacy acceptance on its own row", profile)
+		if counters[accessverify.RefusedMetric+"|profile="+profile+",reason=alg_not_allowed,service="+goAPIAccessService] == 0 {
+			t.Errorf("%s: no HS256 refusal counted on its own row", profile)
 		}
 	}
 	if n := counters[accessverify.RefusedMetric+"|profile=unknown,reason=no_profile,service=unknown"]; n != 0 {

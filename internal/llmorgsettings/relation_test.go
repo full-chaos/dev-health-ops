@@ -138,7 +138,7 @@ func TestTheReaderSQLFollowsTheRelation(t *testing.T) {
 	}
 	before := map[string]string{
 		"raw": `
-SELECT key, value, is_encrypted FROM settings
+SELECT key, value, is_encrypted, updated_at FROM settings
 WHERE org_id = $1 AND category = $2`,
 		"version": `
 SELECT key, updated_at, coalesce(value, '') FROM settings

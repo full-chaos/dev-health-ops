@@ -30,16 +30,12 @@ var Allowlist = []Entry{
 	{File: "internal/api/session/register.go", Func: "insertMembership", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/api/session/register.go", Func: "insertOrganization", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/api/session/social.go", Func: "handlers.createSocialUser", Table: "public.users", Verb: "INSERT"},
-	{File: "internal/api/session/store.go", Func: "insertRefresh", Table: "public.refresh_tokens", Verb: "INSERT"},
-	{File: "internal/api/session/store.go", Func: "markRotated", Table: "public.refresh_tokens", Verb: "UPDATE"},
-	{File: "internal/api/session/store.go", Func: "revokeFamily", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/api/session/store.go", Func: "revokeToken", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/api/session/store.go", Func: "touchLastLogin", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/session/store.go", Func: "updateAttempt", Table: "public.login_attempts", Verb: "UPDATE"},
 	{File: "internal/api/session/verify.go", Func: "handlers.resetPassword", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/session/verify.go", Func: "handlers.verify", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/session/verify.go", Func: "revokeAllForUser", Table: "public.refresh_tokens", Verb: "UPDATE"},
-	{File: "internal/api/sso/login.go", Func: "handlers.finishSSOLogin", Table: "public.refresh_tokens", Verb: "INSERT"},
 	{File: "internal/api/sso/login.go", Func: "handlers.finishSSOLogin", Table: "public.sso_providers", Verb: "UPDATE"},
 	{File: "internal/api/sso/login.go", Func: "handlers.recordSSOFailure", Table: "public.sso_providers", Verb: "UPDATE"},
 	{File: "internal/api/sso/oauth.go", Func: "handlers.oauthProvisionUser", Table: "public.users", Verb: "UPDATE"},
@@ -110,6 +106,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Issue", Table: "auth.link_credentials", Verb: "DELETE"},
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Issue", Table: "auth.link_credentials", Verb: "INSERT"},
 	{File: "internal/auth/identity/local/linkcred.go", Func: "PGLinks.Redeem", Table: "auth.link_credentials", Verb: "UPDATE"},
+	// acp 11-07 ruling, CHAOS-13196: `dho auth users-create` provisions a verified local user through ProvisionCLIUser.
+	{File: "internal/auth/identity/cliuser.go", Func: "Store.ProvisionCLIUser", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/identity/cliuser.go", Func: "Store.ProvisionCLIUser", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.ProvisionLocal", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/local.go", Func: "Store.SetEmailVerifiedWith", Table: "auth.users", Verb: "UPDATE"},
@@ -297,6 +296,7 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/store.go", Func: "Store.rotate", Table: "auth.refresh_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/session/store.go", Func: "Store.rotate", Table: "auth.sessions", Verb: "UPDATE"},
 	{File: "internal/maintenancecli/maintenance.go", Func: "CleanupExpiredTokens", Table: "public.refresh_tokens", Verb: "DELETE"},
+	{File: "internal/testsupport/authplane/authplane.go", Func: "Start", Table: "auth.principals", Verb: "INSERT"}, // test support: the venue auth plane's go-api workload principal, the issue route's audit actor
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "ImpersonationSession", Table: "public.impersonation_sessions", Verb: "INSERT"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "Membership", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/testsupport/pgseed/pgseed.go", Func: "Org", Table: "public.organizations", Verb: "INSERT"},
@@ -310,6 +310,6 @@ var Allowlist = []Entry{
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.users", Verb: "INSERT"},
-	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "Venue.WriteAuthSessions", Table: "auth.principals", Verb: "INSERT"}, // test support: venue seed for the api's real session check
-	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "Venue.WriteAuthSessions", Table: "auth.sessions", Verb: "INSERT"},   // test support: venue seed for the api's real session check
+	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "writeSessions", Table: "auth.principals", Verb: "INSERT"}, // test support: venue seed for the api's real session check
+	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "writeSessions", Table: "auth.sessions", Verb: "INSERT"},   // test support: venue seed for the api's real session check
 }

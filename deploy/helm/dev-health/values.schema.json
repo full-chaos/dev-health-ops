@@ -191,6 +191,17 @@
               "type": "array",
               "uniqueItems": true,
               "items": { "type": "string", "enum": ["acr", "admin", "analytics", "authz", "billing", "credentials", "git", "integrations", "license", "members", "metrics", "org", "reports", "settings", "teams", "work_items"] }
+            },
+            "queryApiPdpMode": { "type": "string", "enum": ["", "off", "shadow", "enforce"] },
+            "queryApi": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "enum": ["analytics", "metrics", "git", "work_items", "integrations", "reports", "org"] }
+            },
+            "queryApiHeaders": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "enum": ["analytics", "metrics", "git", "work_items", "integrations", "reports", "org"] }
             }
           }
         },

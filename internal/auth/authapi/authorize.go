@@ -326,6 +326,10 @@ type authorizeItem struct {
 	decision  authorization.Decision
 	now       int64
 	delegated bool
+	// actor and session are the real actor (uuid.Nil when the row names none)
+	// and the delegated session of a delegated item: its audit row's ids.
+	actor   uuid.UUID
+	session uuid.UUID
 	// orgKnown is true when the question's organization is a canonical uuid
 	// the decision transaction found.
 	orgKnown bool
@@ -424,8 +428,8 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 			h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
 			return nil, false
 		}
-		h.Logger.InfoContext(ctx, "authorize decision", "decision_id", doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode,
-			"reason", string(item.decision.Reason), "cache", item.cache)
+		h.Logger.InfoContext(ctx, "authorize decision", append([]any{"decision_id", doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode,
+			"reason", string(item.decision.Reason), "cache", item.cache}, obligationLogAttrs(doc.Obligations)...)...)
 		// The owner-exemption audit event is written by a follow-up change,
 		// outside this read-only transaction; until then the exemption is only
 		// this log line.
@@ -435,7 +439,7 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		}
 		out[i] = doc
 	}
-	if err := h.auditHighRisk(ctx, items, out); err != nil {
+	if err := h.auditDecisions(ctx, items, out); err != nil {
 		h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
 		return nil, false
 	}
@@ -579,6 +583,9 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			}
 		}
 		items[i].decision, items[i].now, items[i].delegated = d, snap.NowUnixNano(), delegated
+		if delegated {
+			items[i].actor, items[i].session = rs.row.ActorPrincipalID, rs.id
+		}
 		items[i].orgKnown = knownOrganization(q.OrganizationID, snap)
 	}
 	return nil
@@ -621,4 +628,29 @@ func (h authorizeHandlers) document(item authorizeItem) (decisionDocument, error
 		return decisionDocument{}, err
 	}
 	return doc, nil
+}
+
+// obligationLogAttrs is a bounded summary of the served obligations for the decision log line: the repository
+// scope kind, the allowlist size, and the presence of redaction and of a minimum assurance. It names no key, class
+// or level. A member the wire does not carry is left out, and a decision that serves no obligations gets none.
+func obligationLogAttrs(o *wireObligations) []any {
+	if o == nil {
+		return nil
+	}
+	var attrs []any
+	switch {
+	case o.RepositoryScope != nil:
+		attrs = append(attrs, "obligation_repository_scope", authorization.RepositoryScopeOrganization)
+	case o.RepositoryAllowlist != nil:
+		attrs = append(attrs, "obligation_repository_scope", "allowlist", "obligation_repository_allowlist_size", len(*o.RepositoryAllowlist))
+	default:
+		attrs = append(attrs, "obligation_repository_scope", "none")
+	}
+	if o.Redaction != nil {
+		attrs = append(attrs, "obligation_redaction", true)
+	}
+	if o.MinimumAssurance != nil {
+		attrs = append(attrs, "obligation_minimum_assurance", true)
+	}
+	return attrs
 }

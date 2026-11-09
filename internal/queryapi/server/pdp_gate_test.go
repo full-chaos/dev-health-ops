@@ -38,7 +38,7 @@ func newGatedREST(t *testing.T, mode, cellList, base string, routed bool) *gated
 	if !routed {
 		setup = nil
 	}
-	f := newRESTFixture(t, newAccessStore(), setup, true)
+	f := newRESTFixture(t, newAccessStore(), setup)
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -58,7 +58,7 @@ func newGatedREST(t *testing.T, mode, cellList, base string, routed bool) *gated
 func (g *gatedREST) userToken() string { return g.minter.mint(ecUser, nil, nil) }
 
 func (g *gatedREST) edgeToken(t *testing.T) string {
-	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	return ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 }
 
 func (g *gatedREST) do(method, bearer string) answer {
@@ -192,23 +192,24 @@ func TestRESTPDPMisconfiguredIs503(t *testing.T) {
 	}
 }
 
-// The exempt callers (HS256 edge token, routed or not, and the envelope) bypass the PDP even in enforce with a PDP
-// that denies everything, and each is counted with its class.
+// The exempt callers (HS256 edge token unrouted, and the envelope) bypass the PDP even in enforce with a PDP that
+// denies everything, and each is counted with its class. Routed, the edge token is the retired HS256 class: refused
+// 401 before the gate, and not counted.
 func TestRESTPDPExemptCallersBypassAndCount(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Deny("role_lacks_action")
 	for name, routed := range map[string]bool{"routed": true, "unrouted": false} {
 		t.Run(name, func(t *testing.T) {
 			g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, routed)
-			if got := g.do(http.MethodGet, g.edgeToken(t)); got != gatedOK {
-				t.Fatalf("edge token: got %+v, want %+v", got, gatedOK)
+			if edge := g.do(http.MethodGet, g.edgeToken(t)); edge.Status != http.StatusUnauthorized {
+				t.Fatalf("edge token (retired HS256 class): got %+v, want 401", edge)
 			}
 			if got := g.do(http.MethodGet, g.f.envelope); got.Status != http.StatusOK {
 				t.Fatalf("envelope: got %+v, want 200", got)
 			}
 			got := g.counter(t, "dev_health_query_api_pdp_exempt_total")
-			if len(got) != 2 || got["action=analytics.read,class=ops_access_token_hs256"] != 1 || got["action=analytics.read,class=effective_principal_envelope"] != 1 {
-				t.Fatalf("exempt %v, want one per class", got)
+			if len(got) != 1 || got["action=analytics.read,class=effective_principal_envelope"] != 1 {
+				t.Fatalf("exempt %v, want the envelope once and the edge token never", got)
 			}
 		})
 	}

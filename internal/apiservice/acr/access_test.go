@@ -25,7 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
-const accessToken = "svc_acr_principal-access-token-0123456789"
+var accessToken = entToken
 
 var (
 	accessOrg     = uuid.MustParse("6f1c2a52-6d0e-4a5e-9d57-3f4b8d1a7c11")
@@ -45,17 +45,16 @@ func accessPath(org, user, query string) string {
 	return path
 }
 
-func accessCreds() *fakeCredentials {
-	f := credsFor()
-	f.creds[accessToken] = Credential{ID: "cred-access", ServiceName: "acr", Scopes: []string{EntitlementScope, PrincipalAccessScope}}
-	return f
-}
+func accessCreds() *fakeCredentials { return credsFor() }
 
 // accessServer mounts Routes, which serves the principal access read from
 // store, with limiter as its own attempt bucket.
 func accessServer(t *testing.T, store PrincipalAccessStore, creds CredentialStore, deps Deps, limiter ...*httpapi.KeyedLimiter) http.Handler {
 	t.Helper()
 	deps.Auth = creds
+	if deps.Workload == nil {
+		deps.Workload = testWorkload
+	}
 	if deps.Logger == nil {
 		deps.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -79,7 +78,7 @@ func accessServer(t *testing.T, store PrincipalAccessStore, creds CredentialStor
 func TestRoutesMountThePrincipalAccessRead(t *testing.T) {
 	store := &fakeAccessStore{access: PrincipalAccess{Member: true}}
 	var mounted []httpapi.Route
-	for _, route := range Routes(Deps{Auth: accessCreds(), Access: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}) {
+	for _, route := range Routes(Deps{Auth: accessCreds(), Access: store, Workload: testWorkload, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}) {
 		if route.Pattern == PrincipalAccessPattern {
 			mounted = append(mounted, route)
 		}
@@ -119,18 +118,15 @@ func decodeBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	return body
 }
 
-func TestPrincipalAccessBearerAndScope(t *testing.T) {
+func TestPrincipalAccessBearer(t *testing.T) {
 	cases := []struct {
 		name   string
 		header string
 		status int
 	}{
 		{"no header", "", http.StatusUnauthorized},
-		{"unknown token", "Bearer svc_acr_nobody-0123456789", http.StatusUnauthorized},
-		{"revoked", "Bearer svc_acr_revoked-token-0123456789", http.StatusUnauthorized},
-		{"entitlements scope only", "Bearer " + entToken, http.StatusForbidden},
-		{"llm config scope only", "Bearer svc_acr_llm-only-token-0123456789", http.StatusForbidden},
-		{"principal access scope", "Bearer " + accessToken, http.StatusOK},
+		{"svc_acr_ credential", "Bearer svc_acr_principal-access-token-0123456789", http.StatusUnauthorized},
+		{"workload token", "Bearer " + accessToken, http.StatusOK},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -146,16 +142,16 @@ func TestPrincipalAccessBearerAndScope(t *testing.T) {
 	}
 }
 
-// The entitlement route's credential never reaches the access read, and the
-// read is not audited (one row per acr call would put a write on the read path).
+// The access read is not audited (one row per acr call would put a write on
+// the read path).
 func TestPrincipalAccessIsNotAudited(t *testing.T) {
 	creds := accessCreds()
 	rec := do(accessServer(t, &fakeAccessStore{}, creds, Deps{}), accessPath(accessOrg.String(), accessUser.String(), ""), "Bearer "+accessToken)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d %s", rec.Code, rec.Body.String())
 	}
-	if len(creds.audits) != 0 || len(creds.used) != 0 {
-		t.Fatalf("audits %v used %v; the access read writes neither", creds.audits, creds.used)
+	if len(creds.audits) != 0 {
+		t.Fatalf("audits %v; the access read writes none", creds.audits)
 	}
 }
 

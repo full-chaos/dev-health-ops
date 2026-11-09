@@ -85,7 +85,7 @@
               "allowed",
               "denied"
             ],
-            "description": "allowed: a principal whose platform role holds admin.orgs is allowed this organization action in any active organization, with the obligations of an owner and no membership read (the legacy admin guard rule). Only an organization-scope, organization-kind action may carry allowed. Optional; an absent member is denied."
+            "description": "allowed: a principal whose platform role holds admin.orgs is allowed this organization action in any active or suspended organization, or one with no organization row, with the obligations of an owner and no membership read (the legacy rule). Only an organization-scope, organization-kind action may carry allowed. Optional; an absent member is denied."
           }
         },
         "allOf": [

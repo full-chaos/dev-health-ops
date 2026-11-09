@@ -51,13 +51,19 @@ const (
 // its refresh JWT as an opaque credential's place holder, and, on alice's two sign-in steps, her organization A as
 // owner (the organization the target answers).
 func GoldenResponseBody(step, body string) string {
-	body = goldenRefreshJWT.ReplaceAllString(body, opaqueRefresh)
+	body = GoldenRefreshBody(body)
 	if !aliceSteps[step] || !strings.Contains(body, aliceUserStart) || strings.Count(body, aliceSubClaim) != 1 ||
 		strings.Count(body, goldenClaims) != 1 || strings.Count(body, goldenUserOrg) != 1 {
 		return body
 	}
 	body = strings.Replace(body, goldenClaims, targetClaims, 1)
 	return strings.Replace(body, goldenUserOrg, targetUserOrg, 1)
+}
+
+// GoldenRefreshBody is a golden sign-in answer's body with its refresh JWT as an opaque credential's place holder,
+// and nothing else changed.
+func GoldenRefreshBody(body string) string {
+	return goldenRefreshJWT.ReplaceAllString(body, opaqueRefresh)
 }
 
 // TargetResponseBody is the ACP target's (auth-service) answer's body, projected for comparison with the golden's:

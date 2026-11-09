@@ -23,7 +23,7 @@ services:
       AUTH_WORKLOAD_BOOTSTRAP: "true"
       AUTH_MEMBERSHIP_ROUTES: "true"
       AUTH_INVITE_TOKEN_SECRET: ${AUTH_INVITE_TOKEN_SECRET:?AUTH_INVITE_TOKEN_SECRET must be set}
-      AUTH_INVITE_TOKEN_SECRET_PREVIOUS: ${AUTH_INVITE_TOKEN_SECRET_PREVIOUS:?AUTH_INVITE_TOKEN_SECRET_PREVIOUS must be set}
+      AUTH_INVITE_TOKEN_SECRET_PREVIOUS: ${AUTH_INVITE_TOKEN_SECRET_PREVIOUS:-}
       # AUTH_USERS_OWNED: auth-service serves the credential routes, and they need these mail settings. The console provider
       # delivers no mail: this overlay proves the token path, not sign-up.
       EMAIL_FROM_ADDRESS: proof@example.test
@@ -37,10 +37,10 @@ services:
       # AUTH_USERS_OWNED on needs it: go-api refuses to start otherwise.
       AUTH_PROXY_CREDENTIALS: "true"
       AUTH_PROXY_ORG_PROVISIONING: "true"
-      # workload, or empty for go-api's session credential on the provisioning routes (an empty value is the unset default).
+      # workload or empty (both take the workload token on the provisioning routes; session_compat is retired there).
       AUTH_PROVISIONING_CREDENTIAL: ${AUTH_PROVISIONING_CREDENTIAL:-}
-      # workload, or empty for go-api's session credential on the session issue route (an empty value is the unset default).
-      AUTH_SESSION_ISSUE_CREDENTIAL: ${AUTH_SESSION_ISSUE_CREDENTIAL:-}
+      # workload (compose.yml's own value): go-api's workload token on the session issue route.
+      AUTH_SESSION_ISSUE_CREDENTIAL: ${AUTH_SESSION_ISSUE_CREDENTIAL:-workload}
 
   # Presents the credential through stdin and files, never argv: it prints status lines only.
   auth-workload-probe:

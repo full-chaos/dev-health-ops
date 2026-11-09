@@ -15,10 +15,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-// EntitlementScope is the scope the health and entitlement routes require
-// (api/internal/acr.py _REQUIRED_SCOPE).
-const EntitlementScope = "entitlements:read"
-
 // AuthAttemptLimit is INTERNAL_ACR_AUTH_ATTEMPT_IP_LIMIT ("100/minute"): one
 // bucket per forwarded client address, shared by both routes. Python keyed
 // the bucket on the address alone, so the limiter path is a constant.
@@ -28,15 +24,12 @@ const authAttemptPath = "/api/v1/internal/acr"
 
 // Audit outcomes, byte-for-byte api/internal/acr.py's.
 const (
-	outcomeMissingToken  = "missing_or_malformed_token"
-	outcomeUnknownToken  = "unknown_token"
-	outcomeInactiveToken = "inactive_token"
-	outcomeInsufficient  = "insufficient_scope"
-	outcomeOrgNotFound   = "organization_not_found"
-	outcomeLookupFailed  = "entitlement_lookup_failed"
-	outcomeSuccess       = "success"
-	routeHealth          = "health"
-	routeEntitlement     = "entitlement"
+	outcomeMissingToken = "missing_or_malformed_token"
+	outcomeOrgNotFound  = "organization_not_found"
+	outcomeLookupFailed = "entitlement_lookup_failed"
+	outcomeSuccess      = "success"
+	routeHealth         = "health"
+	routeEntitlement    = "entitlement"
 )
 
 var internalRequests = func() metric.Int64Counter {
@@ -54,32 +47,25 @@ func countInternal(ctx context.Context, route, outcome string) {
 		attribute.String("route", route), attribute.String("outcome", outcome)))
 }
 
-// routeAuth is the svc_acr_ bearer check both internal acr routes run, the
-// port of api/internal/acr.py's _reserve_auth_attempt_or_429, _extract_token
-// and credential lookup. A nil store never serves unauthenticated: it is 503.
+// routeAuth is the bearer check the internal acr routes run: the attempt
+// limiter, then the acr-api workload token, the only credential they accept.
+// Every other bearer, a svc_acr_ service credential included, gets the
+// uniform 401 before any credential read. A nil store never serves
+// unauthenticated: it is 503.
 type routeAuth struct {
 	store   CredentialStore
 	limiter *httpapi.KeyedLimiter
 	logger  *slog.Logger
 	route   string
-	// audited routes write an audit row per outcome and stamp last_used_at
-	// (the entitlement route); the health route does neither.
+	// audited routes write an audit row per outcome (the entitlement route);
+	// the health route does not.
 	audited bool
-	// workload lets the route also accept the acr-api workload token.
+	// workload verifies the acr-api workload token; nil refuses it as
+	// not_configured.
 	workload *WorkloadAuth
-	// scope is the scope a svc_acr_ credential must hold; empty means
-	// EntitlementScope (the health and entitlement routes).
-	scope string
 	// limitPath is the attempt limiter's path key; empty means
 	// authAttemptPath, the bucket the health and entitlement routes share.
 	limitPath string
-}
-
-func (a routeAuth) requiredScope() string {
-	if a.scope == "" {
-		return EntitlementScope
-	}
-	return a.scope
 }
 
 func (a routeAuth) attemptPath() string {
@@ -89,25 +75,11 @@ func (a routeAuth) attemptPath() string {
 	return a.limitPath
 }
 
-// extractToken is _extract_token: a case-sensitive "Bearer " header whose
-// token starts with svc_acr_ and is longer than that prefix.
-func extractToken(r *http.Request) (string, bool) {
-	header := r.Header.Get("Authorization")
-	if !strings.HasPrefix(header, "Bearer ") {
-		return "", false
-	}
-	token := strings.TrimPrefix(header, "Bearer ")
-	if !strings.HasPrefix(token, acrTokenPrefix) || len(token) <= len(acrTokenPrefix) {
-		return "", false
-	}
-	return token, true
-}
-
-func (a routeAuth) audit(ctx context.Context, credentialID, principalID, orgID, outcome string) bool {
+func (a routeAuth) audit(ctx context.Context, principalID, orgID, outcome string) bool {
 	if !a.audited {
 		return true
 	}
-	if err := a.store.Audit(ctx, credentialID, principalID, orgID, outcome); err != nil {
+	if err := a.store.Audit(ctx, "", principalID, orgID, outcome); err != nil {
 		a.logger.ErrorContext(ctx, "acr internal: audit write failed",
 			slog.String("route", a.route), slog.String("outcome", outcome), slog.String("error_type", errorKind(err)))
 		countInternal(ctx, a.route, "audit_failed")
@@ -143,64 +115,29 @@ func (a routeAuth) authenticate(w http.ResponseWriter, r *http.Request, orgID st
 		writeDetail(w, http.StatusTooManyRequests, "Too many authentication attempts")
 		return Credential{}, false
 	}
-	deny := func(credentialID, outcome string, status int, detail string) (Credential, bool) {
-		if !a.audit(ctx, credentialID, "", orgID, outcome) {
-			a.unavailable(w, r, "audit_failed")
-			return Credential{}, false
-		}
-		countInternal(ctx, a.route, outcome)
-		a.logger.WarnContext(ctx, "acr internal: request refused",
-			slog.String("route", a.route), slog.String("outcome", outcome), slog.Int("status", status),
-			slog.String("credential_id", credentialID))
-		writeDetail(w, status, detail)
-		return Credential{}, false
-	}
 	if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && isWorkloadToken(bearer) {
 		return a.authenticateWorkload(w, r, orgID, bearer)
 	}
-	token, ok := extractToken(r)
-	if !ok {
-		return deny("", outcomeMissingToken, http.StatusUnauthorized, "Unauthorized")
-	}
-	cred, found, err := a.store.Find(ctx, token)
-	if err != nil {
-		a.logger.ErrorContext(ctx, "acr internal: credential lookup failed",
-			slog.String("route", a.route), slog.String("error_type", errorKind(err)))
-		a.unavailable(w, r, "credential_unavailable")
+	if !a.audit(ctx, "", orgID, outcomeMissingToken) {
+		a.unavailable(w, r, "audit_failed")
 		return Credential{}, false
 	}
-	if !found {
-		return deny("", outcomeUnknownToken, http.StatusUnauthorized, "Unauthorized")
-	}
-	if cred.ServiceName != "acr" || !cred.Valid(time.Now().UTC()) {
-		return deny(cred.ID, outcomeInactiveToken, http.StatusUnauthorized, "Unauthorized")
-	}
-	if a.audited {
-		if err := a.store.MarkUsed(ctx, cred.ID, time.Now().UTC()); err != nil {
-			a.logger.ErrorContext(ctx, "acr internal: last_used_at write failed",
-				slog.String("route", a.route), slog.String("credential_id", cred.ID), slog.String("error_type", errorKind(err)))
-			a.unavailable(w, r, "credential_unavailable")
-			return Credential{}, false
-		}
-	}
-	if !cred.Has(a.requiredScope()) {
-		return deny(cred.ID, outcomeInsufficient, http.StatusForbidden, "Forbidden")
-	}
-	a.logger.DebugContext(ctx, "acr internal: credential accepted",
-		slog.String("route", a.route), slog.String("credential_id", cred.ID))
-	countSvcAcrCompat(ctx, a.route)
-	return cred, true
+	countInternal(ctx, a.route, outcomeMissingToken)
+	a.logger.WarnContext(ctx, "acr internal: request refused",
+		slog.String("route", a.route), slog.String("outcome", outcomeMissingToken), slog.Int("status", http.StatusUnauthorized))
+	writeDetail(w, http.StatusUnauthorized, "Unauthorized")
+	return Credential{}, false
 }
 
 // authenticateWorkload is the workload-token branch of authenticate: no
-// credential row exists, so nothing is looked up or stamped. A refusal is
+// credential row exists, so nothing is looked up. A refusal is
 // counted and logged by reason, audited with a NULL principal (an audited
 // route), and answered 401, or 403 for a valid token of another workload. An
 // accepted token's subject is the Credential's PrincipalID, which the audit
 // row of the answer carries.
 func (a routeAuth) authenticateWorkload(w http.ResponseWriter, r *http.Request, orgID, token string) (Credential, bool) {
 	ctx := r.Context()
-	subject, reason := a.workload.decide(token)
+	subject, reason := a.workload.decide(ctx, token)
 	if reason == "" {
 		countWorkloadAccepted(ctx, a.route)
 		a.logger.DebugContext(ctx, "acr internal: workload token accepted", slog.String("route", a.route))
@@ -218,7 +155,7 @@ func (a routeAuth) authenticateWorkload(w http.ResponseWriter, r *http.Request, 
 	}
 	countWorkloadRefused(ctx, a.route, reason)
 	logWorkloadRefused(ctx, a.logger, a.route, reason)
-	if !a.audit(ctx, "", "", orgID, outcome) {
+	if !a.audit(ctx, "", orgID, outcome) {
 		a.unavailable(w, r, "audit_failed")
 		return Credential{}, false
 	}

@@ -163,7 +163,7 @@ func TestParseFlags_RefusesABaseURLThatWouldChangeTheRequest(t *testing.T) {
 	for _, name := range []string{"-query-api-url", "-python-api-url", "-buildinfo-url"} {
 		for _, suffix := range []string{"/#frag", "/#", "/?x=1", "/?"} {
 			args := []string{"-org", legContractOrg, "-recorded-by", "r", "-review-evidence", "e", "-dry-run",
-				"-candidate-bearer-exec", `["true"]`, "-baseline-bearer-exec", `["true"]`, "-artifact-dir", t.TempDir()}
+				"-candidate-access-token-file", "/run/proof/access-token", "-baseline-bearer-exec", `["true"]`, "-artifact-dir", t.TempDir()}
 			for flagName, value := range good {
 				if flagName == name {
 					value += suffix
@@ -180,7 +180,7 @@ func TestParseFlags_RefusesABaseURLThatWouldChangeTheRequest(t *testing.T) {
 		}
 	}
 	args := []string{"-org", legContractOrg, "-recorded-by", "r", "-review-evidence", "e", "-dry-run",
-		"-candidate-bearer-exec", `["true"]`, "-baseline-bearer-exec", `["true"]`, "-artifact-dir", t.TempDir()}
+		"-candidate-access-token-file", "/run/proof/access-token", "-baseline-bearer-exec", `["true"]`, "-artifact-dir", t.TempDir()}
 	for flagName, value := range good {
 		args = append(args, flagName, value)
 	}

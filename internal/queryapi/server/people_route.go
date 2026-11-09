@@ -152,7 +152,7 @@ func buildPeopleSearchRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler
 func writePeopleSearchResponse(w http.ResponseWriter, r *http.Request, orgID string, resp []people.SearchResult) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: people: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }
@@ -170,6 +170,10 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 			// handler -- see authenticateRESTRequest's own doc comment for
 			// the three real 401 shapes this route actually answers.
 			writeRESTUnauthorized(w, r, "people", "Not authenticated")
+			return
+		}
+		org, ok := restScopeOrg(w, r, "people", claims)
+		if !ok {
 			return
 		}
 
@@ -196,7 +200,7 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 				// it is rejected up front as 422 -- same shape
 				// drilldown_prs_route.go's range_days already
 				// establishes for this binary.
-				writePydanticValidationError(w, r, claims.OrgID, intQueryParamError([]any{"query", "limit"}, raw))
+				writePydanticValidationError(w, r, org, intQueryParamError([]any{"query", "limit"}, raw))
 				return
 			}
 			limit = parsed
@@ -208,7 +212,7 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 		// is a 400.
 		for key := range query {
 			if peopleForbiddenQueryParams[key] {
-				writeRESTError(w, r, "people", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "people", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
@@ -220,7 +224,7 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 		// own doc comment for why this port applies the bound only once,
 		// inside BuildSearchResponse, rather than reproducing the
 		// redundant double-clamp here.
-		resp, err := people.BuildSearchResponse(r.Context(), reader, claims.OrgID, people.SearchParams{
+		resp, err := people.BuildSearchResponse(r.Context(), reader, org, people.SearchParams{
 			Query: q,
 			Limit: limit,
 			Now:   time.Now().UTC(),
@@ -228,9 +232,9 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1064-1065).
-			writeRESTDataUnavailable(w, r, "people", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "people", org, err)
 			return
 		}
-		writePeopleSearchResponse(w, r, claims.OrgID, resp)
+		writePeopleSearchResponse(w, r, org, resp)
 	}
 }

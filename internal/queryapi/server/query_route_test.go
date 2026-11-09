@@ -2,7 +2,6 @@ package server
 
 import (
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -78,15 +77,15 @@ func TestTruncateForLog(t *testing.T) {
 // variables here, which the {query} decode alone would not see) is an
 // unhandled ValueError, the generic 500, never a served operation.
 func TestQueryRouteAnswersAnIntegerPastThe4300DigitLimitAsPythons500(t *testing.T) {
-	verifier, priv := iaVerifier(t)
-	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "admin"})
+	verifier, _ := iaVerifier(t)
+	carrier := iaHeaders("org-1", "admin", false, false)
 	handler := newDocumentDispatchHandler(os.Getenv, nil, nil, verifier, nil, nil, "", nil)
 	post := func(digits int) *httptest.ResponseRecorder {
 		body := `{"query":"{ __typename }","variables":{"n":` + strings.Repeat("1", digits) + `}}`
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(body))
 		// Authenticated: identity is decided before the body is read (CHAOS-10149).
-		request.Header.Set("Authorization", "Bearer "+envelope)
+		carrier(request)
 		handler(recorder, request)
 		return recorder
 	}

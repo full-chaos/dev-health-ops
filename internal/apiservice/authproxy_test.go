@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -31,6 +30,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 const proxyTestKey = "fixture-key-fixture-key-fixture-key-"
@@ -209,20 +209,13 @@ func proxyFixtureRoutesLogging(t *testing.T, cfg AuthProxyConfig, logger *slog.L
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(proxyTestKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := proxyTokens.AuthenticatorOver(t, scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable&connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	return Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
+	return Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
 		AuthProxy: cfg, Limits: httpapi.NewMemoryCounters(time.Now)}, logger)
 }
 
@@ -235,16 +228,13 @@ func proxyFixture(t *testing.T, cfg AuthProxyConfig) http.Handler {
 	return server.Handler()
 }
 
+// proxyTokens mints the routed access tokens the proxy fixtures verify.
+var proxyTokens = edtokens.Fresh()
+
+// proxyBearer is a routed access token for a fresh user with no org.
 func proxyBearer(t *testing.T) string {
 	t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": uuid.NewString(), "type": "access", "org_id": uuid.NewString(), "iss": "dev-health-ops", "aud": "dev-health-api",
-		"exp": time.Now().Add(time.Hour).Unix(),
-	}).SignedString([]byte(proxyTestKey))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return token
+	return proxyTokens.MustMint(t, edtokens.Claims{UserID: uuid.New()})
 }
 
 type seenRequest struct {
@@ -813,13 +803,15 @@ func TestConfigureReadsTheAuthProxySettings(t *testing.T) {
 	t.Setenv(AuthProxyFlagEnv(AuthLocalLogin), "")
 	t.Setenv(AuthProxyFlagEnv(AuthSessions), "true")
 	t.Setenv(EnvAuthProxyURL, stub.URL)
-	t.Setenv(sessionissue.EnvToken, "")
+	t.Setenv(sessionissue.EnvToken, testIssueToken(t))
 	components, err = configure(ctx, reachableDatabase(config.Config{APIAddress: "127.0.0.1:0"}), health.NewRegistry(time.Second), quietLogger())
 	closeComponents(components)
-	if !errors.As(err, &coded) || coded.DependencyReason() != "api_session_issue_config_invalid" {
-		t.Fatalf("sessions on without an issue credential: err = %v, want reason api_session_issue_config_invalid", err)
+	if !errors.As(err, &coded) || coded.DependencyReason() != "api_workload_credential_config_invalid" {
+		t.Fatalf("sessions on without the workload credential: err = %v, want reason api_workload_credential_config_invalid", err)
 	}
-	t.Setenv(sessionissue.EnvToken, testIssueToken(t))
+	for k, v := range workloadEnv(t, nil) {
+		t.Setenv(k, v)
+	}
 	components, err = configure(ctx, reachableDatabase(config.Config{APIAddress: "127.0.0.1:0"}), health.NewRegistry(time.Second), quietLogger())
 	if err != nil {
 		t.Fatalf("configure: %v", err)
@@ -875,7 +867,9 @@ func TestConfigureLogsTheAuthProxyRouting(t *testing.T) {
 				t.Setenv(AuthProxyFlagEnv(aggregate), testCase.env[AuthProxyFlagEnv(aggregate)])
 			}
 			t.Setenv(EnvAuthProxyURL, testCase.env[EnvAuthProxyURL])
-			t.Setenv(sessionissue.EnvToken, testIssueToken(t))
+			for k, v := range workloadEnv(t, nil) {
+				t.Setenv(k, v)
+			}
 			var logs bytes.Buffer
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()

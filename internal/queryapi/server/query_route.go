@@ -6170,7 +6170,20 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	posture := queryAPIPostureCheck(getenv, pgPool)
 	// CHAOS-7831: ONE class-row switch for the MCP listener and the named-operation route (:8091), so a root's class row is one decision.
 	classSwitch := newClassRowSwitch(pgPool)
-	handler, proofHandler, proofWriteHandler, registryHandler, err := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv, classSwitch)
+	// CHAOS-6263 PR (a): /query's edge-access-token carrier, built once
+	// here (not per-request) and threaded into every authenticateInternalRequest
+	// call /query and /buildinfo make. (nil, nil, nil) when AUTH_ACCESS_TOKEN_ISSUER
+	// is unset and /query has no pool -- same opt-out contract as
+	// buildEdgeVerifierFromEnv; an error here (the pool without the issuer, or
+	// a malformed issuer config) is a required-config failure this function
+	// refuses to start behind, same discipline as the envelope verifier's own
+	// JWKS check in buildQueryRoute.
+	edgeAuth, edgeStore, err := buildQueryEdgeAuthenticatorFromEnv(getenv, pgPool)
+	if err != nil {
+		pgPool.Close()
+		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: edge authenticator: %w", err)
+	}
+	handler, proofHandler, proofWriteHandler, registryHandler, err := newQueryHandlerWithEdge(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv, edgeAuth, edgeStore, classSwitch)
 	if err != nil {
 		pgPool.Close()
 		return queryRouteHandlers{}, nil, nil, err
@@ -6189,7 +6202,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		Proof:      proofHandler,
 		ProofWrite: proofWriteHandler,
 		Registry:   registryHandler,
-		BuildInfo:  newBuildInfoHandler(verifier),
+		BuildInfo:  newBuildInfoHandler(verifier, edgeAuth, edgeStore),
 		MCP:        mcpHandler,
 		Probes:     readinessProbes(chClient, pgPool, verifier, posture),
 	}
@@ -6540,18 +6553,9 @@ func mountedRouteLogMessage(digestByOperation map[string]string) string {
 	)
 }
 
-func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string, getenv getenvFunc, classSwitches ...routeswitch.Switch) (http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, error) {
-	// CHAOS-6263 PR (a): /query's edge-access-token carrier, built once
-	// here (not per-request) and threaded into every authenticateInternalRequest
-	// call this handler makes. (nil, nil, nil) when GO_API_EDGE_JWT_SECRET is
-	// unset -- same opt-out contract as buildEdgeVerifierFromEnv; an error
-	// here means the secret IS set but malformed, which is a hard config
-	// failure this function refuses to start behind, same discipline as
-	// the envelope verifier's own JWKS check in buildQueryRoute.
-	edgeAuth, edgeStore, err := buildQueryEdgeAuthenticatorFromEnv(getenv, pgPool)
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("query-api: edge authenticator: %w", err)
-	}
+// newQueryHandlerWithEdge builds the /query, proof, proof-write and registry handlers over the edge carrier the caller
+// built (buildQueryEdgeAuthenticatorFromEnv), so /buildinfo shares the same one.
+func newQueryHandlerWithEdge(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string, getenv getenvFunc, edgeAuth *policy.Authenticator, edgeStore policy.Store, classSwitches ...routeswitch.Switch) (http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, http.HandlerFunc, error) {
 	// digestByOperation is this route's registered-document inventory:
 	// operation name -> the sha256 digest of that operation's registered
 	// document text. CHAOS-4369 Wave 3 generalizes what Wave 1/2 hardcoded
@@ -6787,7 +6791,7 @@ func newGraphQLServerWithLimits(resolver *graph.Resolver, complexityLimit, depth
 	gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
 	gqlHandler.Use(depthLimit{Max: depthMax})
 	gqlHandler.AroundFields(graph.RefuseNullForNonNullArguments)
-	gqlHandler.Use(graph.OperationOrgGuard{})
+	useGraphQLGuards(gqlHandler)
 	gqlHandler.AroundResponses(recordErrorCount)
 	// CHAOS-4647 diagnostic: the process log carries nothing per-request,
 	// and gqlgen's default presenter surfaces only err.Error() -- which for
@@ -6934,6 +6938,12 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			}
 			claims = authenticated
 		}
+		// The bearer the caller authenticated with, on /graphql and /query alike; the header carrier has none.
+		var shadowSubject *graph.ShadowSubject
+		if token, ok := bearerToken(r.Header.Get("Authorization")); ok {
+			subject := graphQLShadowSubject(token)
+			shadowSubject = &subject
+		}
 
 		var query string
 		switch {
@@ -7048,7 +7058,12 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 
 		// The raw body rides along so a resolver can read a JSON variable in the
 		// order the client wrote its keys (see graph.WithRequestBody).
-		r = r.WithContext(graph.WithRequestBody(authctx.WithClaims(r.Context(), claims), bodyBytes))
+		requestCtx := r.Context()
+		if shadowSubject != nil {
+			requestCtx = graph.WithShadowSubject(requestCtx, *shadowSubject)
+		}
+
+		r = r.WithContext(graph.WithRequestBody(authctx.WithClaims(requestCtx, claims), bodyBytes))
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		if edge {
 			// What the Python edge forwarded: a POST of this JSON body, with
@@ -7069,6 +7084,8 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			}
 		}
 
+		// An operation the decision refuses as unavailable answers 503 (CHAOS-10865).
+		w, r = withRefusalStatus(w, r)
 		if edge {
 			routeMux.DispatchOr(operation, w, r, graphQLEdgeNotEnabled(operation))
 			return

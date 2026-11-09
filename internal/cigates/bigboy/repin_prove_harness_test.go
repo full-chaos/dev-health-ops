@@ -8,11 +8,13 @@ import (
 )
 
 const (
-	repinProve        = "ci/bigboy/bigboy-graphql-prove.sh"
-	repinCompose      = "ci/bigboy/compose.bigboy.yml"
-	repinProveSHA     = "0123456789abcdef0123456789abcdef01234567"
-	repinProveOrg     = "11111111-1111-4111-8111-111111111111"
-	repinProveSecret  = "fixture-not-a-secret"
+	repinProve       = "ci/bigboy/bigboy-graphql-prove.sh"
+	repinCompose     = "ci/bigboy/compose.bigboy.yml"
+	repinProveSHA    = "0123456789abcdef0123456789abcdef01234567"
+	repinProveOrg    = "11111111-1111-4111-8111-111111111111"
+	repinProveSecret = "fixture-not-a-secret"
+	// repinProveToken stands in for the local admin's user access token in the operator's 0600 file.
+	repinProveToken   = "fixture-proof-token-not-a-secret"
 	repinRoutedGoEdge = " -go-edge -edge-url http://traefik:3000/graphql "
 	repinGoEdgeNote   = "through the routed /graphql in Go-edge mode,"
 )
@@ -87,8 +89,10 @@ func repinRunProve(g *guard, pin, jwt string, bashArgs ...string) repinProveRun 
 	repinWrite(g, filepath.Join(root, "ops", ".env"), "JWT_SECRET_KEY="+jwt+"\n", 0o644)
 	log := filepath.Join(root, "docker-calls.log")
 	repinWrite(g, log, "", 0o644)
+	token := filepath.Join(root, "proof-token")
+	repinWrite(g, token, repinProveToken+"\n", 0o600)
 	_, path := repinBin(g, map[string]string{"docker": repinProveDocker(log), "gh": "echo '{}'\n"})
-	r := repinRun(g, map[string]string{"PATH": path, "BIGBOY_ROOT": root}, bashArgs...)
+	r := repinRun(g, map[string]string{"PATH": path, "BIGBOY_ROOT": root, "BIGBOY_PROVE_ACCESS_TOKEN_FILE": token}, bashArgs...)
 	out := repinProveRun{scriptRun: r}
 	lines := strings.Split(strings.TrimSuffix(repinReadFile(g, log), "\n"), "\n")
 	for i := 0; i+1 < len(lines); i += 2 {
@@ -162,7 +166,7 @@ func checkRepinProveCredentials(g *guard) {
 	g.expect(!strings.Contains(p.repinOut(), repinProveOrg), "the local org id reached the harness stdout or stderr")
 	g.expect(!strings.Contains(p.repinOut(), repinProveSecret), "JWT_SECRET_KEY's value reached the harness stdout or stderr")
 	for _, c := range p.calls {
-		for _, bad := range []string{repinProveOrg, repinProveSecret, "GO_API_PROVE_PROOF_BEARER"} {
+		for _, bad := range []string{repinProveOrg, repinProveSecret, repinProveToken, "GO_API_PROVE_PROOF_BEARER", "GO_API_ENVELOPE_PRIVATE_KEY"} {
 			g.expect(!c.mentions(bad), "a credential is on docker argv (%q): %q", bad, c.argv)
 		}
 		g.expect(c.env["JWT_SECRET_KEY"] == "<unset>", "the harness handed docker JWT_SECRET_KEY in its env (compose substitution must read it from ops/.env)")
@@ -170,7 +174,14 @@ func checkRepinProveCredentials(g *guard) {
 	}
 	for _, c := range p.proves() {
 		g.expect(c.env["PROVE_ORG"] == repinProveOrg, "venue-prove did not get the org by environment for compose substitution: PROVE_ORG=%q", c.env["PROVE_ORG"])
+		mounted := false
+		for i, a := range c.argv {
+			mounted = mounted || a == "-v" && i+1 < len(c.argv) && strings.HasSuffix(c.argv[i+1], "/proof-token:/run/proof/access-token:ro")
+		}
+		g.expect(mounted, "venue-prove does not get the token file mounted read-only at /run/proof/access-token: %q", c.argv)
+		g.expect(strings.Contains(c.argv[len(c.argv)-1], "-proof-access-token-file /run/proof/access-token"), "the prover is not pointed at the mounted token file: %q", c.argv[len(c.argv)-1])
 	}
+	g.expect(!strings.Contains(p.repinOut(), repinProveToken), "the proof token's value reached the harness stdout or stderr")
 	// xtrace prints every expanded word: the secret appears only if the script ever expands it into a variable or argv.
 	traced := repinRunProve(g, repinProveDigest, repinProveSecret, append([]string{"-x"}, repinProveArgs(g, repinProveSHA)...)...)
 	g.expect(!strings.Contains(traced.repinOut(), repinProveSecret), "the harness reads JWT_SECRET_KEY's value into the shell (seen in xtrace)")
@@ -272,7 +283,7 @@ func TestRepinGraphQLProveHarnessPlanted(t *testing.T) {
 	indexWant := `want=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-go-api-tools:sha-$S7" --format '{{json .Manifest}}' | jq -r .digest)`
 	runPlanted(t, []planted{
 		{"syntax-error", c, mut(repinProve, "\nfail=0\n", "\nfail=0; if then\n"), checkRepinProveParses, "does not parse"},
-		{"posture-env-in-prove-command", c, mut(repinProve, `"GO_API_ENVELOPE_PRIVATE_KEY=`, `"DEV_HEALTH_ENV=production GO_API_ENVELOPE_PRIVATE_KEY=`),
+		{"posture-env-in-prove-command", c, mut(repinProve, `"dho goapi prove $U`, `"DEV_HEALTH_ENV=production dho goapi prove $U`),
 			checkRepinProvePosture, `docker argv carries "DEV_HEALTH_ENV"`},
 		{"posture-up-d", c, mut(repinProve, "st local-org 0; export", `"${DC[@]}" up -d query-api >/dev/null; st local-org 0; export`),
 			checkRepinProvePosture, "harness ran `up -d`"},

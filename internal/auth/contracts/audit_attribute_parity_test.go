@@ -63,6 +63,7 @@ var auditKeyWriters = map[string]string{
 	"run_id":                           "internal/auth/usersbackfill/linkpurge.go",
 	"decision_id":                      "internal/auth/authapi/authorize_audit.go",
 	"decision_reason_code":             "internal/auth/authapi/authorize_audit.go",
+	"decision_internal_reason":         "internal/auth/authapi/authorize_audit.go",
 	"resource_type":                    "internal/auth/authapi/authorize_audit.go",
 	"resource_id":                      "internal/auth/authapi/authorize_audit.go",
 	"policy_revision":                  "internal/auth/authapi/authorize_audit.go",

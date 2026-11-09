@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/workloadclient"
 )
 
 func TestOrgProvisioningFlagNameAndDefault(t *testing.T) {
@@ -55,88 +55,40 @@ func TestOrgProvisioningFlagIsStrictAndStandsAlone(t *testing.T) {
 	}
 }
 
-func TestOrgReactivatorFollowsTheSwitchAndNeedsTheCredential(t *testing.T) {
-	token := testIssueToken(t)
+// Each client follows the switch: none when off (with or without a credential), one from the workload credential when
+// on, and a start-up error naming the switch when on with no workload credential (the session credential is retired).
+func TestOrgClientsFollowTheSwitchAndNeedTheWorkloadCredential(t *testing.T) {
 	on := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095", EnvAuthProxyOrgProvisioning: "true"})
 	off := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
-	if r, err := orgReactivator(off, issueEnv(map[string]string{sessionissue.EnvToken: token}), provisioningCredential{}); r != nil || err != nil {
-		t.Fatalf("switch off with a token: %v %v, want no client", r, err)
-	}
-	if r, err := orgReactivator(off, issueEnv(map[string]string{}), provisioningCredential{}); r != nil || err != nil {
-		t.Fatalf("switch off with no token: %v %v, want no client and no error", r, err)
-	}
-	if r, err := orgReactivator(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"}), provisioningCredential{}); r == nil || err != nil {
-		t.Fatalf("switch on with a credential: %v %v, want a client", r, err)
-	}
-	for name, env := range map[string]map[string]string{
-		"no credential":  {},
-		"empty":          {sessionissue.EnvToken: ""},
-		"acr credential": {sessionissue.EnvToken: "svc_acr_" + token[len("svc_authsess_"):]},
-	} {
-		r, err := orgReactivator(on, issueEnv(env), provisioningCredential{})
-		if err == nil || r != nil {
-			t.Errorf("switch on, %s: %v %v, want a start-up error", name, r, err)
-			continue
+	wc, _ := workloadclient.New(t)
+	have := provisioningCredential{workload: wc}
+	for name, cred := range map[string]provisioningCredential{"with a credential": have, "without": {}} {
+		if r, err := orgReactivator(off, cred); r != nil || err != nil {
+			t.Fatalf("reactivator, switch off %s: %v %v, want no client", name, r, err)
 		}
-		if !strings.Contains(err.Error(), EnvAuthProxyOrgProvisioning) || strings.Contains(err.Error(), token[len("svc_authsess_"):]) {
-			t.Errorf("switch on, %s: error %q must name the switch and never the credential", name, err)
+		if p, err := orgProvisioner(off, cred); p != nil || err != nil {
+			t.Fatalf("provisioner, switch off %s: %v %v, want no client", name, p, err)
+		}
+		if s, err := orgSuspender(off, cred); s != nil || err != nil {
+			t.Fatalf("suspender, switch off %s: %v %v, want no client", name, s, err)
 		}
 	}
-}
-
-// The same switch builds the provisioning client the member, invite and
-// delete routes call: none when off, one from the same credential when on.
-func TestOrgProvisionerFollowsTheSwitchAndNeedsTheCredential(t *testing.T) {
-	token := testIssueToken(t)
-	on := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095", EnvAuthProxyOrgProvisioning: "true"})
-	off := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
-	if p, err := orgProvisioner(off, issueEnv(map[string]string{sessionissue.EnvToken: token}), provisioningCredential{}); p != nil || err != nil {
-		t.Fatalf("switch off with a token: %v %v, want no client", p, err)
+	if r, err := orgReactivator(on, have); r == nil || err != nil {
+		t.Fatalf("reactivator, switch on with the workload credential: %v %v, want a client", r, err)
 	}
-	if p, err := orgProvisioner(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"}), provisioningCredential{}); p == nil || err != nil {
-		t.Fatalf("switch on with a credential: %v %v, want a client", p, err)
+	if p, err := orgProvisioner(on, have); p == nil || err != nil {
+		t.Fatalf("provisioner, switch on with the workload credential: %v %v, want a client", p, err)
 	}
-	for name, env := range map[string]map[string]string{
-		"no credential":  {},
-		"acr credential": {sessionissue.EnvToken: "svc_acr_" + token[len("svc_authsess_"):]},
-	} {
-		p, err := orgProvisioner(on, issueEnv(env), provisioningCredential{})
-		if err == nil || p != nil {
-			t.Errorf("switch on, %s: %v %v, want a start-up error", name, p, err)
-			continue
-		}
-		if !strings.Contains(err.Error(), EnvAuthProxyOrgProvisioning) || strings.Contains(err.Error(), token[len("svc_authsess_"):]) {
-			t.Errorf("switch on, %s: error %q must name the switch and never the credential", name, err)
-		}
+	if s, err := orgSuspender(on, have); s == nil || err != nil {
+		t.Fatalf("suspender, switch on with the workload credential: %v %v, want a client", s, err)
 	}
-}
-
-// The suspend client follows the same switch and needs the same credential as the reactivate client.
-func TestOrgSuspenderFollowsTheSwitchAndNeedsTheCredential(t *testing.T) {
-	token := testIssueToken(t)
-	on := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095", EnvAuthProxyOrgProvisioning: "true"})
-	off := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
-	if s, err := orgSuspender(off, issueEnv(map[string]string{sessionissue.EnvToken: token}), provisioningCredential{}); s != nil || err != nil {
-		t.Fatalf("switch off with a token: %v %v, want no client", s, err)
+	if r, err := orgReactivator(on, provisioningCredential{}); r != nil || err == nil || !strings.Contains(err.Error(), EnvAuthProxyOrgProvisioning) {
+		t.Fatalf("reactivator, switch on with no credential: %v %v, want a start-up error naming the switch", r, err)
 	}
-	if s, err := orgSuspender(off, issueEnv(map[string]string{}), provisioningCredential{}); s != nil || err != nil {
-		t.Fatalf("switch off with no token: %v %v, want no client and no error", s, err)
+	if p, err := orgProvisioner(on, provisioningCredential{}); p != nil || err == nil || !strings.Contains(err.Error(), EnvAuthProxyOrgProvisioning) {
+		t.Fatalf("provisioner, switch on with no credential: %v %v, want a start-up error naming the switch", p, err)
 	}
-	if s, err := orgSuspender(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"}), provisioningCredential{}); s == nil || err != nil {
-		t.Fatalf("switch on with a credential: %v %v, want a client", s, err)
-	}
-	for name, env := range map[string]map[string]string{
-		"no credential":  {},
-		"empty":          {sessionissue.EnvToken: ""},
-		"acr credential": {sessionissue.EnvToken: "svc_acr_" + token[len("svc_authsess_"):]},
-	} {
-		s, err := orgSuspender(on, issueEnv(env), provisioningCredential{})
-		if err == nil || s != nil {
-			t.Errorf("switch on, %s: %v %v, want a start-up error", name, s, err)
-			continue
-		}
-		if !strings.Contains(err.Error(), EnvAuthProxyOrgProvisioning) || strings.Contains(err.Error(), token[len("svc_authsess_"):]) {
-			t.Errorf("switch on, %s: error %q must name the switch and never the credential", name, err)
-		}
+	if s, err := orgSuspender(on, provisioningCredential{}); s != nil || err == nil || !strings.Contains(err.Error(), EnvAuthProxyOrgProvisioning) {
+		t.Fatalf("suspender, switch on with no credential: %v %v, want a start-up error naming the switch", s, err)
 	}
 }

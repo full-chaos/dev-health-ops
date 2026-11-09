@@ -3,11 +3,8 @@ package session
 import (
 	"context"
 	"errors"
-	"log/slog"
-	"net/http/httptest"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -131,57 +128,6 @@ func containsFrom(sql, part string) bool {
 	return false
 }
 
-func refreshRig() (handlers, *refreshRecord, uuid.UUID, uuid.UUID) {
-	org, user := uuid.New(), uuid.New()
-	h := handlers{Deps: Deps{Logger: slog.New(slog.DiscardHandler), Now: time.Now}}
-	return h, &refreshRecord{ID: uuid.New(), UserID: user, OrgID: &org, FamilyID: uuid.New()}, org, user
-}
-
 func userValues(id uuid.UUID, superuser bool) []any {
 	return []any{id, "u@example.com", nil, nil, nil, nil, nil, true, true, superuser, int64(0)}
-}
-
-// Mix 4: refreshRole. A user with no membership in the token's org keeps the
-// refresh only by admin.orgs; otherwise the family is revoked.
-func TestPlatformAction_RefreshWithoutMembershipNeedsAdminOrgs(t *testing.T) {
-	for _, c := range []struct {
-		name      string
-		superuser bool
-		platform  *rule.Platform
-		revoked   bool
-	}{
-		{"flag only, as before the change", true, nil, false},
-		{"only admin.orgs", false, only(rule.ActionAdminOrgs), false},
-		{"every other action", true, allBut(rule.ActionAdminOrgs), true},
-		{"no flag, no set", false, nil, true},
-	} {
-		h, record, org, id := refreshRig()
-		tx := &fakeTx{}
-		w, r := httptest.NewRecorder(), httptest.NewRequest("POST", "/refresh", nil)
-		user := &userRow{ID: id, IsSuperuser: c.superuser, Platform: c.platform}
-		h.refreshRole(w, r, tx, user, record, id.String(), org.String())
-		if got := tx.execs > 0; got != c.revoked {
-			t.Errorf("%s: family revoked = %v, want %v", c.name, got, c.revoked)
-		}
-	}
-}
-
-// Mix 4: refuseRevokedOfAGoneMember. A revoked token of a user with no
-// membership is answered as a gone member unless the user holds admin.orgs.
-func TestPlatformAction_RevokedTokenOfAGoneMemberNeedsAdminOrgs(t *testing.T) {
-	for _, c := range []struct {
-		name      string
-		superuser bool
-		answered  bool
-	}{
-		{"holds the flag", true, false},
-		{"no flag", false, true},
-	} {
-		h, record, org, id := refreshRig()
-		tx := &fakeTx{user: userValues(id, c.superuser)}
-		w, r := httptest.NewRecorder(), httptest.NewRequest("POST", "/refresh", nil)
-		if got := h.refuseRevokedOfAGoneMember(w, r, tx, record, id.String(), org.String()); got != c.answered {
-			t.Errorf("%s: answered = %v, want %v", c.name, got, c.answered)
-		}
-	}
 }

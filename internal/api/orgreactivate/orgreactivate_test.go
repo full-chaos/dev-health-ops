@@ -13,9 +13,24 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/workloadclient"
 )
 
-const testToken = "svc_authsess_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+// testToken is the workload token the last client built by newWorkloadClient presents.
+var testToken string
+
+// newWorkloadClient is a client of base that presents a workload token (testToken).
+func newWorkloadClient(t *testing.T, base *url.URL, timeout time.Duration) *Client {
+	t.Helper()
+	wc, token := workloadclient.New(t)
+	testToken = token
+	client, err := NewWorkload(base, wc, timeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
 
 func newClient(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server) {
 	t.Helper()
@@ -25,11 +40,7 @@ func newClient(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Serve
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := New(base, testToken, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return client, server
+	return newWorkloadClient(t, base, time.Second), server
 }
 
 func TestPathIsTheOrganizationReactivateRoute(t *testing.T) {
@@ -38,23 +49,18 @@ func TestPathIsTheOrganizationReactivateRoute(t *testing.T) {
 	}
 }
 
-func TestNewRefusesAnythingButAnAuthSessionIssuerCredential(t *testing.T) {
+func TestNewWorkloadRefusesNoURLAndNoClient(t *testing.T) {
 	base, _ := url.Parse("http://auth-service:8095")
-	for _, token := range []string{"", "svc_acr_" + strings.Repeat("A", 43), "svc_authsess_short", "Bearer " + testToken, testToken + "x"} {
-		_, err := New(base, token, time.Second)
-		if err == nil {
-			t.Fatalf("New accepted %q", token)
-		}
-		if token != "" && strings.Contains(err.Error(), token) {
-			t.Fatalf("the error carries the token: %v", err)
-		}
+	wc, _ := workloadclient.New(t)
+	if _, err := NewWorkload(nil, wc, time.Second); err == nil {
+		t.Fatal("NewWorkload accepted no URL")
 	}
-	if _, err := New(nil, testToken, time.Second); err == nil {
-		t.Fatal("New accepted no URL")
+	if _, err := NewWorkload(base, nil, time.Second); err == nil {
+		t.Fatal("NewWorkload accepted no workload client")
 	}
 }
 
-func TestReactivateSendsTheOrgAndTheActorWithTheServiceCredential(t *testing.T) {
+func TestReactivateSendsTheOrgAndTheActorWithTheWorkloadToken(t *testing.T) {
 	org, actor := uuid.New(), uuid.New()
 	var gotAuth, gotMethod, gotPath, gotType string
 	var body map[string]any
@@ -135,17 +141,14 @@ func TestATimeoutAndAnUnreachableServerAreUnavailable(t *testing.T) {
 	}))
 	t.Cleanup(slow.Close)
 	base, _ := url.Parse(slow.URL)
-	client, err := New(base, testToken, 50*time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := newWorkloadClient(t, base, 50*time.Millisecond)
 	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New(), nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("timeout = %v, want ErrUnavailable", err)
 	}
 	closed := httptest.NewServer(http.NotFoundHandler())
 	base, _ = url.Parse(closed.URL)
 	closed.Close()
-	client, _ = New(base, testToken, time.Second)
+	client = newWorkloadClient(t, base, time.Second)
 	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New(), nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("unreachable = %v, want ErrUnavailable", err)
 	}
@@ -183,10 +186,7 @@ func TestReactivateNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	}))
 	defer redirecting.Close()
 	base, _ := url.Parse(redirecting.URL)
-	client, err := New(base, testToken, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := newWorkloadClient(t, base, time.Second)
 	if client.http.CheckRedirect == nil || client.http.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
 		t.Fatal("the client's own CheckRedirect does not answer http.ErrUseLastResponse")
 	}
@@ -205,7 +205,7 @@ func TestSuspendPathIsTheOrganizationSuspendRoute(t *testing.T) {
 	var _ Suspender = (*Client)(nil)
 }
 
-func TestSuspendSendsTheOrgAndTheActorWithTheServiceCredential(t *testing.T) {
+func TestSuspendSendsTheOrgAndTheActorWithTheWorkloadToken(t *testing.T) {
 	org, actor := uuid.New(), uuid.New()
 	var gotAuth, gotMethod, gotPath, gotType string
 	var body map[string]any
@@ -282,10 +282,7 @@ func TestSuspendNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	}))
 	defer redirecting.Close()
 	base, _ := url.Parse(redirecting.URL)
-	client, err := New(base, testToken, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := newWorkloadClient(t, base, time.Second)
 	if err := client.Suspend(context.Background(), uuid.New(), uuid.New(), nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("redirect = %v, want ErrUnavailable", err)
 	}

@@ -40,7 +40,7 @@ import (
 //
 // verifier may be nil only where a test exercises the no-carrier refusal.
 // edgeAuth/edgeStore are nil for /buildinfo (this credential is /query-only,
-// per D2898/D2905) and for a pod with no GO_API_EDGE_JWT_SECRET configured.
+// per D2898/D2905) and for a pod with no AUTH_ACCESS_TOKEN_ISSUER configured.
 func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store) (authctx.Claims, bool) {
 	if refuseAmbiguousCarrier(w, r) {
 		return authctx.Claims{}, false
@@ -60,7 +60,7 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 			return authctx.Claims{}, false
 		}
 		internalidentity.RecordOutcome("headers", "accepted")
-		return claims, true
+		return withLegacyScope(claims), true
 	}
 
 	token, ok := bearerToken(r.Header.Get("Authorization"))
@@ -85,7 +85,7 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 		return authctx.Claims{}, false
 	}
 	internalidentity.RecordOutcome("envelope", "accepted")
-	return authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}, true
+	return withLegacyScope(authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}), true
 }
 
 // authenticateEdgeCarrier is /query's edge-access-token path (CHAOS-6263
@@ -219,7 +219,7 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 		internalidentity.RecordOutcome("edge", "invalid")
 		if errors.Is(err, policy.ErrUnavailable) || policy.MissingGrant(err) != "" {
 			log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
-				storeFailureReason("edge_store_unavailable", err), r.URL.Path, envelopeRequestID(r))
+				storeFailureReason("edge_store_unavailable", err), r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
 			return authctx.Claims{}, edgeUnavailable
 		}
 		noteRefusal(r, "edge_rejected", "edge")
@@ -245,7 +245,7 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 			reason = "edge_impersonation_undecided"
 		}
 		log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
-			storeFailureReason(reason, scopeErr), r.URL.Path, envelopeRequestID(r))
+			storeFailureReason(reason, scopeErr), r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
 		return authctx.Claims{}, edgeUnavailable
 	}
 
@@ -270,7 +270,7 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 			// The role could not be read, so there is no role: the request
 			// is refused, never served with a default one.
 			log.Printf("query-api: internal request refused: reason=%s carrier=edge path=%s request_id=%s",
-				storeFailureReason("edge_membership_lookup_failed", memberErr), r.URL.Path, envelopeRequestID(r))
+				storeFailureReason("edge_membership_lookup_failed", memberErr), r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
 			return authctx.Claims{}, edgeUnavailable
 		}
 		orgRole, allowed := roleInOrg(user, orgID, memberRole, member)
@@ -292,8 +292,8 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 	// named action that set holds.
 
 	internalidentity.RecordOutcome("edge", "accepted")
-	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive,
-		Delegated: user.ImpersonatedBy != nil, Platform: user.Platform}, edgeAccepted
+	return withLegacyScope(authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive,
+		Delegated: user.ImpersonatedBy != nil, Platform: user.Platform}), edgeAccepted
 }
 
 // authenticateEdgeTokenOnly authenticates /graphql, the product path an
@@ -331,7 +331,7 @@ func authenticateEdgeTokenOnly(r *http.Request, edgeAuth *policy.Authenticator) 
 		// decided with the answers the middleware saw, so it is refused as a
 		// check that could not be made.
 		log.Printf("query-api: internal request refused: reason=edge_not_bound carrier=edge path=%s request_id=%s",
-			r.URL.Path, envelopeRequestID(r))
+			r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
 		return authctx.Claims{}, edgeUnavailable
 	}
 	if !edgeCarrierToken(edgeAuth, token) {
@@ -373,5 +373,5 @@ func refuseInternal(w http.ResponseWriter, r *http.Request, reason, carrier stri
 func noteRefusal(r *http.Request, reason, carrier string) {
 	internalidentity.RecordOutcome(carrier, reason)
 	log.Printf("query-api: internal request refused: reason=%s carrier=%s path=%s request_id=%s",
-		reason, carrier, r.URL.Path, envelopeRequestID(r))
+		reason, carrier, r.URL.Path, logSafeRequestID(envelopeRequestID(r)))
 }

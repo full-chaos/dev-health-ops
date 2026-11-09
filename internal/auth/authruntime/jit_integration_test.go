@@ -646,10 +646,7 @@ func TestJITAuditRows(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		issuer, err := authapi.NewIssuer(testAccessSecret, "dev-health-ops", "dev-health-api")
-		if err != nil {
-			t.Fatal(err)
-		}
+		issuer := eddsaIssuer(t)
 		var cfg authconfig.Config
 		cfg.SSO.JIT = true
 		sso, err := authapi.NewSSOSessions(authapi.CompatDeps{Sessions: sessions, Users: pgUsers(cfg, e.runtime, authschemaIdent(t)), Issuer: issuer,
@@ -731,20 +728,17 @@ func (e *samlJITEnv) setAllowedDomains(t *testing.T, ctx context.Context, list a
 	}
 }
 
-func TestJITNewAccountNeedsAListedDomain(t *testing.T) {
+func TestJITNewAccountFollowsTheDomainList(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	e := newSAMLJITEnv(t, ctx, true)
+	// Legacy parity: an empty or NULL list is no domain filter.
 	for name, list := range map[string]any{"empty": "[]", "null": nil} {
 		t.Run("saml/"+name, func(t *testing.T) {
 			e.setAllowedDomains(t, ctx, list)
-			before := e.tableCounts(t, ctx)
-			e.wantStatus(t, e.acs(t, "jit-list-"+uuid.NewString()), http.StatusBadRequest)
-			wantSameJITCounts(t, before, e.tableCounts(t, ctx))
-			if n := e.count(t, ctx, `SELECT count(*) FROM public.sso_providers WHERE id = $1 AND last_error = $2`, e.provider.ID,
-				"User not found and auto-provisioning disabled"); n != 1 {
-				t.Fatalf("%d provider rows with the auto-provision failure, want 1", n)
-			}
+			nameID := "jit-list-" + uuid.NewString()
+			e.wantStatus(t, e.acs(t, nameID), http.StatusOK)
+			e.wantOneMembership(t, ctx, e.principalOf(t, ctx, nameID), "member")
 		})
 	}
 	t.Run("saml/listed", func(t *testing.T) {

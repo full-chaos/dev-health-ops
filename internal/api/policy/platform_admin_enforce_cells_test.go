@@ -43,16 +43,22 @@ var platformAdminRoutes = map[string]platformAdminRoute{
 	"POST /api/v1/admin/impersonate/handoff/consume":                     {rule.ActionAdminImpersonate, true},
 }
 
+// adminOrUsersRoutes are the /admin/users rows: mounted WrapAdminOr(admin.users) (an org owner or admin passes too),
+// with whether the body is read first. TestPlatformAction_AdminRoutesAreWrappedByTheirAction (apiservice/admin) pins
+// the real mounts.
+var adminOrUsersRoutes = map[string]platformAdminRoute{
+	"GET /api/v1/admin/users":                     {rule.ActionAdminUsers, false},
+	"GET /api/v1/admin/users/{user_id}":           {rule.ActionAdminUsers, false},
+	"POST /api/v1/admin/users":                    {rule.ActionAdminUsers, true},
+	"PATCH /api/v1/admin/users/{user_id}":         {rule.ActionAdminUsers, true},
+	"POST /api/v1/admin/users/{user_id}/password": {rule.ActionAdminUsers, true},
+	"DELETE /api/v1/admin/users/{user_id}":        {rule.ActionAdminUsers, false},
+}
+
 // platformAdminGapRoutes are the platform-admin rows whose profile row names no action yet, with the guard level they
 // are mounted at. With the admin cell on, the decision point does not judge them.
 var platformAdminGapRoutes = map[string]Authz{
-	"GET /api/v1/admin/users":                     Admin,
-	"GET /api/v1/admin/users/{user_id}":           Admin,
-	"POST /api/v1/admin/users":                    Admin,
-	"PATCH /api/v1/admin/users/{user_id}":         Admin,
-	"POST /api/v1/admin/users/{user_id}/password": Admin,
-	"DELETE /api/v1/admin/users/{user_id}":        Admin,
-	"POST /api/v1/telemetry/report":               Authenticated,
+	"POST /api/v1/telemetry/report": Authenticated,
 }
 
 // productionGoAPIRows is the guard's action map as go-api builds it (apiservice/enforcer.go).
@@ -65,8 +71,8 @@ func productionGoAPIRows(t *testing.T) map[string]ShadowRow {
 	return rows
 }
 
-// The cell table covers exactly the production profile's platform-admin rows: every admin-namespace row except the
-// admin.billing rows (6.9), each with the action of its mount.
+// The cell tables cover exactly the production profile's platform-admin rows: every admin-namespace row except the
+// admin.billing rows (6.9), each with the action of its mount (the platform wraps and the admin-or /admin/users rows).
 func TestPlatformAdminCellsCoverTheProductionPlatformRows(t *testing.T) {
 	rows := productionGoAPIRows(t)
 	got := map[string]string{}
@@ -80,6 +86,9 @@ func TestPlatformAdminCellsCoverTheProductionPlatformRows(t *testing.T) {
 	}
 	want := map[string]string{}
 	for pattern, route := range platformAdminRoutes {
+		want[pattern] = route.action
+	}
+	for pattern, route := range adminOrUsersRoutes {
 		want[pattern] = route.action
 	}
 	if !maps.Equal(got, want) {
@@ -116,12 +125,15 @@ func platformAdminMux(guard *Guard) *http.ServeMux {
 			mux.Handle(pattern, guard.WrapPlatform(route.action, echo))
 		}
 	}
-	for pattern, level := range platformAdminGapRoutes {
-		if level == Admin {
-			mux.Handle(pattern, guard.WrapAdminOr(rule.ActionAdminUsers, echo))
+	for pattern, route := range adminOrUsersRoutes {
+		if route.bodyFirst {
+			mux.Handle(pattern, guard.BodyFirstAdminOr(route.action, echo))
 		} else {
-			mux.Handle(pattern, guard.Wrap(level, echo))
+			mux.Handle(pattern, guard.WrapAdminOr(route.action, echo))
 		}
+	}
+	for pattern, level := range platformAdminGapRoutes {
+		mux.Handle(pattern, guard.Wrap(level, echo))
 	}
 	return mux
 }
@@ -361,39 +373,40 @@ func TestPlatformAdminRowsKeepTheLegacyAnswerWithTheCellOff(t *testing.T) {
 	}
 }
 
-// A legacy HS256 bearer is a caller the decision point cannot judge: the legacy answer stands and the request is
-// counted unjudged by route (answers-10852-2). Enforce turn-on waits for this count to reach 0 (F2).
-func TestPlatformAdminRowsKeepTheLegacyAnswerForAnHS256Caller(t *testing.T) {
-	for pattern := range platformAdminRoutes {
+// Rule 1 parity yardstick (product rules, D6773): a platform admin on a platform-admin row gets the answer the legacy
+// HS256 path gave at base ad73c1cc1 with the admin cell on: 200, the route reached as the caller (logs/13154-legacy-b-1.log
+// 833044a56374). The routed caller is the same principal (superuser on its users row, role "member" in its token's org)
+// and is judged by the production evaluator over a platform_admin state, as auth-service judges it. HS256 skipped the
+// decision point; a users-row superuser without an auth platform role is held in CHAOS-13209.
+const legacyPlatformAdminBody = "org= user=11111111-1111-4111-8111-111111111111 imp=-"
+
+func TestPlatformAdminRowsKeepTheLegacyAnswerForARoutedPlatformAdmin(t *testing.T) {
+	for pattern, route := range platformAdminRoutes {
 		t.Run(pattern, func(t *testing.T) {
-			rec := recordEnforce(t)
-			pdp := newTestPDP(t, denyWith("platform_role_absent"))
-			store := newStore()
-			store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
-			guard := NewGuard(authenticator(t, store), quiet())
-			guard.SetEnforcer(productionEnforcer(t, pdp, "admin"))
-			got := serveCell(platformAdminMux(guard), pattern, bearer(t, superClaims))
-			if got.status != http.StatusOK || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
-				t.Fatalf("HS256 superuser: %d %q, %d PDP calls, counted %v; want the legacy 200, 0, none", got.status, got.body, len(pdp.calls()), rec.snapshot())
+			pdp := newTestPDP(t, evaluatorVerdict(pdpState{authorization.StatusActive, rule.PlatformAdmin, true}))
+			got := serveCell(cellHandler(t, legacyStore(true, "member"), userClaims(nil), productionEnforcer(t, pdp, "admin")), pattern, cellBearer())
+			if got.status != http.StatusOK || got.body != legacyPlatformAdminBody {
+				t.Fatalf("routed platform admin: %d %q; want the legacy 200 %q", got.status, got.body, legacyPlatformAdminBody)
 			}
-			if !slices.Equal(rec.unjudgedSnapshot(), []string{pattern + "/" + enforceUnjudgedHS256}) {
-				t.Fatalf("unjudged %v, want [%s/%s]", rec.unjudgedSnapshot(), pattern, enforceUnjudgedHS256)
+			want := pdpSeen{Principal: shadowBearer, Action: route.action, Type: "platform", Key: "platform", Service: "dev-health-ops-api"}
+			if calls := pdp.calls(); len(calls) != 1 || calls[0] != want {
+				t.Fatalf("PDP saw %+v, want one platform question %+v", calls, want)
 			}
 		})
 	}
 }
 
-// GAP (flips in 10863 PR-1/PR-2): the platform-admin rows with no action are not judged by the decision point with
-// the admin cell on. A decision point that denies everything is never asked, and go-api's own superuser flag admits
-// the caller cross-org.
-func TestPlatformAdminGapRowsAreNotJudgedYet(t *testing.T) {
+// The platform-admin rows with no action yet (the telemetry report row) are not decided by a route question with the
+// admin cell on: a superuser is answered by main's checks with no question. The telemetry report row's guard is
+// Authenticated; its handler asks (see the telemetry package).
+func TestPlatformAdminGapRowsKeepMainsAnswerAndAskTheWrapAction(t *testing.T) {
 	for pattern := range platformAdminGapRoutes {
 		t.Run(pattern, func(t *testing.T) {
 			rec := recordEnforce(t)
 			pdp := newTestPDP(t, denyWith("platform_role_absent"))
 			got := serveCell(cellHandler(t, legacyStore(true, "member"), userClaims(nil), productionEnforcer(t, pdp, "admin", "members")), pattern, cellBearer())
 			if got.status != http.StatusOK || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
-				t.Fatalf("GAP pin: %d %q, %d PDP calls, counted %v; today the legacy 200 with 0 calls", got.status, got.body, len(pdp.calls()), rec.snapshot())
+				t.Fatalf("superuser: %d %q, %d PDP calls, counted %v; want main's 200 with 0 calls", got.status, got.body, len(pdp.calls()), rec.snapshot())
 			}
 		})
 	}
@@ -419,16 +432,19 @@ func TestPlatformAdminGapOrgScopeSelectsAnOrgByTheLocalFlag(t *testing.T) {
 	}
 }
 
-// Q1 status quo (open chris question, superuser cross-org without a membership; not decided here): a platform admin
-// whose access token names an org it has no membership in is refused at authentication (401), before any guard or
-// decision point. An org-less token reaches the decision point (TestPlatformAdminRowsTakeThePDPVerdict).
-func TestPlatformAdminRowsRefuseAnOrgClaimWithNoMembershipBeforeThePDP(t *testing.T) {
+// Product rule 1 (D6773): a platform admin whose access token names an org it holds no membership row in gets, on
+// every platform-admin row, the answer its HS256 token gave for the same org, and is decided by the decision point.
+// The HS256 answer is the executed legacy run on main 98c7d4f56 (log 13154-legacy-rec-98c7d4f5.log sha256
+// 8ba2f74cdd64, LEGACY-REC lines): 200 "org= user=<id> imp=-" on every row, 0 decision-point calls.
+func TestPlatformAdminRowsAnswerAnOrgClaimWithNoMembershipAsLegacy(t *testing.T) {
 	for pattern := range platformAdminRoutes {
 		t.Run(pattern, func(t *testing.T) {
-			pdp := newTestPDP(t, allowAll)
-			got := serveCell(cellHandler(t, legacyStore(true, ""), userClaims(nil), productionEnforcer(t, pdp, "admin")), pattern, cellBearer())
-			if got.status != http.StatusUnauthorized || len(pdp.calls()) != 0 {
-				t.Fatalf("%d %q, %d PDP calls; want 401 and 0", got.status, got.body, len(pdp.calls()))
+			routedPDP := newTestPDP(t, allowAll)
+			store := legacyStore(true, "")
+			got := serveCell(cellHandler(t, store, userClaims(nil), productionEnforcer(t, routedPDP, "admin")), pattern, cellBearer())
+			// The HS256 class never asked the decision point; the user access token, like the org-less one, does.
+			if got.status != http.StatusOK || got.body != legacyPlatformAdminBody || len(routedPDP.calls()) == 0 {
+				t.Fatalf("user access token %d %q (%d PDP calls), HS256 200 %q (0 PDP calls)", got.status, got.body, len(routedPDP.calls()), legacyPlatformAdminBody)
 			}
 		})
 	}

@@ -181,22 +181,14 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 }
 
 // sessionIssuer is the client of auth-service's session issue route when
-// auth-service owns sessions, built from AUTH_SESSION_ISSUE_TOKEN, or from the
-// workload token of cred when AUTH_SESSION_ISSUE_CREDENTIAL selects it; nil
-// when go-api owns them. Sessions on without a usable credential is a start-up
+// auth-service owns sessions, built from the workload token of cred; nil when
+// go-api owns them. Sessions on without a usable credential is a start-up
 // error: every sign-in would answer 503.
-func sessionIssuer(cfg AuthProxyConfig, lookup func(string) (string, bool), cred sessionCredential) (sessionissue.Issuer, error) {
+func sessionIssuer(cfg AuthProxyConfig, cred sessionCredential) (sessionissue.Issuer, error) {
 	if !cfg.Enabled(AuthSessions) {
 		return nil, nil
 	}
-	var client *sessionissue.Client
-	var err error
-	if cred.workload != nil {
-		client, err = sessionissue.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
-	} else {
-		token, _ := lookup(sessionissue.EnvToken)
-		client, err = sessionissue.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
-	}
+	client, err := sessionissue.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s is on: %w", AuthProxyFlagEnv(AuthSessions), err)
 	}
@@ -246,23 +238,15 @@ func impersonationDelegator(ctx context.Context, cfg AuthProxyConfig, issuer ses
 }
 
 // orgLifecycleClient is the client of auth-service's organization reactivate and
-// suspend routes when AUTH_PROXY_ORG_PROVISIONING is on, built from
-// AUTH_SESSION_ISSUE_TOKEN, or from the workload token of cred when
-// AUTH_PROVISIONING_CREDENTIAL selects it; nil when off, so go-api's PATCH
-// never calls auth-service. On without a usable credential is a start-up
-// error: every change would answer 503.
-func orgLifecycleClient(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (*orgreactivate.Client, error) {
+// suspend routes when AUTH_PROXY_ORG_PROVISIONING is on, built from the
+// workload token of cred; nil when off, so go-api's PATCH never calls
+// auth-service. On without a usable credential is a start-up error: every
+// change would answer 503.
+func orgLifecycleClient(cfg AuthProxyConfig, cred provisioningCredential) (*orgreactivate.Client, error) {
 	if !cfg.OrgProvisioningOn() {
 		return nil, nil
 	}
-	var client *orgreactivate.Client
-	var err error
-	if cred.workload != nil {
-		client, err = orgreactivate.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
-	} else {
-		token, _ := lookup(sessionissue.EnvToken)
-		client, err = orgreactivate.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
-	}
+	client, err := orgreactivate.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyOrgProvisioning, err)
 	}
@@ -270,8 +254,8 @@ func orgLifecycleClient(cfg AuthProxyConfig, lookup func(string) (string, bool),
 }
 
 // orgReactivator is the reactivate side of orgLifecycleClient (nil when off).
-func orgReactivator(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (orgreactivate.Reactivator, error) {
-	client, err := orgLifecycleClient(cfg, lookup, cred)
+func orgReactivator(cfg AuthProxyConfig, cred provisioningCredential) (orgreactivate.Reactivator, error) {
+	client, err := orgLifecycleClient(cfg, cred)
 	if client == nil {
 		return nil, err
 	}
@@ -279,8 +263,8 @@ func orgReactivator(cfg AuthProxyConfig, lookup func(string) (string, bool), cre
 }
 
 // orgSuspender is the suspend side of orgLifecycleClient (nil when off).
-func orgSuspender(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (orgreactivate.Suspender, error) {
-	client, err := orgLifecycleClient(cfg, lookup, cred)
+func orgSuspender(cfg AuthProxyConfig, cred provisioningCredential) (orgreactivate.Suspender, error) {
+	client, err := orgLifecycleClient(cfg, cred)
 	if client == nil {
 		return nil, err
 	}
@@ -782,23 +766,15 @@ func dropHop(header http.Header) {
 }
 
 // orgProvisioner is the client of auth-service's provisioning routes when
-// AUTH_PROXY_ORG_PROVISIONING is on, built from AUTH_SESSION_ISSUE_TOKEN, or
-// from the workload token of cred when AUTH_PROVISIONING_CREDENTIAL selects
-// it; nil when off, so the member, invite and delete routes never call
+// AUTH_PROXY_ORG_PROVISIONING is on, built from the workload token of cred;
+// nil when off, so the member, invite and delete routes never call
 // auth-service. On without a usable credential is a start-up error, as for
 // orgReactivator.
-func orgProvisioner(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (authprovision.Provisioner, error) {
+func orgProvisioner(cfg AuthProxyConfig, cred provisioningCredential) (authprovision.Provisioner, error) {
 	if !cfg.OrgProvisioningOn() {
 		return nil, nil
 	}
-	var client *authprovision.Client
-	var err error
-	if cred.workload != nil {
-		client, err = authprovision.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
-	} else {
-		token, _ := lookup(sessionissue.EnvToken)
-		client, err = authprovision.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
-	}
+	client, err := authprovision.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyOrgProvisioning, err)
 	}

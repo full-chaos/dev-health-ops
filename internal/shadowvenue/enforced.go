@@ -82,6 +82,11 @@ type EnforcedInput struct {
 	Log        *Evidence
 	// Leaves, when set, replaces the body_norm_sha comparison with the per-leaf parity after the frozen volatile set.
 	Leaves *LeafParity
+	// J1 turns on the counter proof of form B (D6894): an equal 5xx cell whose yardstick cell is a MATCH with a decision id
+	// is past the guard when its namespace's decision counter equals the judged slots exactly and the idle sweep holds.
+	// Attributed lists the requests of the run that are no slot (the drive's sign-in).
+	J1         bool
+	Attributed []AttributedRequest
 }
 
 // liveEnforcement is what one /metrics scrape of the running go-api says: the namespaces whose enforcement gauge is 1,
@@ -332,6 +337,9 @@ func JudgeEnforced(in EnforcedInput) Report {
 			report.Slots[i].Verdict = VerdictEvidencedNoOrg
 		}
 	}
+	if in.J1 {
+		applyCounterProof(&report, in, func(row, caller string, k int) string { return yard[cell{row, caller, k}].Verdict }, unjudgedRoutes)
+	}
 	outbound := judgeOutboundEnforced(&report, in, byRow)
 	for _, reason := range outbound.voids {
 		void("%s", reason)
@@ -365,6 +373,39 @@ func JudgeEnforced(in EnforcedInput) Report {
 	}
 	report.Pass = !report.Void && !slices.ContainsFunc(report.Reasons, func(s string) bool { return strings.HasPrefix(s, "FAIL") })
 	return report
+}
+
+// applyCounterProof is form B: it lifts the equal 5xx cells that have no log proof to EQUAL_PAST_GUARD, one cell at a
+// time, when (1) the yardstick cell is a MATCH (the 4a log has its decision id), (2) the enforced run's answer equals
+// the yardstick's in status and body (already so for a VOID_PARITY cell), (3) its namespace's counter proof stands and
+// (4) its answer is none of the guard's deny digests. The digests and the counter table go to the record.
+func applyCounterProof(report *Report, in EnforcedInput, yardVerdict func(row, caller string, k int) string, unjudgedRoutes map[string]bool) {
+	idle := idleSweep(in.Log, in.Slots, in.Attributed, in.Grace)
+	report.Notes = append(report.Notes, "judge-enforced: idle sweep: "+idle.note)
+	for _, u := range idle.unattributed {
+		report.Reasons = append(report.Reasons, "FAIL: unattributed request in the go-api log (unknown traffic): "+u)
+	}
+	proof, notes, fails := counterProof(in, report.Slots, idle)
+	report.Notes = append(report.Notes, notes...)
+	for _, f := range fails {
+		report.Reasons = append(report.Reasons, "FAIL: "+f)
+	}
+	deny := guardDenyDigests(report.Slots)
+	report.Notes = append(report.Notes, fmt.Sprintf("judge-enforced: guard deny body digests (%d): %s", len(deny), strings.Join(deny, " ")))
+	for i, sv := range report.Slots {
+		if sv.Verdict != VerdictVoidParity || sv.Status < 500 || unjudgedRoutes[sv.Key()] {
+			continue
+		}
+		if yardVerdict(sv.Row, sv.Caller, sv.K) == VerdictMatch && proof[in.Namespaces[sv.Key()]] {
+			report.Slots[i].Verdict = VerdictEqualPastGuard
+		}
+	}
+	for i, sv := range report.Slots {
+		if sv.Verdict == VerdictEqualPastGuard && slices.Contains(deny, sv.BodyNormSHA) {
+			report.Slots[i].Verdict = VerdictVoidParity
+			report.Reasons = append(report.Reasons, fmt.Sprintf("FAIL: slot %d row %s %s: the answer carries the guard's deny digest %.12s: it is not past the guard", sv.Seq, sv.Row, sv.Caller, sv.BodyNormSHA))
+		}
+	}
 }
 
 // RowNamespaces maps each go-api shadow row key to its action namespace.

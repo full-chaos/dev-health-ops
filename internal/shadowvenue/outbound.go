@@ -209,7 +209,7 @@ func checkOutbound(slots []Slot, ob Outbound, byRow map[string]rowClass, grace t
 			}
 		}
 		if denied(s.Status) && out.hits[s.Seq] > 0 {
-			out.fails = append(out.fails, fmt.Sprintf("FAIL: slot %d row %s %s: answered %d but made %d outside calls (a call before the guard, or the stub's own %d relayed by the handler: the stub log has no answer status, so the two cannot be told apart; the row's stub must answer 2xx)", s.Seq, s.Row, s.Caller, s.Status, out.hits[s.Seq], s.Status))
+			out.fails = append(out.fails, fmt.Sprintf("FAIL: slot %d row %s %s: answered %d but made %d outside calls (the guard passed and the handler relayed the stub's own %d, or a call came before the guard: the stub log holds no answer status, so the row's handler code and the stub's answer table decide which)", s.Seq, s.Row, s.Caller, s.Status, out.hits[s.Seq], s.Status))
 		}
 	}
 	var rows []string

@@ -87,14 +87,12 @@ spec:
         - protocol: TCP
           port: {{ $target.port }}
     {{- if and (eq $target.component "query-api") (include "dev-health.queryApiOwnNetworkPolicy" $) }}
-    # The pods of the release namespace reach the query-api Service port and the operator port (the metrics scrape), no other.
+    # The pods of the release namespace reach the query-api Service port and no other query-api port.
     - from:
         - podSelector: {}
       ports:
         - protocol: TCP
           port: {{ $target.port }}
-        - protocol: TCP
-          port: {{ $.Values.queryApi.operatorPort }}
     {{- end }}
 {{- end }}
 {{- end }}

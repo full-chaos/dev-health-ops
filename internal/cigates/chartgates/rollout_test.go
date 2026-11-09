@@ -199,26 +199,6 @@ func queryAPIOperatorPortCollisionRefused(g *guard) {
 	g.refusal("queryApi.operatorPort equal to queryApi.port", "t", set("queryApi.enabled=true", "queryApi.operatorPort=8090")...)
 }
 
-func queryAPIOperatorScrapeAdmitted(g *guard) {
-	docs := g.docs("operator-netpol", join(set("queryApi.enabled=true", "networkPolicy.enabled=true", "queryApi.mcp.enabled=true", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/8"), setJSON(`queryApi.mcp.allowedFrom=[{"matchLabels":{"a":"b"}}]`))...)
-	pol := named(docs, "NetworkPolicy", "operator-netpol-dev-health-ingress-query-api")
-	if pol == nil {
-		g.failf("no query-api ingress NetworkPolicy rendered")
-		return
-	}
-	found := false
-	for _, r := range list(at(pol, "spec", "ingress")) {
-		if len(list(at(r, "from"))) == 1 && at(r, "from", 0, "podSelector") != nil {
-			ports := ""
-			for _, p := range list(at(r, "ports")) {
-				ports += str(at(p, "port")) + " "
-			}
-			found = strings.Contains(ports, "8080")
-		}
-	}
-	g.expect(found, "the in-namespace rule of the query-api ingress policy does not admit the operator port 8080 (the scrape)")
-}
-
 func migrationHookDefault(g *guard) {
 	r := g.mustRender("default migration hook", "migration-contract")
 	docs, err := parseDocs(r.stdout)
@@ -267,7 +247,6 @@ func TestRolloutGuardsRealTree(t *testing.T) {
 		check{"query-api-probe-old-default-omitted", queryAPIProbeOldDefaultOmitted},
 		check{"query-api-probe-timing-honoured", queryAPIProbeTimingHonoured},
 		check{"query-api-operator-port-collision-refused", queryAPIOperatorPortCollisionRefused},
-		check{"query-api-operator-scrape-admitted", queryAPIOperatorScrapeAdmitted},
 		check{"migration-hook-default", migrationHookDefault},
 		check{"migration-hook-post-install-refused", migrationHookPostInstallRefused},
 		check{"migration-hook-local-needs-bundled", migrationHookLocalNeedsBundled},
@@ -316,9 +295,6 @@ func TestRolloutGuardsPlantedDefects(t *testing.T) {
 		{"query-api-operator-port-collision-accepted", chartOnly,
 			mut(chartFile(qapi), `{{- if or (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.port))`, `{{- if or false (eq 1 2)`),
 			queryAPIOperatorPortCollisionRefused, "must be refused"},
-		{"query-api-operator-scrape-not-admitted", chartOnly,
-			mut(chartFile("templates/networkpolicy.yaml"), "        - protocol: TCP\n          port: {{ $.Values.queryApi.operatorPort }}\n", ""),
-			queryAPIOperatorScrapeAdmitted, "does not admit the operator port"},
 		{"migrate-hook-default-moves", chartOnly,
 			mut(chartFile("templates/migrate-job.yaml"), `{{- $hookEvents := .Values.migrations.hook.events }}`, `{{- $hookEvents := list "pre-install" }}`),
 			migrationHookDefault, "default migrate hook"},

@@ -199,7 +199,7 @@ CHAOS-13092: goApi.acrRevoke wires the acr credential revoke route's client (int
 renders nothing. On, the chart projects a ServiceAccount token with acr's workload-exchange audience (acr
 workloadTokenExchange.audience) into /var/run/dev-health/acr-revoke/token (no subPath, so the kubelet rotation reaches it) and renders
 ACR_REVOKE_URL, ACR_REVOKE_TOKEN_URL and ACR_REVOKE_SUBJECT_FILE (derived from the mount). Both URLs must be https, or plain http on a
-cluster-local Service host (<name>.svc.cluster.local) with allowClusterHTTP: true, which also renders ACR_REVOKE_ALLOW_CLUSTER_HTTP=true.
+cluster-local Service host (<name>.svc.cluster.local) with allowClusterHTTP: true. ACR_REVOKE_ALLOW_CLUSTER_HTTP is always rendered, "true" or "false".
 url takes no query. goApi.extraEnv never sets an ACR_REVOKE_* name.
 */}}
 {{- range .Values.goApi.extraEnv }}
@@ -405,10 +405,8 @@ spec:
               value: {{ $arCfg.tokenURL | quote }}
             - name: ACR_REVOKE_SUBJECT_FILE
               value: "/var/run/dev-health/acr-revoke/token"
-            {{- if $arCluster }}
             - name: ACR_REVOKE_ALLOW_CLUSTER_HTTP
-              value: "true"
-            {{- end }}
+              value: {{ ternary "true" "false" $arCluster | quote }}
             {{- end }}
           {{- with .Values.goApi.extraEnv }}
             {{- toYaml . | nindent 12 }}

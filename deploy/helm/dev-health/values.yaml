@@ -168,8 +168,8 @@ goApi:
   #    and off renders nothing: the route answers 503. On, the chart projects a ServiceAccount token with acr's workload-exchange
   #    audience into /var/run/dev-health/acr-revoke/token and renders ACR_REVOKE_URL (acr's internal API origin, no query),
   #    ACR_REVOKE_TOKEN_URL (acr's token endpoint, <origin>/api/v1/oauth/token) and ACR_REVOKE_SUBJECT_FILE (that path). Both URLs
-  #    are https, or plain http on a <name>.svc.cluster.local host only with allowClusterHTTP: true (renders
-  #    ACR_REVOKE_ALLOW_CLUSTER_HTTP=true). audience = acr's workloadTokenExchange.audience. acr accepts the call only when its
+  #    are https, or plain http on a <name>.svc.cluster.local host only with allowClusterHTTP: true
+  #    (ACR_REVOKE_ALLOW_CLUSTER_HTTP, always rendered "true" or "false"). audience = acr's workloadTokenExchange.audience. acr accepts the call only when its
   #    acr.workload_bindings holds a row with role revoke for go-api's ServiceAccount in the caller's organization (one row per
   #    organization, written out of band); bind first, then turn this on. goApi.extraEnv cannot set an ACR_REVOKE_* name.
   acrRevoke:

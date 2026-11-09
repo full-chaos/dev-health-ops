@@ -17,7 +17,8 @@ const (
 	EnvACRRevokeTokenURL    = "ACR_REVOKE_TOKEN_URL"
 	EnvACRRevokeSubjectFile = "ACR_REVOKE_SUBJECT_FILE"
 	// EnvACRRevokeAllowClusterHTTP "true" also accepts plain-http origins on a cluster-local Service host
-	// (<name>.svc.cluster.local); unset or "false" accepts https (and loopback http) only. Any other value is refused.
+	// (<name>.svc.cluster.local); unset or "false" accepts https (and loopback http) only. Any other set value, blank
+	// included, is refused.
 	EnvACRRevokeAllowClusterHTTP = "ACR_REVOKE_ALLOW_CLUSTER_HTTP"
 )
 
@@ -29,8 +30,9 @@ func newACRRevoker(lookup func(string) (string, bool), logger *slog.Logger) acrc
 		value, _ := lookup(name)
 		return strings.TrimSpace(value)
 	}
-	base, token, subject, allowRaw := read(EnvACRRevokeURL), read(EnvACRRevokeTokenURL), read(EnvACRRevokeSubjectFile), read(EnvACRRevokeAllowClusterHTTP)
-	if base == "" && token == "" && subject == "" && allowRaw == "" {
+	base, token, subject := read(EnvACRRevokeURL), read(EnvACRRevokeTokenURL), read(EnvACRRevokeSubjectFile)
+	allowValue, allowSet := lookup(EnvACRRevokeAllowClusterHTTP)
+	if base == "" && token == "" && subject == "" && !allowSet {
 		logger.Info("api: acr credential revoke not configured; the revoke route answers 503")
 		return nil
 	}
@@ -39,11 +41,11 @@ func newACRRevoker(lookup func(string) (string, bool), logger *slog.Logger) acrc
 		return nil
 	}
 	var allow bool
-	switch allowRaw {
-	case "", "false":
-	case "true":
+	switch {
+	case !allowSet:
+	case strings.TrimSpace(allowValue) == "true":
 		allow = true
-	default:
+	case strings.TrimSpace(allowValue) != "false":
 		return refuse(EnvACRRevokeAllowClusterHTTP)
 	}
 	// A value that does not parse is a nil URL, which ValidOrigin refuses.

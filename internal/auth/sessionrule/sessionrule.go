@@ -17,6 +17,10 @@ import (
 	"time"
 )
 
+// DefaultRefreshTTL is the one refresh lifetime value of the auth plane (session.DefaultRefreshTTL
+// names it). It lives here so a reader of the rule outside the session store needs no import of it.
+const DefaultRefreshTTL = 7 * 24 * time.Hour
+
 // Rule builds the fragments for one auth schema and refresh lifetime.
 type Rule struct {
 	schema    string

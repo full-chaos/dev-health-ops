@@ -133,3 +133,10 @@ func TestRevocationIsTheRulesRevokeWithoutALifetime(t *testing.T) {
 		t.Errorf("Revocation.Revoked(x) = %q, Rule.Revoked(x) = %q", got, want)
 	}
 }
+
+// The auth plane's one refresh lifetime (ACP-ADR-03: 7 days rolling).
+func TestTheDefaultRefreshLifetimeIsSevenDays(t *testing.T) {
+	if DefaultRefreshTTL != 7*24*time.Hour {
+		t.Errorf("DefaultRefreshTTL = %v", DefaultRefreshTTL)
+	}
+}

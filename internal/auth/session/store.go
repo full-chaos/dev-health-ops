@@ -52,7 +52,7 @@ const GraceWindow = 30 * time.Second
 // store defaults to it, and the auth runtime hands the same value to the decision
 // reader, which has no default of its own. It is go-api's rolling refresh lifetime, which ACP-ADR-03
 // keeps (7 days rolling, single-use, family-linked).
-const DefaultRefreshTTL = 7 * 24 * time.Hour
+const DefaultRefreshTTL = sessionrule.DefaultRefreshTTL
 
 var (
 	// ErrSessionNotFound reports an unknown session id.

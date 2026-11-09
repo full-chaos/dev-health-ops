@@ -41,10 +41,17 @@ func TestAdminTargetAndStatsReadsFollowTheSwitch(t *testing.T) {
 		t.Errorf("off transfer target: %q %v", got, err)
 	}
 	on := pgStore{PlatformRolesOwned: true}
+	// A read that asks whether the TARGET is a superuser (a protection) takes the stored holding, as legacy read the
+	// target's stored column: a disabled superuser target keeps its protection. The count stays the authority rule.
+	stored := rule.StoredHoldsSQL(`"auth"`, "users.id", "'platform_admin'")
 	holds := rule.HoldsSQL(`"auth"`, "users.id", "'platform_admin'")
-	for name, build := range map[string]func() (string, error){"target": on.targetUserSQL, "count": on.superuserCountSQL, "targets": on.targetsSuperuserSQL, "transfer target": on.isSuperuserSQL} {
-		if got, err := build(); err != nil || !strings.Contains(got, holds) || strings.Contains(got, "is_superuser") {
-			t.Errorf("on %s: %q %v", name, got, err)
+	for name, c := range map[string]struct {
+		build func() (string, error)
+		want  string
+	}{"target": {on.targetUserSQL, stored}, "targets": {on.targetsSuperuserSQL, stored}, "transfer target": {on.isSuperuserSQL, stored},
+		"count": {on.superuserCountSQL, holds}} {
+		if got, err := c.build(); err != nil || !strings.Contains(got, c.want) || strings.Contains(got, "is_superuser") {
+			t.Errorf("on %s: %q %v, want it to hold %q", name, got, err, c.want)
 		}
 	}
 }

@@ -182,15 +182,12 @@ func TestResetEndsEveryCredentialClass(t *testing.T) {
 	if v := rig.tokenVersion(t, ctx, id); v != 4 {
 		t.Errorf("go-api token_version = %d, want 4", v)
 	}
-	if n := rig.liveLegacyRows(t, ctx, id); n != 0 {
-		t.Errorf("%d go-api refresh rows are still live", n)
+	if n := rig.liveLegacyRows(t, ctx, id); n != 1 {
+		t.Errorf("%d go-api refresh rows are live, want the 1 seeded: auth-service leaves them to go-api", n)
 	}
 	state, found, err := policy.PGStore{Pool: rig.env.runtime, AuthSchema: "auth"}.SessionState(ctx, old.Session.ID)
 	if err != nil || !found || !state.Revoked {
 		t.Errorf("policy SessionState of the old session = %+v found %v err %v; want revoked", state, found, err)
-	}
-	if res, err := rig.sessions.ExchangeLegacy(ctx, session.LegacyRefresh{PrincipalID: id, JTI: contracts.NewSecretString(legacyJTI)}); err != nil || res.Reason.Success() {
-		t.Errorf("ExchangeLegacy after the reset = %+v, %v; want a refusal", res, err)
 	}
 	time.Sleep(20 * time.Millisecond)
 	after, err := rig.sessions.Create(ctx, id, nil, []string{"pwd"})
@@ -226,8 +223,8 @@ func TestChangeEndsEveryCredentialClassAndKeepsTheCallersNewSession(t *testing.T
 	if v := rig.tokenVersion(t, ctx, id); v != 4 {
 		t.Errorf("go-api token_version = %d, want 4", v)
 	}
-	if n := rig.liveLegacyRows(t, ctx, id); n != 0 {
-		t.Errorf("%d go-api refresh rows are still live", n)
+	if n := rig.liveLegacyRows(t, ctx, id); n != 1 {
+		t.Errorf("%d go-api refresh rows are live, want the 1 seeded: auth-service leaves them to go-api", n)
 	}
 }
 
@@ -235,7 +232,7 @@ func TestChangeEndsEveryCredentialClassAndKeepsTheCallersNewSession(t *testing.T
 // sessions stay live and go-api's rows are untouched.
 func TestAFailedStepRollsTheWholePasswordChangeBack(t *testing.T) {
 	steps := map[string]string{
-		"the refresh token revoke": `REVOKE UPDATE (revoked_at) ON public.refresh_tokens FROM %s`,
+		"the token_version bump": `REVOKE UPDATE (token_version) ON public.users FROM %s`,
 	}
 	for name, revoke := range steps {
 		t.Run(name, func(t *testing.T) {

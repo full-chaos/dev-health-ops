@@ -153,6 +153,29 @@ func queryAPIOperatorListener(g *guard) {
 	g.expect(addr == ":8080", "query-api DEV_HEALTH_HTTP_ADDR is %q, want :8080 (the operator port)", addr)
 }
 
+func queryAPIProbeOverrides(g *guard) {
+	for _, o := range []string{
+		"queryApi.livenessProbe.httpGet.port=http", "queryApi.livenessProbe.httpGet.path=/readyz",
+		"queryApi.readinessProbe.httpGet.port=http", "queryApi.readinessProbe.httpGet.path=/other",
+		"queryApi.readinessProbe.periodSeconds=7", "queryApi.readinessProbe.httpGet.scheme=HTTPS",
+	} {
+		docs := g.docs("override-contract", join(setString(o), set("queryApi.enabled=true"), []string{"--show-only", "templates/query-api-deployment.yaml"})...)
+		deps := ofKind(docs, "Deployment")
+		if len(deps) == 0 {
+			g.failf("%s: no query-api Deployment decoded", o)
+			continue
+		}
+		c := containers(deps[0])[0]
+		for _, pr := range []struct{ kind, path string }{{"readinessProbe", "/readyz"}, {"livenessProbe", "/healthz"}} {
+			g.expect(str(at(c, pr.kind, "httpGet", "port")) == "operator" && str(at(c, pr.kind, "httpGet", "path")) == pr.path, "%s: %s is %v, want the chart httpGet on operator %s", o, pr.kind, at(c, pr.kind, "httpGet"), pr.path)
+			g.expect(len(mp(at(c, pr.kind, "httpGet"))) == 2, "%s: %s httpGet is %v, want only the chart path and port", o, pr.kind, at(c, pr.kind, "httpGet"))
+		}
+		if strings.HasSuffix(o, "periodSeconds=7") {
+			g.expect(str(at(c, "readinessProbe", "periodSeconds")) == "7", "%s: periodSeconds is %v, want 7", o, at(c, "readinessProbe", "periodSeconds"))
+		}
+	}
+}
+
 func queryAPIOperatorPortCollisionRefused(g *guard) {
 	g.refusal("queryApi.operatorPort equal to queryApi.port", "t", set("queryApi.enabled=true", "queryApi.operatorPort=8090")...)
 }
@@ -221,6 +244,7 @@ func TestRolloutGuardsRealTree(t *testing.T) {
 		check{"rolling-schema-rejects-unknown-key", rollingSchemaRejectsUnknownKey},
 		check{"api-probes-ports-unique", apiProbesPortsUnique},
 		check{"query-api-operator-listener", queryAPIOperatorListener},
+		check{"query-api-probe-overrides", queryAPIProbeOverrides},
 		check{"query-api-operator-port-collision-refused", queryAPIOperatorPortCollisionRefused},
 		check{"query-api-operator-scrape-admitted", queryAPIOperatorScrapeAdmitted},
 		check{"migration-hook-default", migrationHookDefault},
@@ -256,10 +280,14 @@ func TestRolloutGuardsPlantedDefects(t *testing.T) {
 			mut(chartFile(qapi), "            - name: http\n              containerPort: {{ .Values.queryApi.port }}", "            - name: web\n              containerPort: {{ .Values.queryApi.port }}"),
 			apiProbesPortsUnique, "named [web operator]"},
 		{"query-api-readiness-back-on-http", chartOnly,
-			mut(chartFile(qapi), "httpGet: {path: /readyz, port: operator}", "httpGet: {path: /readyz, port: http}"),
+			mut(chartFile(qapi), `"path" "/readyz" "port" "operator"`, `"path" "/readyz" "port" "http"`),
 			queryAPIOperatorListener, "readinessProbe targets port"},
+		{"query-api-probe-httpget-not-omitted", chartOnly,
+			all(mut(chartFile(qapi), `(omit .Values.queryApi.livenessProbe "httpGet")`, `.Values.queryApi.livenessProbe`),
+				mut(chartFile(qapi), `(omit .Values.queryApi.readinessProbe "httpGet")`, `.Values.queryApi.readinessProbe`)),
+			queryAPIProbeOverrides, "want only the chart path and port"},
 		{"query-api-liveness-back-on-http", chartOnly,
-			mut(chartFile(qapi), "httpGet: {path: /healthz, port: operator}", "httpGet: {path: /healthz, port: http}"),
+			mut(chartFile(qapi), `"path" "/healthz" "port" "operator"`, `"path" "/healthz" "port" "http"`),
 			queryAPIOperatorListener, "livenessProbe targets port"},
 		{"query-api-operator-port-collision-accepted", chartOnly,
 			mut(chartFile(qapi), `{{- if or (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.port))`, `{{- if or false (eq 1 2)`),

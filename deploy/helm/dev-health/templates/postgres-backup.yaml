@@ -118,9 +118,9 @@ spec:
                   mv -- "$part" "$ts.dump"
                   bytes=$(wc -c < "$ts.dump" | tr -d ' ')
                   echo "pg-backup ok file=$ts.dump bytes=$bytes sha256=$(printf '%s' "$sum" | cut -c 1-12)"
-                  ls -1 -- *.dump | sort -r | tail -n "+$((BACKUP_KEEP + 1))" | while read -r old; do
+                  find . -maxdepth 1 -name '*.dump' | sort -r | tail -n "+$((BACKUP_KEEP + 1))" | while read -r old; do
                     rm -f -- "$old" "$old.sha256"
-                    echo "pg-backup pruned file=$old"
+                    echo "pg-backup pruned file=${old#./}"
                   done
                   find . -maxdepth 1 -name '*.partial' -mtime +0 -exec rm -f -- {} \;
               resources:

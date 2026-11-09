@@ -29,6 +29,10 @@ type workItemStateWorkItem struct {
 	ProjectName   string
 	CreatedAt     time.Time
 	CompletedAt   *time.Time
+	// attributionScope is the work scope the item's attribution is keyed by
+	// (workitemmetrics.AttributionKey): set in the scope set, empty in the org
+	// set.
+	attributionScope string
 }
 
 // workScopeID ports WorkItem.work_scope_id
@@ -334,12 +338,13 @@ type workItemStateBatchConn interface {
 // plain MergeTree (no ReplacingMergeTree/dedup key), matching Python's
 // existing insert-only, no-idempotency contract for this table exactly: a
 // partition recompute duplicates rows here today (in both languages) rather
-// than replacing them, which is out of this port's scope to fix.
+// than replacing them, which is out of this port's scope to fix. The views and
+// the count are those of WriteWorkItemMetricsDaily.
 func WriteWorkItemStateDurationsDaily(
 	ctx context.Context, conn workItemStateBatchConn, organizationID string, day time.Time,
-	rows []workItemStateDailyRow, computedAt time.Time,
+	orgRows, scopeRows []workItemStateDailyRow, computedAt time.Time,
 ) (int, error) {
-	if len(rows) == 0 {
+	if len(orgRows) == 0 && len(scopeRows) == 0 {
 		return 0, nil
 	}
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
@@ -347,10 +352,7 @@ func WriteWorkItemStateDurationsDaily(
 	}
 	dayValue := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)
 	computedAtUTC := computedAt.UTC()
-	keys := make([]staleKey, 0, len(rows))
-	for _, row := range rows {
-		keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status})
-	}
+	viewRows, keys, firsts := workItemViews(orgRows, scopeRows, stateDurationsDailyKey)
 	legacy, err := legacyRetractionVersions(ctx, conn, teamkeytables.WorkItemStateDurationsDaily, organizationID, dayValue, keys, computedAtUTC)
 	if err != nil {
 		return 0, err
@@ -367,12 +369,12 @@ func WriteWorkItemStateDurationsDaily(
 		view string
 		at   time.Time
 	}
-	entries := make([]entry, 0, len(rows)*(len(workItemRowViews)+1))
+	entries := make([]entry, 0, len(viewRows)+len(keys))
+	for _, viewRow := range viewRows {
+		entries = append(entries, entry{viewRow.row, viewRow.view, computedAtUTC})
+	}
 	zeroRows := 0
-	for index, row := range rows {
-		for _, rowView := range workItemRowViews {
-			entries = append(entries, entry{row, rowView, computedAtUTC})
-		}
+	for index, row := range firsts {
 		if retraction, retracted := legacy[keys[index].text()]; retracted {
 			zero := workItemStateDailyRow{
 				Provider: row.Provider, WorkScopeID: row.WorkScopeID, TeamID: row.TeamID, TeamName: row.TeamName, Status: row.Status,
@@ -399,9 +401,15 @@ func WriteWorkItemStateDurationsDaily(
 	// ambiguity instead of silently open (matches
 	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return len(rows) + zeroRows, fmt.Errorf("send work_item_state_durations_daily batch: %w", err)
+		return len(keys) + zeroRows, fmt.Errorf("send work_item_state_durations_daily batch: %w", err)
 	}
-	return len(rows) + zeroRows, nil
+	return len(keys) + zeroRows, nil
+}
+
+// stateDurationsDailyKey is the key of a row of work_item_state_durations_daily
+// without row_view.
+func stateDurationsDailyKey(row workItemStateDailyRow) staleKey {
+	return staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status}
 }
 
 // WriteWorkItemBlockedDurationsDaily writes the per-item source for the

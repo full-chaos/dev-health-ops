@@ -94,14 +94,17 @@ func TestWorkItemWritersWriteEveryRowUnderTheOrgAndTheScopeView(t *testing.T) {
 	}{
 		{"work_item_metrics_daily", 1, func(conn workItemBatchConn) (int, error) {
 			return WriteWorkItemMetricsDaily(ctx, conn, "org-a", rowViewsDay,
+				[]workitemmetrics.MetricsDailyRow{{Day: rowViewsDay, Provider: "github", WorkScopeID: "s", TeamID: "t"}},
 				[]workitemmetrics.MetricsDailyRow{{Day: rowViewsDay, Provider: "github", WorkScopeID: "s", TeamID: "t"}}, rowViewsComputedAt)
 		}},
 		{"work_item_user_metrics_daily", 2, func(conn workItemBatchConn) (int, error) {
 			return WriteWorkItemUserMetricsDaily(ctx, conn, "org-a", rowViewsDay,
+				[]workitemmetrics.UserMetricsDailyRow{{Day: rowViewsDay, Provider: "github", WorkScopeID: "s", UserIdentity: "u", TeamID: "t"}},
 				[]workitemmetrics.UserMetricsDailyRow{{Day: rowViewsDay, Provider: "github", WorkScopeID: "s", UserIdentity: "u", TeamID: "t"}}, rowViewsComputedAt)
 		}},
 		{"work_item_state_durations_daily", 1, func(conn workItemBatchConn) (int, error) {
 			return WriteWorkItemStateDurationsDaily(ctx, conn, "org-a", rowViewsDay,
+				[]workItemStateDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t", Status: "open"}},
 				[]workItemStateDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t", Status: "open"}}, rowViewsComputedAt)
 		}},
 	} {
@@ -131,6 +134,7 @@ func TestWorkItemWritersWriteEveryRowUnderTheOrgAndTheScopeView(t *testing.T) {
 func TestWorkItemWritersFailClosedWithoutAReadingConnection(t *testing.T) {
 	batch := &recordingBatch{}
 	_, err := WriteWorkItemMetricsDaily(context.Background(), &recordingBatchConn{batch: batch}, "org-a", rowViewsDay,
+		[]workitemmetrics.MetricsDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t"}},
 		[]workitemmetrics.MetricsDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t"}}, rowViewsComputedAt)
 	if !errors.Is(err, ErrInvalidState) || batch.sent {
 		t.Fatalf("err = %v, sent = %v, want ErrInvalidState and nothing stored", err, batch.sent)
@@ -144,14 +148,17 @@ func TestWorkItemWritersDoNotPrepareABatchWhenTheLegacyReadFails(t *testing.T) {
 	for name, write := range map[string]func(conn workItemBatchConn) (int, error){
 		"metrics": func(conn workItemBatchConn) (int, error) {
 			return WriteWorkItemMetricsDaily(ctx, conn, "org-a", rowViewsDay,
+				[]workitemmetrics.MetricsDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t"}},
 				[]workitemmetrics.MetricsDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t"}}, rowViewsComputedAt)
 		},
 		"user": func(conn workItemBatchConn) (int, error) {
 			return WriteWorkItemUserMetricsDaily(ctx, conn, "org-a", rowViewsDay,
+				[]workitemmetrics.UserMetricsDailyRow{{Provider: "github", WorkScopeID: "s", UserIdentity: "u"}},
 				[]workitemmetrics.UserMetricsDailyRow{{Provider: "github", WorkScopeID: "s", UserIdentity: "u"}}, rowViewsComputedAt)
 		},
 		"state": func(conn workItemBatchConn) (int, error) {
 			return WriteWorkItemStateDurationsDaily(ctx, conn, "org-a", rowViewsDay,
+				[]workItemStateDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t", Status: "open"}},
 				[]workItemStateDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t", Status: "open"}}, rowViewsComputedAt)
 		},
 	} {
@@ -169,6 +176,7 @@ func TestWorkItemWritersDoNotPrepareABatchWhenTheLegacyReadFails(t *testing.T) {
 func TestWorkItemWritersAbortTheBatchWhenAnAppendFails(t *testing.T) {
 	conn := &liveLegacyConn{batch: &countingBatch{appendErr: errors.New("append failed")}}
 	if _, err := WriteWorkItemMetricsDaily(context.Background(), conn, "org-a", rowViewsDay,
+		[]workitemmetrics.MetricsDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t"}},
 		[]workitemmetrics.MetricsDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t"}}, rowViewsComputedAt); err == nil {
 		t.Fatal("a failed append returned no error")
 	}
@@ -187,6 +195,7 @@ func TestWorkItemWriterStoresTheLegacyRetractionInTheBlockOfTheViewRows(t *testi
 			live:  [][]any{{"github", "s", "t", "", rowViewsStored}},
 		}
 		written, err := WriteWorkItemMetricsDaily(ctx, conn, "org-a", rowViewsDay,
+			[]workitemmetrics.MetricsDailyRow{{Day: rowViewsDay, Provider: "github", WorkScopeID: "s", TeamID: "t", ItemsCompleted: 3}},
 			[]workitemmetrics.MetricsDailyRow{{Day: rowViewsDay, Provider: "github", WorkScopeID: "s", TeamID: "t", ItemsCompleted: 3}}, rowViewsComputedAt)
 		if (err != nil) != (sendErr != nil) {
 			t.Fatalf("send error %v returned %v", sendErr, err)
@@ -220,6 +229,7 @@ func TestWorkItemStateWriterStoresTheLegacyRetractionInTheBlock(t *testing.T) {
 		live:  [][]any{{"github", "s", "t", "open", "", rowViewsStored}},
 	}
 	written, err := WriteWorkItemStateDurationsDaily(context.Background(), conn, "org-a", rowViewsDay,
+		[]workItemStateDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t", TeamName: "T", Status: "open", DurationHours: 5, ItemsTouched: 2}},
 		[]workItemStateDailyRow{{Provider: "github", WorkScopeID: "s", TeamID: "t", TeamName: "T", Status: "open", DurationHours: 5, ItemsTouched: 2}}, rowViewsComputedAt)
 	if err != nil || written != 2 {
 		t.Fatalf("written = %d, err = %v, want the row and its row of zeros", written, err)
@@ -243,6 +253,7 @@ func TestWorkItemUserWriterRetractionCarriesTheStoredTeamAndSetsTheMarker(t *tes
 		carried: [][]any{{"github", "s", "u", "", "T1", "Team One"}},
 	}
 	written, err := WriteWorkItemUserMetricsDaily(context.Background(), conn, "org-a", rowViewsDay,
+		[]workitemmetrics.UserMetricsDailyRow{{Day: rowViewsDay, Provider: "github", WorkScopeID: "s", UserIdentity: "u", TeamID: "T2", TeamName: "Team Two", ItemsCompleted: 1}},
 		[]workitemmetrics.UserMetricsDailyRow{{Day: rowViewsDay, Provider: "github", WorkScopeID: "s", UserIdentity: "u", TeamID: "T2", TeamName: "Team Two", ItemsCompleted: 1}}, rowViewsComputedAt)
 	if err != nil || written != 2 {
 		t.Fatalf("written = %d, err = %v", written, err)

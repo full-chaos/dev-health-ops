@@ -26,7 +26,7 @@ func TestTheWorkItemUserWriterStoresTheTeamSplit(t *testing.T) {
 		},
 	}
 	if _, err := WriteWorkItemUserMetricsDaily(context.Background(), conn, "org-a", rowViewsDay,
-		[]workitemmetrics.UserMetricsDailyRow{row}, rowViewsComputedAt); err != nil {
+		[]workitemmetrics.UserMetricsDailyRow{row}, []workitemmetrics.UserMetricsDailyRow{row}, rowViewsComputedAt); err != nil {
 		t.Fatal(err)
 	}
 	appended := conn.batch.appended

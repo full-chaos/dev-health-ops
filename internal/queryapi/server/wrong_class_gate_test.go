@@ -759,3 +759,30 @@ func TestWrongClassGateQueryAPIRigMatchesBuild(t *testing.T) {
 		}
 	}
 }
+
+// The scrape mask hides sample values only: a changed series name, a changed label, an added series or a changed
+// comment still differs after masking, so the mask cannot hide a new metric.
+func TestWrongClassGateQueryAPIScrapeMaskKeepsSeries(t *testing.T) {
+	const header = "Content-Type: text/plain; version=0.0.4; charset=utf-8"
+	base := wrongclass.Answer{Status: 200, Header: header, Body: "# HELP up Up.\n# TYPE up gauge\nup 1\nreqs{route=\"/a b\"} 7 1700000000\n"}
+	masked, ok := scrapeMasked(base)
+	if !ok {
+		t.Fatal("a Prometheus scrape was not masked")
+	}
+	if values, _ := scrapeMasked(wrongclass.Answer{Status: 200, Header: header, Body: "# HELP up Up.\n# TYPE up gauge\nup 0\nreqs{route=\"/a b\"} 9 1700000999\n"}); values != masked {
+		t.Errorf("only values changed, masked answers differ:\n%q\n%q", values.Body, masked.Body)
+	}
+	for name, body := range map[string]string{
+		"renamed series":  "# HELP up Up.\n# TYPE up gauge\nupx 1\nreqs{route=\"/a b\"} 7 1700000000\n",
+		"changed label":   "# HELP up Up.\n# TYPE up gauge\nup 1\nreqs{route=\"/a c\"} 7 1700000000\n",
+		"added series":    "# HELP up Up.\n# TYPE up gauge\nup 1\nreqs{route=\"/a b\"} 7 1700000000\nwrong_class_marker 1\n",
+		"changed comment": "# HELP up Down.\n# TYPE up gauge\nup 1\nreqs{route=\"/a b\"} 7 1700000000\n",
+	} {
+		if got, _ := scrapeMasked(wrongclass.Answer{Status: 200, Header: header, Body: body}); got == masked {
+			t.Errorf("%s: the mask hid the change", name)
+		}
+	}
+	if _, ok := scrapeMasked(wrongclass.Answer{Status: 200, Header: "Content-Type: application/json", Body: "{}"}); ok {
+		t.Error("a JSON body was masked")
+	}
+}

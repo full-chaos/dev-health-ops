@@ -5199,7 +5199,8 @@ auth_scope_tags() {
 # auth_scope_candidates: discovery runs once with no tag, once with every derived
 # tag, and once per tag (a `!tag` file is visible only without it; an `a && b`
 # file only with both), and unions the results. `auth_scope_candidates -sources`
-# prints path<TAB>source lines instead of paths.
+# prints path<TAB>source lines instead of paths. A failed pass fails the whole
+# list: a pass that did not run must not shrink the candidate set.
 auth_scope_candidates() {
   local module tag tags all="" mode=("$@")
   module="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)"
@@ -5208,7 +5209,7 @@ auth_scope_candidates() {
   for tag in ${tags}; do all+="${all:+,}${tag}"; done
   {
     for set in "" "${all}" ${tags}; do
-      auth_go list -mod=readonly -tags="${set}" -e -json ./... | auth_go run -trimpath -mod=readonly ./cmd/cigate scope-candidates "${mode[@]}" "${module}"
+      auth_go list -mod=readonly -tags="${set}" -e -json ./... | auth_go run -trimpath -mod=readonly ./cmd/cigate scope-candidates "${mode[@]}" "${module}" || exit $?
     done
   } | LC_ALL=C sort -u
 }

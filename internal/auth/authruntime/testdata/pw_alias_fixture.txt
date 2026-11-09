@@ -1,0 +1,25 @@
+package fixture
+
+import "fmt"
+
+const pw = "x1"
+
+func viaConst(role string) string {
+	return fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, pw)
+}
+
+func viaAssign(role string) string {
+	secret := "x2"
+	return fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, secret)
+}
+
+func viaLiteral(role string) string {
+	return fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, "x3")
+}
+
+func runtimeBuilt(role string) string {
+	pass := build()
+	return fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, pass)
+}
+
+func build() string { return "" }

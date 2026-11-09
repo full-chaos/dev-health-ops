@@ -1,6 +1,7 @@
 package authruntime
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -44,5 +45,34 @@ func TestNoFixedCredentialLiteralInThePackage(t *testing.T) {
 	}
 	if scanned == 0 {
 		t.Fatal("no Go source scanned: the scan measured nothing")
+	}
+}
+
+func aliasedPasswordFindings(name string, src []byte) ([]string, error) {
+	return nil, nil
+}
+
+func TestAliasedPasswordConstIsFound(t *testing.T) {
+	src, err := os.ReadFile("testdata/pw_alias_fixture.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := aliasedPasswordFindings("pw_alias_fixture.go", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[int]bool{8: true, 13: true, 17: true}
+	for _, line := range found {
+		var number int
+		if _, err := fmt.Sscanf(line, "%d", &number); err != nil {
+			t.Fatalf("finding %q has no leading line number", line)
+		}
+		if !want[number] {
+			t.Errorf("unexpected finding %q", line)
+		}
+		delete(want, number)
+	}
+	for number := range want {
+		t.Errorf("fixture line %d is not reported", number)
 	}
 }

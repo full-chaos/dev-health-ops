@@ -95,6 +95,13 @@ type fakePlatformRoles struct {
 	direct                            int // the store's own Grant or Revoke (its own commit), not GrantOn or RevokeOn
 	grantErr, revokeErr, lastAdminErr error
 	lastAdminChecks                   []uuid.UUID
+	held                              map[uuid.UUID]bool // stored platform_admin assignments, whatever the principal's state
+	heldReads                         []uuid.UUID
+}
+
+func (f *fakePlatformRoles) HeldOn(_ context.Context, _ platformrole.RowQuerier, principal uuid.UUID, role string) (bool, error) {
+	f.heldReads = append(f.heldReads, principal)
+	return role == platformrole.PlatformAdmin && f.held[principal], nil
 }
 
 func (f *fakePlatformRoles) RefuseLastPlatformAdmin(_ context.Context, _ audit.TxOps, principal uuid.UUID) error {

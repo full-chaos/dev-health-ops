@@ -25,22 +25,26 @@ type platformAdminRoute struct {
 }
 
 var platformAdminRoutes = map[string]platformAdminRoute{
-	"GET /api/v1/admin/orgs":                                             {rule.ActionAdminOrgs, false},
-	"GET /api/v1/admin/orgs/{org_id}":                                    {rule.ActionAdminOrgs, false},
-	"POST /api/v1/admin/orgs":                                            {rule.ActionAdminOrgs, true},
-	"PATCH /api/v1/admin/orgs/{org_id}":                                  {rule.ActionAdminOrgs, true},
-	"DELETE /api/v1/admin/orgs/{org_id}":                                 {rule.ActionAdminOrgs, false},
-	"GET /api/v1/admin/feature-flags":                                    {rule.ActionAdminFlags, false},
-	"PATCH /api/v1/admin/feature-flags/{flag_id}":                        {rule.ActionAdminFlags, true},
-	"GET /api/v1/admin/orgs/{org_id}/feature-overrides":                  {rule.ActionAdminFlags, false},
-	"POST /api/v1/admin/orgs/{org_id}/feature-overrides":                 {rule.ActionAdminFlags, true},
-	"PATCH /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":  {rule.ActionAdminFlags, true},
-	"DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}": {rule.ActionAdminFlags, false},
-	"GET /api/v1/admin/platform/audit-logs":                              {rule.ActionAdminAudit, false},
-	"GET /api/v1/admin/platform/stats":                                   {rule.ActionAdminStats, false},
-	"POST /api/v1/admin/impersonate":                                     {rule.ActionAdminImpersonate, true},
-	"POST /api/v1/admin/impersonate/stop":                                {rule.ActionAdminImpersonate, false},
-	"POST /api/v1/admin/impersonate/handoff/consume":                     {rule.ActionAdminImpersonate, true},
+	"GET /api/v1/admin/orgs":                                               {rule.ActionAdminOrgs, false},
+	"GET /api/v1/admin/orgs/{org_id}":                                      {rule.ActionAdminOrgs, false},
+	"POST /api/v1/admin/orgs":                                              {rule.ActionAdminOrgs, true},
+	"PATCH /api/v1/admin/orgs/{org_id}":                                    {rule.ActionAdminOrgs, true},
+	"DELETE /api/v1/admin/orgs/{org_id}":                                   {rule.ActionAdminOrgs, false},
+	"GET /api/v1/admin/feature-flags":                                      {rule.ActionAdminFlags, false},
+	"PATCH /api/v1/admin/feature-flags/{flag_id}":                          {rule.ActionAdminFlags, true},
+	"GET /api/v1/admin/orgs/{org_id}/feature-overrides":                    {rule.ActionAdminFlags, false},
+	"POST /api/v1/admin/orgs/{org_id}/feature-overrides":                   {rule.ActionAdminFlags, true},
+	"PATCH /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":    {rule.ActionAdminFlags, true},
+	"DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":   {rule.ActionAdminFlags, false},
+	"GET /api/v1/admin/platform/audit-logs":                                {rule.ActionAdminAudit, false},
+	"GET /api/v1/admin/platform/stats":                                     {rule.ActionAdminStats, false},
+	"POST /api/v1/admin/impersonate":                                       {rule.ActionAdminImpersonate, true},
+	"POST /api/v1/admin/impersonate/stop":                                  {rule.ActionAdminImpersonate, false},
+	"POST /api/v1/admin/impersonate/handoff/consume":                       {rule.ActionAdminImpersonate, true},
+	"GET /api/v1/admin/service-accounts/{service_account_id}/keys":         {rule.ActionAdminUsers, false},
+	"POST /api/v1/admin/service-accounts/{service_account_id}/keys":        {rule.ActionAdminUsers, false},
+	"POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate": {rule.ActionAdminUsers, false},
+	"POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke":      {rule.ActionAdminUsers, false},
 }
 
 // adminOrUsersRoutes are the /admin/users rows: mounted WrapAdminOr(admin.users) (an org owner or admin passes too),
@@ -56,13 +60,9 @@ var adminOrUsersRoutes = map[string]platformAdminRoute{
 }
 
 // platformAdminGapRoutes are the platform-admin rows whose profile row names no action yet, with the guard level they
-// are mounted at (Superuser: WrapPlatform(admin.users)). With the admin cell on, the decision point does not judge them.
+// are mounted at. With the admin cell on, the decision point does not judge them.
 var platformAdminGapRoutes = map[string]Authz{
-	"POST /api/v1/telemetry/report":                                        Authenticated,
-	"GET /api/v1/admin/service-accounts/{service_account_id}/keys":         Superuser,
-	"POST /api/v1/admin/service-accounts/{service_account_id}/keys":        Superuser,
-	"POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate": Superuser,
-	"POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke":      Superuser,
+	"POST /api/v1/telemetry/report": Authenticated,
 }
 
 // productionGoAPIRows is the guard's action map as go-api builds it (apiservice/enforcer.go).
@@ -137,11 +137,6 @@ func platformAdminMux(guard *Guard) *http.ServeMux {
 		}
 	}
 	for pattern, level := range platformAdminGapRoutes {
-		if level == Superuser {
-			// The service account key rows: WrapPlatform(admin.users), as admin/serviceaccount_keys.go mounts them.
-			mux.Handle(pattern, guard.WrapPlatform(rule.ActionAdminUsers, echo))
-			continue
-		}
 		mux.Handle(pattern, guard.Wrap(level, echo))
 	}
 	return mux
@@ -409,20 +404,12 @@ func TestPlatformAdminRowsKeepTheLegacyAnswerForARoutedPlatformAdmin(t *testing.
 // admin cell on: a superuser is answered by main's checks with no question. The telemetry report row's guard is
 // Authenticated; its handler asks (see the telemetry package).
 func TestPlatformAdminGapRowsKeepMainsAnswerAndAskTheWrapAction(t *testing.T) {
-	for pattern, level := range platformAdminGapRoutes {
+	for pattern := range platformAdminGapRoutes {
 		t.Run(pattern, func(t *testing.T) {
 			rec := recordEnforce(t)
 			pdp := newTestPDP(t, denyWith("platform_role_absent"))
 			got := serveCell(cellHandler(t, legacyStore(true, "member"), userClaims(nil), productionEnforcer(t, pdp, "admin", "members")), pattern, cellBearer())
-			if level == Superuser {
-				// A WrapPlatform gap row (the service account key rows): no route question, but the platform gate asks
-				// the decision point its own admin.users once, so a decision point that denies refuses a local superuser.
-				// The guard obeys a PDP deny (no fall-through). See
-				// TestServiceAccountKeyRowsAdminCellOnSuperuserWithoutMembershipIs200: the real evaluator allows superusers.
-				if got.status != http.StatusForbidden || len(pdp.calls()) != 1 || len(rec.snapshot()) != 0 {
-					t.Fatalf("superuser, PDP deny: %d %q, %d PDP calls, counted %v; want 403 after the one admin.users question", got.status, got.body, len(pdp.calls()), rec.snapshot())
-				}
-			} else if got.status != http.StatusOK || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
+			if got.status != http.StatusOK || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
 				t.Fatalf("superuser: %d %q, %d PDP calls, counted %v; want main's 200 with 0 calls", got.status, got.body, len(pdp.calls()), rec.snapshot())
 			}
 		})

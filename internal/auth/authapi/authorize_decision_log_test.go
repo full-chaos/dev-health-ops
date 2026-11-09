@@ -191,6 +191,20 @@ func TestAuthorizeDecisionLogOfAPlatformAdminAllowIsWhatIsServed(t *testing.T) {
 	}
 }
 
+// Product rule 1: a platform admin with no membership row is allowed acr.credential.issue (a filtered action)
+// org-wide by the real evaluator, and the Info line states the served "organization" scope.
+func TestAuthorizeDecisionLogOfAPlatformAdminCredentialIssueIsOrganizationWide(t *testing.T) {
+	h, logs := decisionLogFixture(t)
+	snap := h.state.snapshots[snapKey{h.principal, h.org}]
+	snap.platformRole = "platform_admin"
+	snap.membership = nil
+	d, _, entry := askAndLog(t, h, logs, h.question("acr.credential.issue", "organization", "acme", h.org), true)
+	if got := d.Obligations["repository_scope"]; got != authorization.RepositoryScopeOrganization {
+		t.Fatalf("obligations %v, want repository_scope %q", d.Obligations, authorization.RepositoryScopeOrganization)
+	}
+	wantObligationLog(t, d, entry, scopeOnly(t, d, "organization"))
+}
+
 // The summary is bounded: the decision line names no repository key, no tenant, no class and no level.
 func TestAuthorizeDecisionLogNamesNoRepositoryOrTenant(t *testing.T) {
 	planted := map[string]authorization.Decision{}

@@ -37,14 +37,14 @@ type tables struct {
 	dynReads []siteRow
 	edges    []edgeRow
 	patterns []patternRow
-	// reach: package<TAB>site -> the packages whose programs reach the site (reach.tsv)
+	// reach: package<TAB>site -> the packages whose programs reach the site (reach.d)
 	reach     map[string]map[string]bool
-	reachRows map[string]string // reach.tsv row -> its line number
+	reachRows map[string]string // reach.d row -> its file:line
 
 	generatedRows map[string]map[string]string
 }
 
-// reachOf is the reachers of a code-scope site, and whether reach.tsv places it (no `*` row).
+// reachOf is the reachers of a code-scope site, and whether reach.d places it (no `*` row).
 func (t *tables) reachOf(pkg, site string) (map[string]bool, bool) {
 	rs, ok := t.reach[pkg+"\t"+site]
 	if !ok || rs[reachAny] {
@@ -216,7 +216,7 @@ func (t *tables) suggest(p string) string {
 // The generated tables: `cigate plan-reads --write` writes them from the code (dynreads.go), and plan-reads and
 // plan-verdict fail (FULL) on any difference, so a row is never narrower or wider than the code. site is the base name
 // of the Go file: a _test.go site is a read of the package's own tests (the package alone is selected), any other site
-// is a read of its non-test code (the packages whose programs reach the site in reach.tsv are selected: reach.go).
+// is a read of its non-test code (the packages whose programs reach the site in reach.d are selected: reach.go).
 //
 //	walks.tsv     package<TAB>site<TAB>root<TAB>depth<TAB>filter
 //	                                                    the site walks root (`.` = the repository) to depth tree or dir
@@ -362,28 +362,41 @@ func loadGenerated(dir string, t *tables) error {
 		t.patterns = append(t.patterns, patternRow{siteRow: s, pattern: r[2]})
 		t.generatedRows[patternsFile][strings.Join(r, "\t")] = fmt.Sprint(s.line)
 	}
-	rows, lines, err = readTSV(filepath.Join(dir, reachFile), 3)
+	t.reach, t.reachRows = map[string]map[string]bool{}, map[string]string{}
+	if _, err := os.Lstat(filepath.Join(dir, reachLegacyFile)); err == nil {
+		return fmt.Errorf("%s: the reach table is %s/, one file per package; run cigate plan-reads --root . --write", reachLegacyFile, reachDir)
+	}
+	names, err := reachFiles(dir)
 	if err != nil {
 		return err
 	}
-	t.reach, t.reachRows = map[string]map[string]bool{}, map[string]string{}
-	for i, r := range rows {
-		s, err := loadSite(reachFile, lines[i], r[0], r[1])
+	for _, name := range names {
+		file := reachDir + "/" + name
+		rows, lines, err := readTSV(filepath.Join(dir, reachDir, name), 3)
 		if err != nil {
 			return err
 		}
-		if s.test() {
-			return fmt.Errorf("%s:%d: site %q is a test file: only code-scope sites have reach rows", reachFile, s.line, s.site)
+		for i, r := range rows {
+			s, err := loadSite(file, lines[i], r[0], r[1])
+			if err != nil {
+				return err
+			}
+			if reachFileOf(s.pkg) != name {
+				return fmt.Errorf("%s:%d: a row of package %s belongs in %s/%s", file, s.line, s.pkg, reachDir, reachFileOf(s.pkg))
+			}
+			if s.test() {
+				return fmt.Errorf("%s:%d: site %q is a test file: only code-scope sites have reach rows", file, s.line, s.site)
+			}
+			if r[2] != reachAny && r[2] != reachNone && r[2] != "." && !cleanRel(r[2]) {
+				return fmt.Errorf("%s:%d: reacher %q is not a clean repository directory, ., %s or %s", file, s.line, r[2], reachAny, reachNone)
+			}
+			k := r[0] + "\t" + r[1]
+			if t.reach[k] == nil {
+				t.reach[k] = map[string]bool{}
+			}
+			t.reach[k][r[2]] = true
+			t.reachRows[strings.Join(r, "\t")] = fmt.Sprintf("%s:%d", file, s.line)
 		}
-		if r[2] != reachAny && r[2] != reachNone && r[2] != "." && !cleanRel(r[2]) {
-			return fmt.Errorf("%s:%d: reacher %q is not a clean repository directory, ., %s or %s", reachFile, s.line, r[2], reachAny, reachNone)
-		}
-		k := r[0] + "\t" + r[1]
-		if t.reach[k] == nil {
-			t.reach[k] = map[string]bool{}
-		}
-		t.reach[k][r[2]] = true
-		t.reachRows[strings.Join(r, "\t")] = fmt.Sprint(s.line)
 	}
 	return nil
 }

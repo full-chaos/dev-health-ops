@@ -14,9 +14,6 @@ import (
 	"testing"
 )
 
-// closureDir is where the dependency closure of every venue test package is committed.
-const closureDir = "ci/venue_oracle_closure.d"
-
 // venuePackages is the sorted set of package directories with a `run` row in the registry.
 func venuePackages(t *testing.T, root string) []string {
 	t.Helper()
@@ -37,8 +34,8 @@ func venuePackages(t *testing.T, root string) []string {
 	return pkgs
 }
 
-func closureFile(root, pkg string) string {
-	return filepath.Join(root, filepath.FromSlash(closureDir), strings.ReplaceAll(pkg, "/", "__")+".txt")
+func closureFile(dir, pkg string) string {
+	return filepath.Join(dir, strings.ReplaceAll(pkg, "/", "__")+".txt")
 }
 
 // listedPackage is the part of `go list -json` the derivation reads. Paths are taken from the JSON as they are: no field is
@@ -210,34 +207,24 @@ func validateClosures(pkgs []string, closures map[string][]string) error {
 	return nil
 }
 
-// committedClosures reads ci/venue_oracle_closure.d/ (package dir -> dependency dirs).
-func committedClosures(t *testing.T, root string, pkgs []string) map[string]map[string]bool {
+// closureSets is computeClosures as sets (package dir -> closure lines).
+func closureSets(t *testing.T, root string, pkgs []string) map[string]map[string]bool {
 	t.Helper()
-	closures := map[string]map[string]bool{}
-	for _, pkg := range pkgs {
-		data, err := os.ReadFile(closureFile(root, pkg))
-		if err != nil {
-			t.Fatalf("%s: no committed dependency closure (%v); regenerate with: %s", pkg, err, regenerate)
+	sets := map[string]map[string]bool{}
+	for pkg, lines := range computeClosures(t, root, pkgs) {
+		sets[pkg] = map[string]bool{}
+		for _, line := range lines {
+			sets[pkg][line] = true
 		}
-		set := map[string]bool{}
-		for _, line := range strings.Split(string(data), "\n") {
-			if line != "" {
-				set[line] = true
-			}
-		}
-		closures[pkg] = set
 	}
-	return closures
+	return sets
 }
 
-const regenerate = "VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
-
-// TestClosureFilesMatchTheTestBinaryDependencies holds the derived trigger set of the pull
-// request venue job (CHAOS-9935): for every venue test package, ci/venue_oracle_closure.d/ lists
-// the in-module packages its test binary links, and `venue-oracles --changed` selects the
-// package's tests when a changed file lies in one of them. The file is what the Go toolchain says
-// today, so a hand-written trigger row can no longer be the only thing between a dependency
-// change and a skipped oracle.
+// TestClosureFilesMatchTheTestBinaryDependencies derives the trigger set of the pull request venue job (CHAOS-9935): for
+// every venue test package, the in-module packages its test binary links, and `venue-oracles --changed` selects the
+// package's tests when a changed file lies in one of them. The closure is what the Go toolchain says for the tree under
+// test, never a committed copy (CHAOS-13101): with VENUE_CLOSURE_WRITE=1 it writes one <package>.txt per venue package
+// into VENUE_CLOSURE_DIR, which ci/check_go.sh reads.
 func TestClosureFilesMatchTheTestBinaryDependencies(t *testing.T) {
 	root := repoRoot(t)
 	pkgs := venuePackages(t, root)
@@ -245,74 +232,29 @@ func TestClosureFilesMatchTheTestBinaryDependencies(t *testing.T) {
 		t.Fatal("no run rows found in ci/venue_oracle_registry.d/")
 	}
 	want := computeClosures(t, root, pkgs)
-	write := os.Getenv("VENUE_CLOSURE_WRITE") == "1"
-	if write {
-		if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(closureDir)), 0o755); err != nil {
-			t.Fatal(err)
-		}
+	if os.Getenv("VENUE_CLOSURE_WRITE") != "1" {
+		t.Logf("%d venue package(s) with a derived dependency closure", len(pkgs))
+		return
 	}
-	known := map[string]bool{}
-	for _, pkg := range pkgs {
-		body := strings.Join(want[pkg], "\n") + "\n"
-		known[filepath.Base(closureFile(root, pkg))] = true
-		if write {
-			if err := os.WriteFile(closureFile(root, pkg), []byte(body), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			continue
-		}
-		got, err := os.ReadFile(closureFile(root, pkg))
-		if err != nil {
-			t.Errorf("%s: no committed dependency closure (%v); regenerate with: %s", pkg, err, regenerate)
-			continue
-		}
-		if string(got) != body {
-			t.Errorf("%s: %s is stale against `go list -test`: %s\nregenerate with: %s", pkg, closureFile(root, pkg), diffLines(string(got), body), regenerate)
-		}
+	dir := os.Getenv("VENUE_CLOSURE_DIR")
+	if dir == "" {
+		t.Fatal("VENUE_CLOSURE_WRITE=1 needs VENUE_CLOSURE_DIR, the directory to write the closure files into")
 	}
-	entries, _ := os.ReadDir(filepath.Join(root, filepath.FromSlash(closureDir)))
-	for _, entry := range entries {
-		if !known[entry.Name()] {
-			if write {
-				_ = os.Remove(filepath.Join(root, filepath.FromSlash(closureDir), entry.Name()))
-				continue
-			}
-			t.Errorf("%s/%s belongs to no registered venue test package: remove it (or regenerate with: %s)", closureDir, entry.Name(), regenerate)
-		}
+	if err := writeClosures(dir, want); err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("%d venue package(s) with a committed dependency closure", len(pkgs))
+	t.Logf("%d venue package closure(s) written to %s", len(pkgs), dir)
 }
 
-// diffLines names the lines that differ between two newline lists, a few of each.
-func diffLines(got, want string) string {
-	in := func(text string) map[string]bool {
-		set := map[string]bool{}
-		for _, line := range strings.Split(text, "\n") {
-			if line != "" {
-				set[line] = true
-			}
-		}
-		return set
+// writeClosures writes one <package>.txt per closure into dir, the form ci/check_go.sh reads.
+func writeClosures(dir string, closures map[string][]string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
-	g, w := in(got), in(want)
-	var added, removed []string
-	for line := range w {
-		if !g[line] {
-			added = append(added, line)
+	for pkg, lines := range closures {
+		if err := os.WriteFile(closureFile(dir, pkg), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			return err
 		}
 	}
-	for line := range g {
-		if !w[line] {
-			removed = append(removed, line)
-		}
-	}
-	sort.Strings(added)
-	sort.Strings(removed)
-	cut := func(list []string) string {
-		if len(list) > 5 {
-			return strings.Join(list[:5], ", ") + fmt.Sprintf(" (+%d more)", len(list)-5)
-		}
-		return strings.Join(list, ", ")
-	}
-	return fmt.Sprintf("now linked and not listed: [%s]; listed and no longer linked: [%s]", cut(added), cut(removed))
+	return nil
 }

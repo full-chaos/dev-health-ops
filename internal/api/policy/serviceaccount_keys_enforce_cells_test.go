@@ -8,8 +8,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
-// serviceAccountKeyRoutes are the four service account key rows: mounted WrapPlatform(admin.users), action null in the
-// profile, so the admin cell asks no route question; the platform gate asks the decision point its own admin.users.
+// serviceAccountKeyRoutes are the four service account key rows: mounted WrapPlatform(admin.users), action admin.users
+// in the profile, so with the admin cell on the decision point decides the route question admin.users.
 var serviceAccountKeyRoutes = []string{
 	"GET /api/v1/admin/service-accounts/{service_account_id}/keys",
 	"POST /api/v1/admin/service-accounts/{service_account_id}/keys",
@@ -18,8 +18,8 @@ var serviceAccountKeyRoutes = []string{
 }
 
 // Admin cell on, rule 1: a superuser with no membership anywhere (an org-less token, no membership row) whose decision
-// point state is platform_admin is allowed admin.users by the production evaluator's platform branch: 200 after one
-// platform question.
+// point state is platform_admin is allowed admin.users by the production evaluator's platform branch: 200 after the one
+// route question.
 func TestServiceAccountKeyRowsAdminCellOnSuperuserWithoutMembershipIs200(t *testing.T) {
 	for _, pattern := range serviceAccountKeyRoutes {
 		t.Run(pattern, func(t *testing.T) {
@@ -33,8 +33,8 @@ func TestServiceAccountKeyRowsAdminCellOnSuperuserWithoutMembershipIs200(t *test
 	}
 }
 
-// Admin cell on: a decision point that does not answer (dead, or not configured) is the 503 with the unavailable
-// reason, and the legacy guard does not answer in its place (a local superuser is not admitted).
+// Admin cell on: a decision point that does not answer (dead, or not configured) is the 503, and the legacy guard does
+// not answer in its place (a local superuser is not admitted).
 func TestServiceAccountKeyRowsAdminCellOnUnavailableIs503(t *testing.T) {
 	for _, pattern := range serviceAccountKeyRoutes {
 		t.Run(pattern, func(t *testing.T) {
@@ -50,10 +50,9 @@ func TestServiceAccountKeyRowsAdminCellOnUnavailableIs503(t *testing.T) {
 				t.Fatal(err)
 			}
 			got = serveCell(cellHandler(t, legacyStore(true, ""), orglessAccessClaims(), unconfigured), pattern, cellBearer())
-			// The platform gate's own question answers the plain unavailable body here: the route-question rows'
-			// authz_enforce_no_decision_point reason is not on this path.
-			if got.status != http.StatusServiceUnavailable || got.body != enforceUnavailableBody {
-				t.Fatalf("no decision point: %d %q, want 503 %q", got.status, got.body, enforceUnavailableBody)
+			// The route question answers as on every route-question row: the authz_enforce_no_decision_point reason.
+			if got.status != http.StatusServiceUnavailable || got.body != enforceNoDecisionPointBody {
+				t.Fatalf("no decision point: %d %q, want 503 %q", got.status, got.body, enforceNoDecisionPointBody)
 			}
 		})
 	}

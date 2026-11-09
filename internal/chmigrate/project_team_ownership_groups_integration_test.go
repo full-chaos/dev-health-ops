@@ -228,6 +228,66 @@ func groupsHead(ctx context.Context, t *testing.T) driver.Conn {
 	return conn
 }
 
+// groupsComparedColumns is every oracle column the cells compare (through
+// groupsRowKeySQL and groupsContentSQL); groupsExcludedColumns is every oracle
+// column they do not, each with its reason. requireOracleColumnsAccounted
+// holds the two to the oracle's own column list, so a column the reader adds
+// is never skipped silently.
+var groupsComparedColumns = []string{"project_id", "team_id", "source_name", "first_valid_from", "latest_is_open", "latest_valid_to",
+	"observed_at", "provider", "edge_suppressed", "conflict_identities", "conflicting_identity_present"}
+
+var groupsExcludedColumns = map[string]string{
+	"ingest_at": "a cursor position, not content: the reader puts it only in a candidate's cursor position, never in an edge or a tombstone; the stored groups page on stored_at instead",
+}
+
+// requireOracleColumnsAccounted reads the oracle's columns with DESCRIBE and
+// fails unless each is compared or excluded by name, and every compared or
+// excluded name is an oracle column.
+func requireOracleColumnsAccounted(ctx context.Context, t *testing.T, conn driver.Conn) {
+	t.Helper()
+	statement := strings.ReplaceAll(acrProjectTeamGroupsSQL, "{org_id:String}", "'"+groupsOrgA+"'")
+	rows, err := conn.Query(ctx, "DESCRIBE TABLE ("+statement+")")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	oracle := map[string]bool{}
+	for rows.Next() {
+		fields := make([]any, len(rows.Columns()))
+		values := make([]string, len(fields))
+		for i := range fields {
+			fields[i] = &values[i]
+		}
+		if err := rows.Scan(fields...); err != nil {
+			t.Fatal(err)
+		}
+		oracle[values[0]] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	accounted := map[string]bool{}
+	for _, name := range groupsComparedColumns {
+		accounted[name] = true
+	}
+	for name := range groupsExcludedColumns {
+		accounted[name] = true
+	}
+	for name := range oracle {
+		if !accounted[name] {
+			t.Errorf("oracle column %q is neither compared nor excluded with a reason", name)
+		}
+	}
+	for name := range accounted {
+		if !oracle[name] {
+			t.Errorf("column %q is compared or excluded but the oracle has no such column", name)
+		}
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
+}
+
 func requireStoredEqualsOracle(ctx context.Context, t *testing.T, conn driver.Conn, when string) map[string]map[string]string {
 	t.Helper()
 	oracle := map[string]map[string]string{}
@@ -256,11 +316,13 @@ func requireStoredEqualsOracle(ctx context.Context, t *testing.T, conn driver.Co
 
 // O1: after a refresh, the stored current groups of every organization equal
 // the reader's own per-organization statement, row for row and column for
-// column. The fixture holds a suppressed (retraction) group and a conflicting
-// group, so the retraction and conflict columns are compared, not defaults.
+// column; every oracle column is compared or excluded by name with a reason.
+// The fixture holds a suppressed (retraction) group and a conflicting group,
+// so the retraction and conflict columns are compared, not defaults.
 func TestMigration147StoredGroupsEqualTheReadersStatement(t *testing.T) {
 	ctx := context.Background()
 	conn := groupsHead(ctx, t)
+	requireOracleColumnsAccounted(ctx, t, conn)
 	refreshGroups(ctx, t, conn)
 	oracle := requireStoredEqualsOracle(ctx, t, conn, "first refresh")
 	suppressed, conflicting := 0, 0

@@ -19,6 +19,7 @@ internal/audit	27
 internal/auth/authapi	57
 internal/auth/contracts	52
 internal/auth/identity/local	15
+internal/auth/passwordpolicy	30
 internal/auth/platformrole	34
 internal/auth/writerinventory	26
 internal/cigates/affected	539

@@ -134,10 +134,11 @@ func TestAGrantWhoseRoleLacksTheActionIsLeftOut(t *testing.T) {
 	}
 }
 
+// An allow by an exact grant carries its one key; an org-wide allow (membership default, wildcard grant) carries
+// repository_scope organization instead (TestRepositoryAllowCarriesTheOrganizationScopeWhenOrgWideInFact).
 func TestRepositoryAllowCarriesItsOneKey(t *testing.T) {
 	for name, s := range map[string]grantFake{
-		"live grant":         repoSnapshot("member", liveGrant("acme/api")),
-		"membership default": repoSnapshot("member"),
+		"live grant": repoSnapshot("member", liveGrant("acme/api")),
 	} {
 		d := filteredOrgEvaluator().Evaluate(repoRequest("acme/api"), s)
 		if !d.Allowed || d.Obligations == nil || d.Obligations.TenantScope != testOrg || !d.Obligations.RepositoryRestricted ||

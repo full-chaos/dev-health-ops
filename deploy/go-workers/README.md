@@ -1209,6 +1209,11 @@ requires `authService.migrate.sessionReaders.queryApi` to equal the
 below phase 2: the reader and the phase are set (and
 removed) in one values change, so auth-migrate and river-migrate never undo each
 other's grant.
+Readiness also accepts, exactly, the widened read the session rule needs
+(`QueryAPISessionRead.Widened`: the same sessions columns plus `created_at` and
+`web_session_id`, and `users(principal_id, password_updated_at)`), so the grant can
+widen after query-api rolls. Any other set is refused, and the refusal names the
+difference against both.
 
 Leaving `QUERY_API_DATABASE_ROLE` unset changes nothing. The completeness proof
 for the manifest is `TestQueryAPIRoleServesEveryPostgresPathItReaches`

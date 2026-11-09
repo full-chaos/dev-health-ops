@@ -20,6 +20,22 @@ exits 2 on the `query-api` argument, so the render refuses it by name.
 {{- if or (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.port)) (and .Values.queryApi.internal.enabled (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.internal.port))) (and .Values.queryApi.mcp.enabled (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.mcp.port))) }}
 {{- fail "queryApi.operatorPort must differ from queryApi.port, queryApi.internal.port and queryApi.mcp.port: each listener has its own port" }}
 {{- end }}
+{{- /*
+Probe handlers are chart-owned (the operator listener): values carry timings only. The one handler
+allowed in values is the previous chart default (httpGet /readyz on port http), which an upgrade
+still carries and which is dropped; any other handler fails the render.
+*/}}
+{{- range $probe := list "livenessProbe" "readinessProbe" }}
+{{- $v := index $.Values.queryApi $probe }}
+{{- range $h := list "tcpSocket" "exec" "grpc" }}
+{{- if hasKey $v $h }}
+{{- fail (printf "queryApi.%s.%s is set: probe handlers are chart-owned (the operator listener); only timings belong in values" $probe $h) }}
+{{- end }}
+{{- end }}
+{{- if and (hasKey $v "httpGet") (ne (toJson $v.httpGet) (toJson (dict "path" "/readyz" "port" "http"))) }}
+{{- fail (printf "queryApi.%s.httpGet is set to a custom handler: probe handlers are chart-owned (the operator listener); only timings belong in values" $probe) }}
+{{- end }}
+{{- end }}
 {{- range .Values.queryApi.extraEnv }}
 {{- if and (eq .name "CORS_ALLOWED_ORIGINS") $.Values.queryApi.corsAllowedOrigins }}
 {{- fail "queryApi.extraEnv sets CORS_ALLOWED_ORIGINS and queryApi.corsAllowedOrigins is set too: two values for one variable; keep one (extraEnv when the value comes from a Secret)" }}
@@ -284,11 +300,10 @@ spec:
             {{- with .Values.queryApi.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- /* The chart owns httpGet (the operator listener): values carry timings only, and an httpGet in them is dropped so the probe is one map. */}}
           livenessProbe:
-            {{- toYaml (merge (dict "httpGet" (dict "path" "/healthz" "port" "operator")) (omit .Values.queryApi.livenessProbe "httpGet")) | nindent 12 }}
+            {{- toYaml (merge (omit .Values.queryApi.livenessProbe "httpGet") (dict "httpGet" (dict "path" "/healthz" "port" "operator"))) | nindent 12 }}
           readinessProbe:
-            {{- toYaml (merge (dict "httpGet" (dict "path" "/readyz" "port" "operator")) (omit .Values.queryApi.readinessProbe "httpGet")) | nindent 12 }}
+            {{- toYaml (merge (omit .Values.queryApi.readinessProbe "httpGet") (dict "httpGet" (dict "path" "/readyz" "port" "operator"))) | nindent 12 }}
           resources:
             {{- toYaml .Values.queryApi.resources | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}

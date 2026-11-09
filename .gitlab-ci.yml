@@ -665,7 +665,10 @@ go:venue-oracles-changed:
       # CHAOS-13101: the first --changed call derives the venue test closures here, the second reads them
       export VENUE_CLOSURE_DIR="$(mktemp -d)/closure"
       git diff --name-only -z "${CI_MERGE_REQUEST_DIFF_BASE_SHA}...${CI_COMMIT_SHA}" > changed.txt
-      bash ci/check_go.sh venue-oracles --changed changed.txt --list | grep '^SELECT' > selected.txt || true
+      # The listing fails the job when the derivation, the registry or a trigger file fails: a broken run must not
+      # read as "nothing selected".
+      bash ci/check_go.sh venue-oracles --changed changed.txt --list > listing.txt
+      grep '^SELECT' listing.txt > selected.txt || true
       count="$(wc -l < selected.txt | tr -d ' ')"
       echo "selected ${count} venue oracle test(s):"
       cat selected.txt

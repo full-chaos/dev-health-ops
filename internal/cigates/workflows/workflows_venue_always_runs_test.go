@@ -251,3 +251,73 @@ func TestVenueJobAlwaysRunsPlantedDefects(t *testing.T) {
 		expectViolation(t, venueAlwaysRunsViolations(t, tree), "now lives in moved.yml")
 	})
 }
+
+// venueListCall matches a `check_go.sh venue-oracles ... --list` call.
+var venueListCall = regexp.MustCompile(`check_go\.sh\s+venue-oracles\b.*--list\b`)
+
+// venueListingViolations reports every venue-oracles --list call in text that is piped into another command or does
+// not write to a file as its own command. A pipe hides the rc of check_go.sh, so a failed derivation reads as "0
+// selected" and a green job. Backslash continuations are joined; the line number is that of the first physical line.
+func venueListingViolations(file, text string) []string {
+	var out []string
+	lines := strings.Split(text, "\n")
+	for i := 0; i < len(lines); i++ {
+		start, logical := i, lines[i]
+		for strings.HasSuffix(strings.TrimRight(logical, " \t"), "\\") && i+1 < len(lines) {
+			logical = strings.TrimSuffix(strings.TrimRight(logical, " \t"), "\\") + " " + strings.TrimSpace(lines[i+1])
+			i++
+		}
+		if strings.HasPrefix(strings.TrimSpace(logical), "#") || !venueListCall.MatchString(logical) {
+			continue
+		}
+		if strings.Contains(logical, "|") {
+			out = append(out, fmt.Sprintf("%s:%d: venue-oracles --list is piped into another command: %s", file, start+1, strings.TrimSpace(logical)))
+		} else if !regexp.MustCompile(`>\s*\S+`).MatchString(logical) {
+			out = append(out, fmt.Sprintf("%s:%d: venue-oracles --list does not write its output to a file as its own command: %s", file, start+1, strings.TrimSpace(logical)))
+		}
+	}
+	return out
+}
+
+// TestVenueOracleListingIsNeverPipedAway: in both CI systems the listing call runs as its own command, so its failure
+// (derivation, registry or trigger file) fails the job instead of reading as "nothing selected".
+func TestVenueOracleListingIsNeverPipedAway(t *testing.T) {
+	root := repoRoot(t)
+	files := []string{".gitlab-ci.yml"}
+	for _, ext := range []string{"*.yml", "*.yaml"} {
+		paths, err := filepath.Glob(filepath.Join(root, ".github", "workflows", ext))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range paths {
+			rel, _ := filepath.Rel(root, p)
+			files = append(files, rel)
+		}
+	}
+	calls := 0
+	for _, rel := range files {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(b)
+		calls += len(venueListCall.FindAllString(text, -1))
+		for _, v := range venueListingViolations(rel, text) {
+			t.Error(v)
+		}
+	}
+	if calls < 2 {
+		t.Errorf("found %d venue-oracles --list call(s) in the CI files, want at least 2 (one per CI system): a rename must update this cell", calls)
+	}
+	for _, c := range []struct{ name, text string }{
+		{"piped", "bash ci/check_go.sh venue-oracles --changed c.txt --list | grep '^SELECT' > s.txt || true\n"},
+		{"no redirect", "bash ci/check_go.sh venue-oracles --changed c.txt --list\n"},
+	} {
+		if len(venueListingViolations("x.yml", c.text)) == 0 {
+			t.Errorf("plant %q not caught", c.name)
+		}
+	}
+	if v := venueListingViolations("x.yml", "bash ci/check_go.sh venue-oracles --changed c.txt --list > l.txt\n"); len(v) != 0 {
+		t.Errorf("clean call flagged: %v", v)
+	}
+}

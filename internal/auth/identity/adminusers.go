@@ -213,10 +213,10 @@ func (s *Store) AdminCreateUser(ctx context.Context, req AdminCreateRequest) (_ 
 	})
 	switch {
 	case err == nil:
+	case errors.Is(err, ErrUsernameTaken), isPublicUsernameCollision(err):
+		return AdminUser{}, ErrUsernameTaken
 	case errors.Is(err, ErrEmailTaken), isEmailCollision(err), isPublicEmailCollision(err):
 		return AdminUser{}, ErrEmailTaken
-	case errors.Is(err, ErrUsernameTaken):
-		return AdminUser{}, ErrUsernameTaken
 	case errors.Is(err, ErrInvalidProviderID):
 		return AdminUser{}, ErrInvalidProviderID
 	default:
@@ -443,7 +443,7 @@ func (d AdminUpdateDecision) profileFields() []string {
 		fields = append(fields, "username")
 	}
 	if d.FullName != nil {
-		fields = append(fields, "full_name")
+		fields = append(fields, "display_name") // full_name is the principal's display name
 	}
 	if d.AvatarURL != nil {
 		fields = append(fields, "avatar_url")
@@ -528,6 +528,9 @@ SET email_verified_at = CASE WHEN $2::boolean THEN clock_timestamp() END, update
 func updatePublicUserRow(ctx context.Context, tx AdminTx, statement string, principal uuid.UUID, value any) error {
 	tag, err := tx.Exec(ctx, statement, principal, value)
 	if err != nil {
+		if isPublicUsernameCollision(err) {
+			return ErrUsernameTaken
+		}
 		if isPublicEmailCollision(err) {
 			return ErrEmailTaken
 		}
@@ -714,4 +717,16 @@ func applyAdminSoftDelete(ctx context.Context, tx AdminTx, q string, principal u
 	// rule with no live go-api token: the user was inactive.
 	result.AlreadyDone = !result.WasActive
 	return result, nil
+}
+
+// publicUsernameIndex is go-api's unique index on public.users.username.
+const publicUsernameIndex = "ix_users_username"
+
+// isPublicUsernameCollision is a unique violation on publicUsernameIndex: a concurrent writer took the username
+// after the duplicate check. It is checked before isPublicEmailCollision, which counts every other public.users
+// unique violation (but the SSO identity index) as the email's.
+func isPublicUsernameCollision(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.SchemaName == "public" && pgErr.TableName == "users" &&
+		pgErr.ConstraintName == publicUsernameIndex
 }

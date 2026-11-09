@@ -185,17 +185,19 @@ func (h provisioningHandlers) usersPrecheck(w http.ResponseWriter, r *http.Reque
 }
 
 // usersAuthorize is the store's Authorize: the platform role write lock (exclusive when the write changes a
-// platform role, shared otherwise) before any row, then usersActorRule on the transaction.
-func (h provisioningHandlers) usersAuthorize(actor uuid.UUID, orgID *uuid.UUID, superuserWrite bool, target *uuid.UUID) func(context.Context, audit.TxOps) error {
+// platform role, shared otherwise) before any row, then usersActorRule on the transaction with grantRequested, the
+// platform_admin grant the request asks for (go-api guards.go:106-109: a non-superuser is refused for a grant or a
+// superuser target, never for an unchanged false).
+func (h provisioningHandlers) usersAuthorize(actor uuid.UUID, orgID *uuid.UUID, roleChange, grantRequested bool, target *uuid.UUID) func(context.Context, audit.TxOps) error {
 	return func(ctx context.Context, tx audit.TxOps) error {
 		lock := h.PlatformRoles.LockWritesShared
-		if superuserWrite {
+		if roleChange {
 			lock = h.PlatformRoles.LockWrites
 		}
 		if err := lock(ctx, tx); err != nil {
 			return err
 		}
-		return h.usersActorRule(ctx, tx, actor, orgID, superuserWrite, target)
+		return h.usersActorRule(ctx, tx, actor, orgID, grantRequested, target)
 	}
 }
 
@@ -293,7 +295,7 @@ func (h provisioningHandlers) usersCreate(w http.ResponseWriter, r *http.Request
 	}
 	req := identity.AdminCreateRequest{Email: email, Username: username, FullName: fullName, PasswordHash: hash, AuthProvider: provider,
 		AuthProviderID: providerID, Verified: verified, OrgID: orgID, RequestMetadata: metadata, Actor: actor,
-		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, grant, nil)}
+		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, grant, grant, nil)}
 	if role != nil {
 		req.Role = *role
 	}
@@ -337,7 +339,8 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ctx := r.Context()
-	if !h.usersPrecheck(w, r, opUsersUpdate, actor, orgID, superuser != nil, &target) {
+	grantRequested := superuser != nil && *superuser
+	if !h.usersPrecheck(w, r, opUsersUpdate, actor, orgID, grantRequested, &target) {
 		return
 	}
 	cur, err := h.UsersAdmin.AdminUpdateState(ctx, target)
@@ -378,7 +381,7 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 	default:
 		err = h.UsersAdmin.AdminUpdateUser(ctx, identity.AdminUpdateRequest{Principal: target, Email: email, Verified: verified,
 			Username: username, FullName: fullName, AvatarURL: avatarURL, Actor: actor,
-			RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, &target),
+			RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, grantRequested, &target),
 			Superuser: superuserWrite}, cur)
 	}
 	if err != nil {
@@ -431,7 +434,7 @@ func (h provisioningHandlers) usersPassword(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	err = h.UsersAdmin.AdminSetPassword(ctx, identity.AdminPasswordRequest{Principal: target, Hash: hash, Actor: actor, AuditOrg: orgID, RequestMetadata: metadata, RequestID: requestid.Audit(ctx),
-		Authorize: h.usersAuthorize(actor, orgID, false, &target)})
+		Authorize: h.usersAuthorize(actor, orgID, false, false, &target)})
 	if err != nil {
 		h.answerUsersError(w, r, opUsersPassword, err)
 		return

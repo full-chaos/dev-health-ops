@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -172,9 +173,6 @@ type jiraBudgetDoer struct {
 	lastIssueComments int
 	// slowCommentFor is slept in the comment read of OPS-3 and OPS-4 only.
 	slowCommentFor time.Duration
-	// stallAfterCtx: a comment read whose context ends sleeps this long more
-	// before it returns (a scheduler delay, not provider time).
-	stallAfterCtx time.Duration
 }
 
 func jiraSleep(ctx context.Context, delay time.Duration) error {
@@ -223,7 +221,6 @@ func (doer *jiraBudgetDoer) Do(request *http.Request) (*http.Response, error) {
 		doer.comments++
 		key := strings.TrimSuffix(strings.TrimPrefix(path, "/rest/api/3/issue/"), "/comment")
 		if err := jiraSleep(request.Context(), doer.commentDelay); err != nil {
-			time.Sleep(doer.stallAfterCtx)
 			return nil, err
 		}
 		if key == "OPS-3" || key == "OPS-4" {
@@ -581,20 +578,7 @@ func TestJiraAtlassianCommentsHangingReadsAfterWorkEndAtTheStopTime(t *testing.T
 	}
 }
 
-func jiraCollectOutcome(t *testing.T, doer *jiraBudgetDoer, window time.Duration, fetch bool) (CompleteRouteBatch, error) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), window)
-	defer cancel()
-	client := jiraWorkItemsTestClient(t, fakehttp.Client(jiraAtlassianDoerFunc(doer.Do)), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
-	return jiraAtlassianCompleteHandler(t).Collect(
-		ctx, jiraCommentsClaim(map[string]any{"fetch_comments": fetch}), providerfoundation.Credential{}, client,
-		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
-	)
-}
-
-// jiraInvariantRow is one timing shape of the comments invariant. stall is a
-// scheduler delay after a comment read's context ends: it is not work, so it
-// must never change the verdict.
+// stall is scheduler time after a cut read's context ends, never work.
 type jiraInvariantRow struct {
 	name                       string
 	window                     time.Duration
@@ -603,19 +587,109 @@ type jiraInvariantRow struct {
 	stall                      time.Duration
 }
 
-// jiraAssertCommentsInvariant: a unit that ends OK with comments off ends OK
-// with comments on, with the same work-item effects and an unheld watermark.
+// Deadline reports the row's window, but only the doer ends it, so no clock decides the verdict.
+type jiraOpWindow struct {
+	deadline time.Time
+	done     chan struct{}
+	once     sync.Once
+}
+
+func (w *jiraOpWindow) Deadline() (time.Time, bool) { return w.deadline, true }
+func (w *jiraOpWindow) Done() <-chan struct{}       { return w.done }
+func (w *jiraOpWindow) Value(any) any               { return nil }
+func (w *jiraOpWindow) end()                        { w.once.Do(func() { close(w.done) }) }
+func (w *jiraOpWindow) Err() error {
+	select {
+	case <-w.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+// Row costs run on a simulated clock; a comment read that misses the stop waits for its own context.
+type jiraOpDoer struct {
+	t                     *testing.T
+	row                   jiraInvariantRow
+	window                *jiraOpWindow
+	sim, stop             time.Duration
+	phase2                bool
+	cutReads, windowReads int
+}
+
+func (doer *jiraOpDoer) Do(request *http.Request) (*http.Response, error) {
+	if err := doer.window.Err(); err != nil {
+		return nil, err
+	}
+	switch path := request.URL.Path; {
+	case path == "/rest/api/3/search/jql" || path == "/rest/api/3/changelog/bulkfetch":
+		cost := doer.row.search
+		if path == "/rest/api/3/changelog/bulkfetch" {
+			var body struct {
+				IssueIdsOrKeys []string `json:"issueIdsOrKeys"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				doer.t.Fatalf("changelog body: %v", err)
+			}
+			// The row cost is per issue; production fetches them in one bulk read.
+			cost = doer.row.changelog * time.Duration(len(body.IssueIdsOrKeys))
+		}
+		if doer.sim += cost; doer.sim >= doer.row.window {
+			doer.window.end()
+			return nil, doer.window.Err()
+		}
+	case strings.HasSuffix(path, "/comment"):
+		if !doer.phase2 {
+			doer.phase2, doer.stop = true, doer.sim+(doer.row.window-doer.sim)/2
+		}
+		if doer.sim+doer.row.comment > doer.stop {
+			return doer.cutRead(request)
+		}
+		doer.sim += doer.row.comment
+	}
+	return (&jiraBudgetDoer{t: doer.t, issues: doer.row.issues, perIssue: 3}).Do(request)
+}
+
+func (doer *jiraOpDoer) cutRead(request *http.Request) (*http.Response, error) {
+	doer.cutReads++
+	ctx := request.Context()
+	// A read with no deadline before the window runs into it and ends the unit.
+	if deadline, ok := ctx.Deadline(); !ok || !deadline.Before(doer.window.deadline) {
+		doer.windowReads++
+		doer.window.end()
+	}
+	select {
+	case <-ctx.Done():
+	case <-doer.window.Done():
+	}
+	time.Sleep(doer.row.stall)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, doer.window.Err()
+}
+
+func jiraCollectOps(t *testing.T, tc jiraInvariantRow, fetch bool) (CompleteRouteBatch, *jiraOpDoer, error) {
+	t.Helper()
+	window := &jiraOpWindow{deadline: time.Now().Add(tc.window), done: make(chan struct{})}
+	defer window.end()
+	doer := &jiraOpDoer{t: t, row: tc, window: window}
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(jiraAtlassianDoerFunc(doer.Do)), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	batch, err := jiraAtlassianCompleteHandler(t).Collect(
+		window, jiraCommentsClaim(map[string]any{"fetch_comments": fetch}), providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	)
+	return batch, doer, err
+}
+
+// Off OK must mean on OK, with the same work items and an unheld watermark.
 func jiraAssertCommentsInvariant(t *testing.T, tc jiraInvariantRow) {
 	t.Helper()
-	newDoer := func() *jiraBudgetDoer {
-		return &jiraBudgetDoer{t: t, issues: tc.issues, perIssue: 3, searchDelay: tc.search,
-			changelogDelay: tc.changelog, commentDelay: tc.comment, stallAfterCtx: tc.stall}
-	}
-	off, offErr := jiraCollectOutcome(t, newDoer(), tc.window, false)
+	off, _, offErr := jiraCollectOps(t, tc, false)
 	if offErr != nil {
 		t.Fatalf("row void: comments off failed: %v", offErr)
 	}
-	on, onErr := jiraCollectOutcome(t, newDoer(), tc.window, true)
+	on, doer, onErr := jiraCollectOps(t, tc, true)
 	if onErr != nil {
 		t.Fatalf("comments off OK but comments on failed: %v", onErr)
 	}
@@ -624,6 +698,17 @@ func jiraAssertCommentsInvariant(t *testing.T, tc jiraInvariantRow) {
 	}
 	if _, held := on.Result["incomplete"]; held || on.Watermark == nil {
 		t.Fatalf("comments held the watermark: %#v", on.Result["incomplete"])
+	}
+	if doer.windowReads != 0 {
+		t.Fatalf("%d comment read(s) ran into the window", doer.windowReads)
+	}
+	// Non-vacuity: the reads the row's timing does not fit before the stop were cut.
+	phase1 := tc.search + tc.changelog*time.Duration(tc.issues)
+	fit := min(tc.issues, int((tc.window-phase1)/2/tc.comment))
+	skipped, _ := on.Result["comments_time_skipped_issues"].(int)
+	landed := len(jiraInteractionRows(t, on)) / 3
+	if landed+skipped != tc.issues || landed > fit || skipped < tc.issues-fit || doer.cutReads > 1 || (fit == tc.issues && doer.cutReads != 0) {
+		t.Fatalf("row fits %d of %d reads: landed=%d time-skipped=%d cut reads=%d", fit, tc.issues, landed, skipped, doer.cutReads)
 	}
 }
 

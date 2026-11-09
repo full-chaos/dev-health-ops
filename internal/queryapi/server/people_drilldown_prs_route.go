@@ -25,7 +25,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
@@ -49,15 +48,12 @@ func peopleDrilldownPRsSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwit
 
 // loadPeopleDrilldownPRsRouteConfig reads this route's own dependency set,
 // same reasoning as loadPeopleSummaryRouteConfig's own doc comment.
-func loadPeopleDrilldownPRsRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadPeopleDrilldownPRsRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 // buildPeopleDrilldownPRsRoute constructs the handler, its own routeswitch
@@ -65,12 +61,12 @@ func loadPeopleDrilldownPRsRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPa
 // build/start" contract every other optionally-configured route in this
 // binary follows.
 func buildPeopleDrilldownPRsRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadPeopleDrilldownPRsRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadPeopleDrilldownPRsRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, err
 	}

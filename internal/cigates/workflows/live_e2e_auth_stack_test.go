@@ -10,9 +10,11 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // The web live e2e logs in through auth-service the way prod does (go-api session issue with the workload
@@ -173,6 +175,37 @@ func TestLiveE2EQueryAPIEnvIsProdsFlagSet(t *testing.T) {
 	env := liveStackEnv(t, "query-api")
 	if env["AUTH_PROXY_SESSIONS"] != "true" || env["AUTH_ACCESS_TOKEN_ISSUER"] == "" {
 		t.Fatalf("FAIL: query-api env %v lacks the sessions flag or the access token issuer", env)
+	}
+}
+
+// CHAOS-13356: prod runs platform roles owned (deploy values.prod.yaml:1830), and the chart renders
+// AUTH_PLATFORM_ROLES_OWNED=true on auth-service, go-api and query-api, no other Deployment
+// (deploy/helm/dev-health/live_e2e_auth_flags_test.go pins the flag table rows to that render). go-api's impersonation
+// refusal of a superuser target (internal/apiservice/admin/impersonation.go) reads is_superuser through
+// policy.PlatformRoleRead: the venue must read it from auth.platform_role_assignments, the table grant-platform-admin
+// writes, as prod does, not from public.users.is_superuser. web reads no platform role and gets no switch.
+func TestLiveE2EPlatformRolesOwnedOnEveryProdSide(t *testing.T) {
+	for _, side := range []string{"go-api", "query-api", "auth-service"} {
+		env := liveStackEnv(t, side)
+		owned, err := rule.OwnedFromLookup(func(k string) (string, bool) { v, ok := env[k]; return v, ok })
+		if err != nil || !owned {
+			t.Errorf("FAIL: %s %s=%q (owned %v, %v); prod renders true", side, rule.OwnedEnv, env[rule.OwnedEnv], owned, err)
+		}
+	}
+	if value, ok := liveStackEnv(t, "web")[rule.OwnedEnv]; ok {
+		t.Errorf("FAIL: web carries %s=%q; prod renders it on no web workload", rule.OwnedEnv, value)
+	}
+	env := liveStackEnv(t, "go-api")
+	owned, err := rule.OwnedFromLookup(func(k string) (string, bool) { v, ok := env[k]; return v, ok })
+	if err != nil {
+		t.Fatalf("FAIL: go-api refuses %s=%q: %v", rule.OwnedEnv, env[rule.OwnedEnv], err)
+	}
+	expr, err := policy.PlatformRoleRead{Owned: owned, AuthSchema: env["AUTH_DATABASE_SCHEMA"]}.Superuser("is_superuser", "users.id")
+	if err != nil {
+		t.Fatalf("FAIL: go-api's is_superuser read: %v", err)
+	}
+	if want := rule.HoldsSQL(`"auth"`, "users.id", "'"+rule.PlatformAdmin+"'"); expr != want {
+		t.Errorf("FAIL: the venue's go-api reads an impersonation target's is_superuser as %q, not the auth platform role grant-platform-admin writes", expr)
 	}
 }
 

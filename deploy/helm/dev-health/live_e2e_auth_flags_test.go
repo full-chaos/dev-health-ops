@@ -82,3 +82,50 @@ func TestLiveE2EAuthFlagsEqualPhase4Chart(t *testing.T) {
 		}
 	}
 }
+
+// Prod runs platform roles owned (deploy values.prod.yaml:1830 authService.platformRolesOwned true, on phase 4
+// usersOwnedStage owned). The flag table's AUTH_PLATFORM_ROLES_OWNED rows must be exactly the services the chart renders
+// it on in that render: one row per Deployment that carries it, same value. The Jobs that also carry it (auth-migrate,
+// auth-grants, auth-backfill, the River step) are no flag table scope: the venue runs their steps itself.
+func TestLiveE2EPlatformRolesOwnedRowsEqualProdRender(t *testing.T) {
+	docs := renderPhase(t, 4, "--set", "authService.platformRolesOwned=true")
+	want := map[string]string{}
+	for _, doc := range docs {
+		if kind, _ := doc["kind"].(string); kind != "Deployment" {
+			continue
+		}
+		name, _ := at(doc, "metadata", "name").(string)
+		for _, container := range podContainers(doc) {
+			env, _ := at(container, "env").([]any)
+			for _, entry := range env {
+				if ename, _ := at(entry, "name").(string); ename == platformRolesEnv {
+					want[strings.TrimPrefix(name, "a-dev-health-")] = strings.TrimPrefix(envEntryValue(entry), "value:")
+				}
+			}
+		}
+	}
+	if len(want) == 0 {
+		t.Fatalf("FAIL: no Deployment of the prod-like render carries %s", platformRolesEnv)
+	}
+	got := map[string]string{}
+	for _, row := range liveE2EFlagRows(t) {
+		if row[1] == platformRolesEnv {
+			got[row[0]] = row[2]
+		}
+	}
+	var scopes []string
+	for scope := range want {
+		scopes = append(scopes, scope)
+	}
+	sort.Strings(scopes)
+	for _, scope := range scopes {
+		if value, ok := got[scope]; !ok || value != want[scope] {
+			t.Errorf("FAIL: %s %s is %q (row %v) in the flag table, %q in the prod-like chart render", scope, platformRolesEnv, value, ok, want[scope])
+		}
+	}
+	for scope := range got {
+		if _, ok := want[scope]; !ok {
+			t.Errorf("FAIL: %s %s is in the flag table and on no Deployment of the prod-like chart render", scope, platformRolesEnv)
+		}
+	}
+}

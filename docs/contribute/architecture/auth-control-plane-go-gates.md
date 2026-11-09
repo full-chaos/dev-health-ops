@@ -61,7 +61,7 @@ tree still reports its old path.
 | `auth-race` | when relevant | `race`. Its own 30 minute job cap. The cap is not raised. |
 | `auth-race-integration` | when relevant | `race-integration`. Its own 30 minute job cap: `job_go_test_timeout` cuts each package timeout from the time left under the job cap, so these packages share a cap with nothing else. The cap is not raised. |
 | `auth-fuzz (<target>)` | when relevant | One matrix job per fuzz target, so each parser has its own CI-visible name. |
-| `auth-corpus-queue (<leg>)` | merge queue entry or pull request with `corpus=true` | The external auth corpus, `ci/auth_corpus_external.sh` legs `go-api`, `acp`, `acp-nokeys`, `acp-social-unowned` (the same legs `venue-oracles.yml` runs on main). On a pull request while the merge queue is off; a draft pull request without `ci:full` skips it with the rest of the auth gates. No retry. |
+| `auth-corpus-queue (<leg>)` | merge queue entry or pull request with `corpus=true` | The external auth corpus, `ci/auth_corpus_external.sh` legs `go-api`, `acp`, `acp-nokeys` (the same legs `venue-oracles.yml` runs on main). On a pull request while the merge queue is off; a draft pull request without `ci:full` skips it with the rest of the auth gates. No retry. |
 | `auth-gate` | **always** | Fans in. Succeeds when the change is not relevant or the pull request is a draft without `ci:full`; fails when `auth-changes` failed, or when a relevant change has any gate job that did not succeed (failed, cancelled **or skipped**), or when the corpus verdict is `true` and `auth-corpus-queue` did not succeed (a skip with `corpus=true` fails, also when the auth gates are not relevant). |
 
 Relevance is decided inside the workflow, not in the trigger, so `auth-gate`

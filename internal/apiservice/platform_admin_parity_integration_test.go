@@ -25,7 +25,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -275,10 +274,6 @@ VALUES ($1::uuid, $2::uuid, $3, 'cus_x', 'open', 100, 'usd', '{}', now(), now())
 	rig := &parityRig{minter: newEdDSAMinter(t), pdp: newParityPDP(t), pool: pool, revoker: &parityRevoker{}}
 	store := parityStore{PGStore: policy.PGStore{Pool: pool}, sessions: sessions}
 	build := func(enforcer *policy.Enforcer) http.Handler {
-		verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-		if err != nil {
-			t.Fatal(err)
-		}
 		auth, err := policy.NewAuthenticator(store, quietLogger())
 		if err != nil {
 			t.Fatal(err)
@@ -307,7 +302,7 @@ VALUES ($1::uuid, $2::uuid, $3, 'cus_x', 'open', 100, 'usd', '{}', now(), now())
 		if enforcer != nil {
 			guard.SetEnforcer(enforcer)
 		}
-		deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Verifier: verifier, ACRRevoker: rig.revoker}
+		deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, ACRRevoker: rig.revoker}
 		scope := policy.NewScope(auth, quietLogger())
 		server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), scope.Layers()...)
 		if err != nil {

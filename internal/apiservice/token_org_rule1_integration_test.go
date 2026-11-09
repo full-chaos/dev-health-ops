@@ -16,7 +16,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -30,10 +29,6 @@ import (
 func rule1EdTokensServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, auth *policy.Authenticator) http.Handler {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	verifier, err := edgetoken.New(ruleOneKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	delegated, err := goAPIDelegatedRows()
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +40,7 @@ func rule1EdTokensServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, auth 
 	}
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
-	deps := Deps{Pool: pool, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier}
+	deps := Deps{Pool: pool, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger)}
 	server, err := NewServer(apiTestConfig(), logger, Routes(deps, logger), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)

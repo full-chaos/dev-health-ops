@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -115,8 +116,9 @@ type qGateRig struct {
 	mounted map[string]string // "METHOD pattern" -> builder
 	unbuilt map[string]string // "METHOD pattern" -> builder error
 	// B
-	counts *matrixCounts
-	minter *accessMinter
+	counts          *matrixCounts
+	minter          *accessMinter
+	unservedAnswers map[string]wrongclass.Answer
 }
 
 type qGateCell struct {
@@ -295,6 +297,32 @@ func newRigB(t *testing.T, restB []string) *qGateRig {
 	return rig
 }
 
+// promSample is one Prometheus exposition sample line: the series (name and labels) and its value (and timestamp).
+var promSample = regexp.MustCompile(`(?m)^([^#\s][^\s{]*(?:\{.*\})?) \S+(?: -?[0-9]+)?$`)
+
+// scrapeMasked is a Prometheus scrape answer with every sample value masked; ok is false for any other answer. The
+// series set, the comments and every other byte still compare.
+func scrapeMasked(answer wrongclass.Answer) (wrongclass.Answer, bool) {
+	if !strings.Contains(answer.Header, "Content-Type: text/plain; version=0.0.4") {
+		return answer, false
+	}
+	answer.Body = promSample.ReplaceAllString(answer.Body, "$1 <value>")
+	return answer, true
+}
+
+// unserved is the listener's answer for a path no route serves.
+func (rig *qGateRig) unserved(listener string) wrongclass.Answer {
+	if answer, ok := rig.unservedAnswers[listener]; ok {
+		return answer
+	}
+	answer := rig.serve(listener, httptest.NewRequest(http.MethodGet, "/wrong-class-gate-no-such-route", nil)).answer
+	if rig.unservedAnswers == nil {
+		rig.unservedAnswers = map[string]wrongclass.Answer{}
+	}
+	rig.unservedAnswers[listener] = answer
+	return answer
+}
+
 // qGateRequest is the row's request on a carrier: the GraphQL and /query routes get their document (the way
 // behaviourStack.sendWith sends it, endpoint_profile_behaviour_test.go:141), an api_route row a GET.
 func qGateRequest(row wrongclass.Row, carrier wrongclass.Carrier) *http.Request {
@@ -466,6 +494,12 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 				errorf("%s: rig %s has no %s listener: the row is not measured", row.ID, rig, listener)
 				continue
 			}
+			// B has no route table to read, so a B row is measured only when B serves it: its anonymous answer must
+			// differ from the listener's answer for a path no route serves.
+			if rig == rigB && b.unserved(listener) == b.serve(listener, qGateRequest(row, wrongclass.Carrier{})).answer {
+				errorf("%s @%s: rig B answers it as a path no route serves: the row is not measured", row.ID, listener)
+				continue
+			}
 			places = append(places, place{row, listener, rig})
 		}
 	}
@@ -481,8 +515,8 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 		if cell.keys != 0 || cell.stores != 0 || cell.decision != 0 {
 			errorf("%s @%s: the garbage baseline %s made %d key reads, %d store reads, %d PDP asks", p.row.ID, p.listener, base.Class, cell.keys, cell.stores, cell.decision)
 		}
-		// A body that differs between two identical requests (a live metrics scrape) is compared on status and
-		// headers only; the status and headers must still repeat.
+		// A body that differs between two identical requests (a live metrics scrape) is volatile: sameAnswer then
+		// compares against a fresh baseline with the Prometheus sample values masked. Status and headers must repeat.
 		again := rigs[p.rig].serve(p.listener, qGateRequest(p.row, base))
 		if again.answer.Status != cell.answer.Status || again.answer.Header != cell.answer.Header {
 			errorf("%s @%s: two garbage baselines answered %s and %s", p.row.ID, p.listener, cell.answer, again.answer)
@@ -494,17 +528,26 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 		return cell
 	}
 	sameAnswer := func(p place, carrier wrongclass.Carrier, got, want wrongclass.Answer) bool {
+		if got == want {
+			return true
+		}
 		key := p.rig + "|" + p.listener + "|" + p.row.ID + "|" + carrier.Baseline().Class
-		if got != want && got.Status == want.Status && got.Header == want.Header && !volatile[key] {
-			// Only the body differs: a body that changes between identical garbage requests is volatile.
+		if !volatile[key] && got.Body != want.Body {
 			if again := rigs[p.rig].serve(p.listener, qGateRequest(p.row, carrier.Baseline())); again.answer.Body != want.Body {
 				volatile[key] = true
 			}
 		}
-		if volatile[key] {
-			return got.Status == want.Status && got.Header == want.Header
+		if !volatile[key] {
+			return false
 		}
-		return got == want
+		fresh := rigs[p.rig].serve(p.listener, qGateRequest(p.row, carrier.Baseline())).answer
+		normalGot, okGot := scrapeMasked(got)
+		normalFresh, okFresh := scrapeMasked(fresh)
+		if !okGot || !okFresh {
+			errorf("%s @%s: a volatile body that is no Prometheus scrape: no rule masks it (%s vs %s)", p.row.ID, p.listener, got, fresh)
+			return false
+		}
+		return normalGot == normalFresh
 	}
 	for _, p := range places {
 		profile := p.row.Method + " " + p.row.Route
@@ -584,7 +627,7 @@ func runQueryAPIGate(t *testing.T, divergences map[string]string, errorf func(fo
 		errorf("no wrong-class cell ran")
 	}
 	for key := range volatile {
-		rigLines = append(rigLines, "volatile body, compared on status and headers: "+key)
+		rigLines = append(rigLines, "volatile body, compared with the Prometheus sample values masked: "+key)
 	}
 	return census, rigLines
 }

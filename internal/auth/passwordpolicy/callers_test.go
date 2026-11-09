@@ -239,6 +239,64 @@ func TestPasswordPathCensusHopRows(t *testing.T) {
 	})
 }
 
+// extraIdentity adds one row of each other kind to the fixture: a writer of a
+// fixed hash, an edge from a caller that copies a hash, and an uncalled writer.
+const extraIdentity = "package identity\n\nimport \"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy\"\n\n" +
+	"func seedFixed(x Exec) {\n\tx(`UPDATE public.users SET password_hash = $2, token_version = token_version + 1 WHERE id = $1`, \"fixed\")\n}\n\n" +
+	"func backfill(x Exec, hash string) {\n\twriteCopied(x, hash)\n}\n\n" +
+	"func changeCopied(x Exec, pw string) {\n\tif len(passwordpolicy.ValidateForHash(pw)) > 0 {\n\t\treturn\n\t}\n\twriteCopied(x, pw)\n}\n\n" +
+	"func writeCopied(x Exec, hash string) {\n\tx(`UPDATE public.users SET password_hash = $2, token_version = token_version + 1 WHERE id = $1`, hash)\n}\n\n" +
+	"func orphan(x Exec, hash string) {\n\tx(`UPDATE public.users SET password_hash = $2, token_version = token_version + 1 WHERE id = $1`, hash)\n}\n"
+
+func extraRows() []notPasswordSetting {
+	id := mod + "internal/auth/identity."
+	return []notPasswordSetting{
+		{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersCreate", at: "internal/auth/authapi/routes.go:15",
+			route: "/internal/v1/users/create", callers: []string{mod + "internal/api/authprovision.PostCreate"}, why: "internal HTTP"},
+		{kind: "hop", fn: mod + "internal/auth/authapi.handlers.usersPassword", at: "internal/auth/authapi/routes.go:17",
+			route: "/internal/v1/users/password", callers: []string{mod + "internal/api/authprovision.PostPassword"}, why: "internal HTTP"},
+		{kind: "writer", fn: id + "seedFixed", at: "internal/auth/identity/extra.go:6", why: "fixed hash"},
+		{kind: "edge", fn: id + "backfill", callee: id + "writeCopied", at: "internal/auth/identity/extra.go:10", why: "copies a hash"},
+		{kind: "uncalled", fn: id + "orphan", at: "internal/auth/identity/extra.go:25", why: "no caller"},
+	}
+}
+
+// A row names its function (and, for an edge, the callee), not a line: lines
+// added above the anchored functions, in their own files, leave every row valid.
+func TestPasswordPathCensusRowsSurviveALineShift(t *testing.T) {
+	for _, shift := range []int{0, 20} {
+		t.Run(fmt.Sprintf("%d lines above", shift), func(t *testing.T) {
+			root := copyFixture(t, "testdata/hopfixture")
+			extra := filepath.Join(root, "internal", "auth", "identity", "extra.go")
+			if err := os.WriteFile(extra, []byte(extraIdentity), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range []string{"internal/auth/authapi/routes.go", "internal/auth/identity/store.go", "internal/auth/identity/extra.go"} {
+				shiftLines(t, filepath.Join(root, filepath.FromSlash(f)), shift)
+			}
+			res := censusPasswordPaths(root, []string{"./..."}, extraRows(), fixtureRoutes, 1)
+			t.Log(res.problems)
+			if len(res.problems) > 0 || len(res.paths) == 0 {
+				t.Fatalf("problems %v, paths %v; want no problem and a walked path", res.problems, res.paths)
+			}
+		})
+	}
+}
+
+// shiftLines puts n comment lines after the first line of the file.
+func shiftLines(t *testing.T, path string, n int) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, rest, _ := strings.Cut(string(raw), "\n")
+	src := first + "\n" + strings.Repeat("// shifted\n", n) + rest
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 var fixtureRoutes = []hopRoute{
 	{path: "/internal/v1/users/create", constant: mod + "internal/api/authprovision.PathUsersCreate"},
 	{path: "/internal/v1/users/password", constant: mod + "internal/api/authprovision.PathUsersPassword"},

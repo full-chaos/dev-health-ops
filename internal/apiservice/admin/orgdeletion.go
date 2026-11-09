@@ -150,8 +150,8 @@ func (h *handlers) deleteOrganizationData(ctx context.Context, orgUUID uuid.UUID
 		return nil, err
 	}
 	defer func() { _ = ch.conn.Close() }()
-	if !dryRun && h.orgProvision != nil {
-		if err := h.deprovisionInAuth(ctx, orgUUID); err != nil {
+	if !dryRun {
+		if err := h.deprovisionBeforeDelete(ctx, orgUUID); err != nil {
 			return nil, err
 		}
 	}

@@ -14,7 +14,7 @@ import (
 // work_items.read are org-wide for every active member. The list is written out here on purpose: a new action does
 // not join it by accident.
 var filteredActions = []string{
-	"acr.context.read", "acr.evidence.read",
+	"acr.context.read", "acr.credential.issue", "acr.evidence.read",
 }
 
 type rawAction struct {

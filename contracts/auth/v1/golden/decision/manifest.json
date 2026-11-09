@@ -24,6 +24,11 @@
       "layer": "pdp"
     },
     {
+      "file": "allow-platform-admin-no-membership-issues-acr-credential.json",
+      "id": "allow-platform-admin-no-membership-issues-acr-credential",
+      "layer": "pdp"
+    },
+    {
       "file": "allow-platform-admin-no-membership-reads-analytics.json",
       "id": "allow-platform-admin-no-membership-reads-analytics",
       "layer": "pdp"

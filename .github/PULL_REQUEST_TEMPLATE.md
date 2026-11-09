@@ -9,6 +9,7 @@
 - [ ] I ran relevant local validation (minimum: `./ci/check_go.sh fast` for code changes).
 - [ ] I documented risk and rollback considerations.
 - [ ] I called out breaking changes, migrations, or config impacts (or wrote `none`).
+- [ ] If this PR widens an auth public grant, I named the `auth-migrate owner-move -grants-only` roll step (or wrote `n/a`).
 
 ## Test Evidence
 

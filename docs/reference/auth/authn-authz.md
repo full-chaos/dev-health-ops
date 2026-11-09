@@ -248,6 +248,10 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | `POST /internal/v1/grants/get` | protected | `workload_token` | `cross_org_superuser_only` |
 | `POST /internal/v1/grants/list` | protected | `workload_token` | `cross_org_superuser_only` |
 | `POST /internal/v1/organizations/rename` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/users/create` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/users/update` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/users/password` | protected | `workload_token` | `org_scoped` |
+| `POST /internal/v1/users/delete` | protected | `workload_token` | `org_scoped` |
 | `POST /internal/v1/service-accounts/create` | protected | `workload_token` | `org_scoped` |
 | `POST /internal/v1/service-accounts/disable` | protected | `workload_token` | `org_scoped` |
 | `POST /internal/v1/service-accounts/enable` | protected | `workload_token` | `org_scoped` |

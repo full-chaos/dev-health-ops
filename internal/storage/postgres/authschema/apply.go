@@ -449,6 +449,9 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 	if options.SchemaOwnerRole != "" {
 		logger.InfoContext(ctx, "verified auth schema owner pin", "schema", options.Schema, "owner_role", options.SchemaOwnerRole)
 	}
+	if err := migratorGrantOptionPrecheck(ctx, conn, options); err != nil {
+		return result, err
+	}
 	var retained []GrantRecord
 	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options, &retained); err != nil {
 		return result, err

@@ -586,6 +586,7 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 	seedLog := fs.String("seed-log", "", "the stub's seed-mode log (required when an external row was sent; an empty file is a log)")
 	logPath := fs.String("log", "", "go-api JSON log of this run: the proof that an equal 5xx cell is past the guard")
 	attributedPath := fs.String("attributed-requests", "", "file of the requests of the run that are no slot (method, route, source file:line, optional request id; tab-separated): the drive's own sign-in; any other request in the go-api log is unknown traffic")
+	processPath := fs.String("process-facts", "", "file naming the go-api process of each metrics scrape (before and after: scrape time, container id, container start), tab-separated with a header: the proof that the two scrapes are one process that started before the drive")
 	volatilePath := fs.String("volatile-keys", "", "owner-only frozen file of the volatile leaf paths per row (bodydiff -paths of legacy-vs-legacy pairs); with -keys-yardstick and -keys-enforced")
 	keysYard := fs.String("keys-yardstick", "", "side file of the yardstick drive (the leaves of its answers by slot seq)")
 	keysEnf := fs.String("keys-enforced", "", "side file of this run's drive")
@@ -700,7 +701,21 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 	}
-	report := shadowvenue.JudgeEnforced(shadowvenue.EnforcedInput{J1: true, Attributed: attributed, Strict: true, Membership: membership, Leaves: leafParity, Log: evidence, Slots: slots, Yard: yard, K: *k, Namespaces: namespaces,
+	var process *shadowvenue.ProcessFacts
+	if *processPath != "" {
+		raw, err := os.ReadFile(*processPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "-process-facts: %v\n", err)
+			return exitUsage
+		}
+		pf, err := shadowvenue.ParseProcessFacts(raw)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+		process = &pf
+	}
+	report := shadowvenue.JudgeEnforced(shadowvenue.EnforcedInput{J1: true, Attributed: attributed, Process: process, Strict: true, Membership: membership, Leaves: leafParity, Log: evidence, Slots: slots, Yard: yard, K: *k, Namespaces: namespaces,
 		Grace: *grace, Outbound: outbound, YardOutbound: yardOut, YardOutboundGiven: *yardOutbound != "",
 		YardDigest: strings.TrimSpace(string(files["yardstick-digest"])), YardDigestAfter: strings.TrimSpace(string(files["yardstick-digest-after"])), DigestBefore: strings.TrimSpace(string(files["digest-before"])),
 		DigestAfter: strings.TrimSpace(string(files["digest-after"])), MetricsBefore: files["metrics-before"], MetricsAfter: files["metrics-after"]})

@@ -87,6 +87,8 @@ type EnforcedInput struct {
 	// Attributed lists the requests of the run that are no slot (the drive's sign-in).
 	J1         bool
 	Attributed []AttributedRequest
+	// Process names the go-api process each scrape came from (nil = none given: no counter proof stands).
+	Process *ProcessFacts
 }
 
 // liveEnforcement is what one /metrics scrape of the running go-api says: the namespaces whose enforcement gauge is 1,
@@ -385,7 +387,13 @@ func applyCounterProof(report *Report, in EnforcedInput, yardVerdict func(row, c
 	for _, u := range idle.unattributed {
 		report.Reasons = append(report.Reasons, "FAIL: unattributed request in the go-api log (unknown traffic): "+u)
 	}
-	proof, notes, fails := counterProof(in, report.Slots, idle)
+	first, _ := driveSpan(in.Slots)
+	processNote, process := sameProcess(in.Process, readLive(in.MetricsBefore), readLive(in.MetricsAfter), first)
+	report.Notes = append(report.Notes, "judge-enforced: same process: "+processNote)
+	if !process {
+		report.Reasons = append(report.Reasons, "FAIL: same process not shown: "+processNote)
+	}
+	proof, notes, fails := counterProof(in, report.Slots, idle, process)
 	report.Notes = append(report.Notes, notes...)
 	for _, f := range fails {
 		report.Reasons = append(report.Reasons, "FAIL: "+f)

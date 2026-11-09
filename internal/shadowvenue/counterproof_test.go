@@ -42,6 +42,7 @@ func j1Run(t *testing.T, extra ...string) *enfRun {
 	r.in.MetricsBefore = live(allEnforced, 1000, "f50883b", "0", unjudged(noOrgKey, "no_org", "5"), unjudged(seamKey, "served_org", "2"))
 	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"),
 		decisions("teams", "allow", "3"), decisions("teams", "deny", "6"), decisions("integrations", "deny", "3"))
+	r.in.Process = goodProcess()
 	var lines []string
 	for _, s := range r.in.Slots {
 		if !s.Gap() {
@@ -50,6 +51,14 @@ func j1Run(t *testing.T, extra ...string) *enfRun {
 	}
 	r.in.Log = logOf(t, append(lines, extra...)...)
 	return r
+}
+
+// goodProcess is one container whose uptime was 1000 s at the before scrape (10 s before the drive) and 1100 s at the
+// after scrape, 100 s later.
+func goodProcess() *ProcessFacts {
+	before := enfT0.Add(-10 * time.Second)
+	started := before.Add(-1000 * time.Second)
+	return &ProcessFacts{BeforeAt: before, AfterAt: before.Add(100 * time.Second), BeforeID: "c0ffee0000001111", AfterID: "c0ffee0000001111", BeforeStarted: started, AfterStarted: started}
 }
 
 func TestJ1CounterProofMakesAnEqualFiveXXPastTheGuard(t *testing.T) {
@@ -127,7 +136,17 @@ func TestJ1MutantsAreRefused(t *testing.T) {
 		"no access lines in the log": func(r *enfRun) {
 			r.in.Log = logOf(t, result(r.in.Slots[0], 0, "match", "dec_X"+strings.Repeat("A", 20)))
 		},
-		"no go-api log": func(r *enfRun) { r.in.Log = nil },
+		"no go-api log":     func(r *enfRun) { r.in.Log = nil },
+		"no process facts":  func(r *enfRun) { r.in.Process = nil },
+		"two container ids": func(r *enfRun) { r.in.Process.AfterID = "deadbeef00001111" },
+		"two start times":   func(r *enfRun) { r.in.Process.AfterStarted = r.in.Process.AfterStarted.Add(time.Minute) },
+		"the uptime does not give the recorded start": func(r *enfRun) {
+			r.in.Process.AfterAt = r.in.Process.AfterAt.Add(time.Hour)
+		},
+		"the process started after the first slot": func(r *enfRun) {
+			r.in.Process.BeforeStarted, r.in.Process.AfterStarted = enfT0.Add(time.Second), enfT0.Add(time.Second)
+			r.in.Process.BeforeAt, r.in.Process.AfterAt = enfT0.Add(time.Second+1000*time.Second), enfT0.Add(time.Second+1100*time.Second)
+		},
 	}
 	for name, plant := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -192,6 +211,24 @@ func TestJ1AttributedExtraRequests(t *testing.T) {
 	bad.in.Attributed = []AttributedRequest{{Method: "POST", Route: "/api/v1/auth/login", Source: "x.go:1"}}
 	if rep := bad.judge(); !rep.Pass {
 		t.Fatalf("an attribution nobody used is harmless: %v", rep.Reasons)
+	}
+}
+
+func TestParseProcessFacts(t *testing.T) {
+	good := "which\tscraped_at\tcontainer_id\tstarted_at\nbefore\t2026-11-09T04:31:00Z\tabc\t2026-11-09T03:00:00Z\nafter\t2026-11-09T04:44:00Z\tabc\t2026-11-09T03:00:00Z\n"
+	if pf, err := ParseProcessFacts([]byte(good)); err != nil || pf.BeforeID != "abc" || !pf.AfterStarted.Equal(pf.BeforeStarted) {
+		t.Fatalf("%v %v", pf, err)
+	}
+	for name, bad := range map[string]string{
+		"no header":    strings.SplitN(good, "\n", 2)[1],
+		"repeated":     strings.Replace(good, "after", "before", 1),
+		"bad time":     strings.Replace(good, "2026-11-09T04:44:00Z", "yesterday", 1),
+		"empty id":     strings.Replace(good, "\tabc\t2026-11-09T03:00:00Z\n", "\t\t2026-11-09T03:00:00Z\n", 1),
+		"unknown line": strings.Replace(good, "after", "later", 1),
+	} {
+		if _, err := ParseProcessFacts([]byte(bad)); err == nil {
+			t.Fatalf("%s is accepted", name)
+		}
 	}
 }
 

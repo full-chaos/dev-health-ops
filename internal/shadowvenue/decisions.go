@@ -3,6 +3,7 @@ package shadowvenue
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -181,6 +182,77 @@ func idleSweep(ev *Evidence, slots []Slot, attributed []AttributedRequest, grace
 	return res
 }
 
+// ProcessFacts names the go-api process each metrics scrape came from: when the scrape was taken and the container's id
+// and start time (docker inspect). The two scrapes are one process when they name one container id and one start time,
+// and the start time implied by each scrape (its time minus the uptime it reports) agrees with it.
+type ProcessFacts struct {
+	BeforeAt, AfterAt           time.Time
+	BeforeID, AfterID           string
+	BeforeStarted, AfterStarted time.Time
+}
+
+// processSkew is the slack between the container's recorded start and the start a scrape implies (the scrape time is a
+// step's clock, the uptime the process's own).
+const processSkew = 5 * time.Second
+
+// ParseProcessFacts reads the process-facts file: a header line "which\tscraped_at\tcontainer_id\tstarted_at" and the
+// lines "before" and "after", each once, times in RFC 3339.
+func ParseProcessFacts(raw []byte) (ProcessFacts, error) {
+	var pf ProcessFacts
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) != 3 || lines[0] != "which\tscraped_at\tcontainer_id\tstarted_at" {
+		return pf, errors.New("process facts: want the header and the lines before and after")
+	}
+	seen := map[string]bool{}
+	for _, line := range lines[1:] {
+		f := strings.Split(line, "\t")
+		if len(f) != 4 || f[2] == "" || seen[f[0]] {
+			return pf, fmt.Errorf("process facts: bad or repeated line %q", line)
+		}
+		seen[f[0]] = true
+		at, err1 := time.Parse(time.RFC3339Nano, f[1])
+		started, err2 := time.Parse(time.RFC3339Nano, f[3])
+		if err1 != nil || err2 != nil {
+			return pf, fmt.Errorf("process facts: bad time in %q", line)
+		}
+		switch f[0] {
+		case "before":
+			pf.BeforeAt, pf.BeforeID, pf.BeforeStarted = at, f[2], started
+		case "after":
+			pf.AfterAt, pf.AfterID, pf.AfterStarted = at, f[2], started
+		default:
+			return pf, fmt.Errorf("process facts: unknown line %q", f[0])
+		}
+	}
+	if !seen["before"] || !seen["after"] {
+		return pf, errors.New("process facts: a line is missing")
+	}
+	return pf, nil
+}
+
+// sameProcess is the concrete proof that metrics-before and metrics-after came from one go-api process whose start is
+// before the drive began: one container id, one recorded start, the start each scrape implies (its time minus its
+// uptime) within processSkew of it, and that start before the first sent slot.
+func sameProcess(pf *ProcessFacts, before, after liveEnforcement, firstSlot time.Time) (string, bool) {
+	if pf == nil {
+		return "no process facts given: the scrapes are not shown to be one process", false
+	}
+	if pf.BeforeID != pf.AfterID || !pf.BeforeStarted.Equal(pf.AfterStarted) {
+		return fmt.Sprintf("the scrapes name two processes (container %.12s started %s, container %.12s started %s)", pf.BeforeID, pf.BeforeStarted.Format(time.RFC3339), pf.AfterID, pf.AfterStarted.Format(time.RFC3339)), false
+	}
+	impliedBefore := pf.BeforeAt.Add(-time.Duration(before.uptime * float64(time.Second)))
+	impliedAfter := pf.AfterAt.Add(-time.Duration(after.uptime * float64(time.Second)))
+	for _, implied := range []time.Time{impliedBefore, impliedAfter} {
+		if d := implied.Sub(pf.BeforeStarted); d > processSkew || d < -processSkew {
+			return fmt.Sprintf("a scrape's time minus its uptime (%s) is not the container's start (%s)", implied.Format(time.RFC3339), pf.BeforeStarted.Format(time.RFC3339)), false
+		}
+	}
+	if !pf.BeforeStarted.Before(firstSlot) {
+		return fmt.Sprintf("the process start (%s) is not before the first slot (%s)", pf.BeforeStarted.Format(time.RFC3339), firstSlot.Format(time.RFC3339)), false
+	}
+	return fmt.Sprintf("container %.12s started %s, before the first slot %s; scrape-implied starts %s and %s", pf.BeforeID, pf.BeforeStarted.Format(time.RFC3339), firstSlot.Format(time.RFC3339), impliedBefore.Format(time.RFC3339), impliedAfter.Format(time.RFC3339)), true
+}
+
 type nsCount struct{ allow, deny int }
 
 // counterProof is the exact-match proof of form B (D6894): per namespace, the increase of the decision counter
@@ -189,7 +261,7 @@ type nsCount struct{ allow, deny int }
 // the attributed extra requests of that namespace, and no error_deny or impersonation_refused counted. The proof stands
 // only when the idle sweep holds. It returns the namespaces whose proof stands, one note per namespace and the reasons
 // of the ones that do not.
-func counterProof(in EnforcedInput, slots []SlotVerdict, idle idleResult) (proof map[string]bool, notes, fails []string) {
+func counterProof(in EnforcedInput, slots []SlotVerdict, idle idleResult, process bool) (proof map[string]bool, notes, fails []string) {
 	proof = map[string]bool{}
 	deltas, err := ParseDecisionDeltas(in.MetricsBefore, in.MetricsAfter)
 	if err != nil {
@@ -244,12 +316,12 @@ func counterProof(in EnforcedInput, slots []SlotVerdict, idle idleResult) (proof
 				extra++
 			}
 		}
-		ok := got["allow"] == w.allow && got["deny"] == w.deny && extra == 0 && idle.ok
+		ok := got["allow"] == w.allow && got["deny"] == w.deny && extra == 0 && idle.ok && process
 		notes = append(notes, fmt.Sprintf("judge-enforced: counter %s: allow delta %d vs %d allowed slots, deny delta %d vs %d denied slots, other outcomes %d: %s", ns, got["allow"], w.allow, got["deny"], w.deny, extra, map[bool]string{true: "exact", false: "NO PROOF"}[ok]))
 		if ok {
 			proof[ns] = true
 		} else {
-			fails = append(fails, fmt.Sprintf("namespace %s has no counter proof: allow %d/%d, deny %d/%d, other outcomes %d, idle sweep %v", ns, got["allow"], w.allow, got["deny"], w.deny, extra, idle.ok))
+			fails = append(fails, fmt.Sprintf("namespace %s has no counter proof: allow %d/%d, deny %d/%d, other outcomes %d, idle sweep %v, same process %v", ns, got["allow"], w.allow, got["deny"], w.deny, extra, idle.ok, process))
 		}
 	}
 	return proof, notes, fails

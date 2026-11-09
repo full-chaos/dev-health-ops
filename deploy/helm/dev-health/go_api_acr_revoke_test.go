@@ -141,8 +141,8 @@ func TestACRRevokeRefusesUnusableValues(t *testing.T) {
 		sets []string
 		want string
 	}{
-		{"no url", []string{"--set-string", "goApi.acrRevoke.url="}, "goApi.acrRevoke.url"},
-		{"no token url", []string{"--set-string", "goApi.acrRevoke.tokenURL="}, "goApi.acrRevoke.tokenURL"},
+		{"no url", []string{"--set-string", "goApi.acrRevoke.url="}, "goApi.acrRevoke.url is required"},
+		{"no token url", []string{"--set-string", "goApi.acrRevoke.tokenURL="}, "goApi.acrRevoke.tokenURL is required"},
 		{"no audience", []string{"--set-string", "goApi.acrRevoke.audience="}, "goApi.acrRevoke.audience"},
 		{"plain http url without the opt-in", []string{"--set-string", "goApi.acrRevoke.url=" + arCluster}, "goApi.acrRevoke.url"},
 		{"plain http token url without the opt-in", []string{"--set-string", "goApi.acrRevoke.tokenURL=" + arCluster + "/api/v1/oauth/token"}, "goApi.acrRevoke.tokenURL"},
@@ -155,6 +155,8 @@ func TestACRRevokeRefusesUnusableValues(t *testing.T) {
 		{"url with user info", []string{"--set-string", "goApi.acrRevoke.url=https://u@acr.revoke-proof.example"}, "goApi.acrRevoke.url"},
 		{"token url with a fragment", []string{"--set-string", "goApi.acrRevoke.tokenURL=" + arToken + "#f"}, "goApi.acrRevoke.tokenURL"},
 		{"other scheme", []string{"--set-string", "goApi.acrRevoke.url=ftp://acr.revoke-proof.example"}, "goApi.acrRevoke.url"},
+		{"opt-in with a cluster host and another scheme", []string{"--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url=ftp://acr.ns.svc.cluster.local"}, "goApi.acrRevoke.url must be https"},
+		{"https url without a host", []string{"--set-string", "goApi.acrRevoke.url=https:///internal"}, "goApi.acrRevoke.url must be https"},
 		{"expiration below the Kubernetes minimum", []string{"--set", "goApi.acrRevoke.expirationSeconds=599"}, "goApi.acrRevoke.expirationSeconds"},
 		{"expiration above a day", []string{"--set", "goApi.acrRevoke.expirationSeconds=86401"}, "goApi.acrRevoke.expirationSeconds"},
 		{"expiration as a string", []string{"--set-string", "goApi.acrRevoke.expirationSeconds=3600"}, "goApi.acrRevoke.expirationSeconds"},

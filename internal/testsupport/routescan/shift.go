@@ -1,4 +1,6 @@
-// Package routescan holds the line-shift fixture of the endpoint-profile anchor cells.
+// Package routescan finds route registrations in Go source by symbol (method and pattern), so a check that ties an
+// endpoint-profile row or a validator anchor to the code does not read the line the row cites. It also holds the
+// line-shift fixture that proves it.
 package routescan
 
 import (

@@ -1,6 +1,8 @@
 package contracts
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -34,5 +36,36 @@ func TestAdminFieldsSurviveALineShift(t *testing.T) {
 	}
 	if len(problems) != 0 {
 		t.Errorf("a line shift broke %d admin-field checks:\n%s", len(problems), strings.Join(problems, "\n"))
+	}
+}
+
+// A registration written twice in its file is not one symbol: the row that cites it fails as ambiguous, and so does a
+// row whose method or file names no registration (the planted cells in TestAdminFieldChecksCatchPlantedDefects).
+func TestAdminFieldsFailOnADoubledRegistration(t *testing.T) {
+	const file = "internal/api/teamsidentity/teamsidentity.go"
+	root := routescan.ShiftedTree(t, testRoot(t), []string{"internal/api/teamsidentity"}, nil, nil)
+	path := filepath.Join(root, file)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	at := -1
+	for i, line := range lines {
+		if strings.Contains(line, `{Method: http.MethodGet, Pattern: "/api/v1/admin/teams",`) {
+			at = i
+		}
+	}
+	if at < 0 || at+1 >= len(lines) {
+		t.Fatal("the GET /api/v1/admin/teams registration is missing")
+	}
+	lines = append(lines[:at+2], append([]string{lines[at], lines[at+1]}, lines[at+2:]...)...)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	row := map[string]any{"id": "GET /api/v1/admin/teams", "method": "GET", "route": "/api/v1/admin/teams",
+		"source": map[string]any{"file": file, "line": float64(at + 1)}}
+	if _, _, err := registrationEntry(row, root); err == nil || !strings.Contains(err.Error(), "source anchor ambiguous") || !strings.Contains(err.Error(), "2 times") {
+		t.Fatalf("a doubled registration resolved: %v", err)
 	}
 }

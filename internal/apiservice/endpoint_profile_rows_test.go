@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/routescan"
 )
 
 const goAPIRows = "../../contracts/auth/v1/endpoint-profiles.go-api.json"
@@ -139,23 +141,26 @@ var dispatchedLevels = map[string]string{
 }
 
 // TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard: each row's
-// source line is the line that registers its route, and the row agrees with the
-// guard level that registration names. A route behind policy.Admin,
-// AdminOrg, Authenticated, Superuser or Optional accepts the user access token
-// with no HS256 opt-in; no row lists the retired ops access token.
+// source file holds the one registration (method + route) that mounts its
+// route, and the row agrees with the guard level that registration names. A
+// route behind policy.Admin, AdminOrg, Authenticated, Superuser or Optional
+// accepts the user access token with no HS256 opt-in; no row lists the retired
+// ops access token. The row's source line is a citation: it is not compared.
 func TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard(t *testing.T) {
-	problems, checked := rowRegistrationProblems(t, scanRegistrations(t, "../api", "."), loadGoAPIRows(t), mountedRoutes(t), treePath)
+	problems, checked, drift := rowRegistrationProblems(t, scanRegistrations(t, "../api", "."), loadGoAPIRows(t), mountedRoutes(t), treePath)
 	for _, problem := range problems {
 		t.Error(problem)
 	}
 	if checked < 200 {
 		t.Fatalf("only %d rows were checked against their registrations", checked)
 	}
+	t.Logf("citation note: %d of %d rows cite a line other than their registration's", drift, checked)
 }
 
-// rowRegistrationProblems ties each mounted route's row to the registration that mounts it and to the guard level
-// that registration names. rel turns a scanned path into the repo-relative form rows carry.
-func rowRegistrationProblems(t *testing.T, regs []registration, rows []map[string]any, mounted []mountedRoute, rel func(string) string) (problems []string, checked int) {
+// rowRegistrationProblems ties each mounted route's row to the registration that mounts it, by symbol, and to the
+// guard level that registration names. rel turns a scanned path into the repo-relative form rows carry. drift counts
+// the rows whose cited line is not the registration's.
+func rowRegistrationProblems(t *testing.T, regs []registration, rows []map[string]any, mounted []mountedRoute, rel func(string) string) (problems []string, checked, drift int) {
 	t.Helper()
 	bad := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	byKey := map[string]map[string]any{}
@@ -177,8 +182,13 @@ func rowRegistrationProblems(t *testing.T, regs []registration, rows []map[strin
 		if got := source["file"].(string); got != rel(reg.File) {
 			bad("%s: row source file %s, the registration is in %s", route.key(), got, rel(reg.File))
 		}
-		if got := int(source["line"].(float64)); got != reg.Line {
-			bad("%s: row source line %d, the registration is on line %d", route.key(), got, reg.Line)
+		if reg.Pattern != "" {
+			if _, err := routescan.Resolve(regs, reg.File, route.Method, route.Pattern); err != nil {
+				bad("%s: %v", route.key(), err)
+			}
+		}
+		if int(source["line"].(float64)) != reg.Line {
+			drift++
 		}
 		classes, _ := row["accepted_credential_classes"].([]any)
 		hs256, user := false, false
@@ -204,64 +214,86 @@ func rowRegistrationProblems(t *testing.T, regs []registration, rows []map[strin
 		}
 		checked++
 	}
-	return problems, checked
+	return problems, checked, drift
 }
 
-// TestEndpointProfileAnchorsStillPointAtTheirSymbols: every anchor carries
-// the text its line must still hold, so a pinned file:line cannot drift.
+// TestEndpointProfileAnchorsStillPointAtTheirSymbols: every validator anchor
+// carries a note, and the note resolves in its file to one place: the one line
+// that holds it, or, for a note on several lines (the weak "Pattern:"), the
+// row's own registration. The anchor's line is a citation: it is not compared.
 func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
-	problems, checked := anchorNoteProblems(t, "../..", loadGoAPIRows(t))
+	problems, checked, drift := anchorNoteProblems(t, "../..", loadGoAPIRows(t))
 	for _, problem := range problems {
 		t.Error(problem)
 	}
 	if checked < 200 {
 		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
 	}
+	t.Logf("citation note: %d of %d validator anchors cite a line other than the one their note resolves to", drift, checked)
 }
 
-// anchorNoteProblems checks the validator anchors of rows against the source under root.
-func anchorNoteProblems(t *testing.T, root string, rows []map[string]any) (problems []string, checked int) {
+// anchorNoteProblems resolves the validator anchors of rows in the source under root. drift counts the anchors whose
+// cited line is not the resolved one.
+func anchorNoteProblems(t *testing.T, root string, rows []map[string]any) (problems []string, checked, drift int) {
 	t.Helper()
-	lineOf := func(path string, line int) string {
+	sources := map[string][]byte{}
+	read := func(path string) []byte {
+		if raw, ok := sources[path]; ok {
+			return raw
+		}
 		raw, err := os.ReadFile(filepath.Join(root, path))
 		if err != nil {
 			t.Fatalf("anchor file %s: %v", path, err)
 		}
-		lines := strings.Split(string(raw), "\n")
-		if line < 1 || line > len(lines) {
-			t.Fatalf("anchor %s:%d is outside the file (%d lines)", path, line, len(lines))
-		}
-		return lines[line-1]
+		sources[path] = raw
+		return raw
 	}
-	var walk func(node any, where string)
-	walk = func(node any, where string) {
+	scanned := map[string][]registration{}
+	ownRegistration := func(row map[string]any, path string) (registration, error) {
+		dir := filepath.Join(root, filepath.Dir(path))
+		if _, ok := scanned[dir]; !ok {
+			scanned[dir] = scanRegistrations(t, dir)
+		}
+		method, _ := row["method"].(string)
+		route, _ := row["route"].(string)
+		return routescan.Resolve(scanned[dir], filepath.ToSlash(filepath.Join(root, path)), method, route)
+	}
+	rowFile := func(row map[string]any) string {
+		source, _ := row["source"].(map[string]any)
+		file, _ := source["file"].(string)
+		return file
+	}
+	var walk func(node any, where string, row map[string]any)
+	walk = func(node any, where string, row map[string]any) {
 		switch value := node.(type) {
 		case map[string]any:
 			path, hasPath := value["path"].(string)
 			line, hasLine := value["line"].(float64)
 			if hasPath && hasLine {
+				checked++
 				note, _ := value["note"].(string)
 				if note == "" {
 					problems = append(problems, fmt.Sprintf("%s: anchor %s:%d carries no note naming what its line holds", where, path, int(line)))
-				} else if !strings.Contains(lineOf(path, int(line)), note) {
-					problems = append(problems, fmt.Sprintf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(lineOf(path, int(line)))))
+				} else if problem, drifted := routescan.ResolveNote(read(path), path, note, int(line), rowFile(row), func() (registration, error) { return ownRegistration(row, path) }); problem != "" {
+					problems = append(problems, where+": "+problem)
+				} else if drifted {
+					drift++
 				}
-				checked++
 			}
 			for key, child := range value {
-				walk(child, where+"/"+key)
+				walk(child, where+"/"+key, row)
 			}
 		case []any:
 			for index, child := range value {
-				walk(child, where+"["+strconv.Itoa(index)+"]")
+				walk(child, where+"["+strconv.Itoa(index)+"]", row)
 			}
 		}
 	}
 	for _, row := range rows {
-		walk(row["primary_validator"], rowKey(t, row)+"/primary_validator")
-		walk(row["reachable_validators"], rowKey(t, row)+"/reachable_validators")
+		walk(row["primary_validator"], rowKey(t, row)+"/primary_validator", row)
+		walk(row["reachable_validators"], rowKey(t, row)+"/reachable_validators", row)
 	}
-	return problems, checked
+	return problems, checked, drift
 }
 
 // dispatchProbeValues give the wildcard values of the routes whose segment

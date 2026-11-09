@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -42,8 +43,42 @@ func TestQueryRowAnchorsSurviveALineShift(t *testing.T) {
 			"internal/queryapi/server/server.go":      "func mountQueryRoute(",
 			"internal/queryapi/server/rest_routes.go": "func RESTRoutes(",
 		})
-	problems, checked := queryRowAnchorProblems(t, root, rows)
+	problems, checked, _ := queryRowAnchorProblems(t, root, rows)
 	if len(problems) != 0 {
 		t.Errorf("a line shift broke %d of %d query-api anchors:\n%s", len(problems), checked, strings.Join(problems, "\n"))
+	}
+}
+
+// A row whose source names no registration of its method and route, or two that its listeners do not tell apart,
+// fails; the line it cites never decides. A method-less mux registration serves every method.
+func TestQueryRowFailsWhenItsSourceDoesNotResolveToOneRegistration(t *testing.T) {
+	rows := map[string]map[string]any{}
+	for _, row := range loadQueryAPIRows(t) {
+		rows[row["id"].(string)] = row
+	}
+	const mcpQuery, summary = "POST /query [dev-health-query-api @mcp]", "GET /api/v1/people/{person_id}/summary [dev-health-query-api @query,internal]"
+	cases := []struct {
+		name, base string
+		plant      func(row map[string]any)
+		want       string
+	}{
+		{"route not registered", mcpQuery, func(row map[string]any) { row["route"] = "/query-gone" }, "source anchor stale: internal/queryapi/server/server.go holds no registration of POST /query-gone"},
+		{"listeners no mux serves", mcpQuery, func(row map[string]any) { row["id"] = "POST /query [dev-health-query-api @query,mcp]" }, "source anchor stale: internal/queryapi/server/server.go holds no registration of POST /query"},
+		{"method outside the Methods list", summary, func(row map[string]any) { row["method"] = "DELETE" }, "source anchor stale: internal/queryapi/server/rest_routes.go holds no registration of DELETE /api/v1/people/{person_id}/summary"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if rows[tc.base] == nil {
+				t.Fatalf("row %s is missing", tc.base)
+			}
+			raw, _ := json.Marshal(rows[tc.base])
+			var row map[string]any
+			_ = json.Unmarshal(raw, &row)
+			tc.plant(row)
+			problems, _, _ := queryRowAnchorProblems(t, "../../..", []map[string]any{row})
+			if len(problems) != 1 || !strings.Contains(problems[0], tc.want) {
+				t.Fatalf("got %v, want one problem with %q", problems, tc.want)
+			}
+		})
 	}
 }

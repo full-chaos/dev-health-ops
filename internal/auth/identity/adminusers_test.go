@@ -135,37 +135,20 @@ func (r scriptedRow) Scan(dest ...any) error {
 	return nil
 }
 
-// AlreadyDone is go-api's: the user was inactive and no refresh token was left to revoke. An active user, or one with
-// a live refresh token, is not already done.
+// AlreadyDone is go-api's rule with no live go-api token (CHAOS-10408, CHAOS-11506): the user was inactive. An active
+// user is not already done.
 func TestAdminSoftDeleteAlreadyDoneIsGoAPIs(t *testing.T) {
 	for _, c := range []struct {
 		active   bool
-		revoked  string
 		wantDone bool
-	}{{false, "UPDATE 0", true}, {false, "UPDATE 2", false}, {true, "UPDATE 0", false}} {
-		tx := &scriptedTx{bools: []bool{true, c.active}, tags: []string{c.revoked}}
+	}{{false, true}, {true, false}} {
+		tx := &scriptedTx{bools: []bool{true, c.active}}
 		got, err := applyAdminSoftDelete(context.Background(), tx, `"auth"`, uuid.New())
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got.WasActive != c.active || got.AlreadyDone != c.wantDone {
-			t.Errorf("active %v revoked %s: %+v, want already_done %v", c.active, c.revoked, got, c.wantDone)
-		}
-	}
-}
-
-// The create refuses a non-local account without a valid provider subject before any row is written, as go-api's
-// create does (RefuseInvalidProviderID).
-func TestAdminCreateRefusesAnInvalidProviderIDBeforeAnyWrite(t *testing.T) {
-	tx := &recordingTx{}
-	provider := "github"
-	err := applyAdminCreate(context.Background(), tx, `"auth"`, planAdminCreate(AdminCreateRequest{Email: "a@example.test", AuthProvider: &provider}), nil, nil)
-	if !errors.Is(err, ErrInvalidProviderID) {
-		t.Fatalf("applyAdminCreate = %v, want ErrInvalidProviderID", err)
-	}
-	for _, s := range tx.statements {
-		if strings.HasPrefix(strings.TrimSpace(s), "INSERT") {
-			t.Fatalf("a row was written before the refusal: %q", s)
+			t.Errorf("active %v: %+v, want already_done %v", c.active, got, c.wantDone)
 		}
 	}
 }

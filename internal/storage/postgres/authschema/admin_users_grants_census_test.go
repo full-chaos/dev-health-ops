@@ -9,8 +9,8 @@ import (
 )
 
 // The user-admin routes (identity adminusers.go) run as the auth runtime role. This census reads their SQL from
-// source and proves the runtime posture and the users-owned grants cover every public.users and public.refresh_tokens
-// column they insert or update, and that none writes is_superuser (the platform roles live in the auth schema).
+// source and proves the runtime posture and the users-owned grants cover every public.users column they insert or
+// update, that none touches public.refresh_tokens (no grant since CHAOS-10408), and that none writes is_superuser (the platform roles live in the auth schema).
 func TestRuntimeGrantsCoverEveryWriteOfTheAdminUserRoutes(t *testing.T) {
 	raw, err := os.ReadFile("../../../auth/identity/adminusers.go")
 	if err != nil {
@@ -49,18 +49,9 @@ func TestRuntimeGrantsCoverEveryWriteOfTheAdminUserRoutes(t *testing.T) {
 		}
 	}
 
-	refresh := LegacyRefreshTokenGrant()
-	for _, m := range regexp.MustCompile("UPDATE public\\.refresh_tokens SET ([^`]*?) WHERE ([^`]*)`").FindAllStringSubmatch(source, -1) {
-		for _, assignment := range strings.Split(m[1], ",") {
-			if column := strings.TrimSpace(strings.SplitN(assignment, "=", 2)[0]); !slices.Contains(refresh.Update, column) {
-				t.Errorf("adminusers.go updates public.refresh_tokens.%s without the UPDATE grant", column)
-			}
-		}
-		for _, column := range []string{"user_id", "revoked_at"} {
-			if strings.Contains(m[2], column) && !slices.Contains(refresh.Select, column) {
-				t.Errorf("adminusers.go filters public.refresh_tokens on %s without the SELECT grant", column)
-			}
-		}
+	// The auth runtime role holds no grant on public.refresh_tokens (CHAOS-10408 removed it): no admin write touches it.
+	if strings.Contains(source, "public.refresh_tokens") {
+		t.Error("adminusers.go writes public.refresh_tokens: the runtime role holds no grant there (CHAOS-10408)")
 	}
 	if strings.Contains(source, "DELETE FROM public.") {
 		t.Error("adminusers.go deletes a public row: the runtime role holds no such DELETE for these routes")

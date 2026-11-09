@@ -567,9 +567,10 @@ func (s *Store) VerifyAdminPassword(ctx context.Context, actor uuid.UUID, passwo
 
 // AdminSetPassword sets the user's password in one audit.Commit. Authorize runs first (the actor rule and the platform
 // role read lock come before any user row, in the auth lock order); then the writes of SetPasswordHashFor (the auth
-// verifier, legacy_token_version + 1, the session stamp event, the public mirror and token_version + 1), go-api's
-// refresh token revoke, and go-api's "Admin changed user password" row (in AuditOrg, else the target's first
-// membership; none writes no row). Reason password_changed, actor the admin.
+// verifier, legacy_token_version + 1, the session stamp event, the public mirror and token_version + 1) and go-api's
+// "Admin changed user password" row (in AuditOrg, else the target's first membership; none writes no row). The session
+// stamp ends the user's auth-service sessions; no go-api refresh token is live while auth-service owns users
+// (CHAOS-10408). Reason password_changed, actor the admin.
 func (s *Store) AdminSetPassword(ctx context.Context, req AdminPasswordRequest) (err error) {
 	defer func() { s.countLink(ctx, "admin_set_password", err) }()
 	if !s.ownsUsers {
@@ -608,10 +609,6 @@ WHERE principal_id = $1 RETURNING password_updated_at`, req.Principal, req.Hash,
 			if _, err := updatePublicPassword(ctx, tx, req.Principal, req.Hash); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`,
-				req.Principal); err != nil {
-				return err
-			}
 			auditOrg, err := publicaudit.OrganizationOr(ctx, tx, req.AuditOrg, req.Principal)
 			if err != nil || auditOrg == nil {
 				return err
@@ -648,7 +645,7 @@ type AdminSoftDeleteResult struct {
 
 // AdminSoftDeleteUser turns the login off and keeps the rows, in one audit.Commit (reason principal_disabled): the
 // principal disabled, its delegated sessions ended, auth.users legacy_token_version + 1, and go-api's public writes
-// (is_active false, token_version + 1, refresh tokens revoked). It runs on every call, for an
+// (is_active false, token_version + 1). It runs on every call, for an
 // inactive user too, as go-api's does.
 func (s *Store) AdminSoftDeleteUser(ctx context.Context, req AdminSoftDeleteRequest) (result AdminSoftDeleteResult, err error) {
 	defer func() { s.countLink(ctx, "admin_soft_delete", err) }()
@@ -701,10 +698,6 @@ func applyAdminSoftDelete(ctx context.Context, tx AdminTx, q string, principal u
 	if err != nil {
 		return result, err
 	}
-	revoked, err := tx.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, principal)
-	if err != nil {
-		return result, err
-	}
 	if _, err := tx.Exec(ctx, `UPDATE public.users SET is_active = false, token_version = token_version + 1, updated_at = now() WHERE id = $1`, principal); err != nil {
 		return result, err
 	}
@@ -714,8 +707,11 @@ func applyAdminSoftDelete(ctx context.Context, tx AdminTx, q string, principal u
 	if _, err := tx.Exec(ctx, `UPDATE `+q+`.users SET legacy_token_version = legacy_token_version + 1, updated_at = clock_timestamp() WHERE principal_id = $1`, principal); err != nil {
 		return result, err
 	}
-	// go-api's soft delete also deletes the user's password reset and email verification tokens; while auth-service
-	// owns users those tables hold no row (the users backfill purges them, CHAOS-11506), so there is none to delete or count.
-	result.AlreadyDone = !result.WasActive && revoked.RowsAffected() == 0
+	// go-api's soft delete also revokes the user's go-api refresh tokens and deletes its password reset and email
+	// verification tokens. While auth-service owns users none of them is live: the go-api refresh token is retired with
+	// the legacy exchange (CHAOS-10408 removed the auth role's grant on go-api's refresh token table) and the link-token tables
+	// are purged by the users backfill (CHAOS-11506). So there is nothing to end or count, and AlreadyDone is go-api's
+	// rule with no live go-api token: the user was inactive.
+	result.AlreadyDone = !result.WasActive
 	return result, nil
 }

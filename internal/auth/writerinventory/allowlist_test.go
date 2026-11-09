@@ -112,13 +112,11 @@ var Allowlist = []Entry{
 	// acp attest of PLAN-13376 v2 (S1, ticket 13377): the user-admin routes go-api calls while auth-service owns users write
 	// the auth rows and go-api's public rows in one commit (create, email, verified and profile update, admin password set, soft delete).
 	{File: "internal/auth/identity/adminusers.go", Func: "Store.AdminSetPassword", Table: "auth.users", Verb: "UPDATE"},
-	{File: "internal/auth/identity/adminusers.go", Func: "Store.AdminSetPassword", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminCreate", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminCreate", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminCreate", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminSoftDelete", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminSoftDelete", Table: "auth.users", Verb: "UPDATE"},
-	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminSoftDelete", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminSoftDelete", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminUpdate", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/adminusers.go", Func: "applyAdminUpdate", Table: "auth.users", Verb: "UPDATE"},

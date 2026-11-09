@@ -138,7 +138,7 @@ const (
 	// enforceSessionRowUnavailable: the caller's go-api impersonation row could not be read. The route is refused with
 	// the dependency failure 503.
 	enforceSessionRowUnavailable
-	// enforceDenyNoOrg: the decision point refused an admin-or row to a token with no organization. The route is refused
+	// enforceDenyNoOrg: the decision point refused a platform row to a token with no organization. The route is refused
 	// with the legacy guard's 403 for a caller with no organization (product rule 1: the legacy answer).
 	enforceDenyNoOrg
 )
@@ -247,6 +247,9 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 		return enforceAllow
 	}
 	countEnforce(ctx, row.Namespace, enforceOutcomeDeny)
+	if row.ResourceType == policycatalog.ScopePlatform && org == "" {
+		return enforceDenyNoOrg
+	}
 	return enforceDeny
 }
 

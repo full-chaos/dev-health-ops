@@ -35,6 +35,18 @@ var platformAdminLegacyGoAPIActions = map[string]string{
 	"license.read": "apiservice TestPlatformAdminNoMembershipBillingAndLicenseReadsEqualLegacyWired, the 2 license.read rows",
 }
 
+// platformAdminLegacyWebActions maps each web action whose legacy route admits a platform admin with no membership
+// row in the organization of its session to its executed legacy cell (dev-health-web, run against a real ops stack).
+var platformAdminLegacyWebActions = map[string]string{
+	"acr.credential.issue": "full-chaos/dev-health-web 440ac1517f1452956ea547162c49a1a7ba58105c tests/acr-legacy/legacy-cells.proof.ts:447 " +
+		"device approval and :457 consent approve (platform admin, no membership row), suite acr-legacy " +
+		"(vitest.acr-legacy.config.ts, runner ci/acr-legacy/run-legacy-cells.sh), recording run 4 on ops c60f0702: " +
+		"200 approved, log 863528210512, record f8aff1566d30",
+}
+
+// platformAdminFilteredActions is the closed list of flagged actions that may be repository_scope filtered.
+var platformAdminFilteredActions = map[string]bool{"acr.credential.issue": true}
+
 var adminGuardValidators = []string{"policy.Admin:", "policy.AdminOrg:"}
 
 var platformAdminProfiles = []string{"go-api", "query-api", "auth-service"}
@@ -137,14 +149,34 @@ func TestPlatformAdminFlagIsExactlyTheAdminGuardOrganizationActions(t *testing.T
 		}
 		want[a] = true
 	}
+	for a := range platformAdminLegacyWebActions {
+		if !organization[a] {
+			t.Errorf("listed web action %s is not an organization action", a)
+		}
+		want[a] = true
+	}
 	if got, want := platformAdminSet(flagged), platformAdminSet(want); !slices.Equal(got, want) {
 		t.Errorf("platform_admin allowed on %v; the go-api admin-guard organization actions and the query-api and go-api lists are %v", got, want)
 	}
 
-	// Part 3: a flagged allow is the owner's shape: no repository scope, no redaction class for any role.
+	// Part 3: a flagged allow is the owner's shape: no repository scope, no redaction class for any role. One closed
+	// exception: acr.credential.issue is repository_scope filtered, because device approval and consent take their
+	// repository scopes from this decision; its platform-admin allow is org-wide (repository_scope organization),
+	// the shape the membership default gives every role.
 	for _, a := range catalog.Actions {
-		if flagged[a.Action] && a.RepositoryScope == "filtered" {
+		if flagged[a.Action] && a.RepositoryScope == "filtered" && !platformAdminFilteredActions[a.Action] {
 			t.Errorf("flagged action %s is repository_scope filtered", a.Action)
+		}
+	}
+	filtered := map[string]bool{}
+	for _, a := range catalog.Actions {
+		if a.RepositoryScope == "filtered" {
+			filtered[a.Action] = true
+		}
+	}
+	for a := range platformAdminFilteredActions {
+		if !flagged[a] || !filtered[a] {
+			t.Errorf("listed filtered action %s is not a flagged, repository_scope filtered action", a)
 		}
 	}
 	var redaction struct {

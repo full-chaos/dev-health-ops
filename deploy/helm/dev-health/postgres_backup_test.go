@@ -227,8 +227,9 @@ func TestPostgresBackupRunsTheStatefulSetImageAgainstTheBundledService(t *testin
 }
 
 // PGPASSWORD is always a secretKeyRef on the Secret and key the StatefulSet's POSTGRES_PASSWORD names: the chart
-// Secret (knob off: the StatefulSet still has the plain value, the chart Secret holds the same value), or the
-// existing Secret and its key. The value is never in the CronJob.
+// Secret, or the existing Secret and its key. With the backup on, the StatefulSet reads that same reference even
+// when credentialsSecret.enabled is false (the chart Secret renders whenever existingSecret is unset), so the
+// database and the backup can never read two different sources. The value is never in the CronJob.
 func TestPostgresBackupPasswordIsTheStatefulSetSecret(t *testing.T) {
 	requireHelmUnderCI(t)
 	cases := map[string]struct {
@@ -248,8 +249,9 @@ func TestPostgresBackupPasswordIsTheStatefulSetSecret(t *testing.T) {
 			if at(ref, "name") != c.name || at(ref, "key") != c.key || len(entry) != 2 {
 				t.Errorf("PGPASSWORD = %v, want only a secretKeyRef on %s/%s", entry, c.name, c.key)
 			}
-			if stsRef := at(pgPasswordEntry(t, sts), "valueFrom", "secretKeyRef"); stsRef != nil && !reflect.DeepEqual(stsRef, ref) {
-				t.Errorf("PGPASSWORD reads %v, the StatefulSet reads %v", ref, stsRef)
+			stsEntry := pgPasswordEntry(t, sts)
+			if stsRef := at(stsEntry, "valueFrom", "secretKeyRef"); stsRef == nil || !reflect.DeepEqual(stsRef, ref) || len(stsEntry) != 2 {
+				t.Errorf("PGPASSWORD reads %v, the StatefulSet's POSTGRES_PASSWORD is %v; want the same secretKeyRef", ref, stsEntry)
 			}
 			if strings.Contains(yamlText(cronJob), pgDummyPassword) {
 				t.Error("the CronJob holds the password value")
@@ -323,6 +325,13 @@ func TestPostgresBackupScriptWritesChecksAndPrunesInOrder(t *testing.T) {
 	}
 	if strings.Contains(script, "PGPASSWORD=") || strings.Contains(script, pgDummyPassword) {
 		t.Error("the script sets or holds the password")
+	}
+	// set -e sees only the last command of a pipeline, so a failed sha256sum, wc or find inside one would be
+	// silent: the script has no pipeline at all.
+	for i, line := range strings.Split(script, "\n") {
+		if strings.Contains(strings.ReplaceAll(line, "||", ""), "|") && !strings.Contains(line, "case ") {
+			t.Errorf("script line %d has a pipeline, whose earlier failures set -e cannot see: %q", i+1, line)
+		}
 	}
 }
 

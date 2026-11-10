@@ -24,6 +24,9 @@ type Registration struct {
 	Head    string   // the literal head of a path expression whose tail is a variable
 	Level   string   // Public, Optional, Authenticated, Admin, AdminOrg, Superuser, or "" for none named
 	Mux     string   // the receiver of a Handle/HandleFunc registration (ScanWithMux), e.g. "mcpMux"
+	// PatternIdent is the pattern expression when it is one identifier (PatternJWKS), resolved or not: a constant from
+	// another package leaves Pattern "" and names the registration here.
+	PatternIdent string
 }
 
 var methodNames = map[string]string{
@@ -253,6 +256,9 @@ func buildRegistration(fset *token.FileSet, path string, methodExpr, patternExpr
 	}
 	if value, ok := literalString(patternExpr, consts); ok {
 		reg.Pattern = value
+	}
+	if ident, ok := patternExpr.(*ast.Ident); ok {
+		reg.PatternIdent = ident.Name
 	}
 	reg.Tail = tailString(patternExpr)
 	if binary, ok := patternExpr.(*ast.BinaryExpr); ok && reg.Pattern == "" && binary.Op == token.ADD {

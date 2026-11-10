@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -177,37 +178,51 @@ func TestTheKeyClassStaysUnconsumedUntilItsUseLands(t *testing.T) {
 // the anchored line holds a quoted /internal/v1/ route, it is that route. A consumer moved onto the line of a sibling route
 // (which has its own pinned text) is caught here and nowhere else.
 func TestAProvisioningConsumerAnchorLineNamesTheRouteItDescribes(t *testing.T) {
-	document := loadClassRegistryDocument(t)
-	root := testRoot(t)
-	described := regexp.MustCompile(`auth-service POST (/internal/v1/[a-z0-9/_-]+)`)
-	quoted := regexp.MustCompile(`"(/internal/v1/[a-z0-9/_-]+)"`)
-	checked := map[string]int{}
-	for _, class := range document.Classes {
-		for _, consumer := range class.Consumers {
-			m := described.FindStringSubmatch(consumer.Description)
-			if m == nil || consumer.Anchor == nil || consumer.Anchor.Repo != "ops" {
-				continue
-			}
-			raw, err := os.ReadFile(filepath.Join(root, consumer.Anchor.Path))
-			if err != nil {
-				t.Fatal(err)
-			}
-			lines := strings.Split(string(raw), "\n")
-			if consumer.Anchor.Line < 1 || consumer.Anchor.Line > len(lines) {
-				t.Errorf("%s %s: anchor %s:%d is outside the file", class.ClassID, m[1], consumer.Anchor.Path, consumer.Anchor.Line)
-				continue
-			}
-			if q := quoted.FindStringSubmatch(lines[consumer.Anchor.Line-1]); q != nil {
-				if q[1] != m[1] {
-					t.Errorf("%s consumer of %s is anchored at %s:%d, a line that names %s", class.ClassID, m[1], consumer.Anchor.Path, consumer.Anchor.Line, q[1])
-				}
-				checked[class.ClassID]++
-			}
-		}
+	problems, checked := provisioningConsumerProblems(t, loadClassRegistryDocument(t), testRoot(t))
+	for _, problem := range problems {
+		t.Error(problem)
 	}
 	for _, class := range []string{"workload_token"} {
 		if checked[class] < 7 {
 			t.Errorf("%s: %d provisioning consumers anchored at a quoted route line, want at least 7 (the grant and service account routes)", class, checked[class])
 		}
 	}
+}
+
+// provisioningConsumerProblems checks each provisioning consumer anchor whose PINNED text quotes a route: the text
+// TestCredentialClassAnchorsPointAtTheirPinnedLineText proves is in its symbol, so a moved line is never read or
+// skipped here. The file must exist under root; checked counts the anchors measured per class.
+func provisioningConsumerProblems(t *testing.T, document classRegistryDocument, root string) (problems []string, checked map[string]int) {
+	t.Helper()
+	pinnedText := map[string]string{}
+	for _, pin := range loadAnchorPins(t) {
+		pinnedText[anchorKey(pin.Path, pin.Line)] = pin.Text
+	}
+	described := regexp.MustCompile(`auth-service POST (/internal/v1/[a-z0-9/_-]+)`)
+	quoted := regexp.MustCompile(`"(/internal/v1/[a-z0-9/_-]+)"`)
+	checked = map[string]int{}
+	for _, class := range document.Classes {
+		for _, consumer := range class.Consumers {
+			m := described.FindStringSubmatch(consumer.Description)
+			if m == nil || consumer.Anchor == nil || consumer.Anchor.Repo != "ops" {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(root, consumer.Anchor.Path)); err != nil {
+				problems = append(problems, fmt.Sprintf("%s %s: anchor file %s: %v", class.ClassID, m[1], consumer.Anchor.Path, err))
+				continue
+			}
+			text, pinned := pinnedText[anchorKey(consumer.Anchor.Path, consumer.Anchor.Line)]
+			if !pinned {
+				problems = append(problems, fmt.Sprintf("%s %s: anchor %s:%d has no pin in credentialanchors/credential-anchor-lines.json", class.ClassID, m[1], consumer.Anchor.Path, consumer.Anchor.Line))
+				continue
+			}
+			if q := quoted.FindStringSubmatch(text); q != nil {
+				if q[1] != m[1] {
+					problems = append(problems, fmt.Sprintf("%s consumer of %s is anchored at %s:%d, a line that names %s", class.ClassID, m[1], consumer.Anchor.Path, consumer.Anchor.Line, q[1]))
+				}
+				checked[class.ClassID]++
+			}
+		}
+	}
+	return problems, checked
 }

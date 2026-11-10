@@ -459,3 +459,60 @@ func TestAliasPassFailsWhenNoStringConstantWasEvaluated(t *testing.T) {
 		t.Fatal("a package with no string constant passed: the alias pass measured nothing")
 	}
 }
+
+func TestFormatOperandsFollowFmtRules(t *testing.T) {
+	flagged := map[string]string{
+		"star-width": `const pw = "x1"
+
+func a(role string) string {
+	return fmt.Sprintf("CREATE ROLE %*s LOGIN PASSWORD '%s'", 8, role, pw)
+}
+`,
+		"star-precision": `const pw = "x1"
+
+func a(role string) string {
+	return fmt.Sprintf("CREATE ROLE %.*s LOGIN PASSWORD '%s'", 8, role, pw)
+}
+`,
+		"star-width-and-precision": `const pw = "x1"
+
+func a(role string) string {
+	return fmt.Sprintf("CREATE ROLE %*.*s LOGIN PASSWORD '%s'", 8, 4, role, pw)
+}
+`,
+		"indexed-forward": `const pw = "x1"
+
+func a(role string) string {
+	return fmt.Sprintf("CREATE ROLE %[2]q LOGIN PASSWORD '%s'", 1, role, pw)
+}
+`,
+		"indexed-rewind": `const pw = "x1"
+
+func a(role string) string {
+	return fmt.Sprintf("CREATE ROLE %q %q LOGIN PASSWORD '%[1]s'", pw, role)
+}
+`,
+	}
+	for name, body := range flagged {
+		if found := aliasCaseFindings(t, body); len(found) != 1 {
+			t.Errorf("%s: findings %q, want one", name, found)
+		}
+	}
+	accepted := map[string]string{
+		"indexed-repeat-runtime-password": `func a() string {
+	pass := build()
+	return fmt.Sprintf("CREATE ROLE %[1]q LOGIN PASSWORD '%[1]s'", pass, "unused")
+}
+`,
+		"star-width-literal-role-runtime-password": `func a() string {
+	pass := build()
+	return fmt.Sprintf("CREATE ROLE %*s LOGIN PASSWORD '%s'", 8, "r", pass)
+}
+`,
+	}
+	for name, body := range accepted {
+		if found := aliasCaseFindings(t, body); len(found) != 0 {
+			t.Errorf("%s: findings %q, want none", name, found)
+		}
+	}
+}

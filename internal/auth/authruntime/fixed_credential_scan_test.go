@@ -182,3 +182,105 @@ func TestAliasedPasswordConstInAnotherFileIsFound(t *testing.T) {
 		t.Fatalf("parsed %d, findings %q", parsed, found)
 	}
 }
+
+const aliasCaseHead = `package p
+
+import "fmt"
+
+func build() string { return "" }
+
+`
+
+func aliasCaseFindings(t *testing.T, body string) []string {
+	t.Helper()
+	found, parsed, err := aliasedPasswordFindings(map[string][]byte{"case.go": []byte(aliasCaseHead + body)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed != 1 {
+		t.Fatalf("parsed %d files, want 1", parsed)
+	}
+	return found
+}
+
+func TestNamedFormatBindingsAreFound(t *testing.T) {
+	cases := map[string]string{
+		"const": `const f = "CREATE ROLE r LOGIN PASSWORD '%s'"
+const pw = "x1"
+
+func a() string { return fmt.Sprintf(f, pw) }
+`,
+		"var": `var f = "CREATE ROLE r LOGIN PASSWORD '%s'"
+const pw = "x1"
+
+func a() string { return fmt.Sprintf(f, pw) }
+`,
+		"short-declaration": `const pw = "x1"
+
+func a() string {
+	f := "CREATE ROLE r LOGIN PASSWORD '%s'"
+	return fmt.Sprintf(f, pw)
+}
+`,
+		"assignment": `const pw = "x1"
+
+func a() string {
+	var f string
+	f = "CREATE ROLE r LOGIN PASSWORD '%s'"
+	return fmt.Sprintf(f, pw)
+}
+`,
+	}
+	for name, body := range cases {
+		if found := aliasCaseFindings(t, body); len(found) != 1 {
+			t.Errorf("%s: findings %q, want one", name, found)
+		}
+	}
+	if found := aliasCaseFindings(t, `func a() string {
+	return fmt.Sprintf("%s%s", "x PASSWORD '%s'", "y")
+}
+`); len(found) != 0 {
+		t.Errorf("a marker in a data argument is flagged: %q", found)
+	}
+}
+
+func TestIdentifierBindingsFollowObjects(t *testing.T) {
+	use := `func b(role string) string {
+	value := build()
+	return fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", role, value)
+}
+`
+	cases := map[string]string{
+		"const-other-scope":         "func a() { const value = \"x\"; _ = value }\n\n" + use,
+		"var-other-scope":           "func a() { var value = \"x\"; _ = value }\n\n" + use,
+		"short-declaration-other":   "func a() { value := \"x\"; _ = value }\n\n" + use,
+		"assignment-other-function": "func a() { var value string; value = \"x\"; _ = value }\n\n" + use,
+		"overwritten": `func b(role string) string {
+	value := "x"
+	value = build()
+	return fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", role, value)
+}
+`,
+		"nested-shadow": `func b(role string) string {
+	value := "x"
+	_ = value
+	{
+		value := build()
+		return fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", role, value)
+	}
+}
+`,
+	}
+	for name, body := range cases {
+		if found := aliasCaseFindings(t, body); len(found) != 0 {
+			t.Errorf("%s: findings %q, want none", name, found)
+		}
+	}
+	if found := aliasCaseFindings(t, `func b(role string) string {
+	value := "x"
+	return fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", role, value)
+}
+`); len(found) != 1 {
+		t.Errorf("a literal-bound value in the same function: findings %q, want one", found)
+	}
+}

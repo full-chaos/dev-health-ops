@@ -519,7 +519,7 @@ func TestRuntimeGrantStatementsMatchProvisionedLeastPrivilegePolicy(t *testing.T
 		"DO $$ BEGIN IF to_regclass('public.sync_coverage_projections') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE public.organizations TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.byo_llm_budget_reservations') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.byo_llm_budget_reservations TO \"domain_runtime\"; GRANT UPDATE (status, input_tokens, output_tokens, cached_input_tokens, actual_micro_usd, reconciled_at) ON TABLE public.byo_llm_budget_reservations TO \"domain_runtime\"; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.users') IS NOT NULL THEN GRANT SELECT ON TABLE public.users TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.users') IS NOT NULL THEN GRANT SELECT (id, email, full_name) ON TABLE public.users TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.audit_logs') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.audit_logs TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_runs TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_partitions TO \"domain_runtime\"; END IF; END $$",

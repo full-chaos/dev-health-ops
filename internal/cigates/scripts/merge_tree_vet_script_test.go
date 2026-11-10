@@ -52,6 +52,7 @@ func newMTV(t *testing.T) *mtvEnv {
 	e.repo.write("go.mod", "module example.com/x\n\ngo 1.24\n")
 	e.repo.write("internal/store/store.go", mtvStore)
 	e.repo.write("internal/store/store_test.go", mtvStoreTest)
+	e.repo.write("internal/store/history_test.go", "//go:build authhistory\n\npackage store\n")
 	e.repo.write("internal/venue/venue_test.go", mtvVenueTest)
 	e.repo.write("ci/venue_oracle_registry.d/internal__venue.tsv", mtvRegistry)
 	for _, f := range mergeTreeVetCIFiles {

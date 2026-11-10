@@ -193,7 +193,7 @@ internal/storage/postgres/domain_grant_reconciliation_integration_test.go	sync_r
 internal/storage/postgres/domain_grant_reconciliation_integration_test.go	sync_runs	PROBE	
 internal/storage/postgres/domain_grant_reconciliation_integration_test.go	sync_watermarks	PROBE	state
 internal/storage/postgres/domain_grant_reconciliation_integration_test.go	tier_limits	SUBSET	
-internal/storage/postgres/domain_grant_reconciliation_integration_test.go	users	PROBE	
+internal/storage/postgres/domain_grant_reconciliation_integration_test.go	users	SUBSET	
 internal/storage/postgres/domain_grant_reconciliation_integration_test.go	webhook_deliveries	PROBE	
 internal/storage/postgres/domain_grant_reconciliation_integration_test.go	worker_concurrency_leases	PROBE	
 internal/storage/postgres/domain_grant_reconciliation_integration_test.go	worker_instances	PROBE	

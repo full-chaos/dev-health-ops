@@ -11,6 +11,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -87,7 +88,7 @@ type bindingState struct {
 // follow object identity. Residuals: string concatenation in the password position, indexed verbs (%[2]s) and *
 // width or precision operands shift the verb count.
 func aliasedPasswordFindings(sources map[string][]byte) (findings []string, parsed int, err error) {
-	format := regexp.MustCompile(`(?i)password\s+'%s'`)
+	format := regexp.MustCompile(`(?i)password\s+'%(\[[0-9]+\])?s'`)
 	fset := token.NewFileSet()
 	names := make([]string, 0, len(sources))
 	for name := range sources {
@@ -215,21 +216,11 @@ func aliasedPasswordFindings(sources map[string][]byte) (findings []string, pars
 						if at == nil {
 							continue
 						}
-						verbs := 0
-						for j := 0; j < at[0]; j++ {
-							if text[j] != '%' {
-								continue
-							}
-							if text[j+1] == '%' {
-								j++
-								continue
-							}
-							verbs++
-						}
-						if i+1+verbs >= len(call.Args) {
+						operand, ok := formatOperand(text, at[0]+strings.Index(text[at[0]:], "'%")+1)
+						if !ok || i+1+operand >= len(call.Args) {
 							continue
 						}
-						target := call.Args[i+1+verbs]
+						target := call.Args[i+1+operand]
 						if len(valuesOf(target)) > 0 {
 							findings = append(findings, fmt.Sprintf("%d %s", fset.Position(target.Pos()).Line, name))
 							break
@@ -242,6 +233,85 @@ func aliasedPasswordFindings(sources map[string][]byte) (findings []string, pars
 		}
 	}
 	return findings, len(fileName), nil
+}
+
+// formatOperand returns the 0-based operand that the directive starting at text[end] takes, following fmt's own rules:
+// flags, [n], * or digits for the width, '.', [n], * or digits for the precision, [n], the verb; each * and each verb
+// takes one operand, [n] moves the next operand, %% takes none. A malformed index reports false.
+func formatOperand(text string, end int) (int, bool) {
+	argNum := 0
+	for i := 0; i < len(text); {
+		if text[i] != '%' {
+			i++
+			continue
+		}
+		operand, next, after, ok := formatDirective(text, i, argNum)
+		if !ok {
+			return 0, false
+		}
+		if i == end {
+			return operand, operand >= 0
+		}
+		argNum, i = after, next
+	}
+	return 0, false
+}
+
+func formatDirective(text string, at, argNum int) (operand, next, after int, ok bool) {
+	if at+1 < len(text) && text[at+1] == '%' {
+		return -1, at + 2, argNum, true
+	}
+	j := at + 1
+	for j < len(text) && strings.IndexByte("#0+- ", text[j]) >= 0 {
+		j++
+	}
+	afterIndex := false
+	index := func() bool {
+		if j >= len(text) || text[j] != '[' {
+			return true
+		}
+		closing := strings.IndexByte(text[j:], ']')
+		if closing < 0 {
+			return false
+		}
+		n, err := strconv.Atoi(text[j+1 : j+closing])
+		if err != nil || n < 1 {
+			return false
+		}
+		argNum, j, afterIndex = n-1, j+closing+1, true
+		return true
+	}
+	digits := func() {
+		for j < len(text) && text[j] >= '0' && text[j] <= '9' {
+			j++
+		}
+	}
+	if !index() {
+		return 0, 0, 0, false
+	}
+	if j < len(text) && text[j] == '*' {
+		argNum, j, afterIndex = argNum+1, j+1, false
+	} else {
+		digits()
+	}
+	if j < len(text) && text[j] == '.' {
+		j++
+		if !index() {
+			return 0, 0, 0, false
+		}
+		if j < len(text) && text[j] == '*' {
+			argNum, j, afterIndex = argNum+1, j+1, false
+		} else {
+			digits()
+		}
+	}
+	if !afterIndex && !index() {
+		return 0, 0, 0, false
+	}
+	if j >= len(text) {
+		return 0, 0, 0, false
+	}
+	return argNum, j + 1, argNum + 1, true
 }
 
 func hasFormatVerb(text string) bool {
@@ -457,5 +527,62 @@ func TestAliasPassFailsWhenNoStringConstantWasEvaluated(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("a package with no string constant passed: the alias pass measured nothing")
+	}
+}
+
+func TestFormatOperandsFollowFmtRules(t *testing.T) {
+	flagged := map[string]string{
+		"star-width": `const pw = "x1"
+
+func a(role string) string {
+	return fmt.Sprintf("CREATE ROLE %*s LOGIN PASSWORD '%s'", 8, role, pw)
+}
+`,
+		"star-precision": `const pw = "x1"
+
+func a(role string) string {
+	return fmt.Sprintf("CREATE ROLE %.*s LOGIN PASSWORD '%s'", 8, role, pw)
+}
+`,
+		"star-width-and-precision": `const pw = "x1"
+
+func a(role string) string {
+	return fmt.Sprintf("CREATE ROLE %*.*s LOGIN PASSWORD '%s'", 8, 4, role, pw)
+}
+`,
+		"indexed-forward": `const pw = "x1"
+
+func a(role string) string {
+	return fmt.Sprintf("CREATE ROLE %[2]q LOGIN PASSWORD '%s'", 1, role, pw)
+}
+`,
+		"indexed-rewind": `const pw = "x1"
+
+func a(role string) string {
+	return fmt.Sprintf("CREATE ROLE %q %q LOGIN PASSWORD '%[1]s'", pw, role)
+}
+`,
+	}
+	for name, body := range flagged {
+		if found := aliasCaseFindings(t, body); len(found) != 1 {
+			t.Errorf("%s: findings %q, want one", name, found)
+		}
+	}
+	accepted := map[string]string{
+		"indexed-repeat-runtime-password": `func a() string {
+	pass := build()
+	return fmt.Sprintf("CREATE ROLE %[1]q LOGIN PASSWORD '%[1]s'", pass, "unused")
+}
+`,
+		"star-width-literal-role-runtime-password": `func a() string {
+	pass := build()
+	return fmt.Sprintf("CREATE ROLE %*s LOGIN PASSWORD '%s'", 8, "r", pass)
+}
+`,
+	}
+	for name, body := range accepted {
+		if found := aliasCaseFindings(t, body); len(found) != 0 {
+			t.Errorf("%s: findings %q, want none", name, found)
+		}
 	}
 }

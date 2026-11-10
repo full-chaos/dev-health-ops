@@ -432,6 +432,36 @@ func TestRuntimeRoleCannotWriteBindingsOrAnythingOutsideAuditCommit(t *testing.T
 	}
 }
 
+// The runtime role resolves through the registry and never writes or locks a
+// workloads row: only the migration role writes it.
+func TestRuntimeRoleReadsTheRegistryButCannotWriteIt(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	n, b := registered(t, e, []string{"auth-service"})
+	info, err := e.writer.Lookup(ctx, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reg, err := e.reader.Resolve(ctx, b.input()); err != nil || reg.PrincipalID != info.PrincipalID {
+		t.Fatalf("Resolve through the runtime role = %+v, %v; want principal %s", reg, err, info.PrincipalID)
+	}
+	if got, err := e.reader.LookupPrincipal(ctx, info.PrincipalID); err != nil || got.Name != n {
+		t.Fatalf("LookupPrincipal through the runtime role = %+v, %v", got, err)
+	}
+	for label, sql := range map[string]string{
+		"insert": `INSERT INTO auth.workloads (principal_id, name) VALUES ($1, 'runtime-probe')`,
+		"update": `UPDATE auth.workloads SET disabled_at = now() WHERE principal_id = $1`,
+		"lock":   `SELECT 1 FROM auth.workloads WHERE principal_id = $1 FOR UPDATE`,
+	} {
+		if _, err := e.runtime.Exec(ctx, sql, info.PrincipalID); sqlState(err) != "42501" {
+			t.Errorf("the runtime role's %s on auth.workloads: state %q, err %v, want 42501", label, sqlState(err), err)
+		}
+	}
+	if c := e.count(t, ctx, `SELECT count(*) FROM auth.workloads WHERE principal_id = $1 AND disabled_at IS NULL`, info.PrincipalID); c != 1 {
+		t.Fatalf("the workload row changed under the refused writes (%d enabled rows)", c)
+	}
+}
+
 func TestDisableDeniesAtOnceAndAuditsTheTransition(t *testing.T) {
 	e := getEnv(t)
 	ctx := ctxT(t)

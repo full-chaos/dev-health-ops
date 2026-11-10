@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -484,4 +485,109 @@ func withIssuer(key string) string {
 		return accessTestIssuer
 	}
 	return os.Getenv(key)
+}
+
+// wiringIssuer is an https issuer whose JWKS kid set a test changes.
+type wiringIssuer struct {
+	srv *httptest.Server
+
+	mu   sync.Mutex
+	keys map[string]ed25519.PublicKey
+	kids []string
+	gets int
+}
+
+func newWiringIssuer(t *testing.T, kids ...string) *wiringIssuer {
+	t.Helper()
+	w := &wiringIssuer{keys: map[string]ed25519.PublicKey{}}
+	for _, kid := range kids {
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.keys[kid] = pub
+	}
+	w.kids = kids
+	w.srv = httptest.NewTLSServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		w.mu.Lock()
+		w.gets++
+		keys := make([]map[string]string, 0, len(w.kids))
+		for _, kid := range w.kids {
+			keys = append(keys, map[string]string{"kty": "OKP", "crv": "Ed25519", "alg": "EdDSA", "use": "sig", "kid": kid, "x": base64.RawURLEncoding.EncodeToString(w.keys[kid])})
+		}
+		w.mu.Unlock()
+		var doc []byte
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			doc, _ = json.Marshal(map[string]any{"issuer": w.srv.URL, "jwks_uri": w.srv.URL + "/.well-known/jwks.json", "id_token_signing_alg_values_supported": []string{"EdDSA"}})
+		case "/.well-known/jwks.json":
+			doc, _ = json.Marshal(map[string]any{"keys": keys})
+		default:
+			http.NotFound(rw, r)
+			return
+		}
+		_, _ = rw.Write(doc)
+	}))
+	t.Cleanup(w.srv.Close)
+	return w
+}
+
+func (w *wiringIssuer) publish(kids ...string) {
+	w.mu.Lock()
+	w.kids = kids
+	w.mu.Unlock()
+}
+
+func (w *wiringIssuer) requests() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.gets
+}
+
+// query-api's access-token key source is built from accessverify.JWKSConfig:
+// a kid the JWKS drops is refused 5 s after the last fetch, and the build
+// makes no request (product rule 3: it never holds a start).
+func TestAccessFromEnv_UsesTheBoundedJWKS(t *testing.T) {
+	issuer := newWiringIssuer(t, "kid-k", "kid-j")
+	var mu sync.Mutex
+	at := time.Unix(1_800_000_000, 0)
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return at
+	}
+	jwksTestHook = func(cfg *authverify.JWKSClientConfig) {
+		cfg.HTTPClient = issuer.srv.Client()
+		cfg.Now = clock
+	}
+	t.Cleanup(func() { jwksTestHook = nil })
+	opts, ok, err := accessFromEnv(func(name string) string {
+		if name == accessTokenIssuerEnvVar {
+			return issuer.srv.URL
+		}
+		return ""
+	})
+	if err != nil || !ok || opts.keys == nil {
+		t.Fatalf("ok %v keys %v err %v", ok, opts.keys != nil, err)
+	}
+	if _, err := newQueryAccessValidator(opts); err != nil {
+		t.Fatalf("validator: %v", err)
+	}
+	if n := issuer.requests(); n != 0 {
+		t.Fatalf("the build made %d requests, want 0", n)
+	}
+	resolver, isResolver := opts.keys.(authverify.KeyResolver)
+	if !isResolver {
+		t.Fatalf("key source %T is not a KeyResolver", opts.keys)
+	}
+	if key, err := resolver.ResolveKey("kid-k"); key == nil || err != nil {
+		t.Fatalf("first fetch: key %v err %v", key != nil, err)
+	}
+	issuer.publish("kid-j")
+	mu.Lock()
+	at = at.Add(5 * time.Second)
+	mu.Unlock()
+	if key, err := resolver.ResolveKey("kid-k"); key != nil || err != nil {
+		t.Fatalf("5 s after the fetch, the JWKS without the kid: key %v err %v, want an unknown kid", key != nil, err)
+	}
 }

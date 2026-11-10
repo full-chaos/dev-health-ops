@@ -27,6 +27,10 @@ const (
 	accessVerifyMeterName  = "github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 )
 
+// jwksTestHook lets a test give the JWKS client its HTTP client and clock; nil
+// in production.
+var jwksTestHook func(*authverify.JWKSClientConfig)
+
 // accessOptions builds one profile-routed validator.
 type accessOptions struct {
 	issuer string
@@ -48,7 +52,11 @@ func accessFromEnv(getenv getenvFunc) (accessOptions, bool, error) {
 	if issuer == "" {
 		return accessOptions{}, false, nil
 	}
-	keys, err := authverify.NewJWKSClient(authverify.JWKSClientConfig{Issuer: issuer})
+	jwks := accessverify.JWKSConfig(issuer)
+	if jwksTestHook != nil {
+		jwksTestHook(&jwks)
+	}
+	keys, err := authverify.NewJWKSClient(jwks)
 	if err != nil {
 		return accessOptions{}, false, err
 	}

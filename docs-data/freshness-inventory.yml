@@ -61,3 +61,7 @@
   disposition: refresh
   owner: product-analytics
   last-reviewed: '2026-07-16'
+- page: reference/auth/billing-and-worker-boundaries.md
+  disposition: refresh
+  owner: platform-operations
+  last-reviewed: '2026-11-10'

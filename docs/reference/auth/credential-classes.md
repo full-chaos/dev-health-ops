@@ -343,27 +343,17 @@ cross-tenant write path. Its two credential classes (the deployment-wide API
 key and the HMAC body signature) are deleted from the registry, the wire
 schemas and the stored-class CHECK (auth migration 0036).
 
-The engineering guardrails say: "missing config must never mean auth
-disabled in production." The webhook validators in
-`internal/api/webhookintake/` (`github.go` HMAC, `gitlab.go` token compare,
-`jira.go` HMAC) and the Stripe webhook
-(`internal/api/billing/webhook.go:60-84`, signature check in
-`internal/api/billing/webhooksig.go`) fail closed: each answers 500
-when its secret is unset.
+The current signature-only routes accept Stripe, GitHub, and PagerDuty signatures. GitLab and Jira intake routes are absent. See [Billing and worker boundaries](billing-and-worker-boundaries.md) for matching rules, refusal behavior, and enforcing tests.
 
 ## Retired credential: `svc_worker_*`
 
-**Retired.** The mint was retired first, and the `service-credentials`
-verbs that listed and revoked the stored rows are gone; `dho service-credentials` is an
-unknown command. No row was migrated or deleted: the rows stay until a later migration
-drops `internal_service_credentials`.
+The class is retired. The entire `dho service-credentials` command group is absent, including create, rotate, list, and revoke. Each verb returns an unknown-command error with exit 2. Stored rows do not grant operator authority.
 
-`WORKER_OPERATOR_TOKEN_PREFIX = "svc_worker_"` was minted through
-the same code path as `svc_acr_*`, with its own scope set (`workers:read`,
-`workers:operate`). No HTTP route in ops, web, or acr was found
-that validates a `svc_worker_`-prefixed bearer token — the internal acr routes (`internal/apiservice/acr/internalauth.go`)
-accept only the acr-api workload token. A consumer, if any, lives in the Go
-worker binaries or `dev-health-go`, outside this repository's HTTP routes.
+Enforced by: `TestRetiredVerbGroupsAreUnknownCommands` and `TestRetiredVerbGroupsAreNotInTheTree` in `cmd/dho/retired_verbs_test.go`.
+
+The worker operator CLI uses its fixed operator principal and database role checks. It does not validate `svc_worker_` bearers or check `workers:read` or `workers:operate` scopes. See [Worker and queue authorization](billing-and-worker-boundaries.md#worker-and-queue-authorization).
+
+Enforced by: `internal/joboperator/auth_test.go` and `internal/workersctl/operator_authority_inventory_test.go`.
 
 ## Infrastructure and exchange classes
 

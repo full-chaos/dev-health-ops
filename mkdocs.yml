@@ -258,6 +258,7 @@ nav:
       - Auth service configuration: reference/auth/configuration.md
       - Auth External Push authority: reference/auth/external-push-authority.md
       - Auth ACR credential authority: reference/auth/acr-credential-authority.md
+      - Auth billing and worker boundaries: reference/auth/billing-and-worker-boundaries.md
       - Auth organization roles and members: reference/auth/org-member-roles.md
       - Auth platform administrator: reference/auth/platform-admin.md
       - Auth resource grants: reference/auth/resource-grants.md

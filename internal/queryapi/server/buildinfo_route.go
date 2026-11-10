@@ -37,6 +37,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
@@ -112,8 +114,10 @@ const (
 // who wants to add pool state or environment to it should add a route.
 type buildInfoResponse = version.Info
 
-// newBuildInfoHandler serves GET /buildinfo behind the same bearer
-// envelope /query requires.
+// newBuildInfoHandler serves GET /buildinfo behind the internal identity
+// headers or a platform admin's user access token
+// (authenticateBuildInfo). edgeAuth/edgeStore are /query's edge carrier;
+// nil serves no user access token.
 //
 // The values come from internal/platform/version, which
 // docker/go-worker.Dockerfile already stamps into dho via -ldflags (VERSION,
@@ -121,7 +125,7 @@ type buildInfoResponse = version.Info
 // settings. So this route reports what was actually built; it does not
 // take the answer from the environment at run time, where a wrong value
 // would be indistinguishable from a right one.
-func newBuildInfoHandler(verifier *principal.Verifier) http.HandlerFunc {
+func newBuildInfoHandler(verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store) http.HandlerFunc {
 	info := version.Current("query-api")
 	body, err := buildstamp.Body(info)
 	if err != nil {
@@ -138,10 +142,7 @@ func newBuildInfoHandler(verifier *principal.Verifier) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		// edgeAuth/edgeStore nil: the edge-access-token carrier is /query-only
-		// (CHAOS-6263 PR (a), D2898/D2905) -- /buildinfo keeps accepting only
-		// the internal headers or the envelope, unchanged.
-		if _, ok := authenticateInternalRequest(w, r, verifier, nil, nil); !ok {
+		if !authenticateBuildInfo(w, r, verifier, edgeAuth, edgeStore) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -156,6 +157,32 @@ func newBuildInfoHandler(verifier *principal.Verifier) http.HandlerFunc {
 			log.Printf("query-api: /buildinfo: encode response failed: err=%v", encodeErr)
 		}
 	}
+}
+
+// authenticateBuildInfo admits the carriers authenticateInternalRequest takes
+// without the edge carrier, plus a user access token read through /query's
+// edge carrier whose live users row holds admin.orgs and that acts as itself:
+// no active impersonation session, not a delegated token. An HS256 edge token
+// is never a /buildinfo carrier. Any other user access token gets the bare 401
+// an unaccepted class gets.
+func authenticateBuildInfo(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store) bool {
+	token, bearer := bearerToken(r.Header.Get("Authorization"))
+	if !bearer || principal.AccessClassOf(token) != principal.AccessClassUser || !edgeCarrierToken(edgeAuth, token) {
+		_, ok := authenticateInternalRequest(w, r, verifier, nil, nil)
+		return ok
+	}
+	if refuseAmbiguousCarrier(w, r) {
+		return false
+	}
+	claims, ok := authenticateEdgeCarrier(w, r, edgeAuth, edgeStore, token)
+	if !ok {
+		return false
+	}
+	if !claims.Holds(rule.ActionAdminOrgs) || claims.ImpersonationActive || claims.Delegated {
+		refuseInternal(w, r, "buildinfo_not_platform_admin", "edge")
+		return false
+	}
+	return true
 }
 
 // mountProofRoute registers POST /query/proof only when this deployment

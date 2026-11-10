@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // CHAOS-9126, D5879: a REST read of more than 1,000 rows is served (the shared
@@ -53,7 +54,7 @@ FROM numbers(?)`, org, uint64(n))
 
 	serve := func(h http.HandlerFunc, target string) (int, string) {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 		rec := httptest.NewRecorder()
 		h(rec, req)
 		return rec.Code, rec.Body.String()
@@ -109,7 +110,7 @@ SELECT generateUUIDv4(), concat('acme/repo-', toString(number)), now(), now(), ?
 		log.SetOutput(&logs)
 		t.Cleanup(func() { log.SetOutput(os.Stderr) })
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/filters/options?scope_id=a&scope_id=b", nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 		rec := httptest.NewRecorder()
 		newFilterOptionsWorkHandler(tight)(rec, req)
 		if rec.Code != 503 || !strings.Contains(rec.Body.String(), "Result too large") {
@@ -123,7 +124,7 @@ SELECT generateUUIDv4(), concat('acme/repo-', toString(number)), now(), now(), ?
 			t.Fatal(err)
 		}
 		req = httptest.NewRequest(http.MethodGet, "/api/v1/filters/options", nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 		rec = httptest.NewRecorder()
 		newFilterOptionsWorkHandler(tight)(rec, req)
 		if rec.Code != 503 || !strings.Contains(rec.Body.String(), "Data unavailable") {

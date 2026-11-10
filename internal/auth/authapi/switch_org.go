@@ -109,8 +109,8 @@ func (p PGUsers) MemberRoleLockedOn(ctx context.Context, q session.Queryer, user
 }
 
 // withSwitchOrgRoute mounts the switch route when rows holds its row with the
-// access token classes the issuer verifies. Without it it logs one line naming
-// the route and mounts nothing.
+// user access token class (the retired HS256 class is on no row). Without it
+// it logs one line naming the route and mounts nothing.
 func (h compatHandlers) withSwitchOrgRoute(routes []httpapi.Route, rows []byte) ([]httpapi.Route, error) {
 	if h.SwitchOrg == nil {
 		return routes, nil
@@ -118,11 +118,11 @@ func (h compatHandlers) withSwitchOrgRoute(routes []httpapi.Route, rows []byte) 
 	if h.SwitchOrg.Sessions == nil || h.SwitchOrg.Reads == nil {
 		return nil, errors.New("authapi: the switch-org route needs its sessions and its reads")
 	}
-	classes := []string{accessverify.ClassLegacy}
-	if h.Issuer.access != nil {
-		classes = append(classes, accessverify.ClassUser)
+	if h.Issuer == nil || h.Issuer.access == nil {
+		h.rec.logger.Info("auth switch-org route not mounted: AUTH_TOKEN_ISSUER_URL is unset (no access-token verifier)", "route", PatternCompatSwitchOrg)
+		return routes, nil
 	}
-	if rowsAcceptFor(rows, []string{PatternCompatSwitchOrg}, classes) != nil {
+	if rowsAcceptFor(rows, []string{PatternCompatSwitchOrg}, []string{accessverify.ClassUser}) != nil {
 		h.rec.logger.Info("auth switch-org route not mounted: no endpoint-profile row", "route", PatternCompatSwitchOrg)
 		return routes, nil
 	}

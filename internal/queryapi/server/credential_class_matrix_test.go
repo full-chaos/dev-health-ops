@@ -19,6 +19,7 @@ import (
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/wrongclass"
 )
 
 // matrixCounts counts every read a credential can cause past the class
@@ -110,15 +111,28 @@ func loadQueryMatrixClasses(t *testing.T) []matrixClassDef {
 	return out
 }
 
-// queryMatrixNotDriven are the classes with no request-head marker in
-// credential-classes.json: the matrix has no carrier to send for them.
-var queryMatrixNotDriven = []string{
-	"acr_browser_refresh_token", "acr_device_flow_code", "acr_workload_identity_exchange",
-	"auth_js_browser_session", "email_verification_token", "github_app_installation_token",
-	"impersonation_session", "infrastructure_deployment_credentials", "kubernetes_sa_token_exchange",
-	"license_key", "link_credential", "llm_api_keys", "ops_refresh_token", "org_invite_token",
-	"pagerduty_oauth_credential", "password_reset_token", "refresh_credential", "social_oauth_exchange",
-	"sso_oidc_exchange", "sso_saml_exchange",
+// queryMatrixNotDriven are the classes the matrix sends no request head for: wrongclass derives the carrier of each
+// class from its credential-classes.json markers, and a class with no carrier, or one carried in a body, has no head.
+func queryMatrixNotDriven(t *testing.T) []string {
+	t.Helper()
+	classes, err := wrongclass.LoadClasses(authv1.CredentialClasses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, class := range classes {
+		carrier, ok, err := wrongclass.CarrierFor(class, wrongclass.Options{Mint: func(string, string) string { return "h.p.s" }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || carrier.Header == "" {
+			out = append(out, class.ID)
+		}
+	}
+	if len(out) == 0 || len(out) == len(classes) {
+		t.Fatalf("%d of %d classes have no request head", len(out), len(classes))
+	}
+	return out
 }
 
 var queryMatrixParam = regexp.MustCompile(`\{[^}]*\}`)
@@ -138,7 +152,7 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 	minter := newAccessMinter(t)
 	base := matrixStoreBase{accessStore: newAccessStore(), counts: counts}
 	setup := testAccess(matrixKeySource{inner: minter.keys, counts: counts}, nil, accessTestNow)
-	stack := newAccessStackOn(t, queryAPIUserStore{queryAPIStoreBase: base}, setup, true)
+	stack := newAccessStackOn(t, queryAPIUserStore{queryAPIStoreBase: base}, setup)
 	stack.user = minter.mint(ecUser, nil, nil)
 
 	// The REST routes' builders need ClickHouse, a registry and JWKS (their
@@ -146,11 +160,11 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 	// the real REST authenticator over the production route table
 	// (RESTRoutes), mounted on a mux with the same patterns.
 	restVerifier, restPriv := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, queryAPIUserStore{queryAPIStoreBase: base})
+	edge, err := principal.NewEdgeVerifier(queryAPIUserStore{queryAPIStoreBase: base})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	restMux := http.NewServeMux()
@@ -232,6 +246,13 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 					got = stack.sendWith(c.listener, c.row.method, path, "", carrier.bearer, carrier.headers)
 				}
 				keys, store := counts.snapshot()
+				if slices.Contains(c.row.classes, class.id) && platformAdminOnly[c.row.method+" "+c.row.route] && class.id == "user_access_token" {
+					accepts++
+					if got.Status != http.StatusUnauthorized || keys+store == 0 {
+						t.Errorf("%s @%s: class %s of an organization admin answered %d after %d lookups, want 401 after a live read: the row serves a platform admin only", c.row.id, c.listener, class.id, got.Status, keys+store)
+					}
+					continue
+				}
 				if slices.Contains(c.row.classes, class.id) {
 					accepts++
 					if got.Status == http.StatusUnauthorized || !served(got.Status) {
@@ -250,12 +271,16 @@ func TestCredentialClassMatrixQueryAPI(t *testing.T) {
 		})
 	}
 	slices.Sort(notDriven)
-	want := slices.Clone(queryMatrixNotDriven)
+	want := queryMatrixNotDriven(t)
 	slices.Sort(want)
 	if !slices.Equal(notDriven, want) {
 		t.Errorf("classes with no carrier %v, want %v", notDriven, want)
 	}
 }
+
+// platformAdminOnly are the rows that accept user_access_token for a platform admin only (authenticateBuildInfo):
+// the matrix's organization-admin token is refused there after its live users-row read.
+var platformAdminOnly = map[string]bool{"GET /buildinfo": true}
 
 func serveREST(handler http.Handler, method, path string, carrier queryMatrixCell) answer {
 	request := httptest.NewRequest(method, path, nil)

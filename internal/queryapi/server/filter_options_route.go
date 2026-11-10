@@ -34,7 +34,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/filteroptions"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -56,19 +55,16 @@ func filterOptionsSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitch {
 }
 
 // loadFilterOptionsRouteConfig reads this route's own dependency set --
-// ClickHouse plus the envelope verifier trio. Deliberately NOT
+// ClickHouse only; the envelope key is optional. Deliberately NOT
 // loadQueryRouteConfig: like quadrant, this route never touches registry
 // Postgres, so requiring GO_API_REGISTRY_POSTGRES_URI just to mount a pure
 // ClickHouse read route would be an unrelated-dependency coupling.
-func loadFilterOptionsRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadFilterOptionsRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 // buildFilterOptionsRoute constructs the handler, its own routeswitch Mux,
@@ -77,12 +73,12 @@ func loadFilterOptionsRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, i
 // "stay unmounted, don't fail to build/start" contract every other
 // optionally-configured route in this binary follows.
 func buildFilterOptionsRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadFilterOptionsRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadFilterOptionsRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("filteroptions: build envelope verifier: %w", err)
 	}
@@ -141,14 +137,18 @@ func newFilterOptionsWorkHandler(client filteroptions.QueryClient) http.HandlerF
 			writeRESTUnauthorized(w, r, "filteroptions", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "filteroptions", claims)
+		if !ok {
+			return
+		}
 
-		resp, err := filteroptions.BuildResponse(r.Context(), client, claims.OrgID)
+		resp, err := filteroptions.BuildResponse(r.Context(), client, org)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1466-1467) -- any ClickHouse
 			// failure degrades to a generic 503, never a raw error on the
 			// wire.
-			writeRESTDataUnavailable(w, r, "filteroptions", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "filteroptions", org, err)
 			return
 		}
 
@@ -156,7 +156,7 @@ func newFilterOptionsWorkHandler(client filteroptions.QueryClient) http.HandlerF
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: filteroptions: encode response failed: org_id=%s request_id=%s err=%v",
-				claims.OrgID, envelopeRequestID(r), encodeErr)
+				org, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 			writeModelFailure(w)
 		}
 	}

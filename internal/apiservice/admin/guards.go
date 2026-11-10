@@ -14,9 +14,15 @@ import (
 
 // ensureUserInScope is common.py's _ensure_user_in_scope: a non-superuser
 // admin may only act on a user who has a membership in orgID. Returns false
-// (and writes the 404) when out of scope; a superuser is always in scope.
+// (and writes the 404) when out of scope; a holder of admin.users (the
+// decision point's answer with the admin cell on) is always in scope.
 func (h *handlers) ensureUserInScope(ctx context.Context, w http.ResponseWriter, user *policy.User, orgID, targetUserID uuid.UUID) bool {
-	if user.Holds(rule.ActionAdminUsers) {
+	held, err := policy.HoldsPlatform(ctx, user, rule.ActionAdminUsers)
+	if err != nil {
+		policy.WritePlatformDecisionRefusal(w, err)
+		return false
+	}
+	if held {
 		return true
 	}
 	inScope, err := h.store.userHasMembership(ctx, orgID, targetUserID)
@@ -35,9 +41,14 @@ func (h *handlers) ensureUserInScope(ctx context.Context, w http.ResponseWriter,
 // ensureOrgAdminAccess is common.py's _ensure_org_admin_access: a
 // non-superuser caller needs an owner/admin membership in orgID. Returns
 // false (and writes the 403) when access is refused; a superuser always
-// passes.
+// passes (with the admin cell on, by the decision point's admin.orgs answer).
 func (h *handlers) ensureOrgAdminAccess(ctx context.Context, w http.ResponseWriter, user *policy.User, orgID uuid.UUID) bool {
-	if user.Holds(rule.ActionAdminOrgs) {
+	held, err := policy.HoldsPlatform(ctx, user, rule.ActionAdminOrgs)
+	if err != nil {
+		policy.WritePlatformDecisionRefusal(w, err)
+		return false
+	}
+	if held {
 		return true
 	}
 	membership, err := h.store.membershipRole(ctx, orgID, user.ID)
@@ -56,9 +67,14 @@ func (h *handlers) ensureOrgAdminAccess(ctx context.Context, w http.ResponseWrit
 // orgIDForNonSuperuser is common.py's _get_org_id_for_non_superuser: a
 // holder of admin.users (every route that calls it is an /admin/users route)
 // gets their own org_id claim (possibly ""), else the caller's org_id claim,
-// 403 when absent.
-func orgIDForNonSuperuser(w http.ResponseWriter, user *policy.User) (string, bool) {
-	if user.Holds(rule.ActionAdminUsers) {
+// 403 when absent; 503 when the decision point gave no verdict.
+func orgIDForNonSuperuser(ctx context.Context, w http.ResponseWriter, user *policy.User) (string, bool) {
+	held, err := policy.HoldsPlatform(ctx, user, rule.ActionAdminUsers)
+	if err != nil {
+		policy.WritePlatformDecisionRefusal(w, err)
+		return "", false
+	}
+	if held {
 		return user.OrgID, true
 	}
 	if user.OrgID == "" {
@@ -102,9 +118,10 @@ func (h *handlers) refuseSuperuserWrite(ctx context.Context, w http.ResponseWrit
 }
 
 // targetsSuperuserSQL locks the targets' users rows in id order and reads
-// is_superuser of each, by the platform roles switch.
+// is_superuser of each, by the platform roles switch: the stored holding, so a
+// disabled superuser target keeps its protection (legacy's stored column).
 func (s pgStore) targetsSuperuserSQL() (string, error) {
-	superuser, err := s.platformRoles().Superuser("is_superuser", "users.id")
+	superuser, err := s.platformRoles().StoredSuperuser("is_superuser", "users.id")
 	if err != nil {
 		return "", err
 	}

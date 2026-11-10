@@ -104,7 +104,7 @@ func newLoginStepsRig(t *testing.T) *loginStepsRig {
 			r.events = append(r.events, event)
 			return nil
 		},
-		ServiceCredentials: f.creds,
+		IssueWorkload: f.workload,
 		Login: &LoginConfig{
 			Users: recLoginUsers{f.loginUsers, r.rec}, Attempts: recAttempts{f.attempts, r.rec},
 			LockoutKey: contracts.NewSecretString(testLockoutKey),

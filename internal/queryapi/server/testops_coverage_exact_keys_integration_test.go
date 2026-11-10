@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
@@ -92,7 +91,7 @@ func TestTestOpsCoverageRoute_ExactRepoKeysReturnBranchCoverageOutsideIndependen
 	}
 
 	pool := startTestRegistryPostgres(t)
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,11 +99,11 @@ func TestTestOpsCoverageRoute_ExactRepoKeysReturnBranchCoverageOutsideIndependen
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, err := newQueryHandler(analytics.PinInvestmentMembershipScope(queryClient), pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, err := newQueryHandler(analytics.PinInvestmentMembershipScope(queryClient), pool, verifier, itTestSchemaDigest, withIssuer)
 	if err != nil {
 		t.Fatalf("build TestOps Coverage handler: %v", err)
 	}
-	token := signTestEnvelope(t, priv, orgID)
+	token := iaHeaders(orgID, "admin", false, false)
 
 	variables := func(branchTopN int, branchKeys []string) map[string]any {
 		branch := map[string]any{

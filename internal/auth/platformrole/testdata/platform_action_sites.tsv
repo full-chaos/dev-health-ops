@@ -5,6 +5,7 @@
 # handler or gate), carry (a middleware). TestEveryPlatformActionSiteIsListed holds this list; no deciding row may read the
 # superuser flag.
 # file	function	action	origin
+internal/api/acrcredentials/routes.go	handlers.actor	admin.orgs	handler
 internal/api/billing/audit.go	handlers.getAudit	admin.billing	handler
 internal/api/billing/audit.go	handlers.listAudit	admin.billing	handler
 internal/api/billing/audit.go	handlers.resolveAudit	admin.billing	handler
@@ -16,6 +17,7 @@ internal/api/billing/refunds.go	handlers.getRefund	admin.billing	handler
 internal/api/billing/refunds.go	handlers.listRefunds	admin.billing	handler
 internal/api/billing/routes.go	Routes	admin.billing	route
 internal/api/billing/subscriptions.go	handlers.resolveOrg	admin.billing	handler
+internal/api/billing/subscriptions.go	handlers.servedOrgWriteRefusal	admin.billing	handler
 internal/api/orgs/orgs.go	handlers.entitlements	admin.billing	7
 internal/api/policy/guard.go	Guard.currentUser	admin.orgs	4
 internal/api/policy/principal.go	User.IsAdmin	admin.orgs	1
@@ -27,8 +29,6 @@ internal/api/policy/scope.go	Scope.useTokenOrg	admin.orgs	4
 internal/api/policy/shadow_guard.go	shadowCallerKind	admin.orgs	handler
 internal/api/session/permissions.go	userPermissions	admin.orgs	2
 internal/api/session/permissions.go	userPermissions	admin.users	2
-internal/api/session/refresh.go	handlers.refreshRole	admin.orgs	4
-internal/api/session/refresh.go	handlers.refuseRevokedOfAGoneMember	admin.orgs	4
 internal/api/telemetry/report.go	handlers.requirePlatformRole	admin.telemetry	handler
 internal/api/telemetry/telemetry.go	handlers.withOrg	admin.telemetry	handler
 internal/apiservice/admin/auditlogs.go	handlers.auditLogRoutes	admin.audit	route
@@ -38,8 +38,11 @@ internal/apiservice/admin/guards.go	handlers.ensureUserInScope	admin.users	3
 internal/apiservice/admin/guards.go	orgIDForNonSuperuser	admin.users	3
 internal/apiservice/admin/impersonation.go	handlers.impersonationRoutes	admin.impersonate	route
 internal/apiservice/admin/impersonation.go	handlers.impersonationStatus	admin.impersonate	handler
+internal/apiservice/admin/impersonation_handoff.go	handlers.handoffRoutes	admin.impersonate	route
 internal/apiservice/admin/orgs.go	handlers.orgRoutes	admin.orgs	route
 internal/apiservice/admin/platformstats.go	handlers.platformRoutes	admin.stats	route
+internal/apiservice/admin/serviceaccount_keys.go	handlers.serviceAccountKeyRoutes	admin.users	route
+internal/apiservice/admin/serviceaccounts.go	handlers.serviceAccountRoutes	admin.users	route
 internal/apiservice/admin/users.go	handlers.createUserOrg	admin.users	8
 internal/apiservice/admin/users.go	handlers.listUsers	admin.users	8
 internal/apiservice/admin/users.go	handlers.userRoutes	admin.users	route
@@ -47,8 +50,11 @@ internal/auth/authapi/compat.go	compatHandlers.compatRefresh	admin.orgs	4
 internal/auth/authapi/compat_guard.go	guardRefresh	admin.orgs	4
 internal/auth/authapi/provisioning.go	provisioningHandlers.actorRule	admin.orgs	9
 internal/auth/authapi/provisioning.go	provisioningHandlers.targetsRule	admin.users	9
+internal/auth/authapi/provisioning_users.go	provisioningHandlers.usersActorRule	admin.users	9
 internal/auth/authapi/refresh.go	handlers.refresh	admin.orgs	4
 internal/queryapi/datahealth/datahealth.go	RequireOperator	admin.stats	6
 internal/queryapi/graph/operation_org_guard.go	operationOrgDecision	admin.orgs	handler
+internal/queryapi/graph/operation_shadow.go	OperationShadow.observe	admin.orgs	handler
 internal/queryapi/producttelemetry/platform.go	RequirePlatformAdmin	admin.telemetry	handler
+internal/queryapi/server/buildinfo_route.go	authenticateBuildInfo	admin.orgs	handler
 internal/queryapi/server/internal_auth.go	roleInOrg	admin.orgs	5

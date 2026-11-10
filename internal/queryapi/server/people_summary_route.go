@@ -37,7 +37,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
@@ -65,18 +64,15 @@ func peopleSummarySwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitch {
 }
 
 // loadPeopleSummaryRouteConfig reads this route's own dependency set --
-// ClickHouse plus the envelope verifier trio. Deliberately NOT
+// ClickHouse only; the envelope key is optional. Deliberately NOT
 // loadQueryRouteConfig: this route never touches registry Postgres,
 // same reasoning as peopleSearchRoute's own doc comment.
-func loadPeopleSummaryRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadPeopleSummaryRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 // buildPeopleSummaryRoute constructs the handler, its own routeswitch
@@ -85,12 +81,12 @@ func loadPeopleSummaryRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, i
 // true, same "stay unmounted, don't fail to build/start" contract every
 // other optionally-configured route in this binary follows.
 func buildPeopleSummaryRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadPeopleSummaryRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadPeopleSummaryRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -144,7 +140,7 @@ func buildPeopleSummaryRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handle
 func writePeopleSummaryResponse(w http.ResponseWriter, r *http.Request, orgID string, resp people.SummaryResponse) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: people_summary: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }
@@ -164,6 +160,10 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
 			writeRESTUnauthorized(w, r, "people_summary", "Not authenticated")
+			return
+		}
+		org, ok := restScopeOrg(w, r, "people_summary", claims)
+		if !ok {
 			return
 		}
 
@@ -195,7 +195,7 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -204,12 +204,12 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 		// query param above already parsed cleanly.
 		for key := range query {
 			if peopleForbiddenQueryParams[key] {
-				writeRESTError(w, r, "people_summary", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "people_summary", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
 
-		resp, err := people.BuildSummaryResponse(r.Context(), reader, claims.OrgID, people.SummaryParams{
+		resp, err := people.BuildSummaryResponse(r.Context(), reader, org, people.SummaryParams{
 			PersonID:    personID,
 			RangeDays:   rangeDays,
 			CompareDays: compareDays,
@@ -217,18 +217,18 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 		})
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
-				writeTimeWindowOverflow(w, r, "people_summary", claims.OrgID)
+				writeTimeWindowOverflow(w, r, "people_summary", org)
 				return
 			}
 			if reqErr, ok := people.AsRequestError(err); ok {
-				writeRESTError(w, r, "people_summary", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "people_summary", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1088-1089).
-			writeRESTDataUnavailable(w, r, "people_summary", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "people_summary", org, err)
 			return
 		}
-		writePeopleSummaryResponse(w, r, claims.OrgID, resp)
+		writePeopleSummaryResponse(w, r, org, resp)
 	}
 }

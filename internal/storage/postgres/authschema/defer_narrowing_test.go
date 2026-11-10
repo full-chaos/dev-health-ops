@@ -18,7 +18,9 @@ func TestUsersOwnedPublicGrantIsExactlyWhatTheSwitchGives(t *testing.T) {
 		{GrantRecord{Kind: "column", Object: "memberships", Column: "role", Privilege: "INSERT"}, true},
 		{GrantRecord{Kind: "relation", Object: "password_reset_tokens", Privilege: "DELETE"}, true},
 		{GrantRecord{Kind: "column", Object: "email_verification_tokens", Column: "id", Privilege: "SELECT"}, true},
-		{GrantRecord{Kind: "column", Object: "users", Column: "full_name", Privilege: "UPDATE"}, false},
+		// full_name UPDATE: the admin profile change go-api makes through auth-service (pm D6872, PLAN-13376 v2 S1).
+		{GrantRecord{Kind: "column", Object: "users", Column: "full_name", Privilege: "UPDATE"}, true},
+		{GrantRecord{Kind: "column", Object: "users", Column: "sso_provider_id", Privilege: "UPDATE"}, false},
 		{GrantRecord{Kind: "column", Object: "users", Column: "last_login_at", Privilege: "INSERT"}, false},
 		// CHAOS-10993: no auth build after the column omission (#5531) inserts is_superuser, so a deferred run keeps no
 		// superuser write for an old pod.

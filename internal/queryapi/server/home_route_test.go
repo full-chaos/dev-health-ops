@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -175,7 +176,7 @@ func TestNewHomePostHandlerRequiresAuthContext(t *testing.T) {
 func TestNewHomeGetHandlerBadRangeDaysIs422(t *testing.T) {
 	handler := newHomeGetHandler(emptyRowsHomeClient{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home?range_days=abc", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -204,7 +205,7 @@ func TestNewHomeGetHandlerBadRangeDaysIs422(t *testing.T) {
 func TestNewHomeGetHandlerBadCompareDaysIs422(t *testing.T) {
 	handler := newHomeGetHandler(emptyRowsHomeClient{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home?compare_days=xyz", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -226,7 +227,7 @@ func TestNewHomeGetHandlerBadCompareDaysIs422(t *testing.T) {
 func TestNewHomeGetHandlerInvalidScopeTypeIs503(t *testing.T) {
 	handler := newHomeGetHandler(emptyRowsHomeClient{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home?scope_type=bogus", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -243,7 +244,7 @@ func TestNewHomeGetHandlerInvalidScopeTypeIs503(t *testing.T) {
 func TestNewHomeGetHandlerHappyPathShape(t *testing.T) {
 	handler := newHomeGetHandler(emptyRowsHomeClient{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home?scope_type=org", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -322,7 +323,7 @@ func TestNewHomeGetHandlerCoverageDistinguishesUnavailableFromObservedZero(t *te
 		t.Run(tt.name, func(t *testing.T) {
 			handler := newHomeGetHandler(tt.client, nil)
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/home?scope_type=org", nil)
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			serveRoute(t, handler, rec, req)
 			if rec.Code != http.StatusOK {
@@ -366,7 +367,7 @@ func float64Pointer(value float64) *float64 { return &value }
 func TestNewHomePostHandlerMissingBodyIs422(t *testing.T) {
 	handler := newHomePostHandler(emptyRowsHomeClient{}, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -389,7 +390,7 @@ func TestNewHomePostHandlerMissingBodyIs422(t *testing.T) {
 func TestNewHomePostHandlerMissingFiltersIs422(t *testing.T) {
 	handler := newHomePostHandler(emptyRowsHomeClient{}, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(`{}`))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -415,7 +416,7 @@ func TestNewHomePostHandlerMissingFiltersIs422(t *testing.T) {
 func TestNewHomePostHandlerInvalidScopeLevelIs422(t *testing.T) {
 	handler := newHomePostHandler(emptyRowsHomeClient{}, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(`{"filters":{"scope":{"level":"bogus"}}}`))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -437,7 +438,7 @@ func TestNewHomePostHandlerBodyTooLargeIs413(t *testing.T) {
 	handler := newHomePostHandler(emptyRowsHomeClient{}, nil)
 	oversized := strings.Repeat("a", homeMaxBodyBytes+1)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(`{"filters":{"why":{"work_category":["`+oversized+`"]}}}`))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -450,7 +451,7 @@ func TestNewHomePostHandlerBodyTooLargeIs413(t *testing.T) {
 func TestNewHomePostHandlerHappyPathShape(t *testing.T) {
 	handler := newHomePostHandler(emptyRowsHomeClient{}, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(`{"filters":{}}`))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {

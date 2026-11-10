@@ -77,7 +77,7 @@ go-api and query-api choose the validator from the route's [endpoint profile](en
 | --- | --- | --- |
 | `EdDSA` | accepts `user_access_token` | The EdDSA verifier checks the token. |
 | `EdDSA` | does not accept it | Refused: `alg_not_allowed`. |
-| `HS256` | `legacy_hs256` is true | The HS256 compatibility check runs. See [legacy compatibility](../../operate/runbooks/auth-legacy-compat-and-rollback.md). |
+| `HS256` | `legacy_hs256` is true | The HS256 compatibility check runs. No row sets it: the class is retired. See [legacy compatibility](../../operate/runbooks/auth-legacy-compat-and-rollback.md). |
 | `HS256` | `legacy_hs256` is false | Refused: `alg_not_allowed`. |
 | any other | any | Refused: `alg_not_allowed`. |
 | no readable `alg` | any | Refused: `malformed`. |

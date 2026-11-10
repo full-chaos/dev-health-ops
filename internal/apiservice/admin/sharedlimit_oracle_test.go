@@ -80,8 +80,8 @@ func TestSharedRateLimitAcrossReplicasVenueOracle(t *testing.T) {
 	python := golden.Python(t, venue, requests)
 
 	// Two replicas: separate pools, separate Valkey clients, one Valkey.
-	replicaA, _ := startGoServer(t, ctx, venue, jwtKey)
-	replicaB, _ := startGoServer(t, ctx, venue, jwtKey)
+	replicaA, _ := startGoServer(t, ctx, venue, jwtKey, withLinkSecret(jwtKey))
+	replicaB, _ := startGoServer(t, ctx, venue, jwtKey, withLinkSecret(jwtKey))
 	balanced := roundRobin(t, replicaA, replicaB)
 
 	receipt := venueoracle.Diff(t, balanced, requests, python, venueoracle.DiffOptions{

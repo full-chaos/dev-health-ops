@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // keepSink is memSink that honours identity.BackfillTarget.InsertOnly as the store does: an existing user is Kept and
@@ -68,15 +70,44 @@ func TestRunInsertOnlyKeepsEveryExistingUser(t *testing.T) {
 	}
 }
 
-// The verb takes -insert-only; the users-owned refusal still holds with it.
-func TestVerbAcceptsInsertOnlyAndStillRefusesWhileOwned(t *testing.T) {
+// The verb takes -insert-only (CHAOS-13372: owned runs are covered below).
+func TestVerbAcceptsInsertOnly(t *testing.T) {
 	if code, stderr := runVerb("-insert-only", "-dry-run"); code != cli.ExitFailure || stderr == "" {
 		t.Fatalf("-insert-only without a database: exit %d (want %d, a missing database, not a usage error), stderr %q", code, cli.ExitFailure, stderr)
 	}
-	var stderr bytes.Buffer
+}
+
+// CHAOS-13372: while users are owned the verb runs with -insert-only (it only creates missing users) and still refuses
+// without it. The connect seam proves the run got past the ownership gate.
+func ownedInsertOnlyRun(t *testing.T, args ...string) (code int, reached bool, stderr string) {
+	t.Helper()
+	orig := connectFn
+	connectFn = func(context.Context, cli.Env, string) (*pgxpool.Pool, authschema.ValidatedIdentifier, int) {
+		reached = true
+		return nil, authschema.ValidatedIdentifier{}, cli.ExitFailure
+	}
+	t.Cleanup(func() { connectFn = orig })
+	var errBuf bytes.Buffer
 	lookup := func(k string) (string, bool) { return "true", k == "AUTH_USERS_OWNED" }
-	code := Command().Children[0].Run(context.Background(), cli.Env{Args: []string{"-insert-only"}, Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &stderr})
-	if code != cli.ExitRefused {
-		t.Fatalf("-insert-only while owned: exit %d, stderr %q", code, stderr.String())
+	code = Command().Children[0].Run(context.Background(), cli.Env{Args: args, Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &errBuf})
+	return code, reached, errBuf.String()
+}
+
+func TestOwnedInsertOnlyRunsPastTheOwnershipGate(t *testing.T) {
+	for _, args := range [][]string{{"-insert-only"}, {"-insert-only", "-dry-run"}} {
+		code, reached, stderr := ownedInsertOnlyRun(t, args...)
+		if code == cli.ExitRefused || !reached {
+			t.Fatalf("args %v: exit %d, connect reached %v, stderr %q", args, code, reached, stderr)
+		}
+	}
+}
+
+func TestOwnedWithoutInsertOnlyStillRefuses(t *testing.T) {
+	for _, args := range [][]string{nil, {"-dry-run"}} {
+		code, reached, stderr := ownedInsertOnlyRun(t, args...)
+		want := "users-backfill: refused: AUTH_USERS_OWNED is true, auth.users is the authority and this command copies from public.users\n"
+		if code != cli.ExitRefused || reached || stderr != want {
+			t.Fatalf("args %v: exit %d, connect reached %v, stderr %q", args, code, reached, stderr)
+		}
 	}
 }

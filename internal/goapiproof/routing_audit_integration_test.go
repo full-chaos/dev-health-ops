@@ -97,6 +97,12 @@ func TestTheDatabaseEnforcesTheCredentialPairing(t *testing.T) {
 	if err := insert(CredentialClassOperatorDirect, nil); err != nil {
 		t.Fatalf("the legal operator_direct shape must write: %v", err)
 	}
+	if err := insert(CredentialClassUserAccessToken, nil); err == nil {
+		t.Fatal("a user_access_token row with NO principal must be refused -- the class means a verified credential named a subject")
+	}
+	if err := insert(CredentialClassUserAccessToken, testPrincipalID); err != nil {
+		t.Fatalf("the legal user_access_token shape must write: %v", err)
+	}
 	if err := insert("something_else", nil); err == nil {
 		t.Fatal("the credential-class vocabulary is closed: an unlisted class must be refused by the database")
 	}

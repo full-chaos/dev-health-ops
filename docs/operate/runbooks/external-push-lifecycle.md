@@ -27,7 +27,7 @@ A token made before the events have no aggregate and no `created` event.
 1. Dry run: `dho push-lifecycle backfill-created -dsn-env <NAME>`. It counts and writes nothing.
 2. Check the count. Run again with `-apply` to write the events. A rerun is safe.
 3. Output is counts only. `-batch` is 1 to 10000.
-4. Reading the DSN without a read grant on the auth schema: after CHAOS-12333.
+4. Reading the DSN without a read grant on the auth schema works.
 
 ## A token leaked
 
@@ -46,4 +46,4 @@ A token made before the events have no aggregate and no `created` event.
 | No `expired` event for an expired token | Flag on in the worker; token expired within 30 days and never revoked | Sweeper idle (flag off) or token out of the window | Turn the flag on; an older token needs the operator to revoke it |
 | Readiness `push_projection_reader` not ready | Reader logs and the outbox rows | Reader degrades after repeated failures on a row | Fix the cause; the reader retries parked rows with a delay |
 | Revoked token still shown active in auth-service | Reader ready; flag on | Projection lag. go-api already refuses the token | Wait for the reader; the record is not a gate |
-| Drift alert fires on old tokens | After CHAOS-10897 and CHAOS-12333 | Tokens with no created event | Backfill, then the alert clears |
+| Drift alert fires on old tokens | After the drift alert and the DSN read path are live | Tokens with no created event | Backfill, then the alert clears |

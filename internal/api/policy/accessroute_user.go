@@ -27,6 +27,14 @@ type AccessUserStore interface {
 
 const principalPrefix = "prn_"
 
+// nonMemberRole is the role of a caller with no membership row in the token
+// org: the legacy answer for a token that stated no role.
+const nonMemberRole = "member"
+
+// orgLessRole is the role of a caller whose token names no org: the HS256
+// path's, as go-api's login minted it (internal/api/session/tokens.go).
+const orgLessRole = "member"
+
 // parsePrincipalID reverses the session.v1 principal id form: "prn_" and the
 // unpadded base64url of the 16 id bytes. The principal id is the users id.
 func parsePrincipalID(wire string) (uuid.UUID, bool) {
@@ -43,8 +51,9 @@ func parsePrincipalID(wire string) (uuid.UUID, bool) {
 
 // accessTokenUser is the per-request half of a verified user access token:
 // the users row (found, active), the sid (a live session of the subject),
-// and the role from the membership in the org claim (Q4). Every failed read
-// is that error, never a pass.
+// and the role from the membership in the org claim (Q4); a caller without
+// that membership gets the HS256 path's principal. Every failed read is that
+// error, never a pass.
 func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessTokenClaims) (*User, error) {
 	id, ok := parsePrincipalID(claims.Subject)
 	if !ok {
@@ -84,27 +93,41 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 		a.logger.WarnContext(ctx, "api user access token without a session", slog.String("user_id", id.String()))
 		return nil, errRejected
 	}
-	sessionID, err := a.checkSession(ctx, map[string]any{"sid": claims.SessionID}, id, row.State.TokenVersion)
+	sessionID, err := a.checkSession(ctx, claims.SessionID, id, row.State.TokenVersion)
 	if err != nil {
 		return nil, err
 	}
 	user := &User{UserID: id.String(), ID: id, Email: row.Email, Username: row.Username, FullName: row.FullName,
 		IsSuperuser: row.State.IsSuperuser, Platform: row.State.Platform, TokenVersion: int(row.State.TokenVersion), accessToken: true, SessionID: sessionID,
-		ImpersonatedBy: impersonatedBy}
+		ImpersonatedBy: impersonatedBy, Role: orgLessRole}
 	if claims.OrgID != nil && *claims.OrgID != "" {
-		role, member, err := a.Membership(ctx, user.UserID, *claims.OrgID)
+		role, err := a.tokenOrgRole(ctx, user, *claims.OrgID)
 		if err != nil {
-			a.logger.WarnContext(ctx, "api user access token membership lookup failed",
-				slog.String("user_id", user.UserID), slog.Bool("unavailable", errors.Is(err, ErrUnavailable)))
 			return nil, err
-		}
-		if !member {
-			a.logger.WarnContext(ctx, "api user access token for an org the user is not a member of", slog.String("user_id", user.UserID))
-			return nil, errRejected
 		}
 		user.OrgID, user.Role = *claims.OrgID, role
 	}
 	return user, nil
+}
+
+// tokenOrgRole is the user's role in the org claim: the membership's role, or,
+// for a caller with no membership row, the role the HS256 path gives a token
+// with no role claim (product rule 1, D6773). As on the HS256 path the
+// authenticator does not refuse that caller: useTokenOrg and the guard (and
+// CheckTokenOrg where a service calls it) decide the token org later, so an
+// org without the row is refused there and an org that does not exist or a
+// claim that is not a UUID goes on as on main.
+func (a *Authenticator) tokenOrgRole(ctx context.Context, user *User, orgID string) (string, error) {
+	role, member, err := a.Membership(ctx, user.UserID, orgID)
+	if err != nil {
+		a.logger.WarnContext(ctx, "api user access token membership lookup failed",
+			slog.String("user_id", user.UserID), slog.Bool("unavailable", errors.Is(err, ErrUnavailable)))
+		return "", err
+	}
+	if member {
+		return role, nil
+	}
+	return nonMemberRole, nil
 }
 
 // AccessUser reads the users row a user access token is checked against. NULL

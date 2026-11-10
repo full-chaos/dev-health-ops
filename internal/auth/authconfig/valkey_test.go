@@ -29,12 +29,12 @@ func TestTheDormantMountSetNeedsNoValkey(t *testing.T) {
 		t.Fatal("a Valkey URI appeared from nowhere")
 	}
 	// Session secrets alone mount the session routes, and the compatibility refresh counts in the store.
-	session := sessionEnv(testAccessSecret, testSuccessorKey)
+	session := sessionEnv(testRateKey, testSuccessorKey)
 	delete(session, EnvValkeyURI)
 	if _, err = Load(Spec{LookupEnv: lookupFrom(session)}); err == nil || !strings.Contains(err.Error(), EnvValkeyURI) {
 		t.Fatalf("session routes without the URI: err %v, want a refusal naming %s", err, EnvValkeyURI)
 	}
-	cfg, err = Load(Spec{LookupEnv: lookupFrom(withValkey(sessionEnv(testAccessSecret, testSuccessorKey), testLimitedValkeyURI))})
+	cfg, err = Load(Spec{LookupEnv: lookupFrom(withValkey(sessionEnv(testRateKey, testSuccessorKey), testLimitedValkeyURI))})
 	if err != nil || !cfg.LimitedRoutesMounted() {
 		t.Fatalf("session routes with the URI: err %v, limited mounted %v", err, cfg.LimitedRoutesMounted())
 	}
@@ -48,14 +48,14 @@ func TestEveryLimitedRouteNeedsTheValkeyURI(t *testing.T) {
 		"social link": func(env map[string]string) { env[EnvSocialLinkRoutes] = "true" },
 	}
 	for name, set := range mount {
-		bare := sessionEnv(testAccessSecret, testSuccessorKey)
+		bare := sessionEnv(testRateKey, testSuccessorKey)
 		delete(bare, EnvValkeyURI)
 		set(bare)
 		_, err := Load(Spec{LookupEnv: lookupFrom(bare)})
 		if err == nil || !strings.Contains(err.Error(), EnvValkeyURI) {
 			t.Errorf("%s without the URI: err %v, want a refusal naming %s", name, err, EnvValkeyURI)
 		}
-		withURI := sessionEnv(testAccessSecret, testSuccessorKey)
+		withURI := sessionEnv(testRateKey, testSuccessorKey)
 		set(withURI)
 		cfg, err := Load(Spec{LookupEnv: lookupFrom(withValkey(withURI, testLimitedValkeyURI))})
 		if err != nil || !cfg.LimitedRoutesMounted() || cfg.ValkeyURI.Reveal() != testLimitedValkeyURI {

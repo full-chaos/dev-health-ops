@@ -72,9 +72,9 @@ func TestBuildQueryRouteRunsTheSchemaGateAfterThePoolAndBeforeReadiness(t *testi
 	calls := []string{
 		"postgresstore.NewTracedPool(context.Background(), cfg.RegistryPostgresURI)",
 		"enforceQueryAPISchemaGate(context.Background(), slog.Default(), pgPool)",
-		"principal.NewVerifier(cfg.EnvelopeJWKSPath",
+		"loadEnvelopeKey(cfg.EnvelopeJWKSPath",
 		"posture := queryAPIPostureCheck(getenv, pgPool)",
-		"ready := readinessCheck(chClient, pgPool, verifier, posture)",
+		"ready := readinessCheck(chClient, pgPool, envelope.jwksProbe(), posture)",
 	}
 	last := -1
 	for _, call := range calls {
@@ -83,7 +83,7 @@ func TestBuildQueryRouteRunsTheSchemaGateAfterThePoolAndBeforeReadiness(t *testi
 		}
 		at := strings.Index(text, call)
 		if at < last {
-			t.Fatalf("%q is out of order: the gate must follow NewTracedPool and precede NewVerifier, the posture check and readiness", call)
+			t.Fatalf("%q is out of order: the gate must follow NewTracedPool and precede the envelope key, the posture check and readiness", call)
 		}
 		last = at
 	}

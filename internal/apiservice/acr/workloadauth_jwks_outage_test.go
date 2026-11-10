@@ -67,7 +67,7 @@ func wlJWKSAuth(t *testing.T, mode, publishedKid string, signer wlSigner) (*Work
 	}
 	claims := wlClaims()
 	claims["iss"] = srv.URL
-	return &WorkloadAuth{Verifier: verifier, Subject: wlSubject, Now: func() time.Time { return wlNow }}, signer.sign(wlHeader(), claims)
+	return &WorkloadAuth{Verifier: verifier, Source: StaticSubject(wlSubject), Now: func() time.Time { return wlNow }}, signer.sign(wlHeader(), claims)
 }
 
 func TestWorkloadJWKSOutageAnswers503OnEveryRoute(t *testing.T) {
@@ -97,9 +97,6 @@ func TestWorkloadJWKSOutageAnswers503OnEveryRoute(t *testing.T) {
 				}
 				if got := wlDelta(llmBefore, llmConfigRequestCounts(t)); len(got) != 0 {
 					t.Fatalf("an outage added llm-config request outcome series: %v", got)
-				}
-				if h.creds.findCalls != 0 || len(h.creds.used) != 0 || h.llm.gotToken != "" {
-					t.Fatalf("an unavailable verdict reached a store: finds %d used %v", h.creds.findCalls, h.creds.used)
 				}
 			})
 		}

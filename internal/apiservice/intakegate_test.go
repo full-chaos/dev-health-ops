@@ -16,14 +16,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 func TestSignatureOnlySetIsUnchangedByTheGate(t *testing.T) {
@@ -39,28 +38,16 @@ func TestSignatureOnlySetIsUnchangedByTheGate(t *testing.T) {
 
 func TestIntakeGateCountsEveryIdShapeOnceAheadOfScope(t *testing.T) {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	key := strings.Repeat("fixture-key-", 3)
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	store := &countingStore{scopeStore: scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}}
-	auth, err := policy.NewAuthenticator(verifier, store, quiet)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.AuthenticatorOver(t, store, quiet)
 	scope := policy.NewScope(auth, quiet)
 	routes := webhookintake.Routes(webhookintake.Deps{Logger: quiet})
 	server, err := NewServerWithGate(apiTestConfig(), quiet, routes, webhookintake.NewGate(httpapi.NewMemoryCounters(nil), nil, quiet), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bearer, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": uuid.NewString(), "type": "access", "org_id": uuid.NewString(), "exp": time.Now().Add(time.Hour).Unix(),
-	}).SignedString([]byte(key))
-	if err != nil {
-		t.Fatal(err)
-	}
+	bearer := tokens.MustMint(t, edtokens.Claims{UserID: uuid.New()})
 	const prefix = "/api/v1/webhooks/pagerduty/"
 	shapes := []struct {
 		name   string

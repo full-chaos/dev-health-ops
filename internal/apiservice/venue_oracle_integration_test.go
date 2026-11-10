@@ -66,9 +66,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "90fa8ecb637e04601a3a0b7c98cd331077a11f89398a2f95581e47e2e087eb04", Ruling: protectedRoutesPinRuling})
-	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-orgclaim.go-pin.json", SHA256: protectedOrgClaimPinSHA256, Ruling: orgClaimRuling})
 	publicPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-public.go-pin.json", SHA256: protectedPublicPinSHA256, Ruling: publicRowRuling})
-	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-orgless.go-pin.json", SHA256: protectedOrglessPinSHA256, Ruling: protectedOrglessRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
@@ -95,7 +93,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		APIAddress: "127.0.0.1:0", RiverDatabaseSchema: "river", APIDatabaseRole: venue.Roles["api"],
 		APIDatabaseURI:   secrets.NewValue(venue.GoAPIDatabaseURI(t)),
 		APIClickHouseURI: secrets.NewValue(venue.GoAPIClickHouseURI(t)),
-		APIJWTSecret:     secrets.NewValue(venueKey), APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
+		APIJWTIssuer:     "dev-health-ops", APIJWTAudience: "dev-health-api",
 		CORSAllowedOrigins:    []string{"http://localhost:3000"},
 		ValkeyURI:             secrets.NewValue(venue.ValkeyURI),
 		TelemetryEndpoint:     endpoint.URL + "/go",
@@ -161,9 +159,10 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		Retire: retiredProtectedRequest,
 		Pin:    pin,
 		Retirements: []venueoracle.Retirement{
-			{Match: func(request venueoracle.Request) bool { return protectedOrgClaimRetired[request.Name] }, Pin: claimPin},
 			{Match: func(request venueoracle.Request) bool { return protectedPublicRetired[request.Name] }, Pin: publicPin},
-			{Match: func(request venueoracle.Request) bool { return protectedOrglessRetired[request.Name] }, Pin: orglessPin},
+		},
+		KnownDivergences: []venueoracle.KnownDivergence{
+			{Match: func(request venueoracle.Request) bool { return request.Name == "ent: bad org claim" }, Ticket: venueoracle.NotUUIDOrgClaimGap},
 		},
 		// A HEAD probe has no body to normalize, but its content-length is the
 		// length of the ruled GET body.
@@ -285,7 +284,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		`SELECT canonical_id, coalesce(display_name, '<null>'), coalesce(email, '<null>'),
 			provider_identities, team_ids, is_active FROM identities FINAL
 		WHERE org_id != '' ORDER BY canonical_id`)
-	venueoracle.FinishPins(t, pin, claimPin, publicPin, orglessPin)
+	venueoracle.FinishPins(t, pin, publicPin)
 	golden.Finish(t)
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt.String()), 0o600)
@@ -588,33 +587,14 @@ func soloTeamRequests(tokens map[string]string) []venueoracle.Request {
 	}
 }
 
-// orgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user holds
-// no live membership in, or is not a UUID.
-const orgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:90-102); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
-
 // publicRowRuling retires the Python answer of a request to a public row (no accepted credential class) that names a
 // stranger org in X-Org-Id.
 const publicRowRuling = "a public row verifies no bearer, so OrgScope (policy/scope.go:128) sees an anonymous caller and does not check X-Org-Id; the row serves no org data and the telemetry POST is the anonymous stream; prod behaves so today"
-
-// orglessSuperuserRuling retires the Python answer of a request by a superuser seed minted with no org claim: the
-// route needs a token org and refuses. Each use names its route's refusal site.
-const orglessSuperuserRuling = "org-less superuser token (auth-service login mints no org claim for a non-member, auth/authapi/login.go:184-190): the route needs a token org, none -> refusal"
-
-// protectedOrglessRuling is orglessSuperuserRuling at /me and the telemetry report.
-const protectedOrglessRuling = orglessSuperuserRuling + " (api/orgs/orgs.go:111-114 for /me, api/telemetry/telemetry.go:109-111 for /report)"
-
-// protectedOrgClaimRetired are the requests orgClaimRuling retired.
-var protectedOrgClaimRetired = map[string]bool{"ent: bad org claim": true}
 
 // protectedPublicRetired are the requests publicRowRuling retired.
 var protectedPublicRetired = map[string]bool{"probe: GET /health stranger org": true, "probe: GET /ready stranger org": true,
 	"probe: GET /health/workers stranger org": true, "pt: stranger org header": true}
 
-// protectedOrglessRetired are the requests protectedOrglessRuling retired.
-var protectedOrglessRetired = map[string]bool{"me: superuser": true, "me: superuser X-Org-Id any": true, "report: superuser no org": true}
-
 const (
-	protectedOrgClaimPinSHA256 = "ab2b2fb1dea730522b3c39382b3ed52d774a25ba183aa2bda2cc52fd1c682ba3"
-	protectedPublicPinSHA256   = "dd35f8f365cec8af4b488d59adcc511ef3dccaf1240f86f9d7464ec3c6d6f27f"
-	protectedOrglessPinSHA256  = "ecee5854d5ba63b469c3f95d6b2d96acace66130e41a2ad6ba4ef878113bb55e"
+	protectedPublicPinSHA256 = "dd35f8f365cec8af4b488d59adcc511ef3dccaf1240f86f9d7464ec3c6d6f27f"
 )

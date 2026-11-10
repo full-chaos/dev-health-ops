@@ -342,11 +342,11 @@ dho goapi routing status -registry-url http://query-api:8090/registry
 #    -candidate-build to type. The build is READ from the deployed
 #    process's authenticated /buildinfo; -expect-build is a cross-check
 #    that can only FAIL a run, never the source of what is written. The
-#    credential is the effective-principal ENVELOPE in
-#    GO_API_ROUTING_BEARER -- an env var, not a flag, because a flag value
-#    reaches `ps` and shell history. No proof run is needed
-#    first: MCP/GraphQL parity is the CI step TestMCPClassParityVenueOracle.
-GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
+#    credential is a platform admin's user access token in the 0600 file
+#    GO_API_ROUTING_ACCESS_TOKEN_FILE names -- an env var, not a flag,
+#    because a flag value reaches `ps` and shell history. No proof run is
+#    needed first: MCP/GraphQL parity is the CI step TestMCPClassParityVenueOracle.
+GO_API_ROUTING_ACCESS_TOKEN_FILE=<path> dho goapi routing enable \
   -registry-url  http://query-api:8090/registry \
   -buildinfo-url http://query-api:8090/buildinfo \
   -operations    mcp:hotspots \
@@ -470,30 +470,28 @@ unrelated things become impossible to aggregate separately later.
 
 | verb | `action` | `credential_class` | `principal_id` |
 |---|---|---|---|
-| `enable` | `enable` | `effective_principal_envelope` | the envelope's `sub` |
+| `enable` (and `seed`) | `enable` | `user_access_token` (rows before revision 0164: `effective_principal_envelope`) | the token's `sub` |
 | `repoint` (retired, D6024; its rows stay as history) | `repoint` | `effective_principal_envelope` | the envelope's `sub` |
 | `disable` | `disable` | `operator_direct` | NULL |
 | `status` | — writes no row — | | |
 
 `credential_class` uses the **Auth Control Plane's** vocabulary
 (`contracts/auth/v1/credential-classes.schema.json` is the closed
-registry). `effective_principal_envelope` is the class_id that project's
-Wave 0 threat model proposes for the envelope; registering it in that
-contract is tracked separately, against the paused Auth Control Plane
-project. `disable` is `operator_direct` because it verifies no credential —
+registry). `user_access_token` is the class of the platform admin's token
+`enable` and `seed` present; earlier rows name `effective_principal_envelope`,
+which the database still admits for them and no new row records. `disable` is `operator_direct` because it verifies no credential —
 it contacts nothing by design — and recording a weaker claim accurately
 beats recording a stronger one nothing checked.
 
 `principal_id` and `recorded_by` answer **different questions** and both
 are recorded. `principal_id` is who the *credential* says is acting: the
-envelope's `sub`, a user id, read only after `/buildinfo` has answered 200
-— which is the deployed verifier accepting that exact token. This command
-never verifies the envelope itself; one validator per credential class is
-the Auth Control Plane's rule, and `internal/queryapi/principal` is
-that validator. `recorded_by` is what the operator typed about themselves,
+token's `sub`, a principal id, read only after `/buildinfo` has answered 200
+— which is query-api's edge carrier accepting that exact token. This command
+never verifies the token itself; one validator per credential class is
+the Auth Control Plane's rule. `recorded_by` is what the operator typed about themselves,
 verified by nothing, and required on every row. The pairing CHECK makes the
-distinction structural: an envelope-class row MUST name a subject, an
-`operator_direct` row MUST NOT.
+distinction structural: a `user_access_token` (or envelope) row MUST name a
+subject, an `operator_direct` row MUST NOT.
 
 Each row also carries the routing key (`schema_digest`, `document_digest`,
 `selected_operation`) and the **before and after** of both
@@ -702,8 +700,9 @@ algorithm (EdDSA/Ed25519), key id, TTL (60s) and issuer/audience all
 mirror `principal_envelope.py` exactly -- `internal/queryapi/principal`'s
 own test suite proves the two stay byte-compatible by signing with
 `internal/envelopemint` and verifying with the real `Verifier`. `dho goapi
-routing` still takes a pre-minted `GO_API_ROUTING_BEARER` the same way it
-always has. The standalone `dho mint envelope` verb still exists (and
+routing` and `dho goapi prove` no longer present the envelope: they read a
+platform admin's user access token from a file
+(`GO_API_ROUTING_ACCESS_TOKEN_FILE`, `-proof-access-token-file`). The standalone `dho mint envelope` verb still exists (and
 still execs nothing itself) for a caller outside `goapi prove` that needs
 the raw credential printed to stdout.
 

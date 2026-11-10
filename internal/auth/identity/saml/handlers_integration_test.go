@@ -76,9 +76,10 @@ func TestSAMLRoutesEndToEnd(t *testing.T) {
 		t.Fatalf("binding cookie %+v", cookies)
 	}
 	requestID := requestIDFromRedirect(t, initBody["redirect_url"])
+	relay := relayStateFromRedirect(t, initBody["redirect_url"])
 
 	posted := h.respond(resp{inResponseTo: requestID, nameID: nid("user-1"), email: "a@example.com"})
-	acs := serve(mux, http.MethodPost, base+"/acs", map[string]string{"SAMLResponse": posted}, cookies)
+	acs := serve(mux, http.MethodPost, base+"/acs", map[string]string{"SAMLResponse": posted, "RelayState": relay}, cookies)
 	if acs.Code != http.StatusOK || len(issuer.got) != 1 || issuer.got[0].PrincipalID != user {
 		t.Fatalf("acs %d %s sessions %+v", acs.Code, acs.Body, issuer.got)
 	}
@@ -92,7 +93,7 @@ func TestSAMLRoutesEndToEnd(t *testing.T) {
 		t.Fatal("the binding cookie was not cleared")
 	}
 
-	replay := serve(mux, http.MethodPost, base+"/acs", map[string]string{"saml_response": posted}, cookies)
+	replay := serve(mux, http.MethodPost, base+"/acs", map[string]string{"saml_response": posted, "relay_state": relay}, cookies)
 	if replay.Code != http.StatusBadRequest || !strings.Contains(replay.Body.String(), "SAML authentication failed") || len(issuer.got) != 1 {
 		t.Fatalf("replay %d %s", replay.Code, replay.Body)
 	}
@@ -250,7 +251,7 @@ func TestSAMLACSAcceptsTheAdvertisedHTTPPostBinding(t *testing.T) {
 	}
 	requestID := requestIDFromRedirect(t, initBody["redirect_url"])
 
-	form := url.Values{"SAMLResponse": {h.respond(resp{inResponseTo: requestID, nameID: nid("user-1"), email: "a@example.com"})}, "RelayState": {"/after"}}
+	form := url.Values{"SAMLResponse": {h.respond(resp{inResponseTo: requestID, nameID: nid("user-1"), email: "a@example.com"})}, "RelayState": {relayStateFromRedirect(t, initBody["redirect_url"])}}
 	req := httptest.NewRequest(http.MethodPost, base+"/acs", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookies[0])
@@ -348,7 +349,7 @@ func TestSAMLBrowserCompletesSignInAtTheAdvertisedACSURL(t *testing.T) {
 
 	posted := b64(h.idp.response(t, resp{inResponseTo: requestID, nameID: nid("user-1"), email: "a@example.com",
 		destination: strp(location[1]), recipient: strp(location[1]), audiences: [][]string{{mdBody["entity_id"]}}}))
-	res, err := client.PostForm(location[1], url.Values{"SAMLResponse": {posted}})
+	res, err := client.PostForm(location[1], url.Values{"SAMLResponse": {posted}, "RelayState": {relayStateFromRedirect(t, initBody["redirect_url"])}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,4 +387,14 @@ func TestSAMLEntitlementIsCheckedBeforeTheBody(t *testing.T) {
 			}
 		})
 	}
+}
+
+// relayStateFromRedirect is the RelayState the redirect binding carries.
+func relayStateFromRedirect(t testing.TB, redirect string) string {
+	t.Helper()
+	u, err := url.Parse(redirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Query().Get("RelayState")
 }

@@ -1,0 +1,4 @@
+# Every file under internal/auth/authruntime/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+c4978c631e78a69735fe03358390b4f4f0899d611a46053e79df0d0a8c7c0b6b	hand-written	pw_alias_fixture.txt

@@ -6,6 +6,9 @@ site_url: https://docs.fullchaos.dev
 # edit_uri: edit/main/docs/
 
 docs_dir: docs
+exclude_docs: |
+  contribute/architecture/go-api-wave-0-proof-infrastructure.md
+  go-migration-matrix.md
 site_dir: .build/docs
 
 theme:
@@ -183,6 +186,7 @@ nav:
           - Disaster recovery: operate/runbooks/disaster-recovery.md
           - Prod k3s operate: operate/runbooks/prod-k3s-deploy-and-operate.md
           - Query-api bootstrap: operate/runbooks/query-api-bootstrap.md
+          - Go API tools image: operate/runbooks/go-api-tools-image.md
           - Auth sessions flip and rollback: operate/runbooks/auth-sessions-flip-and-rollback.md
           - Auth shadow PDP triage: operate/runbooks/auth-shadow-pdp-triage.md
           - Auth PDP outage and rollback: operate/runbooks/auth-pdp-outage-and-rollback.md
@@ -201,8 +205,6 @@ nav:
           - Auth legacy compatibility and rollback: operate/runbooks/auth-legacy-compat-and-rollback.md
           - External Push lifecycle events: operate/runbooks/external-push-lifecycle.md
           - Legacy ingest retirement: operate/runbooks/legacy-ingest-retirement.md
-      - Prod cutover 2026-09-11:
-          - operate/prod-cutover-2026-09-11-lessons/index.md
   - Integrate and extend:
       - integrate/index.md
       - Customer Push:
@@ -225,6 +227,8 @@ nav:
           - Configure: integrate/webhooks/configure.md
           - Verify signatures: integrate/webhooks/verify-signatures.md
           - Retries and replay: integrate/webhooks/retries-and-replay.md
+      - Connect an agent (MCP):
+          - integrate/mcp/index.md
       - Build an integration:
           - integrate/build-an-integration/index.md
           - Provider integration: integrate/build-an-integration/provider.md
@@ -264,6 +268,7 @@ nav:
       - Auth decision clients: reference/auth/decision-clients.md
       - Auth reason codes: reference/auth/reason-codes.md
       - Auth entitlement boundary: reference/auth/entitlement-boundary.md
+      - Auth principal envelope: reference/auth/principal-envelope.md
       - GraphQL:
           - reference/graphql/index.md
           - Schema and fields: reference/graphql/schema.md
@@ -296,8 +301,6 @@ nav:
       - Deprecations: reference/deprecations/index.md
       - Runtime:
           - reference/runtime/index.md
-          - Python↔Go live-path ledger: reference/runtime/python-go-live-path-ledger.md
-          - Go migration matrix: go-migration-matrix.md
   - Contribute:
       - contribute/index.md
       - Get started:
@@ -316,10 +319,8 @@ nav:
           - Ask Dev v2 contracts: contribute/architecture/ask-dev-contracts-v2.md
           - Ask Dev subject preflight: contribute/architecture/ask-dev-subject-preflight.md
           - Ask Dev role readiness: contribute/architecture/ask-dev-role-readiness.md
-          - Go API Wave 0 proof infrastructure: contribute/architecture/go-api-wave-0-proof-infrastructure.md
           - Auth Control Plane threat model: contribute/architecture/auth-control-plane-threat-model.md
           - Auth Control Plane ADRs: contribute/architecture/auth-control-plane-adrs.md
-          - Auth Control Plane decision sheet: contribute/architecture/auth-control-plane-decision-sheet.md
           - Auth Control Plane architecture: contribute/architecture/auth-control-plane-architecture.md
           - Auth Control Plane dependencies and cryptography: contribute/architecture/auth-control-plane-dependencies.md
           - Auth Control Plane deployment: contribute/architecture/auth-control-plane-deployment.md
@@ -336,7 +337,6 @@ nav:
           - Migrations: contribute/development/migrations.md
           - Debugging: contribute/development/debugging.md
           - Go worker verification traps: contribute/development/go-worker-verification-traps.md
-          - Lane isolation on kiac: contribute/development/lane-isolation-kiac.md
           - Integration suite targets: contribute/development/integration-suite-targets.md
       - Review and release:
           - contribute/review-and-release/index.md

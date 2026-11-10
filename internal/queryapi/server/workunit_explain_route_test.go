@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
@@ -40,7 +41,7 @@ func newWorkUnitExplainRequest(t *testing.T, workUnitID, query string) *http.Req
 	}
 	req := httptest.NewRequest(http.MethodPost, target, nil)
 	req.SetPathValue("work_unit_id", workUnitID)
-	return req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-ABC-123"}))
+	return req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-ABC-123", Scope: pepgate.Legacy("org-ABC-123")}))
 }
 
 // readWorkUnitExplainFixture takes the fixture's path RELATIVE TO THIS

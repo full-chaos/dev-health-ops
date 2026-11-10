@@ -37,13 +37,13 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "auth",
 		Kind:    cli.Group,
-		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, repo-identities-sync, platform-role-grant, platform-role-revoke, platform-role-list",
+		Summary: "auth control plane operator verbs: users-backfill, users-create, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, repo-identities-sync, platform-role-grant, platform-role-revoke, platform-role-list",
 		Children: append([]cli.Command{{
 			Name:    "users-backfill",
 			Kind:    cli.Verb,
 			Summary: "copy public.users into the auth schema (idempotent; counts only)",
 			Run:     run,
-		}, {
+		}, usersCreateCommand(), {
 			Name:    "users-reconcile",
 			Kind:    cli.Verb,
 			Summary: "compare public.users with the auth schema in one read-only snapshot (counts only; exit 1 on any gated diff; -platform-roles-gate also gates no_active_platform_admin, run it before the platform roles flip)",
@@ -93,7 +93,7 @@ func run(ctx context.Context, env cli.Env) int {
 	if owned, err := authconfig.UsersOwnedFromLookup(env.Lookup); err != nil {
 		fmt.Fprintln(env.Stderr, "users-backfill: AUTH_USERS_OWNED must be true or false")
 		return cli.ExitFailure
-	} else if owned {
+	} else if owned && !*insertOnly { // CHAOS-13372: insert-only only creates missing users, so it may run owned
 		fmt.Fprintln(env.Stderr, "users-backfill: refused: AUTH_USERS_OWNED is true, auth.users is the authority and this command copies from public.users")
 		return cli.ExitRefused
 	}

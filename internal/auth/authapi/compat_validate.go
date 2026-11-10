@@ -119,17 +119,17 @@ func (validateStore) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Im
 
 func (validateStore) ReadsPlatformRoles() bool { return false }
 
-// newValidateAuth is go-api's token decision over the store: the HS256 token
-// verified by the go-api verifier this Issuer holds, then CheckClaims
-// (Authenticate). With an EdDSA configuration it is go-api's routed decision
-// (internal/apiservice accessverify.go and accessrows.go) over this route's
-// one row: the token's alg picks the HS256 path or the EdDSA user token of
-// audience dev-health-api, whose users row, session and membership go-api's
-// accessTokenUser checks.
+// newValidateAuth is go-api's routed decision (internal/apiservice
+// accessverify.go and accessrows.go) over this route's one row: an HS256
+// token is refused alg_not_allowed (its class is retired), and the EdDSA user
+// token of audience dev-health-api is checked, its users row, session and
+// membership by go-api's accessTokenUser. The authenticator holds no HS256
+// verifier, so an unrouted call is refused. The route mounts only with the
+// EdDSA configuration (withValidateRoute).
 func newValidateAuth(deps CompatDeps) (*policy.Authenticator, error) {
-	auth, err := policy.NewAuthenticator(deps.Issuer.verifier, validateStore{users: deps.Users, sessions: deps.Validate.Sessions}, deps.Logger)
-	if err != nil || !deps.Validate.eddsa() {
-		return auth, err
+	auth, err := policy.NewAuthenticator(validateStore{users: deps.Users, sessions: deps.Validate.Sessions}, deps.Logger)
+	if err != nil {
+		return nil, err
 	}
 	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{
 		Issuer: deps.Validate.IssuerURL, Audience: contracts.PlatformAPIAudience, Keys: publishedKeys{source: deps.Validate.Keys},
@@ -142,10 +142,9 @@ func newValidateAuth(deps CompatDeps) (*policy.Authenticator, error) {
 		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify")
 	}
 	validator, err := accessverify.New(accessverify.Config{
-		Rows:   []accessverify.Row{{Service: AccessService, Profile: validateProfile, AcceptsUser: true, LegacyHS256: true}},
-		EdDSA:  verifier,
-		Legacy: validateLegacy(auth.AuthenticateLegacy),
-		Meter:  meter, Logger: deps.Logger,
+		Rows:  []accessverify.Row{{Service: AccessService, Profile: validateProfile, AcceptsUser: true}},
+		EdDSA: verifier,
+		Meter: meter, Logger: deps.Logger,
 	})
 	if err != nil {
 		return nil, err
@@ -154,22 +153,6 @@ func newValidateAuth(deps CompatDeps) (*policy.Authenticator, error) {
 		return nil, err
 	}
 	return auth, nil
-}
-
-// validateLegacy is go-api's legacyVerifier: a refusal and a claim of the
-// wrong type stay refusals, any other failure is the validator's outage.
-func validateLegacy(authenticate func(context.Context, string) (*policy.User, error)) accessverify.LegacyVerifier {
-	return func(ctx context.Context, token string) (any, error) {
-		user, err := authenticate(ctx, token)
-		switch {
-		case err == nil:
-			return user, nil
-		case policy.IsRefusal(err), policy.IsClaimTypeError(err):
-			return nil, err
-		default:
-			return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
-		}
-	}
 }
 
 // validateRouted is go-api's routedAccessVerify.
@@ -187,12 +170,7 @@ func (v validateRouted) Validate(ctx context.Context, service, profile, bearer s
 	case err != nil:
 		return nil, err
 	}
-	switch {
-	case result.Class == accessverify.ClassLegacy:
-		if user, ok := result.Legacy.(*policy.User); ok && user != nil {
-			return &policy.RoutedResult{Legacy: user}, nil
-		}
-	case result.Class == accessverify.ClassUser && result.Claims != nil:
+	if result.Class == accessverify.ClassUser && result.Claims != nil {
 		claims := result.Claims
 		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID, Actor: claims.ActorSubject}}, nil
 	}
@@ -200,9 +178,9 @@ func (v validateRouted) Validate(ctx context.Context, service, profile, bearer s
 }
 
 // withValidateRoute mounts the validate route when rows holds its row: an
-// auth-service row that accepts the HS256 token, and the user access token
-// too when the EdDSA configuration is set. Without it it logs one line naming
-// the route and mounts nothing.
+// auth-service row that accepts the user access token (the retired HS256
+// class is on no row). Without the access-token verifier or the row it logs
+// one line naming the route and mounts nothing; the legacy key plays no part.
 func (h compatHandlers) withValidateRoute(routes []httpapi.Route, rows []byte) ([]httpapi.Route, error) {
 	if h.Validate == nil {
 		return routes, nil
@@ -210,11 +188,11 @@ func (h compatHandlers) withValidateRoute(routes []httpapi.Route, rows []byte) (
 	if h.Validate.Sessions == nil {
 		return nil, errors.New("authapi: the validate route needs go-api's session read")
 	}
-	classes := []string{accessverify.ClassLegacy}
-	if h.Validate.eddsa() {
-		classes = append(classes, accessverify.ClassUser)
+	if !h.Validate.eddsa() {
+		h.rec.logger.Info("auth validate route not mounted: AUTH_TOKEN_ISSUER_URL is unset (no access-token verifier)", "route", PatternCompatValidate)
+		return routes, nil
 	}
-	if rowsAcceptFor(rows, []string{PatternCompatValidate}, classes) != nil {
+	if rowsAcceptFor(rows, []string{PatternCompatValidate}, []string{accessverify.ClassUser}) != nil {
 		h.rec.logger.Info("auth validate route not mounted: no endpoint-profile row", "route", PatternCompatValidate)
 		return routes, nil
 	}

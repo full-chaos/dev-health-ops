@@ -89,6 +89,20 @@ type GrantInput struct {
 	Role      string
 	// ExpiresAt is nil for a permanent assignment.
 	ExpiresAt *time.Time
+	// AllowDisabledTarget lets the grant land on a disabled user principal, as go-api's admin user writes do (pm D6914):
+	// the assignment is stored and gives nothing while the principal is disabled (the active rule reads disabled_at).
+	AllowDisabledTarget bool
+}
+
+// grantTargetRefusal is the target check of a grant: a user principal, enabled unless the grant allows a disabled one.
+func grantTargetRefusal(kind string, enabled, allowDisabled bool) error {
+	switch {
+	case kind != "user":
+		return ErrNotHumanUser
+	case !enabled && !allowDisabled:
+		return ErrPrincipalOff
+	}
+	return nil
 }
 
 // RevokeInput is one revoke. Actor must hold GrantAction now.
@@ -113,6 +127,18 @@ func (s *Store) ResolveOn(ctx context.Context, q RowQuerier, principal uuid.UUID
 		return Authority{}, s.storeErr(ctx, "resolve", err)
 	}
 	return a, nil
+}
+
+// HeldOn reports whether principal has a stored, unexpired assignment of role, whatever the principal's state: it is
+// what an admin update compares is_superuser with, as go-api compares with its stored column. It is no authority
+// read: a disabled principal's assignment gives nothing (Resolve, ResolveOn).
+func (s *Store) HeldOn(ctx context.Context, q RowQuerier, principal uuid.UUID, role string) (bool, error) {
+	var held bool
+	if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments
+WHERE principal_id = $1 AND role_key = $2 AND (expires_at IS NULL OR expires_at > statement_timestamp()))`, principal, role).Scan(&held); err != nil {
+		return false, s.storeErr(ctx, "read the stored assignment", err)
+	}
+	return held, nil
 }
 
 // Resolve is the platform authority principal holds now. Any read failure is
@@ -172,7 +198,7 @@ func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 	}
 	id := uuid.New()
 	actor, subject := in.Actor.String(), in.Principal.String()
-	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+	err := s.commit(ctx, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if err := lockWrites(ctx, tx); err != nil {
 				return err
@@ -195,10 +221,9 @@ func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 				return ErrPrincipalMissing
 			case err != nil:
 				return err
-			case kind != "user":
-				return ErrNotHumanUser
-			case !enabled:
-				return ErrPrincipalOff
+			}
+			if err := grantTargetRefusal(kind, enabled, in.AllowDisabledTarget); err != nil {
+				return err
 			}
 			if in.ExpiresAt != nil {
 				var future bool
@@ -240,7 +265,7 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 		return ErrPlatformOwnerCLIOnly
 	}
 	var target uuid.UUID
-	err := s.pool.QueryRow(ctx, `SELECT id FROM `+s.q+`.platform_role_assignments WHERE principal_id = $1 AND role_key = $2`,
+	err := s.reader(ctx).QueryRow(ctx, `SELECT id FROM `+s.q+`.platform_role_assignments WHERE principal_id = $1 AND role_key = $2`,
 		in.Principal, in.Role).Scan(&target)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotHeld
@@ -249,7 +274,7 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 		return s.storeErr(ctx, "read revoke target", err)
 	}
 	actor, subject := in.Actor.String(), in.Principal.String()
-	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+	err = s.commit(ctx, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if err := lockWrites(ctx, tx); err != nil {
 				return err

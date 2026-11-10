@@ -76,14 +76,14 @@ func ImpersonationDecided(ctx context.Context) bool {
 	return decided
 }
 
-// Scope holds the request-wide steps: Principal, then OrgScope and
-// Impersonation. They run for every request on the api listener, public
-// routes and unknown paths included, as the Python middlewares do.
+// Scope holds the request-wide steps: Principal, then OrgScope and Impersonation. They run for
+// every request on the api listener, public routes and unknown paths included, as the Python middlewares do.
 type Scope struct {
 	auth         *Authenticator
 	logger       *slog.Logger
 	rows         func(profile string) (BearerRow, bool)
 	authenticate func(ctx context.Context, token string) (*User, error)
+	refuseLegacy bool
 }
 
 // NewScope builds the middlewares over auth.
@@ -212,12 +212,12 @@ func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (s
 	return role, member, err
 }
 
-// Impersonation is ImpersonationMiddleware. For a caller mayImpersonate lets
-// in whose users row says superuser, an active session makes the target's
-// org the request's org, sets the impersonation context, and stamps
-// X-Impersonating / X-Impersonated-User-Id on the response. A session
-// lookup failure refuses the request with the generic 500, like the other
-// authorization lookups (fail closed, logged).
+// Impersonation is ImpersonationMiddleware. For a caller mayImpersonate lets in who holds
+// admin.impersonate, an active session makes the target's org the request's org, sets the
+// impersonation context, and stamps X-Impersonating / X-Impersonated-User-Id on the response;
+// with RefuseLegacyImpersonation on, it refuses a live row with 403 instead, but on
+// liveRowExemptPatterns (a non-holder's row is read on writes only). The row is kept for the
+// Guard refusals (Guard.sessionRow). A session lookup failure is 503 (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every path below that calls next has decided; the refusals return
@@ -234,7 +234,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			writeCallerLookupFailure(w, err)
 			return
 		}
-		if user == nil || !user.Holds(ActionAdminImpersonate) {
+		if user == nil || (!user.Holds(ActionAdminImpersonate) && (readMethod(r.Method) || !s.refusesLegacyCaller(r))) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -247,14 +247,21 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			s.logger.ErrorContext(r.Context(), "api impersonation: session lookup failed; refusing the request",
 				slog.String("path", r.Pattern), slog.String("admin_user_id", user.UserID),
 				slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)), slog.Any("error", err))
-			WriteInternal(w)
+			WriteAuthFailure(w, "", ErrUnavailable)
 			return
 		}
+		ctx := context.WithValue(r.Context(), sessionRowKey{}, rowRead{session: session})
 		if session == nil {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		ctx := context.WithValue(r.Context(), orgIDKey, session.TargetOrgID.String())
+		if s.refusesLegacyCaller(r) {
+			s.logger.WarnContext(r.Context(), "api impersonation: legacy session caller refused; impersonation goes through a delegated session",
+				slog.String("route", RouteProfileFrom(r.Context())), slog.String("admin_user_id", user.UserID))
+			WriteDetail(w, http.StatusForbidden, msgImpersonationReadOnly, nil)
+			return
+		}
+		ctx = context.WithValue(ctx, orgIDKey, session.TargetOrgID.String())
 		ctx = context.WithValue(ctx, impersonationKey, session)
 		header := w.Header()
 		header.Add("X-Impersonating", "true")
@@ -263,24 +270,28 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	})
 }
 
-// pyTruthy is bool() of a decoded JSON value.
-func pyTruthy(value any) bool {
-	switch typed := value.(type) {
-	case nil:
+// RefuseLegacyImpersonation sets whether Impersonation refuses the legacy
+// impersonation caller (the admin's own bearer beside a live go-api session
+// row) on every route but the session's status and stop. Call it once,
+// before the Scope serves.
+func (s *Scope) RefuseLegacyImpersonation(on bool) { s.refuseLegacy = on }
+
+// RefusesLegacyImpersonation reports what RefuseLegacyImpersonation set.
+func (s *Scope) RefusesLegacyImpersonation() bool { return s.refuseLegacy }
+
+// refusesLegacyCaller reports whether the legacy caller is refused on r: the
+// option is on and r is not one of liveRowExemptPatterns, where a refused
+// legacy caller is still served in its session (the guard's live-row
+// refusals read the same set). The route is the
+// template RouteProfiles recorded, whose method must be the request's own (a
+// GET template also matches HEAD); a request no route matches is refused.
+func (s *Scope) refusesLegacyCaller(r *http.Request) bool {
+	if !s.refuseLegacy {
 		return false
-	case bool:
-		return typed
-	case float64:
-		return typed != 0
-	case string:
-		return typed != ""
-	case []any:
-		return len(typed) > 0
-	case map[string]any:
-		return len(typed) > 0
-	default:
-		return true
 	}
+	profile := RouteProfileFrom(r.Context())
+	method, _, _ := strings.Cut(profile, " ")
+	return method != r.Method || !liveRowExempt(profile)
 }
 
 // orgDeniedBody is OrgIdMiddleware._deny's body: json.dumps with its default

@@ -274,13 +274,9 @@ func samlSPMetadataXML(entityID, acsURL, nameIDFormat string) string {
 
 // samlMetadata is GET /saml/{provider_id}/metadata.
 func (h handlers) samlMetadata(w http.ResponseWriter, r *http.Request) {
-	providerID, err := pythonparity.ParseUUID(r.PathValue("provider_id"))
-	if err != nil {
-		h.fail(w, r, "parse provider id", err)
-		return
-	}
+	providerID, parseErr := pythonparity.ParseUUID(r.PathValue("provider_id"))
 	ctx := r.Context()
-	row, err := scanProvider(h.Pool.QueryRow(ctx, `SELECT `+providerColumns+` FROM sso_providers WHERE id = $1::uuid`, providerID))
+	row, err := scanProvider(h.providerByID(ctx, providerColumns, providerID, parseErr))
 	if errorsIsNoRows(err) {
 		policy.WriteDetail(w, http.StatusNotFound, "SSO provider not found", nil)
 		return
@@ -331,11 +327,7 @@ func deflateRaw(data []byte) ([]byte, error) {
 
 // initiateSAMLAuth is POST /saml/{provider_id}/initiate.
 func (h handlers) initiateSAMLAuth(w http.ResponseWriter, r *http.Request) {
-	providerID, err := pythonparity.ParseUUID(r.PathValue("provider_id"))
-	if err != nil {
-		h.fail(w, r, "parse provider id", err)
-		return
-	}
+	providerID, parseErr := pythonparity.ParseUUID(r.PathValue("provider_id"))
 	rawBody, _ := policy.BodyFrom(r.Context())
 	var errs pybody.Errors
 	object, ok := errs.Object(rawBody)
@@ -349,7 +341,7 @@ func (h handlers) initiateSAMLAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	row, err := scanProvider(h.Pool.QueryRow(ctx, `SELECT `+providerColumns+` FROM sso_providers WHERE id = $1::uuid`, providerID))
+	row, err := scanProvider(h.providerByID(ctx, providerColumns, providerID, parseErr))
 	if errorsIsNoRows(err) {
 		policy.WriteDetail(w, http.StatusNotFound, "SSO provider not found", nil)
 		return
@@ -570,7 +562,7 @@ func (h handlers) processSAMLResponse(ctx context.Context, w http.ResponseWriter
 		if relayState == "" {
 			return samlClaims{}, ssoAuthErr("Missing SAML RelayState")
 		}
-		state, err := verifySAMLStateKeys(h.stateKeys(), relayState, row.ID, now)
+		state, err := verifySAMLState(h.StateSecret, relayState, row.ID, now)
 		if err != nil {
 			if errors.Is(err, errSAMLStateExpired) {
 				return samlClaims{}, ssoAuthErr("SAML RelayState expired")
@@ -744,11 +736,7 @@ func toAnyMap(in map[string]string) map[string]any {
 
 // samlACSCallback is POST /saml/{provider_id}/acs.
 func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
-	providerID, err := pythonparity.ParseUUID(r.PathValue("provider_id"))
-	if err != nil {
-		h.fail(w, r, "parse provider id", err)
-		return
-	}
+	providerID, parseErr := pythonparity.ParseUUID(r.PathValue("provider_id"))
 	rawBody, _ := policy.BodyFrom(r.Context())
 	var errs pybody.Errors
 	object, ok := errs.Object(rawBody)
@@ -767,7 +755,7 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 	relayState := relayStateField.Value
 
 	ctx := r.Context()
-	row, err := scanProvider(h.Pool.QueryRow(ctx, `SELECT `+providerColumns+` FROM sso_providers WHERE id = $1::uuid`, providerID))
+	row, err := scanProvider(h.providerByID(ctx, providerColumns, providerID, parseErr))
 	if errorsIsNoRows(err) {
 		policy.WriteDetail(w, http.StatusNotFound, "SSO provider not found", nil)
 		return

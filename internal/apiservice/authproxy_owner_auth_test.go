@@ -9,14 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // countingScopeStore is scopeStore that counts every read go-api's authenticator makes.
@@ -55,26 +54,15 @@ type ownerFixture struct {
 // and the scope exemption of cfg.
 func newOwnerFixture(t *testing.T, cfg AuthProxyConfig) *ownerFixture {
 	t.Helper()
-	verifier, err := edgetoken.New(proxyTestKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(proxyTestKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	reads := &atomic.Int64{}
 	store := scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}
-	auth, err := policy.NewAuthenticator(verifier, countingScopeStore{scopeStore: store, reads: reads}, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := proxyTokens.AuthenticatorOver(t, countingScopeStore{scopeStore: store, reads: reads}, quietLogger())
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable&connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
+	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 		AuthProxy: cfg, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 	scope := policy.NewScope(auth, quietLogger())
 	server, err := newServer(config.Config{APIAddress: "127.0.0.1:0", CORSAllowedOrigins: []string{proxyOrigin}}, quietLogger(), routes,
@@ -227,17 +215,11 @@ func TestScopeExemptRoutesAreExactAndFlagBound(t *testing.T) {
 	}
 }
 
-// ownerSuperuserBearer is go-api's HS256 access token for the fixture's superuser, who holds an active impersonation.
+// ownerSuperuserBearer is a routed access token for the fixture's superuser (the users row says superuser), who
+// holds an active impersonation.
 func ownerSuperuserBearer(t *testing.T, admin uuid.UUID) string {
 	t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": admin.String(), "type": "access", "org_id": uuid.NewString(), "is_superuser": true, "iss": "dev-health-ops",
-		"aud": "dev-health-api", "exp": time.Now().Add(time.Hour).Unix(),
-	}).SignedString([]byte(proxyTestKey))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return token
+	return proxyTokens.MustMint(t, edtokens.Claims{UserID: admin})
 }
 
 // go-api's own refusals with the credentials aggregate off, byte for byte. auth-service answers the same requests

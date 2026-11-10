@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // OperationOrgGuard is the Go form of the Python schema extension
@@ -66,6 +67,10 @@ func (OperationOrgGuard) InterceptOperation(ctx context.Context, next graphql.Op
 		// Python, every field of this operation runs against that org.
 		claims, _ := authctx.FromContext(ctx)
 		claims.OrgID = rebindTo
+		if claims.Scope.Kind() == pepgate.KindLegacy {
+			// The legacy path's scope names the org the operation runs in.
+			claims.Scope = pepgate.Legacy(rebindTo)
+		}
 		ctx = authctx.WithClaims(ctx, claims)
 	}
 	return next(ctx)
@@ -89,8 +94,35 @@ func operationOrgDecision(ctx context.Context, operation *graphql.OperationConte
 			return "Authorization required", ""
 		}
 	}
-	var requested []string
-	invalid := false
+	requested, invalid := collectOrgArguments(operation)
+	if invalid {
+		return "A valid organization ID is required", ""
+	}
+	if len(requested) == 0 {
+		return "", ""
+	}
+	first := requested[0]
+	for _, other := range requested[1:] {
+		if other != first {
+			return "Only one organization may be queried per operation", ""
+		}
+	}
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return "Authorization required", ""
+	}
+	if claims.OrgID == first {
+		return "", ""
+	}
+	if claims.Holds(rule.ActionAdminOrgs) && !claims.ImpersonationActive {
+		return "", first
+	}
+	return "Access denied: cannot query org '" + first + "'", ""
+}
+
+// collectOrgArguments is every orgId/org_id argument the operation names, in document order, and whether any is not a
+// non-empty, unpadded string. It walks fields, inline fragments and fragment spreads (each spread once).
+func collectOrgArguments(operation *graphql.OperationContext) (requested []string, invalid bool) {
 	visited := map[string]bool{}
 	var collect func(set ast.SelectionSet)
 	collect = func(set ast.SelectionSet) {
@@ -123,29 +155,7 @@ func operationOrgDecision(ctx context.Context, operation *graphql.OperationConte
 		}
 	}
 	collect(operation.Operation.SelectionSet)
-	if invalid {
-		return "A valid organization ID is required", ""
-	}
-	if len(requested) == 0 {
-		return "", ""
-	}
-	first := requested[0]
-	for _, other := range requested[1:] {
-		if other != first {
-			return "Only one organization may be queried per operation", ""
-		}
-	}
-	claims, ok := authctx.FromContext(ctx)
-	if !ok || claims.OrgID == "" {
-		return "Authorization required", ""
-	}
-	if claims.OrgID == first {
-		return "", ""
-	}
-	if claims.Holds(rule.ActionAdminOrgs) && !claims.ImpersonationActive {
-		return "", first
-	}
-	return "Access denied: cannot query org '" + first + "'", ""
+	return requested, invalid
 }
 
 // orglessPlatformCaller is a caller with no organization and no superuser flag

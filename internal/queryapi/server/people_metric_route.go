@@ -27,7 +27,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
@@ -51,15 +50,12 @@ func peopleMetricSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitch {
 
 // loadPeopleMetricRouteConfig reads this route's own dependency set,
 // same reasoning as loadPeopleSummaryRouteConfig's own doc comment.
-func loadPeopleMetricRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadPeopleMetricRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 // buildPeopleMetricRoute constructs the handler, its own routeswitch
@@ -67,12 +63,12 @@ func loadPeopleMetricRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, is
 // build/start" contract every other optionally-configured route in this
 // binary follows.
 func buildPeopleMetricRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadPeopleMetricRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadPeopleMetricRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -125,7 +121,7 @@ func buildPeopleMetricRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler
 func writePeopleMetricResponse(w http.ResponseWriter, r *http.Request, orgID string, resp people.MetricResponse) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: people_metric: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }
@@ -149,6 +145,10 @@ func newPeopleMetricHandler(reader *people.Reader) http.HandlerFunc {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
 			writeRESTUnauthorized(w, r, "people_metric", "Not authenticated")
+			return
+		}
+		org, ok := restScopeOrg(w, r, "people_metric", claims)
+		if !ok {
 			return
 		}
 
@@ -185,18 +185,18 @@ func newPeopleMetricHandler(reader *people.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
 		for key := range query {
 			if peopleForbiddenQueryParams[key] {
-				writeRESTError(w, r, "people_metric", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "people_metric", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
 
-		resp, err := people.BuildMetricResponse(r.Context(), reader, claims.OrgID, people.MetricParams{
+		resp, err := people.BuildMetricResponse(r.Context(), reader, org, people.MetricParams{
 			PersonID:    personID,
 			Metric:      metric,
 			RangeDays:   rangeDays,
@@ -205,18 +205,18 @@ func newPeopleMetricHandler(reader *people.Reader) http.HandlerFunc {
 		})
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
-				writeTimeWindowOverflow(w, r, "people_metric", claims.OrgID)
+				writeTimeWindowOverflow(w, r, "people_metric", org)
 				return
 			}
 			if reqErr, ok := people.AsRequestError(err); ok {
-				writeRESTError(w, r, "people_metric", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "people_metric", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1119-1120).
-			writeRESTDataUnavailable(w, r, "people_metric", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "people_metric", org, err)
 			return
 		}
-		writePeopleMetricResponse(w, r, claims.OrgID, resp)
+		writePeopleMetricResponse(w, r, org, resp)
 	}
 }

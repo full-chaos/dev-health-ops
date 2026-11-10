@@ -1,18 +1,24 @@
 # CHAOS-12702: the auth flags the web live e2e runs with. One row per flag. The source column is the prod line (dev-health-deploy values.prod.yaml read at d78e9109) or the chart rule that renders it.
-# deploy/helm/dev-health/live_e2e_auth_flags_test.go pins the AUTH_PROXY_ rows to the phase 3 chart render; internal/cigates/workflows/live_e2e_auth_stack_test.go pins the delta column.
+# deploy/helm/dev-health/live_e2e_auth_flags_test.go pins the AUTH_PROXY_ rows to the phase 4 chart render (usersOwnedStage owned); internal/cigates/workflows/live_e2e_auth_stack_test.go pins the delta column.
+# The same chart test pins the AUTH_PLATFORM_ROLES_OWNED rows to the Deployments of the prod-like render (phase 4, usersOwnedStage owned, platformRolesOwned true).
 # delta is - for a flag equal to prod. A flag that differs names why. Only the one named delta is allowed.
 scope	name	value	source	delta
-go-api	AUTH_PROXY_SESSIONS	true	chart authService.phase 3, templates/go-api-deployment.yaml:123; prod values.prod.yaml:1645	-
-go-api	AUTH_PROXY_LOCAL_LOGIN	true	chart phase 3 loginStage goApi, go-api-deployment.yaml:123; prod values.prod.yaml:1645,1650	-
-go-api	AUTH_PROXY_CREDENTIALS	false	chart phase 3 (credentials need phase 4), go-api-deployment.yaml:123; prod values.prod.yaml:1645	-
-go-api	AUTH_PROXY_SOCIAL	true	chart phase 3 loginStage goApi, go-api-deployment.yaml:123; prod values.prod.yaml:1645,1650	-
+go-api	AUTH_PROXY_SESSIONS	true	chart authService.phase 4, templates/go-api-deployment.yaml:123; prod values.prod.yaml:1820	-
+go-api	AUTH_PROXY_LOCAL_LOGIN	true	chart phase 4, go-api-deployment.yaml:123; prod values.prod.yaml:1820	-
+go-api	AUTH_PROXY_CREDENTIALS	true	chart phase 4 usersOwnedStage owned, go-api-deployment.yaml:123; prod values.prod.yaml:1820-1821	-
+go-api	AUTH_USERS_OWNED	true	chart phase 4 usersOwnedStage owned (CHAOS-13356: every venue runs users owned); prod values.prod.yaml:1820-1821	-
+go-api	AUTH_PROXY_SOCIAL	true	chart phase 4, go-api-deployment.yaml:123; prod values.prod.yaml:1820	-
 go-api	AUTH_PROXY_OIDC	false	chart authSSOOn, go-api-deployment.yaml:123; prod values.prod.yaml sets no sso	-
 go-api	AUTH_PROXY_SAML	false	chart authSSOOn, go-api-deployment.yaml:123; prod values.prod.yaml sets no sso	-
 go-api	AUTH_SESSION_ISSUE_CREDENTIAL	workload	prod values.prod.yaml:1420-1421	-
 go-api	AUTH_PROVISIONING_CREDENTIAL	workload	prod values.prod.yaml:1416-1417	-
+go-api	AUTH_PLATFORM_ROLES_OWNED	true	chart authService.platformRolesOwned, phase 4 usersOwnedStage owned, templates/go-api-deployment.yaml:345; prod values.prod.yaml:1830 (dev-health-deploy main beccc13)	-
 query-api	AUTH_PROXY_SESSIONS	true	chart templates/query-api-deployment.yaml:181; prod phase values.prod.yaml:1645	-
-auth-service	AUTH_USERS_OWNED	false	chart authOn goApiUsersOwned needs phase 4; prod values.prod.yaml:1645	-
+query-api	AUTH_PLATFORM_ROLES_OWNED	true	chart authService.platformRolesOwned, phase 4 usersOwnedStage owned, templates/query-api-deployment.yaml:185; prod values.prod.yaml:1830 (dev-health-deploy main beccc13)	-
+auth-service	AUTH_USERS_OWNED	true	chart phase 4 usersOwnedStage owned (CHAOS-13356: every venue runs users owned); prod values.prod.yaml:1820-1821	-
+auth-service	AUTH_PLATFORM_ROLES_OWNED	true	chart authService.platformRolesOwned, phase 4 usersOwnedStage owned, templates/auth-service.yaml:338; prod values.prod.yaml:1830 (dev-health-deploy main beccc13)	-
 auth-service	AUTH_DATABASE_SCHEMA	auth	chart default; prod values.prod.yaml sets no override	-
 auth-service	AUTH_ACCESS_TOKEN_CLASS	eddsa	prod class is eddsa (dev-health-deploy main de64644c9, deploy PR #851 e2620977e, values.prod.yaml:1693)	-
 auth-service	AUTH_JWT_AUDIENCE	dev-health-api	the chart renders this under eddsa, which prod runs (deploy/helm/dev-health/auth_eddsa_audience_test.go)	-
 auth-service	AUTH_WORKLOAD_BOOTSTRAP	true	prod uses the Kubernetes exchange (values.prod.yaml:1715-1721); a runner has no Kubernetes, so the Compose bootstrap subject of the same exchange (compose.yml:1637-1639)	bootstrap subject, no Kubernetes
+auth-service	AUTH_WORKLOAD_EXCHANGE	true	prod uses the Kubernetes exchange (values.prod.yaml:1715-1721); the API server it asks is a job-local fake (AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL, set by the script)	-

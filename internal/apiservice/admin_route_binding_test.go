@@ -38,7 +38,8 @@ func adminBindingViolations(t *testing.T, table []string, extra ...httpapi.Route
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	routes := append(Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger()), ClickHouse: nilConn{}}, quietLogger()), extra...)
+	// ServiceAccounts set: the lifecycle routes mount only with AUTH_PROXY_SERVICE_ACCOUNT_KEYS on, and the table lists them
+	routes := append(Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger()), ClickHouse: nilConn{}, ServiceAccounts: stubAccounts{}}, quietLogger()), extra...)
 	server, err := NewServer(apiTestConfig(), quietLogger(), routes)
 	if err != nil {
 		t.Fatal(err)

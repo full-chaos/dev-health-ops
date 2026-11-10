@@ -88,6 +88,11 @@ type orgCategorizeBYO struct {
 	// of one clef request URL and model (nil = unguarded, tests only).
 	newClef    func(cfg categorize.ClefClientConfig) (*categorize.TypeSafeClient, error)
 	clefBudget func(orgID, model, postURL string) *llmbudget.Guard
+	// newTypeSafe builds the client of an org's own TypeSafe account;
+	// typeSafeBudget the budget guard of one TypeSafe model (nil = unguarded,
+	// tests only).
+	newTypeSafe    func(cfg categorize.OrgTypeSafeClientConfig) (*categorize.TypeSafeClient, error)
+	typeSafeBudget func(orgID, model string) *llmbudget.Guard
 }
 
 // NewOrgCategorizeBYO wires the opt-in, the model gate, the org's categorize
@@ -138,6 +143,10 @@ func newOrgCategorizeBYO(
 		clefBudget: func(orgID, model, postURL string) *llmbudget.Guard {
 			return newClefGuard(budget, orgID, model, postURL)
 		},
+		newTypeSafe: categorize.NewOrgTypeSafeClient,
+		typeSafeBudget: func(orgID, model string) *llmbudget.Guard {
+			return newTypeSafeGuard(budget, orgID, model)
+		},
 	}
 }
 
@@ -147,6 +156,15 @@ func newClefGuard(store llmbudget.Store, orgID, model, postURL string) *llmbudge
 	return &llmbudget.Guard{
 		Store: store, OrgID: orgID, Provider: string(categorize.ClefProviderName), Model: model,
 		BaseURL: postURL, Lookup: secrets.ProcessLookup,
+	}
+}
+
+// newTypeSafeGuard is the budget guard of an org's TypeSafe model: it prices the
+// call by the one URL it is sent to, so an unpriced model is refused under a cap.
+func newTypeSafeGuard(store llmbudget.Store, orgID, model string) *llmbudget.Guard {
+	return &llmbudget.Guard{
+		Store: store, OrgID: orgID, Provider: llmorgsettings.ProviderTypeSafe, Model: model,
+		BaseURL: llmorgsettings.TypeSafePostURL, Lookup: secrets.ProcessLookup,
 	}
 }
 
@@ -183,6 +201,9 @@ func (byo *orgCategorizeBYO) Build(ctx context.Context, orgID string) (*ServedDe
 	if llmorgsettings.NormalizeProvider(cfg.Provider) == llmorgsettings.ProviderClef {
 		return byo.buildClef(ctx, orgID, cfg)
 	}
+	if llmorgsettings.NormalizeProvider(cfg.Provider) == llmorgsettings.ProviderTypeSafe {
+		return byo.buildTypeSafe(orgID, cfg)
+	}
 	kind := categorize.ProviderKind(llmorgsettings.NormalizeProvider(cfg.Provider))
 	switch kind {
 	case categorize.ProviderKindMock, categorize.ProviderKindNone, categorize.ProviderKindTypeSafe:
@@ -203,6 +224,7 @@ func (byo *orgCategorizeBYO) Build(ctx context.Context, orgID string) (*ServedDe
 		_ = provider.Close()
 		return nil, refuseBYO("")
 	}
+	served.backend.baseURL = cfg.BaseURL
 	return served, nil
 }
 
@@ -226,12 +248,41 @@ func (byo *orgCategorizeBYO) buildClef(ctx context.Context, orgID string, cfg ll
 	if byo.clefBudget != nil {
 		guard = byo.clefBudget(orgID, cfg.Model, postURL)
 	}
-	served, err := newServedDecisionFor(clefSender{client: client, guard: guard}, byo.logger, byoProviderPrefix+llmorgsettings.ProviderClef)
+	served, err := newServedDecisionFor(clefSender{client: client, guard: guard, keyPrefix: "clef:"}, byo.logger, byoProviderPrefix+llmorgsettings.ProviderClef)
 	if err != nil {
 		_ = client.Close()
 		return nil, refuseBYO("")
 	}
 	served.byo = true
 	served.endpointType, served.gatewayID, _ = llmorgsettings.ClefEndpoint(cfg.BaseURL)
+	served.backend = attemptBackend{provider: llmorgsettings.ProviderClef, baseURL: postURL, byo: true}
+	return served, nil
+}
+
+// buildTypeSafe builds the backend of an org whose categorize config names
+// typesafe: the SystemOne request goes as it is to the fixed TypeSafe endpoint,
+// with the org's own key. The platform key and the environment are never read.
+func (byo *orgCategorizeBYO) buildTypeSafe(orgID string, cfg llmorgsettings.OrgConfig) (*ServedDecision, error) {
+	if !llmorgsettings.TypeSafeModelAllowed(cfg.Model) {
+		return nil, refuseBYO(llmorgsettings.CodeCategorizeBYOModelUnsupported)
+	}
+	if cfg.BaseURL != "" {
+		return nil, refuseBYO(string(llmorgsettings.ConfigInvalidBaseURL))
+	}
+	client, err := byo.newTypeSafe(categorize.OrgTypeSafeClientConfig{APIKey: cfg.APIKey, Model: cfg.Model, Logger: byo.logger})
+	if err != nil {
+		return nil, refuseBYO("")
+	}
+	var guard *llmbudget.Guard
+	if byo.typeSafeBudget != nil {
+		guard = byo.typeSafeBudget(orgID, cfg.Model)
+	}
+	served, err := newServedDecisionFor(clefSender{client: client, guard: guard, keyPrefix: "typesafe:"}, byo.logger, byoProviderPrefix+llmorgsettings.ProviderTypeSafe)
+	if err != nil {
+		_ = client.Close()
+		return nil, refuseBYO("")
+	}
+	served.byo = true
+	served.backend = attemptBackend{provider: llmorgsettings.ProviderTypeSafe, baseURL: llmorgsettings.TypeSafePostURL, byo: true}
 	return served, nil
 }

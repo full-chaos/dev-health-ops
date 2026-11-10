@@ -146,14 +146,13 @@ if { [ "${R}" = 0 ] && grep -q "^docker pull mirror.gcr.io/library/golang@${C}\$
 
 if grep -q 'IFS' "${LIB}"; then bad "helper sets or reads IFS (semgrep ifs-tampering)"; else ok "helper sets no IFS"; fi
 
-for s in ci/check_auth_k8s.sh ci/check_session_cutover_rehearsal.sh; do
-  p="$(grep -n 'pull_pinned_base_image' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
-  b="$(grep -n '^build ' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
-  if { [ -n "${p}" ] && [ -n "${b}" ] && [ "${p}" -lt "${b}" ]; }; then ok "${s} pre-pulls before its first build"; else bad "${s} does not pre-pull before building"; fi
-  # shellcheck disable=SC2016
-  if grep -qF 'GO_BUILD_IMAGE="${PINNED_BASE_TAG}"' "${ROOT}/${s}" && grep -q -- '--pull=false' "${ROOT}/${s}"; then ok "${s} builds from the local tag"; else bad "${s} build args"; fi
-  if grep -E 'docker image rm' "${ROOT}/${s}" | grep -qF 'PINNED_BASE_TAG'; then ok "${s} removes PINNED_BASE_TAG in its cleanup"; else bad "${s} cleanup leaves the pulled base tag"; fi
-done
+s=ci/check_auth_k8s.sh
+p="$(grep -n 'pull_pinned_base_image' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
+b="$(grep -n '^build ' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
+if { [ -n "${p}" ] && [ -n "${b}" ] && [ "${p}" -lt "${b}" ]; }; then ok "${s} pre-pulls before its first build"; else bad "${s} does not pre-pull before building"; fi
+# shellcheck disable=SC2016
+if grep -qF 'GO_BUILD_IMAGE="${PINNED_BASE_TAG}"' "${ROOT}/${s}" && grep -q -- '--pull=false' "${ROOT}/${s}"; then ok "${s} builds from the local tag"; else bad "${s} build args"; fi
+if grep -E 'docker image rm' "${ROOT}/${s}" | grep -qF 'PINNED_BASE_TAG'; then ok "${s} removes PINNED_BASE_TAG in its cleanup"; else bad "${s} cleanup leaves the pulled base tag"; fi
 
 
 # --- the Go build image helper keeps its behaviour: the output of every t* case is byte-equal to the golden recorded from
@@ -239,23 +238,21 @@ per_source="$(awk -v t="${tries}" -v o="${tmo}" -v g="${gaps}" 'BEGIN { n = spli
 sources_total=$((2 + 1))
 worst=$((per_source * sources_total))
 min_timeout=""
-for wf in auth-k8s-proof.yml session-cutover-rehearsal.yml; do
-  # shellcheck disable=SC2013
-  for m in $(sed -n 's/^ *timeout-minutes: *\([0-9]*\).*/\1/p' "${ROOT}/.github/workflows/${wf}"); do
-    if [ -z "${min_timeout}" ] || [ "${m}" -lt "${min_timeout}" ]; then min_timeout="${m}"; fi
-  done
+wf=auth-k8s-proof.yml
+# shellcheck disable=SC2013
+for m in $(sed -n 's/^ *timeout-minutes: *\([0-9]*\).*/\1/p' "${ROOT}/.github/workflows/${wf}"); do
+  if [ -z "${min_timeout}" ] || [ "${m}" -lt "${min_timeout}" ]; then min_timeout="${m}"; fi
 done
 if [ -n "${per_source}" ] && [ -n "${min_timeout}" ] && [ "$((worst * 2))" -lt "$((min_timeout * 60))" ]; then ok "r9 worst-case pull time ${worst}s (3 sources x ${per_source}s) is below half of the smaller job timeout (${min_timeout} min)"; else bad "r9 budget: per_source=${per_source} worst=${worst} min_timeout=${min_timeout}"; fi
 
-# both scripts pre-pull the runtime image before their first build, build from the local tag and clean it up
-for s in ci/check_auth_k8s.sh ci/check_session_cutover_rehearsal.sh; do
-  p="$(grep -n 'pull_pinned_runtime_image' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
-  b="$(grep -n '^build ' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
-  if { [ -n "${p}" ] && [ -n "${b}" ] && [ "${p}" -lt "${b}" ]; }; then ok "r8 ${s} pre-pulls the runtime image before its first build"; else bad "r8 ${s} does not pre-pull the runtime image before building"; fi
-  # shellcheck disable=SC2016
-  if grep -qF 'GO_RUNTIME_IMAGE="${PINNED_RUNTIME_TAG}"' "${ROOT}/${s}" && grep -q -- '--pull=false' "${ROOT}/${s}"; then ok "r8 ${s} builds from the local runtime tag"; else bad "r8 ${s} runtime build arg"; fi
-  if grep -E 'docker image rm' "${ROOT}/${s}" | grep -qF 'PINNED_RUNTIME_TAG'; then ok "r8 ${s} removes PINNED_RUNTIME_TAG in its cleanup"; else bad "r8 ${s} cleanup leaves the pulled runtime tag"; fi
-done
+# the script pre-pulls the runtime image before its first build, builds from the local tag and cleans it up
+s=ci/check_auth_k8s.sh
+p="$(grep -n 'pull_pinned_runtime_image' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
+b="$(grep -n '^build ' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
+if { [ -n "${p}" ] && [ -n "${b}" ] && [ "${p}" -lt "${b}" ]; }; then ok "r8 ${s} pre-pulls the runtime image before its first build"; else bad "r8 ${s} does not pre-pull the runtime image before building"; fi
+# shellcheck disable=SC2016
+if grep -qF 'GO_RUNTIME_IMAGE="${PINNED_RUNTIME_TAG}"' "${ROOT}/${s}" && grep -q -- '--pull=false' "${ROOT}/${s}"; then ok "r8 ${s} builds from the local runtime tag"; else bad "r8 ${s} runtime build arg"; fi
+if grep -E 'docker image rm' "${ROOT}/${s}" | grep -qF 'PINNED_RUNTIME_TAG'; then ok "r8 ${s} removes PINNED_RUNTIME_TAG in its cleanup"; else bad "r8 ${s} cleanup leaves the pulled runtime tag"; fi
 
 # the loop is shared: the pull helper uses retry_named from ci/lib/retry.sh
 if grep -q 'retry_named' "${LIB}" && grep -q 'retry.sh' "${LIB}"; then ok "r10 the pull helper uses retry_named from ci/lib/retry.sh"; else bad "r10 the pull helper does not use the shared retry"; fi

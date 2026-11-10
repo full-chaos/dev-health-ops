@@ -86,21 +86,18 @@ func TestSessionStateReadsAuthServicesOwnDecisionAgainstRealPostgres(t *testing.
 	absolute := create(store(life, 0), user, &org)
 	idle := create(store(0, life), user, &org)
 
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	issuer := newTestIssuer(t)
 	rec, err := newRecorder(slog.New(slog.DiscardHandler), sdkmetric.NewMeterProvider().Meter("test"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := compatHandlers{CompatDeps: CompatDeps{Sessions: p.store, Issuer: issuer,
-		ServiceCredentials: &fakeServiceCredentials{id: uuid.NewString()}}, rec: rec}
+	h := compatHandlers{CompatDeps: CompatDeps{Sessions: p.store, Issuer: issuer, IssueWorkload: testIssueWorkload()},
+		rec: rec}
 	server := serveRoutes(h.withSessionStateRouteRows(nil, stateRowsDocument))
 	read := func(t *testing.T, id uuid.UUID) map[string]any {
 		t.Helper()
 		request := httptest.NewRequest(http.MethodPost, PatternSessionState, strings.NewReader(stateBody(id.String())))
-		request.Header.Set("Authorization", "Bearer "+issuerToken)
+		request.Header.Set("Authorization", issuerBearer()["Authorization"])
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
 		var answer map[string]any
@@ -155,7 +152,7 @@ func TestSessionStateReadsAuthServicesOwnDecisionAgainstRealPostgres(t *testing.
 		t.Fatalf("a state read moved last_seen_at from %v to %v", idleSeen, after)
 	}
 	request := httptest.NewRequest(http.MethodPost, PatternSessionState, strings.NewReader(stateBody(uuid.NewString())))
-	request.Header.Set("Authorization", "Bearer "+issuerToken)
+	request.Header.Set("Authorization", issuerBearer()["Authorization"])
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"reason_code":"`+reasonSessionNotFound+`"`) {

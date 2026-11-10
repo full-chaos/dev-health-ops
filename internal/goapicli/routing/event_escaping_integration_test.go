@@ -43,7 +43,7 @@ func assertQuotedPlant(t *testing.T, stderrOut, event string) {
 
 func TestEnableEventQuotesRecordedBy(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
+	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 	server := queryAPIFor(t)
 	_, stderrOut, err := captureVerb(t, classEnableArgs(server, dsn, "-recorded-by", eventPlant)...)
 	if err != nil {

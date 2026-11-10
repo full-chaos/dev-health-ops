@@ -10,7 +10,10 @@
 # main target: a PR that touches a frozen venue sees its replay before merge.
 # A path that ci/venue_oracle_triggers.d/ declares for a test also selects it: code
 # outside the package of the test whose behaviour the test compares (a change of a
-# `teams` write selects the protected-routes test of internal/apiservice).
+# `teams` write selects the protected-routes test of internal/apiservice). So does a
+# file in a package the test binary links: the first `--changed` call derives that
+# closure from the tree (`go list -deps -test`) into VENUE_CLOSURE_DIR and the later
+# call reads it (CHAOS-13101: derived, never committed).
 # Nothing selected is a plain notice and the heavy steps do not run.
 #
 # COST PER PR (D6039a). The measured seconds of the selected rows (ci/venue_oracle_weights.d/):
@@ -21,7 +24,7 @@
 # K VENUE_LEGS`), with no cap on what a change may select. Every leg reads the same change set
 # and computes the same partition; a leg whose slice is empty is a green no-op and starts none of
 # the heavy steps. Each leg's timeout is 60 minutes. A PR that changes no package with a registered venue
-# test costs the checkout and the selection (seconds): the path filter below starts it
+# test costs the checkout, Go setup and the selection with its closure derivation: the path filter below starts it
 # only for changes under internal/, the GraphQL contract, the registry, or the gate itself.
 #
 # NOT COVERED, on purpose: a change to the harness (internal/testsupport/venueoracle),
@@ -38,7 +41,6 @@ on:
       - 'contracts/graphql/**'
       - 'ci/venue_oracle_registry.d/**'
       - 'ci/venue_oracle_triggers.d/**'
-      - 'ci/venue_oracle_closure.d/**'
       - 'ci/check_go.sh'
       - '.github/workflows/venue-oracles-changed.yml'
 
@@ -74,11 +76,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
       - name: Select the venue oracles of the changed packages
         id: select
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VENUE_CLOSURE_DIR: ${{ runner.temp }}/venue-closure
         run: |
           set -euo pipefail
           git diff --name-only -z "${BASE_SHA}...${HEAD_SHA}" > changed.txt
@@ -96,13 +105,6 @@ jobs:
             printf 'run=true\n' >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Set up Go
-        if: steps.select.outputs.run == 'true'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: '**/go.sum'
-
       - name: Log in to GitHub Container Registry
         if: steps.select.outputs.run == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -119,6 +121,7 @@ jobs:
         if: steps.select.outputs.run == 'true'
         env:
           DHO_CHAOS8509_CAPTURE_DIR: ${{ runner.temp }}/venue-oracle-receipt/chaos-8509
+          VENUE_CLOSURE_DIR: ${{ runner.temp }}/venue-closure
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"

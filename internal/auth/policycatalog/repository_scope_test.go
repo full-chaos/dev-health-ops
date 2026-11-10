@@ -9,10 +9,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/contracts/auth/v1/vocabulary"
 )
 
-// filteredActions are the actions that read repository-bound data (ruling answers-12656-1, Q7). The list is
-// written out here on purpose: a new action does not join it by accident.
+// filteredActions are the actions that read repository-bound data and that repository grants scope: the ACR reads
+// only. Product rule 2 (CHAOS-13207, catalog version 14): metrics.read, analytics.read, analytics.export, git.read and
+// work_items.read are org-wide for every active member. The list is written out here on purpose: a new action does
+// not join it by accident.
 var filteredActions = []string{
-	"acr.context.read", "acr.evidence.read", "analytics.export", "analytics.read", "git.read", "metrics.read", "work_items.read",
+	"acr.context.read", "acr.credential.issue", "acr.evidence.read",
 }
 
 type rawAction struct {

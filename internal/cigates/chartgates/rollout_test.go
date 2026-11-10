@@ -122,7 +122,81 @@ func apiProbesPortsUnique(g *guard) {
 		seen[k] = true
 		names = append(names, str(at(p, "name")))
 	}
-	g.expect(equal(names, []string{"http"}), "query-api container ports named %v, want [http]: /metrics is scraped through the http port", names)
+	g.expect(equal(names, []string{"http", "operator"}), "query-api container ports named %v, want [http operator]: probes and the /metrics scrape use the operator port", names)
+}
+
+func queryAPIOperatorListener(g *guard) {
+	docs := g.docs("operator-contract", join(set("queryApi.enabled=true"), []string{"--show-only", "templates/query-api-deployment.yaml"})...)
+	deps := ofKind(docs, "Deployment")
+	if len(deps) == 0 {
+		g.failf("no query-api Deployment rendered")
+		return
+	}
+	c := containers(deps[0])[0]
+	opPort := ""
+	for _, p := range list(c["ports"]) {
+		if str(at(p, "name")) == "operator" {
+			opPort = str(at(p, "containerPort"))
+		}
+	}
+	g.expect(opPort == "8080", "query-api declares the operator containerPort %q, want 8080", opPort)
+	for _, pr := range []struct{ kind, path string }{{"readinessProbe", "/readyz"}, {"livenessProbe", "/healthz"}} {
+		g.expect(str(at(c, pr.kind, "httpGet", "port")) == "operator", "query-api %s targets port %q, want operator", pr.kind, str(at(c, pr.kind, "httpGet", "port")))
+		g.expect(str(at(c, pr.kind, "httpGet", "path")) == pr.path, "query-api %s path is %q, want %s", pr.kind, str(at(c, pr.kind, "httpGet", "path")), pr.path)
+	}
+	addr := ""
+	for _, e := range list(c["env"]) {
+		if str(at(e, "name")) == "DEV_HEALTH_HTTP_ADDR" {
+			addr = str(at(e, "value"))
+		}
+	}
+	g.expect(addr == ":8080", "query-api DEV_HEALTH_HTTP_ADDR is %q, want :8080 (the operator port)", addr)
+}
+
+const probeOwned = "probe handlers are chart-owned"
+
+func queryAPIProbeHandlerRefused(g *guard) {
+	for _, o := range [][]string{
+		setString("queryApi.livenessProbe.httpGet.port=http"), setString("queryApi.livenessProbe.httpGet.path=/readyz"),
+		setString("queryApi.readinessProbe.httpGet.port=http"), setString("queryApi.readinessProbe.httpGet.path=/other"),
+		setJSON(`queryApi.readinessProbe.httpGet={"path":"/custom","port":"operator"}`),
+		setJSON(`queryApi.livenessProbe.tcpSocket={"port":"operator"}`),
+		setJSON(`queryApi.readinessProbe.exec={"command":["true"]}`),
+	} {
+		stderr := g.refusal("a custom probe handler in values", "handler-contract", join(o, set("queryApi.enabled=true"))...)
+		g.expect(strings.Contains(stderr, probeOwned), "%v: the refusal does not say %q: %s", o, probeOwned, firstLines(stderr, 2))
+	}
+}
+
+func queryAPIProbeOldDefaultOmitted(g *guard) {
+	docs := g.docs("olddefault-contract", join(setJSON(`queryApi.livenessProbe={"httpGet":{"path":"/readyz","port":"http"},"periodSeconds":15}`, `queryApi.readinessProbe={"httpGet":{"path":"/readyz","port":"http"},"periodSeconds":7}`), set("queryApi.enabled=true"), []string{"--show-only", "templates/query-api-deployment.yaml"})...)
+	deps := ofKind(docs, "Deployment")
+	if len(deps) == 0 {
+		g.failf("no query-api Deployment decoded")
+		return
+	}
+	c := containers(deps[0])[0]
+	for _, pr := range []struct{ kind, path string }{{"readinessProbe", "/readyz"}, {"livenessProbe", "/healthz"}} {
+		g.expect(equal(mp(at(c, pr.kind, "httpGet")), doc{"path": pr.path, "port": "operator"}), "%s is %v, want the chart httpGet on operator %s", pr.kind, at(c, pr.kind, "httpGet"), pr.path)
+	}
+	g.expect(str(at(c, "readinessProbe", "periodSeconds")) == "7", "readiness periodSeconds is %v, want the values timing 7", at(c, "readinessProbe", "periodSeconds"))
+}
+
+func queryAPIProbeTimingHonoured(g *guard) {
+	docs := g.docs("timing-contract", join(set("queryApi.enabled=true", "queryApi.readinessProbe.periodSeconds=7", "queryApi.livenessProbe.failureThreshold=9"), []string{"--show-only", "templates/query-api-deployment.yaml"})...)
+	deps := ofKind(docs, "Deployment")
+	if len(deps) == 0 {
+		g.failf("no query-api Deployment decoded")
+		return
+	}
+	c := containers(deps[0])[0]
+	g.expect(str(at(c, "readinessProbe", "periodSeconds")) == "7", "readiness periodSeconds is %v, want 7", at(c, "readinessProbe", "periodSeconds"))
+	g.expect(str(at(c, "livenessProbe", "failureThreshold")) == "9", "liveness failureThreshold is %v, want 9", at(c, "livenessProbe", "failureThreshold"))
+	g.expect(str(at(c, "readinessProbe", "httpGet", "port")) == "operator", "readiness httpGet port is %v, want operator", at(c, "readinessProbe", "httpGet", "port"))
+}
+
+func queryAPIOperatorPortCollisionRefused(g *guard) {
+	g.refusal("queryApi.operatorPort equal to queryApi.port", "t", set("queryApi.enabled=true", "queryApi.operatorPort=8090")...)
 }
 
 func migrationHookDefault(g *guard) {
@@ -168,6 +242,11 @@ func TestRolloutGuardsRealTree(t *testing.T) {
 		check{"rolling-group-wins", rollingGroupWins},
 		check{"rolling-schema-rejects-unknown-key", rollingSchemaRejectsUnknownKey},
 		check{"api-probes-ports-unique", apiProbesPortsUnique},
+		check{"query-api-operator-listener", queryAPIOperatorListener},
+		check{"query-api-probe-handler-refused", queryAPIProbeHandlerRefused},
+		check{"query-api-probe-old-default-omitted", queryAPIProbeOldDefaultOmitted},
+		check{"query-api-probe-timing-honoured", queryAPIProbeTimingHonoured},
+		check{"query-api-operator-port-collision-refused", queryAPIOperatorPortCollisionRefused},
 		check{"migration-hook-default", migrationHookDefault},
 		check{"migration-hook-post-install-refused", migrationHookPostInstallRefused},
 		check{"migration-hook-local-needs-bundled", migrationHookLocalNeedsBundled},
@@ -199,7 +278,23 @@ func TestRolloutGuardsPlantedDefects(t *testing.T) {
 			apiProbesPortsUnique, "must be unique"},
 		{"query-api-port-renamed", chartOnly,
 			mut(chartFile(qapi), "            - name: http\n              containerPort: {{ .Values.queryApi.port }}", "            - name: web\n              containerPort: {{ .Values.queryApi.port }}"),
-			apiProbesPortsUnique, "named [web]"},
+			apiProbesPortsUnique, "named [web operator]"},
+		{"query-api-readiness-back-on-http", chartOnly,
+			mut(chartFile(qapi), `"path" "/readyz" "port" "operator"`, `"path" "/readyz" "port" "http"`),
+			queryAPIOperatorListener, "readinessProbe targets port"},
+		{"query-api-probe-omit-removed", chartOnly,
+			all(mut(chartFile(qapi), `(omit .Values.queryApi.livenessProbe "httpGet")`, `.Values.queryApi.livenessProbe`),
+				mut(chartFile(qapi), `(omit .Values.queryApi.readinessProbe "httpGet")`, `.Values.queryApi.readinessProbe`)),
+			queryAPIProbeOldDefaultOmitted, "want the chart httpGet on operator"},
+		{"query-api-probe-handler-check-removed", chartOnly,
+			mut(chartFile(qapi), `{{- range $probe := list "livenessProbe" "readinessProbe" }}`, `{{- range $probe := list }}`),
+			queryAPIProbeHandlerRefused, "must be refused"},
+		{"query-api-liveness-back-on-http", chartOnly,
+			mut(chartFile(qapi), `"path" "/healthz" "port" "operator"`, `"path" "/healthz" "port" "http"`),
+			queryAPIOperatorListener, "livenessProbe targets port"},
+		{"query-api-operator-port-collision-accepted", chartOnly,
+			mut(chartFile(qapi), `{{- if or (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.port))`, `{{- if or false (eq 1 2)`),
+			queryAPIOperatorPortCollisionRefused, "must be refused"},
 		{"migrate-hook-default-moves", chartOnly,
 			mut(chartFile("templates/migrate-job.yaml"), `{{- $hookEvents := .Values.migrations.hook.events }}`, `{{- $hookEvents := list "pre-install" }}`),
 			migrationHookDefault, "default migrate hook"},

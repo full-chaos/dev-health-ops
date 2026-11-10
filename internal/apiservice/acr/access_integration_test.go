@@ -4,10 +4,12 @@ package acr
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -15,13 +17,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
 	devclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-go/workloadtoken"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -29,9 +33,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/projectinventory"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
@@ -43,14 +48,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pinrig"
+	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
 // authServiceStates is auth-service's session state route as auth-service
 // serves it: authapi.CompatRoutes, which mounts the route from the embedded
-// endpoint-profile document, with the real service credential check, over the
-// rig's session store (the runtime role). It returns go-api's real
-// sessionissue client, presenting a seeded session issuer credential, so the
-// access read decides on auth-service's own answer, read over HTTP.
+// endpoint-profile document, with the real go-api workload token check, over
+// the rig's session store (the runtime role). It returns go-api's real
+// sessionissue client, presenting the go-api workload token, so the access
+// read decides on auth-service's own answer, read over HTTP.
 func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, rig *pinrig.PinRig) *sessionissue.Client {
 	t.Helper()
 	random := func() string {
@@ -65,7 +71,21 @@ func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, r
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	issuer, err := authapi.NewIssuer(random(), "dev-health-ops", "dev-health-api")
+	keyDir := t.TempDir()
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(keyDir, "k1.pem")
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	signer := token.NewFileSigner(token.FileConfig{KeyPath: keyPath, KeyID: "k1"})
+	issuer, err := authapi.NewEdDSAIssuer("dev-health-api", signer, "https://auth.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,9 +97,17 @@ func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, r
 	if err != nil {
 		t.Fatal(err)
 	}
+	plane, err := newIssuePlane("https://auth.access.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workload, err := plane.workload()
+	if err != nil {
+		t.Fatal(err)
+	}
 	routes, err := authapi.CompatRoutes(authapi.CompatDeps{
 		Sessions: rig.Sessions(), Users: authapi.PGUsers{Pool: admin}, Issuer: issuer, Logger: logger,
-		Projector: projector, ServiceCredentials: servicecred.PG{Pool: admin},
+		Projector: projector, IssueWorkload: workload,
 		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
 			return audit.Append(ctx, admin, schema, event)
 		},
@@ -99,23 +127,23 @@ func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, r
 	}
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	token := "svc_authsess_" + random()
-	sum := sha256.Sum256([]byte(token))
-	if _, err := admin.Exec(ctx, `INSERT INTO public.internal_service_credentials
-	(id, service_name, token_hash, token_prefix, scopes, created_at)
-VALUES ($1, $2, $3, $4, $5::json, now())`, uuid.New(), servicecred.ServiceSessionIssuer, hex.EncodeToString(sum[:]),
-		token[:len("svc_authsess_")+4], `["`+servicecred.ScopeSessionsIssue+`"]`); err != nil {
-		t.Fatalf("seed the session issuer credential: %v", err)
+	if err := plane.seed(ctx, admin); err != nil {
+		t.Fatal(err)
 	}
+	client, stop, err := plane.client(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
 	base, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := sessionissue.New(base, token, 5*time.Second)
+	states, err := sessionissue.NewWorkload(base, client, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return client
+	return states
 }
 
 type staticInventory []string
@@ -441,7 +469,16 @@ func TestPrincipalAccessSessionIsBoundToTheOrgAndItsExpiry(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		client, err := sessionissue.New(base, "svc_authsess_"+strings.Repeat("A", 43), time.Second)
+		plane, err := newIssuePlane("https://auth.access.example.test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		workload, stop, err := plane.client(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(stop)
+		client, err := sessionissue.NewWorkload(base, workload, time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -612,4 +649,94 @@ func TestClickHouseProjectInventoryReadsTheOrgsProjects(t *testing.T) {
 	if got, err := inventory.Projects(ctx, big); !errors.Is(err, projectinventory.ErrOverLimit) || got != nil {
 		t.Fatalf("an org above the limit: %d projects, %v; want ErrOverLimit", len(got), err)
 	}
+}
+
+// issuePlane is go-api's workload principal and one in-memory Ed25519 key: auth-service's key set and subject for
+// the session issue route, and go-api's workload token client whose exchange answers a token that key signed.
+// Kept local (no shared test API); it folds into internal/testsupport/workloadclient once CHAOS-12782 lands.
+type issuePlane struct {
+	issuer    string
+	principal uuid.UUID
+	subject   string
+	private   ed25519.PrivateKey
+	set       token.KeySet
+}
+
+const issuePlaneKeyID = "issue-workload-test"
+
+func newIssuePlane(issuer string) (*issuePlane, error) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	set, err := token.NewKeySet([]token.Key{{KeyID: issuePlaneKeyID, State: token.StateActive, Algorithm: token.Algorithm, PublicKey: public}})
+	if err != nil {
+		return nil, err
+	}
+	principal := uuid.New()
+	return &issuePlane{issuer: issuer, principal: principal, subject: session.WirePrincipalID(principal), private: private, set: set}, nil
+}
+
+// KeySet is the published key set (an authapi.KeySetSource).
+func (p *issuePlane) KeySet(context.Context) (token.KeySet, error) { return p.set, nil }
+
+// workload is the session issue route's workload path over the plane's key and subject.
+func (p *issuePlane) workload() (*authapi.SessionIssueWorkload, error) {
+	return authapi.NewSessionIssueWorkload(authapi.SessionIssueWorkloadConfig{IssuerURL: p.issuer, Keys: p, Subject: p.subject})
+}
+
+// mint is a fresh go-api workload token for auth-service, valid 300 s.
+func (p *issuePlane) mint() (string, error) {
+	now := time.Now()
+	claims, err := json.Marshal(contracts.WorkloadTokenClaims{
+		Iss: p.issuer, Aud: "auth-service", Sub: p.subject, PrincipalType: "workload", Jti: uuid.NewString(),
+		Iat: now.Unix(), Nbf: now.Unix(), Exp: now.Unix() + 300,
+	})
+	if err != nil {
+		return "", err
+	}
+	header, err := json.Marshal(map[string]string{"alg": token.Algorithm, "kid": issuePlaneKeyID, "typ": contracts.WorkloadTokenTyp})
+	if err != nil {
+		return "", err
+	}
+	enc := base64.RawURLEncoding
+	input := enc.EncodeToString(header) + "." + enc.EncodeToString(claims)
+	return input + "." + enc.EncodeToString(ed25519.Sign(p.private, []byte(input))), nil
+}
+
+// seed writes the workload principal to auth.principals: the audit rows name it as their actor.
+func (p *issuePlane) seed(ctx context.Context, db *pgxpool.Pool) error {
+	_, err := db.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'workload', 'go-api-test')`, p.principal.String())
+	return err
+}
+
+// client is go-api's workload token client over a bootstrap file in dir; its exchange (a local server, stopped by
+// stop) answers a fresh mint on every exchange.
+func (p *issuePlane) client(dir string) (client *workloadtoken.Client, stop func(), err error) {
+	exchange := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		minted, err := p.mint()
+		if err != nil {
+			http.Error(w, "mint", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": minted, "issued_token_type": workloadtoken.TokenTypeJWT, "token_type": "Bearer", "expires_in": 300})
+	}))
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		exchange.Close()
+		return nil, nil, err
+	}
+	path := filepath.Join(dir, "bootstrap")
+	if err := os.WriteFile(path, []byte(workloadtoken.BootstrapPrefix+base64.RawURLEncoding.EncodeToString(random)), 0o600); err != nil {
+		exchange.Close()
+		return nil, nil, err
+	}
+	client, err = workloadtoken.New(workloadtoken.Config{ExchangeURL: exchange.URL, AllowPlainHTTP: true, Issuer: p.issuer,
+		Subject: workloadtoken.BootstrapCredentialFile(path), Transport: &http.Transport{}})
+	if err != nil {
+		exchange.Close()
+		return nil, nil, err
+	}
+	return client, exchange.Close, nil
 }

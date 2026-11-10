@@ -74,10 +74,9 @@ change to the set is a new rollout. The states and the moves between them are in
 
 | Service | Setting | Rule |
 | --- | --- | --- |
-| auth-service | `AUTH_ACCESS_TOKEN_CLASS` | `hs256_compat` (default) or `eddsa`. Chart key `authService.accessToken.class`, needs `authService.phase` 2 or more. |
+| auth-service | `AUTH_ACCESS_TOKEN_CLASS` | `eddsa` (default); the retired `hs256_compat` is a start error. Chart key `authService.accessToken.class`, needs `authService.phase` 2 or more. |
 | auth-service | `AUTH_TOKEN_ISSUER_URL` | The issuer, and the `iss` of every token. Chart key `authService.accessToken.issuerURL`. Required by `eddsa`. It mounts the discovery document. |
 | auth-service | `AUTH_JWT_AUDIENCE` | `dev-health-api` for the access token. `acr-api` and `acr-mcp` are refused. |
-| auth-service | `AUTH_LEGACY_JWT_AUDIENCE` | The audience that go-api's HS256 token is checked with under `eddsa`. Default `dev-health-api`. |
 | auth-service | `AUTH_ACCESS_TOKEN_LIFETIME` | Whole minutes, 5 to 60. Default 60. Needs `eddsa`. |
 | go-api, query-api | `AUTH_ACCESS_TOKEN_ISSUER` | The same URL, byte for byte. The chart renders it only under the `eddsa` class. Unset: neither service verifies an EdDSA token. |
 
@@ -97,5 +96,5 @@ Rules for the issuer URL:
 3. From the go-api pod network, the same two requests answer 200 with the certificate trusted.
 4. The counter `devhealth_auth_access_token_refused_total` for go-api and query-api has no reason `unavailable`.
 5. The preconditions of the eddsa class are met. See
-   [Auth sessions flip and rollback](../runbooks/auth-sessions-flip-and-rollback.md#access-token-class-eddsa-w3-d1)
+   [Auth sessions flip and rollback](../runbooks/auth-sessions-flip-and-rollback.md#access-token-class-eddsa)
    and [legacy compatibility and rollback](../runbooks/auth-legacy-compat-and-rollback.md).

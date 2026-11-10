@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -75,29 +74,21 @@ func TestInternalLLMConfigLapsedOrgServesNothing(t *testing.T) {
 	lapsedOverride := seedOrg("community", &yes)
 	switchedOff := seedOrg("enterprise", &no)
 
-	acrToken := "svc_acr_" + uuid.NewString()
-	for _, c := range []struct{ service, token string }{{"acr", acrToken}} {
-		if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials
-			(id, service_name, token_hash, token_prefix, scopes, created_at)
-			VALUES (gen_random_uuid(), $1, $2, $3, '["llm_config:read"]'::json, now())`,
-			c.service, admin.HashServiceToken(c.token), c.token[:16]); err != nil {
-			t.Fatal(err)
-		}
-	}
+	workload, bearer := listenerWorkload(t)
 	server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(),
-		InternalRoutes(Deps{Pool: pool, Decryptor: decryptor}, quietLog()))
+		InternalRoutes(Deps{Pool: pool, Decryptor: decryptor, ACRWorkload: workload}, quietLog()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	handler := server.Handler()
-	routes := []struct{ name, path, token string }{
-		{"acr", "/api/v1/internal/acr/orgs/%s/llm-config", acrToken},
+	routes := []struct{ name, path, bearer string }{
+		{"acr", "/api/v1/internal/acr/orgs/%s/llm-config", bearer},
 	}
 	var reason string
 	get := func(route int, org string) (int, string, string) {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, strings.Replace(routes[route].path, "%s", org, 1), nil)
-		req.Header.Set("Authorization", "Bearer "+routes[route].token)
+		req.Header.Set("Authorization", routes[route].bearer)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		reason = rec.Header().Get("X-Org-Llm-Config-Reason")

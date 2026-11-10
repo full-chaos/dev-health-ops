@@ -23,7 +23,7 @@ func TestNoConfigNotFoundNamesTheClosedGateInAHeader(t *testing.T) {
 		{name: "nothing stored", source: &fakeSource{}, reason: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			response, _ := call(t, &fakeVerifier{}, tc.source, io.Discard, testOrg, "Bearer "+testToken)
+			response, _ := call(t, tc.source, io.Discard, testOrg, "Bearer "+testToken)
 			if response.StatusCode != 404 || response.Header.Get(NoConfigHeader) != NoConfigValue {
 				t.Fatalf("status %d marker %q, want the marked 404", response.StatusCode, response.Header.Get(NoConfigHeader))
 			}

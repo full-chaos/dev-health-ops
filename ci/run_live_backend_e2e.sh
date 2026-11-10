@@ -213,7 +213,7 @@ fetch_json() {
   local expected_status="$3"
   # base_url/bearer default to the Python api / AUTH_TOKEN (every existing
   # caller) -- CHAOS-6241's query-api REST checks pass both explicitly, to
-  # hit the Go binary with its own envelope bearer instead.
+  # hit the Go binary.
   local base_url="${4:-${BASE_URL}}"
   local bearer="${5-${AUTH_TOKEN:-}}"
   local extra_headers=()
@@ -402,6 +402,9 @@ echo "==> starting dho api at ${BASE_URL}"
   # dho api refuses to start without JWT_SECRET_KEY until its HS256 verifier is removed: a random value per run that no minter reads.
   JWT_SECRET_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')" # go-api startup only
   export JWT_SECRET_KEY # go-api startup only
+  # Without a link secret the link routes answer 503 config_missing: a random value per run.
+  LINK_TOKEN_SECRET="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+  export LINK_TOKEN_SECRET
   exec "${BIN_DIR}/dho" api --api-addr="${API_HOST}:${API_PORT}" --http-addr="127.0.0.1:${API_OPERATOR_PORT}"
 ) >"${API_LOG_FILE}" 2>&1 &
 API_PID="$!"
@@ -500,11 +503,13 @@ fetch_json "/api/v1/meta" "${META_FILE}" "200" "${QUERY_API_BASE_URL}" ""
 # assert_home.py may need updating if those two fields regress in CI).
 echo "==> validating /api/v1/home (query-api)"
 HOME_FILE="${TMP_DIR}/home.json"
-QUERY_API_ENVELOPE_TOKEN="$(query_api_e2e_mint_envelope_token "${E2E_ORG_ID}")"
-fetch_json "/api/v1/home" "${HOME_FILE}" "200" "${QUERY_API_BASE_URL}" "${QUERY_API_ENVELOPE_TOKEN}"
+# The e2e user's own access token (an admin member of the e2e organization): query-api's REST rows take the user
+# access token, the class every product caller presents.
+fetch_json "/api/v1/home" "${HOME_FILE}" "200" "${QUERY_API_BASE_URL}" "${AUTH_TOKEN}"
 "${BIN_DIR}/cigate" live-e2e assert-home "${HOME_FILE}"
 
-echo "==> running go-api-prove end to end with the envelope and the edge access token minted in-process"
+echo "==> running go-api-prove end to end with the platform admin's user access token file and the edge access token minted in-process"
+generate_platform_admin_token "${GO_API_PROVE_E2E_DIR}/platform-admin-token"
 run_go_api_prove_e2e
 
 echo "Live backend e2e checks passed."

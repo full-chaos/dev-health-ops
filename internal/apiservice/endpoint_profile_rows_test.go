@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -15,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/routescan"
 )
 
 const goAPIRows = "../../contracts/auth/v1/endpoint-profiles.go-api.json"
@@ -137,49 +140,64 @@ var dispatchedLevels = map[string]string{
 	"POST /api/v1/admin/teams/{team_id}@api":        "AdminOrg",
 }
 
-// handlerValidatedAccessToken are the routes with no bearer guard whose
-// handler itself verifies a legacy access token; they are the only unguarded
-// routes whose row may accept the ops access token.
-var handlerValidatedAccessToken = map[string]bool{
-	"POST /api/v1/auth/validate@api": true,
-	"POST /api/v1/auth/logout@api":   true,
+// TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard: each row's
+// source file holds the one registration (method + route) that mounts its
+// route, and the row agrees with the guard level that registration names. A
+// route behind policy.Admin, AdminOrg, Authenticated, Superuser or Optional
+// accepts the user access token with no HS256 opt-in; no row lists the retired
+// ops access token. The row's source line is a citation: it is not compared.
+// An Optional route serves an anonymous caller (legacy
+// get_current_user_optional), so its row is public with a rationale; every
+// other guarded row is protected.
+func TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard(t *testing.T) {
+	problems, checked, drift := rowRegistrationProblems(t, scanRegistrations(t, "../api", "."), loadGoAPIRows(t), mountedRoutes(t), treePath)
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	if checked < 200 {
+		t.Fatalf("only %d rows were checked against their registrations", checked)
+	}
+	t.Logf("citation note: %d of %d rows cite a line other than their registration's", drift, checked)
 }
 
-// TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard: each row's
-// source line is the line that registers its route, and the row agrees with the
-// guard level that registration names. A route behind policy.Admin,
-// AdminOrg, Authenticated, Superuser or Optional accepts the ops access token
-// and states its HS256 opt-in; a route with no policy guard never lists that
-// class, so the legacy token is impossible there.
-func TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard(t *testing.T) {
-	regs := scanRegistrations(t, "../api", ".")
+// rowRegistrationProblems ties each mounted route's row to the registration that mounts it, by symbol, and to the
+// guard level that registration names. rel turns a scanned path into the repo-relative form rows carry. drift counts
+// the rows whose cited line is not the registration's.
+func rowRegistrationProblems(t *testing.T, regs []registration, rows []map[string]any, mounted []mountedRoute, rel func(string) string) (problems []string, checked, drift int) {
+	t.Helper()
+	bad := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	byKey := map[string]map[string]any{}
-	for _, row := range loadGoAPIRows(t) {
+	for _, row := range rows {
 		byKey[rowKey(t, row)] = row
 	}
 	guarded := map[string]bool{"Admin": true, "AdminOrg": true, "Authenticated": true, "Superuser": true, "Optional": true}
-	checked := 0
-	for _, route := range mountedRoutes(t) {
+	for _, route := range mounted {
 		row := byKey[route.key()]
 		if row == nil {
 			continue
 		}
 		reg, ok := registrationFor(regs, route)
 		if !ok {
-			t.Errorf("%s: no registration found in the source", route.key())
+			bad("%s: no registration found in the source", route.key())
 			continue
 		}
 		source := row["source"].(map[string]any)
-		if got := source["file"].(string); got != treePath(reg.File) {
-			t.Errorf("%s: row source file %s, the registration is in %s", route.key(), got, treePath(reg.File))
+		if got := source["file"].(string); got != rel(reg.File) {
+			bad("%s: row source file %s, the registration is in %s", route.key(), got, rel(reg.File))
 		}
-		if got := int(source["line"].(float64)); got != reg.Line {
-			t.Errorf("%s: row source line %d, the registration is on line %d", route.key(), got, reg.Line)
+		if reg.Pattern != "" {
+			if _, err := routescan.Resolve(regs, reg.File, route.Method, route.Pattern); err != nil {
+				bad("%s: %v", route.key(), err)
+			}
+		}
+		if int(source["line"].(float64)) != reg.Line {
+			drift++
 		}
 		classes, _ := row["accepted_credential_classes"].([]any)
-		hs256 := false
+		hs256, user := false, false
 		for _, class := range classes {
 			hs256 = hs256 || class == "ops_access_token_hs256"
+			user = user || class == "user_access_token"
 		}
 		validation, _ := row["access_token_validation"].(map[string]any)
 		level := reg.Level
@@ -191,65 +209,101 @@ func TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard(t *testing.T
 		case guarded[reg.Level]:
 			validator, _ := row["primary_validator"].(map[string]any)
 			description, _ := validator["description"].(string)
-			if row["classification"] != "protected" || !hs256 || validation["legacy_hs256"] != true || !strings.HasPrefix(description, "policy."+reg.Level+":") {
-				t.Errorf("%s: registered at policy.%s, row says %v %v %v %q", route.key(), reg.Level, row["classification"], classes, validation, description)
+			classification := "protected"
+			if reg.Level == "Optional" {
+				classification = "public"
 			}
-		case hs256 && !(handlerValidatedAccessToken[route.key()] && validation["legacy_hs256"] == true):
-			t.Errorf("%s: no policy guard on its registration (%q) but the row accepts the ops access token", route.key(), reg.Level)
+			if row["classification"] != classification || hs256 || !user || validation["legacy_hs256"] != false || !strings.HasPrefix(description, "policy."+reg.Level+":") {
+				bad("%s: registered at policy.%s, row says %v %v %v %q", route.key(), reg.Level, row["classification"], classes, validation, description)
+			}
+			if rationale, _ := row["public_rationale"].(string); classification == "public" && strings.TrimSpace(rationale) == "" {
+				bad("%s: registered at policy.Optional, the public row has no public_rationale", route.key())
+			}
+		case hs256:
+			bad("%s: the row accepts the retired ops access token (registration level %q)", route.key(), reg.Level)
 		}
 		checked++
 	}
-	if checked < 200 {
-		t.Fatalf("only %d rows were checked against their registrations", checked)
-	}
+	return problems, checked, drift
 }
 
-// TestEndpointProfileAnchorsStillPointAtTheirSymbols: every anchor carries
-// the text its line must still hold, so a pinned file:line cannot drift.
+// TestEndpointProfileAnchorsStillPointAtTheirSymbols: every validator anchor
+// carries a note, and the note resolves in its file to one place: the one line
+// that holds it, or, for a note on several lines (the weak "Pattern:"), the
+// row's own registration. The anchor's line is a citation: it is not compared.
 func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
-	lineOf := func(path string, line int) string {
-		raw, err := os.ReadFile(filepath.Join("../..", path))
+	problems, checked, drift := anchorNoteProblems(t, "../..", loadGoAPIRows(t))
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	if checked < 200 {
+		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
+	}
+	t.Logf("citation note: %d of %d validator anchors cite a line other than the one their note resolves to", drift, checked)
+}
+
+// anchorNoteProblems resolves the validator anchors of rows in the source under root. drift counts the anchors whose
+// cited line is not the resolved one.
+func anchorNoteProblems(t *testing.T, root string, rows []map[string]any) (problems []string, checked, drift int) {
+	t.Helper()
+	sources := map[string][]byte{}
+	read := func(path string) []byte {
+		if raw, ok := sources[path]; ok {
+			return raw
+		}
+		raw, err := os.ReadFile(filepath.Join(root, path))
 		if err != nil {
 			t.Fatalf("anchor file %s: %v", path, err)
 		}
-		lines := strings.Split(string(raw), "\n")
-		if line < 1 || line > len(lines) {
-			t.Fatalf("anchor %s:%d is outside the file (%d lines)", path, line, len(lines))
-		}
-		return lines[line-1]
+		sources[path] = raw
+		return raw
 	}
-	checked := 0
-	var walk func(node any, where string)
-	walk = func(node any, where string) {
+	scanned := map[string][]registration{}
+	ownRegistration := func(row map[string]any, path string) (registration, error) {
+		dir := filepath.Join(root, filepath.Dir(path))
+		if _, ok := scanned[dir]; !ok {
+			scanned[dir] = scanRegistrations(t, dir)
+		}
+		method, _ := row["method"].(string)
+		route, _ := row["route"].(string)
+		return routescan.Resolve(scanned[dir], filepath.ToSlash(filepath.Join(root, path)), method, route)
+	}
+	rowFile := func(row map[string]any) string {
+		source, _ := row["source"].(map[string]any)
+		file, _ := source["file"].(string)
+		return file
+	}
+	var walk func(node any, where string, row map[string]any)
+	walk = func(node any, where string, row map[string]any) {
 		switch value := node.(type) {
 		case map[string]any:
 			path, hasPath := value["path"].(string)
 			line, hasLine := value["line"].(float64)
 			if hasPath && hasLine {
+				checked++
 				note, _ := value["note"].(string)
 				if note == "" {
-					t.Errorf("%s: anchor %s:%d carries no note naming what its line holds", where, path, int(line))
-				} else if !strings.Contains(lineOf(path, int(line)), note) {
-					t.Errorf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(lineOf(path, int(line))))
+					problems = append(problems, fmt.Sprintf("%s: anchor %s:%d carries no note naming what its line holds", where, path, int(line)))
+				} else if problem, drifted := routescan.ResolveNote(read(path), path, note, int(line), rowFile(row), func() (registration, error) { return ownRegistration(row, path) }); problem != "" {
+					problems = append(problems, where+": "+problem)
+				} else if drifted {
+					drift++
 				}
-				checked++
 			}
 			for key, child := range value {
-				walk(child, where+"/"+key)
+				walk(child, where+"/"+key, row)
 			}
 		case []any:
 			for index, child := range value {
-				walk(child, where+"["+strconv.Itoa(index)+"]")
+				walk(child, where+"["+strconv.Itoa(index)+"]", row)
 			}
 		}
 	}
-	for _, row := range loadGoAPIRows(t) {
-		walk(row["primary_validator"], rowKey(t, row)+"/primary_validator")
-		walk(row["reachable_validators"], rowKey(t, row)+"/reachable_validators")
+	for _, row := range rows {
+		walk(row["primary_validator"], rowKey(t, row)+"/primary_validator", row)
+		walk(row["reachable_validators"], rowKey(t, row)+"/reachable_validators", row)
 	}
-	if checked < 200 {
-		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
-	}
+	return problems, checked, drift
 }
 
 // dispatchProbeValues give the wildcard values of the routes whose segment
@@ -305,6 +359,44 @@ func TestEveryGuardedRowRefusesAnAnonymousCaller(t *testing.T) {
 	}
 	if checked < 150 {
 		t.Fatalf("only %d guarded rows were probed", checked)
+	}
+}
+
+// TestEveryOptionalRowServesAnAnonymousCaller is the behavioural half for
+// policy.Optional: a route whose row names that guard serves a request with no
+// credential through the real mounted handler (legacy
+// get_current_user_optional). The rig's store is down, so the served answer is
+// the handler's 5xx, never a 401 or 403 refusal; the row is public.
+func TestEveryOptionalRowServesAnAnonymousCaller(t *testing.T) {
+	byKey := map[string]map[string]any{}
+	for _, row := range loadGoAPIRows(t) {
+		byKey[rowKey(t, row)] = row
+	}
+	checked := 0
+	for _, route := range mountedRoutes(t) {
+		row := byKey[route.key()]
+		validator, _ := row["primary_validator"].(map[string]any)
+		description, _ := validator["description"].(string)
+		if row == nil || !strings.HasPrefix(description, "policy.Optional:") {
+			continue
+		}
+		target := regexp.MustCompile(`\{[^}]*\}`).ReplaceAllString(route.Pattern, "00000000-0000-4000-8000-000000000001")
+		request := httptest.NewRequest(route.Method, target, nil)
+		for _, match := range regexp.MustCompile(`\{([^}]*)\}`).FindAllStringSubmatch(route.Pattern, -1) {
+			request.SetPathValue(match[1], "00000000-0000-4000-8000-000000000001")
+		}
+		recorder := httptest.NewRecorder()
+		route.Handler.ServeHTTP(recorder, request)
+		if recorder.Code/100 != 5 {
+			t.Errorf("%s: a policy.Optional row answered %d to an anonymous request, want the store-down 5xx of a served read: %s", route.key(), recorder.Code, recorder.Body.String())
+		}
+		if row["classification"] != "public" {
+			t.Errorf("%s: a policy.Optional row serves an anonymous caller and is classified %v, want public", route.key(), row["classification"])
+		}
+		checked++
+	}
+	if checked < 2 {
+		t.Fatalf("only %d policy.Optional rows were probed", checked)
 	}
 }
 

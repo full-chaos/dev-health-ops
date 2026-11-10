@@ -397,7 +397,7 @@ groups:
       # segment is a per-org or per-integration identifier. Labeling by the
       # literal stream key would put an org/integration identity on a metric
       # label, which the PRD forbids outright. Each runner kind (pagerduty,
-      # internal_ingest, product_telemetry, external_ingest) instead runs as
+      # product_telemetry, external_ingest) instead runs as
       # its own scrape target, so grouping by Prometheus's own job/instance
       # labels — already relied on by GoWorkerTelemetryTargetDown below —
       # is the bounded, policy-safe way to say *which deployment* is behind.
@@ -1087,6 +1087,36 @@ groups:
             stopped reporting is not the same as a fresh table).
 
   # ---------------------------------------------------------------------------
+  # Issue-PR fallback invariant (work-graph pre-step issue_pr_fallback_invariant).
+  # The counters are unlabeled and are added on every build, 0 included, so a
+  # breach is an increase. The organization is named by the WARN log line only.
+  # Created in SigNoz by hand as a builder threshold rule (PromQL does not
+  # evaluate there): docs/operate/observe/dashboards-and-alerts.md.
+  # ---------------------------------------------------------------------------
+  - name: issue_pr_fallback_invariant
+    interval: 1m
+    rules:
+      - alert: IssuePRFallbackInvariantBreached
+        expr: |
+          sum(increase(workgraph_issue_pr_fallback_beside_native_rows_total[24h])) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "work_graph_issue_pr holds fallback rows the native-first rule forbids"
+          description: |
+            A work-graph build found about {{ $value | humanize }} explicit_text or
+            heuristic rows beside a native link, or with a pull request as the
+            issue side, in the last day. A link writer regressed; the check
+            reports and repairs nothing. Next: the WARN log line "issue-pr
+            fallback invariant breached" (organization_id and the counts), the
+            per-side counters
+            workgraph_issue_pr_fallback_beside_native_pull_request_rows_total,
+            workgraph_issue_pr_fallback_beside_native_issue_rows_total and
+            workgraph_issue_pr_fallback_pull_request_issue_side_rows_total, and
+            the pre-step issue_pr_fallback_invariant.
+
+  # ---------------------------------------------------------------------------
   # Push credential projection (CHAOS-10897). The reconcile compares the push
   # projection with the credential domain; drift and run series come from the
   # worker probe (off until PUSH_RECONCILE_PROBE is on), the parked and final
@@ -1305,6 +1335,108 @@ groups:
             jobs are available but not fetched, so a worker group is stuck or
             starved. CHAOS-13068 baseline 7 d to 2026-11-05: 1 fire (10-29
             15:34Z, heavy/metrics, real backlog to 2364 s).
+
+  # ---------------------------------------------------------------------------
+  # query-api PDP gate. The gate is built by QUERY_API_PDP_MODE and decides the
+  # routes and GraphQL roots of the namespaces in QUERY_API_AUTHZ_ENFORCE and
+  # QUERY_API_HEADERS_AUTHZ_ENFORCE (internal/queryapi/pdp/pdp.go). The series
+  # are lazy: absent, not 0, until the first event, so both rules are inert
+  # while the gate is off and no cell is on. Labels read: result only; the
+  # `action` label is bounded by the catalog and stays off the group-by. The
+  # `for` is a noise window for a restart or one PDP blip, never a wait before
+  # a flip. Runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md.
+  # ---------------------------------------------------------------------------
+  - name: query_api_pdp
+    interval: 1m
+    rules:
+      - alert: QueryAPIPDPConfigInvalid
+        expr: |
+          max(dev_health_query_api_pdp_config_invalid) > 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "query-api PDP gate is misconfigured and refuses PDP-gated requests"
+          description: |
+            dev_health_query_api_pdp_config_invalid is 1 on a query-api pod for five
+            minutes. Reasons: QUERY_API_PDP_MODE is not off, shadow or enforce; a mode
+            that is on misses an input (AUTH_PROXY_URL or the workload credential);
+            or a namespace is listed in QUERY_API_AUTHZ_ENFORCE or
+            QUERY_API_HEADERS_AUTHZ_ENFORCE with no PDP client. Every request that
+            would ask the PDP gets a 503. Next: the query-api start ERROR line (it names
+            the variable, never a value), then the roll back in
+            docs/operate/runbooks/auth-pdp-outage-and-rollback.md#query-api.
+
+      - alert: QueryAPIPDPRefusing
+        expr: |
+          sum by (result) (increase(dev_health_query_api_pdp_results_total{result=~"unavailable|no_decision_point|not_carried_out|not_configured"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "query-api refuses requests with a 503 on the PDP gate: {{ $labels.result }}"
+          description: |
+            query-api answered 503 for result {{ $labels.result }} in the last fifteen
+            minutes, and kept doing so for five. unavailable: no PDP verdict (the PDP
+            is down, late or rate limits the caller) or an operation with no scope or
+            principal. no_decision_point: a namespace is on and query-api has no PDP
+            client. not_carried_out: an allow with an obligation query-api does not
+            carry out. not_configured: a bad config, or mode enforce with the cell of
+            the route off. A deny (403) is not counted here. Next: the query-api WARN
+            line "query-api: the PDP refused the request" (closed reason) and
+            docs/operate/runbooks/auth-pdp-outage-and-rollback.md#query-api.
+
+  # ---------------------------------------------------------------------------
+  # Nightly pg_dump of the bundled PostgreSQL (CHAOS-13373; chart value
+  # postgresql.backup.enabled, CronJob <fullname>-postgresql-backup). The series
+  # come from the collector's k8s_cluster receiver, which writes dotted names
+  # only (k8s.job.failed_pods, k8s.job.successful_pods, label k8s.job.name), so
+  # the rules select them by __name__. A finished Job is deleted
+  # postgresql.backup.ttlSecondsAfterFinished (43200 s) after it ends, so the
+  # successful_pods series of a good run lasts 12h and the stale window is
+  # 25h - 12h = 13h. Import both only where the CronJob is on: the stale rule
+  # fires wherever no backup Job runs. Created in SigNoz by hand as builder
+  # threshold rules (PromQL does not evaluate there), named
+  # prod-pg-backup-failed and prod-pg-backup-stale, channel accounts-email:
+  # docs/operate/maintain/backup-and-restore.md.
+  # ---------------------------------------------------------------------------
+  - name: postgres_backup
+    interval: 5m
+    rules:
+      - alert: PostgresBackupFailed
+        expr: |
+          max(max_over_time({__name__="k8s.job.failed_pods", "k8s.job.name"=~".+-postgresql-backup-.+"}[1h])) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "The nightly Postgres backup Job failed"
+          description: |
+            A <release>-postgresql-backup Job had a failed pod in the last hour:
+            pg_dump, the pg_restore --list check, the sha256 file or the rename
+            failed, or the Job ran past its 1h deadline. No new dump was kept;
+            the older dumps are not pruned. Next: the pod log (it is deleted
+            12h after the Job ends) and "Prod Postgres from the nightly dump" in
+            docs/operate/maintain/backup-and-restore.md.
+
+      # 43200 s ttlSecondsAfterFinished + 13h window = 25h since the last good dump; change both together
+      - alert: PostgresBackupStale
+        expr: |
+          (max(max_over_time({__name__="k8s.job.successful_pods", "k8s.job.name"=~".+-postgresql-backup-.+"}[13h])) or vector(0)) < 1
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "No good nightly Postgres backup for 25 hours"
+          description: |
+            No <release>-postgresql-backup Job succeeded in the last 25 hours
+            (a good Job's series lasts 12h, the window is 13h): the CronJob did
+            not run, was suspended, or every run failed. The newest dump on the
+            PVC is older than a day. Next: the CronJob and its Jobs, then "Prod
+            Postgres from the nightly dump" in
+            docs/operate/maintain/backup-and-restore.md.
 
   # ---------------------------------------------------------------------------
   # In-chart Valkey (rate-limit counters, ingest streams). The series come from

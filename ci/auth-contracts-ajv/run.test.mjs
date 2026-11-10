@@ -151,9 +151,10 @@ test("the row schema (strict ajv) requires class_disambiguator on a row that acc
   const ajv = new Ajv2020({ strict: true, allErrors: true });
   addFormats(ajv);
   const validate = ajv.compile(JSON.parse(readFileSync(path.join(v1, "endpoint-profile.schema.json"), "utf8")));
-  const document = JSON.parse(readFileSync(path.join(v1, "endpoint-profiles.query-api.json"), "utf8"));
+  // The go-api inventory: the query-api one holds no row that accepts two classes since its envelope class was retired.
+  const document = JSON.parse(readFileSync(path.join(v1, "endpoint-profiles.go-api.json"), "utf8"));
   assert.equal(validate(document), true, JSON.stringify(validate.errors));
-  const row = document.rows.find((r) => r.class_disambiguator);
+  const row = document.rows.find((r) => r.class_disambiguator && r.accepted_credential_classes.length > 1);
   delete row.class_disambiguator;
   assert.equal(validate(document), false);
 });
@@ -169,13 +170,25 @@ test("the row schema (strict ajv) holds the HS256 opt-in to the class list on ev
   for (const file of ["endpoint-profiles.auth-service.json", "endpoint-profiles.query-api.json", "endpoint-profiles.go-api.json"]) {
     const read = () => JSON.parse(readFileSync(path.join(v1, file), "utf8"));
     assert.equal(validate(read()), true, `${file}: ${JSON.stringify(validate.errors)}`);
-    const legacy = read().rows.findIndex((r) => r.accepted_credential_classes.includes("ops_access_token_hs256"));
+    assert.ok(!read().rows.some((r) => r.accepted_credential_classes.includes("ops_access_token_hs256")), `${file}: a row accepts the retired HS256 class`);
+    const user = read().rows.findIndex((r) => r.accepted_credential_classes.length === 1 && r.accepted_credential_classes[0] === "user_access_token");
     const plain = read().rows.findIndex((r) => !r.accepted_credential_classes.some((c) => accessClasses.includes(c)));
-    assert.ok(legacy >= 0 && plain >= 0, `${file}: no HS256 row or no row without an access-token class`);
+    assert.ok(user >= 0 && plain >= 0, `${file}: no user-token-only row or no row without an access-token class`);
+    // No row accepts the retired HS256 class: the HS256 probes plant it on a user-token-only row, and the planted
+    // row itself must validate, so each probe fails for its own rule.
+    const plant = (row) => {
+      row.accepted_credential_classes = ["ops_access_token_hs256", "user_access_token"];
+      row.class_disambiguator = { kind: "jwt_header_alg", name: "EdDSA" };
+      row.access_token_validation = { legacy_hs256: true };
+    };
+    const planted = read();
+    plant(planted.rows[user]);
+    assert.equal(validate(planted), true, `${file}: planted HS256 row: ${JSON.stringify(validate.errors)}`);
     const probes = [
-      [legacy, (row) => delete row.access_token_validation],
-      [legacy, (row) => (row.access_token_validation = { legacy_hs256: false })],
-      [legacy, (row) => (row.access_token_validation = { legacy_hs256: true, classes: ["ops_access_token_hs256"] })],
+      [user, (row) => { plant(row); delete row.access_token_validation; }],
+      [user, (row) => { plant(row); row.access_token_validation = { legacy_hs256: false }; }],
+      [user, (row) => { plant(row); row.access_token_validation = { legacy_hs256: true, classes: ["ops_access_token_hs256"] }; }],
+      [user, (row) => (row.access_token_validation = { legacy_hs256: true })],
       [plain, (row) => (row.access_token_validation = { legacy_hs256: false })],
       [plain, (row) => (row.access_token_validation = { legacy_hs256: true })],
     ];
@@ -194,7 +207,8 @@ test("the row schema (strict ajv) rejects a row that omits accepted_credential_c
   const ajv = new Ajv2020({ strict: true, allErrors: true });
   addFormats(ajv);
   const validate = ajv.compile(JSON.parse(readFileSync(path.join(v1, "endpoint-profile.schema.json"), "utf8")));
-  const read = () => JSON.parse(readFileSync(path.join(v1, "endpoint-profiles.query-api.json"), "utf8"));
+  // The go-api inventory holds rows with and without a selector; the query-api one has none with a selector.
+  const read = () => JSON.parse(readFileSync(path.join(v1, "endpoint-profiles.go-api.json"), "utf8"));
   assert.equal(validate(read()), true, JSON.stringify(validate.errors));
   for (const withSelector of [true, false]) {
     const document = read();

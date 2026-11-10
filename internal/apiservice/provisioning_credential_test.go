@@ -72,21 +72,38 @@ func subjectFile(t *testing.T) string {
 	return path
 }
 
-// Unset and session_compat build no workload client: today's constructors run.
-func TestProvisioningCredentialDefaultsToTheSessionCredential(t *testing.T) {
+// With the switch on the provisioning clients take the workload credential whether the selector is unset, empty or
+// workload: unset and empty need the workload inputs like workload does. session_compat is retired: a start-up error
+// naming the selector and the switch, with or without the workload inputs.
+func TestProvisioningCredentialIsTheWorkloadCredentialWhenTheSwitchIsOn(t *testing.T) {
 	cfg := provisioningOn(t, "http://auth-service:8095")
-	for name, env := range map[string]map[string]string{
-		"unset":                {},
-		"empty":                {EnvAuthProvisioningCredential: " "},
-		"session_compat":       {EnvAuthProvisioningCredential: "session_compat"},
-		"session_compat+files": {EnvAuthProvisioningCredential: "session_compat", EnvAuthWorkloadSubjectFile: "/nonexistent", EnvAuthWorkloadIssuer: "x"},
-	} {
-		cred, err := newProvisioningCredential(cfg, issueEnv(env))
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
+	inputs := map[string]string{EnvAuthWorkloadIssuer: testWorkloadIssuer, EnvAuthWorkloadBootstrapFile: bootstrapFile(t)}
+	with := func(selector string, set bool) map[string]string {
+		env := map[string]string{}
+		for k, v := range inputs {
+			env[k] = v
 		}
-		if cred.workload != nil {
-			t.Errorf("%s: a workload client was built", name)
+		if set {
+			env[EnvAuthProvisioningCredential] = selector
+		}
+		return env
+	}
+	for name, env := range map[string]map[string]string{"unset": with("", false), "empty": with(" ", true), "workload": with("workload", true)} {
+		cred, err := newProvisioningCredential(cfg, issueEnv(env))
+		if err != nil || cred.workload == nil {
+			t.Errorf("%s: %v %v, want a workload client", name, cred.workload, err)
+		}
+	}
+	for name, env := range map[string]map[string]string{"unset, no inputs": {}, "empty, no inputs": {EnvAuthProvisioningCredential: " "}} {
+		cred, err := newProvisioningCredential(cfg, issueEnv(env))
+		if err == nil || cred.workload != nil || !strings.Contains(err.Error(), EnvAuthProxyOrgProvisioning) {
+			t.Errorf("%s: %v %v, want a start-up error naming the switch and no client", name, cred.workload, err)
+		}
+	}
+	for name, env := range map[string]map[string]string{"session_compat": with("session_compat", true), "session_compat, no inputs": {EnvAuthProvisioningCredential: "session_compat"}} {
+		cred, err := newProvisioningCredential(cfg, issueEnv(env))
+		if err == nil || cred.workload != nil || !strings.Contains(err.Error(), EnvAuthProvisioningCredential) || !strings.Contains(err.Error(), EnvAuthProxyOrgProvisioning) {
+			t.Errorf("%s: %v %v, want a start-up error naming the selector and the switch", name, cred.workload, err)
 		}
 	}
 }
@@ -165,14 +182,14 @@ func TestWorkloadClientsNeedNoSessionCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c, err := orgLifecycleClient(cfg, issueEnv(map[string]string{}), cred); c == nil || err != nil {
+	if c, err := orgLifecycleClient(cfg, cred); c == nil || err != nil {
 		t.Errorf("lifecycle client: %v %v, want a client", c, err)
 	}
-	if p, err := orgProvisioner(cfg, issueEnv(map[string]string{}), cred); p == nil || err != nil {
+	if p, err := orgProvisioner(cfg, cred); p == nil || err != nil {
 		t.Errorf("provisioner: %v %v, want a client", p, err)
 	}
 	off := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
-	if c, err := orgLifecycleClient(off, issueEnv(map[string]string{}), cred); c != nil || err != nil {
+	if c, err := orgLifecycleClient(off, cred); c != nil || err != nil {
 		t.Errorf("switch off: %v %v, want no client", c, err)
 	}
 }
@@ -318,11 +335,11 @@ func (w *wiringServer) runAll(t *testing.T, cfg AuthProxyConfig, env map[string]
 	if err != nil {
 		t.Fatal(err)
 	}
-	life, err := orgLifecycleClient(cfg, lookup, cred)
+	life, err := orgLifecycleClient(cfg, cred)
 	if err != nil {
 		t.Fatal(err)
 	}
-	prov, err := orgProvisioner(cfg, lookup, cred)
+	prov, err := orgProvisioner(cfg, cred)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,45 +355,6 @@ func (w *wiringServer) runAll(t *testing.T, cfg AuthProxyConfig, env map[string]
 		out = append(out, got)
 	}
 	return out
-}
-
-// Selector unset, and session_compat, send the exact bytes the golden pins.
-func TestUnsetAndSessionCompatSendTheGoldenRequests(t *testing.T) {
-	raw, err := os.ReadFile(goldenFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want []wiringRequest
-	if err := json.Unmarshal(raw, &want); err != nil {
-		t.Fatal(err)
-	}
-	for name, selector := range map[string]map[string]string{"unset": {}, "session_compat": {EnvAuthProvisioningCredential: "session_compat"}} {
-		w := newWiringServer(t)
-		token := testIssueToken(t)
-		env := map[string]string{sessionissue.EnvToken: token}
-		for k, v := range selector {
-			env[k] = v
-		}
-		got := w.runAll(t, provisioningOn(t, w.URL), env)
-		w.mu.Lock()
-		if len(w.auths) != 12 {
-			t.Errorf("%s: %d provisioning requests, want 12", name, len(w.auths))
-		}
-		for i, auth := range w.auths {
-			if len(auth) != 1 || auth[0] != "Bearer "+token {
-				t.Errorf("%s: request %d Authorization is not exactly the AUTH_SESSION_ISSUE_TOKEN value", name, i)
-			}
-		}
-		w.mu.Unlock()
-		gotJSON, _ := json.Marshal(got)
-		wantJSON, _ := json.Marshal(want)
-		if string(gotJSON) != string(wantJSON) {
-			t.Errorf("%s: outgoing requests differ from the golden\n got %s\nwant %s", name, gotJSON, wantJSON)
-		}
-		if w.exchanges != 0 {
-			t.Errorf("%s: %d exchanges, want 0", name, w.exchanges)
-		}
-	}
 }
 
 func testWorkloadToken(t *testing.T) string {
@@ -438,8 +416,8 @@ func TestWorkloadSelectorExchangeFailureSendsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	life, _ := orgLifecycleClient(cfg, lookup, cred)
-	prov, _ := orgProvisioner(cfg, lookup, cred)
+	life, _ := orgLifecycleClient(cfg, cred)
+	prov, _ := orgProvisioner(cfg, cred)
 	for _, call := range wiringCalls(prov, life) {
 		if err := call.do(); err == nil {
 			t.Errorf("%s: no error after a failed exchange", call.verb)
@@ -505,8 +483,8 @@ func TestWorkloadSubjectRemovedAfterStartFailsTheCallWithNoRequest(t *testing.T)
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	life, _ := orgLifecycleClient(cfg, lookup, cred)
-	prov, _ := orgProvisioner(cfg, lookup, cred)
+	life, _ := orgLifecycleClient(cfg, cred)
+	prov, _ := orgProvisioner(cfg, cred)
 	for _, call := range wiringCalls(prov, life) {
 		if err := call.do(); err == nil {
 			t.Errorf("%s: no error with the subject file gone", call.verb)
@@ -531,8 +509,8 @@ func TestWorkloadExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	life, _ := orgLifecycleClient(cfg, lookup, cred)
-	prov, _ := orgProvisioner(cfg, lookup, cred)
+	life, _ := orgLifecycleClient(cfg, cred)
+	prov, _ := orgProvisioner(cfg, cred)
 	calls := wiringCalls(prov, life)
 	if err := calls[0].do(); err == nil {
 		t.Fatal("a redirect answer was taken for a token")

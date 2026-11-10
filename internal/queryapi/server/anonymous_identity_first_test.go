@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -17,7 +16,7 @@ import (
 // an oracle on body validity and opens the parser to anonymous input.
 func TestAnonymousDocumentRoutesRefuseBeforeReadingTheBody(t *testing.T) {
 	getenv := getenvFunc(func(string) string { return "" })
-	verifier, priv := iaVerifier(t)
+	verifier, _ := iaVerifier(t)
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true})
 	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	byDigest := map[string]string{digestHex(iaDocument): "probe"}
@@ -49,7 +48,7 @@ func TestAnonymousDocumentRoutesRefuseBeforeReadingTheBody(t *testing.T) {
 	}
 
 	// The same bad bodies from an authenticated caller keep their refusals.
-	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "admin"})
+	carrier := iaHeaders("org-1", "admin", false, false)
 	authed := map[string]struct {
 		body string
 		want int
@@ -62,7 +61,7 @@ func TestAnonymousDocumentRoutesRefuseBeforeReadingTheBody(t *testing.T) {
 		for name, c := range authed {
 			t.Run(path+"/authenticated/"+name, func(t *testing.T) {
 				request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(c.body))
-				request.Header.Set("Authorization", "Bearer "+envelope)
+				carrier(request)
 				recorder := httptest.NewRecorder()
 				handler.ServeHTTP(recorder, request)
 				if recorder.Code != c.want {

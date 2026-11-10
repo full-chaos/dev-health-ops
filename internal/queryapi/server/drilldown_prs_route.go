@@ -31,7 +31,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -62,19 +61,16 @@ func drilldownPRsSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitch {
 }
 
 // loadDrilldownPRsRouteConfig reads this route's own dependency set --
-// ClickHouse plus the envelope verifier trio. Deliberately NOT
+// ClickHouse only; the envelope key is optional. Deliberately NOT
 // loadQueryRouteConfig, same reasoning as quadrant_route.go's own
 // loadQuadrantRouteConfig doc comment: this route never touches registry
 // Postgres.
-func loadDrilldownPRsRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadDrilldownPRsRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 // buildDrilldownPRsRoute constructs the handler, its own routeswitch Mux,
@@ -83,12 +79,12 @@ func loadDrilldownPRsRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, is
 // same "stay unmounted, don't fail to build/start" contract every other
 // optionally-configured route in this binary follows.
 func buildDrilldownPRsRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadDrilldownPRsRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadDrilldownPRsRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -180,7 +176,7 @@ func drilldownTimeFilterMap(rangeDays int, startDate, endDate *time.Time) map[st
 func writeDrilldownPRsResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *drilldown.PRsResponse) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: drilldown: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }
@@ -198,6 +194,10 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 			// handler -- see authenticateRESTRequest's own doc comment for
 			// the three real 401 shapes this route actually answers.
 			writeRESTUnauthorized(w, r, "drilldown_prs", "Not authenticated")
+			return
+		}
+		org, ok := restScopeOrg(w, r, "drilldown_prs", claims)
+		if !ok {
 			return
 		}
 
@@ -236,7 +236,7 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -250,7 +250,7 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		startTS, endTS, windowErr := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "drilldown_prs", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "drilldown_prs", org)
 			return
 		}
 
@@ -274,18 +274,18 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 			Limit: 50,
 		}
 
-		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, claims.OrgID, params)
+		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, org, params)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:973-974).
-			writeRESTDataUnavailable(w, r, "drilldown_prs", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "drilldown_prs", org, err)
 			return
 		}
 
 		// Python sets this header only on the GET route (main.py:970-971),
 		// steering callers toward POST with an explicit filters body.
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
-		writeDrilldownPRsResponse(w, r, claims.OrgID, resp)
+		writeDrilldownPRsResponse(w, r, org, resp)
 	}
 }
 
@@ -300,6 +300,10 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "drilldown_prs", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "drilldown_prs", claims)
+		if !ok {
+			return
+		}
 
 		bodyBytes, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
@@ -309,7 +313,7 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			// a clean HTTP response in that case. This keeps the existing
 			// 400 status, only replacing the plain-text wire body with this
 			// package's one JSON envelope.
-			writeRESTError(w, r, "drilldown_prs", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "drilldown_prs", org, http.StatusBadRequest, "bad request")
 			return
 		}
 
@@ -323,17 +327,17 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		// (byte-identical response either way).
 		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
 		if syntaxDetail != nil {
-			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			writePydanticValidationError(w, r, org, *syntaxDetail)
 			return
 		}
 		if bodyIsEmptyOrNull {
-			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
+			writePydanticValidationError(w, r, org, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
 		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
-			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
+			writePydanticValidationError(w, r, org, modelAttributesTypeError([]any{"body"}, decoded))
 			return
 		}
 
@@ -375,7 +379,7 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 		if limit == 0 {
@@ -394,7 +398,7 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		startTS, endTS, windowErr := timeWindow(filters)
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "drilldown_prs", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "drilldown_prs", org)
 			return
 		}
 
@@ -407,11 +411,11 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			Limit:      limit,
 		}
 
-		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, claims.OrgID, params)
+		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, org, params)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "drilldown_prs", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "drilldown_prs", org, err)
 			return
 		}
-		writeDrilldownPRsResponse(w, r, claims.OrgID, resp)
+		writeDrilldownPRsResponse(w, r, org, resp)
 	}
 }

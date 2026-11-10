@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	mintedgetoken "github.com/full-chaos/dev-health-ops/internal/mintcli/edgetoken"
-	mintenvelope "github.com/full-chaos/dev-health-ops/internal/mintcli/envelope"
 )
 
 // MintViaAllowlistedHelper mints one of a fixed set of credentials
@@ -22,8 +21,10 @@ import (
 // flag, and no fixed filesystem path to keep in sync with the image build.
 //
 // helperName SELECTS a helper, exactly as it did when it selected an
-// executable path: "mint-envelope" or "mint-edge-token", never anything
-// that reaches a shell or a filesystem path.
+// executable path: "mint-edge-token", never anything that reaches a shell
+// or a filesystem path. The effective-principal envelope is no longer
+// minted for the tools: query-api is read with a user access token from a
+// file (UserAccessTokenFileCredential).
 //
 // args are the helper's own argv[1:] -- operator-supplied flag data (e.g.
 // "-org", "<org>"), parsed by the mintcli package's own flag set exactly
@@ -34,11 +35,9 @@ import (
 // contract the exec'd binaries held.
 func MintViaAllowlistedHelper(ctx context.Context, helperName string, args []string) (string, error) {
 	switch helperName {
-	case "mint-envelope":
-		return mintenvelope.Mint(args)
 	case "mint-edge-token":
 		return mintedgetoken.Mint(ctx, args)
 	default:
-		return "", fmt.Errorf("goapiproof: %q is not an allowlisted minting helper -- expected \"mint-envelope\" or \"mint-edge-token\"", helperName)
+		return "", fmt.Errorf("goapiproof: %q is not an allowlisted minting helper -- expected \"mint-edge-token\"; a user access token for query-api comes from a token file", helperName)
 	}
 }

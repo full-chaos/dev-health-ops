@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
 
 const (
@@ -50,14 +52,15 @@ type WorkloadVerifier interface {
 	Verify(token string, now time.Time) (*authverify.WorkloadClaims, error)
 }
 
-// WorkloadAuth lets the internal acr routes accept the acr-api workload token.
-// Subject is the one workload principal (prn_) the routes allow; the token has
-// no scope claim, so this equality is the per-route action binding. A nil
-// WorkloadAuth, a nil Verifier or an empty Subject refuses every workload
-// token as not_configured.
+// WorkloadAuth verifies the acr-api workload token, the one credential the
+// internal acr routes accept.
+// Source names the one workload principal (prn_) the routes allow, read from the
+// workload registry; the token has no scope claim, so this equality is the
+// per-route action binding. A nil WorkloadAuth, a nil Verifier or a nil Source
+// refuses every workload token as not_configured.
 type WorkloadAuth struct {
 	Verifier WorkloadVerifier
-	Subject  string
+	Source   SubjectSource
 	Now      func() time.Time
 }
 
@@ -65,7 +68,6 @@ var (
 	workloadMeter    = otel.Meter("github.com/full-chaos/dev-health-ops/internal/apiservice/acr")
 	workloadRefused  = mustCounter("devhealth_acr_workload_refused_total", "Workload tokens refused by the internal acr routes, by route and reason.")
 	workloadAccepted = mustCounter("devhealth_acr_workload_accepted_total", "Workload tokens accepted by the internal acr routes, by route.")
-	svcAcrCompat     = mustCounter("devhealth_acr_svc_acr_compat_total", "svc_acr_ credentials accepted by the internal acr routes during the workload-token migration, by route.")
 )
 
 func mustCounter(name, description string) metric.Int64Counter {
@@ -84,7 +86,6 @@ func declareWorkloadSeries() {
 			workloadRefused.Add(ctx, 0, metric.WithAttributes(attribute.String("route", route), attribute.String("reason", reason)))
 		}
 		workloadAccepted.Add(ctx, 0, metric.WithAttributes(attribute.String("route", route)))
-		svcAcrCompat.Add(ctx, 0, metric.WithAttributes(attribute.String("route", route)))
 	}
 }
 
@@ -102,10 +103,6 @@ func countWorkloadAccepted(ctx context.Context, route string) {
 	workloadAccepted.Add(ctx, 1, metric.WithAttributes(attribute.String("route", route)))
 }
 
-func countSvcAcrCompat(ctx context.Context, route string) {
-	svcAcrCompat.Add(ctx, 1, metric.WithAttributes(attribute.String("route", route)))
-}
-
 // classedPrefixes are the credential prefixes of the other token classes
 // (service credentials, acr client credentials, External Push keys); a token
 // that carries one is never workload-classed and its header is never decoded.
@@ -114,12 +111,17 @@ var classedPrefixes = []string{"svc_", "fcacr_", "fcpush_"}
 // isWorkloadToken reads the unverified JOSE header alone, whatever the
 // segment count, and reports typ workload+jwt. It only picks the
 // verification path; the verifier re-checks everything, so a missing or extra
-// segment is a contract refusal there.
+// segment is a contract refusal there. A bearer over
+// contracts.WorkloadTokenMaxBytes takes the workload path undecoded, and
+// decide refuses it before the verifier reads it.
 func isWorkloadToken(token string) bool {
 	for _, prefix := range classedPrefixes {
 		if strings.HasPrefix(token, prefix) {
 			return false
 		}
+	}
+	if len(token) > contracts.WorkloadTokenMaxBytes {
+		return true
 	}
 	head, _, _ := strings.Cut(token, ".")
 	raw, err := base64.RawURLEncoding.DecodeString(head)
@@ -134,13 +136,16 @@ func isWorkloadToken(token string) bool {
 
 // decide verifies token and returns the workload subject and the refusal
 // reason (empty reason = accepted). The subject is set only on accept.
-func (w *WorkloadAuth) decide(token string) (subject, reason string) {
-	if w == nil || w.Verifier == nil || w.Subject == "" {
+func (w *WorkloadAuth) decide(ctx context.Context, token string) (subject, reason string) {
+	if w == nil || w.Verifier == nil || w.Source == nil {
 		return "", ReasonNotConfigured
 	}
 	now := time.Now
 	if w.Now != nil {
 		now = w.Now
+	}
+	if len(token) > contracts.WorkloadTokenMaxBytes {
+		return "", ReasonContract
 	}
 	claims, err := w.Verifier.Verify(token, now())
 	if errors.Is(err, authverify.ErrKeySourceUnavailable) {
@@ -149,7 +154,15 @@ func (w *WorkloadAuth) decide(token string) (subject, reason string) {
 	if err != nil {
 		return "", workloadReason(err)
 	}
-	if claims.Subject != w.Subject {
+	want, err := w.Source.Subject(ctx)
+	switch {
+	case errors.Is(err, ErrSubjectNotConfigured):
+		return "", ReasonNotConfigured
+	case err != nil:
+		return "", ReasonUnavailable
+	case want == "":
+		return "", ReasonNotConfigured
+	case claims.Subject != want:
 		return "", ReasonPrincipal
 	}
 	return claims.Subject, ""

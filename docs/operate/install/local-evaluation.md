@@ -22,7 +22,7 @@ A local evaluation is not a production hardening, backup, availability, or scale
 
 ## Sessions and the local token issuer
 
-The local stack signs users in as production does (CHAOS-13107). A plain `docker compose up` starts
+The local stack signs users in as production does. A plain `docker compose up` starts
 auth-service and its one-shot jobs, because go-api waits for them:
 
 - go-api forwards the auth aggregates production forwards to auth-service: sessions, local login,
@@ -36,9 +36,13 @@ auth-service and its one-shot jobs, because go-api waits for them:
 - auth-service sends the verify and reset mail. The local default is the console provider
   (`AUTH_MAIL_ALLOW_CONSOLE=true`), which delivers no mail. Set `EMAIL_PROVIDER` and its keys in
   `.env` for real mail.
-- go-api asks auth-service for each session with the `session_compat` service credential
-  `AUTH_SESSION_ISSUE_TOKEN`. compose.yml has a local default for it, and the
-  `auth-session-issue-seed` job writes the credential's row.
+- go-api asks auth-service for each session with its workload token, as in production
+  (`AUTH_SESSION_ISSUE_CREDENTIAL=workload`). The `auth-workload-bootstrap` job writes go-api's
+  credential file once (0600, a named volume go-api mounts read-only), and the
+  `auth-workload-subject` job writes the principal id auth-service accepts to a second volume it
+  mounts read-only (`AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT_FILE`). Both jobs run on every
+  `docker compose up` and a second run changes nothing. No credential is in the environment, in
+  `.env` or in a log.
 - The token issuer is `https://auth.dev-health.internal:8443`. The `auth-issuer` service serves it,
   and it forwards only the discovery document and the JWKS of auth-service. go-api and query-api
   verify the token against this issuer. They trust its certificate through `SSL_CERT_DIR`.
@@ -60,13 +64,12 @@ local CA:
 A browser does not call the issuer. To open the issuer URL in a browser, import
 `auth-issuer-ca.pem` into the browser's trust store.
 
-Before auth-service serves, the `auth-users-backfill` job copies `public.users` into the auth schema
-(`dho auth users-backfill -insert-only`, with `AUTH_USERS_OWNED=false` for that run only). It creates
-the auth users that are missing and never changes an existing one. Without the copy,
+Before auth-service serves, the `auth-users-backfill` job runs the seed tool: it copies `public.users`
+into the auth schema (`dho auth users-backfill -insert-only`, with users owned, as every venue runs).
+The seed tool creates the auth users that are missing and never changes an existing one. Without the copy,
 auth-service does not become ready (`users_owned`): a fresh database already holds one service user,
-and a database from before this change can hold more. The job runs on every `docker compose up`.
+and an older database can hold more. The job runs on every `docker compose up`.
 
-Known limit: the local stack uses the `session_compat` credential (`svc_authsess_`), not the
-workload credential of production. It stops working when `svc_authsess_` acceptance is removed
-(W11-19). Before that removal, `bootstrap-create -if-absent` and a `_FILE` form of the session
-issue workload subject are necessary.
+`docker compose down -v` removes both volumes and the registry with the database, so the next `up`
+starts clean. If only the credential volume is lost, the registry still holds the live credential and
+the job skips it: run `auth-migrate workloads bootstrap-disable -workload api -apply`, then `up` again.

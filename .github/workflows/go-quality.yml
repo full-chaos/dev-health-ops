@@ -270,8 +270,13 @@ jobs:
             exit 1
           fi
           printf 'plan verdict: %s\n' "${PLAN_SELECTION}"
-          if [ "${LEG}" = "static" ] || [ "${LEG}" = "plan-reads" ]; then
-            echo "the ${LEG} leg runs on every change set"
+          if [ "${LEG}" = "static" ]; then
+            echo "the static leg runs on every change set"
+            printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [ "${LEG}" = "plan-reads" ]; then
+            echo "the plan-reads leg runs on every change set"
             printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
             exit 0
           fi

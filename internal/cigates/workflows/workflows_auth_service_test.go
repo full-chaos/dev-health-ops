@@ -318,7 +318,7 @@ func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 		{"registry gains a target with no fuzz job", []mutation{{cg, "AUTH_FUZZ_TARGETS=(\n", "AUTH_FUZZ_TARGETS=(\n  \"./internal/auth/x FuzzPlanted\"\n"}}, []string{"differs from the AUTH_FUZZ_TARGETS registry", "FuzzPlanted"}},
 		{"gate stops failing on a skipped job", []mutation{{wf, `[ "${pair#*=}" = "success" ]`, `[ "${pair#*=}" != "failure" ]`}}, []string{"failed, cancelled OR skipped"}},
 		{"gate job drops its always()", []mutation{{wf, "if: always()", "if: success()"}}, []string{"always()"}},
-		{"the auth race step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh auth race\n", "run: 'echo \"run: bash ci/check_go.sh auth race\"'\n"}}, []string{"no longer calls auth stage \"race\""}},
+		{"the auth race step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh auth race-leg \"${{ matrix.leg }}\" 7\n", "run: 'echo \"run: bash ci/check_go.sh auth race-leg\"'\n"}}, []string{"no longer calls auth stage \"race-leg\""}},
 		{"an auth gate job runs on a condition that is always false", []mutation{{wf, "    if: needs.auth-changes.outputs.relevant == 'true'\n", "    if: false && needs.auth-changes.outputs.relevant == 'true'\n"}}, []string{"if must be exactly"}},
 		{"the gate's success check is only echoed", []mutation{{wf, `[ "${pair#*=}" = "success" ] ||`, `echo '[ "${pair#*=}" = "success" ] ||'; true ||`}}, []string{"failed, cancelled OR skipped"}},
 		{"the closure loop survives only in a comment", []mutation{{cg, "for arch in amd64 arm64", "# for arch in amd64 arm64"}}, []string{"no longer covers cgo"}},
@@ -334,7 +334,7 @@ func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 		{"the auth workflow runs gofmt again", []mutation{{wf, "      - name: Fuzz registry matches the tree\n", "      - name: gofmt\n        run: bash ci/check_go.sh auth fmt\n      - name: Fuzz registry matches the tree\n"}}, []string{"runs auth fmt"}},
 		{"go-quality static may be skipped", []mutation{{quality, "the static leg runs on every change set", "the static leg may be skipped"}}, []string{"static leg no longer runs on every change set"}},
 		{"go-quality static drops vet", []mutation{{cg, "      ci_leg_stage vet check_vet\n", ""}}, []string{"static ci-leg no longer runs"}},
-		{"the auth race step gains a pull request guard", []mutation{{wf, "      - name: go test -race (auth packages)\n", "      - name: go test -race (auth packages)\n        if: github.event_name == 'pull_request'\n"}}, []string{"must run on every event"}},
+		{"the auth race step gains a pull request guard", []mutation{{wf, "      - name: go test -race (auth packages, leg ${{ matrix.leg }} of 7)\n", "      - name: go test -race (auth packages, leg ${{ matrix.leg }} of 7)\n        if: github.event_name == 'pull_request'\n"}}, []string{"must run on every event"}},
 		{"closure check stops covering arm64", []mutation{{cg, "for arch in amd64 arm64", "for arch in amd64"}}, []string{"no longer covers cgo"}},
 	}
 	for _, c := range cases {

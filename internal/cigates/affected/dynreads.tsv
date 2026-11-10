@@ -6,6 +6,7 @@ cmd/cigate	chposture.go
 cmd/cigate	docs_prepare_refusals_test.go
 cmd/cigate	main.go
 cmd/cigate	main_test.go
+cmd/credrefgen	main.go
 cmd/dev-health-migration-matrix	main.go
 cmd/dev-health-provider-fixture	main.go
 cmd/dev-health-provider-normalized-fixture	main.go

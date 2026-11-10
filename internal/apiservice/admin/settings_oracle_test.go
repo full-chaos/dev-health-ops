@@ -49,8 +49,8 @@ func TestSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
 // The Go-pin digests (testdata/governance/settings_<mode>.go-pin.json), each
 // on its own declaration line.
 const (
-	settingsEncryptedPinDigest    = "e242aeb85a96ac5bee2bece5f9d74f29e31bacb598164a8c929950e96b7c311c"
-	settingsNoEncryptionPinDigest = "9c7cb35a0059c52e5265ffee89dc6e00c32b141346eda4acb8355b4bede52eab"
+	settingsEncryptedPinDigest    = "7b7ebfff29cc8b515fd9d2d350733d4ad6c3d13872aec7546ca8edd911e96fe3"
+	settingsNoEncryptionPinDigest = "d21c6f7e659e2047318db84151e3ae542a656582be146aa9f3446b35258a6bf6"
 )
 
 // settingsListRuling retires the Python answer of every list of a non-empty

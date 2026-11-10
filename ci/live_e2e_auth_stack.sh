@@ -9,7 +9,10 @@
 #   bash ci/live_e2e_auth_stack.sh with-env SIDE STATE_DIR -- CMD [ARG...]   run CMD with the environment of SIDE
 #   bash ci/live_e2e_auth_stack.sh print-env SIDE STATE_DIR                 print NAME=VALUE lines of SIDE, secret values redacted
 #   bash ci/live_e2e_auth_stack.sh assert-audit STATE_DIR                   every delegated session issue used the workload credential
-#   bash ci/live_e2e_auth_stack.sh down STATE_DIR                           stop auth-service by pid
+#   bash ci/live_e2e_auth_stack.sh enable-social STATE_DIR                  enable the throwaway GitHub provider (needs sudo)
+#   bash ci/live_e2e_auth_stack.sh enable-sso STATE_DIR                     enable OIDC/SAML before go-api starts
+#   bash ci/live_e2e_auth_stack.sh start-idp STATE_DIR [ARG...]              start the IdP with extra idpstub serve arguments
+#   bash ci/live_e2e_auth_stack.sh down STATE_DIR                           stop the stack and remove the social hosts entry
 #   bash ci/live_e2e_auth_stack.sh stop-auth STATE_DIR      stop auth-service by pid (the outage cell); start-auth starts it again with the same environment
 #   bash ci/live_e2e_auth_stack.sh start-auth STATE_DIR
 #   bash ci/live_e2e_auth_stack.sh verify-user STATE_DIR EMAIL  mark one user's e-mail verified in auth.users (the authority:
@@ -72,6 +75,7 @@ print_env() {
   raw_env "$1" "$2" | awk '
     { k = substr($0, 1, index($0, "=") - 1) }
     k == "AUTH_JWT_SECRET_KEY" || k == "AUTH_SESSION_SUCCESSOR_KEY" || k == "AUTH_LOGIN_LOCKOUT_KEY" { print k "=<redacted>"; next }
+    k ~ /(_SECRET|_STATE_KEY)$/ || k == "SETTINGS_ENCRYPTION_KEY" { print k "=<redacted>"; next }
     k == "AUTH_DATABASE_URI" { sub(/password=\047[^\047]*\047/, "password=\047<redacted>\047") }
     { print }'
 }
@@ -143,6 +147,13 @@ raw_env() {
       ;;
     *) die "unknown side ${side} (go-api, query-api, auth-service, web)" ;;
   esac
+  if [ "${side}" != auth-service ] && [ -f "${state}/extra/${side}.env" ]; then
+    local line
+    while IFS= read -r line || [ -n "${line}" ]; do
+      [[ "${line}" =~ ^[A-Z][A-Z0-9_]*= ]] || die "invalid overlay line in ${state}/extra/${side}.env"
+      printf '%s\n' "${line}"
+    done <"${state}/extra/${side}.env"
+  fi
 }
 
 # with_env SIDE STATE -- CMD...: export the lines of raw_env, then exec CMD. A value is taken whole (no shell parsing).
@@ -343,6 +354,18 @@ down() {
   STATE="$(cd "$1" && pwd)"
   stop_pid "${STATE}/auth-service.pid"
   stop_pid "${STATE}/tokenreview.pid"
+  stop_pid "${STATE}/idpstub.pid"
+  if [ -f "${STATE}/providerstub.pid" ]; then
+    local pid
+    pid="$(cat "${STATE}/providerstub.pid")"
+    [[ "${pid}" =~ ^[0-9]+$ ]] || die "providerstub pid file holds no pid"
+    if [ -r "/proc/${pid}/cmdline" ] && tr '\0' '\n' <"/proc/${pid}/cmdline" | grep -qE '(^|/)providerstub$'; then
+      sudo kill "${pid}"
+    fi
+  fi
+  if grep -q '# live-e2e-social' /etc/hosts; then
+    sudo sed -i '/# live-e2e-social/d' /etc/hosts
+  fi
 }
 
 stop_auth() {
@@ -372,6 +395,87 @@ start_auth() {
     sleep 1
   done
   die "auth-service did not become ready again"
+}
+
+refresh_ca_bundle() {
+  local ca
+  cat "${STATE}/tls/ca.pem" >"${STATE}/ca-bundle.pem"
+  for ca in social idp; do
+    if [ -f "${STATE}/${ca}/ca.pem" ]; then cat "${STATE}/${ca}/ca.pem" >>"${STATE}/ca-bundle.pem"; fi
+  done
+}
+
+wait_stub() {
+  local name="$1" url="$2" ca="$3" attempt=0 deadline=$((SECONDS + 30))
+  while [ "${attempt}" -lt 30 ] && [ "${SECONDS}" -lt "${deadline}" ]; do
+    if curl -sS --max-time 1 -o /dev/null --cacert "${ca}" "${url}" 2>/dev/null; then return 0; fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  tail -n 40 "${STATE}/logs/${name}.log" >&2 || true
+  die "${name} did not become ready"
+}
+
+enable_social() {
+  command -v sudo >/dev/null 2>&1 || die "enable-social requires sudo for /etc/hosts and port 443"
+  STATE="$(cd "$1" && pwd)"
+  [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
+  umask 077
+  mkdir -p "${STATE}/bin" "${STATE}/logs" "${STATE}/extra"
+  (cd "${ROOT}" && go build -o "${STATE}/bin/providerstub" ./internal/testsupport/providerstub/cmd/providerstub)
+  "${STATE}/bin/providerstub" certs -out "${STATE}/social"
+  refresh_ca_bundle
+  if ! grep -q '# live-e2e-social' /etc/hosts; then
+    printf '%s\n' '127.0.0.1 api.github.com github.com # live-e2e-social' | sudo tee -a /etc/hosts >/dev/null
+  fi
+  (
+    cd "${STATE}"
+    nohup sudo "${STATE}/bin/providerstub" serve -fixtures "${ROOT}/ci/live_e2e_stub" \
+      -cert "${STATE}/social/server.pem" -key "${STATE}/social/server.key" \
+      -listen 127.0.0.1:443 -admin 127.0.0.1:9091 >"${STATE}/logs/providerstub.log" 2>&1 &
+    echo "$!" >"${STATE}/providerstub.pid"
+  )
+  wait_stub providerstub https://api.github.com/ "${STATE}/social/ca.pem"
+  chmod 600 "${STATE}/auth-service.env"
+  printf '%s\n' 'SOCIAL_GITHUB_CLIENT_ID=gh-client' 'SOCIAL_GITHUB_CLIENT_SECRET=gh-secret' \
+    "SSL_CERT_FILE=${STATE}/ca-bundle.pem" >>"${STATE}/auth-service.env"
+  printf '%s\n' 'AUTH_GITHUB_ID=gh-client' 'AUTH_GITHUB_SECRET=gh-secret' \
+    "NODE_EXTRA_CA_CERTS=${STATE}/ca-bundle.pem" >>"${STATE}/extra/web.env"
+  stop_auth "${STATE}"
+  start_auth "${STATE}"
+}
+
+enable_sso() {
+  STATE="$(cd "$1" && pwd)"
+  [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
+  umask 077
+  mkdir -p "${STATE}/bin" "${STATE}/logs" "${STATE}/extra"
+  (cd "${ROOT}" && go build -o "${STATE}/bin/idpstub" ./internal/testsupport/idpstub/cmd/idpstub)
+  "${STATE}/bin/idpstub" certs -out "${STATE}/idp" -host localhost
+  refresh_ca_bundle
+  printf '%s\n' 'AUTH_PROXY_OIDC=true' 'AUTH_PROXY_SAML=true' >>"${STATE}/extra/go-api.env"
+  printf '%s\n' 'AUTH_SSO_ENABLED=true' "NODE_EXTRA_CA_CERTS=${STATE}/ca-bundle.pem" >>"${STATE}/extra/web.env"
+  chmod 600 "${STATE}/auth-service.env"
+  local state_key
+  state_key="$(new_secret)"
+  printf '%s\n' "AUTH_SSO_STATE_KEY=${state_key}" \
+    "SETTINGS_ENCRYPTION_KEY=${LIVE_E2E_SETTINGS_ENCRYPTION_KEY:-live-e2e-test-settings-key-do-not-use}" \
+    "APP_BASE_URL=${LIVE_E2E_WEB_ORIGIN:-http://127.0.0.1:3002}" \
+    "SSL_CERT_FILE=${STATE}/ca-bundle.pem" >>"${STATE}/auth-service.env"
+  stop_auth "${STATE}"
+  start_auth "${STATE}"
+}
+
+start_idp() {
+  STATE="$(cd "$1" && pwd)"
+  shift
+  (
+    cd "${STATE}"
+    nohup "${STATE}/bin/idpstub" serve -cert "${STATE}/idp/server.pem" -key "${STATE}/idp/server.key" \
+      -listen 127.0.0.1:9443 -base-url https://localhost:9443 "$@" >"${STATE}/logs/idpstub.log" 2>&1 &
+    echo "$!" >"${STATE}/idpstub.pid"
+  )
+  wait_stub idpstub https://localhost:9443/ "${STATE}/idp/ca.pem"
 }
 
 # verify_user STATE EMAIL: the e-mail of one user is verified, in auth.users (the authority while users are owned; its
@@ -443,6 +547,18 @@ case "${verb}" in
     [ "$#" -eq 2 ] || die "usage: start-auth STATE_DIR"
     start_auth "$2"
     ;;
+  enable-social)
+    [ "$#" -eq 2 ] || die "usage: enable-social STATE_DIR"
+    enable_social "$2"
+    ;;
+  enable-sso)
+    [ "$#" -eq 2 ] || die "usage: enable-sso STATE_DIR"
+    enable_sso "$2"
+    ;;
+  start-idp)
+    [ "$#" -ge 2 ] || die "usage: start-idp STATE_DIR [idpstub serve ARG...]"
+    start_idp "${@:2}"
+    ;;
   verify-user)
     [ "$#" -eq 3 ] || die "usage: verify-user STATE_DIR EMAIL"
     verify_user "$2" "$3"
@@ -451,5 +567,5 @@ case "${verb}" in
     [ "$#" -eq 3 ] || die "usage: grant-platform-admin STATE_DIR EMAIL"
     grant_platform_admin "$2" "$3"
     ;;
-  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | verify-user | grant-platform-admin" ;;
+  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | enable-social | enable-sso | start-idp | verify-user | grant-platform-admin" ;;
 esac

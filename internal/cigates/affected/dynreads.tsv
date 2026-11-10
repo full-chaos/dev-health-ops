@@ -341,6 +341,7 @@ internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go
 internal/cigates/workflows	go_workers_compose_proof_test.go
+internal/cigates/workflows	live_e2e_auth_stack_test.go
 internal/cigates/workflows	live_e2e_no_python_test.go
 internal/cigates/workflows	providerstub_not_release_test.go
 internal/cigates/workflows	providersync_shard_budget_test.go

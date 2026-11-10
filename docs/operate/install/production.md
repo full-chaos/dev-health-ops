@@ -95,6 +95,16 @@ kubectl -n dev-health logs job/<migrate-job-name>
 
 If a hook Job fails, correct the database, credential, role, or schema problem and run the upgrade again; the workloads keep running the previous revision until the hooks succeed.
 
+## Required values change: separate Secrets for web and the HS256 key
+
+This is a required values change; an existing values file that renders today stops rendering until it is made.
+
+- **web** gets its own session secret. Set `web.authSecret.secretName` (and `web.authSecret.key`, default `AUTH_SECRET`) to a Secret that holds a fresh random value, or `web.env.AUTH_SECRET` for a development install. The chart no longer falls back to `JWT_SECRET_KEY`, and the render fails without one. A new value signs every web user out once.
+- **The HS256 access-token key** (`JWT_SECRET_KEY`) lives in its own Secret that only go-api (and query-api, through your values) reads. With `secrets.create: true` the chart creates `<release>-hs256`. With `secrets.create: false` set `hs256Secret.externalSecretName` to a Secret that holds `JWT_SECRET_KEY` as a byte-identical copy of the current value (go-api also signs invite, verify and reset links with it, so do not rotate it). It must not be the shared Secret's name.
+- **One key per purpose:** go-api reads `SSO_STATE_SECRET` (SSO login state) and `GITHUB_APP_STATE_SECRET` (GitHub App install state), auth-service reads `AUTH_RATE_LIMIT_KEY` (rate-limit counters). Each is a random value of at least 32 characters, different from the others and from `JWT_SECRET_KEY`. go-api no longer falls back to `JWT_SECRET_KEY` for the two state keys. With `SSO_STATE_SECRET` unset, the OIDC, SAML and OAuth sign-in routes answer `503 config_missing`; with `GITHUB_APP_STATE_SECRET` unset, the GitHub App install-url and install-callback routes answer `503 config_missing`. Every other route still works and go-api starts. (The rate-limit key still falls back to `AUTH_JWT_SECRET_KEY` while it is unset.) States minted under the old key are refused, so a login or install in flight (10 and 15 minutes) at the roll starts again.
+- **Order:** create both Secrets first, then ship the values change together with the chart revision in one roll. A chart revision without the values change fails to render; a values change without the Secrets leaves the new web and go-api pods unable to start while the old pods keep serving.
+- **Existing Secret changes need a restart:** the chart cannot hash an external Secret, so after you change `secrets.externalSecretName` or `hs256Secret.externalSecretName` content, restart every Deployment that reads it. Removing `JWT_SECRET_KEY` from the shared Secret rolls nothing by itself.
+
 ## Authentication services and secrets
 
 Deploy auth-service with go-api and query-api. auth-service is the user access-token issuer.
@@ -130,7 +140,7 @@ See [auth architecture](../architecture/auth-control-plane.md),
 [signing-key custody](../configure/auth-signing-key-custody.md) and
 [auth configuration](../../reference/auth/configuration.md) for the settings and key rotation rules.
 
-## Session successor key Secret
+## Session successor key Secret (auth-service session routes)
 
 The session routes require `AUTH_SESSION_SUCCESSOR_KEY`, a 32-byte value encoded as base64url without padding.
 Create its Secret before setting `authService.sessionKeys.successor.secretName`.

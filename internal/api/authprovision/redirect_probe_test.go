@@ -12,21 +12,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 )
 
-// Both cores (the session credential and the workload token) answer a redirect without following it: the second origin
+// The core answers a redirect without following it: the second origin
 // sees no request, and the call fails as unavailable.
 func TestTheCoresNeverFollowARedirectToAnotherOrigin(t *testing.T) {
-	t.Run("session", func(t *testing.T) {
-		probe := redirectprobe.New(t)
-		base := mustParseURL(t, probe.Base.URL)
-		client, err := authprovision.New(base, goldenToken, time.Second)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := client.Deprovision(context.Background(), uuid.New(), uuid.New()); err == nil {
-			t.Fatal("a redirect answer was taken for success")
-		}
-		probe.Assert(t)
-	})
 	t.Run("workload", func(t *testing.T) {
 		probe := redirectprobe.New(t)
 		exchange := newGoldenServer(t)

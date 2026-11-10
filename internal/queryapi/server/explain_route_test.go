@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/explain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // emptyRowsExplainClient answers every ClickHouse call with zero rows --
@@ -89,7 +90,7 @@ func TestNewExplainGetHandlerRequiresAuthContext(t *testing.T) {
 func TestNewExplainGetHandlerHappyPathSetsDeprecatedHeader(t *testing.T) {
 	handler := newExplainGetHandler(newEmptyRowsExplainReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/explain?metric=cycle_time&scope_type=repo&scope_id=repo-a&range_days=7", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -128,7 +129,7 @@ func TestNewExplainGetHandlerHappyPathSetsDeprecatedHeader(t *testing.T) {
 func TestNewExplainGetHandlerEmptyWindowStatesBothDataFlags(t *testing.T) {
 	handler := newExplainGetHandler(newEmptyRowsExplainReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/explain?metric=cycle_time&range_days=7", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -174,7 +175,7 @@ func TestNewExplainPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) {
 	handler := newExplainPostHandler(newEmptyRowsExplainReader(t))
 	body := `{"metric":"churn","filters":{"scope":{"level":"org"},"time":{"range_days":7}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/explain", bytes.NewReader([]byte(body)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -291,7 +292,7 @@ func TestExplainAnswersTheMetricsOwnConfigOrAClientError(t *testing.T) {
 			},
 		} {
 			req := request()
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			handler := get
 			if surface == "POST" {

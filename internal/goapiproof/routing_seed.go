@@ -148,7 +148,7 @@ func Seed(ctx context.Context, pool *pgxpool.Pool, request SeedRequest) ([]SeedO
 	}
 	correlationID, err := writeRoutingAudit(ctx, tx, RoutingAudit{
 		Action:          AuditActionEnable,
-		CredentialClass: CredentialClassEnvelope,
+		CredentialClass: CredentialClassUserAccessToken,
 		PrincipalID:     request.PrincipalID,
 		RecordedBy:      request.RecordedBy,
 		ReviewEvidence:  evidence,

@@ -7,7 +7,7 @@ source_of_truth:
   - internal/scheduler/sync/backfill_planner.go (BuildBackfillPlan)
   - internal/scheduler/sync/materializer.go (loadMaterializationPlan's sync_manual_triggers lookup, Materialize's mode routing)
   - internal/pgmigrate/baseline/head.json
-  - internal/api/syncadmin/manual_trigger.go (the Go trigger and backfill routes, CHAOS-6871)
+  - internal/api/syncadmin/manual_trigger.go (the Go trigger and backfill routes)
   - internal/synchandoff/handoff.go (Mint, Wait)
 applicability: current
 lifecycle: active
@@ -15,10 +15,8 @@ lifecycle: active
 
 # Manual Sync Now + Backfill planning architecture
 
-A manual "Sync Now" or an operator/admin Backfill request used to plan units
-by calling Python's `plan_sync_run` in-process, synchronously, inside the
-admin API request. CHAOS-4602 moves that planning into the Go scheduler --
-for **planner-managed configs only** -- behind a rollout flag, reusing the
+A manual "Sync Now" or an operator/admin Backfill request is planned
+in the Go scheduler -- for **planner-managed configs only** -- behind a rollout flag, reusing the
 same occurrence identity space and pickup path a cron tick already uses.
 {: .fc-page-lede }
 
@@ -29,14 +27,13 @@ A non-planner-managed config (a child config pinned to one explicit
 The routing decision lives in one place --
 `create_sync_execution_trigger` (`execution_trigger.py`) checks
 `config.planner_managed AND SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED` (env
-flag, default OFF at launch, flipped PERMANENTLY ON by CHAOS-4629 landing --
-chris ruling, 2026-08-31) before choosing the Go hand-off branch over the
+flag, permanently on) before choosing the Go hand-off branch over the
 pre-existing in-process call. It is also enforced structurally, not just by
 that routing check: `NativeMaterializer.Materialize`'s own eligibility gate
 rejects any occurrence whose `ConfigPlannerManaged` is false
 (`ErrOccurrenceIneligible`), so a routing bug cannot silently mis-plan a
 child config through the Go path -- it can only fail loud. Porting the
-non-planner-managed case is tracked separately (CHAOS-4604).
+non-planner-managed case is tracked separately.
 
 ## The seam: one new table, one reused table
 
@@ -44,7 +41,7 @@ non-planner-managed case is tracked separately (CHAOS-4604).
 identity and plan links for a cron-minted occurrence, and the Go
 reconciler's pickup query (`internal/scheduler/sync/occurrence_reconciler.go`'s
 `dueOccurrenceKeysSQL`/`lockPendingOccurrenceSQL`) is producer-agnostic --
-it does not care whether Python or Go inserted the row. CHAOS-4602 reuses
+it does not care whether Python or Go inserted the row. The manual path reuses
 this table verbatim for a manual/backfill occurrence and adds exactly one
 new table, `sync_manual_triggers` (migration 0118), 1:1 with one occurrence:
 the mode override (`incremental`/`full_resync`/`backfill`) and, for
@@ -112,16 +109,16 @@ short `session.run_sync` reads instead). Three outcomes:
 
 ## Known limitation, ported anyway
 
-Python's `_is_non_project_jira_source` (CHAOS-4582) guards against a
+Python's `_is_non_project_jira_source` guards against a
 legacy-shape Jira source row (`external_id` literally `"jira"`, no
 explicit-project-scope marker) that is guaranteed to 400 against Jira's
-work-items route. This guard predates CHAOS-4602's own source discovery and
+work-items route. This guard predates the manual path's own source discovery and
 such rows already exist in production (and locally) independent of who
 wrote them, so it is ported here too, as `PlanSource.NonProjectJiraSource`
 -- resolved by `loadPlanSources` (which has the DB access the check needs)
 and read by the otherwise-pure planner as a plain bool.
 
-## The Go admin routes (CHAOS-6871)
+## The Go admin routes
 
 `POST /api/v1/admin/sync-configs/{config_id}/trigger` and `.../backfill` are
 served by the Go api (`internal/api/syncadmin`), on the same seam the

@@ -22,24 +22,24 @@ func TestNewShadowRefusesRowsThatDifferFromTheirCatalogEntry(t *testing.T) {
 	var key string
 	var base ShadowRow
 	for k, row := range catalogRows {
-		if row.ResourceType == "organization" && !row.HighRisk && row.Namespace == "teams" {
+		if row.ResourceType == "organization" && !row.HighRisk && row.Namespace == "integrations" {
 			key, base = k, row
 			break
 		}
 	}
 	if key == "" {
-		t.Fatal("no low-risk organization teams row in the profiles")
+		t.Fatal("no low-risk organization integrations row in the profiles")
 	}
 	if _, err := NewShadow(ShadowConfig{Decider: ok, Rows: map[string]ShadowRow{key: base}}); err != nil {
 		t.Fatalf("a row equal to its catalog entry was refused: %v", err)
 	}
 	for name, mutate := range map[string]func(ShadowRow) ShadowRow{
-		"unknown action":     func(r ShadowRow) ShadowRow { r.Action = "teams.nonexistent"; return r },
+		"unknown action":     func(r ShadowRow) ShadowRow { r.Action = "integrations.nonexistent"; return r },
 		"wrong namespace":    func(r ShadowRow) ShadowRow { r.Namespace = "billing"; return r },
 		"wrong resource":     func(r ShadowRow) ShadowRow { r.ResourceType = "platform"; return r },
 		"wrong high-risk":    func(r ShadowRow) ShadowRow { r.HighRisk = true; return r },
 		"action of another":  func(r ShadowRow) ShadowRow { r.Action = "billing.read"; return r },
-		"namespace of other": func(r ShadowRow) ShadowRow { r.Namespace = "settings"; return r },
+		"namespace of other": func(r ShadowRow) ShadowRow { r.Namespace = "teams"; return r },
 	} {
 		if _, err := NewShadow(ShadowConfig{Decider: ok, Rows: map[string]ShadowRow{key: mutate(base)}}); err == nil {
 			t.Errorf("%s: NewShadow accepted a row that differs from its catalog entry", name)

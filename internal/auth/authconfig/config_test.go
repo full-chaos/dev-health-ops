@@ -19,6 +19,8 @@ func baseEnv() map[string]string {
 		EnvDatabaseURI:    "postgres://auth@localhost:5432/devhealth",
 		EnvSigningKeyFile: "/run/secrets/auth-signing-key.pem",
 		EnvSigningKeyID:   "auth-2026-09",
+		// The access token class is eddsa by default, which needs the issuer URL.
+		EnvTokenIssuerURL: "https://auth.example.test",
 	}
 }
 
@@ -346,9 +348,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvSigningKeyID:                "other-kid",
 		EnvSigningKeySetFile:           "/tmp/other-keyset.json",
 		EnvTokenIssuerURL:              "https://other-issuer.example.test",
-		EnvAccessTokenIssuer:           "other-issuer",
-		EnvAccessTokenAudience:         "other-audience",
-		EnvLegacyJWTAudience:           "other-legacy-audience",
+		EnvAccessTokenAudience:         "auth-service",
 		EnvSocialLinkRoutes:            "true",
 		EnvSSOJIT:                      "true",
 		EnvMembershipRoutes:            "true",
@@ -391,9 +391,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvSigningKeyID:                func(c Config) string { return c.SigningKeyID },
 		EnvSigningKeySetFile:           func(c Config) string { return c.SigningKeySetPath },
 		EnvTokenIssuerURL:              func(c Config) string { return c.TokenIssuerURL },
-		EnvAccessTokenIssuer:           func(c Config) string { return c.Session.AccessIssuer },
 		EnvAccessTokenAudience:         func(c Config) string { return c.Session.AccessAudience },
-		EnvLegacyJWTAudience:           func(c Config) string { return c.Session.LegacyAudience },
 		EnvSocialLinkRoutes:            func(c Config) string { return strconv.FormatBool(c.Session.SocialLinkRoutes) },
 		EnvSSOJIT:                      func(c Config) string { return strconv.FormatBool(c.SSO.JIT) },
 		EnvMembershipRoutes:            func(c Config) string { return strconv.FormatBool(c.Provisioning.Routes) },
@@ -433,12 +431,12 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 				delete(env, EnvSigningKeyID)
 			}
 			if option.Env == EnvMembershipRoutes {
-				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
+				env[EnvRateLimitKey], env[EnvSessionSuccessorKey] = testRateKey, testSuccessorKey
 				env[EnvValkeyURI] = testValkeyURI
 				env[EnvInviteTokenSecret], env[EnvInviteTokenSecretPrevious] = "invite-signing-key", "invite-previous-key"
 			}
 			if option.Env == EnvSocialLinkRoutes {
-				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
+				env[EnvRateLimitKey], env[EnvSessionSuccessorKey] = testRateKey, testSuccessorKey
 				env[EnvValkeyURI] = testValkeyURI
 			}
 			if option.Env == EnvRevisionFeed {
@@ -493,15 +491,16 @@ func ftoa(value float64) string {
 	return strconv.FormatFloat(value, 'g', -1, 64)
 }
 
-func TestTokenIssuerURLIsOptionalAndHasTheDiscoveryShape(t *testing.T) {
-	cfg, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
-	if err != nil || cfg.TokenIssuerURL != "" {
-		t.Fatalf("unset: issuer %q err %v, want empty and no error", cfg.TokenIssuerURL, err)
+func TestTokenIssuerURLIsRequiredAndHasTheDiscoveryShape(t *testing.T) {
+	unset := baseEnv()
+	delete(unset, EnvTokenIssuerURL)
+	if _, err := Load(Spec{LookupEnv: lookupFrom(unset)}); err == nil || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
+		t.Fatalf("unset: err %v, want a refusal naming %s", err, EnvTokenIssuerURL)
 	}
 	for value, ok := range map[string]bool{
 		"https://auth.example.test":                 true,
 		"https://auth.example.test:8443/dev-health": true,
-		"  https://auth.example.test  ":             true,
+		"  https://auth.example.test  ":             false,
 		"http://auth.example.test":                  false,
 		"https://auth.example.test/":                false,
 		"https://Auth.Example.test":                 false,

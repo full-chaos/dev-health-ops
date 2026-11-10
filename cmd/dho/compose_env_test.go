@@ -59,7 +59,9 @@ var verbServices = map[string]string{
 	"auth-owner-grants":                "`auth-migrate owner-move -grants-only -apply`: the same standalone binary with the owner-move verb; opens the database at once; its own DSN and role settings are not measured here",
 	"auth-fence-init":                  "`auth-migrate restore-fence init -if-absent`: the same standalone binary; opens the database at once; its own DSN and role settings are not measured here",
 	"auth-workload-seed":               "`auth-migrate workloads seed -apply`: the same standalone binary; opens the database at once; its own DSN and role settings are not measured here",
+	"auth-workload-subject":            "`auth-migrate workloads subject -apply`: the same standalone binary; opens the database at once and writes the principal id file; its own DSN and role settings are not measured here",
 	"auth-workload-bootstrap":          "`auth-migrate workloads bootstrap-create -apply`: the same standalone binary; opens the database at once and writes the credential file; its own DSN and role settings are not measured here",
+	"auth-users-backfill":              "`dho auth users-backfill` (CHAOS-13107): opens the auth runtime pool at once; its AUTH_DATABASE_URI is pinned by internal/cigates/workflows TestComposeCopiesTheUsersBeforeAuthServiceServes, its AUTH_USERS_OWNED by TestComposeUsersOwnedDefaultsOnForEveryReader; only the DSN groups are checked",
 	"go-sync-dispatch-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-finalize-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-post-route-activate":      "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
@@ -286,10 +288,28 @@ func startFindings(service composeGoService) []string {
 func authServiceFindings(service composeGoService) []string {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	// auth-workload-subject writes this file on the first `up` and auth-service reads it while it loads its
+	// configuration: stand in for it with a file of the same form, so the measurement is of the rest of the environment.
+	env := make(map[string]string, len(service.env))
+	for k, v := range service.env {
+		env[k] = v
+	}
+	if _, ok := env["AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT_FILE"]; ok {
+		file, err := os.CreateTemp("", "api.subject-*")
+		if err != nil {
+			return []string{service.name + ": " + err.Error()}
+		}
+		defer os.Remove(file.Name())
+		if _, err := file.WriteString("prn_AAAAAAAAAAAAAAAAAAAAAA"); err != nil {
+			return []string{service.name + ": " + err.Error()}
+		}
+		_ = file.Close()
+		env["AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT_FILE"] = file.Name()
+	}
 	var stdout, stderr syncBuffer
 	done := make(chan int, 1)
 	go func() {
-		done <- authruntime.Execute(ctx, service.command, lookupOf(service.env), authruntime.IO{
+		done <- authruntime.Execute(ctx, service.command, lookupOf(env), authruntime.IO{
 			Stdout: &stdout, Stderr: &stderr,
 		})
 	}()

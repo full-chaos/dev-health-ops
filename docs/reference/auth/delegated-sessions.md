@@ -102,9 +102,8 @@ end path, because its end follows no switch.
 
 ## Tokens
 
-`exp` is the earlier of the token lifetime and the session's `expires_at`. Under
-`hs256_compat` the token carries `impersonating_user_id`, the actor's user id.
-Under eddsa the access token and the session-route token carry
+`exp` is the earlier of the token lifetime and the session's `expires_at`. The
+access token and the session-route token carry
 `act: {"sub": <actor principal>}`. A plain grant carries neither claim.
 
 ## What the bearer reaches
@@ -114,8 +113,7 @@ Under eddsa the access token and the session-route token carry
 it gates answers `403`, and a later caller of it is denied by default. The
 `delegated_bearer` field of the endpoint profile holds the same list.
 
-At go-api the token's actor (`impersonating_user_id` under `hs256_compat`,
-`act.sub` under eddsa) is the caller's `ImpersonatedBy`. The Guard refuses the
+At go-api the token's actor (`act.sub`) is the caller's `ImpersonatedBy`. The Guard refuses the
 bearer `403` on every row whose `delegated_bearer` is not `allowed`: no route
 under `/api/v1/admin` and no write admits it (see the endpoint profiles). At
 query-api the caller is `Delegated`: every GraphQL operation but a query is
@@ -163,14 +161,16 @@ There is no refresh: the session lasts at most 15 minutes, not the
 at auth-service and answers `200` with `status` `stopped`; with no open session
 it answers `400` "No active impersonation session" as before. Stop needs the
 administrator's own session: the delegated bearer is refused on every
-`/api/v1/admin` route. go-api refuses an impersonation caller fail-closed on
-PDP-enforced rows (outcome `impersonation_refused`, CHAOS-12814); the stop
-route is exempt and is decided by the PDP with the administrator's own bearer.
+`/api/v1/admin` route. go-api refuses an impersonation caller's write, and its
+request to a platform wrap, fail-closed on PDP-enforced rows (outcome
+`impersonation_refused`); its read keeps the legacy answer (unjudged
+`impersonation`). The stop route is exempt and is decided by the PDP with the
+administrator's own bearer.
 With the web change below live, the Superadmin UI is refused in every tab while
 a delegated token is live.
 
 Do not turn the switch on before the web change that swaps the browser session
-to the delegated token at start and restores it at stop (CHAOS-12913) is live.
+to the delegated token at start and restores it at stop is live.
 
 ## Metric
 

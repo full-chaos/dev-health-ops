@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
@@ -136,7 +135,7 @@ func TestInvestmentBreakdownScopedDocuments_RegistryServesEachNameWithItsOwnDige
 	if err != nil {
 		t.Fatalf("principal.NewVerifier: %v", err)
 	}
-	_, _, _, registry, err := newQueryHandler(nopQueryClient{}, pgPool, verifier, "sha256:test-schema-digest", os.Getenv)
+	_, _, _, registry, err := newQueryHandler(nopQueryClient{}, pgPool, verifier, "sha256:test-schema-digest", withIssuer)
 	if err != nil {
 		t.Fatalf("newQueryHandler: %v", err)
 	}

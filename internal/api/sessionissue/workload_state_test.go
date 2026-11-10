@@ -2,10 +2,8 @@ package sessionissue_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -43,31 +41,6 @@ func TestWorkloadStateCarriesOnlyTheWorkloadToken(t *testing.T) {
 	}
 	if s.exchanges != 1 {
 		t.Errorf("%d exchanges for %d issues and 3 state reads, want 1", s.exchanges, len(issueCases()))
-	}
-}
-
-// The state request equals the session credential's (the golden) except the bearer.
-func TestWorkloadStateRequestDiffersFromTheGoldenOnlyInTheBearer(t *testing.T) {
-	s := newIssueServer(t)
-	s.exchange = issuedAnswer(mintWorkloadToken(t))
-	client, err := sessionissue.NewWorkload(s.URL, newWorkloadClient(t, s), time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(stateGoldenPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want []goldenRequest
-	if err := json.Unmarshal(raw, &want); err != nil {
-		t.Fatal(err)
-	}
-	got := stateRequestOf(t, s, client)
-	got.Headers["Authorization"] = want[0].Headers["Authorization"]
-	gotJSON, _ := json.Marshal([]goldenRequest{got})
-	wantJSON, _ := json.Marshal(want)
-	if string(gotJSON) != string(wantJSON) {
-		t.Fatalf("workload state request differs from the golden beyond the bearer\n got %s\nwant %s", gotJSON, wantJSON)
 	}
 }
 

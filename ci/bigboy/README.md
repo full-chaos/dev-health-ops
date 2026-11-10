@@ -74,6 +74,7 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
   -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-deps --no-build <service>
 ```
 
+- `acr-db-init` and `acr-db-acl` run `acr-db-init.sh` of the acr commit in `ci/bigboy/acr-db-init.pin` (ops `ci/bigboy/images.env` `BIGBOY_ACR_COMMIT`, the acr of the acr-api pin). Before any compose command that names them, and after every acr repin, run `bash ops/ci/bigboy/acr-db-init-fetch.sh`: it fetches the file at that commit, refuses a sha256 other than the pin's, and writes it to the path `ACR_DB_INIT_SCRIPT` of the pins file (`/var/lib/oci-cache/mcp-venue/acr-db-init/acr-db-init.sh`). A host's `_records/images.env` must hold the `ACR_DB_INIT_SCRIPT` and `BIGBOY_ACR_COMMIT` lines, or compose fails and names the variable. An acr repin updates the pin file (both lines) and `BIGBOY_ACR_COMMIT` together; a gate test compares the two commits.
 - `--profile acr` holds every acr service. `--profile acr-venue` holds only what must exist before acr-api: `acr-postgres`, `acr-db-init`
   (roles), `acr-migrate` and `acr-db-acl` (grants). Pass both when you want to name no service.
   Services do not clash with the dev-health ones: the database and the graph are `acr-postgres` and `acr-falkordb`, answering to the
@@ -153,13 +154,15 @@ Bring-up, in this order (every command names its services; `-p dev-health ... --
 5. Once: `--profile auth run --rm acr-workload-bootstrap` (runs `acr-workload-volume` first). It prints the credential id and its
    `expires_at`; re-create before that time (a second `run` refuses while a credential is live: revoke it first with
    `auth-migrate workloads bootstrap-revoke -credential <id> -reason owner_request -apply`, or rotate with `bootstrap-rotate`). It is never a `depends_on`.
-6. The subject: read the principal of the workload acr-api,
-   `docker exec dev-health-postgres-1 psql -U devhealth -d devhealth -Atc "SELECT 'prn_' || rtrim(translate(encode(uuid_send(principal_id), 'base64'), '+/', '-_'), '=') FROM auth.workloads WHERE name = 'acr-api'"`,
-   and write it to `ops/.env` as `AUTH_ACR_WORKLOAD_SUBJECT=prn_...` (an id, not a secret). Unset, go-api refuses every workload token as
-   not configured.
+6. The subject: nothing to write. go-api reads the principal of the workload acr-api from the workload registry (the row `auth.workloads`
+   `name = 'acr-api'`); the venue grants its role that read (`AUTH_WORKLOAD_READER_ROLES=devhealth_api` on auth-migrate and auth-grants).
+   No live acr-api row, or an unreadable registry, and go-api refuses every workload token on the internal acr routes.
 7. Once: `--profile auth run --rm go-api-workload-bootstrap` (runs `go-api-workload-volume` first), then read the principal of the workload `api` as in step 6
    (`WHERE name = 'api'`) and write it to `ops/.env` as `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_...`. Recreate auth-service (`--profile auth up -d --no-deps --no-build auth-service`).
 8. Recreate go-api (`up -d --no-deps --no-build go-api`; it needs the api bootstrap file from step 7 to start), query-api and web, then acr-api (`--profile acr up -d --no-deps --no-build acr-api`).
+9. Platform roles (CHAOS-13282): auth-service has `AUTH_PLATFORM_ROLES_OWNED=true` in `compose.bigboy.yml` (the prod form: the PDP reads the role from `auth.platform_role_assignments`, not `users.is_superuser`), so a plain `up` keeps it.
+10. Users owned (CHAOS-13356): every service runs with users owned, as prod's phase 4: `AUTH_USERS_OWNED=true` on auth-service, go-api, the auth one-shots and `auth-users-backfill`. go-api forwards sessions, local login and credentials (`AUTH_PROXY_SESSIONS`, `AUTH_PROXY_LOCAL_LOGIN`, `AUTH_PROXY_CREDENTIALS`; it refuses the owned switch without the three); auth-service reads the login lockout key from `/run/auth/session/login-lockout-key` (made by `auth-session-keys-init`, 0600) and sends the verify and reset mail over SMTP to the venue's own `mailpit` service (`EMAIL_PROVIDER=smtp`, `SMTP_HOST=mailpit`, `SMTP_PORT=1025`, no TLS; read the mail at `mail.localhost`). `AUTH_MAIL_ALLOW_CONSOLE=true` stays only so the venue's http `APP_BASE_URL` is accepted. Recreate auth-session-keys-init, then auth-service, then go-api. The seed tool is `dho auth users-backfill -insert-only` (the one-off `auth-users-backfill`, users and platform roles owned): it creates the auth users that are missing and never changes one or grants a role.
+11. The drift-S control (moved to the platform roles by CHAOS-13356): `BIGBOY_DRIFT_S_ID=<uuid of a user principal with no platform role> ci/bigboy/bigboy-platform-admin-fixture.sh` runs the seed tool, then proves the control: it reads the active platform roles from `auth.platform_role_assignments` (the platform role store's active rule) and is green when drift-S holds none and another principal holds `platform_admin`. The fixture plants the drift directly in that table (an active `platform_admin` row for drift-S, in one transaction that sets the audit commit guard's `dev_health.audit_txid`; no go-api route, no audit row), wants the control red, clears it (deletes the drift-S rows), reads back 0 rows and wants the control green again; the trap clears a plant on every exit. `... bigboy-platform-admin-fixture.sh check` runs the control alone (exit 20 when red). It is idempotent; a drift-S row left from an earlier run stops it (exit 11) until it is deleted.
 
 ## Go-only stack (CHAOS-8361)
 
@@ -443,8 +446,11 @@ and the prover refuses by name if a Python plane answers the routed `/graphql`. 
 1. refuse unless `venue-prove`'s image is `go-api-tools:sha-<sha>` (prover build skew);
 2. derive the local org read-only (the single org of the local admin account; never printed);
 3. `dho goapi prove` for the local org -- read-only against org data, writes proof receipts only;
-   both credentials are minted in process (envelope key loaded from the mounted file inside the
-   container; `JWT_SECRET_KEY` by compose substitution from `ops/.env`);
+   the proof credential is the local admin's user access token (a platform admin), in a 0600/0400
+   file the operator stages and names by `BIGBOY_PROVE_ACCESS_TOKEN_FILE` (the script refuses a
+   file that is unset, missing, a symlink or of another mode, and never reads the value); it is
+   mounted read-only into the container and read there (`-proof-access-token-file`); the edge token
+   is still minted in process from `JWT_SECRET_KEY` (compose substitution from `ops/.env`);
 
 Full output names the org and stays under the devhealth-root `_records/bigboy-<sha8>/graphql-prove-<ts>/`.
 `BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the running tree the harness works in, the same

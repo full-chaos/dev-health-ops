@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
@@ -124,7 +123,7 @@ func TestRevokeAllWritesKeptUnderTheSessionsPosture(t *testing.T) {
 	}
 
 	reset := seedGoAPIRefresh(t, ctx, st, changeBob)
-	token, tokenHash := signedtoken.Build(uuid.New(), authmail.Config{}.Secret())
+	token, tokenHash := signedtoken.Build(uuid.New(), testLinkSecret)
 	if _, err := st.pool.Exec(ctx, `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
 		VALUES (gen_random_uuid(), $1::uuid, $2, now() + interval '1 hour', now())`, changeBob, tokenHash); err != nil {
 		t.Fatalf("seed reset token: %v", err)

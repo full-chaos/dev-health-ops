@@ -11,7 +11,8 @@ import (
 	"testing"
 )
 
-// The dependency closure file of a venue package (ci/venue_oracle_closure.d/<package>.txt) and the per-leg slices of a
+// The dependency closure file of a venue package (<VENUE_CLOSURE_DIR>/<package>.txt; a scratch tree with no generator
+// reads ci/venue_oracle_closure.d/) and the per-leg slices of a
 // changed-file selection: a missing, empty, malformed or unreadable file is refused, never read as "nothing to run".
 
 func closureTree(t *testing.T, tests ...string) *otree {
@@ -37,20 +38,26 @@ func wantFail(t *testing.T, r cmdResult, needle string, ctx ...any) {
 
 func TestOracleClosureFiles(t *testing.T) {
 	t.Parallel()
-	t.Run("a missing closure directory fails loudly in the real layout", func(t *testing.T) {
+	t.Run("the real layout derives the closure and never reads a missing one as none", func(t *testing.T) {
 		t.Parallel()
 		o := closureTree(t)
 		o.write("changed.txt", "internal/auth/signedtoken/x.go\n")
-		list := func() cmdResult {
-			return o.venueOracles(nil, "--changed", filepath.Join(o.dir, "changed.txt"), "--list").res
+		list := func(env ...string) cmdResult {
+			return o.venueOracles(env, "--changed", filepath.Join(o.dir, "changed.txt"), "--list").res
 		}
 		if r := list(); r.code != 0 {
 			t.Fatalf("control: a scratch tree without the generator keeps the package and row rules: %s", r.stderr)
 		}
 		o.mkdir("internal/testsupport/venuechanged")
-		wantFail(t, list(), "ci/venue_oracle_closure.d is missing")
-		o.mkdir("ci/venue_oracle_closure.d")
-		wantFail(t, list(), "internal__apiservice.txt is missing")
+		// the stand-in go answers the derivation's go test and writes nothing
+		wantFail(t, list(), "the derivation of the venue test closures wrote no")
+		given := "VENUE_CLOSURE_DIR=" + filepath.Join(o.dir, "given")
+		o.mkdir("given")
+		wantFail(t, list(given), "internal__apiservice.txt is missing")
+		o.write("given/internal__apiservice.txt", "internal/auth/signedtoken\n")
+		if r := list(given); r.code != 0 || !strings.Contains(r.stdout, "TestVenueOracleX") {
+			t.Fatalf("an existing VENUE_CLOSURE_DIR is read as it is: exit %d: %s", r.code, tail(r.stderr, 300))
+		}
 	})
 	t.Run("the selection never reads an unreadable or empty registry as nothing to run", func(t *testing.T) {
 		t.Parallel()

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -577,15 +578,138 @@ func TestJiraAtlassianCommentsHangingReadsAfterWorkEndAtTheStopTime(t *testing.T
 	}
 }
 
-func jiraCollectOutcome(t *testing.T, doer *jiraBudgetDoer, window time.Duration, fetch bool) (CompleteRouteBatch, error) {
+// stall is scheduler time after a cut read's context ends, never work.
+type jiraInvariantRow struct {
+	name                       string
+	window                     time.Duration
+	issues                     int
+	search, changelog, comment time.Duration
+	stall                      time.Duration
+}
+
+// Deadline reports the row's window, but only the doer ends it, so no clock decides the verdict.
+type jiraOpWindow struct {
+	deadline time.Time
+	done     chan struct{}
+	once     sync.Once
+}
+
+func (w *jiraOpWindow) Deadline() (time.Time, bool) { return w.deadline, true }
+func (w *jiraOpWindow) Done() <-chan struct{}       { return w.done }
+func (w *jiraOpWindow) Value(any) any               { return nil }
+func (w *jiraOpWindow) end()                        { w.once.Do(func() { close(w.done) }) }
+func (w *jiraOpWindow) Err() error {
+	select {
+	case <-w.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+// Row costs run on a simulated clock; a comment read that misses the stop waits for its own context.
+type jiraOpDoer struct {
+	t                     *testing.T
+	row                   jiraInvariantRow
+	window                *jiraOpWindow
+	sim, stop             time.Duration
+	phase2                bool
+	cutReads, windowReads int
+}
+
+func (doer *jiraOpDoer) Do(request *http.Request) (*http.Response, error) {
+	if err := doer.window.Err(); err != nil {
+		return nil, err
+	}
+	switch path := request.URL.Path; {
+	case path == "/rest/api/3/search/jql" || path == "/rest/api/3/changelog/bulkfetch":
+		cost := doer.row.search
+		if path == "/rest/api/3/changelog/bulkfetch" {
+			var body struct {
+				IssueIdsOrKeys []string `json:"issueIdsOrKeys"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				doer.t.Fatalf("changelog body: %v", err)
+			}
+			// The row cost is per issue; production fetches them in one bulk read.
+			cost = doer.row.changelog * time.Duration(len(body.IssueIdsOrKeys))
+		}
+		if doer.sim += cost; doer.sim >= doer.row.window {
+			doer.window.end()
+			return nil, doer.window.Err()
+		}
+	case strings.HasSuffix(path, "/comment"):
+		if !doer.phase2 {
+			doer.phase2, doer.stop = true, doer.sim+(doer.row.window-doer.sim)/2
+		}
+		if doer.sim+doer.row.comment > doer.stop {
+			return doer.cutRead(request)
+		}
+		doer.sim += doer.row.comment
+	}
+	return (&jiraBudgetDoer{t: doer.t, issues: doer.row.issues, perIssue: 3}).Do(request)
+}
+
+func (doer *jiraOpDoer) cutRead(request *http.Request) (*http.Response, error) {
+	doer.cutReads++
+	ctx := request.Context()
+	// A read with no deadline before the window runs into it and ends the unit.
+	if deadline, ok := ctx.Deadline(); !ok || !deadline.Before(doer.window.deadline) {
+		doer.windowReads++
+		doer.window.end()
+	}
+	select {
+	case <-ctx.Done():
+	case <-doer.window.Done():
+	}
+	time.Sleep(doer.row.stall)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, doer.window.Err()
+}
+
+func jiraCollectOps(t *testing.T, tc jiraInvariantRow, fetch bool) (CompleteRouteBatch, *jiraOpDoer, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), window)
-	defer cancel()
+	window := &jiraOpWindow{deadline: time.Now().Add(tc.window), done: make(chan struct{})}
+	defer window.end()
+	doer := &jiraOpDoer{t: t, row: tc, window: window}
 	client := jiraWorkItemsTestClient(t, fakehttp.Client(jiraAtlassianDoerFunc(doer.Do)), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
-	return jiraAtlassianCompleteHandler(t).Collect(
-		ctx, jiraCommentsClaim(map[string]any{"fetch_comments": fetch}), providerfoundation.Credential{}, client,
+	batch, err := jiraAtlassianCompleteHandler(t).Collect(
+		window, jiraCommentsClaim(map[string]any{"fetch_comments": fetch}), providerfoundation.Credential{}, client,
 		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
 	)
+	return batch, doer, err
+}
+
+// Off OK must mean on OK, with the same work items and an unheld watermark.
+func jiraAssertCommentsInvariant(t *testing.T, tc jiraInvariantRow) {
+	t.Helper()
+	off, _, offErr := jiraCollectOps(t, tc, false)
+	if offErr != nil {
+		t.Fatalf("row void: comments off failed: %v", offErr)
+	}
+	on, doer, onErr := jiraCollectOps(t, tc, true)
+	if onErr != nil {
+		t.Fatalf("comments off OK but comments on failed: %v", onErr)
+	}
+	if jiraWorkItemEffectRows(t, on) != tc.issues || jiraWorkItemEffectRows(t, on) != jiraWorkItemEffectRows(t, off) {
+		t.Fatalf("work items on=%d off=%d want=%d", jiraWorkItemEffectRows(t, on), jiraWorkItemEffectRows(t, off), tc.issues)
+	}
+	if _, held := on.Result["incomplete"]; held || on.Watermark == nil {
+		t.Fatalf("comments held the watermark: %#v", on.Result["incomplete"])
+	}
+	if doer.windowReads != 0 {
+		t.Fatalf("%d comment read(s) ran into the window", doer.windowReads)
+	}
+	// Non-vacuity: the reads the row's timing does not fit before the stop were cut.
+	phase1 := tc.search + tc.changelog*time.Duration(tc.issues)
+	fit := min(tc.issues, int((tc.window-phase1)/2/tc.comment))
+	skipped, _ := on.Result["comments_time_skipped_issues"].(int)
+	landed := len(jiraInteractionRows(t, on)) / 3
+	if landed+skipped != tc.issues || landed > fit || skipped < tc.issues-fit || doer.cutReads > 1 || (fit == tc.issues && doer.cutReads != 0) {
+		t.Fatalf("row fits %d of %d reads: landed=%d time-skipped=%d cut reads=%d", fit, tc.issues, landed, skipped, doer.cutReads)
+	}
 }
 
 // The invariant (round 3 vet, B1): for ANY timing, a unit that ends OK with
@@ -593,43 +717,26 @@ func jiraCollectOutcome(t *testing.T, doer *jiraBudgetDoer, window time.Duration
 // Every row is designed so comments off ends OK (checked: else the row is void).
 func TestJiraAtlassianCommentsOnNeverCostsAUnitThatPassesWithCommentsOff(t *testing.T) {
 	ms := time.Millisecond
-	for _, tc := range []struct {
-		name                       string
-		window                     time.Duration
-		issues                     int
-		search, changelog, comment time.Duration
-	}{
-		{"vet probe: work at 91 percent", 2000 * ms, 10, 200 * ms, 160 * ms, 500 * ms},
-		{"round 2 probe: work at 71 percent", 2000 * ms, 6, 400 * ms, 170 * ms, 600 * ms},
-		{"everything fast", 1000 * ms, 5, 5 * ms, 5 * ms, 5 * ms},
-		{"comment read slower than the window", 1000 * ms, 5, 10 * ms, 50 * ms, 5000 * ms},
-		{"work at 90 percent, slow reads", 2000 * ms, 10, 100 * ms, 170 * ms, 300 * ms},
-		{"work at 50 percent", 2000 * ms, 10, 100 * ms, 90 * ms, 400 * ms},
-		{"no work cost, hanging reads", 1000 * ms, 20, 0, 0, time.Hour},
-		{"many small reads", 2000 * ms, 30, 100 * ms, 20 * ms, 60 * ms},
-		{"work at 80 percent, reads hang", 2000 * ms, 8, 200 * ms, 175 * ms, time.Hour},
+	for _, tc := range []jiraInvariantRow{
+		{name: "vet probe: work at 91 percent", window: 2000 * ms, issues: 10, search: 200 * ms, changelog: 160 * ms, comment: 500 * ms},
+		{name: "round 2 probe: work at 71 percent", window: 2000 * ms, issues: 6, search: 400 * ms, changelog: 170 * ms, comment: 600 * ms},
+		{name: "everything fast", window: 1000 * ms, issues: 5, search: 5 * ms, changelog: 5 * ms, comment: 5 * ms},
+		{name: "comment read slower than the window", window: 1000 * ms, issues: 5, search: 10 * ms, changelog: 50 * ms, comment: 5000 * ms},
+		{name: "work at 90 percent, slow reads", window: 2000 * ms, issues: 10, search: 100 * ms, changelog: 170 * ms, comment: 300 * ms},
+		{name: "work at 50 percent", window: 2000 * ms, issues: 10, search: 100 * ms, changelog: 90 * ms, comment: 400 * ms},
+		{name: "no work cost, hanging reads", window: 1000 * ms, issues: 20, comment: time.Hour},
+		{name: "many small reads", window: 2000 * ms, issues: 30, search: 100 * ms, changelog: 20 * ms, comment: 60 * ms},
+		{name: "work at 80 percent, reads hang", window: 2000 * ms, issues: 8, search: 200 * ms, changelog: 175 * ms, comment: time.Hour},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			newDoer := func() *jiraBudgetDoer {
-				return &jiraBudgetDoer{t: t, issues: tc.issues, perIssue: 3, searchDelay: tc.search,
-					changelogDelay: tc.changelog, commentDelay: tc.comment}
-			}
-			off, offErr := jiraCollectOutcome(t, newDoer(), tc.window, false)
-			if offErr != nil {
-				t.Fatalf("row void: comments off failed: %v", offErr)
-			}
-			on, onErr := jiraCollectOutcome(t, newDoer(), tc.window, true)
-			if onErr != nil {
-				t.Fatalf("comments off OK but comments on failed: %v", onErr)
-			}
-			if jiraWorkItemEffectRows(t, on) != tc.issues || jiraWorkItemEffectRows(t, on) != jiraWorkItemEffectRows(t, off) {
-				t.Fatalf("work items on=%d off=%d want=%d", jiraWorkItemEffectRows(t, on), jiraWorkItemEffectRows(t, off), tc.issues)
-			}
-			if _, held := on.Result["incomplete"]; held || on.Watermark == nil {
-				t.Fatalf("comments held the watermark: %#v", on.Result["incomplete"])
-			}
-		})
+		t.Run(tc.name, func(t *testing.T) { jiraAssertCommentsInvariant(t, tc) })
 	}
+}
+
+// The verdict must not depend on scheduling: a stall of one window after the
+// hanging read's stop is scheduler time, not work, so the invariant still holds.
+func TestJiraAtlassianCommentsInvariantVerdictIgnoresSchedulerStall(t *testing.T) {
+	jiraAssertCommentsInvariant(t, jiraInvariantRow{name: "hanging reads, stall after the stop",
+		window: time.Second, issues: 20, comment: time.Hour, stall: time.Second})
 }
 
 // Round 2 P1-2 (CHAOS-8806): 101 issues, the first 100 with 499 comments and

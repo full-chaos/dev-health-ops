@@ -119,10 +119,6 @@ func mintSAMLState(secret string, state samlState, now time.Time) (token, flowID
 // RelayState token this package minted for this exact provider gets
 // errInvalidSAMLState or errSAMLStateExpired -- both routed, at the call
 // site, to D2738's unauthenticated bucket, never a provider row mutation.
-func verifySAMLStateKeys(keys stateKeys, token, providerID string, now time.Time) (samlState, error) {
-	return verifyWithKeys(keys, func(secret string) (samlState, error) { return verifySAMLState(secret, token, providerID, now) })
-}
-
 func verifySAMLState(secret, token, providerID string, now time.Time) (samlState, error) {
 	gcm, err := newGCM(secret, samlStateHKDFInfo)
 	if err != nil {

@@ -1117,7 +1117,9 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// at one attempt, is discarded -- the bridge it replaced ran as the
 		// application role and never needed them. audit_logs gets no UPDATE
 		// or DELETE: the worker appends its own row and never edits the trail.
-		"DO $$ BEGIN IF to_regclass('public.users') IS NOT NULL THEN GRANT SELECT ON TABLE public.users TO " + domainRole + "; END IF; END $$",
+		// users is column-scoped to the heartbeat count and the billing owner
+		// lookup (domainPosture's ColumnScoped): password_hash stays unreadable.
+		"DO $$ BEGIN IF to_regclass('public.users') IS NOT NULL THEN GRANT SELECT (id, email, full_name) ON TABLE public.users TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.audit_logs') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.audit_logs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_partitions TO " + domainRole + "; END IF; END $$",

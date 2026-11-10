@@ -28,9 +28,9 @@ postures. A test that connects as the database superuser holds every privilege,
 so a statement issued on the wrong pool succeeds — and the same statement
 returns SQLSTATE 42501 the moment it meets the production role split.
 
-That is exactly how the CHAOS-4005 unreclaimable sweep shipped dead: it read a
+That is exactly how an unreclaimable sweep once shipped dead: it read a
 coordinator-exclusive table on the domain pool, passed its tests, and returned
-permission denied on every pass in production (CHAOS-4035).
+permission denied on every pass in production.
 
 **Control.** An integration test for any pool-sensitive path must connect as the
 real, separately granted role, with each role holding exactly its declared
@@ -57,7 +57,7 @@ indistinguishable from an outage — and those need opposite responses.
 different audiences and can coexist. Log the underlying error where it occurs,
 naming the component and the statement, and keep returning the sentinel.
 `internal/storage/postgres/posture_diagnostics.go` is the precedent for naming a
-privilege gap without leaking a DSN. Tracked as CHAOS-4036 and CHAOS-4028.
+privilege gap without leaking a DSN.
 
 ## A start-only probe cannot see a dependency that leaves
 
@@ -65,7 +65,7 @@ privilege gap without leaking a DSN. Tracked as CHAOS-4036 and CHAOS-4028.
 once, at startup, and it works: it refused to admit four workers whose pools
 were unreachable and exited fail-closed. But it is never re-evaluated. When a
 pooler was recreated seventeen seconds after admission, every worker reported
-healthy for two hours while completing no job at all (CHAOS-4029).
+healthy for two hours while completing no job at all.
 
 The probe answered "were my dependencies reachable when I booted?" while the
 question being asked was "can this worker do work right now?"
@@ -125,7 +125,7 @@ shown to bind.
 Integration-test DDL must be **derived from the alembic migrations**, never
 hand-authored: a suite that invents a column proves the query against a schema
 production does not have, and stays green while the shipped SQL fails to parse
-in production (CHAOS-4041 — the strand repair's test DDL invented
+in production (a strand repair's test DDL invented
 `daily_metrics_partitions.org_id` and the merged query crash-looped the prod
 reconciler on `column partition.org_id does not exist`).
 
@@ -133,11 +133,11 @@ reconciler on `column partition.org_id does not exist`).
 
 Every new Postgres Alembic revision changes the pgmigrate goldens and the api/health
 schema-revisions golden. The recorder runs the real Python Alembic CLI against a container
-Postgres, so it needs Docker: do not run it on a lane host. Push a golden recording build (the
+Postgres, so it needs Docker: do not run it on a shared host. Push a golden recording build (the
 Alembic scripts of the base plus the new revision), then dispatch the `Golden record` workflow
 (`.github/workflows/golden-record.yml`, removed with the Python api) with the migration branch as `ref` and the build's full sha
 as `python_build`. It uploads the changed files as an artifact and pushes nothing: unpack it at the
-repository root, commit, push (CHAOS-10089).
+repository root, commit, push.
 
 ## Related
 

@@ -51,21 +51,60 @@ status_verdict() {
   esac
 }
 
-# A probe file holds "<n> <http code>" lines.
+# An overlap probe file holds "<n> <go-api code> <query-api code>" lines. go-api must answer 2xx; query-api must serve: 401,
+# 000 (no answer) and 5xx count as down, as query_serves judges it. A line without exactly three fields is malformed.
+# shellcheck disable=SC2016
+PROBE_AWK='NF != 3 { n++; mal++; next } { n++; if ($2 !~ /^2[0-9][0-9]$/) go++; if ($3 == 401 || $3 == "000" || $3 ~ /^5/) q++ }'
 probe_summary() {
-  awk 'NF >= 2 { n++; if ($2 !~ /^2[0-9][0-9]$/) bad++ } END { printf "probes=%d non2xx=%d\n", n, bad }' "$1"
+  awk "${PROBE_AWK}"' END { printf "probes=%d go_api_non2xx=%d query_api_down=%d malformed=%d\n", n, go, q, mal }' "$1"
 }
 
 probe_no_downtime() {
-  local n bad
-  read -r n bad < <(awk 'NF >= 2 { n++; if ($2 !~ /^2[0-9][0-9]$/) bad++ } END { print n + 0, bad + 0 }' "$1")
-  [ "${n}" -gt 0 ] && [ "${bad}" -eq 0 ]
+  local n go q mal
+  read -r n go q mal < <(awk "${PROBE_AWK}"' END { print n + 0, go + 0, q + 0, mal + 0 }' "$1")
+  [ "${n}" -gt 0 ] && [ "${go}" -eq 0 ] && [ "${q}" -eq 0 ] && [ "${mal}" -eq 0 ]
 }
 
+# A refusal probe file holds "<n> <http code>" lines.
 probe_all_refused() {
   local n ok
   read -r n ok < <(awk 'NF >= 2 { n++; if ($2 == 401 || $2 == 403) ok++ } END { print n + 0, ok + 0 }' "$1")
   [ "${n}" -gt 0 ] && [ "${n}" -eq "${ok}" ]
+}
+
+# forge_token TOKEN KID PEM WORKDIR -> a token with TOKEN's payload, its header kid set to KID, signed with the Ed25519
+# private key in the file PEM: what a holder of that key can mint for any session whose claims it has seen. The signing
+# input goes to openssl in a 0600 file under WORKDIR (removed after); no key and no token is on argv or printed.
+forge_token() {
+  local token="$1" kid="$2" pem="$3" work="$4" header h64 sig rc=0
+  [[ "${token}" =~ ^[A-Za-z0-9_-]+\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]*$ ]] || return 1
+  local payload="${BASH_REMATCH[1]}"
+  header="$(jwt_part "${token}" 0 | jq -c --arg k "${kid}" '.kid = $k')" || return 1
+  h64="$(printf '%s' "${header}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+  (umask 077 && printf '%s.%s' "${h64}" "${payload}" >"${work}/forge.in") || return 1
+  sig="$(openssl pkeyutl -sign -rawin -inkey "${pem}" -in "${work}/forge.in" 2>/dev/null | base64 -w0 | tr '+/' '-_' | tr -d '=')" || rc=1
+  rm -f "${work}/forge.in"
+  # An Ed25519 signature is 64 bytes: 86 base64url characters.
+  [ "${rc}" = 0 ] && [ "${#sig}" = 86 ] || return 1
+  printf '%s.%s.%s' "${h64}" "${payload}" "${sig}"
+}
+
+# A forge probe file holds "<s> <go-api forged> <go-api genuine> <query-api forged> <query-api genuine> <auth-service forged>
+# <auth-service genuine>" lines: s = seconds since the decision; each verdict A (accepted), R (refused) or X (any other
+# answer), "-" when not asked. The forged token carries the claims of a live session; the genuine one is that session's own.
+# kid_refused_at FILE FORGED_FIELD GENUINE_FIELD -> the seconds of the forged token's first refusal, only when that refusal
+# is the kid: on every line up to and including it the genuine token is accepted (the session is live, so the refusal is
+# not the session revoke), the forged token is accepted on every line before it and refused on every line after it. A
+# malformed line, a refusal on which the genuine token is not accepted, or no refusal at all is no answer (rc 1).
+kid_refused_at() {
+  awk -v f="$2" -v g="$3" '
+    NF != 7 { bad = 1; next }
+    $f == "-" && $g == "-" { next }
+    !seen && $f == "A" && $g == "A" { next }
+    !seen && $f == "R" && $g == "A" { seen = 1; at = $1; next }
+    seen && $f == "R" { next }
+    { bad = 1 }
+    END { if (bad || !seen) exit 1; print at }' "$1"
 }
 
 # floor_remaining_seconds "refused: floor_not_reached (floor reached in 1h2m3s)" -> seconds

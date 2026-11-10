@@ -71,12 +71,16 @@ func (r *paRows) Scan(dest ...any) error {
 func (r *paRows) Close()     {}
 func (r *paRows) Err() error { return nil }
 
-// paRow scans a users row in fullUser's column order.
+// paRow scans a users row in fullUser's column order, or the acting user's row (id, password_hash NULL).
 type paRow struct{ super, member bool }
 
 func (r paRow) Scan(dest ...any) error {
 	if len(dest) == 1 {
 		*(dest[0].(*bool)) = r.member
+		return nil
+	}
+	if len(dest) == 2 {
+		*(dest[0].(*uuid.UUID)) = uuid.New()
 		return nil
 	}
 	values := []any{uuid.New(), "target@example.com", nil, nil, nil, nil, nil, nil, true, true, r.super, 0, nil, time.Now(), time.Now()}

@@ -184,35 +184,15 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "commit social login", err)
 		return
 	}
-	orgID, role := "", "member"
 	var orgUUID *uuid.UUID
 	if membership != nil {
-		orgID, role = membership.OrgID.String(), roleText(membership.Role)
 		id := membership.OrgID
 		orgUUID = &id
 	}
-	if h.Issuer != nil {
-		pair, err := h.issueSession(ctx, r, user.ID, orgUUID, amrFederated, nil)
-		if err != nil {
-			h.fail(w, r, "issue session", err)
-			return
-		}
-		policy.WriteModel(w, http.StatusOK, loginResponse(pair, needsOnboarding, userInfo(user, membership), &isNewUser), nil)
-		return
-	}
-	pair, jti, family, err := h.mintPair(user, orgID, role, h.Now())
+	pair, err := h.issueSession(ctx, r, user.ID, orgUUID, amrFederated, nil)
 	if err != nil {
-		h.fail(w, r, "mint tokens", err)
+		h.fail(w, r, "issue session", err)
 		return
-	}
-	// The refresh token is recorded only for a user with a membership.
-	if membership != nil {
-		if err := h.inTx(ctx, func(next pgx.Tx) error {
-			return h.storeRefresh(ctx, next, r, user.ID, orgUUID, jti, family, h.Now())
-		}); err != nil {
-			h.fail(w, r, "store refresh token", err)
-			return
-		}
 	}
 	policy.WriteModel(w, http.StatusOK, loginResponse(pair, needsOnboarding, userInfo(user, membership), &isNewUser), nil)
 }

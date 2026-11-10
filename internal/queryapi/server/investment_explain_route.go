@@ -60,7 +60,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
@@ -99,27 +98,27 @@ func investmentExplainSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitc
 }
 
 // loadInvestmentExplainRouteConfig reuses loadQueryRouteConfig's env vars
-// (CLICKHOUSE_URI + the GO_API_ENVELOPE_* trio + GO_API_REGISTRY_POSTGRES_URI)
-// rather than inventing a second set: both routes need the same
-// ClickHouse/envelope/registry-Postgres dependencies in the same
+// (CLICKHOUSE_URI + GO_API_REGISTRY_POSTGRES_URI; the envelope key is
+// optional) rather than inventing a second set: both routes need the same
+// ClickHouse/registry-Postgres dependencies in the same
 // deployment (deploy/go-api/compose-query-api.yml declares them once for
 // the whole service).
 //
 // CORRECTION (CHAOS-5006 PR3): the comment this replaced claimed this
 // route "does NOT require GO_API_REGISTRY_POSTGRES_URI -- not meaningful
 // for a REST route" -- that was already STALE the moment it was written:
-// loadQueryRouteConfig's own ok gate requires ALL FIVE of its vars
+// loadQueryRouteConfig's own ok gate requires its data-store vars
 // together, registry-Postgres included, so this route was already
 // implicitly requiring it before this change, just never reading the
 // field. Now it does: registryPostgresURI backs the org-BYO settings
 // read path (internal/llmorgsettings), reusing the SAME Postgres this
 // route's config loading already, silently, required.
-func loadInvestmentExplainRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience, registryPostgresURI string, ok bool) {
+func loadInvestmentExplainRouteConfig(getenv getenvFunc) (clickHouseURI, registryPostgresURI string, ok bool) {
 	cfg, queryOk := loadQueryRouteConfig(getenv)
 	if !queryOk {
-		return "", "", "", "", "", false
+		return "", "", false
 	}
-	return cfg.ClickHouseURI, cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience, cfg.RegistryPostgresURI, true
+	return cfg.ClickHouseURI, cfg.RegistryPostgresURI, true
 }
 
 // buildInvestmentExplainRoute constructs the handler, its own
@@ -128,12 +127,12 @@ func loadInvestmentExplainRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPat
 // fail to build/start" contract loadQueryRouteConfig's own doc comment
 // describes) -- main() only calls mux.HandleFunc when ok is true.
 func buildInvestmentExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, registryPostgresURI, cfgOK := loadInvestmentExplainRouteConfig(getenv)
+	clickHouseURI, registryPostgresURI, cfgOK := loadInvestmentExplainRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("investment/explain: build envelope verifier: %w", err)
 	}
@@ -355,7 +354,7 @@ func writeKeepAliveJSON(ctx context.Context, w http.ResponseWriter, work func(co
 				// hand-written literal is safe and exact, not a shortcut.
 				writeStreamErrorChunks(w, flusher)
 				slog.Default().ErrorContext(ctx, "query-api: investment/explain streaming error",
-					slog.String("request_id", w.Header().Get("X-Request-Id")), slog.String("error", result.err.Error()))
+					slog.String("request_id", logSafeRequestID(w.Header().Get("X-Request-Id"))), slog.String("error", result.err.Error()))
 				return
 			}
 			// result.body is EncodeInvestmentMixExplanation's own JSON
@@ -409,7 +408,11 @@ func newInvestmentExplainWorkHandler(
 			writeRESTUnauthorized(w, r, "investment_explain", "Not authenticated")
 			return
 		}
-		r, admitted := admitModel(gate, w, r, "investment_explain", claims.OrgID)
+		org, ok := restScopeOrg(w, r, "investment_explain", claims)
+		if !ok {
+			return
+		}
+		r, admitted := admitModel(gate, w, r, "investment_explain", org)
 		if !admitted {
 			return
 		}
@@ -432,7 +435,7 @@ func newInvestmentExplainWorkHandler(
 			// A body-read I/O failure has no Python counterpart to match --
 			// see drilldown_prs_route.go's own POST handler for the same
 			// reasoning. Status unchanged, only the wire body's encoding.
-			writeRESTError(w, r, "investment_explain", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "investment_explain", org, http.StatusBadRequest, "bad request")
 			return
 		}
 		if len(bodyBytes) > investmentExplainMaxBodyBytes {
@@ -440,13 +443,13 @@ func newInvestmentExplainWorkHandler(
 			// endpoint enforces none at all (see investmentExplainMaxBodyBytes's
 			// own doc comment), so there is no Python body to match here
 			// either. Status unchanged, only the wire body's encoding.
-			writeRESTError(w, r, "investment_explain", claims.OrgID, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
+			writeRESTError(w, r, "investment_explain", org, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
 			return
 		}
 
 		reqBody, validationErrors := decodeInvestmentExplainRequestBody([]any{"body"}, bodyBytes)
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -456,7 +459,7 @@ func newInvestmentExplainWorkHandler(
 		}
 		forceRefresh, _ := strconv.ParseBool(lastQueryValue(r.URL.Query(), "force_refresh"))
 
-		opts, buildErr := buildExplainOptions(r.Context(), reader, claims.OrgID, reqBody, llmProvider, forceRefresh)
+		opts, buildErr := buildExplainOptions(r.Context(), reader, org, reqBody, llmProvider, forceRefresh)
 		if buildErr != nil {
 			// buildExplainOptions fails only on a store read (the repo ref
 			// lookup), never on a request value, so the cause goes to the log
@@ -464,9 +467,9 @@ func newInvestmentExplainWorkHandler(
 			status, message, _ := policy.MapError(buildErr)
 			echoRequestID(w, r)
 			slog.Default().ErrorContext(r.Context(), "query-api: investment_explain: building the options failed",
-				slog.String("org_id", claims.OrgID), slog.String("request_id", envelopeRequestID(r)),
+				slog.String("org_id", org), slog.String("request_id", logSafeRequestID(envelopeRequestID(r))),
 				slog.Int("status", status), slog.String("error", buildErr.Error()))
-			writeRESTError(w, r, "investment_explain", claims.OrgID, status, message)
+			writeRESTError(w, r, "investment_explain", org, status, message)
 			return
 		}
 
@@ -479,7 +482,7 @@ func newInvestmentExplainWorkHandler(
 		// instead of a wrong Go answer. Team-lead ruling, CHAOS-4977 codex
 		// round 1's #5.
 		if _, unsupported := investmentexplain.ResolveUnsupportedProviderKindForOrg(
-			r.Context(), llmProvider, claims.OrgID, orgSettings,
+			r.Context(), llmProvider, org, orgSettings,
 		); unsupported {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotImplemented)
@@ -487,7 +490,7 @@ func newInvestmentExplainWorkHandler(
 			return
 		}
 
-		// available/complete are closures over claims.OrgID and
+		// available/complete are closures over org and
 		// orgSettings, matching investmentexplain.AvailabilityFunc/
 		// CompleteFunc's own EXISTING types exactly -- CHAOS-5006 PR3
 		// added no new parameter to ExplainInvestmentMix's complete
@@ -501,7 +504,7 @@ func newInvestmentExplainWorkHandler(
 			categorize.CompletionResult, string, string, error,
 		) {
 			return investmentexplain.CompleteInvestmentMixExplanationForOrg(
-				ctx, requestedProvider, requestedModel, claims.OrgID, orgSettings, budgetStore, fullPrompt)
+				ctx, requestedProvider, requestedModel, org, orgSettings, budgetStore, fullPrompt)
 		}
 
 		echoRequestID(w, r)

@@ -71,6 +71,12 @@ const (
 	// the paused ACP project, deliberately not done here.
 	CredentialClassEnvelope = "effective_principal_envelope"
 
+	// CredentialClassUserAccessToken is `seed` and `enable`. Both read the deployed process's authenticated
+	// /buildinfo with a platform admin's user access token, which query-api's edge carrier verifies (the routed
+	// validator and the live users row) before a row is written. Revision 0164 admits the class; rows written
+	// before it keep CredentialClassEnvelope, which no new row records.
+	CredentialClassUserAccessToken = "user_access_token"
+
 	// CredentialClassOperatorDirect is `disable`. It presents NO
 	// credential, by contract -- the off-ramp must work when the planes
 	// disagree and the deployed process is down. Recording a weaker claim
@@ -82,13 +88,17 @@ const (
 // the routing write it describes must not commit either.
 var ErrAuditRowRefused = errors.New("goapiproof: the routing audit row was refused")
 
-// ErrEnvelopeSubjectMissing reports that the envelope carried no `sub`.
+// ErrTokenSubjectMissing reports that the envelope carried no `sub`.
 //
 // It is a REFUSAL rather than a NULL: an envelope-class row whose
 // principal_id is NULL is exactly the shape the pairing CHECK forbids,
 // and writing `operator_direct` instead would claim no credential was
 // presented when one was.
-var ErrEnvelopeSubjectMissing = errors.New("goapiproof: the effective-principal envelope carries no subject, so no audit row can name who acted")
+var ErrTokenSubjectMissing = errors.New("goapiproof: the user access token carries no subject, so no audit row can name who acted")
+
+// ErrTokenSubjectNotAccepted reports that no /buildinfo read accepted the credential, so no verifier has vouched for
+// the subject an audit row would name.
+var ErrTokenSubjectNotAccepted = errors.New("goapiproof: no /buildinfo read accepted this user access token, so no audit row can name who acted")
 
 // auditReviewEvidenceMax mirrors alembic 0130's CHECK. Bounded rather
 // than truncated: this table is append-only, so a silently trimmed
@@ -113,8 +123,8 @@ type RoutingAuditEntry struct {
 type RoutingAudit struct {
 	Action          string
 	CredentialClass string
-	// PrincipalID is WHO THE CREDENTIAL SAYS is acting -- the envelope's
-	// `sub`, a user id. Empty for operator_direct, which has no
+	// PrincipalID is WHO THE CREDENTIAL SAYS is acting -- the user access
+	// token's `sub`, a principal id. Empty for operator_direct, which has no
 	// credential to have carried one.
 	PrincipalID string
 	// RecordedBy is what the OPERATOR typed about themselves. Verified by
@@ -137,8 +147,8 @@ var auditActions = map[string]bool{
 }
 
 var auditCredentialClasses = map[string]bool{
-	CredentialClassEnvelope:       true,
-	CredentialClassOperatorDirect: true,
+	CredentialClassUserAccessToken: true,
+	CredentialClassOperatorDirect:  true,
 }
 
 const insertRoutingAuditSQL = `
@@ -155,8 +165,8 @@ func (a RoutingAudit) validate() error {
 		return fmt.Errorf("%w: %q is not a routing audit action; alembic 0130 admits %v",
 			ErrAuditRowRefused, a.Action, []string{AuditActionEnable, AuditActionDisable, AuditActionRepoint})
 	case !auditCredentialClasses[a.CredentialClass]:
-		return fmt.Errorf("%w: %q is not a credential class; alembic 0130 admits %v",
-			ErrAuditRowRefused, a.CredentialClass, []string{CredentialClassEnvelope, CredentialClassOperatorDirect})
+		return fmt.Errorf("%w: %q is not a credential class a routing write records; new rows record %v",
+			ErrAuditRowRefused, a.CredentialClass, []string{CredentialClassUserAccessToken, CredentialClassOperatorDirect})
 	case a.SchemaDigest == "":
 		return fmt.Errorf("%w: schema digest is required -- it is what CHAOS-5416 moved, and a row without it cannot tell a live write from one against a dead digest", ErrAuditRowRefused)
 	case a.RecordedBy == "":
@@ -180,9 +190,9 @@ func (a RoutingAudit) validate() error {
 	// The pairing the database also enforces, checked here so the refusal
 	// names the reason instead of surfacing a constraint name.
 	switch a.CredentialClass {
-	case CredentialClassEnvelope:
+	case CredentialClassUserAccessToken:
 		if a.PrincipalID == "" {
-			return fmt.Errorf("%w: an %s row must name the subject its credential carried", ErrAuditRowRefused, CredentialClassEnvelope)
+			return fmt.Errorf("%w: a %s row must name the subject its credential carried", ErrAuditRowRefused, CredentialClassUserAccessToken)
 		}
 	case CredentialClassOperatorDirect:
 		if a.PrincipalID != "" {
@@ -266,62 +276,64 @@ func describeAuditWriteFailure(operation string, err error) error {
 	return fmt.Errorf("%w: writing the row for %s: %w", ErrAuditRowRefused, operation, err)
 }
 
-// EnvelopeSubject reads the `sub` claim out of an effective-principal
-// envelope.
+// TokenSubject reads the `sub` claim out of the user access token a routing
+// write presents.
 //
-// IT DOES NOT VERIFY THE ENVELOPE, and must not. The Auth Control Plane's
-// rule is one validator per credential class, and this process is not that
-// validator -- `internal/queryapi/principal/verifier.go` is, and it
-// holds the public key. What makes reading the subject here honest is the
-// ORDER: `enable` and `repoint` both call the authenticated `/buildinfo`
-// BEFORE they write, and that route runs the real verifier and answers 401
-// on a bad envelope. So by the time a row is written, this exact token has
-// already been accepted by the verifier that owns it, and this function is
-// reading the subject out of a credential someone else checked -- not
-// asserting one this process trusts.
+// IT DOES NOT VERIFY THE TOKEN, and must not. The Auth Control Plane's rule
+// is one validator per credential class, and this process is not that
+// validator -- query-api's edge carrier is (the routed validator and the
+// live users row). What makes reading the subject here honest is the ORDER:
+// `seed` and `enable` call the authenticated `/buildinfo` BEFORE they write,
+// and that route verifies the token and answers 401 unless it is a platform
+// admin's. So by the time a row is written, this exact token has already
+// been accepted by the verifier that owns it.
 //
-// A caller that has NOT verified the envelope first must not use this.
-func EnvelopeSubject(bearer string) (string, error) {
+// A caller that has NOT verified the token first must not use this.
+func TokenSubject(bearer string) (string, error) {
 	token := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(bearer), "Bearer "))
 	segments := strings.Split(token, ".")
 	if len(segments) != 3 {
-		return "", fmt.Errorf("%w: it is not a three-segment JWT", ErrEnvelopeSubjectMissing)
+		return "", fmt.Errorf("%w: it is not a three-segment JWT", ErrTokenSubjectMissing)
 	}
 	// RawURLEncoding: a JWT segment is unpadded base64url. The VALUE is
 	// never included in any error below -- a decode failure names the
 	// shape, never the token.
 	payload, err := base64.RawURLEncoding.DecodeString(segments[1])
 	if err != nil {
-		return "", fmt.Errorf("%w: its payload segment is not base64url", ErrEnvelopeSubjectMissing)
+		return "", fmt.Errorf("%w: its payload segment is not base64url", ErrTokenSubjectMissing)
 	}
 	var claims struct {
 		Subject string `json:"sub"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", fmt.Errorf("%w: its payload is not JSON", ErrEnvelopeSubjectMissing)
+		return "", fmt.Errorf("%w: its payload is not JSON", ErrTokenSubjectMissing)
 	}
 	if strings.TrimSpace(claims.Subject) == "" {
-		return "", ErrEnvelopeSubjectMissing
+		return "", ErrTokenSubjectMissing
 	}
 	return claims.Subject, nil
 }
 
-// EnvelopeSubject reads the `sub` claim out of the envelope this
-// Credential carries, for an audit row's principal_id.
+// TokenSubject reads the `sub` claim out of the user access token the last
+// accepted /buildinfo read of this Credential sent, for an audit row's
+// principal_id.
 //
 // This is a method rather than a caller reaching for the raw bearer,
 // because Credential's whole design (credential.go) is that its value is
 // asked for per request and never handed back -- adding a second way out
-// of the type would undo that. The value never leaves this package: it is
-// read here, fed straight into the package-level EnvelopeSubject above,
-// and discarded.
+// of the type would undo that. The value never leaves this package.
 //
-// The same verification-order requirement applies: call this only after
-// the credential has already been accepted by /buildinfo.
-func (c *Credential) EnvelopeSubject(ctx context.Context) (string, error) {
-	bearer, err := c.value(ctx)
-	if err != nil {
-		return "", err
+// It reads the value FetchBuildIdentity recorded, never the source again: a
+// file-fed credential re-reads its file on each use, and a file rotated to
+// another admin's token between the two reads would name a subject the
+// verifier never saw. With no accepted read it refuses
+// (ErrTokenSubjectNotAccepted).
+func (c *Credential) TokenSubject(context.Context) (string, error) {
+	c.state.mu.Lock()
+	accepted := c.state.accepted
+	c.state.mu.Unlock()
+	if accepted == "" {
+		return "", ErrTokenSubjectNotAccepted
 	}
-	return EnvelopeSubject(bearer)
+	return TokenSubject(accepted)
 }

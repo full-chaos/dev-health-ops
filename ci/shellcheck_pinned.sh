@@ -147,6 +147,9 @@ FILES=(
   # the bounded ghcr.io login fallback for merge_group jobs, and its fixture suite.
   "${ROOT}/ci/lib/ghcr_login.sh"
   "${ROOT}/ci/ghcr_login_test.sh"
+  # CHAOS-13426: the authenticated, retried, sha-checked pinned release download, and its fixture suite.
+  "${ROOT}/ci/lib/fetch_pinned_release.sh"
+  "${ROOT}/ci/fetch_pinned_release_test.sh"
   # the signing-key rotation rehearsal: its readers, its driver and their fixture suites.
   "${ROOT}/ci/lib/auth_rotation_probe.sh"
   "${ROOT}/ci/auth_rotation_probe_test.sh"
@@ -168,6 +171,8 @@ FILES=(
   "${ROOT}/ci/lib/auth_workload_session_issue_k3s.sh"
   # CHAOS-11596: the merge queue relevance of the external auth corpus.
   "${ROOT}/ci/auth_corpus_queue_relevance.sh"
+  # CHAOS-12702: the auth side of the web live e2e (auth-service as a bare process).
+  "${ROOT}/ci/live_e2e_auth_stack.sh"
   "${ROOT}/ci/run_tests.sh"
   "${ROOT}/docker/init-extra-dbs.sh"
   "${ROOT}/.github/docs-legacy/examples/customer-push/generic-runner.sh"

@@ -444,3 +444,196 @@ func TestTheUsageStatesTheOutDirectoryRule(t *testing.T) {
 		}
 	}
 }
+
+type fakeLive struct {
+	fakeBootstrap
+	live int
+}
+
+func (f *fakeLive) LiveBootstrap(context.Context, string) ([]workload.BootstrapCredential, error) {
+	out := make([]workload.BootstrapCredential, f.live)
+	for i := range out {
+		out[i] = workload.BootstrapCredential{ID: uuid.New()}
+	}
+	return out, nil
+}
+
+func TestBootstrapCreateIfAbsentSkipsAWorkloadThatHoldsALiveValue(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "value")
+	store := &fakeLive{live: 1}
+	var stdout, stderr bytes.Buffer
+	code := runBootstrap(t.Context(), store, mustParse(t, "bootstrap-create", "-workload", "api", "-out", out, "-if-absent", "-apply"), &stdout, &stderr)
+	if code != 0 || store.writes != 0 || len(store.values) != 0 {
+		t.Fatalf("exit %d, writes %d: a live workload must be skipped, stderr %s", code, store.writes, stderr.String())
+	}
+	if _, err := os.Lstat(out); err == nil {
+		t.Fatal("the skip wrote the out-file")
+	}
+	if !strings.Contains(stdout.String(), "skipped") {
+		t.Fatalf("the skip is not said: %q", stdout.String())
+	}
+
+	store = &fakeLive{live: 0}
+	stdout.Reset()
+	if code := runBootstrap(t.Context(), store, mustParse(t, "bootstrap-create", "-workload", "api", "-out", out, "-if-absent", "-apply"), &stdout, &stderr); code != 0 || store.writes != 1 {
+		t.Fatalf("exit %d, writes %d: a workload with no live value must be created", code, store.writes)
+	}
+	if b, err := os.ReadFile(out); err != nil || string(b) != store.values[0] {
+		t.Fatal("the created value is not in the out-file")
+	}
+}
+
+func TestBootstrapCreateWithoutIfAbsentStillRefusesALiveWorkload(t *testing.T) {
+	store := &fakeLive{live: 1, fakeBootstrap: fakeBootstrap{refusal: workload.ErrBootstrapLive}}
+	var stdout, stderr bytes.Buffer
+	out := filepath.Join(t.TempDir(), "value")
+	if code := runBootstrap(t.Context(), store, mustParse(t, "bootstrap-create", "-workload", "api", "-out", out, "-apply"), &stdout, &stderr); code != 1 {
+		t.Fatalf("exit %d, want the refusal", code)
+	}
+}
+
+func TestIfAbsentIsBootstrapCreateOnly(t *testing.T) {
+	if _, err := parseWorkloadsArgs([]string{"bootstrap-rotate", "-workload", "api", "-out", "v", "-overlap", "0s", "-if-absent"}, io.Discard); err == nil {
+		t.Fatal("bootstrap-rotate took -if-absent")
+	}
+	if _, err := parseWorkloadsArgs([]string{"seed", "-if-absent"}, io.Discard); err == nil {
+		t.Fatal("seed took -if-absent")
+	}
+}
+
+type fakeSubject struct {
+	id  uuid.UUID
+	err error
+}
+
+func (f fakeSubject) Lookup(context.Context, string) (*workload.Info, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &workload.Info{PrincipalID: f.id, Name: "api"}, nil
+}
+
+func TestSubjectWritesTheWirePrincipalIDAndIsRerunnable(t *testing.T) {
+	id := uuid.MustParse("00000000-0000-0000-0000-000000000000")
+	out := filepath.Join(t.TempDir(), "api.subject")
+	var stdout, stderr bytes.Buffer
+	for run := 0; run < 2; run++ {
+		if code := runSubject(t.Context(), fakeSubject{id: id}, mustParse(t, "subject", "-workload", "api", "-out", out, "-apply"), &stdout, &stderr); code != 0 {
+			t.Fatalf("run %d exit %d, stderr %s", run, code, stderr.String())
+		}
+	}
+	b, err := os.ReadFile(out)
+	if err != nil || string(b) != "prn_AAAAAAAAAAAAAAAAAAAAAA" {
+		t.Fatalf("subject file = %q, %v", b, err)
+	}
+	info, _ := os.Stat(out)
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("mode %v: the id is not a secret and auth-service reads it as another uid", info.Mode().Perm())
+	}
+	entries, _ := os.ReadDir(filepath.Dir(out))
+	if len(entries) != 1 {
+		t.Fatalf("%d files left in the directory, want only the subject file", len(entries))
+	}
+}
+
+func TestSubjectDryRunWritesNothingAndAnUnknownWorkloadIsRefused(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "api.subject")
+	var stdout, stderr bytes.Buffer
+	if code := runSubject(t.Context(), fakeSubject{id: uuid.New()}, mustParse(t, "subject", "-workload", "api", "-out", out), &stdout, &stderr); code != 0 {
+		t.Fatalf("dry run exit %d", code)
+	}
+	if _, err := os.Lstat(out); err == nil {
+		t.Fatal("the dry run wrote the file")
+	}
+	if code := runSubject(t.Context(), fakeSubject{err: workload.ErrNotFound}, mustParse(t, "subject", "-workload", "api", "-out", out, "-apply"), &stdout, &stderr); code != 1 {
+		t.Fatalf("unknown workload exit %d, want 1", code)
+	}
+	if _, err := os.Lstat(out); err == nil {
+		t.Fatal("a refused run wrote the file")
+	}
+	for _, args := range [][]string{{"subject", "-out", "v"}, {"subject", "-workload", "api"}, {"subject", "-workload", "api", "-out", "-"}, {"subject", "-workload", "api", "-out", "v", "-expires-in", "1h"}} {
+		if _, err := parseWorkloadsArgs(args, io.Discard); err == nil {
+			t.Errorf("%v accepted", args)
+		}
+	}
+}
+
+// A registry with no live credential (expired or revoked) and a volume that keeps the old file: -if-absent replaces
+// the file with the new value, atomically and 0600; a live workload is skipped with the file untouched.
+func TestBootstrapCreateIfAbsentReplacesAStaleOutFile(t *testing.T) {
+	for _, state := range []string{"expired", "revoked"} {
+		t.Run(state, func(t *testing.T) {
+			dir := t.TempDir()
+			out := filepath.Join(dir, "value")
+			if err := os.WriteFile(out, []byte("old-dead-value"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := &fakeLive{live: 0}
+			var stdout, stderr, logs bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			code := runBootstrap(t.Context(), store, mustParse(t, "bootstrap-create", "-workload", "api", "-out", out, "-if-absent", "-apply"), &stdout, &stderr)
+			slog.SetDefault(prev)
+			if code != 0 || store.writes != 1 || len(store.values) != 1 {
+				t.Fatalf("%s: exit %d, writes %d, stderr %s", state, code, store.writes, stderr.String())
+			}
+			b, err := os.ReadFile(out)
+			if err != nil || string(b) == "old-dead-value" || string(b) != store.values[0] || !workload.CanonicalBootstrap(string(b)) {
+				t.Fatalf("%s: the out-file does not hold the new registered value", state)
+			}
+			if info, _ := os.Stat(out); info.Mode().Perm() != 0o600 {
+				t.Fatalf("%s: mode %v, want 0600", state, info.Mode().Perm())
+			}
+			if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+				t.Fatalf("%s: %d files left in the directory, want only the out-file", state, len(entries))
+			}
+			noLeak(t, store.values[0], stdout.String(), stderr.String(), logs.String())
+		})
+	}
+}
+
+func TestBootstrapCreateIfAbsentLeavesTheFileOfALiveWorkload(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "value")
+	if err := os.WriteFile(out, []byte("live-value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeLive{live: 1}
+	var stdout, stderr bytes.Buffer
+	if code := runBootstrap(t.Context(), store, mustParse(t, "bootstrap-create", "-workload", "api", "-out", out, "-if-absent", "-apply"), &stdout, &stderr); code != 0 || store.writes != 0 {
+		t.Fatalf("exit %d, writes %d", code, store.writes)
+	}
+	if b, _ := os.ReadFile(out); string(b) != "live-value" {
+		t.Fatalf("the live workload's file changed: %q", b)
+	}
+}
+
+func TestBootstrapCreateWithoutIfAbsentStillRefusesAnExistingOutFile(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "value")
+	if err := os.WriteFile(out, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeLive{live: 0}
+	var stdout, stderr bytes.Buffer
+	if code := runBootstrap(t.Context(), store, mustParse(t, "bootstrap-create", "-workload", "api", "-out", out, "-apply"), &stdout, &stderr); code != 1 || store.writes != 0 {
+		t.Fatalf("exit %d, writes %d: without -if-absent an existing -out file must be refused", code, store.writes)
+	}
+	if b, _ := os.ReadFile(out); string(b) != "old" {
+		t.Fatalf("the refused run changed the file: %q", b)
+	}
+}
+
+func TestBootstrapCreateIfAbsentCommitFailureRemovesTheNewFile(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "value")
+	if err := os.WriteFile(out, []byte("old-dead-value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeLive{live: 0, fakeBootstrap: fakeBootstrap{err: true}}
+	var stdout, stderr bytes.Buffer
+	if code := runBootstrap(t.Context(), store, mustParse(t, "bootstrap-create", "-workload", "api", "-out", out, "-if-absent", "-apply"), &stdout, &stderr); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if _, err := os.Lstat(out); err == nil {
+		t.Fatal("a value that was not registered is left in the out-file")
+	}
+	noLeak(t, store.values[0], stdout.String(), stderr.String())
+}

@@ -39,7 +39,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -83,19 +82,16 @@ func investmentSunburstSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwit
 }
 
 // loadInvestmentRouteConfig reads this route family's own dependency set
-// -- ClickHouse plus the envelope verifier trio. Deliberately NOT
+// -- ClickHouse only; the envelope key is optional. Deliberately NOT
 // loadQueryRouteConfig, same reasoning as quadrant_route.go's own
 // loadQuadrantRouteConfig doc comment: none of these three routes touch
 // registry Postgres.
-func loadInvestmentRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadInvestmentRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 // buildInvestmentRoute constructs the GET+POST /api/v1/investment
@@ -105,12 +101,12 @@ func loadInvestmentRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issu
 // build/start" contract every other optionally-configured route in this
 // binary follows.
 func buildInvestmentRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadInvestmentRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadInvestmentRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -173,12 +169,12 @@ func buildInvestmentRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler h
 // one-client-per-route-file convention every other route in this binary
 // follows (quadrant_route.go, explain_route.go, drilldown_prs_route.go).
 func buildInvestmentSunburstRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadInvestmentRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadInvestmentRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -258,7 +254,7 @@ func investmentTimeFilterMap(rangeDays int, startDate, endDate *time.Time) map[s
 func writeInvestmentResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *investment.Response) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: investment: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }
@@ -306,7 +302,7 @@ func sunburstMeasureError(raw string) pydanticErrorDetail {
 func writeInvestmentSunburstResponse(w http.ResponseWriter, r *http.Request, orgID string, resp []investment.SunburstSlice) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: investment_sunburst: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }
@@ -324,6 +320,10 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 			// this handler -- see authenticateRESTRequest's own doc
 			// comment for the three real 401 shapes this route answers.
 			writeRESTUnauthorized(w, r, "investment", "Not authenticated")
+			return
+		}
+		org, ok := restScopeOrg(w, r, "investment", claims)
+		if !ok {
 			return
 		}
 
@@ -358,7 +358,7 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -372,7 +372,7 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 
 		startTS, endTS, windowErr := timeWindow(investmentTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "investment", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "investment", org)
 			return
 		}
 
@@ -391,12 +391,12 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 			WhatRepos: nil, WorkCategory: nil,
 		}
 
-		resp, err := investment.BuildResponse(r.Context(), reader, claims.OrgID, params)
+		resp, err := investment.BuildResponse(r.Context(), reader, org, params)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1240-1241) -- this route has
 			// no typed HTTPException branch at all.
-			writeRESTDataUnavailable(w, r, "investment", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "investment", org, err)
 			return
 		}
 
@@ -404,7 +404,7 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 		// 1237-1238), steering callers toward POST with an explicit
 		// filters body.
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
-		writeInvestmentResponse(w, r, claims.OrgID, resp)
+		writeInvestmentResponse(w, r, org, resp)
 	}
 }
 
@@ -419,10 +419,14 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "investment", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "investment", claims)
+		if !ok {
+			return
+		}
 
 		bodyBytes, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
-			writeRESTError(w, r, "investment", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "investment", org, http.StatusBadRequest, "bad request")
 			return
 		}
 
@@ -431,17 +435,17 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 		// DrilldownRequest/ExplainRequest's own "filters" field.
 		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
 		if syntaxDetail != nil {
-			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			writePydanticValidationError(w, r, org, *syntaxDetail)
 			return
 		}
 		if bodyIsEmptyOrNull {
-			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
+			writePydanticValidationError(w, r, org, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
 		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
-			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
+			writePydanticValidationError(w, r, org, modelAttributesTypeError([]any{"body"}, decoded))
 			return
 		}
 
@@ -455,7 +459,7 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -471,7 +475,7 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 
 		startTS, endTS, windowErr := timeWindow(filters)
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "investment", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "investment", org)
 			return
 		}
 
@@ -481,12 +485,12 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 			WhatRepos: whatRepos, WorkCategory: workCategoryFromFilters(filters),
 		}
 
-		resp, err := investment.BuildResponse(r.Context(), reader, claims.OrgID, params)
+		resp, err := investment.BuildResponse(r.Context(), reader, org, params)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "investment", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "investment", org, err)
 			return
 		}
-		writeInvestmentResponse(w, r, claims.OrgID, resp)
+		writeInvestmentResponse(w, r, org, resp)
 	}
 }
 
@@ -498,6 +502,10 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
 			writeRESTUnauthorized(w, r, "investment_sunburst", "Not authenticated")
+			return
+		}
+		org, ok := restScopeOrg(w, r, "investment_sunburst", claims)
+		if !ok {
 			return
 		}
 
@@ -563,7 +571,7 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -577,7 +585,7 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 
 		startTS, endTS, windowErr := timeWindow(investmentTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "investment", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "investment", org)
 			return
 		}
 
@@ -592,15 +600,15 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 			WhatRepos: nil, WorkCategory: nil, Limit: limit, IssueSize: issueSize,
 		}
 
-		result, err := investment.BuildSunburst(r.Context(), reader, claims.OrgID, params)
+		result, err := investment.BuildSunburst(r.Context(), reader, org, params)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "investment_sunburst", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "investment_sunburst", org, err)
 			return
 		}
 
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
 		setSunburstSizingHeaders(w, result.Sizing)
 		slog.DebugContext(r.Context(), "investment_sunburst: served", "issue_size", issueSize, "slices", len(result.Slices), "sizing_headers", result.Sizing != nil)
-		writeInvestmentSunburstResponse(w, r, claims.OrgID, result.Slices)
+		writeInvestmentSunburstResponse(w, r, org, result.Slices)
 	}
 }

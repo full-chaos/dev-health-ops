@@ -39,7 +39,7 @@ func readReport(t *testing.T, path string) jsonReport {
 // the same accounting on stdout, and exits non-zero.
 func TestEveryConfigurationRefusalWritesAFreshReport(t *testing.T) {
 	good := []string{"-org", "org-1", "-recorded-by", "r", "-review-evidence", "e", "-dry-run",
-		"-candidate-bearer-exec", `["true"]`, "-baseline-bearer-exec", `["true"]`, "-python-api-url", "http://api:8000"}
+		"-candidate-access-token-file", "/run/proof/access-token", "-baseline-bearer-exec", `["true"]`, "-python-api-url", "http://api:8000"}
 	cells := map[string][]string{
 		"unparseable duration":  {"-run-deadline", "soon"},
 		"unknown flag":          {"-no-such-flag"},

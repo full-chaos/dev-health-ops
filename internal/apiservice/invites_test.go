@@ -15,25 +15,6 @@ func inviteLookup(values map[string]string) func(string) (string, bool) {
 	return func(name string) (string, bool) { value, ok := values[name]; return value, ok }
 }
 
-func TestInviteConfigTokenSecretFollowsInvitesPy(t *testing.T) {
-	t.Setenv("EMAIL_PROVIDER", "console")
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	for _, tc := range []struct {
-		name, jwt, settings, want string
-	}{
-		// _token_secret(): JWT_SECRET_KEY or SETTINGS_ENCRYPTION_KEY or the
-		// last-resort default (left "" here, the admin package applies it).
-		{"jwt key wins", "jwt-key", "settings-key", "jwt-key"},
-		{"empty jwt key falls to the settings key", "", "settings-key", "settings-key"},
-		{"neither leaves the default to the route", "", "", ""},
-	} {
-		cfg := config.Config{APIJWTSecret: secrets.NewValue(tc.jwt), SettingsEncryptionKey: secrets.NewValue(tc.settings)}
-		if got := inviteConfig(cfg, logger, inviteLookup(nil)).TokenSecret; got != tc.want {
-			t.Errorf("%s: token secret %q, want %q", tc.name, got, tc.want)
-		}
-	}
-}
-
 func TestInviteConfigAppBaseURLSetVersusUnset(t *testing.T) {
 	t.Setenv("EMAIL_PROVIDER", "console")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -67,18 +48,14 @@ func TestInviteConfigCarriesTheLinkSecrets(t *testing.T) {
 	t.Setenv("EMAIL_PROVIDER", "console")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := config.Config{
-		APIJWTSecret: secrets.NewValue("jwt-key"), LinkTokenSecret: secrets.NewValue("link-new"),
+		LinkTokenSecret:         secrets.NewValue("link-new"),
 		LinkTokenSecretPrevious: secrets.NewValue("link-old"),
 	}
 	got := inviteConfig(cfg, logger, inviteLookup(nil))
 	if got.Secret() != "link-new" {
 		t.Errorf("signing secret %q, want the link secret", got.Secret())
 	}
-	if accepts := got.AcceptSecrets(); len(accepts) != 3 || accepts[0] != "link-new" || accepts[1] != "link-old" || accepts[2] != "jwt-key" {
-		t.Errorf("accepted secrets %v, want link-new, link-old, jwt-key", accepts)
-	}
-	unset := inviteConfig(config.Config{APIJWTSecret: secrets.NewValue("jwt-key")}, logger, inviteLookup(nil))
-	if unset.Secret() != "jwt-key" {
-		t.Errorf("with no link secret the signing secret is %q, want the access key", unset.Secret())
+	if accepts := got.AcceptSecrets(); len(accepts) != 2 || accepts[0] != "link-new" || accepts[1] != "link-old" {
+		t.Errorf("accepted secrets %v, want link-new, link-old", accepts)
 	}
 }

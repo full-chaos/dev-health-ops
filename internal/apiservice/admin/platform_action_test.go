@@ -122,7 +122,7 @@ func TestPlatformAction_NoOrgContextNeedsAdminUsers(t *testing.T) {
 	for _, c := range actionCases(rule.ActionAdminUsers) {
 		w := httptest.NewRecorder()
 		user := &policy.User{IsSuperuser: c.superuser, Platform: c.platform}
-		if _, got := orgIDForNonSuperuser(w, user); got != c.want {
+		if _, got := orgIDForNonSuperuser(context.Background(), w, user); got != c.want {
 			t.Errorf("%s: served = %v (status %d), want %v", c.name, got, w.Code, c.want)
 		}
 	}

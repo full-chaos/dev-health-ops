@@ -17,9 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
-	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
@@ -43,8 +41,6 @@ const (
 type CompatSessions interface {
 	GuardedSessions
 	RevokeByCredential(ctx context.Context, credential contracts.SecretString, actor session.Actor) (bool, error)
-	ExchangeLegacyGuarded(ctx context.Context, legacy session.LegacyRefresh, guard session.Guard) (session.Result, error)
-	RevokeLegacy(ctx context.Context, legacy session.LegacyRefresh, actor session.Actor) (bool, error)
 	IssueSessions
 }
 
@@ -94,11 +90,9 @@ type CompatDeps struct {
 	Login *LoginConfig
 	// Social mounts POST /api/v1/auth/social-login; nil leaves it unmounted.
 	Social SocialExchange
-	// ServiceCredentials mounts POST /internal/v1/sessions, the session issue
-	// route go-api calls; nil leaves it unmounted.
-	ServiceCredentials ServiceCredentials
-	// IssueWorkload lets that route accept the go-api workload token, and
-	// mounts it alone when ServiceCredentials is nil; nil refuses the token.
+	// IssueWorkload mounts POST /internal/v1/sessions, the session issue route
+	// go-api calls with its workload token, and the session state and
+	// delegated routes; nil leaves them unmounted.
 	IssueWorkload *SessionIssueWorkload
 	// Limits holds the limits' windows and the digest key; required while Login is set.
 	Limits *Limits
@@ -161,14 +155,14 @@ func compatRoutes(deps CompatDeps, rows []byte) ([]httpapi.Route, error) {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatLogin, Handler: http.HandlerFunc(h.compatLogin),
 			ErrorWriter: h.signInTransportRefusal(providerLocal)})
 	}
-	if deps.ServiceCredentials != nil || deps.IssueWorkload != nil {
+	if deps.IssueWorkload != nil {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternIssueSession, Handler: http.HandlerFunc(h.issueSession)})
 	}
 	if deps.Social != nil {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(h.compatSocialLogin),
 			ErrorWriter: h.signInTransportRefusal("")})
 	}
-	if deps.ServiceCredentials != nil || deps.IssueWorkload != nil {
+	if deps.IssueWorkload != nil {
 		routes = h.withSessionStateRoute(routes)
 		routes = h.withDelegatedRoutes(routes)
 	}
@@ -352,9 +346,8 @@ func compatRefreshMessage(reason session.Reason) string {
 
 // compatRefresh is POST /api/v1/auth/refresh with go-api's wire
 // (internal/api/session/refresh.go): {"refresh_token"} in, the rotated opaque
-// credential and an access token out. A go-api refresh JWT is exchanged once
-// for a new session (session.Store.ExchangeLegacy); the answer then carries
-// the session's opaque credential.
+// credential and an access token out. A go-api refresh JWT is no longer
+// exchanged: it gets the answer of a refresh token that does not verify.
 func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	// go-api's refresh row commits with the rotation and its auth.session.refreshed row.
 	r = r.WithContext(session.WithPublicRow(r.Context(), compatRefreshRow))
@@ -370,36 +363,25 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		h.unavailableCompat(w, r, opCompatRefresh, err)
 		return
 	}
-	var (
-		result session.Result
-		legacy *session.LegacyRefresh
-		err    error
-	)
 	if isJWT(token) {
-		if result, legacy, ok, err = h.exchangeLegacy(w, r, token); !ok {
-			return
-		}
-	} else {
-		result, err = h.Sessions.ExchangeGuarded(ctx, contracts.NewSecretString(token), h.refreshGuard)
+		h.refuseLegacyRefresh(w, r, token)
+		return
 	}
+	result, err := h.Sessions.ExchangeGuarded(ctx, contracts.NewSecretString(token), h.refreshGuard)
 	guardRefused := errors.Is(err, session.ErrGuardRefused)
 	// The store refuses an auth-service credential whose public user is inactive or gone under the session lock
 	// (D6651) and names the locked session. The user read below decides go-api's answer and row, the session is
 	// revoked whatever that read finds, and nothing is minted.
-	storeRefused := err == nil && storeRefusedUser(result) && legacy == nil
+	storeRefused := err == nil && storeRefusedUser(result)
 	if err != nil && !guardRefused {
 		h.fail(w, r, opCompatRefresh, err)
 		return
 	}
 	if !guardRefused && !storeRefused && !result.Reason.Success() {
 		if result.Reason == session.ReasonPrincipalDeactivated {
-			// go-api's deactivated row (refresh.go:265), in a transaction of its own: for a go-api refresh token the
-			// store revoked its family in its own transaction; for an auth-service credential the store refused
-			// under the session lock and changed nothing, naming the locked session's user and organization.
+			// go-api's deactivated row (refresh.go:265), in a transaction of its own: the store refused under the
+			// session lock and changed nothing, naming the locked session's user and organization.
 			principal, org := result.Session.PrincipalID, result.Session.OrganizationID
-			if legacy != nil {
-				principal, org = legacy.PrincipalID, legacy.OrganizationID
-			}
 			if org != nil {
 				row := refreshRefusal{description: "Token refresh failed: user deactivated", message: textDisabled, withUser: true}
 				if !h.writeRefusalAlone(w, r, principal, *org, row) {
@@ -421,7 +403,7 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		if !found {
 			row = refreshRefusal{description: "Token refresh failed: user not found", message: textUserNotFound}
 		}
-		if !h.revokeRefused(w, r, record, legacy, &row) {
+		if !h.revokeRefused(w, r, record, &row) {
 			return
 		}
 		if !found {
@@ -434,7 +416,7 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	if storeRefused {
 		// The store's lock read refused the user and the read above finds it active (a concurrent change): nothing
 		// was rotated, the refused session ends with go-api's generic 401.
-		if !h.revokeRefused(w, r, record, legacy, nil) {
+		if !h.revokeRefused(w, r, record, nil) {
 			return
 		}
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textInvalidRefresh)
@@ -445,7 +427,7 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textInvalidRefresh)
 		return
 	case pinStale:
-		if !h.revokeRefused(w, r, record, legacy, nil) {
+		if !h.revokeRefused(w, r, record, nil) {
 			return
 		}
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textRefreshReused)
@@ -462,7 +444,7 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 			// was removed or left, D6507): end the session, never re-mint
 			// org-scoped access for it.
 			row := refreshRefusal{description: "Token refresh failed: not a member", message: "Not a member of the organization", withUser: true}
-			if !h.revokeRefused(w, r, record, legacy, &row) {
+			if !h.revokeRefused(w, r, record, &row) {
 				return
 			}
 			h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonNotEntitled, textInvalidRefresh)
@@ -491,9 +473,6 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		h.failMint(w, r, opCompatRefresh, err)
 		return
 	}
-	if legacy != nil {
-		legacyRefreshAccepted.Load().Accepted(ctx)
-	}
 	h.rec.record(ctx, opCompatRefresh, "success", string(result.Reason), nil)
 	out := pyjson.NewObject()
 	out.Set("access_token", tokens.Access)
@@ -515,37 +494,14 @@ func storeRefusedUser(result session.Result) bool {
 // auth-service credential has no dot.
 func isJWT(token string) bool { return strings.Count(token, ".") == 2 }
 
-// exchangeLegacy verifies a go-api refresh JWT, projects its principal and
-// organization into the auth schema, and exchanges it once. It returns false
-// when it answered.
-func (h compatHandlers) exchangeLegacy(w http.ResponseWriter, r *http.Request, token string) (session.Result, *session.LegacyRefresh, bool, error) {
-	ctx := r.Context()
-	legacy, err := h.Issuer.VerifyLegacyRefresh(token)
-	if err != nil {
-		h.rec.logger.DebugContext(ctx, "legacy refresh token refused", "reason", edgetoken.ReasonOf(err))
-		if err := h.invalidRefreshRow(ctx, token); err != nil {
-			h.fail(w, r, opCompatRefresh, err)
-			return session.Result{}, nil, false, nil
-		}
-		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, string(session.ReasonRefreshUnknown), textInvalidRefresh)
-		return session.Result{}, nil, false, nil
-	}
-	err = h.Projector.Project(ctx, legacy.PrincipalID)
-	if err == nil && legacy.OrganizationID != nil {
-		err = h.Projector.ProjectOrganization(ctx, *legacy.OrganizationID)
-	}
-	switch {
-	case errors.Is(err, identity.ErrUserNotFound), errors.Is(err, identity.ErrOrganizationNotFound):
-		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, string(session.ReasonRefreshUnknown), textInvalidRefresh)
-		return session.Result{}, nil, false, nil
-	case err != nil:
+// refuseLegacyRefresh answers a go-api refresh JWT as go-api answers one that does not verify: its login_failed row
+// and the generic 401. Nothing is verified, projected or exchanged (the HS256 refresh exchange is retired).
+func (h compatHandlers) refuseLegacyRefresh(w http.ResponseWriter, r *http.Request, token string) {
+	if err := h.invalidRefreshRow(r.Context(), token); err != nil {
 		h.fail(w, r, opCompatRefresh, err)
-		return session.Result{}, nil, false, nil
+		return
 	}
-	// The same guard as a native credential's exchange: a refused refresh stops
-	// before the exchange creates its session (acp answers-11400-impl-1 G1).
-	result, err := h.Sessions.ExchangeLegacyGuarded(ctx, legacy, h.refreshGuard)
-	return result, &legacy, true, err
+	h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, string(session.ReasonRefreshUnknown), textInvalidRefresh)
 }
 
 // refreshUserInfo is go-api's refresh UserInfo: username and full_name stay
@@ -567,9 +523,7 @@ func refreshUserInfo(id uuid.UUID, user UserState, orgID, role string) *pyjson.O
 // (internal/api/session/routes.go logout): {"refresh_token"} in, and the same
 // 200 whether or not the credential revoked a session, so the answer says
 // nothing about the credential. The session's revocation is audited by the
-// session store. A go-api refresh JWT ends its whole go-api lineage (the live
-// refresh rows of its family and the sessions exchanged from it), which is
-// stricter than go-api's logout, so a refresh after sign-out is refused.
+// session store. A go-api refresh JWT revokes nothing: no route accepts one.
 func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
 	// go-api's logout row commits with the revocation and its auth.session.revoked
 	// row, with the user and organization of the revoked session; a credential that
@@ -583,9 +537,7 @@ func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
 	actor := session.Actor{RequestID: requestid.Audit(ctx)}
 	var revoked bool
 	var err error
-	if isJWT(token) {
-		revoked, err = h.revokeLegacy(r, token, actor)
-	} else {
+	if !isJWT(token) {
 		revoked, err = h.Sessions.RevokeByCredential(ctx, contracts.NewSecretString(token), actor)
 	}
 	if err != nil {
@@ -600,19 +552,6 @@ func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
 	out := pyjson.NewObject()
 	out.Set("message", textLogoutDone)
 	writeCompatModel(w, out)
-}
-
-// revokeLegacy verifies a go-api refresh JWT and ends its lineage. A token that
-// does not verify revokes nothing, as an unknown opaque credential does; no
-// principal is projected, since the go-api rows exist without it.
-func (h compatHandlers) revokeLegacy(r *http.Request, token string, actor session.Actor) (bool, error) {
-	ctx := r.Context()
-	legacy, err := h.Issuer.VerifyLegacyRefresh(token)
-	if err != nil {
-		h.rec.logger.DebugContext(ctx, "legacy refresh token refused at logout", "reason", edgetoken.ReasonOf(err))
-		return false, nil
-	}
-	return h.Sessions.RevokeLegacy(ctx, legacy, actor)
 }
 
 // writeCompatModel writes a 200 response_model body as go-api does, marked

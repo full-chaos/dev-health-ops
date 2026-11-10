@@ -52,7 +52,16 @@ func resolveEndpointProfileSchema(t *testing.T) (*jsonschema.Resolved, struct {
 
 func loadQueryAPIDocument(t *testing.T) map[string]any {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(ContractsDir(testRoot(t)), "endpoint-profiles.query-api.json"))
+	return loadProfileDocument(t, "endpoint-profiles.query-api.json")
+}
+
+// selectorSpecimen is the inventory the row-schema selector tests mutate: it must hold a row that accepts two classes,
+// and the query-api inventory holds none since its envelope class was retired.
+const selectorSpecimen = "endpoint-profiles.go-api.json"
+
+func loadProfileDocument(t *testing.T, name string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(ContractsDir(testRoot(t)), name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +249,7 @@ func TestSchemaStatesAbsentVersusNullOnEveryAdvisoryField(t *testing.T) {
 	}
 }
 
-const multiClassQueryAPIRows = 35
+const multiClassQueryAPIRows = 0
 
 func TestEveryMultiClassQueryAPIRowNamesASelectorTheRegistryHonours(t *testing.T) {
 	registry := realRegistry(t)
@@ -271,7 +280,7 @@ func TestTheRowSchemaClosesTheSelectorKindAndShape(t *testing.T) {
 		"missing name":                map[string]any{"kind": "jwt_header_alg"},
 		"extra field":                 map[string]any{"kind": "jwt_header_alg", "name": "HS256", "also": "x"},
 	} {
-		document := loadQueryAPIDocument(t)
+		document := loadProfileDocument(t, selectorSpecimen)
 		for _, item := range document["rows"].([]any) {
 			if row := item.(map[string]any); row["class_disambiguator"] != nil {
 				row["class_disambiguator"] = selector
@@ -286,10 +295,11 @@ func TestTheRowSchemaClosesTheSelectorKindAndShape(t *testing.T) {
 
 func TestTheRowSchemaRequiresASelectorOnARowThatAcceptsTwoClasses(t *testing.T) {
 	resolved, _ := resolveEndpointProfileSchema(t)
-	document := loadQueryAPIDocument(t)
+	document := loadProfileDocument(t, selectorSpecimen)
 	var target map[string]any
 	for _, item := range document["rows"].([]any) {
-		if row := item.(map[string]any); row["class_disambiguator"] != nil {
+		row := item.(map[string]any)
+		if classes, _ := row["accepted_credential_classes"].([]any); len(classes) > 1 && row["class_disambiguator"] != nil {
 			target = row
 			break
 		}
@@ -324,12 +334,12 @@ func TestTheRowSchemaStillAcceptsASingleClassRowWithoutASelector(t *testing.T) {
 
 func TestTheRowSchemaRejectsARowWithoutAcceptedCredentialClasses(t *testing.T) {
 	resolved, _ := resolveEndpointProfileSchema(t)
-	document := loadQueryAPIDocument(t)
+	document := loadProfileDocument(t, selectorSpecimen)
 	if err := resolved.Validate(document); err != nil {
 		t.Fatalf("control: the unmutated document must validate: %v", err)
 	}
 	for _, withSelector := range []bool{true, false} {
-		document := loadQueryAPIDocument(t)
+		document := loadProfileDocument(t, selectorSpecimen)
 		for _, item := range document["rows"].([]any) {
 			row := item.(map[string]any)
 			if (row["class_disambiguator"] != nil) != withSelector {
@@ -350,7 +360,7 @@ func TestTheRowSchemaRejectsARowWithoutAcceptedCredentialClasses(t *testing.T) {
 // selector gate on the real registry. The wire profile cannot list the exchange class; the inventory row can.
 func TestTheRealDeviceCodeAndTokenExchangePairHasAValidInventoryRow(t *testing.T) {
 	resolved, _ := resolveEndpointProfileSchema(t)
-	document := loadQueryAPIDocument(t)
+	document := loadProfileDocument(t, selectorSpecimen)
 	var template map[string]any
 	for _, item := range document["rows"].([]any) {
 		if row := item.(map[string]any); row["class_disambiguator"] != nil {

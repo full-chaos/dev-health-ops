@@ -9,8 +9,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
+
+// legacyClaims are the claims of an accepted caller the PDP does not decide (an exempt credential class): the
+// organization of the credential and the Legacy scope of today's path.
+func legacyClaims(orgID string) authctx.Claims {
+	return authctx.Claims{OrgID: orgID, Scope: pepgate.Legacy(orgID)}
+}
 
 // authenticateRESTRouted is authenticateRESTRequest for an edge or user access
 // token once the edge verifier routes by row: the request's row picks the
@@ -18,24 +25,21 @@ import (
 // refusal is the same 401 "Invalid or expired token"; a valid token with no
 // organization is 403 unless the caller is a superuser; a check that could not
 // be made is policy.WriteAuthFailure's 503 (unavailable) or 500, never a pass.
-// An accepted user access token then asks the request's PDP gate; an accepted
-// edge token is on the exempt list and is counted.
+// An accepted user access token then asks the request's PDP gate. The routed
+// validator accepts no other class: an HS256 edge token is refused
+// alg_not_allowed.
 func authenticateRESTRouted(w http.ResponseWriter, r *http.Request, edgeVerifier *principal.EdgeVerifier, token, component string) (authctx.Claims, bool) {
 	ctx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
 	claims, err := edgeVerifier.VerifyRouted(ctx, routeProfile(r), token)
 	if err == nil {
 		gate := pdp.FromContext(r.Context())
-		if principal.AccessClassOf(token) != principal.AccessClassUser {
-			gate.CountExempt(r.Context(), pdp.ClassHS256, routeProfile(r))
-			observeRESTShadow(r, token, claims.OrgID, claims.Caller, claims.Delegated, true)
-			return authctx.Claims{OrgID: claims.OrgID}, true
-		}
-		if denied := gate.Authorize(r.Context(), routeProfile(r), token, claims.OrgID); denied != nil {
+		scope, denied := gate.Authorize(r.Context(), routeProfile(r), token, claims.OrgID)
+		if denied != nil {
 			writePDPDenied(w, r, component, denied)
 			return authctx.Claims{}, false
 		}
 		observeRESTShadow(r, token, claims.OrgID, claims.Caller, claims.Delegated, true)
-		return authctx.Claims{OrgID: claims.OrgID}, true
+		return authctx.Claims{OrgID: claims.OrgID, Scope: scope}, true
 	}
 	var orgRequired *principal.OrgRequiredError
 	switch {
@@ -50,7 +54,7 @@ func authenticateRESTRouted(w http.ResponseWriter, r *http.Request, edgeVerifier
 			requestID = ""
 		}
 		slog.WarnContext(r.Context(), "query-api: access token check failed",
-			slog.String("component", component), slog.String("request_id", requestID),
+			slog.String("component", component), slog.String("request_id", logSafeRequestID(requestID)),
 			slog.Bool("unavailable", errors.Is(err, policy.ErrUnavailable)), logging.ErrorAttr(err))
 		policy.WriteAuthFailure(w, "", err)
 	}

@@ -938,3 +938,104 @@ func TestCheckGoDiscoversEveryTestName(t *testing.T) {
 			"a_control_byte_in_a_test_file_name_is_refused", "want exit 2"),
 	})
 }
+
+// ---- authhistory vet positive control ---------------------------------------------------------------------------
+
+const authHistoryBroken = "//go:build authhistory\n\npackage zpkg\n\nfunc Broken() int {\n\treturn \"not an int\"\n}\n"
+
+func authHistoryFixture(t *testing.T, tagged bool) (root string, vet func() cmdResult) {
+	t.Helper()
+	root = t.TempDir()
+	for rel, content := range map[string]string{
+		"go.mod":            "module scratchmod\n\ngo 1.27\n",
+		"scratchpkg/ok.go":  "package scratchpkg\n",
+		"scratchpkg/sub.go": "package scratchpkg\n",
+		"zpkg/ok.go":        "package zpkg\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, rel := range []string{"ci/check_go.sh", "ci/lib/venue_oracle_registry.sh"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(readText(t, scriptPath(t, rel))), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if tagged {
+		if err := os.WriteFile(filepath.Join(root, "scratchpkg", "a_history_test.go"), []byte("//go:build authhistory\n\npackage scratchpkg\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "zpkg", "history_test.go"), []byte(authHistoryBroken), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if res := (cmdSpec{dir: root, env: inheritedEnv(nil)}).run("git", "init", "-q", "."); res.code != 0 {
+		t.Fatalf("git init: %s", res.stderr)
+	}
+	vet = func() cmdResult {
+		return cmdSpec{dir: root, env: inheritedEnv([]string{"GOFLAGS", "GOWORK"})}.run("bash", "ci/check_go.sh", "vet")
+	}
+	return root, vet
+}
+
+func TestAuthHistoryVetCatchesABrokenTaggedFile(t *testing.T) {
+	t.Parallel()
+	root, vet := authHistoryFixture(t, true)
+	fixture := filepath.Join(root, "zpkg", "history_test.go")
+
+	broken := vet()
+	if broken.code == 0 {
+		t.Fatalf("check_go.sh vet exited 0 on a deliberately broken authhistory-tagged file: no job vets the authhistory tag\nstdout: %s\nstderr: %s", broken.stdout, broken.stderr)
+	}
+	if !strings.Contains(broken.stderr, "history_test.go") || !strings.Contains(broken.stderr, "not an int") {
+		t.Fatalf("vet failed, but not on the planted error\nstdout: %s\nstderr: %s", broken.stdout, broken.stderr)
+	}
+	untagged := cmdSpec{dir: root, env: inheritedEnv([]string{"GOFLAGS", "GOWORK"})}.run("go", "vet", "./...")
+	if untagged.code != 0 {
+		t.Fatalf("control: default-tag vet must not see the authhistory file, got exit %d\nstderr: %s", untagged.code, untagged.stderr)
+	}
+	fixed := strings.Replace(authHistoryBroken, `return "not an int"`, "return 0", 1)
+	if err := os.WriteFile(fixture, []byte(fixed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if again := vet(); again.code != 0 {
+		t.Fatalf("vet still failed after the planted error was fixed: the setup is broken, not the gate\nstdout: %s\nstderr: %s", again.stdout, again.stderr)
+	}
+}
+
+func TestAuthHistoryVetRefusesAVacuousPass(t *testing.T) {
+	t.Parallel()
+	_, vet := authHistoryFixture(t, false)
+	res := vet()
+	if res.code == 0 || !strings.Contains(res.stderr, "no file carries the authhistory build tag") {
+		t.Fatalf("a tree with no authhistory file must fail with a named line, got exit %d\nstdout: %s\nstderr: %s", res.code, res.stdout, res.stderr)
+	}
+}
+
+func TestAuthHistoryVetIsPartOfCheckVet(t *testing.T) {
+	t.Parallel()
+	body := functionBody(t, readText(t, scriptPath(t, "ci/check_go.sh")), "check_vet")
+	if !strings.Contains(body, "check_authhistory_vet") {
+		t.Fatalf("check_vet no longer calls check_authhistory_vet:\n%s", body)
+	}
+}
+
+func functionBody(t *testing.T, script, name string) string {
+	t.Helper()
+	start := strings.Index(script, "\n"+name+"() {\n")
+	if start < 0 {
+		t.Fatalf("function %s not found in ci/check_go.sh", name)
+	}
+	rest := script[start+1:]
+	end := strings.Index(rest, "\n}\n")
+	if end < 0 {
+		t.Fatalf("function %s has no closing brace", name)
+	}
+	return rest[:end]
+}

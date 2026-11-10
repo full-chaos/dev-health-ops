@@ -856,10 +856,8 @@ func domainPosture() RolePosture {
 			{"job_runs", false, true, false},
 			{"sync_coverage_projections", true, true, false},
 			{"organizations", false, false, false},
-			// The native phone-home heartbeat counts users next to
-			// organizations and appends its own audit_logs row; it never
-			// edits the trail, so audit_logs stays without UPDATE or DELETE.
-			{"users", false, false, false},
+			// The native phone-home heartbeat appends its own audit_logs row;
+			// it never edits the trail, so audit_logs stays without UPDATE or DELETE.
 			{"audit_logs", true, false, false},
 			{"remaining_metric_runs", true, true, false},
 			{"remaining_metric_partitions", true, true, false},
@@ -965,6 +963,11 @@ func domainPosture() RolePosture {
 			{"byo_llm_budget_reservations", "cached_input_tokens", "UPDATE"},
 			{"byo_llm_budget_reservations", "actual_micro_usd", "UPDATE"},
 			{"byo_llm_budget_reservations", "reconciled_at", "UPDATE"},
+			// The heartbeat's COUNT(*) and the billing owner lookup's id, email and full_name: password_hash and
+			// token_version stay unreadable.
+			{"users", "id", "SELECT"},
+			{"users", "email", "SELECT"},
+			{"users", "full_name", "SELECT"},
 		},
 		// The heavy worker reads an org's categorization opt-in (pgmigrate 0156)
 		// and an opted-in org's categorize configuration and budget limit

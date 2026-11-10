@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -27,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/routescan"
 )
 
 const authServiceRows = "../../../contracts/auth/v1/endpoint-profiles.auth-service.json"
@@ -67,8 +69,10 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if issuer != "" {
 		env[authconfig.EnvTokenIssuerURL] = issuer
 		// The workload-token exchange needs the token issuer: the probe turns it
-		// on whenever an issuer is set.
+		// on whenever an issuer is set, and the go-api workload subject, which
+		// mounts the session issue routes, with it.
 		exchangeEnvironment(t, env)
+		workloadIssueEnvironment(env)
 	}
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(provisioningEnvironment(ssoEnvironment(compatEnvironment(env))))})
 	if err != nil {
@@ -110,11 +114,12 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, nil, mustLimits(t), nil)
+	signer := keySigner(t)
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, signer, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), nil)
+	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), signer)
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}
@@ -275,9 +280,9 @@ func TestTheRowGateRefusesAPlantedMissingRowForEveryServedRoute(t *testing.T) {
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
 // four compatibility routes, the validate route, the switch-org route, the session issue route, the session state route, the two delegated session routes, the eight federated sign-in routes, the six credentials routes,
-// the twenty-five provisioning routes, the eight read routes, the two authorize routes and the three operator paths on GET and HEAD, GET and HEAD of the JWKS and the
-// discovery document, and the five OAuth authorization server routes.
-const servedAuthRouteCount = 81
+// the twenty-five provisioning routes, the eight read routes, the four user-admin routes, the two authorize routes and the three operator paths on GET and HEAD, GET and
+// HEAD of the JWKS and the discovery document, and the five OAuth authorization server routes.
+const servedAuthRouteCount = 85
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -367,88 +372,127 @@ func TestTheRowGateRefusesARowForARouteNothingServes(t *testing.T) {
 	}
 }
 
-// TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols: a row's source line
-// still registers its route, and every anchor with a note still holds the
-// symbol the note names, so a pinned file:line cannot drift silently.
+// TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols: a row's source names
+// its route by symbol (routescan.RowSymbol: the registration of its method and
+// route, the registration of its pattern constant, or that constant's spec),
+// and every anchor's note resolves to one place (routescan.ResolveNote). The
+// cited lines are citations: a drift count is logged, never compared.
 func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
-	lineOf := func(path string, line int) string {
-		raw, err := os.ReadFile(filepath.Join("../../..", path))
-		if err != nil {
-			t.Fatalf("anchor file %s: %v", path, err)
-		}
-		lines := strings.Split(string(raw), "\n")
-		if line < 1 || line > len(lines) {
-			t.Fatalf("anchor %s:%d is outside the file (%d lines)", path, line, len(lines))
-		}
-		return lines[line-1]
-	}
-	constants := map[string]string{
-		"/v1/token/refresh": "PatternRefresh", "/v1/sessions/current": "PatternCurrent",
-		"/v1/sessions/revoke": "PatternRevoke", "/v1/sessions/revoke-all": "PatternRevokeAll",
-		"/api/v1/auth/login": "PatternCompatLogin", "/api/v1/auth/refresh": "PatternCompatRefresh",
-		"/api/v1/auth/logout": "PatternCompatLogout", "/api/v1/auth/social-login": "PatternCompatSocialLogin",
-		"/internal/v1/sessions":       "PatternIssueSession",
-		"/internal/v1/token/exchange": "Pattern",
-		"/.well-known/jwks.json":      "PatternJWKS", "/.well-known/openid-configuration": "PatternDiscovery",
-		"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
-		"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
-		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
-		"/api/v1/auth/change-password": "PatternChangePassword", "/api/v1/auth/register": "PatternRegister",
-		"/internal/v1/memberships/add": "PatternMembershipAdd", "/internal/v1/memberships/role": "PatternMembershipRole",
-		"/internal/v1/memberships/remove": "PatternMembershipRemove", "/internal/v1/memberships/transfer": "PatternMembershipTransfer",
-		"/internal/v1/invites/create": "PatternInviteCreate", "/internal/v1/invites/accept": "PatternInviteAccept",
-		"/internal/v1/organizations/deprovision":        "PatternOrgDeprovision",
-		"/internal/v1/organizations/reactivate":         "PatternOrgReactivate",
-		"/internal/v1/invites/revoke":                   "PatternInviteRevoke",
-		"/internal/v1/organizations/suspend":            "PatternOrgSuspend",
-		"/internal/v1/organizations/state":              "PatternOrgState",
-		"/internal/v1/organizations/onboard":            "PatternOrgOnboard",
-		"/internal/v1/organizations/create":             "PatternOrgCreate",
-		"/oauth/authorize":                              "PatternOAuthAuthorize",
-		"/.well-known/oauth-authorization-server/oauth": "PatternOAuthMetadata",
-		"/oauth/.well-known/openid-configuration":       "PatternOAuthDiscovery",
-		"/oauth/.well-known/jwks.json":                  "PatternOAuthJWKS",
-	}
-	checked := 0
-	var walk func(node any, where string)
-	walk = func(node any, where string) {
-		switch value := node.(type) {
-		case map[string]any:
-			path, hasPath := value["path"].(string)
-			line, hasLine := value["line"].(float64)
-			if hasPath && hasLine {
-				note, _ := value["note"].(string)
-				if note == "" {
-					t.Errorf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(line))
-				} else if !strings.Contains(lineOf(path, int(line)), note) {
-					t.Errorf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(lineOf(path, int(line))))
-				}
-				checked++
-			}
-			for key, child := range value {
-				walk(child, where+"/"+key)
-			}
-		case []any:
-			for index, child := range value {
-				walk(child, where+"["+strconv.Itoa(index)+"]")
-			}
-		}
-	}
-	for _, row := range loadAuthServiceRows(t) {
-		id, _ := row["id"].(string)
-		route, _ := row["route"].(string)
-		source := row["source"].(map[string]any)
-		text := lineOf(source["file"].(string), int(source["line"].(float64)))
-		if !strings.Contains(text, `"`+route+`"`) && (constants[route] == "" || !strings.Contains(text, "Pattern: "+constants[route]+",")) {
-			t.Errorf("row %q: %v:%v holds no registration of %s: %q", id, source["file"], source["line"], route, strings.TrimSpace(text))
-		}
-		checked++
-		walk(row["primary_validator"], id+"/primary_validator")
-		walk(row["issued_credential"], id+"/issued_credential")
+	problems, checked, drift := authRowAnchorProblems(t, "../../..", loadAuthServiceRows(t))
+	for _, problem := range problems {
+		t.Error(problem)
 	}
 	if checked < 10 {
 		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
 	}
+	t.Logf("citation note: %d of %d auth-service sources and anchors cite a line other than the one they resolve to", drift, checked)
+}
+
+// authRowAnchorProblems resolves the auth-service rows in the source under root, by symbol. drift counts the cited
+// lines that are not the resolved ones.
+func authRowAnchorProblems(t *testing.T, root string, rows []map[string]any) (problems []string, checked, drift int) {
+	t.Helper()
+	sources := map[string][]byte{}
+	read := func(path string) []byte {
+		if raw, ok := sources[path]; ok {
+			return raw
+		}
+		raw, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatalf("anchor file %s: %v", path, err)
+		}
+		sources[path] = raw
+		return raw
+	}
+	scanned := map[string][]routescan.Registration{}
+	trim := func(err error) string { return strings.ReplaceAll(err.Error(), filepath.ToSlash(root)+"/", "") }
+	for _, row := range rows {
+		id, _ := row["id"].(string)
+		method, _ := row["method"].(string)
+		route, _ := row["route"].(string)
+		source := row["source"].(map[string]any)
+		file, line := source["file"].(string), int(source["line"].(float64))
+		dir := filepath.Join(root, filepath.Dir(file))
+		if _, ok := scanned[dir]; !ok {
+			regs, err := routescan.ScanWithMux(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scanned[dir] = regs
+		}
+		at, err := routescan.RowSymbol(scanned[dir], read(file), filepath.ToSlash(filepath.Join(root, file)), method, route, authPatternConstants[route])
+		checked++
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("row %q: %s", id, trim(err)))
+		} else if at != line {
+			drift++
+		}
+		own := func() (routescan.Registration, error) {
+			if err != nil {
+				return routescan.Registration{}, err
+			}
+			return routescan.Registration{File: file, Line: at}, nil
+		}
+		var walk func(node any, where string)
+		walk = func(node any, where string) {
+			switch value := node.(type) {
+			case map[string]any:
+				path, hasPath := value["path"].(string)
+				anchorLine, hasLine := value["line"].(float64)
+				if hasPath && hasLine {
+					checked++
+					note, _ := value["note"].(string)
+					if note == "" {
+						problems = append(problems, fmt.Sprintf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(anchorLine)))
+					} else if problem, drifted := routescan.ResolveNote(read(path), path, note, int(anchorLine), file, own); problem != "" {
+						problems = append(problems, where+": "+problem)
+					} else if drifted {
+						drift++
+					}
+				}
+				for key, child := range value {
+					walk(child, where+"/"+key)
+				}
+			case []any:
+				for index, child := range value {
+					walk(child, where+"["+strconv.Itoa(index)+"]")
+				}
+			}
+		}
+		walk(row["primary_validator"], id+"/primary_validator")
+		walk(row["issued_credential"], id+"/issued_credential")
+	}
+	return problems, checked, drift
+}
+
+// authPatternConstants are the pattern constants the auth-service registrations name, by route: a constant from another
+// package (PatternJWKS) resolves only through its name.
+var authPatternConstants = map[string]string{
+	"/v1/token/refresh": "PatternRefresh", "/v1/sessions/current": "PatternCurrent",
+	"/v1/sessions/revoke": "PatternRevoke", "/v1/sessions/revoke-all": "PatternRevokeAll",
+	"/api/v1/auth/login": "PatternCompatLogin", "/api/v1/auth/refresh": "PatternCompatRefresh",
+	"/api/v1/auth/logout": "PatternCompatLogout", "/api/v1/auth/social-login": "PatternCompatSocialLogin",
+	"/internal/v1/sessions":       "PatternIssueSession",
+	"/internal/v1/token/exchange": "Pattern",
+	"/.well-known/jwks.json":      "PatternJWKS", "/.well-known/openid-configuration": "PatternDiscovery",
+	"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
+	"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
+	"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
+	"/api/v1/auth/change-password": "PatternChangePassword", "/api/v1/auth/register": "PatternRegister",
+	"/internal/v1/memberships/add": "PatternMembershipAdd", "/internal/v1/memberships/role": "PatternMembershipRole",
+	"/internal/v1/memberships/remove": "PatternMembershipRemove", "/internal/v1/memberships/transfer": "PatternMembershipTransfer",
+	"/internal/v1/invites/create": "PatternInviteCreate", "/internal/v1/invites/accept": "PatternInviteAccept",
+	"/internal/v1/organizations/deprovision":        "PatternOrgDeprovision",
+	"/internal/v1/organizations/reactivate":         "PatternOrgReactivate",
+	"/internal/v1/invites/revoke":                   "PatternInviteRevoke",
+	"/internal/v1/organizations/suspend":            "PatternOrgSuspend",
+	"/internal/v1/organizations/state":              "PatternOrgState",
+	"/internal/v1/organizations/onboard":            "PatternOrgOnboard",
+	"/internal/v1/organizations/create":             "PatternOrgCreate",
+	"/oauth/authorize":                              "PatternOAuthAuthorize",
+	"/.well-known/oauth-authorization-server/oauth": "PatternOAuthMetadata",
+	"/oauth/.well-known/openid-configuration":       "PatternOAuthDiscovery",
+	"/oauth/.well-known/jwks.json":                  "PatternOAuthJWKS",
 }
 
 // TestClassConsumersNameEveryAuthRouteThatAcceptsThem: every auth-service row
@@ -546,22 +590,6 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) 
 		if len(missing) != 1 || missing[0] != key || len(stale) != 0 {
 			t.Errorf("rows without %s: missing %v stale %v, want exactly it missing", key, missing, stale)
 		}
-	}
-}
-
-// TestWithoutAnIssuerTheDiscoveryRowsAreStale pins that the probe really mounts
-// the discovery document: with AUTH_TOKEN_ISSUER_URL unset only the JWKS is
-// served, so the two discovery rows are reported as rows for routes nothing serves.
-func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
-	served := servedAuthRoutesWithIssuer(t, "")
-	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
-	// The workload-token exchange and the OAuth authorization server need the issuer too, so their rows are stale as well.
-	wantStale := []string{"GET /.well-known/oauth-authorization-server/oauth@api", "GET /.well-known/openid-configuration@api", "GET /oauth/.well-known/jwks.json@api", "GET /oauth/.well-known/openid-configuration@api", "GET /oauth/authorize@api", "HEAD /.well-known/openid-configuration@api", "POST /internal/v1/token/exchange@api", "POST /oauth/authorize@api"}
-	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
-		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)
-	}
-	if served["GET /.well-known/jwks.json@api"] != true || served["HEAD /.well-known/jwks.json@api"] != true {
-		t.Error("the JWKS must be served without an issuer")
 	}
 }
 

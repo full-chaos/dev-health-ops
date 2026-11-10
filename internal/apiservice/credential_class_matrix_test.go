@@ -22,9 +22,9 @@ import (
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/wrongclass"
 )
 
 // lookupCounts counts every read a credential can cause past the class
@@ -113,15 +113,28 @@ const (
 	matrixFillerBytes = 43
 )
 
-// matrixNotDriven are the classes with no request-head marker in
-// credential-classes.json: the matrix has no carrier to send for them.
-var matrixNotDriven = []string{
-	"acr_browser_refresh_token", "acr_device_flow_code", "acr_workload_identity_exchange",
-	"auth_js_browser_session", "email_verification_token", "github_app_installation_token",
-	"impersonation_session", "infrastructure_deployment_credentials", "kubernetes_sa_token_exchange",
-	"license_key", "link_credential", "llm_api_keys", "org_invite_token", "pagerduty_oauth_credential",
-	"password_reset_token", "refresh_credential", "social_oauth_exchange", "sso_oidc_exchange",
-	"sso_saml_exchange", "ops_refresh_token",
+// matrixNotDriven are the classes the matrix sends no request head for: wrongclass derives the carrier of each class
+// from its credential-classes.json markers, and a class with no carrier, or one carried in a body, has no head.
+func matrixNotDriven(t *testing.T) []string {
+	t.Helper()
+	classes, err := wrongclass.LoadClasses(authv1.CredentialClasses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, class := range classes {
+		carrier, ok, err := wrongclass.CarrierFor(class, wrongclass.Options{Mint: func(string, string) string { return "h.p.s" }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || carrier.Header == "" {
+			out = append(out, class.ID)
+		}
+	}
+	if len(out) == 0 || len(out) == len(classes) {
+		t.Fatalf("%d of %d classes have no request head", len(out), len(classes))
+	}
+	return out
 }
 
 type matrixClass struct {
@@ -178,11 +191,7 @@ func newMatrixRig(t *testing.T, guarded, routed bool) *matrixRig {
 	counts := &lookupCounts{}
 	minter := newEdDSAMinter(t)
 	store := matrixStore{probeStore: newProbeStore(), counts: counts}
-	hs, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(hs, store, quietLogger())
+	auth, err := policy.NewAuthenticator(store, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,14 +199,9 @@ func newMatrixRig(t *testing.T, guarded, routed bool) *matrixRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := legacyVerifier(auth.AuthenticateLegacy)
 	validator, err := accessverify.New(accessverify.Config{
-		Rows:  realRows(t),
-		EdDSA: eddsa,
-		Legacy: func(ctx context.Context, token string) (any, error) {
-			counts.add(&counts.legacy)
-			return legacy(ctx, token)
-		},
+		Rows:   realRows(t),
+		EdDSA:  eddsa,
 		Meter:  sdkmetric.NewMeterProvider().Meter("test"),
 		Logger: quietLogger(),
 		Now:    func() time.Time { return probeNow },
@@ -347,7 +351,7 @@ func TestCredentialClassMatrix(t *testing.T) {
 		})
 	}
 	slices.Sort(notDriven)
-	want := slices.Clone(matrixNotDriven)
+	want := matrixNotDriven(t)
 	slices.Sort(want)
 	if !slices.Equal(notDriven, want) {
 		t.Errorf("classes with no carrier %v, want %v", notDriven, want)

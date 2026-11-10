@@ -72,8 +72,8 @@ func (h *handlers) writeProvisionUnavailable(w http.ResponseWriter) {
 }
 
 // withDeactivated adds the wire reason auth-service sends for a deactivated
-// actor; only the member and invite routes carry it, organization creation
-// keeps its own answer.
+// actor; the member, invite and service account key routes carry it,
+// organization creation keeps its own answer.
 func withDeactivated(answers map[string]provisionAnswer) map[string]provisionAnswer {
 	answers["principal_deactivated"] = provisionAnswer{http.StatusForbidden, "Account is deactivated"}
 	return answers
@@ -277,9 +277,10 @@ func (s pgStore) soleOwner(ctx context.Context, orgID uuid.UUID) (uuid.UUID, err
 	return owners[0], nil
 }
 
-// isSuperuserSQL reads the user's is_superuser by the platform roles switch.
+// isSuperuserSQL reads the transfer target's is_superuser by the platform roles
+// switch: the stored holding, as the local transfer's guarded write reads it.
 func (s pgStore) isSuperuserSQL() (string, error) {
-	superuser, err := s.platformRoles().Superuser("is_superuser", "users.id")
+	superuser, err := s.platformRoles().StoredSuperuser("is_superuser", "users.id")
 	if err != nil {
 		return "", err
 	}

@@ -403,28 +403,30 @@ func sloExpectedRows() []sloRow {
 	tok, outbox := sloRuleNamed("AuthTokenLatencyP95High"), sloRuleNamed("AuthOutboxOldestPendingHigh")
 	outMin := func() string { f, _ := strconv.Atoi(outbox.target); return strconv.Itoa(f/60) + " minutes" }()
 	return []sloRow{
-		{label: "auth-service, all routes", sli: "`dev_health_api_http_requests_total`", target: "99.95%", window: "30 days", source: "CHAOS-11220",
+		{label: "auth-service, all routes", sli: "`dev_health_api_http_requests_total`", target: "99.95%", window: "30 days", source: "this page",
 			alerts: []string{"AuthService5xx", "AuthServiceHighServerErrorRate"},
 			pin:    "Target only; no production measurement. Alerts: `AuthService5xx` (any 5xx in 5 minutes, live in SigNoz) and `AuthServiceHighServerErrorRate` (5xx ratio above 5% for 10 minutes, in `alerts/rules.yml`, not yet created in SigNoz). No burn-rate rule."},
 		{label: "PDP", sli: "p95, p99 latency; error rate", target: "p95 < " + sloMs(p95) + ", p99 < " + sloMs(p99) + ", errors 0",
-			window: "Load leg (`ci/pdp_load_k3s.sh`); alert window " + sloMinutes(p95.window), source: "CHAOS-10854, CHAOS-12705 (\"do not loosen the SLO\")",
+			window: "Load leg (`ci/pdp_load_k3s.sh`); alert window " + sloMinutes(p95.window), source: "this page",
 			routes: []string{"/v1/authorize", "/v1/authorize:batch"}, alerts: []string{p95.alert, p99.alert},
-			pin: "Not yet met at peak (CHAOS-12705). At normal load it holds: low p95 7.1 ms, high 10.2, deny 7.6, batch-10 16.4. At 200 requests/s (client concurrency 64): authorize-high p95 2075 ms with 6.9% dropped, authorize-deny p95 32.6 ms and p99 120 ms, authorize-batch-10 p50 2.6 s with 38% dropped; batch-100 is recorded, not gated (82% dropped). Recorded baseline: run `lead-10854-k3s-v5`. Alerts: `" + p95.alert + "`, `" + p99.alert + "`."},
-		{label: "Session issue", sli: "p95 latency", target: "< " + sloMs(tok), window: sloMinutes(tok.window), source: "CHAOS-11220",
+			pin: "Not yet met at peak. At normal load it holds: low p95 7.1 ms, high 10.2, deny 7.6, batch-10 16.4. At 200 requests/s (client concurrency 64): authorize-high p95 2075 ms with 6.9% dropped, authorize-deny p95 32.6 ms and p99 120 ms, authorize-batch-10 p50 2.6 s with 38% dropped; batch-100 is recorded, not gated (82% dropped). Alerts: `" + p95.alert + "`, `" + p99.alert + "`."},
+		{label: "Session issue", sli: "p95 latency", target: "< " + sloMs(tok), window: sloMinutes(tok.window), source: "this page",
 			routes: []string{"/internal/v1/sessions"}, alerts: []string{tok.alert},
 			pin: "Measured, one pod of 1 CPU: p95 under 10 ms up to 400 requests/s; 161 ms at 800 requests/s ([capacity](../../operate/plan/auth-service-capacity.md)). Alert: `" + tok.alert + "`."},
-		{label: "Refresh", sli: "p95 latency", target: "< " + sloMs(tok), window: sloMinutes(tok.window), source: "CHAOS-11220",
+		{label: "Refresh", sli: "p95 latency", target: "< " + sloMs(tok), window: sloMinutes(tok.window), source: "this page",
 			routes: []string{"/v1/token/refresh"}, alerts: []string{tok.alert},
 			pin: "Measured: p95 about 7 ms at 300 requests/s; 6.8 ms with 6 times the refresh rate (10-minute token lifetime). Alert: `" + tok.alert + "`."},
 		{label: "JWKS", sli: "p95 latency", target: "target not set", window: "-", source: "no ticket or page states one", routes: []string{"/.well-known/jwks.json"}, noAlert: true,
 			pin: "Measured baseline: p95 under 2 ms up to 1600 requests/s per pod. No alert."},
 		{label: "Exchange", sli: "latency, outcome", target: "target not set", window: "-", source: "no ticket or page states one", routes: []string{"/internal/v1/token/exchange"}, noAlert: true,
 			pin: "No measurement: the load harness covers issue, refresh and JWKS. No alert."},
-		{label: "Audit outbox", sli: "`" + outbox.metric + "`", target: "under " + outMin, window: sloMinutes(outbox.window), source: "this page, before CHAOS-11220",
+		{label: "Audit outbox", sli: "`" + outbox.metric + "`", target: "under " + outMin, window: sloMinutes(outbox.window), source: "this page",
 			alerts: []string{outbox.alert}, status: []string{"(above " + outbox.target + " seconds)"},
 			pin: "Metric exists; not measured under load. Alert: `" + outbox.alert + "` (above " + outbox.target + " seconds)."},
 		{label: "Revocation propagation", sli: "`auth.session.revocation_lag`", target: "target not set", window: "-", source: "no ticket or page states one", noAlert: true,
 			pin: "The SLI is named; the metric is not on main yet. No alert."},
+		{label: "Signing-key compromise", sli: "Seconds from the decision to drop a signing key", target: "go-api and query-api without a restart: 330 s; auth-service: 20 s", window: "per compromise", source: "this page: the verifiers' JWKS cache (5 min) and refresh floor (30 s); auth-service's key-state refresh (15 s)", noAlert: true,
+			pin: "Measured in the compose key-compromise drill, not in production: two runs, go-api 277 s and 274 s, query-api 277 s and 274 s, auth-service 18 s and 3 s ([emergency rotation](../../operate/runbooks/auth-signing-key-emergency-rotation-and-rollback.md#the-key-compromise-drill-compose-2026-11-10)). A restart of go-api and query-api closes their window at once. No alert."},
 		{label: "Readiness", sli: "`dev_health_runtime_ready == 1`", target: "99.9%", window: "30 days", source: "this page, kept",
 			pin: "Proposed, not measured in production."},
 		{label: "Readiness", sli: "Time to ready after a start", target: "under 60 s", window: "per start", source: "this page, kept",
@@ -535,8 +537,8 @@ func sloBlockMut(alert, old, repl string) func(*testing.T, string) {
 
 func TestAuthSLOTableGuardPlantedDefects(t *testing.T) {
 	const intro = "`" + sloDuration + "` histogram on the auth-service API listener"
-	const sessionRow = "| < 200 ms | 5 minutes | CHAOS-11220 | Measured, one pod"
-	const refreshRow = "| < 200 ms | 5 minutes | CHAOS-11220 | Measured: p95 about"
+	const sessionRow = "| < 200 ms | 5 minutes | this page | Measured, one pod"
+	const refreshRow = "| < 200 ms | 5 minutes | this page | Measured: p95 about"
 	const none = "| target not set | - | no ticket or page states one | "
 	runPlanted(t, []planted{
 		{"latency-metric-statement-changed", []string{sloTableRel}, mut(sloTableRel, intro, "`dev_health_api_http_requests_total` histogram on the auth-service API listener"), sloTableRowsBindToTheRules, "SLO intro does not name the latency metric"},
@@ -547,18 +549,18 @@ func TestAuthSLOTableGuardPlantedDefects(t *testing.T) {
 		{"refresh-route-changed", []string{sloTableRel}, mut(sloTableRel, "| Refresh `/v1/token/refresh` |", "| Refresh `/v1/token/refresh2` |"), sloTableRowsBindToTheRules, "(Refresh): route set"},
 		{"refresh-route-dropped-from-the-rule-union", []string{sloTableRel}, mut(sloTableRel, "| Refresh `/v1/token/refresh` |", "| Refresh |"), sloTableRowsBindToTheRules, "the rows naming AuthTokenLatencyP95High cover routes"},
 		{"pdp-window-changed", []string{sloTableRel}, mut(sloTableRel, "alert window 5 minutes", "alert window 10 minutes"), sloTableRowsBindToTheRules, "(PDP): window is"},
-		{"session-window-changed", []string{sloTableRel}, mut(sloTableRel, sessionRow, "| < 200 ms | 10 minutes | CHAOS-11220 | Measured, one pod"), sloTableRowsBindToTheRules, "(Session issue): window is"},
-		{"refresh-window-changed", []string{sloTableRel}, mut(sloTableRel, refreshRow, "| < 200 ms | 10 minutes | CHAOS-11220 | Measured: p95 about"), sloTableRowsBindToTheRules, "(Refresh): window is"},
-		{"session-target-changed", []string{sloTableRel}, mut(sloTableRel, sessionRow, "| < 25 ms | 5 minutes | CHAOS-11220 | Measured, one pod"), sloTableRowsBindToTheRules, "(Session issue): target is"},
-		{"refresh-target-changed", []string{sloTableRel}, mut(sloTableRel, refreshRow, "| < 25 ms | 5 minutes | CHAOS-11220 | Measured: p95 about"), sloTableRowsBindToTheRules, "(Refresh): target is"},
+		{"session-window-changed", []string{sloTableRel}, mut(sloTableRel, sessionRow, "| < 200 ms | 10 minutes | this page | Measured, one pod"), sloTableRowsBindToTheRules, "(Session issue): window is"},
+		{"refresh-window-changed", []string{sloTableRel}, mut(sloTableRel, refreshRow, "| < 200 ms | 10 minutes | this page | Measured: p95 about"), sloTableRowsBindToTheRules, "(Refresh): window is"},
+		{"session-target-changed", []string{sloTableRel}, mut(sloTableRel, sessionRow, "| < 25 ms | 5 minutes | this page | Measured, one pod"), sloTableRowsBindToTheRules, "(Session issue): target is"},
+		{"refresh-target-changed", []string{sloTableRel}, mut(sloTableRel, refreshRow, "| < 25 ms | 5 minutes | this page | Measured: p95 about"), sloTableRowsBindToTheRules, "(Refresh): target is"},
 		{"pdp-target-changed", []string{sloTableRel}, mut(sloTableRel, "p99 < 75 ms, errors 0", "p99 < 70 ms, errors 0"), sloTableRowsBindToTheRules, "(PDP): target is"},
-		{"pdp-source-removed", []string{sloTableRel}, mut(sloTableRel, "| CHAOS-10854, CHAOS-12705 (\"do not loosen the SLO\") |", "| - |"), sloTableRowsBindToTheRules, "(PDP): source is"},
+		{"pdp-source-removed", []string{sloTableRel}, mut(sloTableRel, "alert window 5 minutes | this page |", "alert window 5 minutes | - |"), sloTableRowsBindToTheRules, "(PDP): source is"},
 		{"session-source-removed", []string{sloTableRel}, mut(sloTableRel, sessionRow, "| < 200 ms | 5 minutes | - | Measured, one pod"), sloTableRowsBindToTheRules, "(Session issue): source is"},
 		{"refresh-source-removed", []string{sloTableRel}, mut(sloTableRel, refreshRow, "| < 200 ms | 5 minutes | - | Measured: p95 about"), sloTableRowsBindToTheRules, "(Refresh): source is"},
 		{"outbox-metric-changed", []string{sloTableRel}, mut(sloTableRel, "pending event (`devhealth_auth_outbox_oldest_pending_age_seconds`)", "pending event (`devhealth_auth_outbox_pending`)"), sloTableRowsBindToTheRules, "(Audit outbox): SLI cell"},
 		{"outbox-target-changed", []string{sloTableRel}, mut(sloTableRel, "| under 5 minutes | 5 minutes |", "| under 4 minutes | 5 minutes |"), sloTableRowsBindToTheRules, "(Audit outbox): target is"},
 		{"outbox-window-changed", []string{sloTableRel}, mut(sloTableRel, "| under 5 minutes | 5 minutes |", "| under 5 minutes | 10 minutes |"), sloTableRowsBindToTheRules, "(Audit outbox): window is"},
-		{"outbox-source-removed", []string{sloTableRel}, mut(sloTableRel, "| this page, before CHAOS-11220 |", "| - |"), sloTableRowsBindToTheRules, "(Audit outbox): source is"},
+		{"outbox-source-removed", []string{sloTableRel}, mut(sloTableRel, "| under 5 minutes | 5 minutes | this page |", "| under 5 minutes | 5 minutes | - |"), sloTableRowsBindToTheRules, "(Audit outbox): source is"},
 		{"outbox-threshold-status-changed", []string{sloTableRel}, mut(sloTableRel, "(above 300 seconds)", "(above 240 seconds)"), sloTableRowsBindToTheRules, "(Audit outbox): status does not say"},
 		{"jwks-target-invented", []string{sloTableRel}, mut(sloTableRel, none+"Measured baseline", "| target 30 ms | - | no ticket or page states one | Measured baseline"), sloTableRowsBindToTheRules, "(JWKS): target is"},
 		{"exchange-target-invented", []string{sloTableRel}, mut(sloTableRel, none+"No measurement", "| target 30 ms | - | no ticket or page states one | No measurement"), sloTableRowsBindToTheRules, "(Exchange): target is"},
@@ -599,7 +601,7 @@ func TestAuthSLOBuilderGuardPlantedDefects(t *testing.T) {
 
 func TestAuthSLOTableGuardRowCount(t *testing.T) {
 	runPlanted(t, []planted{
-		{"row-appended", []string{sloTableRel}, mut(sloTableRel, "| Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |\n", "| Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |\n| Extra | x | target 1 ms | 1 minute | none | none |\n"), sloTableRowsBindToTheRules, "SLO table has 11 rows, want 10"},
+		{"row-appended", []string{sloTableRel}, mut(sloTableRel, "| Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |\n", "| Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |\n| Extra | x | target 1 ms | 1 minute | none | none |\n"), sloTableRowsBindToTheRules, "SLO table has 12 rows, want 11"},
 	})
 }
 
@@ -663,7 +665,7 @@ func TestAuthSLOTableGuardRowSetDefects(t *testing.T) {
 	runPlanted(t, []planted{
 		{"row-dropped", []string{sloTableRel}, sloRowsMut(func(t *testing.T, doc string) string {
 			return strings.Replace(doc, sloRowLine(t, doc, "Exchange ")+"\n", "", 1)
-		}), sloTableRowsBindToTheRules, "SLO table has 9 rows, want 10"},
+		}), sloTableRowsBindToTheRules, "SLO table has 10 rows, want 11"},
 		{"row-replaced-by-a-duplicate", []string{sloTableRel}, sloRowsMut(func(t *testing.T, doc string) string {
 			return strings.Replace(doc, sloRowLine(t, doc, "Refresh "), sloRowLine(t, doc, "Session issue "), 1)
 		}), sloTableRowsBindToTheRules, "(Refresh): first cell: no unmatched row"},
@@ -879,6 +881,7 @@ var sloRowPrefixes = []struct{ prefix, label string }{
 	{"Exchange ", "Exchange"},
 	{"Audit outbox ", "Audit outbox"},
 	{"Revocation propagation ", "Revocation propagation"},
+	{"Signing-key compromise ", "Signing-key compromise"},
 	{"Readiness | Fraction", "Readiness"},
 	{"Readiness | Time to ready", "Readiness"},
 }

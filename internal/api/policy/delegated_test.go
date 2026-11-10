@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -185,6 +186,20 @@ func TestAccessTokenActorIsImpersonatedBy(t *testing.T) {
 	}
 }
 
+// TestAccessTokenActorIsNotTheSubject: a delegation names two principals, so a
+// token whose act names its own subject is refused before any store read.
+func TestAccessTokenActorIsNotTheSubject(t *testing.T) {
+	ctx := WithRouteProfile(context.Background(), "GET /p")
+	self := wireOwner
+	store := newAccessStore()
+	// A users read would answer this error, which is not a refusal.
+	store.errUser = errors.New("users read reached")
+	user, err := routed(t, store, &fakeValidator{result: userClaims(func(c *AccessTokenClaims) { c.Actor = &self })}).Authenticate(ctx, "x.y.z")
+	if user != nil || !IsRefusal(err) {
+		t.Fatalf("act names the subject: user %+v err %v, want a refusal before the users read", user, err)
+	}
+}
+
 // bearerReaders are the calls that read a user bearer outside the Guard.
 var bearerReaders = map[string]bool{"Authenticate": true, "AuthenticateLegacy": true, "CheckClaims": true, "BearerToken": true}
 
@@ -195,6 +210,8 @@ var bearerReaders = map[string]bool{"Authenticate": true, "AuthenticateLegacy": 
 var namedBearerReaders = map[string]bool{
 	"internal/api/policy/guard.go:Guard.currentUser":  true,
 	"internal/api/policy/guard.go:Guard.optionalUser": true,
+	// switch-org under AUTH_PROXY_SESSIONS skips the scope: reads the bearer (the route row's classes) only to refuse an impersonating admin; it never serves a handler for it.
+	"internal/api/policy/guard.go:Guard.RefuseImpersonatingCaller": true,
 	// The shadow PDP's observation, after currentUser (and its deny) admitted the caller; it never changes the answer.
 	"internal/api/policy/guard.go:Guard.wrap":                           true,
 	"internal/api/policy/principal.go:Authenticator.Authenticate":       true,

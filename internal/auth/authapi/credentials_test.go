@@ -12,11 +12,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -461,24 +459,6 @@ func TestCredentialRoutePatternsAreGoAPIs(t *testing.T) {
 		if !got[want] {
 			t.Fatalf("route %q is not mounted", want)
 		}
-	}
-}
-
-func TestChangePasswordRefusesAnImpersonatedBearer(t *testing.T) {
-	c := newCredFixture(t)
-	grant := c.grant()
-	other := uuid.NewString()
-	token, err := c.issuer.signer.Access(edgetoken.AccessClaims{
-		UserID: grant.PrincipalID.String(), Email: grant.User.Email, OrgID: grant.OrganizationID.String(), Role: grant.Role,
-		TokenVersion: grant.User.TokenVersion, SessionID: ptr(session.WireSessionID(grant.SessionID)), ImpersonatingUserID: &other,
-	}, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := c.call(http.MethodPost, PatternChangePassword, `{"current_password":"current-password-1","new_password":"Brand-new-pass-77!"}`,
-		map[string]string{"Authorization": "Bearer " + token})
-	if r.Code != http.StatusForbidden || c.fakes.pwdSet != 0 || c.fakes.revoked != 0 {
-		t.Fatalf("impersonated bearer = %d, writes %d", r.Code, c.fakes.pwdSet)
 	}
 }
 

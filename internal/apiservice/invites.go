@@ -20,12 +20,12 @@ import (
 const inviteMailHTTPTimeout = 30 * time.Second
 
 // inviteConfig builds create_org_invite's configuration from the process
-// environment the way invites.py reads it at send time: the token secret is
-// JWT_SECRET_KEY, else SETTINGS_ENCRYPTION_KEY (else the route's own
-// last-resort default) until LINK_TOKEN_SECRET is set, which then signs new
-// links while LINK_TOKEN_SECRET_PREVIOUS and that chain value stay accepted; the accept link base is APP_BASE_URL; the email
-// sender is chosen by EMAIL_PROVIDER exactly as the worker's billing sender
-// is (internal/mail).
+// environment: LINK_TOKEN_SECRET signs new links and, with
+// LINK_TOKEN_SECRET_PREVIOUS, is the only key that accepts one (JWT_SECRET_KEY
+// and SETTINGS_ENCRYPTION_KEY never sign or verify a link). Unset, the process
+// starts, logs once, and the link routes answer 503 config_missing. The accept
+// link base is APP_BASE_URL; the email sender is chosen by EMAIL_PROVIDER
+// exactly as the worker's billing sender is (internal/mail).
 //
 // A mail misconfiguration must NOT stop the api from starting -- Python
 // resolved its provider per send and logged a failure without surfacing it --
@@ -33,13 +33,11 @@ const inviteMailHTTPTimeout = 30 * time.Second
 // own send failure, never failing the request.
 func inviteConfig(cfg config.Config, logger *slog.Logger, lookup func(string) (string, bool)) admin.InviteConfig {
 	out := admin.InviteConfig{}
-	if secret := cfg.APIJWTSecret.Reveal(); secret != "" {
-		out.TokenSecret = secret
-	} else if key := cfg.SettingsEncryptionKey.Reveal(); key != "" {
-		out.TokenSecret = key
-	}
 	out.LinkSecret = cfg.LinkTokenSecret.Reveal()
 	out.PreviousLinkSecret = cfg.LinkTokenSecretPrevious.Reveal()
+	if !out.Configured() {
+		logger.Warn("api: LINK_TOKEN_SECRET is not set; the link routes (register, verify, resend-verification, forgot-password, reset-password, accept-invite, onboard join, create invite) answer 503 config_missing")
+	}
 	out.AppBaseURL, out.AppBaseURLSet = lookup("APP_BASE_URL")
 	sender, err := mail.NewSenderFromEnv(&http.Client{Timeout: inviteMailHTTPTimeout, Transport: httpguard.SharedTransport()})
 	if err != nil {

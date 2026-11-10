@@ -25,7 +25,7 @@ the `ask_dev` entitlement through the existing explicit-enable path, so every
 tier remains disabled by default. It does not change `byo_llm` or
 `agent_context_runtime`. The release also adds provider-neutral schemas,
 positive and negative fixtures, version compatibility rules, and generated web
-types. Wave 1 adds the authorized scope-search and bounded metric GraphQL fields
+types. The release also adds the authorized scope-search and bounded metric GraphQL fields
 behind the same canonical entitlement decision. It does not ship orchestration,
 conversation persistence, or the user interaction UI.
 
@@ -35,7 +35,7 @@ remains effectively disabled unless explicitly granted, and the global feature
 decision is still the emergency kill switch. Future inclusion in paid plans is
 a separate product change and is not part of this V1 release.
 
-## Ask Dev Wave 1 release note
+## Ask Dev conversation storage release note
 
 - **New:** additive PostgreSQL conversation, message, run, safe tool-audit,
   feedback, and minimal deletion-tombstone storage behind the disabled Ask Dev
@@ -53,7 +53,7 @@ a separate product change and is not part of this V1 release.
   all Ask Dev tables and their contents. Disabling the feature never disables
   retention for conversations already stored.
 
-## Ask Dev Wave 2 provider foundation release note
+## Ask Dev provider foundation release note
 
 - **New:** a provider-neutral multi-turn decision contract, OpenAI-compatible
   agent adapter, deterministic scripted provider, current-readiness seam, safe
@@ -63,12 +63,12 @@ a separate product change and is not part of this V1 release.
   BYO cannot silently fall through to platform credentials.
 - **Known limited:** this foundation does not expose the Ask Dev REST or stream
   routes and does not enable the feature. Provider/model construction and the
-  orchestration loop land in their owning Wave 2 integration lanes.
+  orchestration loop land in their own integration releases.
 - **Rollback:** disable Ask Dev, roll back the binary, then remove the additive
   ClickHouse `use_case` column only if older readers require it. Existing rows
   default to `legacy`; no customer prompt or response content is introduced.
 
-## Ask Dev Wave 2 runtime integration release note
+## Ask Dev runtime integration release note
 
 - **New:** the authenticated `/api/v1/dev` surface now submits idempotent
   conversation messages over bounded SSE, runs the exact nine server-owned
@@ -89,7 +89,7 @@ a separate product change and is not part of this V1 release.
   Conversation retention and tombstone policy continue to apply to already
   admitted runs; no database downgrade is required.
 
-## Ask Dev Wave 3 administrator controls release note
+## Ask Dev administrator controls release note
 
 - **New:** organization administrators can read the safe effective provider and
   readiness state, run deterministic certification, select the exact 0/30-day
@@ -105,7 +105,7 @@ a separate product change and is not part of this V1 release.
   policy rows are inert to older binaries; retained conversations continue to
   follow their persisted lifecycle policy.
 
-## Ask Dev Wave 3 shared conversation release note
+## Ask Dev shared conversation release note
 
 - **New:** the permanent Ask Dev window and `/dev` can load one canonical,
   cursor-paginated persisted transcript through
@@ -121,7 +121,7 @@ a separate product change and is not part of this V1 release.
 - **Reliability:** closing the browser stream signals cancellation and waits for
   a durable `cancelled` terminal state before the stream task is released.
 
-## Ask Dev Wave 3 full-page workspace and shared UI core release note
+## Ask Dev full-page workspace and shared UI core release note
 
 - **New:** `dev-health-web` adds the full-page `/dev` investigation workspace
   and a shared conversational UI core (conversation client, SSE parser/state
@@ -141,11 +141,10 @@ a separate product change and is not part of this V1 release.
   Live verification against a real OpenAI-backed organization surfaced a
   release-blocking defect in the Ops-side tool-call adapter (dotted
   `*.v1`-suffixed tool names are rejected by the OpenAI Chat Completions API),
-  tracked separately as CHAOS-3286; it blocks the real-provider answer path
+  tracked separately; it blocks the real-provider answer path
   for both platform and BYO OpenAI connections until fixed and does not
   originate in this release's web code.
-- **Reliability/accessibility hardening:** a follow-up hardening pass (tracked
-  under CHAOS-3215) fixes a cross-tenant conversation-state leak on
+- **Reliability/accessibility hardening:** a follow-up hardening pass fixes a cross-tenant conversation-state leak on
   organization switch, a request-race that could route a question to the
   wrong conversation, screen-reader announcement noise during streaming,
   reduced-motion support, and several keyboard/focus gaps found during

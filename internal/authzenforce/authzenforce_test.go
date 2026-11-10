@@ -36,11 +36,11 @@ func TestNamespacesAreTheCatalogs(t *testing.T) {
 }
 
 func TestServicesAndEnvNames(t *testing.T) {
-	if got := Services(); !slices.Equal(got, []Service{GoAPI, QueryAPI}) {
+	if got := Services(); !slices.Equal(got, []Service{GoAPI, QueryAPI, QueryAPIHeaders}) {
 		t.Fatalf("Services() = %v", got)
 	}
-	if GoAPI.Env() != "GO_API_AUTHZ_ENFORCE" || QueryAPI.Env() != "QUERY_API_AUTHZ_ENFORCE" {
-		t.Fatalf("env names %q %q", GoAPI.Env(), QueryAPI.Env())
+	if GoAPI.Env() != "GO_API_AUTHZ_ENFORCE" || QueryAPI.Env() != "QUERY_API_AUTHZ_ENFORCE" || QueryAPIHeaders.Env() != "QUERY_API_HEADERS_AUTHZ_ENFORCE" {
+		t.Fatalf("env names %q %q %q", GoAPI.Env(), QueryAPI.Env(), QueryAPIHeaders.Env())
 	}
 }
 
@@ -59,8 +59,8 @@ func TestEveryCellIsOffByDefault(t *testing.T) {
 			}
 		}
 	}
-	if cells != 4*2*len(catalogNamespaces) {
-		t.Fatalf("checked %d cells, want %d", cells, 4*2*len(catalogNamespaces))
+	if want := 4 * len(Services()) * len(catalogNamespaces); cells != want {
+		t.Fatalf("checked %d cells, want %d", cells, want)
 	}
 }
 

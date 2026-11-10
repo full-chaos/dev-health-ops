@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
@@ -20,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 const actionsCatalog = "../../contracts/auth/v1/vocabulary/actions.v1.json"
@@ -153,7 +153,7 @@ func TestDelegatedBearerRowsFollowTheRule(t *testing.T) {
 // TestNewProtectionReadsTheDelegatedRows: the authenticator go-api serves
 // with reads the embedded rows, so the Guard's deny follows them.
 func TestNewProtectionReadsTheDelegatedRows(t *testing.T) {
-	protected, err := newProtection(apiTestConfig(), nil, false, quietLogger())
+	protected, err := newProtection(apiTestConfig(), nil, false, AuthProxyConfig{}, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,15 +210,6 @@ func mustReadGoAPIRows(t *testing.T) []byte {
 	return raw
 }
 
-func mountedHS256(t *testing.T, claims jwt.MapClaims) string {
-	t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(mountedKey))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return token
-}
-
 // TestEveryGuardRowAnswersADelegatedBearerByItsRow drives the real mounted
 // handler of every row the Guard gates, at its own route template: a
 // delegated session's bearer is refused with the deny body on a denied row
@@ -233,14 +224,9 @@ func TestEveryGuardRowAnswersADelegatedBearerByItsRow(t *testing.T) {
 	for _, row := range loadGoAPIRows(t) {
 		byKey[rowKey(t, row)] = row
 	}
-	now := time.Now()
-	base := jwt.MapClaims{"sub": uuid.NewString(), "email": "d@example.com", "org_id": uuid.NewString(), "role": "member",
-		"type": "access", "iss": "dev-health-ops", "aud": "dev-health-api", "exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "tv": 0}
-	delegated := jwt.MapClaims{"impersonating_user_id": uuid.NewString()}
-	for k, v := range base {
-		delegated[k] = v
-	}
-	plainToken, delegatedToken := mountedHS256(t, base), mountedHS256(t, delegated)
+	actor := uuid.New()
+	plainToken := mountedTokens.MustMint(t, edtokens.Claims{UserID: mountedUser, OrgID: mountedOrg.String()})
+	delegatedToken := mountedTokens.MustMint(t, edtokens.Claims{UserID: mountedUser, OrgID: mountedOrg.String(), Actor: &actor})
 	params := regexp.MustCompile(`\{([^}]*)\}`)
 	probed := map[string]int{}
 	for _, route := range mountedRoutesWith(t, func(a *policy.Authenticator) { a.DelegatedRows(rows) }) {

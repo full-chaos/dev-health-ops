@@ -29,7 +29,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/heatmap"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
@@ -52,19 +51,16 @@ func heatmapSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitch {
 }
 
 // loadHeatmapRouteConfig reads this route's own dependency set --
-// ClickHouse plus the envelope verifier trio. Deliberately NOT
+// ClickHouse only; the envelope key is optional. Deliberately NOT
 // loadQueryRouteConfig, same reasoning as quadrant_route.go's own
 // loadQuadrantRouteConfig doc comment: this route never touches registry
 // Postgres.
-func loadHeatmapRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadHeatmapRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 // buildHeatmapRoute constructs the handler, its own routeswitch Mux, and
@@ -73,12 +69,12 @@ func loadHeatmapRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer,
 // "stay unmounted, don't fail to build/start" contract every other
 // optionally-configured route in this binary follows.
 func buildHeatmapRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadHeatmapRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadHeatmapRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("heatmap: build envelope verifier: %w", err)
 	}
@@ -142,6 +138,10 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "heatmap", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "heatmap", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		var validationErrors []pydanticErrorDetail
@@ -190,7 +190,7 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -201,7 +201,7 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 		// binary's one call site for it.
 		for key := range query {
 			if peopleForbiddenQueryParams[key] {
-				writeRESTError(w, r, "heatmap", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "heatmap", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
@@ -226,14 +226,14 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 			params.EndDate = &endDate
 		}
 
-		resp, err := heatmap.BuildResponse(r.Context(), client, claims.OrgID, params)
+		resp, err := heatmap.BuildResponse(r.Context(), client, org, params)
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
-				writeTimeWindowOverflow(w, r, "heatmap", claims.OrgID)
+				writeTimeWindowOverflow(w, r, "heatmap", org)
 				return
 			}
 			if reqErr, ok := heatmap.AsRequestError(err); ok {
-				writeRESTError(w, r, "heatmap", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "heatmap", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -241,13 +241,13 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 			// not one of build_heatmap_response's own typed
 			// HTTPExceptions degrades to a generic 503, never a raw
 			// ClickHouse error on the wire.
-			writeRESTDataUnavailable(w, r, "heatmap", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "heatmap", org, err)
 			return
 		}
 
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: heatmap: encode response failed: org_id=%s request_id=%s err=%v",
-				claims.OrgID, envelopeRequestID(r), encodeErr)
+				org, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 			writeModelFailure(w)
 		}
 	}

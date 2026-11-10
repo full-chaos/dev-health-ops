@@ -17,15 +17,12 @@ const (
 	Gap Kind = "gap"
 )
 
-// Ownership says on which legs a quirk is live: a leg where auth-service owns users (AUTH_USERS_OWNED=true) or not.
+// Ownership says on which legs a quirk is live: every leg, or only a leg where auth-service owns users
+// (AUTH_USERS_OWNED=true). The legs where public.users stays the authority are retired, so no quirk is theirs alone.
 type Ownership string
 
-const (
-	// NotOwned is live only on a leg where public.users stays the authority.
-	NotOwned Ownership = "not_owned"
-	// OwnedOnly is live only on a leg where auth-service owns users.
-	OwnedOnly Ownership = "owned"
-)
+// OwnedOnly is live only on a leg where auth-service owns users.
+const OwnedOnly Ownership = "owned"
 
 // TableLinkMails is the comparison of the link mails the planes send: one line per mail, its subject and the format of
 // its link token. It has no SQL projection; the test builds both sides.
@@ -65,15 +62,15 @@ type Quirk struct {
 	Max int
 	// Exact makes the run cover exactly Max rows: fewer is a failure too.
 	Exact bool
-	// Owned limits the quirk to legs where users are not owned by auth-service (NotOwned) or are (OwnedOnly); empty
-	// is every leg.
+	// Owned limits the quirk to legs where auth-service owns users (OwnedOnly); empty is every leg.
 	Owned Ownership
 }
 
-// legacyVerificationQuirk is the one quirk allowed on a table that has no projection of its own: the owned leg's single
-// stale row of public.email_verification_tokens (CHAOS-11506). Nothing else widens the tables a quirk may name.
-func legacyVerificationQuirk(q Quirk) bool {
-	return q.Table == TableEmailVerificationTokens && q.Owned == OwnedOnly && q.Max == 1 && q.Exact
+// legacyResetPurgeQuirk is the one quirk allowed on a table that has no projection of its own: the owned leg's single
+// golden row of public.password_reset_tokens that the users-owned switch purges (dho auth legacy-link-purge). Nothing
+// else widens the tables a quirk may name.
+func legacyResetPurgeQuirk(q Quirk) bool {
+	return q.Table == TablePasswordResetTokens && q.Owned == OwnedOnly && q.Missing != nil && q.Max == 1 && q.Exact
 }
 
 // CheckTable is every way table is malformed, in the order of the table.
@@ -98,7 +95,7 @@ func CheckTable(table []Quirk) []string {
 		if q.Kind == Gap && strings.TrimSpace(q.Tracked) == "" {
 			problems = append(problems, q.ID+": a gap names the ticket that closes it")
 		}
-		if !projected[q.Table] && q.Table != TableLinkMails && !legacyVerificationQuirk(q) {
+		if !projected[q.Table] && q.Table != TableLinkMails && !legacyResetPurgeQuirk(q) {
 			problems = append(problems, fmt.Sprintf("%s: table %q has no projection", q.ID, q.Table))
 		}
 		if len(q.Needs) == 0 {
@@ -121,8 +118,8 @@ func CheckTable(table []Quirk) []string {
 		if q.Exact && q.Max < 1 {
 			problems = append(problems, q.ID+": an exact quirk sets Max, the rows it must cover")
 		}
-		if q.Owned != "" && q.Owned != NotOwned && q.Owned != OwnedOnly {
-			problems = append(problems, fmt.Sprintf("%s: owned %q is not empty, not_owned or owned", q.ID, q.Owned))
+		if q.Owned != "" && q.Owned != OwnedOnly {
+			problems = append(problems, fmt.Sprintf("%s: owned %q is not empty or owned", q.ID, q.Owned))
 		}
 		set := 0
 		for _, present := range []bool{q.Rewrite != nil, q.Extra != nil, q.Missing != nil} {
@@ -147,7 +144,7 @@ func isAggregate(a Aggregate) bool {
 }
 
 func (q Quirk) live(f Forwarded, owned bool) bool {
-	if (q.Owned == NotOwned && owned) || (q.Owned == OwnedOnly && !owned) {
+	if q.Owned == OwnedOnly && !owned {
 		return false
 	}
 	for _, a := range q.Needs {
@@ -179,13 +176,18 @@ func newLedger(f Forwarded, owned bool, table []Quirk) (*Ledger, error) {
 }
 
 // Compare returns every way the ACP target's rows differ from the golden's for table, beyond the live quirks'. A
-// difference is a line held by one side more often than by the other. Empty rows on either side are a problem.
+// difference is a line held by one side more often than by the other. Empty golden rows are a problem; an empty
+// target is one too, unless live missing-row quirks cover every golden row.
 func (l *Ledger) Compare(table, golden, acp string) []string {
 	l.compared++
-	if golden == "" || acp == "" {
+	if golden == "" {
 		return []string{fmt.Sprintf("%s: rows are empty (golden %d bytes, target %d bytes)", table, len(golden), len(acp))}
 	}
-	goldenOnly, acpOnly := difference(strings.Split(golden, rowSeparator), strings.Split(acp, rowSeparator))
+	var acpLines []string
+	if acp != "" {
+		acpLines = strings.Split(acp, rowSeparator)
+	}
+	goldenOnly, acpOnly := difference(strings.Split(golden, rowSeparator), acpLines)
 	var problems []string
 	for _, line := range sortedKeys(goldenOnly) {
 		for goldenOnly[line] > 0 {

@@ -1,6 +1,6 @@
 ---
 page_id: con-auth-cp-architecture
-summary: The Go Auth Control Plane as built in Wave 1 - the two binaries, the package layout, what runs and what is deliberately dormant - with the guardrail G-75 checklist that links every Wave 1 documentation surface to its page.
+summary: The Go Auth Control Plane as built - the two binaries, the package layout, what runs and what is deliberately dormant - with the guardrail G-75 checklist that links every documentation surface to its page.
 content_type: architecture
 owner: engineering
 source_of_truth:
@@ -17,8 +17,7 @@ lifecycle: active
 # Auth Control Plane architecture and package layout
 
 The Auth Control Plane (ACP) is a separately deployable Go service that will
-become the single issuer and validator authority for platform credentials. In
-Wave 1 it is **built and deployed dormant**: the binaries, the owned database
+become the single issuer and validator authority for platform credentials. It is **built and deployed dormant**: the binaries, the owned database
 schema, the contracts, the audit and outbox machinery and the release gates
 exist, and nothing in production calls the service.
 {: .fc-page-lede }
@@ -53,7 +52,7 @@ Go images. See [deployment](auth-control-plane-deployment.md).
 | `internal/auth/keystore` | Signing-key custody: the file contract and the public half only. |
 | `internal/auth/httpapi` | The middleware stack and server shared by the API listener: request ids, body bound, rate limits, panic recovery, error envelope. |
 | `internal/auth/contracts` | Go validation of the wire contracts under `contracts/auth/v1/`. |
-| `internal/auth/edgetoken`, `signedtoken`, `passwordhash`, `passwordpolicy`, `ratelimitvalkey` | Behaviour-parity ports of the existing Python auth helpers. |
+| `internal/auth/signedtoken`, `passwordhash`, `passwordpolicy`, `ratelimitvalkey` | Behaviour-parity ports of the existing Python auth helpers. |
 | `internal/audit` | The same-transaction audit and outbox write, the outbox publisher loop and the reaper. See [audit and outbox operations](auth-control-plane-audit-outbox.md). |
 | `internal/storage/postgres/authschema` | The auth-owned schema: its own migration lineage, the runtime grant manifest, posture checks. See [database, roles and migrations](auth-control-plane-database.md). |
 | `contracts/auth/v1/` | The language-neutral wire contracts and golden fixtures. See the [contract and SDK guide](auth-control-plane-contracts.md). |
@@ -72,7 +71,7 @@ on the API port. Details are in the
 
 ## Guardrail G-75 checklist
 
-G-75 requires every Wave 1 documentation surface to exist and be linked from
+G-75 requires every documentation surface to exist and be linked from
 this page.
 
 | Surface | Page |
@@ -87,9 +86,8 @@ this page.
 | Go build, release and security gate reference | [Go gates](auth-control-plane-go-gates.md) |
 | Initial service SLO and readiness reference | [Readiness and SLO reference](../../reference/auth/readiness-and-slo.md) |
 
-The decisions behind all of it are in the [ADRs](auth-control-plane-adrs.md),
-the [decision sheet](auth-control-plane-decision-sheet.md) and the
-[threat model](auth-control-plane-threat-model.md).
+The decisions behind all of it are in the [ADRs](auth-control-plane-adrs.md)
+and the [threat model](auth-control-plane-threat-model.md).
 
 ## Verified against
 

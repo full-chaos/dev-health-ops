@@ -37,6 +37,12 @@ type BackfillTarget struct {
 	// platform roles, so the backfill neither grants nor revokes one; a
 	// difference is reported as RoleSkipped.
 	PlatformRolesOwned bool
+	// InsertOnly creates the user when the auth schema does not hold it and
+	// never changes an existing one (CHAOS-13107: compose's auth-users-backfill,
+	// where auth-service owns users and public.users may be stale). An existing
+	// principal is reported as Kept. Off, the default, an existing user is made
+	// to agree with t.
+	InsertOnly bool
 }
 
 // notExpiredSQL is the expiry half of the platform role store's rule, over the
@@ -71,6 +77,8 @@ type BackfillResult struct {
 	// RoleExpiredGranted is the id of an expired assignment a person granted
 	// to a superuser: the backfill leaves it and reports it.
 	RoleExpiredGranted *uuid.UUID
+	// Kept is set when InsertOnly found the principal and wrote nothing.
+	Kept bool
 }
 
 type backfillState struct {
@@ -111,10 +119,17 @@ func (s *Store) BackfillUser(ctx context.Context, t BackfillTarget, dryRun bool)
 	if err != nil {
 		return res, err
 	}
+	if found && t.InsertOnly {
+		// auth-service owns this user: public.users may be stale, so nothing is written (CHAOS-13107).
+		res.Kept = true
+		return res, nil
+	}
 	src := source{email: t.Email, emailLower: storedLoginKey(t.Email), active: t.Active, verified: t.Verified}
 	if !found {
 		res.Inserted = true
 		res.RoleSkipped = t.Superuser && t.PlatformRolesOwned
+		// insertBackfill grants in the same commit (the same rule as its grant), so the grant counts here, dry run or not.
+		res.RoleGranted = t.Superuser && !t.PlatformRolesOwned
 		if !dryRun {
 			if err := s.insertBackfill(ctx, t, src); err != nil {
 				if !errors.Is(err, errPrincipalExists) {

@@ -59,32 +59,37 @@ func apiRows(t *testing.T) []map[string]any {
 	return out
 }
 
-// Every go-api row that opts in to the HS256 access token also accepts the
-// platform EdDSA access token, selected by the JWT header alg.
-func TestEveryHS256RowAlsoAcceptsTheUserAccessToken(t *testing.T) {
-	hs, plain := 0, 0
+// Every go-api row that validates an access token accepts the platform EdDSA
+// access token only: ops_access_token_hs256 is retired, so no row opts in to
+// HS256 or lists that class. A multi-class row selects by the JWT header alg.
+func TestEveryAccessTokenRowAcceptsOnlyTheUserAccessToken(t *testing.T) {
+	user, plain := 0, 0
 	for _, row := range apiRows(t) {
 		classes := rowClasses(row)
+		if slices.Contains(classes, classHS256) {
+			t.Errorf("%s: accepts the retired %s", row["id"], classHS256)
+		}
 		validation, _ := row["access_token_validation"].(map[string]any)
-		if validation == nil || validation["legacy_hs256"] != true {
+		if validation == nil {
 			plain++
 			if slices.Contains(classes, classUserTok) {
-				t.Errorf("%s: a row without the access-token opt-in accepts %s", row["id"], classUserTok)
+				t.Errorf("%s: a row without access_token_validation accepts %s", row["id"], classUserTok)
 			}
 			continue
 		}
-		hs++
-		if !slices.Contains(classes, classHS256) || !slices.Contains(classes, classUserTok) {
-			t.Errorf("%s: classes %v, want both %s and %s", row["id"], classes, classHS256, classUserTok)
+		user++
+		if validation["legacy_hs256"] != false || !slices.Contains(classes, classUserTok) {
+			t.Errorf("%s: classes %v, legacy_hs256 %v; want %s and legacy_hs256 false", row["id"], classes, validation["legacy_hs256"], classUserTok)
 		}
-		if selector, _ := row["class_disambiguator"].(map[string]any); selector["kind"] != wantSelector["kind"] || selector["name"] != wantSelector["name"] {
-			t.Errorf("%s: class_disambiguator %v, want %v", row["id"], row["class_disambiguator"], wantSelector)
+		if len(classes) > 1 {
+			if selector, _ := row["class_disambiguator"].(map[string]any); selector["kind"] != wantSelector["kind"] || selector["name"] != wantSelector["name"] {
+				t.Errorf("%s: class_disambiguator %v, want %v", row["id"], row["class_disambiguator"], wantSelector)
+			}
 		}
 	}
-	// CHAOS-12128 added the principal access read, which has no HS256 opt-in (42 before); CHAOS-11813 retired the
-	// 6 legacy ingest rows, which had no HS256 opt-in (48 before).
-	if hs != 197 || plain != 43 {
-		t.Errorf("rows with the HS256 opt-in %d, without %d; want 197 and 43", hs, plain)
+	// CHAOS-12128 added the principal access read (42 before); CHAOS-11813 retired the 6 legacy ingest rows (48 before).
+	if user != 206 || plain != 43 {
+		t.Errorf("rows with access_token_validation %d, without %d; want 206 and 43", user, plain)
 	}
 }
 
@@ -98,7 +103,7 @@ func TestWidenedRowsPassTheClassSelectorGate(t *testing.T) {
 	checked := 0
 	for _, row := range apiRows(t) {
 		classes := rowClasses(row)
-		if !slices.Contains(classes, classUserTok) || !slices.Contains(classes, classHS256) {
+		if !slices.Contains(classes, classUserTok) || len(classes) < 2 {
 			continue
 		}
 		if err := contracts.CheckClassSelector(row, registry); err != nil {
@@ -106,8 +111,9 @@ func TestWidenedRowsPassTheClassSelectorGate(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 197 {
-		t.Errorf("checked %d rows, want 197", checked)
+	// The four X-Org-Id telemetry rows and logout keep a second class.
+	if checked != 5 {
+		t.Errorf("checked %d rows, want 5", checked)
 	}
 }
 
@@ -121,7 +127,6 @@ func realValidator(t *testing.T) (*accessverify.Validator, *eddsaMinter) {
 	validator, err := accessverify.New(accessverify.Config{
 		Rows:   realRows(t),
 		EdDSA:  verifier,
-		Legacy: func(context.Context, string) (any, error) { return nil, errors.New("hs256 not used here") },
 		Meter:  sdkmetric.NewMeterProvider().Meter("test"),
 		Logger: quietLogger(),
 		Now:    func() time.Time { return probeNow },
@@ -163,7 +168,7 @@ func TestRealRowTableAcceptsAValidUserAccessToken(t *testing.T) {
 	}
 }
 
-// Every row outside the widened 197 (the 48 api rows without the opt-in and
+// Every row outside the widened 206 (the 48 api rows without the opt-in and
 // the 3 billing-edge rows) accepts no access-token class and keeps refusing a
 // user access token: an api row by its row, a billing-edge row because the
 // access-token table holds api rows only.
@@ -201,9 +206,9 @@ func TestAWorkloadTokenIsRefusedOnWidenedRows(t *testing.T) {
 	}
 }
 
-// Every widened row carries its exact class list: the HS256 and user access
-// tokens, plus org_context_header on the four X-Org-Id telemetry rows and
-// ops_refresh_token on logout.
+// Every widened row carries its exact class list: the user access token, plus
+// org_context_header on the four X-Org-Id telemetry rows and ops_refresh_token
+// on logout.
 func TestWidenedRowsCarryTheirExactClassList(t *testing.T) {
 	extra := map[string]string{
 		"GET /api/v1/telemetry/status":   "org_context_header",
@@ -217,7 +222,7 @@ func TestWidenedRowsCarryTheirExactClassList(t *testing.T) {
 		if validation, _ := row["access_token_validation"].(map[string]any); validation == nil {
 			continue
 		}
-		want := []string{classHS256, classUserTok}
+		want := []string{classUserTok}
 		if more, ok := extra[rowProfile(row)]; ok {
 			want = append(want, more)
 			withExtra++
@@ -228,7 +233,7 @@ func TestWidenedRowsCarryTheirExactClassList(t *testing.T) {
 		}
 		widened++
 	}
-	if widened != 197 || withExtra != len(extra) {
-		t.Errorf("checked %d widened rows (%d with an extra class), want 197 and %d", widened, withExtra, len(extra))
+	if widened != 206 || withExtra != len(extra) {
+		t.Errorf("checked %d widened rows (%d with an extra class), want 206 and %d", widened, withExtra, len(extra))
 	}
 }

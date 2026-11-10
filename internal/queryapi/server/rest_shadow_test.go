@@ -128,7 +128,7 @@ func newShadowREST(t *testing.T, decider pep.Decider, env map[string]string) (*g
 	quietStdLog(t)
 	shadowCounters(t)
 	m := newAccessMinter(t)
-	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -245,7 +245,7 @@ func TestRESTShadowOffBuildsNothing(t *testing.T) {
 		quietStdLog(t)
 		before := shadowCounters(t)
 		m := newAccessMinter(t)
-		f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+		f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 		gate := pdp.New(pdp.Config{Mode: mode, Decider: pepOf(t, srv.URL)})
 		if gate.Shadow() != nil {
 			t.Fatalf("mode %q built a shadow", mode)
@@ -339,21 +339,19 @@ func TestRESTShadowObserveSeam(t *testing.T) {
 }
 
 // 2h and the acp condition: EVERY legacy-allow request on a mapped route is observed, whatever the credential class.
-// A user token asks the PDP (match); the HS256 edge token routed or not and the envelope are counted skipped; the
-// #5679 exempt counter is unchanged.
+// A user token asks the PDP (match). The envelope is a retired class on both paths: the 401 of an unaccepted bearer,
+// nothing to observe, no PDP call and no exempt count.
 func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
-	skippedHS256 := map[string]int64{shadowResultsMetric + "|reason=hs256,result=skipped": 1}
-	skippedEnvelope := map[string]int64{shadowResultsMetric + "|reason=envelope,result=skipped": 1}
 	matched := map[string]int64{shadowResultsMetric + "|reason=none,result=match": 1}
 	for name, routed := range map[string]bool{"routed": true, "unrouted": false} {
 		for class, tc := range map[string]struct {
-			token func(*gatedREST, *testing.T) string
-			want  map[string]int64
-			calls int
+			token   func(*gatedREST, *testing.T) string
+			want    map[string]int64
+			calls   int
+			retired bool
 		}{
-			"user token": {func(g *gatedREST, _ *testing.T) string { return g.userToken() }, matched, 1},
-			"edge token": {func(g *gatedREST, t *testing.T) string { return g.edgeToken(t) }, skippedHS256, 0},
-			"envelope":   {func(g *gatedREST, _ *testing.T) string { return g.f.envelope }, skippedEnvelope, 0},
+			"user token": {func(g *gatedREST, _ *testing.T) string { return g.userToken() }, matched, 1, false},
+			"envelope":   {func(g *gatedREST, _ *testing.T) string { return g.f.envelope }, nil, 0, true},
 		} {
 			if class == "user token" && !routed {
 				continue
@@ -366,7 +364,7 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 				if !routed {
 					setup = nil
 				}
-				f := newRESTFixture(t, newAccessStore(), setup, true)
+				f := newRESTFixture(t, newAccessStore(), setup)
 				reader := sdkmetric.NewManualReader()
 				provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 				t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -374,6 +372,21 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 					Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 				g := &gatedREST{handler: planeHandler(f.handler.(*http.ServeMux), gate), reader: reader, gate: gate, f: f, minter: m}
 				before := shadowCounters(t)
+				if tc.retired {
+					if got, _ := g.get(tc.token(g, t)); got != (answer{http.StatusUnauthorized, restRefusal}) {
+						t.Fatalf("answer %+v, want 401 refusal", got)
+					}
+					if d := settleQuiet(t, before); len(d) != 0 {
+						t.Fatalf("5.12 counters %v, want none for a refused token", d)
+					}
+					if n := len(srv.Requests()); n != 0 {
+						t.Fatalf("PDP asked %d times for a refused token", n)
+					}
+					if got := g.counter(t, "dev_health_query_api_pdp_exempt_total"); len(got) != 0 {
+						t.Fatalf("exempt counter %v, want none", got)
+					}
+					return
+				}
 				if got, _ := g.get(tc.token(g, t)); got.Status != http.StatusOK {
 					t.Fatalf("status %d, want 200", got.Status)
 				}
@@ -382,11 +395,6 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 				}
 				if n := len(srv.Requests()); n != tc.calls {
 					t.Fatalf("PDP asked %d times, want %d", n, tc.calls)
-				}
-				if class != "user token" {
-					if got := g.counter(t, "dev_health_query_api_pdp_exempt_total"); len(got) != 1 {
-						t.Fatalf("exempt counter %v, want one series as before", got)
-					}
 				}
 			})
 		}
@@ -441,20 +449,22 @@ func TestRESTShadowInFlightFullIsDropped(t *testing.T) {
 	}
 }
 
-// 2k: AUTH_SHADOW_PDP_SAMPLE=50 asks for 50 of 100 requests.
+// 2k: AUTH_SHADOW_PDP_SAMPLE=50 asks for 50 of 100 requests. The in-flight cap is 100 so a slow PDP drops none.
 func TestRESTShadowSampleKnob(t *testing.T) {
 	srv := pdptest.New(t)
-	g, _ := newShadowREST(t, pepOf(t, srv.URL), map[string]string{policy.EnvShadowPDPSample: "50"})
+	g, _ := newShadowREST(t, pepOf(t, srv.URL), map[string]string{policy.EnvShadowPDPSample: "50", policy.EnvShadowPDPInFlight: "100"})
+	before := shadowCounters(t)
 	for i := 0; i < 100; i++ {
 		if got, _ := g.get(g.userToken()); got != gatedOK {
 			t.Fatalf("request %d: %+v", i, got)
 		}
 	}
-	for deadline := time.Now().Add(3 * time.Second); len(srv.Requests()) < 50 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-	}
-	time.Sleep(100 * time.Millisecond)
+	g.gate.Shadow().Wait()
 	if n := len(srv.Requests()); n != 50 {
 		t.Fatalf("PDP asked %d times for a 50 percent sample of 100, want 50", n)
+	}
+	if dropped := shadowDelta(before, shadowCounters(t))[shadowResultsMetric+"|reason=none,result=dropped"]; dropped != 0 {
+		t.Fatalf("%d sampled calls dropped, want 0", dropped)
 	}
 }
 
@@ -560,7 +570,7 @@ func TestRESTShadowLabelCensus(t *testing.T) {
 // 5.12 counters.
 func TestRESTEnforceUnchangedByTheShadowSwitch(t *testing.T) {
 	srv := pdptest.New(t)
-	g := newGatedREST(t, pdp.ModeEnforce, srv.URL, true)
+	g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, true)
 	before := shadowCounters(t)
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedOK {
 		t.Fatalf("allow: %+v", got)
@@ -598,7 +608,7 @@ func TestRESTShadowCallerKindFromTheVerifiedCaller(t *testing.T) {
 	g, _ := newShadowREST(t, pepOf(t, srv.URL), nil)
 	store := newAccessStore()
 	store.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
-	g.f = newRESTFixture(t, store, testAccess(g.minter.keys, nil, accessTestNow), true)
+	g.f = newRESTFixture(t, store, testAccess(g.minter.keys, nil, accessTestNow))
 	g.handler = planeHandler(g.f.handler.(*http.ServeMux), g.gate)
 	before := shadowCounters(t)
 	if got, _ := g.get(g.userToken()); got != gatedOK {
@@ -654,7 +664,7 @@ func TestRESTShadowDecisionWithObligationsNeverChangesTheLegacyAnswerOrTheSQL(t 
 		t.Helper()
 		m := newAccessMinter(t)
 		client := &recordingHomeClient{}
-		f := newRESTFixtureServing(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true, newHomeGetHandler(client, nil))
+		f := newRESTFixtureServing(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), newHomeGetHandler(client, nil))
 		mux := f.handler.(*http.ServeMux)
 		var handler http.Handler = mux
 		if gate != nil {

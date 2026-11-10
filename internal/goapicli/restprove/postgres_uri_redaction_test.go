@@ -68,7 +68,7 @@ func TestParseFlags_PostgresURIFallsBackToTheEnvValue(t *testing.T) {
 
 	f, err := parseFlags([]string{
 		"-python-api-url", "http://api:8000",
-		"-candidate-bearer-exec", `["/bin/true"]`,
+		"-candidate-access-token-file", "/run/proof/access-token",
 		"-baseline-bearer-exec", `["/bin/true"]`,
 		"-org", "org-1",
 		"-recorded-by", "chris",
@@ -93,7 +93,7 @@ func TestParseFlags_PostgresURIExplicitEmptyWinsOverTheEnvValue(t *testing.T) {
 	f, err := parseFlags([]string{
 		"-postgres-uri=",
 		"-python-api-url", "http://api:8000",
-		"-candidate-bearer-exec", `["/bin/true"]`,
+		"-candidate-access-token-file", "/run/proof/access-token",
 		"-baseline-bearer-exec", `["/bin/true"]`,
 		"-org", "org-1",
 		"-recorded-by", "chris",

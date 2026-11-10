@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 type grantedLicensing struct{}
@@ -63,7 +64,7 @@ func TestExplainRoutesRefuseASavedConfigThatCannotServe(t *testing.T) {
 					t.Fatal(err)
 				}
 				req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain", nil)
-				req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+				req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 				rec := httptest.NewRecorder()
 				newInvestmentExplainWorkHandler(reader, nil, resolver, nil, gate)(rec, req)
 				assertGateOutcome(t, rec, resolver, admittedOutcome{}, false, http.StatusForbidden, c.reason)

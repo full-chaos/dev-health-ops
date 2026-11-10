@@ -28,7 +28,8 @@ func mustOutcomeCounter() metric.Int64Counter {
 }
 
 // RecordOutcome counts one internal-path authentication. carrier is
-// "headers", "envelope" or "none"; outcome is "accepted", "invalid" (an envelope the verifier refused; its own reason is on the principal series) or a refusal reason.
+// "headers", "edge", "envelope" or "none"; outcome is "accepted", "invalid" or a refusal reason. carrier "envelope" is
+// any bearer outside the edge carrier, the retired effective-principal envelope included, and is always "invalid".
 func RecordOutcome(carrier, outcome string) {
 	outcomeCounter.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("carrier", carrier),

@@ -48,4 +48,18 @@ if [[ "$STOP" == *" $first "* ]]; then
   echo "PR title description opens with '$first' (article, determiner or pronoun): start it with the verb of the change" >&2
   exit 1
 fi
+# CHAOS-13180: a PR closes its title's ticket at merge. A live temporary or decision row of the exception ledger whose owner is that
+# ticket would stay with a closed owner, so the title is refused until the PR removes the row or re-homes it to the open ticket that
+# removes it. EXCEPTION_LEDGER overrides the path (cells only).
+ledger=${EXCEPTION_LEDGER:-"$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ci/auth_exception_ledger.tsv"}
+if ! [ -r "$ledger" ]; then
+  echo "cannot read the exception ledger $ledger" >&2
+  exit 1
+fi
+id=$(grep -oE 'CHAOS-[0-9]+' <<<"$title")
+owned=$(awk -F'\t' -v id="$id" '!/^#/ && ($2 == "temporary" || $2 == "decision") && $5 == id { print $1 }' "$ledger" | paste -sd, -)
+if [ -n "$owned" ]; then
+  echo "PR title ticket $id owns live exception ledger row(s) $owned: the merge closes $id while they stay; remove them in this PR or re-home them to the open ticket that removes them" >&2
+  exit 1
+fi
 echo "PR title ok"

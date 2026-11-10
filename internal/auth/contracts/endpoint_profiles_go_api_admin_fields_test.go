@@ -6,11 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/contracts/auth/v1/vocabulary"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/routescan"
 )
 
 // The go-api admin rows record, for each route, what the code does today: the action, how the resource is
@@ -117,6 +118,11 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 		out = append(out, id+": "+strings.TrimSpace(sprintf(format, args...)))
 	}
 
+	// source: the row's registration, found by symbol (method and route), never by the line the row cites.
+	if _, _, err := registrationEntry(row, root); err != nil {
+		bad("source: %v", err)
+	}
+
 	// action: a catalog action, or null with a gap naming it.
 	switch action := row["action"].(type) {
 	case string:
@@ -125,7 +131,13 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 			bad("action %q is not in the actions catalog", action)
 		}
 		tenancy, _ := row["tenant_requirement"].(string)
-		if known && (scope == "platform") != (tenancy == "cross_org_superuser_only") {
+		// A platform action sits on a cross-org superuser row, or on an org_scoped row mounted admin-or (an org owner or
+		// admin of the token's organization passes too); a platform action on any other org_scoped row fails.
+		adminOr := false
+		if known && scope == "platform" && tenancy == "org_scoped" {
+			adminOr, _ = registeredAdminOr(row, root)
+		}
+		if known && (scope == "platform") != (tenancy == "cross_org_superuser_only") && !adminOr {
 			bad("action %q has scope %q but the row's tenant_requirement is %q", action, scope, tenancy)
 		}
 	case nil:
@@ -140,7 +152,8 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 
 	// resource resolver, cache text and impersonation enum are always recorded.
 	resolver, _ := row["resource_resolver"].(string)
-	if !strings.HasPrefix(resolver, "organization_from_session:") && !strings.HasPrefix(resolver, "organization_from_path:") && !strings.HasPrefix(resolver, "none:") && !nonSessionResolver(resolver) {
+	if !strings.HasPrefix(resolver, "organization_from_session:") && !strings.HasPrefix(resolver, "organization_from_path:") &&
+		!strings.HasPrefix(resolver, "organization_from_query_or_session:") && !strings.HasPrefix(resolver, "none:") && !nonSessionResolver(resolver) {
 		bad("resource_resolver does not start with a resolver kind: %q", resolver)
 	}
 	cache, _ := row["current_state_cache_behavior"].(string)
@@ -225,21 +238,21 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 	// a registration that wraps the handler in bodyFirst always says so (a handler may decode first by other means and say so too).
 	if text, ok := disclosure.(string); ok {
 		claims := strings.Contains(text, bodyFirstClause)
-		if registered, found := registeredBodyFirst(row, root); found && registered != claims {
+		if registered, err := registeredBodyFirst(row, root); err == nil && registered != claims {
 			bad("the body-first clause (%v) disagrees with the route registration (%v)", claims, registered)
 		}
 	}
 
-	// the text is a record, not a policy: no denial under impersonation is claimed, and every anchor resolves.
+	// the text is a record, not a policy: no denial under impersonation is claimed, and every cited file exists. The
+	// cited line is a citation at the inventory's source_commit (the authhistory leg checks it), never read here.
 	for _, field := range []string{"resource_resolver", "current_state_cache_behavior", "disclosure_behavior"} {
 		text, _ := row[field].(string)
 		if denialPattern.MatchString(text) {
 			bad("%s claims a denial under impersonation: %q", field, text)
 		}
 		for _, match := range anchorPattern.FindAllStringSubmatch(text, -1) {
-			line, _ := strconv.Atoi(match[2])
-			if problem := anchorProblem(root, match[1], line); problem != "" {
-				bad("%s anchor %s:%d %s", field, match[1], line, problem)
+			if problem := anchorProblem(root, match[1]); problem != "" {
+				bad("%s anchor %s:%s %s", field, match[1], match[2], problem)
 			}
 		}
 	}
@@ -255,38 +268,73 @@ var bodyFirstPattern = regexp.MustCompile(`(?i)(bodyFirst|adminBody\(|decodeFirs
 
 var bodyFirstClosures = map[string]string{"internal/api/integrationsadmin/routes.go": "write("}
 
-// registeredBodyFirst reports whether the registration entry at the row's source line wraps its handler in bodyFirst.
-func registeredBodyFirst(row map[string]any, root string) (registered, found bool) {
-	source, _ := row["source"].(map[string]any)
-	file, _ := source["file"].(string)
-	line, _ := source["line"].(float64)
-	raw, err := os.ReadFile(filepath.Join(root, file))
-	if err != nil || int(line) < 1 {
-		return false, false
-	}
-	lines := strings.Split(string(raw), "\n")
-	if int(line) > len(lines) {
-		return false, false
-	}
-	entry := lines[int(line)-1]
-	for i := int(line); i < len(lines) && i < int(line)+3 && !strings.Contains(lines[i], "Method:"); i++ {
-		entry += "\n" + lines[i]
+// registeredBodyFirst reports whether the row's registration wraps its handler in bodyFirst.
+func registeredBodyFirst(row map[string]any, root string) (bool, error) {
+	file, entry, err := registrationEntry(row, root)
+	if err != nil {
+		return false, err
 	}
 	closure, named := bodyFirstClosures[file]
-	return bodyFirstPattern.MatchString(entry) || (named && strings.Contains(entry, closure)), true
+	return bodyFirstPattern.MatchString(entry) || (named && strings.Contains(entry, closure)), nil
 }
 
-func anchorProblem(root, rel string, line int) string {
-	raw, err := os.ReadFile(filepath.Join(root, rel))
+// adminOrPattern names the registration wrappers of an admin-or mount: Guard.WrapAdminOr and Guard.BodyFirstAdminOr
+// (the admin package's bodyFirstAdminOr).
+var adminOrPattern = regexp.MustCompile(`\b(WrapAdminOr|[bB]odyFirstAdminOr)\(`)
+
+// registeredAdminOr reports whether the row's registration mounts it admin-or; the error says the source anchor does
+// not resolve.
+func registeredAdminOr(row map[string]any, root string) (bool, error) {
+	_, entry, err := registrationEntry(row, root)
+	return err == nil && adminOrPattern.MatchString(entry), err
+}
+
+var (
+	registrationsMu sync.Mutex
+	registrationsIn = map[string][]routescan.Registration{}
+)
+
+// registrationEntry is the row's registration as the source holds it: the line of the one registration in source.file
+// that serves the row's method and route, and the lines after it up to the next route (at most three). source.line is
+// a citation and is not read: a line moved above the registration cannot change the entry, and a registration that is
+// gone or doubled fails.
+func registrationEntry(row map[string]any, root string) (file, entry string, err error) {
+	source, _ := row["source"].(map[string]any)
+	file, _ = source["file"].(string)
+	method, _ := row["method"].(string)
+	route, _ := row["route"].(string)
+	dir := filepath.Join(root, filepath.Dir(file))
+	registrationsMu.Lock()
+	regs, ok := registrationsIn[dir]
+	if !ok {
+		regs, err = routescan.ScanWithMux(dir)
+		if err == nil {
+			registrationsIn[dir] = regs
+		}
+	}
+	registrationsMu.Unlock()
 	if err != nil {
-		return "names a file that does not exist"
+		return file, "", fmt.Errorf("source %s does not scan: %v", file, err)
+	}
+	reg, err := routescan.Resolve(regs, filepath.ToSlash(filepath.Join(root, file)), method, route)
+	if err != nil {
+		return file, "", fmt.Errorf("%s", strings.ReplaceAll(err.Error(), filepath.ToSlash(root)+"/", ""))
+	}
+	raw, err := os.ReadFile(filepath.Join(root, file))
+	if err != nil {
+		return file, "", err
 	}
 	lines := strings.Split(string(raw), "\n")
-	if line < 1 || line > len(lines) {
-		return "is past the end of the file"
+	entry = lines[reg.Line-1]
+	for i := reg.Line; i < len(lines) && i < reg.Line+3 && !strings.Contains(lines[i], "Method:"); i++ {
+		entry += "\n" + lines[i]
 	}
-	if strings.TrimSpace(lines[line-1]) == "" {
-		return "points at a blank line"
+	return file, entry, nil
+}
+
+func anchorProblem(root, rel string) string {
+	if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+		return "names a file that does not exist"
 	}
 	return ""
 }
@@ -352,18 +400,19 @@ func TestAdminFieldChecksCatchPlantedDefects(t *testing.T) {
 		t.Fatalf("the unmodified row has violations: %v", got)
 	}
 	mutations := map[string]func(map[string]any){
-		"unknown action":                         func(r map[string]any) { r["action"] = "teams.destroy" },
-		"action with the wrong scope":            func(r map[string]any) { r["action"] = "admin.orgs" },
-		"null action without a gap":              func(r map[string]any) { r["action"] = nil },
-		"absent resolver":                        func(r map[string]any) { delete(r, "resource_resolver") },
-		"cache text without a rule":              func(r map[string]any) { r["current_state_cache_behavior"] = "unknown" },
-		"impersonation unknown":                  func(r map[string]any) { r["impersonation_policy"] = "unknown" },
-		"impersonation exempt on a tenant route": func(r map[string]any) { r["impersonation_policy"] = "exempt_no_org_context" },
-		"by-id route claims the no-id rule":      func(r map[string]any) { r["disclosure_behavior"] = noIDPrefix + " the caller's own organization" },
-		"disclosure names no class":              func(r map[string]any) { r["disclosure_behavior"] = "returns 404" },
-		"disclosure null without a gap":          func(r map[string]any) { r["disclosure_behavior"] = nil },
-		"anchor past the end of the file": func(r map[string]any) {
-			r["disclosure_behavior"] = byIDPrefix + " 404 (internal/api/teamsidentity/teamsidentity.go:99999; internal/api/teamsidentity/store.go:125); 403 (internal/api/policy/guard.go:129)"
+		"unknown action":                             func(r map[string]any) { r["action"] = "teams.destroy" },
+		"action with the wrong scope":                func(r map[string]any) { r["action"] = "admin.orgs" },
+		"null action without a gap":                  func(r map[string]any) { r["action"] = nil },
+		"absent resolver":                            func(r map[string]any) { delete(r, "resource_resolver") },
+		"cache text without a rule":                  func(r map[string]any) { r["current_state_cache_behavior"] = "unknown" },
+		"impersonation unknown":                      func(r map[string]any) { r["impersonation_policy"] = "unknown" },
+		"impersonation exempt on a tenant route":     func(r map[string]any) { r["impersonation_policy"] = "exempt_no_org_context" },
+		"by-id route claims the no-id rule":          func(r map[string]any) { r["disclosure_behavior"] = noIDPrefix + " the caller's own organization" },
+		"disclosure names no class":                  func(r map[string]any) { r["disclosure_behavior"] = "returns 404" },
+		"disclosure null without a gap":              func(r map[string]any) { r["disclosure_behavior"] = nil },
+		"source names no registration of the method": func(r map[string]any) { r["method"] = "PUT" },
+		"source names a file without the route": func(r map[string]any) {
+			r["source"] = map[string]any{"file": "internal/api/teamsidentity/store.go", "line": float64(1)}
 		},
 		"anchor names a missing file": func(r map[string]any) {
 			r["disclosure_behavior"] = byIDPrefix + " 404 (internal/api/nope/nope.go:5; internal/api/teamsidentity/store.go:125); 403 (internal/api/policy/guard.go:129)"
@@ -648,34 +697,37 @@ func TestInternalOrgScopedRowWithOtherIDFormIsStillInternal(t *testing.T) {
 	}
 }
 
-func TestInternalACRRowsNameBothCredentialPaths(t *testing.T) {
+// The internal acr rows accept the acr-api workload token only: no row lists
+// internal_svc_acr_token or describes a svc_acr_ store read.
+func TestInternalACRRowsNameTheWorkloadTokenOnly(t *testing.T) {
 	for id, row := range rowsByID(t, internalACRCacheIDs) {
 		cache, _ := row["current_state_cache_behavior"].(string)
-		for _, want := range []string{
-			cachePrefix,
-			"svc_acr_ credential: store read every request, no cache",
-			"workload token: signature verify only, no store read",
-		} {
+		for _, want := range []string{cachePrefix, "workload token: signature verify only, no store read"} {
 			if !strings.Contains(cache, want) {
 				t.Errorf("%s: cache text lacks %q: %q", id, want, cache)
 			}
 		}
+		if strings.Contains(cache, "svc_acr_") {
+			t.Errorf("%s: cache text still names a svc_acr_ read: %q", id, cache)
+		}
 		if strings.HasPrefix(cache, noReadPrefix) {
 			t.Errorf("%s: cache text still says no authorization read: %q", id, cache)
+		}
+		classes, _ := row["accepted_credential_classes"].([]any)
+		if len(classes) != 1 || classes[0] != "workload_token" {
+			t.Errorf("%s: accepted_credential_classes = %v, want [workload_token]", id, classes)
 		}
 	}
 	llm := rowsByID(t, internalOrgScopedIDs[1:])[internalOrgScopedIDs[1]]
 	validator, _ := llm["primary_validator"].(map[string]any)
 	text, _ := validator["description"].(string)
-	for _, banned := range []string{"routeAuth", "keyed", "limiter"} {
+	for _, banned := range []string{"routeAuth", "keyed", "limiter", "llm_config:read"} {
 		if strings.Contains(text, banned) {
 			t.Errorf("the llm-config validator text names %q: %q", banned, text)
 		}
 	}
-	for _, want := range []string{"llmConfigHandler", "llm_config:read"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("the llm-config validator text lacks %q: %q", want, text)
-		}
+	if !strings.Contains(text, "llmConfigHandler") {
+		t.Errorf("the llm-config validator text lacks llmConfigHandler: %q", text)
 	}
 }
 
@@ -798,10 +850,9 @@ var billingActionRows = map[string]string{
 }
 
 // The billing rows no catalog role set fits: superuser-only handlers (org-scoped rows, which the shape test forbids a
-// platform action), the anonymous plan reads and the routes every organization role may call. They keep action null with a gap that says why.
+// platform action) and the routes every organization role may call. They keep action null with a gap that says why.
+// The anonymous plan reads are public rows, not covered here; apiservice's shadow-row cell holds their action null.
 var billingNullRows = []string{
-	"GET /api/v1/billing/plans [dev-health-ops-api @api]",
-	"GET /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",
 	"POST /api/v1/billing/plans [dev-health-ops-api @api]",
 	"PUT /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",
 	"DELETE /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",

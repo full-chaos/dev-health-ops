@@ -13,7 +13,7 @@ import (
 
 // ErrNoProvisioner refuses a membership change or a real organization delete
 // when the CLI holds no client of auth-service's provisioning routes.
-var ErrNoProvisioner = &OperatorError{Message: "membership changes and organization deletes go through the authentication service: AUTH_PROXY_URL and AUTH_SESSION_ISSUE_TOKEN (the admin API's own service credential) must be set; nothing was written."}
+var ErrNoProvisioner = &OperatorError{Message: "membership changes and organization deletes go through the authentication service: AUTH_PROXY_URL and the workload inputs (AUTH_WORKLOAD_SUBJECT_FILE or AUTH_WORKLOAD_BOOTSTRAP_FILE, and AUTH_WORKLOAD_ISSUER) must be set; nothing was written."}
 
 // ErrActorRequired refuses a membership change or a real organization delete with no --actor.
 var ErrActorRequired = &OperatorError{Message: "--actor is required: the id or email of an active owner or admin of the organization, or of a superuser (a superuser for an organization delete)."}
@@ -50,7 +50,7 @@ func resolveActorOn(ctx context.Context, store pgStore, actor string) (uuid.UUID
 		}
 		return id, nil
 	}
-	user, err := store.userByEmail(ctx, actor)
+	user, err := store.actorByEmail(ctx, actor)
 	if err != nil {
 		return uuid.Nil, err
 	}

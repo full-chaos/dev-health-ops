@@ -20,10 +20,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 )
 
+// declaredGapTicket matches the open ticket a declared gap must name.
+var declaredGapTicket = regexp.MustCompile(`\bCHAOS-[0-9]+\b`)
+
 const (
-	declaredGapTicket = "CHAOS-11042"
-	actionMapTicket   = "CHAOS-12657"
-	unknownValue      = "unknown"
+	fixtureGapTicket = "CHAOS-1"
+	actionMapTicket  = "CHAOS-12657"
+	unknownValue     = "unknown"
 )
 
 var actionFieldKeys = []string{"action", "resource_resolver", "current_state_cache_behavior", "impersonation_policy", "disclosure_behavior"}
@@ -131,6 +134,8 @@ func rowFamily(id, route string) string {
 		return "proofw"
 	case strings.HasPrefix(route, "/query"):
 		return "query"
+	case strings.Contains(route, "{"):
+		return "rest-id"
 	}
 	return "rest"
 }
@@ -141,7 +146,7 @@ func rowFamily(id, route string) string {
 // five, never null; "action" is the catalog action the route action table
 // (route_actions.go) names for the row, never "unknown", with no "action:" gap
 // and a platform-scope action only on a resource_resolver of "none"; each other
-// key is "unknown" with a named gap that names CHAOS-11042, or the exact
+// key is "unknown" with a named gap that names a ticket other than CHAOS-11042, or the exact
 // statement registered for the row's family and field, whose every proof needle
 // is present in the named source or test file; an impersonation policy is a
 // schema value; the REST validator description is the registered statement.
@@ -191,12 +196,12 @@ func checkRowFields(rows []map[string]any, cat *policycatalog.Catalog, actions m
 			case text == unknownValue:
 				named := false
 				for _, gap := range gaps {
-					if strings.HasPrefix(gap, key+":") && strings.Contains(gap, declaredGapTicket) {
+					if strings.HasPrefix(gap, key+":") && declaredGapTicket.MatchString(gap) && !strings.Contains(gap, retiredGapTicket) {
 						named = true
 					}
 				}
 				if !named {
-					defects = append(defects, fmt.Sprintf("%s: %s is unknown without a %q gap naming %s", id, key, key+":", declaredGapTicket))
+					defects = append(defects, fmt.Sprintf("%s: %s is unknown without a %q gap naming an open ticket", id, key, key+":"))
 				}
 			default:
 				claim, registered := claims[fam][key]
@@ -213,10 +218,10 @@ func checkRowFields(rows []map[string]any, cat *policycatalog.Catalog, actions m
 				defects = append(defects, fmt.Sprintf("%s: impersonation_policy %q is not a schema value", id, text))
 			}
 		}
-		if fam == "rest" {
+		if fam == "rest" || fam == "rest-id" {
 			if pv, ok := row["primary_validator"].(map[string]any); ok {
 				description, _ := pv["description"].(string)
-				if claim, registered := claims["rest"]["primary_validator"]; registered {
+				if claim, registered := claims[fam]["primary_validator"]; registered {
 					if description != claim.value {
 						defects = append(defects, fmt.Sprintf("%s: primary_validator description is not the proven statement: %.80q", id, description))
 					} else {
@@ -306,7 +311,7 @@ func TestRowFieldGuardCatchesPlantedDefects(t *testing.T) {
 		},
 	}
 	read := func(string) string { return src }
-	gap := func(field string) []any { return []any{field + ": declared gap tracked in " + declaredGapTicket} }
+	gap := func(field string) []any { return []any{field + ": declared gap tracked in " + fixtureGapTicket} }
 	protected := func() map[string]any {
 		gaps := append(gap("current_state_cache_behavior"), gap("impersonation_policy")[0])
 		return map[string]any{
@@ -335,7 +340,8 @@ func TestRowFieldGuardCatchesPlantedDefects(t *testing.T) {
 		{"null field", with("disclosure_behavior", nil), nil, nil, "is null"},
 		{"empty string", with("disclosure_behavior", ""), nil, nil, "not a non-empty string"},
 		{"unknown without a gap", with("gaps", gap("current_state_cache_behavior")), nil, nil, "impersonation_policy is unknown without"},
-		{"unknown gap without the ticket", with("gaps", []any{"current_state_cache_behavior: x", "impersonation_policy: x"}), nil, nil, "naming " + declaredGapTicket},
+		{"unknown gap without the ticket", with("gaps", []any{"current_state_cache_behavior: x", "impersonation_policy: x"}), nil, nil, "naming an open ticket"},
+		{"unknown gap naming the closed check", with("gaps", []any{"current_state_cache_behavior: declared gap tracked in " + retiredGapTicket, "impersonation_policy: declared gap tracked in " + retiredGapTicket}), nil, nil, "naming an open ticket"},
 		{"action set back to unknown", with("action", unknownValue), nil, nil, "action is unknown; every query-api protected row names a catalog action"},
 		{"action not in the catalog", with("action", "x.nothing"), nil, nil, "is not in the catalog"},
 		{"action that is not the table's", with("action", "metrics.read"), nil, nil, "is not the route action table's \"analytics.read\""},
@@ -388,11 +394,11 @@ func TestRowGuardGoesRedOnTheVerifierPlants(t *testing.T) {
 			return text
 		}
 	}
-	forbidden := swapped("rest_error_response.go", `http.StatusForbidden, "Organization context required"`, `http.StatusUnauthorized, "Organization context required"`)
+	forbidden := swapped("rest_access.go", `http.StatusForbidden, "Organization context required"`, `http.StatusUnauthorized, "Organization context required"`)
 	if joined := strings.Join(checkRowFields(rows, cat, RouteActionTable(), rowClaims, forbidden), "\n"); !strings.Contains(joined, "Organization context required") {
-		t.Errorf("a 403 changed to 401 in authenticateRESTRequest stayed green")
+		t.Errorf("a 403 changed to 401 in authenticateRESTRouted stayed green")
 	}
-	commented := swapped("rest_error_response.go", `policy.WriteAuthFailure(`, `/* policy.WriteAuthFailure( */ nothing(`)
+	commented := swapped("rest_access.go", `policy.WriteAuthFailure(`, `/* policy.WriteAuthFailure( */ nothing(`)
 	if joined := strings.Join(checkRowFields(rows, cat, RouteActionTable(), rowClaims, commented), "\n"); !strings.Contains(joined, "WriteAuthFailure") {
 		t.Errorf("a needle moved into a comment stayed green")
 	}
@@ -438,10 +444,10 @@ var allOrgRoles = []string{"admin", "member", "owner", "viewer"}
 
 var legacyGuards = map[string]legacyGuard{
 	"rest-org": {orgRoles: allOrgRoles, proofs: []claimProof{
-		{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return authctx.Claims{OrgID: claims.OrgID}, true"}},
+		{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"return authctx.Claims{OrgID: claims.OrgID, Scope: scope}, true"}},
 	}},
 	"internal-org": {orgRoles: allOrgRoles, proofs: []claimProof{
-		{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"OrgID: claims.OrgID"}},
+		{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"return withLegacyScope(claims), true"}},
 	}},
 	"graphql-edge": {orgRoles: allOrgRoles, proofs: []claimProof{
 		{file: "../../api/policy/scope.go", decl: "Scope.mayUseOrg", needles: []string{"s.auth.IsMember(ctx, user.UserID, orgID)"}},
@@ -706,16 +712,23 @@ func queryAPIRoleReads(t *testing.T) map[string]int {
 // Each count was read against its file: the legacy gates are datahealth.RequireOperator (admin.stats or the admin, owner,
 // operator roles), producttelemetry.RequirePlatformAdmin (admin.telemetry, no impersonation), the org-less platform
 // admission and the cross-org superuser branch in operation_org_guard.go (admin.orgs), the MCP elevated-role refusal in
-// mcp_route.go, and the plumbing that copies the role into the claims or logs it.
+// mcp_route.go, the /buildinfo platform-admin bound in buildinfo_route.go (admin.orgs, a user access token only; the
+// identity headers keep the any-role answer), and the plumbing that copies the role into the claims or
+// logs it. graph/field_precheck.go and
+// graph/operation_shadow.go only copy the verified claims into the shadow's pre-checks and observations (the shadow
+// changes no decision).
 var knownQueryAPIRoleReads = map[string]int{
 	"authctx/authctx.go":                   1,
 	"datahealth/datahealth.go":             3,
+	"graph/field_precheck.go":              3,
 	"graph/operation_org_guard.go":         2,
+	"graph/operation_shadow.go":            2,
 	"graph/schema.resolvers.go":            3,
 	"internalidentity/internalidentity.go": 1,
 	"producttelemetry/platform.go":         2,
+	"server/buildinfo_route.go":            1,
 	"server/graphql_edge_route.go":         1,
-	"server/internal_auth.go":              2,
+	"server/internal_auth.go":              1,
 	"server/mcp_route.go":                  1,
 }
 

@@ -95,3 +95,23 @@ func TestTheOutcomeListMustHoldExactlyTheTwoSecretsInOrder(t *testing.T) {
 		}
 	}
 }
+
+// The expect tag is T or F only (CHAOS-12338): any other tag, the empty one included, is refused before the attempts are
+// read, even with tries that would pass as a T copy, and the message never prints the tag.
+func TestAttemptsRefuseAnExpectTagThatIsNotTOrF(t *testing.T) {
+	accepted := tries(drillAttemptOutcome{Accepted: true}, drillAttemptOutcome{Accepted: true})
+	refused := tries(drillAttemptOutcome{Reason: string(workload.ReasonRevoked)}, drillAttemptOutcome{Reason: string(workload.ReasonDisabled)})
+	for _, expect := range []string{"Q", "", "t", " T", "TF"} {
+		for _, fenced := range []bool{false, true} {
+			for _, outcomes := range [][]drillAttemptOutcome{accepted, refused} {
+				err := checkAttempts(expect, fenced, outcomes)
+				if err == nil {
+					t.Fatalf("expect %q fenced=%v: accepted", expect, fenced)
+				}
+				if err.Error() != "the expect tag is not T or F" {
+					t.Fatalf("expect %q: message %q, want the fixed text that never prints the tag", expect, err)
+				}
+			}
+		}
+	}
+}

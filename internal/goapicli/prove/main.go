@@ -62,30 +62,19 @@ import (
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
-// The proof-plane credential environment variable. VALUES never appear in
-// output; only this NAME does.
-//
-// The two planes accept different credential KINDS, measured on the
-// deployed stack (JOB 4): an access token gets HTTP 200 on the Python edge
-// and 401 on /buildinfo; an effective-principal envelope gets the reverse.
-// The edge leg has no env var: minting in process (mint-edge-token) is its
-// only source, a fresh access token every run.
-const proofBearerEnvVar = "GO_API_PROVE_PROOF_BEARER"
+// proofAccessTokenFileFlag names the file the operator stages with a platform admin's user access token (typ at+jwt):
+// the proof-plane credential, which /buildinfo (a platform admin only) and /query/proof read. The file is read on
+// each use, so a token refreshed in place during a run is picked up; its VALUE never appears in output. The edge leg
+// keeps its in-process mint (mint-edge-token).
+const proofAccessTokenFileFlag = "-proof-access-token-file"
+
+// proofAccessTokenFileEnvVar is the flag's fallback, as POSTGRES_URI is -postgres-uri's: a path, never a token.
+const proofAccessTokenFileEnvVar = "GO_API_PROVE_PROOF_ACCESS_TOKEN_FILE"
 
 // postgresURIEnvVar is the ONLY place the DSN may come from other than the
 // -postgres-uri flag -- named so the usage text and the flag-parsing path
 // can name the variable without ever naming its value.
 const postgresURIEnvVar = "POSTGRES_URI"
-
-// proofCredentialFreshness is how long a minted envelope is reused before
-// a fresh one is requested.
-//
-// ENVELOPE_DEFAULT_TTL_SECONDS is 60 (principal_envelope.py:96). 25
-// seconds leaves 35 for the request to reach the server and be verified,
-// so no request is ever sent carrying a value already near expiry -- which
-// is how JOB 4's attempt B failed, at the CLOSING /buildinfo, after every
-// measurement had already been taken.
-const proofCredentialFreshness = 25 * time.Second
 
 // edgeCredentialFreshness is how long a minted edge access token is reused
 // before mint-edge-token is re-invoked. Its default TTL is ten minutes;
@@ -125,6 +114,7 @@ type flags struct {
 	principalKind        string
 	audience             string
 	keyID                string
+	proofAccessTokenFile string
 	dryRun               bool
 	adminPrincipal       bool
 	// goEdge selects Go-edge mode: -edge-url is query-api's own /graphql,
@@ -195,6 +185,7 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.principalKind, "principal-kind", "stored_account", "auth-context SHAPE recorded in request_identity; never a credential")
 	fs.StringVar(&f.audience, "audience", "query-api", "envelope audience, part of the auth-context shape")
 	fs.StringVar(&f.keyID, "key-id", "", "envelope signing key id (kid) -- a public identifier, and the value that silently broke routing three times on 2026-09-07")
+	fs.StringVar(&f.proofAccessTokenFile, proofAccessTokenFileFlag[1:], "", "path to a 0600 file holding a platform admin's user access token (typ at+jwt), read on each use: the credential of /buildinfo and /query/proof (required). Never a token on argv")
 	fs.BoolVar(&f.goEdge, "go-edge", false, "Go-edge mode: -edge-url is query-api's own /graphql with NO Python plane behind it. No Python answer is read: each operation is proven by its candidate alone (PROVEN_GO_ONLY, for an operation the go-served ledger names), and the control document must be refused by query-api (404 UNREGISTERED_DOCUMENT, plane go, the named build). Never detected: without this flag an edge with no Python plane is refused, and with it an edge that has one is refused")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "open NO database and write NO receipts. A dry run takes no document operation to the edge, so every one is refused as not routed: nothing is executed or compared and the run ends with the measured-nothing error (the registry and /buildinfo are still read, and the reference-principal check too unless -go-edge)")
 	fs.BoolVar(&f.adminPrincipal, "admin-principal", false, "mint the org-admin proof principal's edge token (mint edge-token -principal admin-proof) for the operations on the closed operator-gated allowlist (internal/goapiproof/principal.go); without it those operations are refused by name, never measured as the read-level principal. Read-only queries only: a document that is not a query is refused")
@@ -709,7 +700,7 @@ func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.Pro
 	// A COUNT, never a value. A fifteen-operation run that minted once is
 	// a run that will fail at the closing /buildinfo, and without this
 	// line that is invisible until it does.
-	fmt.Printf("go-api-prove:   envelope mints = %d\n", proofCredential.Mints())
+	fmt.Printf("go-api-prove:   proof access token reads = %d\n", proofCredential.Mints())
 	// The edge credential is always minted (the only source), so this is
 	// at least 1 on a successful run -- a 0 here means the edge leg was
 	// never actually exercised.
@@ -760,7 +751,7 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// mintCredential mints one of the two allowlisted credentials, exactly
+// mintCredential mints the allowlisted edge credential, exactly
 // like goapiproof.MintViaAllowlistedHelper -- which this package-level
 // var defaults to. credentials() below calls THIS, never the function
 // directly, so a test can substitute a synthetic minter for the duration
@@ -768,46 +759,36 @@ func sortedKeys[V any](m map[string]V) []string {
 // openPostgresPool already gives run()'s Postgres connection step.
 var mintCredential = goapiproof.MintViaAllowlistedHelper //nolint:gochecknoglobals // deliberately test-substitutable, same seam as openPostgresPool
 
-// credentials builds the two credential sources, one per plane, minted
-// IN PROCESS via mintCredential -- the same mechanism `goapi rest-prove`
-// already uses: mint-envelope and mint-edge-token are compiled into this
-// binary, so minting calls their packages directly; nothing forks a
-// subprocess to mint a credential anymore.
+// credentials builds the two credential sources, one per plane.
 //
-// The edge token is always minted (mint-edge-token), re-run as it ages --
+// The edge token is always minted IN PROCESS via mintCredential (mint-edge-token), re-run as it ages --
 // the only source for this credential; a hand-minted static token expired
 // mid-day once and had to be replaced by hand.
 //
-// The proof credential is normally minted too (mint-envelope): the
-// effective-principal envelope it needs lives 60 seconds and a
-// fifteen-operation run does not fit in that. A static proof bearer
-// (proofBearerEnvVar) is still accepted as a fallback, because it is the
-// right shape for a one-operation run and for a test -- but it is exactly
-// what failed on the real stack; the refusal below says so rather than
-// letting a second operator rediscover it at the closing /buildinfo.
+// The proof credential is a platform admin's user access token from the file -proof-access-token-file names: it is
+// checked once here, so a missing file or an envelope in it fails as a configuration error before anything is
+// measured rather than as a 401 at the first /buildinfo read; the refusal never echoes the value.
 func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
 	edge = goapiproof.MintedCredential("Authorization", "edge access token", edgeCredentialFreshness,
 		func(ctx context.Context) (string, error) {
 			return mintCredential(ctx, "mint-edge-token", []string{"-org", f.orgID})
 		}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
 
-	switch {
-	case os.Getenv(proofBearerEnvVar) != "":
-		// Validated HERE, at construction, so a malformed static envelope
-		// fails as a configuration error before anything is measured
-		// rather than as a 401 fifteen operations later. The
-		// message never echoes the value.
-		static := "Bearer " + os.Getenv(proofBearerEnvVar)
-		if err := goapiproof.ValidateEnvelopeShape(static); err != nil {
-			return nil, nil, fmt.Errorf("%s is not a well-formed effective-principal envelope (%w). Its VALUE is not printed; check that you exported the envelope and not the edge access token", proofBearerEnvVar, err)
-		}
-		proof = goapiproof.StaticCredential("Authorization", "effective-principal envelope", static)
-	default:
-		proof = goapiproof.MintedCredential("Authorization", "effective-principal envelope", proofCredentialFreshness,
-			func(ctx context.Context) (string, error) {
-				return mintCredential(ctx, "mint-envelope", []string{"-org", f.orgID})
-			}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
+	path := f.proofAccessTokenFile
+	if path == "" {
+		path = strings.TrimSpace(secrets.GetenvNamed(proofAccessTokenFileEnvVar))
 	}
+	if path == "" {
+		return nil, nil, fmt.Errorf("%s (or %s) is required: the path of a 0600 file holding a platform admin's user access token, the credential /buildinfo and /query/proof read", proofAccessTokenFileFlag, proofAccessTokenFileEnvVar)
+	}
+	raw, err := os.ReadFile(path) // #nosec G304 -- operator-supplied token file path, by design
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: the file cannot be read", proofAccessTokenFileFlag)
+	}
+	if err := goapiproof.ValidateUserAccessTokenShape(strings.TrimSpace(string(raw))); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w; /buildinfo serves a platform admin's user access token. Its VALUE is not printed", proofAccessTokenFileFlag, err)
+	}
+	proof = goapiproof.UserAccessTokenFileCredential("proof access token", "proof access token", path)
 	return edge, proof, nil
 }
 

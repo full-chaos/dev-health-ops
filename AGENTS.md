@@ -150,8 +150,7 @@ What does NOT change: never touch another lane's namespace, never
 `kiac down`/`delete`/prune a cluster you did not create, and never run
 host-wide `container system` verbs — they stop every kiac VM on the machine.
 
-Recipe, cost, and the testcontainers-per-suite policy:
-[docs/contribute/development/lane-isolation-kiac.md](docs/contribute/development/lane-isolation-kiac.md).
+Recipe, cost, and the testcontainers-per-suite policy: see the Linear document "Lane isolation on a kiac cluster (internal, moved from public docs)".
 
 ## Landing the plane
 
@@ -191,7 +190,7 @@ Operational health is a SEPARATE claim; its Python comparator was retired
 
 ## PR and CI conventions
 
-- PR title: `<type>(<area>): CHAOS-<n> <description>`, type in feat|bug|enhancement|chore|fix|docs, exactly one id. The `pr-title` check (`.github/workflows/pr-title.yml`, pattern in `ci/pr_title_check.sh`) enforces it, in the merge queue too (it reads the queued PR by REST); `dependabot[bot]` is exempt by author. A PR body Part-of line names the parent, never the id in the title.
+- PR title: `<type>(<area>): CHAOS-<n> <description>`, type in feat|bug|enhancement|chore|fix|docs, exactly one id. The `pr-title` check (`.github/workflows/pr-title.yml`, pattern in `ci/pr_title_check.sh`) enforces it, in the merge queue too (it reads the queued PR by REST); `dependabot[bot]` is exempt by author. A PR body Part-of line names the parent, never the id in the title. The check also refuses a title whose ticket owns a live temporary or decision row of `ci/auth_exception_ledger.tsv`: the merge would close the owner while the row stays, so the PR removes the row or re-homes it first (CHAOS-13180).
 - The `governance` check requires `TEST-EVIDENCE` and `RISK-NOTES` markers in the PR body when a change touches `src/dev_health_ops/workers/provider_unit_route.py`. This is a PR-body requirement, not a code requirement. Missing markers cost two lanes a CI round.
 
 ## Pre-push validation gate (REQUIRED for every ops change)

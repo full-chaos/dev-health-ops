@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"time"
 
@@ -68,6 +69,10 @@ type Options struct {
 	// token when its session is revoked (go-api and query-api read
 	// SessionReaderColumns, and nothing else in the schema). Empty means none.
 	SessionReaderRoles []string
+	// WorkloadReaderRoles are the session reader roles that also read the workload registry row of the acr-api
+	// workload (go-api's internal acr routes, WorkloadReaderReads). Each must be a SessionReaderRole; a session
+	// reader not named here holds SessionReaderReads alone (query-api never reads the registry). Empty means none.
+	WorkloadReaderRoles []string
 	// ProjectionReaderRoles are the roles that read the acr rows of the credential projection (the worker login that
 	// runs the acr reconcile, CHAOS-11199): column SELECT on ProjectionReaderReads, and nothing else in the schema.
 	// Empty means none.
@@ -215,6 +220,17 @@ func (o Options) Validate(migrationRole string) error {
 				ErrInvalidOptions, reader)
 		}
 		seen[reader] = true
+	}
+	seenWorkload := map[string]bool{}
+	for _, reader := range o.WorkloadReaderRoles {
+		if err := ValidateIdentifier(reader); err != nil {
+			return err
+		}
+		if !slices.Contains(o.SessionReaderRoles, reader) || seenWorkload[reader] {
+			return fmt.Errorf("%w: workload reader role %q must be one of the session reader roles and named once",
+				ErrInvalidOptions, reader)
+		}
+		seenWorkload[reader] = true
 	}
 	for _, reader := range o.ProjectionReaderRoles {
 		if err := ValidateIdentifier(reader); err != nil {
@@ -432,6 +448,9 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 	}
 	if options.SchemaOwnerRole != "" {
 		logger.InfoContext(ctx, "verified auth schema owner pin", "schema", options.Schema, "owner_role", options.SchemaOwnerRole)
+	}
+	if err := migratorGrantOptionPrecheck(ctx, conn, options); err != nil {
+		return result, err
 	}
 	var retained []GrantRecord
 	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options, &retained); err != nil {

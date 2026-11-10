@@ -14,14 +14,12 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -184,15 +182,12 @@ func TestResetEndsEveryCredentialClass(t *testing.T) {
 	if v := rig.tokenVersion(t, ctx, id); v != 4 {
 		t.Errorf("go-api token_version = %d, want 4", v)
 	}
-	if n := rig.liveLegacyRows(t, ctx, id); n != 0 {
-		t.Errorf("%d go-api refresh rows are still live", n)
+	if n := rig.liveLegacyRows(t, ctx, id); n != 1 {
+		t.Errorf("%d go-api refresh rows are live, want the 1 seeded: auth-service leaves them to go-api", n)
 	}
 	state, found, err := policy.PGStore{Pool: rig.env.runtime, AuthSchema: "auth"}.SessionState(ctx, old.Session.ID)
 	if err != nil || !found || !state.Revoked {
 		t.Errorf("policy SessionState of the old session = %+v found %v err %v; want revoked", state, found, err)
-	}
-	if res, err := rig.sessions.ExchangeLegacy(ctx, session.LegacyRefresh{PrincipalID: id, JTI: contracts.NewSecretString(legacyJTI)}); err != nil || res.Reason.Success() {
-		t.Errorf("ExchangeLegacy after the reset = %+v, %v; want a refusal", res, err)
 	}
 	time.Sleep(20 * time.Millisecond)
 	after, err := rig.sessions.Create(ctx, id, nil, []string{"pwd"})
@@ -228,8 +223,8 @@ func TestChangeEndsEveryCredentialClassAndKeepsTheCallersNewSession(t *testing.T
 	if v := rig.tokenVersion(t, ctx, id); v != 4 {
 		t.Errorf("go-api token_version = %d, want 4", v)
 	}
-	if n := rig.liveLegacyRows(t, ctx, id); n != 0 {
-		t.Errorf("%d go-api refresh rows are still live", n)
+	if n := rig.liveLegacyRows(t, ctx, id); n != 1 {
+		t.Errorf("%d go-api refresh rows are live, want the 1 seeded: auth-service leaves them to go-api", n)
 	}
 }
 
@@ -237,7 +232,7 @@ func TestChangeEndsEveryCredentialClassAndKeepsTheCallersNewSession(t *testing.T
 // sessions stay live and go-api's rows are untouched.
 func TestAFailedStepRollsTheWholePasswordChangeBack(t *testing.T) {
 	steps := map[string]string{
-		"the refresh token revoke": `REVOKE UPDATE (revoked_at) ON public.refresh_tokens FROM %s`,
+		"the token_version bump": `REVOKE UPDATE (token_version) ON public.users FROM %s`,
 	}
 	for name, revoke := range steps {
 		t.Run(name, func(t *testing.T) {
@@ -312,62 +307,6 @@ func TestAPasswordChangeEndsTheEarlierResetLinksOnly(t *testing.T) {
 	}
 	if out, err := rig.flows.Verify(ctx, "verify"); err != nil || out.Kind != FlowOK {
 		t.Errorf("the verification link = %+v, %v; want it to stay valid", out, err)
-	}
-}
-
-// accepts is go-api's live access-token check (policy.Authenticator.CheckClaims)
-// for an access token with no sid claim and token version tv.
-func (r *endRig) accepts(t *testing.T, ctx context.Context, id uuid.UUID, tv int) bool {
-	t.Helper()
-	verifier, err := edgetoken.New(strings.Repeat("k", 40), "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: r.env.admin, AuthSchema: "auth"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = auth.CheckClaims(ctx, jwt.MapClaims{"sub": id.String(), "type": "access", "tv": float64(tv)})
-	return err == nil
-}
-
-// A go-api access token minted before a reset or a change carries no sid, so
-// only the token version ends it; after either it is refused, a token at the
-// new version is accepted.
-func TestANoSidGoAPIAccessTokenIsRefusedAfterResetAndChange(t *testing.T) {
-	ctx := context.Background()
-	rig := newEndRig(t, ctx)
-
-	reset := rig.account(t, ctx, "Old-pass-12345")
-	if !rig.accepts(t, ctx, reset, 3) {
-		t.Fatal("the token is refused before the reset")
-	}
-	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: reset, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77"); err != nil || out.Kind != FlowOK {
-		t.Fatalf("Reset = %+v, %v", out, err)
-	}
-	if rig.accepts(t, ctx, reset, 3) {
-		t.Error("the pre-reset no-sid access token is accepted after the reset")
-	}
-	if !rig.accepts(t, ctx, reset, 4) {
-		t.Error("a token at the new version is refused after the reset")
-	}
-
-	rig2 := newEndRig(t, ctx)
-	change := rig2.account(t, ctx, "Old-pass-12345")
-	if !rig2.accepts(t, ctx, change, 3) {
-		t.Fatal("the token is refused before the change")
-	}
-	if out, err := rig2.flows.Change(ctx, ChangeRequest{PrincipalID: change, Current: "Old-pass-12345", New: "Brand-new-pass-42"}); err != nil || out.Kind != FlowOK {
-		t.Fatalf("Change = %+v, %v", out, err)
-	}
-	if rig2.accepts(t, ctx, change, 3) {
-		t.Error("the pre-change no-sid access token is accepted after the change")
-	}
-	if !rig2.accepts(t, ctx, change, 4) {
-		t.Error("a token at the new version is refused after the change")
 	}
 }
 

@@ -21,17 +21,16 @@ func newDualMintFixture(t *testing.T) *accessFixture {
 	t.Helper()
 	signer, dir, _ := fileSigner(t)
 	issuer := newEdDSAIssuer(t, signer, contracts.PlatformAPIAudience)
-	f := newFixtureWith(t, issuer)
 	rows, err := AuthServiceAccessRows()
 	if err != nil {
 		t.Fatal(err)
 	}
 	reader, provider := accessMeter()
-	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer, Legacy: issuer, Rows: rows, Meter: provider.Meter("test")})
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer, Rows: rows, Meter: provider.Meter("test")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuer.WithAccessCheck(check)
+	f := newFixtureWith(t, issuer.WithAccessCheck(check))
 	return &accessFixture{fixture: f, signer: signer, dir: dir, reader: reader, check: check}
 }
 
@@ -104,23 +103,8 @@ func TestEdDSAIssuerMintsTheSessionRouteTokenBesideTheAPIToken(t *testing.T) {
 	}
 }
 
-// Under hs256_compat the HS256 token is accepted at the session routes itself (legacy_hs256), so no second token.
-func TestHS256IssuerMintsNoSessionRouteToken(t *testing.T) {
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tokens, err := issuer.Tokens(context.Background(), Grant{PrincipalID: uuid.New(), SessionID: uuid.New(), Role: "member"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tokens.Access == "" || tokens.Session != "" {
-		t.Fatalf("hs256_compat tokens: access set %v, session %q", tokens.Access != "", tokens.Session)
-	}
-}
-
-// The refresh route answers refresh-response.v2 under eddsa (both tokens) and v1 under hs256_compat; each parses with
-// the contract reader, and the eddsa session token opens the session routes the API token cannot.
+// The refresh route answers refresh-response.v2 (both tokens); it parses with the contract reader, and the session
+// token opens the session routes the API token cannot.
 func TestRefreshRouteAnswersTheSurfaceOfItsClass(t *testing.T) {
 	refresh := func(f *fixture) []byte {
 		t.Helper()
@@ -132,12 +116,6 @@ func TestRefreshRouteAnswersTheSurfaceOfItsClass(t *testing.T) {
 			t.Fatalf("refresh status %d: %s", response.Code, response.Body)
 		}
 		return response.Body.Bytes()
-	}
-
-	hs := newFixture(t)
-	v1, err := contracts.ParseRefreshResponse(repoRoot(t), refresh(hs))
-	if err != nil || v1.SchemaVersion != contracts.RefreshResponseSurface || v1.SessionAccessToken.Reveal() != "" {
-		t.Fatalf("hs256_compat answer: %v", err)
 	}
 
 	a := newDualMintFixture(t)
@@ -155,21 +133,12 @@ func TestRefreshRouteAnswersTheSurfaceOfItsClass(t *testing.T) {
 	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", bearer(v2.AccessToken.Reveal())), http.StatusUnauthorized, "audience")
 }
 
-// The issue route (go-api's sign-ins ask it for every session) carries the session token under eddsa and no such
-// member under hs256_compat.
+// The issue route (go-api's sign-ins ask it for every session) carries the session token.
 func TestIssueRouteCarriesTheSessionRouteTokenUnderEdDSA(t *testing.T) {
-	for class, want := range map[string]bool{"hs256_compat": false, "eddsa": true} {
+	for class, want := range map[string]bool{"eddsa": true} {
 		t.Run(class, func(t *testing.T) {
-			var issuer *Issuer
-			if want {
-				signer, _, _ := fileSigner(t)
-				issuer = newEdDSAIssuer(t, signer, contracts.PlatformAPIAudience)
-			} else {
-				var err error
-				if issuer, err = NewIssuer(testSecret, testIssuer, testAudience); err != nil {
-					t.Fatal(err)
-				}
-			}
+			signer, _, _ := fileSigner(t)
+			issuer := newEdDSAIssuer(t, signer, contracts.PlatformAPIAudience)
 			body := issueAnswerFor(t, issuer)
 			var answer map[string]any
 			if err := json.Unmarshal(body, &answer); err != nil {
@@ -197,29 +166,20 @@ func compatFixtureWith(t *testing.T, issuer *Issuer) *compatFixture {
 func issueAnswerFor(t *testing.T, issuer *Issuer) []byte {
 	t.Helper()
 	f := compatFixtureWith(t, issuer)
-	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer)
+	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer())
 	if response.Code != http.StatusOK {
 		t.Fatalf("issue status %d: %s", response.Code, response.Body)
 	}
 	return response.Body.Bytes()
 }
 
-// go-api's own wire (compat login and refresh, which web reads) carries the session token under eddsa as an added
-// member, and its hs256_compat answers keep their exact member list.
-func TestCompatAnswersCarryTheSessionRouteTokenUnderEdDSAOnly(t *testing.T) {
+// go-api's own wire (compat login and refresh, which web reads) carries the session token as an added member.
+func TestCompatAnswersCarryTheSessionRouteToken(t *testing.T) {
 	login := `{"email":"` + compatEmail + `","password":"` + compatPassword + `"}`
-	for class, want := range map[string]bool{"hs256_compat": false, "eddsa": true} {
+	for class, want := range map[string]bool{"eddsa": true} {
 		t.Run(class, func(t *testing.T) {
-			var issuer *Issuer
-			if want {
-				signer, _, _ := fileSigner(t)
-				issuer = newEdDSAIssuer(t, signer, contracts.PlatformAPIAudience)
-			} else {
-				var err error
-				if issuer, err = NewIssuer(testSecret, testIssuer, testAudience); err != nil {
-					t.Fatal(err)
-				}
-			}
+			signer, _, _ := fileSigner(t)
+			issuer := newEdDSAIssuer(t, signer, contracts.PlatformAPIAudience)
 			f := compatFixtureWith(t, issuer)
 			response := f.do(http.MethodPost, PatternCompatLogin, login, nil)
 			if response.Code != http.StatusOK {

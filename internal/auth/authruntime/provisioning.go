@@ -1,6 +1,8 @@
 package authruntime
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,9 +16,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/orgdeprovision"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/publicread"
 	"github.com/full-chaos/dev-health-ops/internal/auth/serviceaccount"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -65,7 +67,7 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 		return nil, err
 	}
 	routes, err := authapi.ProvisioningRoutes(authapi.ProvisioningDeps{
-		Credentials: servicecred.PG{Pool: pool}, Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities,
+		Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities,
 		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, ServiceAccounts: accounts, Grants: grants, Workload: workload, Logger: logger, ProfileRows: provisioningProfileRows,
 	})
 	if err != nil {
@@ -76,10 +78,61 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 		return nil, err
 	}
 	reads, err := authapi.ReadRoutes(authapi.ReadDeps{
-		Credentials: servicecred.PG{Pool: pool}, Reads: reader, GrantReads: grants, Workload: workload, Logger: logger, ProfileRows: provisioningProfileRows,
+		Reads: reader, GrantReads: grants, Workload: workload, Logger: logger, ProfileRows: provisioningProfileRows,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return append(routes, reads...), nil
+}
+
+// usersAdminRoutes builds the user-admin routes go-api calls for its admin users writes while auth-service owns users
+// (AUTH_USERS_OWNED), and none otherwise. They are not behind AUTH_MEMBERSHIP_ROUTES: they mount only with their
+// endpoint-profile rows (authapi.UsersAdminRoutes), on the provisioning routes' workload path. A missing row is no
+// start refusal (product rule 3): the one INFO line "users routes" says how many are mounted and, when none is, why.
+func usersAdminRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+	identities *identity.Store, workload *authapi.SessionIssueWorkload) ([]httpapi.Route, error) {
+	if !cfg.UsersOwned {
+		logUsersAdminMount(logger, 0, "reason", "users_not_owned")
+		return nil, nil
+	}
+	roles, err := platformrole.New(platformrole.Config{Pool: pool, Schema: schema, Logger: logger})
+	if err != nil {
+		return nil, err
+	}
+	routes, err := authapi.UsersAdminRoutes(authapi.ProvisioningDeps{
+		Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities, Workload: workload, Logger: logger,
+		ProfileRows:      provisioningProfileRows,
+		UsersAdminStores: authapi.UsersAdminStores{UsersAdmin: identities, PlatformRoles: authapi.PlatformRoleStore{Store: roles}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var missing *authapi.ProvisioningRowError
+	if len(routes) == 0 && errors.As(authapi.UsersAdminRowsError(provisioningProfileRows), &missing) {
+		logUsersAdminMount(logger, 0, append([]any{"reason", missing.DependencyReason()}, missing.DependencyAttrs()...)...)
+		return routes, nil
+	}
+	logUsersAdminMount(logger, len(routes))
+	return routes, nil
+}
+
+// logUsersAdminMount writes the user-admin routes' start line: mounted=<n>/<all> and attrs.
+func logUsersAdminMount(logger *slog.Logger, mounted int, attrs ...any) {
+	logger.Info("users routes", append([]any{"mounted", fmt.Sprintf("%d/%d", mounted, authapi.UsersAdminRouteCount())}, attrs...)...)
+}
+
+// goAPIInternalRoutes are the internal routes go-api calls: the provisioning routes (AUTH_MEMBERSHIP_ROUTES) and, apart
+// from them, the user-admin routes (AUTH_USERS_OWNED).
+func goAPIInternalRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+	identities *identity.Store, workload *authapi.SessionIssueWorkload, sessions *session.Store) ([]httpapi.Route, error) {
+	provisioning, err := provisioningRoutes(cfg, logger, pool, schema, identities, workload, sessions)
+	if err != nil {
+		return nil, err
+	}
+	users, err := usersAdminRoutes(cfg, logger, pool, schema, identities, workload)
+	if err != nil {
+		return nil, err
+	}
+	return append(provisioning, users...), nil
 }

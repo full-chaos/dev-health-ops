@@ -261,7 +261,7 @@ func undeclaredProducers(t *testing.T, root string, tests map[string][]string, d
 // producer that test reaches must be equal to or under a path declared FOR THAT TEST in
 // ci/venue_oracle_triggers.d/ (CHAOS-9614: the pull request job selects per test, so a row
 // for another test of the package does not count), or lie in the dependency closure of the
-// package's test binary (ci/venue_oracle_closure.d/, derived from `go list -test`, CHAOS-9935:
+// package's test binary (derived from `go list -test`, CHAOS-9935 and CHAOS-13101:
 // that selects every test of the package), or be listed in
 // ci/venue_oracle_trigger_gaps.tsv (the known gaps, a ratchet: a new gap fails, and a gap that
 // got covered must leave the file).
@@ -306,7 +306,7 @@ func TestEveryProducerAVenueTestImportsIsDeclaredAsATrigger(t *testing.T) {
 	for pkg := range tests {
 		venuePkgs = append(venuePkgs, pkg)
 	}
-	found, covered := undeclaredProducers(t, root, tests, declared, committedClosures(t, root, venuePkgs))
+	found, covered := undeclaredProducers(t, root, tests, declared, closureSets(t, root, venuePkgs))
 	for gap := range found {
 		if !known[gap] {
 			t.Errorf("a venue test uses a producer no trigger row declares for it, so a change there does not select that test on a pull request: %q (add a row to ci/venue_oracle_triggers.d/, see its README)", gap)

@@ -5,45 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/google/uuid"
 )
-
-// A failed read of the current version must not fall through to an insert:
-// the insert would write blanks over established values. The error is
-// transient so the stream redelivers the message.
-func TestInternalIngestWritesNothingWhenCurrentVersionReadFails(t *testing.T) {
-	payloads := map[string]string{
-		"pull-requests": `{"org_id":"org-1","repo_url":"https://example.test/acme/repo","items":[{"number":7,"title":"Ship it","state":"open","author_name":"Ada","created_at":"2026-07-23T12:00:00Z"}]}`,
-		"deployments":   `{"org_id":"org-1","repo_url":"https://example.test/acme/repo","items":[{"deployment_id":"deploy-1","status":"success","environment":"prod"}]}`,
-		"work-items":    `{"org_id":"org-1","items":[{"work_item_id":"jira:ABC-123","provider":"jira","title":"Ship it","type":"bug","status":"done","created_at":"2026-07-23T12:00:00Z"}]}`,
-	}
-	for _, entity := range []string{"pull-requests", "deployments", "work-items"} {
-		t.Run(entity, func(t *testing.T) {
-			sink := &productSink{batch: &productBatch{}, queryErr: errors.New("clickhouse unavailable")}
-			handler, err := NewInternalIngestHandler(sink)
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = handler.Handle(context.Background(), streamrunner.Message{
-				Stream: "ingest:org-1:" + entity, Fields: map[string]string{"payload": payloads[entity]},
-			})
-			var permanent *streamrunner.PermanentError
-			if err == nil || errors.As(err, &permanent) {
-				t.Fatalf("Handle error = %v, want a transient error", err)
-			}
-			if sink.queryCalls != 1 || len(sink.queries) != 0 || sink.batch.sent {
-				t.Fatalf("reads = %d, prepared = %v, sent = %v; want one read and no insert", sink.queryCalls, sink.queries, sink.batch.sent)
-			}
-		})
-	}
-}
 
 func TestExternalSinkWritesNothingWhenCurrentVersionReadFails(t *testing.T) {
 	payloads := map[string]map[string]any{
@@ -82,13 +48,7 @@ type contractUnderTest struct {
 
 func contractsUnderTest(t *testing.T) []contractUnderTest {
 	t.Helper()
-	out := []contractUnderTest{
-		{"internal commits", internalCommitInsert, internalCommitContract, ""},
-		{"internal reviews", internalReviewInsert, internalReviewContract, ""},
-		{"internal pull requests", internalPullRequestInsert, internalPullRequestContract, ""},
-		{"internal deployments", internalDeploymentInsert, internalDeploymentContract, ""},
-		{"internal work items", internalWorkItemInsert, internalWorkItemContract, ""},
-	}
+	out := []contractUnderTest{}
 	for _, kind := range []string{"pull_request.v1", "review.v1", "commit.v1", "work_item.v1", "repository.v1", "identity.v1"} {
 		for _, system := range []string{"github", "gitlab", "jira", "linear", "custom", "pagerduty", "atlassian"} {
 			if _, allowed := externalAllowedKinds[system][kind]; !allowed {
@@ -159,7 +119,7 @@ func TestEveryWrittenColumnHasOneContractRow(t *testing.T) {
 }
 
 func TestExternalKindsOfContractTablesAllHaveContracts(t *testing.T) {
-	scoped := map[string]bool{"git_pull_requests": true, "git_pull_request_reviews": true, "git_commits": true, "deployments": true, "work_items": true, "repos": true, "identities": true}
+	scoped := map[string]bool{"git_pull_requests": true, "git_pull_request_reviews": true, "git_commits": true, "work_items": true, "repos": true, "identities": true}
 	if len(externalRecordSchemas) == 0 {
 		t.Fatal("no external schemas")
 	}
@@ -224,80 +184,6 @@ func TestEveryDeclaredExternalFieldReachesAColumnOrIsNamedUnstored(t *testing.T)
 				if translated[field] == (reason != "") {
 					t.Errorf("%s: translated=%v unstored=%q; want exactly one", field, translated[field], reason)
 				}
-			}
-		})
-	}
-}
-
-// frozenIngestFields reads testdata/python_ingest_declared_fields.json: the
-// fields src/dev_health_ops/api/ingest/schemas.py declared per ingest class when
-// the Python api source was scheduled for deletion.
-func frozenIngestFields(t *testing.T) map[string][]string {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "python_ingest_declared_fields.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var frozen struct {
-		Classes map[string][]string `json:"classes"`
-	}
-	if err := json.Unmarshal(raw, &frozen); err != nil {
-		t.Fatal(err)
-	}
-	return frozen.Classes
-}
-
-var pythonIngestFieldLine = regexp.MustCompile(`^    ([a-z_]+): `)
-
-// pythonIngestClassFields reads one class's declared fields out of schemas.py.
-func pythonIngestClassFields(t *testing.T, source, class string) []string {
-	t.Helper()
-	start := strings.Index(source, "\nclass "+class+"(BaseModel):\n")
-	if start < 0 {
-		t.Fatalf("class %s not found", class)
-	}
-	body := source[start+1:]
-	if end := strings.Index(body[1:], "\nclass "); end >= 0 {
-		body = body[:end+1]
-	}
-	var fields []string
-	for _, line := range strings.Split(body, "\n") {
-		if match := pythonIngestFieldLine.FindStringSubmatch(line); match != nil {
-			fields = append(fields, match[1])
-		}
-	}
-	return fields
-}
-
-// Every field the ingest API declares for an entity reaches a column
-// through the entity's contract table, or is named as unstored with its reason.
-func TestEveryDeclaredIngestFieldReachesAColumnOrIsNamedUnstored(t *testing.T) {
-	frozen := frozenIngestFields(t)
-	contracts := []struct {
-		class    string
-		contract storedversion.Contract
-	}{
-		{"IngestCommit", internalCommitContract}, {"IngestPullRequestReview", internalReviewContract},
-		{"IngestPullRequest", internalPullRequestContract}, {"IngestDeployment", internalDeploymentContract},
-		{"IngestWorkItem", internalWorkItemContract},
-	}
-	for _, c := range contracts {
-		t.Run(c.class, func(t *testing.T) {
-			translated := map[string]bool{}
-			for _, column := range c.contract.Columns {
-				for _, name := range column.Fields {
-					translated[name] = true
-				}
-			}
-			declared := frozen[c.class]
-			for _, name := range declared {
-				reason := internalUnstoredFields[c.class][name]
-				if translated[name] == (reason != "") {
-					t.Errorf("%s: translated=%v unstored=%q; want exactly one", name, translated[name], reason)
-				}
-			}
-			if len(declared) == 0 {
-				t.Fatalf("%s declares no fields", c.class)
 			}
 		})
 	}

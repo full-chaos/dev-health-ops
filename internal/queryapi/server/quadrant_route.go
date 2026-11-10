@@ -30,7 +30,6 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
@@ -54,21 +53,18 @@ func quadrantSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitch {
 }
 
 // loadQuadrantRouteConfig reads this route's own dependency set --
-// ClickHouse plus the envelope verifier trio. Deliberately NOT
+// ClickHouse only; the envelope key is optional. Deliberately NOT
 // loadQueryRouteConfig: this route never touches registry Postgres (no
 // org-BYO settings, no registry lookup at all), so requiring
 // GO_API_REGISTRY_POSTGRES_URI just to mount a pure ClickHouse read
 // route would be an unrelated-dependency coupling, not a real
 // requirement.
-func loadQuadrantRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadQuadrantRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 // buildQuadrantRoute constructs the handler, its own routeswitch Mux, and
@@ -77,12 +73,12 @@ func loadQuadrantRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer
 // "stay unmounted, don't fail to build/start" contract every other
 // optionally-configured route in this binary follows.
 func buildQuadrantRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadQuadrantRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadQuadrantRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("quadrant: build envelope verifier: %w", err)
 	}
@@ -151,6 +147,10 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "quadrant", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "quadrant", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		var validationErrors []pydanticErrorDetail
@@ -187,7 +187,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -198,7 +198,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		// people_summary_route.go and heatmap_route.go already check.
 		for key := range query {
 			if peopleForbiddenQueryParams[key] {
-				writeRESTError(w, r, "quadrant", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "quadrant", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
@@ -220,14 +220,14 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			params.EndDate = &endDate
 		}
 
-		resp, err := quadrant.BuildResponse(r.Context(), client, claims.OrgID, params)
+		resp, err := quadrant.BuildResponse(r.Context(), client, org, params)
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
-				writeTimeWindowOverflow(w, r, "quadrant", claims.OrgID)
+				writeTimeWindowOverflow(w, r, "quadrant", org)
 				return
 			}
 			if reqErr, ok := quadrant.AsRequestError(err); ok {
-				writeRESTError(w, r, "quadrant", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "quadrant", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -236,7 +236,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			// (unknown type, invalid scope/bucket, unsupported metric)
 			// degrades to a generic 503, never a raw ClickHouse error on
 			// the wire.
-			writeRESTDataUnavailable(w, r, "quadrant", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "quadrant", org, err)
 			return
 		}
 
@@ -244,7 +244,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: quadrant: encode response failed: org_id=%s request_id=%s err=%v",
-				claims.OrgID, envelopeRequestID(r), encodeErr)
+				org, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 			writeModelFailure(w)
 		}
 	}

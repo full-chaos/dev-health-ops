@@ -33,7 +33,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/aggflame"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
@@ -72,19 +71,16 @@ func flameAggregatedSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitch 
 }
 
 // loadFlameAggregatedRouteConfig reads this route's own dependency set --
-// ClickHouse plus the envelope verifier trio. Deliberately NOT
+// ClickHouse only; the envelope key is optional. Deliberately NOT
 // loadQueryRouteConfig, same reasoning as quadrant_route.go/
 // flame_route.go's own doc comments: this route never touches registry
 // Postgres.
-func loadFlameAggregatedRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadFlameAggregatedRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 // buildFlameAggregatedRoute constructs the handler, its own routeswitch
@@ -93,12 +89,12 @@ func loadFlameAggregatedRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath,
 // same "stay unmounted, don't fail to build/start" contract every other
 // optionally-configured route in this binary follows.
 func buildFlameAggregatedRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadFlameAggregatedRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadFlameAggregatedRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -172,6 +168,10 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 			writeRESTUnauthorized(w, r, "flame_aggregated", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "flame_aggregated", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		var validationErrors []pydanticErrorDetail
@@ -221,7 +221,7 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -230,7 +230,7 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 		// regardless of value -- is a 400.
 		for key := range query {
 			if flameAggregatedForbiddenQueryParams[key] {
-				writeRESTError(w, r, "flame_aggregated", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "flame_aggregated", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
@@ -249,8 +249,8 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 			computed, windowErr := timewindow.AddDays(endDay, -rangeDays)
 			if windowErr != nil {
 				log.Printf("query-api: flame_aggregated: report window out of Python's date range: org_id=%s request_id=%s",
-					claims.OrgID, envelopeRequestID(r))
-				writeRESTError(w, r, "flame_aggregated", claims.OrgID, http.StatusInternalServerError, "Internal Server Error")
+					org, logSafeRequestID(envelopeRequestID(r)))
+				writeRESTError(w, r, "flame_aggregated", org, http.StatusInternalServerError, "Internal Server Error")
 				return
 			}
 			startDay = computed
@@ -268,7 +268,7 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 			minValue = 0
 		}
 
-		resp, err := aggflame.BuildResponse(r.Context(), client, claims.OrgID, aggflame.Params{
+		resp, err := aggflame.BuildResponse(r.Context(), client, org, aggflame.Params{
 			Mode:        mode,
 			StartDay:    startDay,
 			EndDay:      endDay,
@@ -281,7 +281,7 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 		})
 		if err != nil {
 			if reqErr, ok := aggflame.AsRequestError(err); ok {
-				writeRESTError(w, r, "flame_aggregated", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "flame_aggregated", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -289,7 +289,7 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 			// not one of build_aggregated_flame_response's own typed
 			// errors degrades to a generic 503, never a raw ClickHouse
 			// error on the wire.
-			writeRESTDataUnavailable(w, r, "flame_aggregated", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "flame_aggregated", org, err)
 			return
 		}
 
@@ -297,7 +297,7 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: flame_aggregated: encode response failed: org_id=%s request_id=%s err=%v",
-				claims.OrgID, envelopeRequestID(r), encodeErr)
+				org, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 			writeModelFailure(w)
 		}
 	}

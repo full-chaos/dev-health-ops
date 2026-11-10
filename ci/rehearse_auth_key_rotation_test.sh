@@ -244,6 +244,13 @@ else
   bad d1-judge-found-in-the-script
 fi
 
+# The rollback to the previous image keeps the verifier issuer: go-api and query-api of a release after the HS256 class
+# retired refuse to start without it (drill run of 2026-11-10, S3).
+roll_fn="$(sed -n '/^roll_images() {/,/^}/p' "${SCRIPT}")"
+# shellcheck disable=SC2016
+if [ -n "${roll_fn}" ] && ! grep -q 'REHEARSAL_VERIFY_ISSUER=""' <<<"${roll_fn}" && [ "$(grep -c 'REHEARSAL_VERIFY_ISSUER="${ISSUER_URL}"' <<<"${roll_fn}")" = 2 ]; then
+  ok rollback-keeps-the-verifier-issuer; else bad rollback-keeps-the-verifier-issuer; fi
+
 # D0: t0 is the decision, taken before the dry run of the compromise (not after the apply).
 fn="$(sed -n '/^scenario_compromise() {/,/^}/p' "${SCRIPT}")"
 # shellcheck disable=SC2016

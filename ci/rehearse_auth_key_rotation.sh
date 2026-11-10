@@ -650,12 +650,14 @@ scenario_compromise() {
 }
 
 # roll_images previous|current: recreate auth-service, go-api and query-api on the previous or the current image. The class stays
-# eddsa on the current image; the previous image is run with its own default class (the variable is set empty).
+# eddsa on the current image; the previous image is run with its own default class (the variable is set empty). The verifier
+# issuer stays set on both: go-api and query-api of every release since the HS256 class retired have no other verifier and
+# refuse to start without it (drill run of 2026-11-10: "AUTH_ACCESS_TOKEN_ISSUER is required").
 roll_images() {
   if [ "$1" = previous ]; then
     export DEV_HEALTH_GO_DHO_IMAGE="${PREVIOUS_DHO_IMAGE}" DEV_HEALTH_GO_AUTH_SERVICE_IMAGE="${PREVIOUS_AUTH_SERVICE_IMAGE}"
     export REHEARSAL_ACCESS_CLASS=""
-    export REHEARSAL_VERIFY_ISSUER=""
+    export REHEARSAL_VERIFY_ISSUER="${ISSUER_URL}"
   else
     export DEV_HEALTH_GO_DHO_IMAGE="${CURRENT_DHO_IMAGE}" DEV_HEALTH_GO_AUTH_SERVICE_IMAGE="${CURRENT_AUTH_SERVICE_IMAGE}"
     export REHEARSAL_ACCESS_CLASS="eddsa"

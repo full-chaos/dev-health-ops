@@ -209,7 +209,7 @@ func checkOutbound(slots []Slot, ob Outbound, byRow map[string]rowClass, grace t
 			}
 		}
 		if denied(s.Status) && out.hits[s.Seq] > 0 {
-			out.fails = append(out.fails, fmt.Sprintf("FAIL: slot %d row %s %s: answered %d but made %d outside calls (a call before the guard)", s.Seq, s.Row, s.Caller, s.Status, out.hits[s.Seq]))
+			out.fails = append(out.fails, fmt.Sprintf("FAIL: slot %d row %s %s: answered %d but made %d outside calls (the guard passed and the handler relayed the stub's own %d, or a call came before the guard: the stub log holds no answer status, so the row's handler code and the stub's answer table decide which)", s.Seq, s.Row, s.Caller, s.Status, out.hits[s.Seq], s.Status))
 		}
 	}
 	var rows []string
@@ -237,9 +237,15 @@ func checkOutbound(slots []Slot, ob Outbound, byRow map[string]rowClass, grace t
 			}
 			continue
 		}
-		allowed, reached := 0, 0
+		allowed, reached, refusedHit := 0, 0, 0
 		for _, s := range sent {
-			if s.Row != row || denied(s.Status) {
+			if s.Row != row {
+				continue
+			}
+			if denied(s.Status) {
+				if out.hits[s.Seq] > 0 {
+					refusedHit++
+				}
 				continue
 			}
 			allowed++
@@ -249,7 +255,7 @@ func checkOutbound(slots []Slot, ob Outbound, byRow map[string]rowClass, grace t
 		}
 		if reached == 0 {
 			out.noReach = append(out.noReach, row)
-			out.fails = append(out.fails, fmt.Sprintf("FAIL: row %s VOID: %d allowed slots, %d reached the %s stub; the row is no evidence", row, allowed, reached, extOf[row]))
+			out.fails = append(out.fails, fmt.Sprintf("FAIL: row %s VOID: %d allowed slots, %d reached the %s stub (%d answered 401/403 with a stub hit: a relayed refusal or a call before the guard); the row is no evidence", row, allowed, reached, extOf[row], refusedHit))
 		}
 	}
 	return out

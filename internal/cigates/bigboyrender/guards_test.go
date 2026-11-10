@@ -152,7 +152,7 @@ func TestRealManifestRendersOneGrantPerTableAndEqualsTheGolden(t *testing.T) {
 	if got := strings.Count(out, "<query>"); got != rows {
 		t.Errorf("%d grants for %d rows with a privilege", got, rows)
 	}
-	if !strings.Contains(out, "<query>GRANT SELECT, INSERT, ALTER DELETE ON default.teams</query>") {
+	if !strings.Contains(out, "<query>GRANT SELECT, INSERT ON default.teams</query>") {
 		t.Error("the teams grant is missing")
 	}
 	if diff := goldenDiff(queries(out), realGolden(t)); diff != "" {
@@ -614,5 +614,23 @@ func TestRunRefusesAnUnknownVerb(t *testing.T) {
 	}
 	if code, _, stderr := run("pg-posture", "other", "a", "b", "c"); code != 2 || !strings.Contains(stderr, "unknown role") {
 		t.Errorf("role: exit %d %q", code, stderr)
+	}
+}
+
+// A row's OptionalDelete is not a grant (GrantStatements renders none for it), so the users.d render and the bigboy
+// grants comparison leave it out too.
+func TestOptionalDeleteIsNotRendered(t *testing.T) {
+	manifest := "package clickhouse\n\nfunc APIPosture(database string) Posture {\n\treturn Posture{RequiredTables: []TableGrant{\n" +
+		"\t\t{Database: database, Table: \"teams\", AllowInsert: true, AllowSelect: true, OptionalDelete: true},\n" +
+		"\t\t{Database: database, Table: \"only_optional\", OptionalDelete: true},\n" +
+		"\t\t{Database: database, Table: \"identities\", AllowInsert: true, AllowSelect: true, AllowDelete: true},\n\t}}\n}\n"
+	got := bigboyrender.GrantsFromManifest(manifest)
+	want := []string{"GRANT SELECT, INSERT ON default.teams", "GRANT SELECT, INSERT, ALTER DELETE ON default.identities"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("render %q, want %q", got, want)
+	}
+	actual := "SELECT\tteams\nINSERT\tteams\nSELECT\tidentities\nINSERT\tidentities\nALTER DELETE\tidentities\n"
+	if code, out, _ := run("grants-compare", actual, manifest); code != 0 || !strings.HasSuffix(out, "GRANTS_CHECK_OK\n") {
+		t.Fatalf("grants-compare: exit %d %q", code, out)
 	}
 }

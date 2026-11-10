@@ -410,6 +410,9 @@ func TestJudgeIsStrictAndVoidsASlotsFileWithNoClaimReadBack(t *testing.T) {
 	if code != 3 || !strings.Contains(out.String(), "claim read-back") {
 		t.Fatalf("a slots file with no claim read-back: code %d out %q err %q", code, out.String(), errOut.String())
 	}
+	if !strings.Contains(out.String(), "judge: schedule sha12 ") {
+		t.Fatalf("judge prints no schedule sha12 line: %q", out.String())
+	}
 }
 
 func TestDriveRefusesATokenFileThatNoSlotUsesOrThatIsOpen(t *testing.T) {

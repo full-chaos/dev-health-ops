@@ -28,11 +28,13 @@ if [ -n "${dups}" ]; then
   exit 3
 fi
 # The whole leg file must have the shape the workflow, the shard plans and the queue-tested check rely on, whatever the event: one static
-# leg with args "static" (a missing static leg is refused above, a repeated name by the duplicate check), test-K-of-N with args "test K N" for K = 1..N, race-K-of-M (heavy) with args "race K M" for K = 1..M, no other name.
+# leg with args "static" (a missing static leg is refused above, a repeated name by the duplicate check), one plan-reads leg with args
+# "plan-reads" (CHAOS-13520), test-K-of-N with args "test K N" for K = 1..N, race-K-of-M (heavy) with args "race K M" for K = 1..M, no other name.
 # Every line of the program below but the last is one check, so a dropped check is a dropped line.
 shape="$(jq -r '
   [.[] | select((.name | type) == "string")] as $l
   | [$l[] | select(.name == "static")] as $st
+  | [$l[] | select(.name == "plan-reads")] as $pr
   | [$l[] | select(.name | test("^test-[0-9]+-of-[0-9]+$"))] as $t
   | [$l[] | select(.name | test("^race-[0-9]+-of-[0-9]+$"))] as $r
   | [$t[] | .name | capture("^test-(?<k>[0-9]+)-of-(?<n>[0-9]+)$") | {k: (.k | tonumber), n: (.n | tonumber)}] as $tk
@@ -40,7 +42,9 @@ shape="$(jq -r '
   | [
     (if ($l | length) != length then "a leg has no string name" else empty end),
     ($st[] | select(.args != "static") | "the static leg must have args \"static\", has \(.args | tojson)"),
-    ($l[] | select(.name | test("^(static|test-[0-9]+-of-[0-9]+|race-[0-9]+-of-[0-9]+)$") | not) | "unknown leg name \(.name)"),
+    (if ($pr | length) != 1 then "want exactly one plan-reads leg" else empty end),
+    ($pr[] | select(.args != "plan-reads" or (.heavy // false)) | "the plan-reads leg must have args \"plan-reads\" and not be heavy"),
+    ($l[] | select(.name | test("^(static|plan-reads|test-[0-9]+-of-[0-9]+|race-[0-9]+-of-[0-9]+)$") | not) | "unknown leg name \(.name)"),
     ($t[] | . as $e | ($e.name | capture("^test-(?<k>[0-9]+)-of-(?<n>[0-9]+)$")) as $c | select($e.args != "test \($c.k) \($c.n)") | "leg \($e.name) has args \($e.args | tojson), want \"test \($c.k) \($c.n)\""),
     ($r[] | . as $e | ($e.name | capture("^race-(?<k>[0-9]+)-of-(?<n>[0-9]+)$")) as $c | select($e.args != "race \($c.k) \($c.n)") | "leg \($e.name) has args \($e.args | tojson), want \"race \($c.k) \($c.n)\""),
     ($r[] | select(.heavy != true) | "race leg \(.name) must be heavy"),

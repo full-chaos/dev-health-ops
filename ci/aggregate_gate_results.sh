@@ -80,7 +80,9 @@
 #   CHANGES_RESULT     needs.changes.result       (selector gates only)
 #   CHANGES_CODE       needs.changes.outputs.code (selector gates only)
 #   HEAVY_ON_PR        "true" or "false": the PR carries ci:full (queue-heavy only)
-#   GATED_JOB_1..N     "<job name>|<policy>|<needs.<job>.result>", consecutive
+#   GATED_JOB_1..N     "<job name>|<policy>|<needs.<job>.result>", consecutive; an optional 4th field "|<unit>" names the
+#                      ready-reuse unit of the job: a skip is then a pass when READY_REUSED names that unit (prints REUSED)
+#   READY_REUSED       the ready-reuse job's `reused` output ("unit=run:attempt:job[,job...]" entries; empty off a ready flip)
 #   GATE_TIMEOUT_NOTE_n  optional "<job name>|<names of the shards that ran to the job time limit>" (CHAOS-11331); a
 #                      failure or cancelled result of that job then reads JOB TIMEOUT (a slow runner or a hung test, no assertion failed); the verdict is unchanged
 #
@@ -233,6 +235,22 @@ is_selected() {
   esac
 }
 
+# reused_from <unit>: prints "run <id> attempt <a> job <ids>" when READY_REUSED (the ready-reuse job's `reused` output,
+# "unit=run:attempt:job[,job...]" entries) names this unit on a pull_request run; a skip of that job is then the reuse,
+# not an absence of proof. Any other shape, an empty unit or another event never explains a skip.
+reused_from() {
+  local unit="$1" entry src
+  [[ -n "${unit}" && "${EVENT_NAME}" == "pull_request" ]] || return 1
+  for entry in ${READY_REUSED:-}; do
+    [[ "${entry%%=*}" == "${unit}" ]] || continue
+    src="${entry#*=}"
+    [[ "${src}" =~ ^([0-9]+):([0-9]+):([0-9]+(,[0-9]+)*)$ ]] || return 1
+    printf 'run %s attempt %s job %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+    return 0
+  done
+  return 1
+}
+
 # How many GATED_JOB_<n> variables actually exist in the environment, versus
 # how many the consecutive loop below will read. The loop stops at the first
 # gap, so `GATED_JOB_1` + `GATED_JOB_3` used to judge job 1 and silently drop
@@ -260,6 +278,11 @@ while true; do
   rest="${spec#*|}"
   policy="${rest%%|*}"
   result="${rest#*|}"
+  reuse_unit=""
+  if [[ "${result}" == *"|"* ]]; then
+    reuse_unit="${result#*|}"
+    result="${result%%|*}"
+  fi
 
   printf '%s result: %s\n' "${job_name}" "${result:-<empty>}"
   validate_policy "${job_name}" "${policy}"
@@ -267,7 +290,9 @@ while true; do
   case "${result}" in
     success) ;;
     skipped)
-      if is_selected "${policy}"; then
+      if source="$(reused_from "${reuse_unit}")"; then
+        printf 'REUSED %s from %s\n' "${job_name}" "${source}"
+      elif is_selected "${policy}"; then
         add_failure "${job_name} was skipped, but its job condition selected it to run (event=${EVENT_NAME:-<empty>}, changes code=${CHANGES_CODE:-<empty>}) -- an unexplained skip is an absence of proof, not a pass"
       else
         printf '%s skipped legitimately: its condition did not select it on event %s with changes code=%s\n' \

@@ -33,14 +33,66 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  # A ready_for_review run gets its own group keyed by the head sha and is never cancelled: a synchronize run of the
+  # same sha (a push right before the flip) cannot cancel it, and its ready-reuse job waits for that run instead.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 # CHAOS-12858: "|" falls back to direct on ANY proxy error; the default "," only on 404/410.
 env:
   GOPROXY: https://proxy.golang.org|direct
 
 jobs:
+  # Ready flip: names the legs that already passed on this exact head sha (ci/ready_reuse.sh, read from the BASE commit
+  # so a change cannot rewrite its own judge); each leg below skips when its unit is in `passed`, and its gate prints
+  # REUSED for it. Every other event, and a base without the script, passes [] and every leg runs.
+  ready-reuse:
+    name: ready-reuse
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      passed: ${{ steps.reuse.outputs.passed || '[]' }}
+      reused: ${{ steps.reuse.outputs.reused }}
+    steps:
+      - name: Check out the reuse judge from the base commit
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: ci/ready_reuse.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Name the legs that already passed on this head sha
+        id: reuse
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          READY_REUSE_UNITS: |
+            auth-go-quality exact 1 - auth-go-quality
+            auth-test exact 1 - auth-test
+            auth-race exact 1 - auth-race
+            auth-race-integration exact 1 - auth-race-integration
+            auth-fuzz prefix 1 - auth-fuzz (
+            auth-corpus-queue prefix 3 - auth-corpus-queue (
+        run: |
+          if [ ! -f ci/ready_reuse.sh ]; then
+            echo "READY REUSE OFF: the base commit has no ci/ready_reuse.sh; every leg runs"
+            echo 'passed=[]' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          bash ci/ready_reuse.sh
+
   auth-changes:
     if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
@@ -135,8 +187,8 @@ jobs:
           grep -xE 'corpus=(true|false)' corpus.txt >> "${GITHUB_OUTPUT}"
 
   auth-go-quality:
-    needs: [auth-changes]
-    if: needs.auth-changes.outputs.relevant == 'true'
+    needs: [ready-reuse, auth-changes]
+    if: (needs.auth-changes.outputs.relevant == 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'auth-go-quality')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -157,8 +209,8 @@ jobs:
         run: bash ci/check_go.sh auth vuln
 
   auth-test:
-    needs: [auth-changes]
-    if: needs.auth-changes.outputs.relevant == 'true'
+    needs: [ready-reuse, auth-changes]
+    if: (needs.auth-changes.outputs.relevant == 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'auth-test')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -186,8 +238,8 @@ jobs:
   # CHAOS-12420: the same again. The two legs grew to the whole 30 minutes on a slow runner, and the last package got a
   # 2 s timeout, so each leg has a job of its own. auth-gate fans in both.
   auth-race:
-    needs: [auth-changes]
-    if: needs.auth-changes.outputs.relevant == 'true'
+    needs: [ready-reuse, auth-changes]
+    if: (needs.auth-changes.outputs.relevant == 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'auth-race')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -204,8 +256,8 @@ jobs:
         run: bash ci/check_go.sh auth race
 
   auth-race-integration:
-    needs: [auth-changes]
-    if: needs.auth-changes.outputs.relevant == 'true'
+    needs: [ready-reuse, auth-changes]
+    if: (needs.auth-changes.outputs.relevant == 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'auth-race-integration')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -226,8 +278,8 @@ jobs:
   # of ci/check_go.sh are unchanged. A new target in a listed package needs only its registry row.
   auth-fuzz:
     name: auth-fuzz (${{ matrix.package }})
-    needs: [auth-changes]
-    if: needs.auth-changes.outputs.relevant == 'true'
+    needs: [ready-reuse, auth-changes]
+    if: (needs.auth-changes.outputs.relevant == 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'auth-fuzz')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -282,8 +334,8 @@ jobs:
   # ejects the entry or reds the pull request before main. No retry: a red leg stays red. Its result fans into `auth-gate`.
   auth-corpus-queue:
     name: auth-corpus-queue (${{ matrix.leg }})
-    needs: [auth-changes]
-    if: (github.event_name == 'merge_group' || github.event_name == 'pull_request') && needs.auth-changes.outputs.corpus == 'true'
+    needs: [ready-reuse, auth-changes]
+    if: ((github.event_name == 'merge_group' || github.event_name == 'pull_request') && needs.auth-changes.outputs.corpus == 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'auth-corpus-queue')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -321,7 +373,7 @@ jobs:
 
   auth-gate:
     if: always()
-    needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz, auth-corpus-queue]
+    needs: [ready-reuse, auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz, auth-corpus-queue]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -334,6 +386,9 @@ jobs:
       RACE: ${{ needs.auth-race.result }}
       RACE_INTEGRATION: ${{ needs.auth-race-integration.result }}
       FUZZ: ${{ needs.auth-fuzz.result }}
+      # Ready flip: "unit=run:attempt:job" entries of ready-reuse; a leg it named was skipped because it passed on this sha.
+      READY_REUSED: ${{ needs.ready-reuse.outputs.reused }}
+      EVENT_NAME: ${{ github.event_name }}
     steps:
       - name: Fan in
         run: |
@@ -343,10 +398,22 @@ jobs:
             exit 0
           fi
           [ "${CHANGES}" = "success" ] || { echo "auth-changes: ${CHANGES}" >&2; exit 1; }
+          # passed <job> <result>: success, or a skip that ready-reuse named on a pull_request run (prints REUSED).
+          passed() {
+            [ "$2" = success ] && return 0
+            [ "$2" = skipped ] && [ "${EVENT_NAME}" = pull_request ] || return 1
+            for entry in ${READY_REUSED:-}; do
+              if [ "${entry%%=*}" = "$1" ] && [[ "${entry#*=}" =~ ^([0-9]+):([0-9]+):([0-9]+(,[0-9]+)*)$ ]]; then
+                echo "REUSED $1 from run ${BASH_REMATCH[1]} attempt ${BASH_REMATCH[2]} job ${BASH_REMATCH[3]}"
+                return 0
+              fi
+            done
+            return 1
+          }
           # CHAOS-11596: a skipped corpus job passes ONLY when the relevance step said the entry does not touch the corpus
           # path set; a skip (or any non-success) with corpus=true fails, also when the auth gates are not relevant.
           case "${CORPUS_RELEVANT}" in
-            true) [ "${CORPUS}" = "success" ] || { echo "auth-corpus-queue: ${CORPUS}: a skipped corpus leg with relevant=true fails the gate" >&2; exit 1; } ;;
+            true) passed auth-corpus-queue "${CORPUS}" || { echo "auth-corpus-queue: ${CORPUS}: a skipped corpus leg with relevant=true fails the gate" >&2; exit 1; } ;;
             false) echo "the change is outside the external auth corpus path set (auth-corpus-queue=${CORPUS})" ;;
             *) echo "auth-changes produced no corpus verdict" >&2; exit 1 ;;
           esac
@@ -356,7 +423,7 @@ jobs:
           fi
           [ "${RELEVANT}" = "true" ] || { echo "auth-changes produced no relevance verdict" >&2; exit 1; }
           for pair in "auth-go-quality=${QUALITY}" "auth-test=${TEST}" "auth-race=${RACE}" "auth-race-integration=${RACE_INTEGRATION}" "auth-fuzz=${FUZZ}"; do
-            [ "${pair#*=}" = "success" ] || { echo "${pair}: a relevant change needs every gate job to pass" >&2; exit 1; }
+            passed "${pair%%=*}" "${pair#*=}" || { echo "${pair}: a relevant change needs every gate job to pass" >&2; exit 1; }
           done
           echo "all auth gate jobs passed"
 

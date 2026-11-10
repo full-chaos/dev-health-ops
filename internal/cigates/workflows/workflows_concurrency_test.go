@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -26,17 +27,45 @@ func eventContext(event, ref, headRef, refName, prNumber, sha string) ctxMap {
 		"github.event.inputs.ref": "",
 		// no modelled event is a `labeled` pull_request action
 		"github.event.action": "", "github.event.label.name": "",
+		"github.event.pull_request.head.sha": "",
 	}
 }
 
 var (
 	pushCtx     = eventContext("push", "refs/heads/topic-branch", "", "topic-branch", "", "abc123")
-	prCtx       = eventContext("pull_request", "refs/pull/7/merge", "topic-branch", "7/merge", "7", "def456")
+	prCtx       = withHeadSHA(eventContext("pull_request", "refs/pull/7/merge", "topic-branch", "7/merge", "7", "def456"), "prheadsha7")
 	scheduleCtx = eventContext("schedule", "refs/heads/main", "", "main", "", "abc123")
 	dispatchCtx = eventContext("workflow_dispatch", "refs/heads/topic-branch", "", "topic-branch", "", "ghi789")
 	pushMainCtx = eventContext("push", "refs/heads/main", "", "main", "", "mainsha1")
 	mergeGrpCtx = eventContext("merge_group", "refs/heads/gh-readonly-queue/main/pr-7-abcdef", "", "gh-readonly-queue/main/pr-7-abcdef", "", "mergegroupsha1")
 )
+
+// readyCtx is a pull_request ready_for_review event: the draft flip, which may arrive beside a synchronize run of the same sha.
+var readyCtx = withAction(prCtx, "ready_for_review")
+
+func withHeadSHA(c ctxMap, sha string) ctxMap {
+	c["github.event.pull_request.head.sha"] = sha
+	return c
+}
+
+func withAction(c ctxMap, action string) ctxMap {
+	out := ctxMap{}
+	for k, v := range c {
+		out[k] = v
+	}
+	out["github.event.action"] = action
+	return out
+}
+
+// prTypes lists the pull_request activity types a workflow names (nil when it names none: the default types, which do
+// not include ready_for_review).
+func prTypes(events map[string]any) []string {
+	var out []string
+	for _, ty := range asList(asMap(events["pull_request"])["types"]) {
+		out = append(out, strings.TrimSpace(fmt.Sprint(ty)))
+	}
+	return out
+}
 
 func withInputsAction(c ctxMap) ctxMap {
 	out := ctxMap{"inputs.action": ""}
@@ -424,6 +453,18 @@ func concurrencyViolations(t *testing.T, root string) []string {
 				add("%s: a merge_group entry is not keyed by commit sha (got %q)", name, g)
 			}
 		}
+		// (5) a ready_for_review run never shares the synchronize group and is never cancelled: a synchronize run of the same
+		// sha (a push right before the flip) cancelled the ready run on #6048 and the merge gate saw cancelled check-runs.
+		if hasPR && slices.Contains(prTypes(ev), "ready_for_review") {
+			sync, err1 := renderGroup(group, withInputsAction(prCtx))
+			g := check("ready_for_review", readyCtx, false, "cancel-in-progress cancels a ready_for_review run: a synchronize run of the same sha would cancel it, or it would cancel a draft run whose legs it reuses")
+			if err1 == nil && g == sync {
+				add("%s: the ready_for_review group %q is the synchronize group: the two runs of one sha cancel each other", name, g)
+			}
+			if !strings.Contains(g, readyCtx["github.event.pull_request.head.sha"]) {
+				add("%s: the ready_for_review group %q is not keyed by the head sha: a ready run of an older sha would hold the group", name, g)
+			}
+		}
 	}
 	return out
 }
@@ -471,7 +512,9 @@ func TestWorkflowConcurrencyPlantedDefects(t *testing.T) {
 	const codeql = ".github/workflows/codeql-analysis.yml"
 	const dockerImages = ".github/workflows/docker-images.yml"
 	canonGroup := "group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}"
-	cancelExpr := "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}"
+	cancelExpr := "cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}"
+	readyHead := "${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}"
+	readyGroup := "${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}" + readyHead
 	cases := []struct {
 		name string
 		muts []mutation
@@ -495,6 +538,15 @@ func TestWorkflowConcurrencyPlantedDefects(t *testing.T) {
 		{"CHAOS-4906: workflow drops its concurrency group",
 			[]mutation{{codeql, canonGroup, "# group dropped"}},
 			[]string{"codeql-analysis.yml", "no concurrency group"}},
+		{"ready flip: a synchronize run of the same sha may cancel the ready run (#6048)",
+			[]mutation{{goYml, cancelExpr, "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}"}},
+			[]string{"go.yml", "cancels a ready_for_review run"}},
+		{"ready flip: the ready run shares the synchronize group",
+			[]mutation{{codeql, readyGroup, ""}},
+			[]string{"codeql-analysis.yml", "is the synchronize group"}},
+		{"ready flip: the ready group is not keyed by the head sha",
+			[]mutation{{dockerImages, readyHead, ""}},
+			[]string{"docker-images.yml", "not keyed by the head sha"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

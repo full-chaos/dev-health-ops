@@ -149,7 +149,7 @@ func authViolations(t *testing.T, root string) []string {
 	}
 	// the auth test and race legs are not duplicates of go-quality (no -count=1 there, race skips on pull requests): they stay, unconditional
 	for _, st := range testSteps0(jobs) {
-		if r := asString(st["run"]); (r == "bash ci/check_go.sh auth test" || r == "bash ci/check_go.sh auth race") && st["if"] != nil {
+		if r := asString(st["run"]); (strings.HasPrefix(r, "bash ci/check_go.sh auth test-leg ") || strings.HasPrefix(r, "bash ci/check_go.sh auth race-leg ")) && st["if"] != nil {
 			out = append(out, fmt.Sprintf("`%s` must run on every event: go-quality is not a superset of it", r))
 		}
 	}

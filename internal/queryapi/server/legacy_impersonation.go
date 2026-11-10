@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 )
@@ -66,20 +68,15 @@ var errLegacyImpersonationRefused = errors.New("legacy impersonation caller refu
 
 type legacyImpersonationRefusedKey struct{}
 
-// nonHolderRow is what liveScope read of the go-api row of a caller without
-// admin.impersonate while the refusal is on; the dispatch refuses that
-// caller's non-query documents on it, as go-api's Scope.Impersonation does
-// on a request that does not only read.
-type nonHolderRow int
-
-const (
-	nonHolderRowNone       nonHolderRow = iota
-	nonHolderRowLive                    // the row is live: the impersonation refusal (403)
-	nonHolderRowUnreadable              // the read failed: /query's failed live read (401)
-)
-
-// legacyRefusal is the request's refusal state.
-type legacyRefusal struct{ nonHolder nonHolderRow }
+// legacyRefusal is the request's refusal state: nonHolder is the caller
+// liveScope found without admin.impersonate while the refusal is on. The
+// dispatch reads that caller's go-api row only for a non-query document, as
+// go-api's Scope.Impersonation reads it only on a request that does not only
+// read, and refuses the document beside a live row.
+type legacyRefusal struct {
+	nonHolder    uuid.UUID
+	hasNonHolder bool
+}
 
 // withLegacyImpersonationRefused marks the request so liveScope refuses the
 // admin's own bearer beside a live go-api row instead of serving it as the target.
@@ -92,17 +89,17 @@ func legacyImpersonationRefused(ctx context.Context) bool {
 	return refused
 }
 
-func markNonHolderRow(ctx context.Context, row nonHolderRow) {
+func markNonHolder(ctx context.Context, id uuid.UUID) {
 	if state, ok := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal); ok {
-		state.nonHolder = row
+		state.nonHolder, state.hasNonHolder = id, true
 	}
 }
 
-func nonHolderRowOf(ctx context.Context) nonHolderRow {
-	if state, ok := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal); ok {
-		return state.nonHolder
+func nonHolderOf(ctx context.Context) (uuid.UUID, bool) {
+	if state, ok := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal); ok && state.hasNonHolder {
+		return state.nonHolder, true
 	}
-	return nonHolderRowNone
+	return uuid.UUID{}, false
 }
 
 // legacyDocumentReads reports whether text, the document the resolver runs,

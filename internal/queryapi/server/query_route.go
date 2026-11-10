@@ -7021,14 +7021,17 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			}
 		}
 
-		if row := nonHolderRowOf(r.Context()); row != nonHolderRowNone && !legacyDocumentReads(query) {
-			log.Printf("query-api: refused a non-query document of a caller without admin.impersonate beside its go-api impersonation row: operation=%s row_unreadable=%t", operation, row == nonHolderRowUnreadable)
-			if row == nonHolderRowUnreadable {
+		if id, ok := nonHolderOf(r.Context()); ok && !legacyDocumentReads(query) {
+			switch session, err := edgeStore.ActiveImpersonation(r.Context(), id); {
+			case err != nil:
+				log.Printf("query-api: refused a non-query document of a caller without admin.impersonate: reason=%s operation=%s", storeFailureReason("edge_impersonation_lookup_failed", err), operation)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
+			case session != nil:
+				log.Printf("query-api: refused a non-query document of a caller without admin.impersonate beside its live go-api impersonation row: operation=%s", operation)
+				policy.WriteImpersonationRefused(w)
+				return
 			}
-			policy.WriteImpersonationRefused(w)
-			return
 		}
 
 		if requireKind != "" {

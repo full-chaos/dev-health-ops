@@ -16,7 +16,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -48,20 +47,12 @@ func TestAuthProxyF3aSAMLRoutesAnswerProviderNotFoundBeforeAnyParse(t *testing.T
 		t.Fatalf("sso_providers = %d (%v), want 0", providers, err)
 	}
 
-	verifier, err := edgetoken.New(proxyTestKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(proxyTestKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, quietLogger())
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
 	stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
-	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
+	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 		SSOStateSecret: "f3a-sso-state-secret-f3a-sso-state", AuthProxy: mustProxyConfig(t, f3aProdFlags(stub.URL)),
 		Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 	server, err := NewServer(config.Config{APIAddress: "127.0.0.1:0", CORSAllowedOrigins: []string{proxyOrigin}}, quietLogger(), routes)

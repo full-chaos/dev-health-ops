@@ -200,7 +200,7 @@ type Deps struct {
 	// SELECT on projects. See EnvACRAccessProjectScope for the acr
 	// DisallowUnknownFields dependency and the roll order.
 	ACRAccessProjectScope bool
-	// ACRRevoker is the credential revoke route's acr client (EnvACRRevokeURL and its two siblings); nil is not
+	// ACRRevoker is the credential revoke route's acr client (EnvACRRevokeURL and its three siblings); nil is not
 	// configured, and the route answers 503.
 	ACRRevoker acrcredentials.Revoker
 	// SessionIssuer issues the session and sso routes' token pairs at

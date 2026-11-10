@@ -151,6 +151,7 @@ internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*
 internal/auth/session	liveness_census_test.go	cmd	tree	*
 internal/auth/session	liveness_census_test.go	internal	tree	*
 internal/auth/writerinventory	credential_registry_reader_census_test.go	internal	tree	*.go
+internal/auth/writerinventory	dynamic_enumerate_test.go	unexpressed	-	-
 internal/auth/writerinventory	refresh_tokens_dropped_test.go	internal/auth	tree	*
 internal/auth/writerinventory	scan_test.go	.	tree	*.go
 internal/auth/writerinventory	scan_test.go	internal/storage/postgres/authschema/migrations	dir	*

@@ -81,7 +81,7 @@ func runQualityHelper(t *testing.T, sha string, runs string, jobs string, failRu
 	if failRuns {
 		write("fail-runs", "")
 	}
-	command := exec.Command("bash", script, qualityRepo, sha, "go-quality.yml", qualityLegPrefix, qualityLegStep, "12")
+	command := exec.Command("bash", script, qualityRepo, sha, "go-quality.yml", qualityLegPrefix, qualityLegStep, fmt.Sprint(len(qualityLegNames)))
 	command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "STUB_DIR="+dir)
 	if idFile != "" {
 		command.Env = append(command.Env, "QUEUE_TESTED_RUN_ID_FILE="+idFile)
@@ -141,7 +141,7 @@ func TestQueueTestedShaForGoQualityAnswersOnlyForAFullyRanQueueRun(t *testing.T)
 					l.job = "cancelled"
 				}
 			})), false, false},
-		{"only eleven legs", qualitySha, good, qualityJobsJSON(qualityLegs(nil)[1:]), false, false},
+		{"one leg short", qualitySha, good, qualityJobsJSON(qualityLegs(nil)[1:]), false, false},
 		{"no leg job at all", qualitySha, good, qualityJobsJSON(nil), false, false},
 		{"the run is from a fork repository", qualitySha, qualityRunsJSON(qualitySha, "merge_group", "someone/dev-health-ops", "success"), allRan, false, false},
 		{"the run is not a merge_group run", qualitySha, qualityRunsJSON(qualitySha, "push", qualityRepo, "success"), allRan, false, false},

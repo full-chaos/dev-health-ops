@@ -196,7 +196,7 @@ func (s *Store) AdminCreateUser(ctx context.Context, req AdminCreateRequest) (_ 
 			if req.OrgID != nil {
 				orgID, role := *req.OrgID, req.Role
 				join = func(ctx context.Context) error {
-					if err := s.insertJoinMembership(ctx, tx, membershipJoin{ID: uuid.New(), Principal: p.ID, OrgID: orgID, Role: role}); err != nil {
+					if err := s.insertJoinMembership(ctx, tx, membershipJoin{ID: uuid.New(), Principal: p.ID, OrgID: orgID, Role: role, AdminCreate: true}); err != nil {
 						return err
 					}
 					return adminCreateAuditRow(ctx, tx, orgID, actor, p.ID, p.Email, role, req.RequestMetadata)
@@ -356,7 +356,11 @@ func (r AdminUpdateRequest) patch() AdminUpdatePatch {
 // the same transaction. A profile change with a platform role change and nothing else is one audit.Commit off the
 // stream (OffStreamPublicProfile; the role change queues its own events). A profile change alone is one
 // audit.CommitPublicProjection (EventUserProfileUpdated): its columns are in no guarded table, so Commit would count
-// it as no change. Under the locks the state is read again, and a different decision is ErrStateChangedUnderLock.
+// it as no change. A PATCH with no field change still bumps public.users.updated_at, as go-api's does (pm D6915): with
+// a platform role change it is one audit.Commit off the stream with EventUserTouched (the role change queues its own
+// events), alone it is one audit.CommitPublicProjection with EventUserTouched. Every PATCH takes one lock order:
+// the actor rule, the auth principal, public.users, then the write and the Superuser step. Under the locks the state
+// is read again, and a different decision is ErrStateChangedUnderLock.
 func (s *Store) AdminUpdateUser(ctx context.Context, req AdminUpdateRequest, cur AdminUpdateCurrent) (err error) {
 	defer func() { s.countLink(ctx, "admin_update", err) }()
 	if !s.ownsUsers {
@@ -405,7 +409,11 @@ func (s *Store) AdminUpdateUser(ctx context.Context, req AdminUpdateRequest, cur
 		if again := DecideAdminUpdate(now, req.patch()); !sameDecision(again, decided) {
 			return ErrStateChangedUnderLock
 		}
-		if applied, err = applyAdminUpdate(ctx, tx, s.q, req.Principal, decided, req.Email); err != nil {
+		if decided.Empty() {
+			if applied, err = touchPublicUser(ctx, tx, req.Principal); err != nil {
+				return err
+			}
+		} else if applied, err = applyAdminUpdate(ctx, tx, s.q, req.Principal, decided, req.Email); err != nil {
 			return err
 		}
 		if req.Superuser != nil {
@@ -432,9 +440,31 @@ func (s *Store) AdminUpdateUser(ctx context.Context, req AdminUpdateRequest, cur
 			return applied, err
 		})
 	case req.Superuser != nil:
-		return errors.New("identity: a platform role change alone is the platform role store's own commit")
+		event := localAudit(audit.EventUserTouched, "principal_projected", subject, actor)
+		req.Caller.Annotate(event.Attributes)
+		return commitMutation(ctx, s.pool, s.schema, audit.Mutation{Apply: apply, Audit: event, OffStream: audit.OffStreamPublicProfile,
+			Refusals: refusals})
+	default:
+		event := localAudit(audit.EventUserTouched, "principal_projected", subject, actor)
+		req.Caller.Annotate(event.Attributes)
+		return commitPublicProjection(ctx, s.pool, s.schema, event, func(ctx context.Context, tx audit.TxOps) (int64, error) {
+			err := apply(ctx, tx)
+			return applied, err
+		})
 	}
-	return audit.ErrNoStateChange
+}
+
+// touchPublicUser bumps public.users.updated_at, as go-api's PATCH does for every user it finds: an admin PATCH with no
+// field change, or a platform role change only, is still a write of the row.
+func touchPublicUser(ctx context.Context, tx audit.TxOps, principal uuid.UUID) (int64, error) {
+	tag, err := tx.Exec(ctx, `UPDATE public.users SET updated_at = now() WHERE id = $1`, principal)
+	if err != nil {
+		return 0, err
+	}
+	if tag.RowsAffected() != 1 {
+		return 0, ErrLegacyProjection
+	}
+	return 1, nil
 }
 
 func (d AdminUpdateDecision) profileFields() []string {

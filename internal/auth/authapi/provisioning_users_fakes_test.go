@@ -91,8 +91,17 @@ func (f *fakeUsersAdmin) AdminSoftDeleteUser(ctx context.Context, req identity.A
 type fakePlatformRoles struct {
 	locks, sharedLocks                int
 	grants, revokes                   []uuid.UUID
+	grantInputs                       []platformrole.GrantInput
+	direct                            int // the store's own Grant or Revoke (its own commit), not GrantOn or RevokeOn
 	grantErr, revokeErr, lastAdminErr error
 	lastAdminChecks                   []uuid.UUID
+	held                              map[uuid.UUID]bool // stored platform_admin assignments, whatever the principal's state
+	heldReads                         []uuid.UUID
+}
+
+func (f *fakePlatformRoles) HeldOn(_ context.Context, _ platformrole.RowQuerier, principal uuid.UUID, role string) (bool, error) {
+	f.heldReads = append(f.heldReads, principal)
+	return role == platformrole.PlatformAdmin && f.held[principal], nil
 }
 
 func (f *fakePlatformRoles) RefuseLastPlatformAdmin(_ context.Context, _ audit.TxOps, principal uuid.UUID) error {
@@ -108,6 +117,7 @@ func (f *fakePlatformRoles) LockWritesShared(context.Context, audit.TxOps) error
 
 func (f *fakePlatformRoles) GrantOn(_ context.Context, _ audit.TxOps, in platformrole.GrantInput) (uuid.UUID, error) {
 	f.grants = append(f.grants, in.Principal)
+	f.grantInputs = append(f.grantInputs, in)
 	return uuid.New(), f.grantErr
 }
 
@@ -117,11 +127,14 @@ func (f *fakePlatformRoles) RevokeOn(_ context.Context, _ audit.TxOps, in platfo
 }
 
 func (f *fakePlatformRoles) Grant(_ context.Context, in platformrole.GrantInput) (uuid.UUID, error) {
+	f.direct++
 	f.grants = append(f.grants, in.Principal)
+	f.grantInputs = append(f.grantInputs, in)
 	return uuid.New(), f.grantErr
 }
 
 func (f *fakePlatformRoles) Revoke(_ context.Context, in platformrole.RevokeInput) error {
+	f.direct++
 	f.revokes = append(f.revokes, in.Principal)
 	return f.revokeErr
 }

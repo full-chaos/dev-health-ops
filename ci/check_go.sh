@@ -5439,7 +5439,7 @@ auth_leg_args() {
 }
 
 auth_leg_plan() {
-  local kind="$1" leg="$2" count="$3" modpath pkgs weights splits=/dev/null out tmp=""
+  local kind="$1" leg="$2" count="$3" modpath pkgs weights splits="" out tmp=""
   auth_leg_args "${leg}" "${count}"
   modpath="$(auth_go list -m)" || die "go list -m failed"
   case "${kind}" in
@@ -5461,7 +5461,7 @@ auth_leg_plan() {
       ;;
     *) die "auth leg KIND must be test, race or race-integration, got '${kind}'" ;;
   esac
-  [ -f "${weights}" ] && [ -f "${splits}" ] || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} legs need ${weights} and ${splits}"; }
+  { [ -f "${weights}" ] && { [ -z "${splits}" ] || [ -f "${splits}" ]; }; } || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} legs need ${weights}${splits:+ and ${splits}}"; }
   out="$(printf '%s\n' "${pkgs}" | awk -v mod="${modpath}" -v shard="${leg}" -v count="${count}" -v weights="${weights}" \
     -v splits="${splits}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} leg ${leg}/${count}: the split (ci/go_race_shard.awk) failed"; }
   [ -z "${tmp}" ] || rm -f -- "${tmp}"

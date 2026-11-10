@@ -46,15 +46,52 @@ The Go worker fleet deliberately separates three PostgreSQL responsibilities:
 
 Do not collapse these into one connection string. Long-running workers must not receive `MIGRATION_DATABASE_URI` and never apply migrations. The usernames in the runtime DSNs must match the declared domain and queue role names; mismatches fail closed.
 
+## Authentication configuration
+
+The [auth control plane](../architecture/auth-control-plane.md) separates browser sessions, user access tokens,
+workload identity and database logins. Use the [credential reference](../../reference/auth/credential-reference.md)
+for issuers, consumers, storage and expiry.
+
+| Process | Settings and purpose |
+| --- | --- |
+| auth-service | `AUTH_DATABASE_URI` or `AUTH_DATABASE_URI_FILE` for the unprivileged runtime login; `AUTH_SIGNING_KEY_FILE` or a key set for Ed25519 signing; `AUTH_TOKEN_ISSUER_URL` for the HTTPS issuer. |
+| go-api and query-api | `AUTH_ACCESS_TOKEN_ISSUER` must match the issuer exactly. They verify public JWKS keys. `AUTH_PROXY_SESSIONS=true` enables the auth-service session path. |
+| go-api auth-service client | `AUTH_PROXY_URL`, `AUTH_WORKLOAD_ISSUER`, and exactly one of `AUTH_WORKLOAD_SUBJECT_FILE` or `AUTH_WORKLOAD_BOOTSTRAP_FILE`. The file supplies a workload-exchange subject, not a user token. |
+| Web | `AUTH_SECRET` or `NEXTAUTH_SECRET` protects its Auth.js session cookie. Keep it separate from backend signing and link secrets. |
+| Auth migration command | `AUTH_MIGRATION_DATABASE_URI` or `AUTH_MIGRATION_DATABASE_URI_FILE`. Never inject it into a long-running service. |
+
+`AUTH_ACCESS_TOKEN_CLASS` defaults to `eddsa`. The retired `hs256_compat` value is a startup error.
+The former HS256 edge secret and `JWT_SECRET_KEY` signing paths are retired.
+auth-service ignores the retired `AUTH_JWT_SECRET_KEY`, `AUTH_JWT_SECRET_KEY_FILE`, `AUTH_JWT_ISSUER` and
+`AUTH_LEGACY_JWT_AUDIENCE` settings and warns when they are set. They are not installation requirements.
+The former go-api principal envelope is also retired; query-api accepts no envelope bearer.
+
+Session routes require `AUTH_SESSION_SUCCESSOR_KEY` or its `_FILE` form: 32 bytes encoded as base64url without
+padding. Local password login also requires `AUTH_LOGIN_LOCKOUT_KEY` in the same encoding and size.
+`AUTH_RATE_LIMIT_KEY` is optional, with at least 32 characters when supplied. Without it, the rate limiter
+uses a key derived from the successor key. It does not fall back to an HS256 access-token secret.
+
+Use independent `SSO_STATE_SECRET`, `GITHUB_APP_STATE_SECRET` and `LINK_TOKEN_SECRET` values in go-api.
+The two state secrets require at least 32 characters. Missing state keys disable the corresponding SSO or
+GitHub App installation routes with `503 config_missing`. A missing link secret makes go-api's signed-link
+routes return `503 config_missing`. `LINK_TOKEN_SECRET_PREVIOUS` accepts older signed links during rotation;
+new links use only the current secret. Neither `JWT_SECRET_KEY` nor `SETTINGS_ENCRYPTION_KEY` signs these links.
+auth-service verification and reset routes instead consume purpose-bound opaque link credentials.
+
+Direct `AUTH_SIGNING_KEY` values are refused. Mount the private signing key as a protected regular file.
+Only auth-service receives it. See [signing-key custody](auth-signing-key-custody.md) and the
+[auth configuration reference](../../reference/auth/configuration.md) for file permissions, setting bounds
+and the workload-exchange switches.
+
 ## PagerDuty app configuration
 
 The API and every worker that can synchronize PagerDuty need the same OAuth app values:
 
 ```dotenv
 PAGER_DUTY_CLIENT_ID="<client-id>"
-PAGER_DUTY_SECRET="<client-secret>"
+PAGER_DUTY_SECRET="<redacted>"
 PAGER_DUTY_REDIRECT_URI="https://YOUR_HOST/org/admin/integrations/pagerduty/callback"
-SETTINGS_ENCRYPTION_KEY="<stable-encryption-key>"
+SETTINGS_ENCRYPTION_KEY="<redacted>"
 ```
 
 The callback URI is a browser route on Dev Health Web. Do not expose the client secret to the browser. Keep `SETTINGS_ENCRYPTION_KEY` stable anywhere encrypted provider credentials are read; changing it without a coordinated credential migration or reconnect can break token refresh.
@@ -101,7 +138,7 @@ LOCAL_LLM_MODEL=your-model-id
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
 OLLAMA_MODEL=your-model-id
-OLLAMA_API_KEY=optional-cloud-key
+OLLAMA_API_KEY=<redacted>
 ```
 
 `OLLAMA_API_KEY` is the provider-specific platform alias; `LLM_API_KEY` remains
@@ -134,23 +171,23 @@ below.
 ```dotenv
 # Anthropic
 LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=your-key
+ANTHROPIC_API_KEY=<redacted>
 LLM_MODEL_ANTHROPIC=claude-haiku-5-5   # optional; ANTHROPIC_BASE_URL optional
 
 # Google Gemini
 LLM_PROVIDER=gemini
-GEMINI_API_KEY=your-key
+GEMINI_API_KEY=<redacted>
 GEMINI_MODEL=gemini-3.8-flash          # optional; LLM_MODEL_GEMINI also works; GEMINI_BASE_URL optional
 
 # Qwen on DashScope
 LLM_PROVIDER=qwen
-DASHSCOPE_API_KEY=your-key             # or QWEN_API_KEY
+DASHSCOPE_API_KEY=<redacted>             # or QWEN_API_KEY
 QWEN_MODEL=qwen-plus                   # optional; LLM_MODEL_QWEN also works
 DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1   # optional; default is the Beijing endpoint
 
 # Qwen on Cloudflare Workers AI (OpenAI-compatible route)
 LLM_PROVIDER=qwen
-QWEN_API_KEY=your-workers-ai-token
+QWEN_API_KEY=<redacted>
 QWEN_BASE_URL=https://api.cloudflare.com/client/v4/accounts/<account-id>/ai/v1
 QWEN_MODEL=@cf/qwen/qwen3-30b-a3b-fp8
 ```

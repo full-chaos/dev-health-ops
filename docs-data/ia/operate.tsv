@@ -1,5 +1,6 @@
 id	parent_id	url	label	kind	nav	public_state	lifecycle	provisional	summary
 operate	home	/operate/	Install and operate	landing	true	public	planned	false	Deployment, lifecycle maintenance, observability, and recovery.
+op-architecture-auth-control-plane	operate	/operate/architecture/auth-control-plane/	Auth control plane architecture	explanation	true	public	active	false	Authentication services, credentials, sessions, authorization enforcement, signing keys and database privileges.
 op-plan	operate	/operate/plan/	Plan a deployment	landing	true	public	planned	false	
 op-models	op-plan	/operate/plan/deployment-models/	Supported deployment models	concept	true	public	planned	false	
 op-arch	op-plan	/operate/plan/architecture/	Architecture and service dependencies	concept	true	public	planned	false	

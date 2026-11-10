@@ -30,3 +30,19 @@ func TestRunbooksNameTheOwnerSecretForTheFence(t *testing.T) {
 		}
 	}
 }
+
+// The bare apply line is a prefix of the -apply line, so the dry run is pinned with the words that follow it.
+func TestRunbooksGiveTheDryRunApplyLine(t *testing.T) {
+	for path, want := range map[string]string{
+		"../../../docs/operate/maintain/backup-and-restore.md":        "`auth-migrate restore-fence apply -manifest manifest.json` (it writes",
+		"../../../docs/operate/runbooks/backup-or-restore-failure.md": "`auth-migrate restore-fence apply -manifest manifest.json` (dry run)",
+	} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("%s does not contain %q", path, want)
+		}
+	}
+}

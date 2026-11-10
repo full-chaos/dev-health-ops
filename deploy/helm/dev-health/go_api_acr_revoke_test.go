@@ -131,6 +131,15 @@ func TestACRRevokeClusterHostTakesValidLabelsAndATokenQuery(t *testing.T) {
 	}
 }
 
+func TestACRRevokeTokenQueryMayHoldAnAtSign(t *testing.T) {
+	for _, token := range []string{"https://acr.revoke-proof.example?email=a@b", "https://acr.revoke-proof.example/api/v1/oauth/token?email=a@b"} {
+		_, env := arGoAPI(t, arOn("--set-string", "goApi.acrRevoke.tokenURL="+token)...)
+		if got := arValue(env, "ACR_REVOKE_TOKEN_URL"); got != token {
+			t.Errorf("ACR_REVOKE_TOKEN_URL = %v, want %s: an @ in the query is not user info", got, token)
+		}
+	}
+}
+
 func TestACRRevokeKeepsTheExistingExtraVolume(t *testing.T) {
 	dep, _ := arGoAPI(t, append(arOn(), "--set-json", "goApi.extraVolumes="+extraVolumesJSON, "--set-json", "goApi.extraVolumeMounts="+extraMountsJSON)...)
 	vols, _ := at(dep, "spec", "template", "spec", "volumes").([]any)
@@ -171,6 +180,8 @@ func TestACRRevokeRefusesUnusableValues(t *testing.T) {
 		{"token url with an empty fragment", []string{"--set-string", "goApi.acrRevoke.tokenURL=" + arToken + "#"}, "goApi.acrRevoke.tokenURL"},
 		{"url with empty user info", []string{"--set-string", "goApi.acrRevoke.url=https://@acr.revoke-proof.example"}, "goApi.acrRevoke.url"},
 		{"token url with empty user info", []string{"--set-string", "goApi.acrRevoke.tokenURL=https://@acr.revoke-proof.example/api/v1/oauth/token"}, "goApi.acrRevoke.tokenURL"},
+		{"token url with user info and a path", []string{"--set-string", "goApi.acrRevoke.tokenURL=https://u@acr.revoke-proof.example/api/v1/oauth/token"}, "goApi.acrRevoke.tokenURL"},
+		{"url with user info and a path", []string{"--set-string", "goApi.acrRevoke.url=https://u@acr.revoke-proof.example/x"}, "goApi.acrRevoke.url"},
 		{"opt-in, cluster url with an empty query", []string{"--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url=" + arCluster + "?"}, "goApi.acrRevoke.url"},
 		{"opt-in, cluster url with empty user info", []string{"--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url=http://@dev-health-acr.dev-health.svc.cluster.local:8080"}, "goApi.acrRevoke.url"},
 		{"opt-in, cluster host with an empty label", []string{"--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url=http://dev..svc.cluster.local"}, "goApi.acrRevoke.url"},

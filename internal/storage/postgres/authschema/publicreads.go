@@ -140,6 +140,14 @@ func SessionReaderReadsWith(platformRolesOwned, workloadReader bool) []ColumnGra
 // GRANT OPTION on the table, so a REVOKE there would fail with 42501.
 const retiredRefreshTokensTable = "refresh_tokens"
 
+// retiredPublicReadTables are public tables the auth runtime role once read by a
+// grant and reads no more. A grants pass that finds the role still holding a
+// direct privilege on one revokes it (a narrowing, acknowledged once); one where
+// the role holds nothing, or the table is gone, sends no statement on it.
+// internal_service_credentials left PublicReadColumns when its last auth-service
+// reader went.
+var retiredPublicReadTables = []string{retiredRefreshTokensTable, "internal_service_credentials"}
+
 // runtimeHoldsPublicGrant reports whether role holds a direct table or column
 // privilege on public.<table>, read from the ACLs (the set REVOKE removes).
 func runtimeHoldsPublicGrant(ctx context.Context, conn rowQuerier1, table, role string) (bool, error) {
@@ -537,24 +545,26 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 		logger.InfoContext(ctx, "applying public read grants",
 			"schema", publicSchema, "table", entry.Table, "columns", len(columns), "deferred", len(entry.Columns)-len(columns))
 	}
-	exists, err := publicTableState(ctx, conn, retiredRefreshTokensTable)
-	if err != nil {
-		return nil, err
-	}
-	held := false
-	if exists {
-		held, err = runtimeHoldsPublicGrant(ctx, conn, retiredRefreshTokensTable, options.RuntimeRole)
+	for _, retired := range retiredPublicReadTables {
+		exists, err := publicTableState(ctx, conn, retired)
 		if err != nil {
 			return nil, err
 		}
-	}
-	if held {
-		tableID, err := NewValidatedIdentifier(retiredRefreshTokensTable)
-		if err != nil {
-			return nil, err
+		held := false
+		if exists {
+			held, err = runtimeHoldsPublicGrant(ctx, conn, retired, options.RuntimeRole)
+			if err != nil {
+				return nil, err
+			}
 		}
-		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
-		statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+		if held {
+			tableID, err := NewValidatedIdentifier(retired)
+			if err != nil {
+				return nil, err
+			}
+			table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
+			statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+		}
 	}
 	return statements, nil
 }

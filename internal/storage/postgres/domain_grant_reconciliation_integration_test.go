@@ -180,15 +180,19 @@ func reconciliationTables() []domainTable {
 			},
 		},
 		{
-			// The native phone-home heartbeat's fleet count and audit row, in
-			// the exact statement shapes heartbeat_native.go issues on the
-			// domain pool. audit_logs carries its production columns because
-			// the INSERT names them and PostgreSQL resolves columns before it
-			// checks the ACL.
+			// The native phone-home heartbeat's fleet count and the billing
+			// owner lookup's users columns, in the statement shapes
+			// heartbeat_native.go and billingfence.go issue on the domain pool
+			// (the lookup's memberships join is not the domain role's here).
+			// audit_logs carries its production columns because the INSERT
+			// names them and PostgreSQL resolves columns before it checks the ACL.
 			name: "users",
-			ddl:  "CREATE TABLE public.users (id uuid PRIMARY KEY, email text NOT NULL)",
+			ddl: `CREATE TABLE public.users (
+				id uuid PRIMARY KEY, email text NOT NULL, username text, password_hash text,
+				full_name text, token_version integer NOT NULL DEFAULT 0)`,
 			exercise: []string{
 				"SELECT COUNT(*) FROM public.users",
+				"SELECT u.email, u.full_name FROM public.users u WHERE u.id = '00000000-0000-0000-0000-000000000000'::uuid",
 			},
 		},
 		{

@@ -153,8 +153,8 @@ func TestAuthCorpusBuildCachePlantedDefectsAreCaught(t *testing.T) {
 			"    permissions:\n      contents: read\n      actions: write\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n", "exactly contents: read"},
 		{"the seed job reads a secret", "wf", "  auth-corpus-image-cache:\n    if: " + seedIf + "\n", "  auth-corpus-image-cache:\n    if: " + seedIf + "\n    env:\n      T: ${{ secrets.GITHUB_TOKEN }}\n", "must read no secret"},
 		{"the legs rebuild instead of using the baked images", "wf", "        env:\n          AUTH_CORPUS_PREBUILT_TAG: ci-prebuilt\n        run: bash ci/auth_corpus_external.sh", "        run: bash ci/auth_corpus_external.sh", "AUTH_CORPUS_PREBUILT_TAG"},
-		{"a shell step reads the cache token", "wf", "      - name: Run the auth-flow corpus against the external go-api\n        if: matrix.leg != 'acp-nokeys'\n        run: ",
-			"      - name: Run the auth-flow corpus against the external go-api\n        if: matrix.leg != 'acp-nokeys'\n        run: echo \"${ACTIONS_RUNTIME_TOKEN}\"; ", "reads the actions cache token"},
+		{"a shell step reads the cache token", "wf", "        run: bash ci/auth_corpus_external.sh \"${{ matrix.leg }}\"",
+			"        run: echo \"${ACTIONS_RUNTIME_TOKEN}\"; bash ci/auth_corpus_external.sh \"${{ matrix.leg }}\"", "reads the actions cache token"},
 	} {
 		w, h := wf, hcl
 		target := &w

@@ -1,4 +1,4 @@
-GRANT SELECT, INSERT, ALTER DELETE ON default.teams
+GRANT SELECT, INSERT ON default.teams
 GRANT SELECT, INSERT, ALTER DELETE ON default.identities
 GRANT SELECT, INSERT ON default.team_sync_policies
 GRANT SELECT, INSERT ON default.team_provider_observations

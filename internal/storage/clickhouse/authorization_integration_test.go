@@ -113,8 +113,10 @@ func (h *postureHarness) newUser(t *testing.T, grants ...string) driver.Conn {
 }
 
 const (
-	grantTeamsExact      = "GRANT SELECT, INSERT, ALTER DELETE ON default.teams"
+	grantTeamsExact      = "GRANT SELECT, INSERT ON default.teams"
 	grantIdentitiesExact = "GRANT SELECT, INSERT, ALTER DELETE ON default.identities"
+	// The optional ALTER DELETE on teams: prod's login still holds it until the revoke.
+	grantTeamsDelete = "GRANT ALTER DELETE ON default.teams"
 
 	// POST /teams/import's drift-projector tables (CHAOS-6311).
 	grantSyncPoliciesExact = "GRANT SELECT, INSERT ON default.team_sync_policies"
@@ -186,16 +188,47 @@ func TestCheckPostureAcceptsExactMatch(t *testing.T) {
 }
 
 // TestCheckPostureRejectsMissingPrivilege is the negative control for an
-// under-grant: a user missing ALTER DELETE on one declared table fails.
+// under-grant: a user missing ALTER DELETE on identities (required) fails.
 func TestCheckPostureRejectsMissingPrivilege(t *testing.T) {
 	h := startPostureHarness(t)
-	conn := h.newUser(t, append([]string{"GRANT SELECT, INSERT ON default.teams", grantIdentitiesExact}, importGrants()...)...)
+	conn := h.newUser(t, append([]string{grantTeamsExact, "GRANT SELECT, INSERT ON default.identities"}, importGrants()...)...)
 	err := CheckAPIClickHouseAuthorization(h.ctx, conn)
 	if err == nil {
-		t.Fatal("missing ALTER DELETE on teams must fail the posture check")
+		t.Fatal("missing ALTER DELETE on identities must fail the posture check")
 	}
-	if !errors.Is(err, ErrPostureMismatch) {
-		t.Fatalf("want ErrPostureMismatch, got: %v", err)
+	if !errors.Is(err, ErrPostureMismatch) || !strings.Contains(err.Error(), "default.identities missing ALTER DELETE") {
+		t.Fatalf("want ErrPostureMismatch naming identities' ALTER DELETE, got: %v", err)
+	}
+}
+
+// grantStatementsLogin is a login granted exactly what GrantStatements renders
+// for APIPosture, plus extra.
+func (h *postureHarness) grantStatementsLogin(t *testing.T, extra ...string) driver.Conn {
+	t.Helper()
+	const role = "posture_render_role"
+	var grants []string
+	for _, statement := range GrantStatements(role, APIPosture("default")) {
+		grants = append(grants, strings.TrimSuffix(statement, " TO "+role))
+	}
+	return h.newUser(t, append(grants, extra...)...)
+}
+
+// The login the users.d render declares (teams SELECT, INSERT) passes, and so
+// does the same login still holding ALTER DELETE on teams (prod until the
+// revoke). ALTER DELETE on any other table still fails.
+func TestCheckPostureAcceptsTeamsAlterDeleteHeldOrAbsent(t *testing.T) {
+	h := startPostureHarness(t)
+	if err := CheckAPIClickHouseAuthorization(h.ctx, h.grantStatementsLogin(t)); err != nil {
+		t.Fatalf("the GrantStatements login must pass: %v", err)
+	}
+	if err := CheckAPIClickHouseAuthorization(h.ctx, h.grantStatementsLogin(t, grantTeamsDelete)); err != nil {
+		t.Fatalf("the GrantStatements login plus ALTER DELETE on teams must pass: %v", err)
+	}
+	for _, extra := range []string{"GRANT ALTER DELETE ON default.other_table", "GRANT ALTER DELETE ON default.team_memberships"} {
+		err := CheckAPIClickHouseAuthorization(h.ctx, h.grantStatementsLogin(t, grantTeamsDelete, extra))
+		if !errors.Is(err, ErrPostureMismatch) {
+			t.Fatalf("%q: want ErrPostureMismatch, got: %v", extra, err)
+		}
 	}
 }
 

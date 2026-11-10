@@ -17,6 +17,7 @@ internal/apiservice/admin	24
 internal/atlassianteams	9
 internal/audit	12
 internal/auth/authapi	52
+internal/auth/authruntime	75
 internal/auth/contracts	41
 internal/auth/identity	16
 internal/auth/identity/local	17

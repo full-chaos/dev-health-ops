@@ -8504,11 +8504,11 @@
       },
       "action": null,
       "classification": "protected",
-      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the handler reads the caller's membership row live on every request (internal/api/acrcredentials/routes.go:113)",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the handler asks the caller's admin.orgs platform action live on every request (internal/api/policy/platform_decision.go:69) and, for a caller without it, reads the caller's membership row live (internal/api/acrcredentials/routes.go:149)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id, another organization's id, a credential that is not MCP-bound and one the caller did not approve all answer the same 404, acr's one refusal answer (internal/api/acrcredentials/routes.go:130); acr resolves the id only in the token organization the handler sends (internal/api/acrcredentials/routes.go:126); a caller with no membership row in that organization answers 403 (internal/api/acrcredentials/routes.go:118); a malformed id answers the same 404 without an acr call (internal/api/acrcredentials/routes.go:100)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id, another organization's id, a credential that is not MCP-bound and one the caller did not approve all answer the same 404, acr's one refusal answer (internal/api/acrcredentials/routes.go:124); acr resolves the id only in the token organization the handler sends (internal/api/acrcredentials/routes.go:107); a platform admin (admin.orgs, internal/api/policy/platform_decision.go:69) acts as that organization's admin with or without a membership row there; any other caller with no membership row in that organization answers 403 (internal/api/acrcredentials/routes.go:149); a malformed id answers the same 404 without an acr call (internal/api/acrcredentials/routes.go:103)",
       "gaps": [
-        "action: no catalog action is proven to equal this handler's own check (the caller's live membership row decides the acr actor type; acr decides whether the credential admits that actor); candidate for a ruling, this leaf does not extend the vocabulary"
+        "action: no catalog action is proven to equal this handler's own check (the caller's admin.orgs platform action, else the caller's live membership row, decides the acr actor type; acr decides whether the credential admits that actor); candidate for a ruling, this leaf does not extend the vocabulary"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/acr/credentials/{credential_id}/revoke [dev-health-ops-api @api]",
@@ -8545,12 +8545,12 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the token's org claim of the verified session user, the admin-route rule (internal/api/acrcredentials/routes.go:104); credential_id (path) supplied by the caller and resolved by acr in that organization",
+      "resource_resolver": "organization_from_session: the token's org claim of the verified session user, the admin-route rule (internal/api/acrcredentials/routes.go:107); credential_id (path) supplied by the caller and resolved by acr in that organization",
       "route": "/api/v1/acr/credentials/{credential_id}/revoke",
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/acrcredentials/routes.go",
-        "line": 60
+        "line": 62
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",

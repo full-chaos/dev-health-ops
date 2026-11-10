@@ -12,11 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/pep/pepfake"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrlisting"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrrevoke"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
@@ -29,13 +31,14 @@ type users struct {
 	mu         sync.Mutex
 	role       string
 	superusers map[uuid.UUID]bool
+	platforms  map[uuid.UUID]*rule.Platform
 	sessions   map[uuid.UUID]*policy.Impersonation
 }
 
 func (u *users) UserState(_ context.Context, id uuid.UUID) (policy.UserState, bool, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	return policy.UserState{IsActive: true, IsSuperuser: u.superusers[id]}, true, nil
+	return policy.UserState{IsActive: true, IsSuperuser: u.superusers[id], Platform: u.platforms[id]}, true, nil
 }
 func (u *users) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
 	u.mu.Lock()
@@ -104,7 +107,8 @@ type fixture struct {
 
 func newFixture(t *testing.T, scopeRun bool) *fixture {
 	t.Helper()
-	f := &fixture{t: t, store: &users{superusers: map[uuid.UUID]bool{}, sessions: map[uuid.UUID]*policy.Impersonation{}},
+	f := &fixture{t: t, store: &users{superusers: map[uuid.UUID]bool{}, platforms: map[uuid.UUID]*rule.Platform{},
+		sessions: map[uuid.UUID]*policy.Impersonation{}},
 		members: &members{rows: map[[2]uuid.UUID]memberRow{}}, revoker: &revoker{}, scopeRun: scopeRun}
 	f.auth = tokens.AuthenticatorOver(t, f.store, quiet())
 	f.build(Deps{Guard: policy.NewGuard(f.auth, quiet()), Members: f.members, Revoker: f.revoker, Logger: quiet()})
@@ -373,20 +377,148 @@ func TestTheRouteTakesNoOtherMethod(t *testing.T) {
 	}
 }
 
-// A platform superuser is no organization admin here: with no membership row it is refused, with a member row it acts
-// as a user, and only a live impersonation session (not the flag) is the impersonation refusal.
-func TestAPlatformSuperuserGetsNoBypass(t *testing.T) {
-	user, org := uuid.New(), uuid.New()
-	f := newFixture(t, true)
-	f.store.superusers[user] = true
-	f.store.role = "admin"
-	token := f.sign(user, org.String(), nil)
-	expect(t, f.post(token, credOne), http.StatusForbidden, bodyNotMember)
-	f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "member", found: true}
-	if got := f.post(token, credOne); got.Code != http.StatusNoContent {
-		t.Fatalf("answer %d %s", got.Code, got.Body.String())
+// Product rule 1 (a platform admin is never forced to hold an organization membership row): a holder of admin.orgs
+// revokes as the admin of the token's organization, with no membership read, whatever row it holds there, and the acr
+// call names the platform admin as the actor.
+func TestAPlatformAdminRevokesAsTheOrganizationAdmin(t *testing.T) {
+	cases := []struct {
+		name   string
+		row    *memberRow
+		err    error
+		status int
+		body   string
+	}{
+		{"no row", nil, nil, http.StatusNoContent, ""},
+		{"no row, acr refuses", nil, acrrevoke.ErrNotFound, http.StatusNotFound, bodyNotFound},
+		{"no row, already revoked", nil, acrrevoke.ErrConflict, http.StatusConflict, bodyConflict},
+		{"no row, acr unavailable", nil, &acrrevoke.Error{Kind: acrlisting.KindUnavailable, Status: 503}, http.StatusServiceUnavailable, bodyUnavail},
+		{"member row", &memberRow{role: "member", found: true}, nil, http.StatusNoContent, ""},
+		{"viewer row", &memberRow{role: "viewer", found: true}, nil, http.StatusNoContent, ""},
+		{"a failing row read is never made", &memberRow{err: errors.New("db down")}, nil, http.StatusNoContent, ""},
 	}
-	if len(f.revoker.calls) != 1 || f.revoker.calls[0].actorType != acrrevoke.ActorUser {
-		t.Fatalf("revoke calls %+v", f.revoker.calls)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			user, org := uuid.New(), uuid.New()
+			f.store.superusers[user] = true
+			f.revoker.err = tc.err
+			if tc.row != nil {
+				f.members.rows[[2]uuid.UUID{user, org}] = *tc.row
+			}
+			expect(t, f.post(f.sign(user, org.String(), nil), credOne), tc.status, tc.body)
+			want := revokeCall{org: org.String(), credential: credOne, actorType: acrrevoke.ActorAdmin, actorID: user.String()}
+			if len(f.revoker.calls) != 1 || f.revoker.calls[0] != want {
+				t.Fatalf("revoke calls = %+v, want %+v", f.revoker.calls, want)
+			}
+			if f.members.calls != 0 {
+				t.Fatalf("%d membership reads, want 0", f.members.calls)
+			}
+		})
+	}
+}
+
+// The platform action decides, never the superuser flag: a role holding admin.orgs alone revokes as the admin; one
+// holding every other platform action but not admin.orgs takes the membership path and, with no row, is refused.
+func TestOnlyAdminOrgsIsThePlatformAdminPath(t *testing.T) {
+	var others []string
+	for _, action := range rule.PlatformActions {
+		if action != rule.ActionAdminOrgs {
+			others = append(others, action)
+		}
+	}
+	orgsOnly, allButOrgs := rule.PlatformOf(rule.ActionAdminOrgs), rule.PlatformOf(others...)
+	for _, tc := range []struct {
+		name     string
+		platform *rule.Platform
+		status   int
+		body     string
+		calls    int
+		reads    int
+	}{
+		{"admin.orgs alone", &orgsOnly, http.StatusNoContent, "", 1, 0},
+		{"every action but admin.orgs", &allButOrgs, http.StatusForbidden, bodyNotMember, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			user, org := uuid.New(), uuid.New()
+			f.store.platforms[user] = tc.platform
+			expect(t, f.post(f.sign(user, org.String(), nil), credOne), tc.status, tc.body)
+			if len(f.revoker.calls) != tc.calls || f.members.calls != tc.reads {
+				t.Fatalf("revoke %+v, %d reads", f.revoker.calls, f.members.calls)
+			}
+			if tc.calls == 1 && f.revoker.calls[0].actorType != acrrevoke.ActorAdmin {
+				t.Fatalf("revoke %+v, want the admin actor", f.revoker.calls)
+			}
+		})
+	}
+}
+
+// Each refusal ahead of the platform question still holds for a platform admin: a delegated bearer (here admitted by
+// its row, so the handler's own refusal decides), a live impersonation session and a token with no organization send
+// no revoke and read no membership.
+func TestAPlatformAdminKeepsTheRefusals(t *testing.T) {
+	user, org, actor := uuid.New(), uuid.New(), uuid.New()
+	cases := []struct {
+		name  string
+		plant func(*fixture) string
+		body  string
+	}{
+		{"delegated bearer", func(f *fixture) string {
+			f.auth.DelegatedRows(func(string) bool { return true })
+			return f.sign(user, org.String(), &actor)
+		}, bodyImpersonal},
+		{"live impersonation session", func(f *fixture) string {
+			f.store.sessions[user] = &policy.Impersonation{ID: uuid.New(), AdminUserID: user, TargetUserID: uuid.New(), TargetOrgID: org,
+				TargetRole: "member", ExpiresAt: time.Now().Add(time.Hour)}
+			return f.sign(user, org.String(), nil)
+		}, bodyImpersonal},
+		{"no org claim", func(f *fixture) string { return f.sign(user, "", nil) }, bodyNotMember},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			f.store.superusers[user] = true
+			expect(t, f.post(tc.plant(f), credOne), http.StatusForbidden, tc.body)
+			if len(f.revoker.calls) != 0 || f.members.calls != 0 {
+				t.Fatalf("revoke %+v, %d reads", f.revoker.calls, f.members.calls)
+			}
+		})
+	}
+}
+
+// With the admin cell on, the platform question is the decision point's: its allow makes a caller without the flag
+// the admin actor, and no verdict is the decision point's 503, before any membership read or revoke.
+func TestThePlatformQuestionIsTheDecisionPointsWithTheAdminCellOn(t *testing.T) {
+	const bearer = "pdp-bearer"
+	allow := pepfake.Rule{PrincipalReference: bearer, Action: rule.ActionAdminOrgs, ResourceType: "platform", ResourceKey: "platform"}
+	bad := allow
+	bad.MinimumAssurance = "bogus"
+	for _, tc := range []struct {
+		name   string
+		rule   pepfake.Rule
+		status int
+		calls  int
+	}{
+		{"allow", allow, http.StatusNoContent, 1},
+		{"no verdict", bad, http.StatusServiceUnavailable, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			user, org := uuid.New(), uuid.New()
+			inner := f.handler
+			f.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				inner.ServeHTTP(w, r.WithContext(policy.WithPlatformDecider(r.Context(), pepfake.New(tc.rule), bearer)))
+			})
+			got := f.post(f.sign(user, org.String(), nil), credOne)
+			if got.Code != tc.status {
+				t.Fatalf("answer %d %s, want %d", got.Code, got.Body.String(), tc.status)
+			}
+			if len(f.revoker.calls) != tc.calls || f.members.calls != 0 {
+				t.Fatalf("revoke %+v, %d reads", f.revoker.calls, f.members.calls)
+			}
+			if tc.calls == 1 && f.revoker.calls[0].actorType != acrrevoke.ActorAdmin {
+				t.Fatalf("revoke %+v, want the admin actor", f.revoker.calls)
+			}
+		})
 	}
 }

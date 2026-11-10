@@ -365,3 +365,8 @@ func dropReuse(needs []string) []string {
 	}
 	return out
 }
+
+// reuseClause is the text a reusable leg appends to its condition for unit.
+func reuseClause(unit string) string {
+	return " && !contains(fromJSON(needs.ready-reuse.outputs.passed), '" + unit + "')"
+}

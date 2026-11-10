@@ -106,7 +106,7 @@ func codeqlRefreshDefects(t *testing.T, root string) []string {
 	}
 
 	analyze := asMap(jobs["analyze"])
-	if fmt.Sprint(pinNeeds(analyze)) != fmt.Sprint([]string{"changes", "refresh-target"}) {
+	if fmt.Sprint(dropReuse(pinNeeds(analyze))) != fmt.Sprint([]string{"changes", "refresh-target"}) {
 		add("analyze needs %v, want [changes refresh-target]", pinNeeds(analyze))
 	}
 	if !strings.Contains(asString(analyze["if"]), "(needs.refresh-target.result == 'success' || !(github.event_name == 'workflow_dispatch' && inputs.pr != ''))") {

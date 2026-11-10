@@ -23,6 +23,11 @@ type TableGrant struct {
 	// uses, and ALTER DELETE is the privilege it needs -- confirmed live
 	// against a real server, not assumed.
 	AllowDelete bool
+	// OptionalDelete lets a RequiredTables entry hold ALTER DELETE or not:
+	// CheckPosture accepts both, and GrantStatements does not render it. It
+	// is the one privilege a revoke takes away while the readiness check must
+	// pass before and after; it has no effect with AllowDelete set.
+	OptionalDelete bool
 }
 
 // Posture is one role's declared privilege manifest: the ClickHouse analog
@@ -39,7 +44,8 @@ type Posture struct {
 // write login internal/api/teamsidentity uses for the team + identity
 // admin CRUD routes. Insert for create/update, select for every read
 // (including the CHAOS-4321 manual_members-preserving read-before-write),
-// alter delete for the lightweight DELETE FROM ... WHERE ... calls. No
+// alter delete for the identity's lightweight DELETE FROM ... WHERE ... (a
+// team delete inserts a newer row, see teamsidentity.Store.DeleteTeam). No
 // other table is in this manifest -- CheckAPIClickHouseAuthorization fails
 // on any grant outside it, the same "no more, no less" discipline
 // postgres.CheckAPIAuthorization already holds the Postgres api role to.
@@ -47,7 +53,11 @@ type Posture struct {
 // every real deployment; a venue oracle's own per-run database in tests).
 func APIPosture(database string) Posture {
 	return Posture{RequiredTables: []TableGrant{
-		{Database: database, Table: "teams", AllowInsert: true, AllowSelect: true, AllowDelete: true},
+		// No delete runs on teams through this login. Prod's login still
+		// holds ALTER DELETE on it until the revoke, so the readiness check
+		// accepts it held or absent (OptionalDelete); GrantStatements and
+		// the users.d renders leave it out.
+		{Database: database, Table: "teams", AllowInsert: true, AllowSelect: true, OptionalDelete: true},
 		{Database: database, Table: "identities", AllowInsert: true, AllowSelect: true, AllowDelete: true},
 		// POST /teams/import (CHAOS-6311) runs import_teams' drift-projector
 		// write path: it reads a team's sync policy and its pending drift
@@ -211,9 +221,9 @@ func GrantStatements(role string, posture Posture) []string {
 // privilege -- unlike querying system.grants directly, which 403s without
 // its own SELECT grant, confirmed live) and proves them EXACTLY equal to
 // posture: every declared table carries every declared privilege and no
-// other, and no table outside the manifest carries any grant at all. A
-// grant line this parser cannot recognize (a database-wide or global
-// grant, a role grant) is treated as an unexpected over-grant rather than
+// other (an OptionalDelete table may also hold ALTER DELETE), and no table
+// outside the manifest carries any grant at all. A grant line this parser
+// cannot recognize (a database-wide or global grant, a role grant) is treated as an unexpected over-grant rather than
 // silently ignored, so a manifest can never be satisfied by a privilege
 // posture broader than what it declares.
 func CheckPosture(ctx context.Context, conn driver.Conn, posture Posture) error {
@@ -271,6 +281,7 @@ func CheckPosture(ctx context.Context, conn driver.Conn, posture Posture) error 
 	}
 
 	expected := map[string]map[string]bool{}
+	optionalDelete := map[string]bool{}
 	for _, table := range posture.RequiredTables {
 		key := table.Database + "." + table.Table
 		privileges := map[string]bool{}
@@ -284,6 +295,9 @@ func CheckPosture(ctx context.Context, conn driver.Conn, posture Posture) error 
 			privileges["ALTER DELETE"] = true
 		}
 		expected[key] = privileges
+		if table.OptionalDelete {
+			optionalDelete[key] = true
+		}
 	}
 
 	optional := map[string]map[string]bool{}
@@ -321,7 +335,7 @@ func CheckPosture(ctx context.Context, conn driver.Conn, posture Posture) error 
 			}
 		}
 		for privilege := range gotPrivileges {
-			if !wantPrivileges[privilege] {
+			if !wantPrivileges[privilege] && (privilege != "ALTER DELETE" || !optionalDelete[key]) {
 				problems = append(problems, fmt.Sprintf("%s has unexpected %s", key, privilege))
 			}
 		}

@@ -4,7 +4,7 @@
 # go-api verifies against the https issuer served by issuer-tls. compose.yml and the chart are not changed.
 # REHEARSAL_ACCESS_CLASS is eddsa; the driver sets it empty (not unset) when it recreates the services on the previous
 # image for the rollback scenario, so that image runs with its own default class. hs256_compat is retired and does not
-# start. The verifier issuer is set only under eddsa, as the chart renders it (authEdDSAIssuer).
+# start. The verifier issuer is set on the current and the previous image alike: go-api and query-api have no other verifier.
 services:
   issuer-tls:
     image: ghcr.io/nginx/nginx-unprivileged:1.30-alpine@sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e

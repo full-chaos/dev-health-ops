@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/routescan"
 )
 
 // CHAOS-4765. An inventory's top-level source_commit says which commit its
@@ -695,5 +697,153 @@ func TestSourceCommitRewrittenAnchorStaysExemptWithoutAFreeTextCite(t *testing.T
 	dir, base, _ := fixtureRepoAt(t, citeFile, rewriteBefore, rewriteAfter)
 	if problems := problemsForSourceCommit(dir, "fixture", inventoryRewrittenWithText(base, "answers 404")); len(problems) != 0 {
 		t.Fatalf("a rewritten structured anchor alone was refused: %v", problems)
+	}
+}
+
+// A symbol cite, <dir>/<file>.go#<Name> or #<Recv>.<Name> with an optional `anchor`, names a func, method or type and a
+// text inside it; it holds when both resolve to one place at source_commit and in the tree, whatever lines they are on.
+const symbolBefore = "package x\n\n// a is doc.\nfunc a() int {\n\treturn 1\n}\n\ntype T struct{}\n\nfunc (t *T) m() string {\n\treturn \"m\"\n}\n"
+
+// symbolTip is symbolBefore with a line appended below every symbol (the fixture repo needs a tip commit).
+const symbolTip = symbolBefore + "\nvar tip = 0\n"
+
+// symbolLine is the line of func a in symbolBefore.
+const symbolLine = 4
+
+var symbolCites = []string{"internal/x/routes.go#a", "internal/x/routes.go#a`return 1`", "internal/x/routes.go#T", "internal/x/routes.go#T.m`return \"m\"`"}
+
+// shiftedByRoutescan is symbolBefore after routescan.ShiftedTree inserts its comment lines above func a.
+func shiftedByRoutescan(t *testing.T) string {
+	t.Helper()
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, filepath.Dir(citeFile)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, citeFile), []byte(symbolBefore), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := routescan.ShiftedTree(t, src, nil, []string{citeFile}, map[string]string{citeFile: "func a("})
+	raw, err := os.ReadFile(filepath.Join(root, citeFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// A shift above the cited symbol: every symbol cite holds. The line cite of func a either passes only by the legacy
+// shifted-unique-line rule while it reads another line (one line inserted), or goes stale (ShiftedTree's comment lines).
+func TestSourceCommitSymbolCiteSurvivesALineShiftThatMovesTheLineCite(t *testing.T) {
+	text := "answers 404 (" + strings.Join(symbolCites, "; ") + ")"
+	line := fmt.Sprintf("internal/x/routes.go:%d", symbolLine)
+	for _, tc := range []struct {
+		name, after string
+		lineHolds   bool
+	}{
+		{"one line inserted", strings.Replace(symbolBefore, "// a is doc.\n", "var inserted = 0\n// a is doc.\n", 1), true},
+		{"routescan.ShiftedTree", shiftedByRoutescan(t), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, base, _ := fixtureRepoAt(t, citeFile, symbolBefore, tc.after)
+			if problems := problemsForSourceCommit(dir, "fixture", inventoryWithText(base, text)); len(problems) != 0 {
+				t.Fatalf("a line shift broke a symbol cite: %v", problems)
+			}
+			// the measurement happened: a symbol the file does not declare fails by name on the same tree
+			wantOneProblem(t, problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "answers 404 (internal/x/routes.go#gone)")), "free-text cite internal/x/routes.go#gone", "symbol stale", " gone")
+			treeLine, _ := lineOfText(tc.after, symbolLine)
+			if treeLine == "func a() int {" {
+				t.Fatalf("the shift did not move func a off line %d", symbolLine)
+			}
+			legacy := problemsForSourceCommit(dir, "fixture", inventoryWithText(base, text+" and "+line))
+			t.Logf("legacy line cite %s: tree line reads %q, problems %v", line, treeLine, legacy)
+			if tc.lineHolds {
+				if len(legacy) != 0 {
+					t.Fatalf("the legacy shifted-unique-line rule no longer passes %s: %v", line, legacy)
+				}
+				return
+			}
+			wantOneProblem(t, legacy, "free-text cite "+line, "stale base")
+		})
+	}
+}
+
+// A renamed symbol fails by name; so does a symbol the file did not declare at source_commit.
+func TestSourceCommitSymbolCiteFailsByNameWhenTheSymbolIsRenamed(t *testing.T) {
+	for _, tc := range []struct {
+		name, after, cite string
+		want              []string
+	}{
+		{"func renamed", strings.Replace(symbolBefore, "func a()", "func renamed()", 1), "internal/x/routes.go#a",
+			[]string{"free-text cite internal/x/routes.go#a in the tree", "symbol stale", "no func, method or type a"}},
+		{"method renamed", strings.Replace(symbolBefore, ") m()", ") n()", 1), "internal/x/routes.go#T.m`return \"m\"`",
+			[]string{"free-text cite internal/x/routes.go#T.m", "in the tree", "symbol stale", "T.m"}},
+		{"added after source_commit", symbolBefore + "\nfunc b() {}\n", "internal/x/routes.go#b",
+			[]string{"free-text cite internal/x/routes.go#b at source_commit", "symbol stale", "no func, method or type b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, base, _ := fixtureRepoAt(t, citeFile, symbolBefore, tc.after)
+			wantOneProblem(t, problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "answers 404 ("+tc.cite+")")), tc.want...)
+		})
+	}
+}
+
+// Two declarations of the cited name are not one symbol: the cite fails as ambiguous, never resolving to the first.
+func TestSourceCommitSymbolCiteFailsWhenTheSymbolIsAmbiguous(t *testing.T) {
+	doubled := symbolBefore + "\nfunc a() int {\n\treturn 2\n}\n"
+	dir, base, _ := fixtureRepoAt(t, citeFile, symbolBefore, doubled)
+	wantOneProblem(t, problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "answers 404 (internal/x/routes.go#a`return 1`)")),
+		"free-text cite internal/x/routes.go#a", "in the tree", "symbol ambiguous", "2 times")
+}
+
+// The anchor must be on exactly one line inside the symbol, at source_commit and in the tree.
+func TestSourceCommitSymbolCiteFailsWhenItsAnchorIsNotInTheSymbol(t *testing.T) {
+	twice := strings.Replace(symbolBefore, "\treturn 1\n", "\treturn 1\n\treturn 1\n", 1)
+	for _, tc := range []struct {
+		name, after, cite string
+		want              []string
+	}{
+		{"anchor on no line", symbolTip, "internal/x/routes.go#a`return 2`", []string{"free-text cite internal/x/routes.go#a`return 2`", "anchor stale"}},
+		{"anchor outside the symbol", symbolTip, "internal/x/routes.go#a`return \"m\"`", []string{"free-text cite internal/x/routes.go#a`return \"m\"`", "anchor stale"}},
+		{"anchor rewritten in the tree", strings.Replace(symbolBefore, "return 1", "return 3", 1), "internal/x/routes.go#a`return 1`", []string{"in the tree", "anchor stale"}},
+		{"anchor on two lines of the symbol", twice, "internal/x/routes.go#a`return 1`", []string{"in the tree", "anchor ambiguous"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, base, _ := fixtureRepoAt(t, citeFile, symbolBefore, tc.after)
+			problems := problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "answers 404 ("+tc.cite+")"))
+			if len(problems) == 0 {
+				t.Fatalf("%s passed", tc.cite)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(strings.Join(problems, "\n"), want) {
+					t.Fatalf("the problems %v do not say %q", problems, want)
+				}
+			}
+		})
+	}
+}
+
+// A malformed symbol cite, or one with no directory, is refused, never skipped.
+func TestSourceCommitSymbolCiteRefusesAMalformedCite(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, symbolBefore, symbolTip)
+	for cite, want := range map[string]string{
+		"internal/x/routes.go#":               "is not a symbol cite",
+		"internal/x/routes.go#1a":             "is not a symbol cite",
+		"internal/x/routes.go#T.m.z":          "is not a symbol cite",
+		"internal/x/routes.go#a`unterminated": "is not a symbol cite",
+		"/abs/x/routes.go#a":                  "is not a symbol cite",
+		"routes.go#a":                         "has no directory",
+	} {
+		problems := problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "answers 404 ("+cite+")"))
+		if len(problems) != 1 || !strings.Contains(problems[0], want) || !strings.Contains(problems[0], "write <dir>/<file>.go#<Name>") {
+			t.Errorf("%q: got %v, want one refusal that says %q", cite, problems, want)
+		}
+	}
+}
+
+// A URL fragment is not a symbol cite.
+func TestSourceCommitSymbolCiteIgnoresAURLFragment(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, symbolBefore, symbolTip)
+	text := "see https://github.com/full-chaos/dev-health-ops/blob/main/internal/x/routes.go#L4 and internal/x/routes.go#a"
+	if problems := problemsForSourceCommit(dir, "fixture", inventoryWithText(base, text)); len(problems) != 0 {
+		t.Fatalf("a URL fragment was read as a cite: %v", problems)
 	}
 }

@@ -66,40 +66,15 @@ var errLegacyImpersonationRefused = errors.New("legacy impersonation caller refu
 
 type legacyImpersonationRefusedKey struct{}
 
-// legacyRefusal is the request's refusal state: liveScope sets holderRowLive
-// for a holder of admin.impersonate that is not a superuser (its row is never
-// applied) when its row is live or cannot be read, and the dispatch then
-// refuses its non-query documents.
-type legacyRefusal struct{ holderRowLive bool }
-
 // withLegacyImpersonationRefused marks the request so liveScope refuses the
 // admin's own bearer beside a live go-api row instead of serving it as the target.
 func withLegacyImpersonationRefused(ctx context.Context) context.Context {
-	return context.WithValue(ctx, legacyImpersonationRefusedKey{}, &legacyRefusal{})
+	return context.WithValue(ctx, legacyImpersonationRefusedKey{}, true)
 }
 
 func legacyImpersonationRefused(ctx context.Context) bool {
-	_, refused := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal)
+	refused, _ := ctx.Value(legacyImpersonationRefusedKey{}).(bool)
 	return refused
-}
-
-func markHolderRowLive(ctx context.Context) {
-	if state, ok := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal); ok {
-		state.holderRowLive = true
-	}
-}
-
-func holderRowLive(ctx context.Context) bool {
-	state, ok := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal)
-	return ok && state.holderRowLive
-}
-
-// legacyDocumentReads reports whether text, the document the resolver runs,
-// is one query operation by its AST (digest.DocumentKind); a mutation, a
-// subscription and a text that does not parse are not.
-func legacyDocumentReads(text string) bool {
-	kind, err := digest.DocumentKind(text)
-	return err == nil && kind == digest.KindQuery
 }
 
 // graphQLEdgeReads is /graphql's read test for the read limit of the legacy

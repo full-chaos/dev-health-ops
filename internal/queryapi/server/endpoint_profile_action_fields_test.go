@@ -713,9 +713,9 @@ func queryAPIRoleReads(t *testing.T) map[string]int {
 // operator roles), producttelemetry.RequirePlatformAdmin (admin.telemetry, no impersonation), the org-less platform
 // admission and the cross-org superuser branch in operation_org_guard.go (admin.orgs), the MCP elevated-role refusal in
 // mcp_route.go, the /buildinfo platform-admin bound in buildinfo_route.go (admin.orgs, a user access token only; the
-// identity headers keep the any-role answer), /query's live scope reading the row of an admin.impersonate holder that
-// is not a superuser while the legacy refusal is on (internal_auth.go liveScope: its writes are refused), and the
-// plumbing that copies the role into the claims or logs it. graph/field_precheck.go and
+// identity headers keep the any-role answer), /query's live scope applying an impersonation row to a holder of
+// admin.impersonate only (internal_auth.go liveScope, as go-api's Scope.Impersonation), and the plumbing that copies
+// the role into the claims or logs it. graph/field_precheck.go and
 // graph/operation_shadow.go only copy the verified claims into the shadow's pre-checks and observations (the shadow
 // changes no decision).
 var knownQueryAPIRoleReads = map[string]int{

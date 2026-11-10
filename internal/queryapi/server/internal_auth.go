@@ -108,7 +108,7 @@ func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *p
 }
 
 // edgeOutcome is how checkEdgeCarrier decided a token. /query answers every
-// failure with the same bare 401 but the legacy impersonation refusal (403);
+// failure with the same bare 401 but the impersonation refusal (403);
 // /graphql answers a store it could not read as the Python app did (its
 // unhandled 500), never as a bad credential.
 type edgeOutcome int
@@ -117,7 +117,7 @@ const (
 	edgeAccepted             edgeOutcome = iota
 	edgeRefused                          // the credential is not good
 	edgeUnavailable                      // a live check could not be read: nothing was decided
-	edgeImpersonationRefused             // the legacy impersonation caller, refused (liveScope)
+	edgeImpersonationRefused             // the legacy impersonation caller, or a non-holder's write beside a live row (liveScope)
 )
 
 // edgeScope answers, for a caller Authenticate has just accepted, the org the
@@ -127,18 +127,24 @@ const (
 type edgeScope func(ctx context.Context, user *policy.User) (org string, session *policy.Impersonation, err error)
 
 // liveScope is /query's scope: nothing in front of /query decided anything,
-// so the org is the token's own and the session is read here, once, for a
-// caller the live users row confirms is a superuser.
+// so the org is the token's own and the session is read here, once. As in
+// go-api's Scope.Impersonation, a session is applied only to a caller that
+// holds admin.impersonate now. A caller without the action acts as itself;
+// on the write door its row is read, and a live one refuses the write. With
+// AUTH_PROXY_IMPERSONATION on, a holder's live row refuses the request (the
+// legacy impersonation caller): the impersonation is a delegated session.
 func liveScope(store policy.Store) edgeScope {
 	return func(ctx context.Context, user *policy.User) (string, *policy.Impersonation, error) {
-		if !user.IsSuperuser {
-			// A holder that is not a superuser is served as itself; with the
-			// switch on, its live (or unreadable) row refuses its non-query
-			// documents in the dispatch.
-			if user.Holds(policy.ActionAdminImpersonate) && legacyImpersonationRefused(ctx) {
-				if session, err := store.ActiveImpersonation(ctx, user.ID); err != nil || session != nil {
-					markHolderRowLive(ctx)
-				}
+		if !user.Holds(policy.ActionAdminImpersonate) {
+			if !onWriteDoor(ctx) {
+				return user.OrgID, nil, nil
+			}
+			session, err := store.ActiveImpersonation(ctx, user.ID)
+			switch {
+			case err != nil:
+				return "", nil, err
+			case session != nil:
+				return "", nil, errRevokedImpersonatorWrite
 			}
 			return user.OrgID, nil, nil
 		}
@@ -237,6 +243,10 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 	orgID, session, scopeErr := scope(ctx, user)
 	if errors.Is(scopeErr, errLegacyImpersonationRefused) {
 		noteRefusal(r, "edge_legacy_impersonation_caller", "edge")
+		return authctx.Claims{}, edgeImpersonationRefused
+	}
+	if errors.Is(scopeErr, errRevokedImpersonatorWrite) {
+		noteRefusal(r, "edge_revoked_impersonator_write", "edge")
 		return authctx.Claims{}, edgeImpersonationRefused
 	}
 	if scopeErr != nil {

@@ -6891,6 +6891,9 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			if refuseLegacy {
 				r = r.WithContext(withLegacyImpersonationRefused(r.Context()))
 			}
+			if requireKind == digest.KindMutation {
+				r = r.WithContext(withWriteDoor(r.Context()))
+			}
 			authenticated, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
 			if !ok {
 				return
@@ -7017,14 +7020,6 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			if kind, _ := digest.DocumentKind(query); kind != digest.KindQuery {
 				log.Printf("query-api: /graphql refused a GET for a non-query document: operation=%s kind=%q", operation, kind)
 				refuseMutationOverGET(w)
-				return
-			}
-		}
-
-		if holderRowLive(r.Context()) {
-			if !legacyDocumentReads(query) {
-				log.Printf("query-api: refused a non-query document of an admin.impersonate holder beside a live impersonation row: operation=%s", operation)
-				policy.WriteImpersonationRefused(w)
 				return
 			}
 		}

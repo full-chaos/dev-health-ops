@@ -109,6 +109,15 @@ func aliasedPasswordFindings(sources map[string][]byte) (findings []string, pars
 		conf := types.Config{Importer: emptyImporter{}, Error: func(error) {}, FakeImportC: true}
 		_, _ = conf.Check(pkgName, fset, files, info)
 	}
+	evaluated := 0
+	for _, tv := range info.Types {
+		if tv.Value != nil && tv.Value.Kind() == constant.String {
+			evaluated++
+		}
+	}
+	if evaluated == 0 {
+		return nil, len(fileName), fmt.Errorf("type-checking evaluated no string constant: the alias pass measured nothing")
+	}
 	constString := func(expr ast.Expr) (string, bool) {
 		tv, ok := info.Types[expr]
 		if ok && tv.Value != nil && tv.Value.Kind() == constant.String {
@@ -194,7 +203,11 @@ func aliasedPasswordFindings(sources map[string][]byte) (findings []string, pars
 				}
 				for i, arg := range call.Args {
 					texts := valuesOf(arg)
-					if len(texts) == 0 {
+					withVerb := false
+					for _, text := range texts {
+						withVerb = withVerb || hasFormatVerb(text)
+					}
+					if !withVerb {
 						continue
 					}
 					for _, text := range texts {
@@ -231,7 +244,7 @@ func aliasedPasswordFindings(sources map[string][]byte) (findings []string, pars
 	return findings, len(fileName), nil
 }
 
-func unusedHasFormatVerb(text string) bool {
+func hasFormatVerb(text string) bool {
 	for j := 0; j+1 < len(text); j++ {
 		if text[j] != '%' {
 			continue

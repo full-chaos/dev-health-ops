@@ -24,10 +24,12 @@ After a restore, promote or failover of the auth database, auth-service stays no
 until `auth-migrate restore-fence apply` has run for the live timeline. This is by design (fail closed); do not bypass it.
 The procedure is in [Restoring the auth schema to a point in time](../maintain/backup-and-restore.md#restoring-the-auth-schema-to-a-point-in-time-the-restore-fence).
 
-1. `auth-migrate restore-fence status` (migration role): `fenced=false` means no apply has run for this timeline; `fenced=true` with a
+Run every `auth-migrate restore-fence` command below with the owner login: `AUTH_MIGRATION_DATABASE_URI` from Secret `auth-migrate-database-owner` (key `AUTH_MIGRATION_DATABASE_URI`), not Secret `auth-migrate-database`. The migration login has no SELECT on the legacy `public` tables: `export` stops with `reading section public.refresh_tokens`, `apply` stops in the privilege preflight. Commands: `auth-migrate restore-fence export -out manifest.json`, `auth-migrate restore-fence apply -manifest manifest.json` (dry run), `auth-migrate restore-fence apply -manifest manifest.json -apply`, `auth-migrate restore-fence status`.
+
+1. `auth-migrate restore-fence status` (owner login): `fenced=false` means no apply has run for this timeline; `fenced=true` with a
    not-ready service means look at the service logs (`reason=fence_state_unreadable` is a failed read, `timeline_not_fenced` a missing row).
 2. Apply failed: it rolls back whole and leaves readiness closed. Read the message (a table name and a SQLSTATE, never a value). A
-   missing privilege is listed by table name; the migration role must be able to write the auth and the legacy public tables.
+   missing privilege is listed by table name; the owner login must be able to write the auth and the legacy public tables (the migration login cannot).
 3. Re-run `export` from a FRESH shadow copy (the end-of-WAL restore of the same base backup) and apply again: apply is idempotent
    (the same timeline and manifest changes nothing), and a different manifest applies on top. Dry run first (no `-apply`).
 4. The WAL after the target time is gone: `apply -blind-margin N` instead of `-manifest`. It raises every revision (consumers read a

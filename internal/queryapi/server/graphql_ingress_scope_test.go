@@ -16,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 // CHAOS-12659 Q18: the GraphQL ingresses (/query and its proof routes, run-operation, /graphql, the MCP /query) hand
@@ -28,7 +27,7 @@ import (
 // result of <f>, either withLegacyScope or legacyClaims (the legacy scope of the claims' own org) or another listed
 // authenticator. Anything else is "unlisted:<expression>".
 var ingressSuccessForms = map[string][]string{
-	"authenticateInternalRequest": {"call:authenticateEdgeCarrier", "call:withLegacyScope", "call:withLegacyScope"},
+	"authenticateInternalRequest": {"call:authenticateEdgeCarrier", "call:withLegacyScope"},
 	"authenticateEdgeCarrier":     {"call:checkEdgeCarrier"},
 	"checkEdgeCarrier":            {"call:withLegacyScope"},
 	"authenticateGraphQLEdge":     {"call:authenticateEdgeTokenOnly"},
@@ -151,19 +150,15 @@ func TestIngressScopeHelpersScopeTheClaimsOwnOrg(t *testing.T) {
 
 // Each carrier of /query, and the MCP carrier, reaches the resolvers with the legacy scope of the org it acts in.
 func TestGraphQLIngressCarriersServeTheLegacyScope(t *testing.T) {
-	verifier, priv := iaVerifier(t)
+	verifier, _ := iaVerifier(t)
 	handler, seen := iaDispatch(t, verifier)
-	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: "org-env", Role: "member"})
-	if code := iaPost(t, handler, func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+envelope) }); code != http.StatusOK {
-		t.Fatalf("envelope carrier: %d", code)
-	}
 	if code := iaPost(t, handler, iaHeaders("org-hdr", "member", false, false)); code != http.StatusOK {
 		t.Fatalf("header carrier: %d", code)
 	}
 
 	store := ecMemberStore()
 	edgeHandler, edgeSeen := iaDispatchWithEdge(t, nil, ecEdgeAuth(t, store), store)
-	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
+	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	if rec := ecPost(edgeHandler, edge); rec.Code != http.StatusOK {
 		t.Fatalf("edge carrier: %d %s", rec.Code, rec.Body.String())
 	}
@@ -175,16 +170,15 @@ func TestGraphQLIngressCarriersServeTheLegacyScope(t *testing.T) {
 		t.Fatalf("MCP carrier: %d %q", status, reason)
 	}
 
-	if len(*seen) != 2 || len(*edgeSeen) != 1 {
-		t.Fatalf("resolver runs %d + %d, want 2 + 1", len(*seen), len(*edgeSeen))
+	if len(*seen) != 1 || len(*edgeSeen) != 1 {
+		t.Fatalf("resolver runs %d + %d, want 1 + 1", len(*seen), len(*edgeSeen))
 	}
 	for _, cell := range []struct {
 		name  string
 		scope pepgate.Scope
 		org   string
 	}{
-		{"envelope", (*seen)[0].Scope, "org-env"},
-		{"headers", (*seen)[1].Scope, "org-hdr"},
+		{"headers", (*seen)[0].Scope, "org-hdr"},
 		{"edge", (*edgeSeen)[0].Scope, ecOrg.String()},
 		{"mcp", mcp.Scope, "org-mcp"},
 	} {

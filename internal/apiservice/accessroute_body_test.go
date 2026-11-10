@@ -13,7 +13,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 // TestIssuerSetBodyFirstRoutesKeepTheRouteProfile: on the real session routes
@@ -22,20 +21,12 @@ import (
 // /auth/logout is refused there for its retired class (alg_not_allowed), never
 // for want of a profile.
 func TestIssuerSetBodyFirstRoutesKeepTheRouteProfile(t *testing.T) {
-	verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, newProbeStore(), quietLogger())
+	auth, err := policy.NewAuthenticator(newProbeStore(), quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
 	reader := sdkmetric.NewManualReader()
-	validator, err := accessverify.New(accessverify.Config{Rows: realRows(t), Legacy: legacyVerifier(auth.AuthenticateLegacy),
+	validator, err := accessverify.New(accessverify.Config{Rows: realRows(t),
 		// The SDK's default limit of 2000 series per instrument folds most of the refused counter (10 reasons per row) into overflow.
 		Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithCardinalityLimit(10000)).Meter("test"), Logger: quietLogger()})
 	if err != nil {
@@ -54,7 +45,7 @@ func TestIssuerSetBodyFirstRoutesKeepTheRouteProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = clickHouse.Close() })
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}
 	scope := policy.NewScope(auth, quietLogger())
 	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), scope.Layers()...)
 	if err != nil {

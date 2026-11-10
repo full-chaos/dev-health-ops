@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -19,7 +18,7 @@ import (
 var refreshCredentialPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43,256}$`)
 
 // maxRefreshExpiresIn is refresh-response.v1 refresh_expires_in's maximum.
-const maxRefreshExpiresIn = int(edgetoken.RefreshLifetime / time.Second)
+const maxRefreshExpiresIn = int(session.DefaultRefreshTTL / time.Second)
 
 var errRefreshRequest = errors.New("authapi: body is not a refresh-request.v1 document")
 

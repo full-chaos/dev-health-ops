@@ -35,6 +35,7 @@ func newBYOSystemOne(provider categorize.Provider, kind string, logger *slog.Log
 		return nil, err
 	}
 	served.byo = true
+	served.backend = attemptBackend{provider: kind, byo: true}
 	return served, nil
 }
 

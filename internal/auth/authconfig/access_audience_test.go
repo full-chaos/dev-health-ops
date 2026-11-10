@@ -31,22 +31,13 @@ func TestEdDSAClassMintsTheAPIAudienceAndTheSessionRouteTokenBeside(t *testing.T
 	if err == nil || !strings.Contains(err.Error(), EnvAccessTokenAudience) || strings.Contains(err.Error(), "CHAOS-") {
 		t.Errorf("eddsa with audience auth-service: Load err %v; want a refusal naming %s", err, EnvAccessTokenAudience)
 	}
-	for _, audience := range []string{"", "dev-health-api", "auth-service"} {
-		env := sessionEnv(testAccessSecret, testSuccessorKey)
-		if audience != "" {
-			env[EnvAccessTokenAudience] = audience
-		}
-		if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err != nil {
-			t.Errorf("hs256_compat with audience %q: %v", audience, err)
-		}
-	}
 }
 
 // With no session secrets no session route is mounted and no token is minted, so the audience rule has nothing to
 // guard.
 func TestTheAudienceRuleDoesNotApplyWithoutTheSessionRoutes(t *testing.T) {
 	env := eddsaEnv()
-	delete(env, EnvAccessTokenSecret)
+	delete(env, EnvRateLimitKey)
 	delete(env, EnvSessionSuccessorKey)
 	env[EnvAccessTokenAudience] = "auth-service"
 	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})

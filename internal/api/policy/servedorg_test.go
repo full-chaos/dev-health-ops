@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
@@ -129,21 +128,6 @@ func servedOrgServe(t *testing.T, row servedOrgCensusRow, setup servedOrgSetup, 
 		setup.shadow.wg.Wait()
 	}
 	return got
-}
-
-// servedOrgServeHS256 serves row to a legacy HS256 admin token of org A.
-func servedOrgServeHS256(t *testing.T, row servedOrgCensusRow, enf *Enforcer, served string) response {
-	t.Helper()
-	store := newStore()
-	withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
-	guard := NewGuard(authenticator(t, store), quiet())
-	if enf != nil {
-		guard.SetEnforcer(enf)
-	}
-	mux := http.NewServeMux()
-	mux.Handle(row.pattern, guard.Wrap(row.level, echo))
-	method, _, _ := strings.Cut(row.pattern, " ")
-	return serve(mux, method, servedOrgRequestPath(row, served), validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 }
 
 func servedOrgEnforcer(t *testing.T, pdp *testPDP, namespaces ...string) *Enforcer {
@@ -331,26 +315,18 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 						len(pdp.calls()), legacy.status)
 				}
 			})
-			t.Run("a legacy HS256 token: another org is unjudged served_org", func(t *testing.T) {
+			t.Run("a caller with no organization and a slug keeps the legacy answer, unjudged no_org", func(t *testing.T) {
+				noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
+				legacy := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg}, "acme")
 				rec := recordEnforce(t)
 				pdp := newTestPDP(t, allowAll)
-				legacy := servedOrgServeHS256(t, row, nil, ownOrg)
-				got := servedOrgServeHS256(t, row, servedOrgEnforcer(t, pdp, namespace), ownOrg)
-				if got.status != legacy.status || got.body != legacy.body || !slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/hs256"}) {
-					t.Errorf("HS256, same org: %d %q unjudged %v, want the legacy %d %q and [%s/hs256]", got.status, got.body, rec.unjudgedSnapshot(),
+				got := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: servedOrgEnforcer(t, pdp, namespace)}, "acme")
+				if got.status != legacy.status || got.body != legacy.body || !slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/no_org"}) {
+					t.Errorf("no token org, a slug: %d %q unjudged %v, want the legacy %d %q and [%s/no_org]", got.status, got.body, rec.unjudgedSnapshot(),
 						legacy.status, legacy.body, row.pattern)
 				}
-				legacy = servedOrgServeHS256(t, row, nil, strangerOrg)
-				rec = recordEnforce(t)
-				got = servedOrgServeHS256(t, row, servedOrgEnforcer(t, pdp, namespace), strangerOrg)
-				if got.status != legacy.status || got.body != legacy.body {
-					t.Errorf("HS256, another org: %d %q, want the legacy %d %q", got.status, got.body, legacy.status, legacy.body)
-				}
-				if len(rec.snapshot()) != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/served_org"}) {
-					t.Errorf("HS256, another org: outcomes %v unjudged %v, want none and [%s/served_org]", rec.snapshot(), rec.unjudgedSnapshot(), row.pattern)
-				}
 				if n := len(pdp.calls()); n != 0 {
-					t.Errorf("HS256: %d PDP calls, want 0", n)
+					t.Errorf("no token org: %d PDP calls, want 0", n)
 				}
 			})
 			t.Run("a token with no organization keeps the legacy answer on any named org", func(t *testing.T) {

@@ -112,11 +112,12 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, probeSigner(cfg), mustLimits(t), nil)
+	signer := keySigner(t)
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, signer, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), nil)
+	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), signer)
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}
@@ -277,9 +278,9 @@ func TestTheRowGateRefusesAPlantedMissingRowForEveryServedRoute(t *testing.T) {
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
 // four compatibility routes, the validate route, the switch-org route, the session issue route, the session state route, the two delegated session routes, the eight federated sign-in routes, the six credentials routes,
-// the twenty-five provisioning routes, the eight read routes, the two authorize routes and the three operator paths on GET and HEAD, GET and HEAD of the JWKS and the
-// discovery document, and the five OAuth authorization server routes.
-const servedAuthRouteCount = 81
+// the twenty-five provisioning routes, the eight read routes, the four user-admin routes, the two authorize routes and the three operator paths on GET and HEAD, GET and
+// HEAD of the JWKS and the discovery document, and the five OAuth authorization server routes.
+const servedAuthRouteCount = 85
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -548,23 +549,6 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) 
 		if len(missing) != 1 || missing[0] != key || len(stale) != 0 {
 			t.Errorf("rows without %s: missing %v stale %v, want exactly it missing", key, missing, stale)
 		}
-	}
-}
-
-// TestWithoutAnIssuerTheDiscoveryRowsAreStale pins that the probe really mounts
-// the discovery document: with AUTH_TOKEN_ISSUER_URL unset only the JWKS is
-// served, so the two discovery rows are reported as rows for routes nothing serves.
-func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
-	served := servedAuthRoutesWithIssuer(t, "")
-	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
-	// The workload-token exchange and the OAuth authorization server need the issuer too, so their rows are stale as
-	// well, and so do the session issue routes, which take only the go-api workload token.
-	wantStale := []string{"GET /.well-known/oauth-authorization-server/oauth@api", "GET /.well-known/openid-configuration@api", "GET /oauth/.well-known/jwks.json@api", "GET /oauth/.well-known/openid-configuration@api", "GET /oauth/authorize@api", "HEAD /.well-known/openid-configuration@api", "POST /internal/v1/sessions/delegated/end@api", "POST /internal/v1/sessions/delegated@api", "POST /internal/v1/sessions/state@api", "POST /internal/v1/sessions@api", "POST /internal/v1/token/exchange@api", "POST /oauth/authorize@api"}
-	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
-		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)
-	}
-	if served["GET /.well-known/jwks.json@api"] != true || served["HEAD /.well-known/jwks.json@api"] != true {
-		t.Error("the JWKS must be served without an issuer")
 	}
 }
 

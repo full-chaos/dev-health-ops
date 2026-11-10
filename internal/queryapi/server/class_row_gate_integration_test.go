@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -52,7 +51,7 @@ func setClassRowMode(t *testing.T, pool *pgxpool.Pool, operation, mode string) {
 
 func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,9 +59,8 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	runOperation := markClassGated(handler) // what buildQueryRoute mounts at /query/run-operation
-	token := signTestEnvelope(t, priv, "org-1")
 	hotspots := mcpclass.Operation("hotspots")
 
 	t.Run("no class row: the run_operation request is refused with the MCP refusal", func(t *testing.T) {
@@ -86,13 +84,6 @@ func TestRunOperationRouteFollowsTheClassRowOfItsRoot(t *testing.T) {
 		recorder := postAsRunOperation(t, handler, registeredHotspotsDocument, hotspotsVariables()) // /query: the Python /graphql edge's route
 		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "org/repo-a") {
 			t.Fatalf("/query with identity headers was class-gated: status %d, body %s", recorder.Code, recorder.Body.String())
-		}
-	})
-
-	t.Run("a dark class root does not gate the envelope caller (web)", func(t *testing.T) {
-		recorder := postGraphQLWithVariables(t, handler, registeredHotspotsDocument, token, hotspotsVariables())
-		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "org/repo-a") {
-			t.Fatalf("the envelope caller was gated: status %d, body %s", recorder.Code, recorder.Body.String())
 		}
 	})
 

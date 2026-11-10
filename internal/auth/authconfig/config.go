@@ -100,19 +100,13 @@ const (
 	// Load rejects it when present rather than ignoring it, because an
 	// operator who set it believes the key is in effect.
 	EnvSigningKeyDirect = "AUTH_SIGNING_KEY"
-	// EnvAccessTokenSecret is the HS256 key of the compatibility access token:
-	// the same value as go-api's JWT_SECRET_KEY, so the tokens auth-service
-	// mints verify where go-api's do. Secret: environment or _FILE only.
-	EnvAccessTokenSecret   = "AUTH_JWT_SECRET_KEY"
-	EnvAccessTokenIssuer   = "AUTH_JWT_ISSUER"
+	// EnvAccessTokenAudience is the aud of the access token this service mints.
 	EnvAccessTokenAudience = "AUTH_JWT_AUDIENCE"
-	// EnvLegacyJWTAudience is the audience of go-api's HS256 compatibility access token under the eddsa class.
-	EnvLegacyJWTAudience = "AUTH_LEGACY_JWT_AUDIENCE"
 	// EnvAccessTokenClass picks the one class of access token this service
-	// mints: hs256_compat (the default) or eddsa. Exact match, no fallback.
+	// mints: eddsa, the default. The retired value hs256_compat is refused at start. Exact match, no fallback.
 	EnvAccessTokenClass = "AUTH_ACCESS_TOKEN_CLASS"
 	// EnvAccessTokenLifetime is the eddsa access token's lifetime (exp - iat): whole minutes from 5 to 60, default 60
-	// (ACP-ADR-03: EdDSA ships at 60 minutes, the 10-minute target is this setting). Not used under hs256_compat.
+	// (ACP-ADR-03: EdDSA ships at 60 minutes, the 10-minute target is this setting).
 	EnvAccessTokenLifetime = "AUTH_ACCESS_TOKEN_LIFETIME"
 	// EnvSessionSuccessorKey is the 32-byte session successor key (base64url,
 	// no padding) that derives a rotated refresh credential (CHAOS-10207
@@ -123,8 +117,9 @@ const (
 	// with the session secrets, it mounts the login route. Secret.
 	EnvLoginLockoutKey = "AUTH_LOGIN_LOCKOUT_KEY"
 	// EnvRateLimitKey is the key the rate-limit counters digest identifiers
-	// with (HKDF input). Optional; unset, the limiter is keyed from
-	// EnvAccessTokenSecret. Secret: environment or _FILE only.
+	// with (HKDF input). Optional; unset, the limiter keys from
+	// EnvSessionSuccessorKey (authapi.NewSessionLimits). Secret: environment or
+	// _FILE only.
 	EnvRateLimitKey = "AUTH_RATE_LIMIT_KEY"
 
 	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
@@ -189,14 +184,12 @@ const (
 	defaultPDPRouteRateLimitBurst  = 4000
 	defaultDatabaseMaxConns        = int32(8)
 	defaultDatabaseConnectTimeout  = 5 * time.Second
-	// go-api's JWT_ISSUER and JWT_AUDIENCE defaults (internal/platform/config).
-	defaultAccessTokenIssuer   = "dev-health-ops"
+	// go-api's JWT_AUDIENCE default (internal/platform/config).
 	defaultAccessTokenAudience = "dev-health-api"
-	// minAccessTokenSecretLength is edgetoken.MinSecretLength, the Python
-	// signer's floor, counted in characters.
-	minAccessTokenSecretLength = 32
-	sessionSuccessorKeyBytes   = 32
-	loginLockoutKeyBytes       = 32
+	// minRateLimitKeyLength is the rate-limit key's floor, counted in characters.
+	minRateLimitKeyLength    = 32
+	sessionSuccessorKeyBytes = 32
+	loginLockoutKeyBytes     = 32
 
 	minShutdownTimeout        = 500 * time.Millisecond
 	maxShutdownTimeout        = 10 * time.Minute
@@ -329,28 +322,23 @@ type Config struct {
 	EnvOnlySettings []string
 }
 
-// Access token classes (EnvAccessTokenClass).
+// Access token classes (EnvAccessTokenClass). hs256_compat is a retired value: it is refused at start.
 const (
-	AccessClassHS256Compat = "hs256_compat" // gitleaks:allow
-	AccessClassEdDSA       = "eddsa"
+	AccessClassEdDSA = "eddsa"
+
+	retiredAccessClassHS256Compat = "hs256_compat" // gitleaks:allow
 )
 
-// SessionTokens are the session routes' secrets and the access token's iss
-// and aud.
+// SessionTokens are the session routes' secrets and the access token's aud.
 type SessionTokens struct {
 	Enabled bool
-	// AccessClass is AccessClassHS256Compat or AccessClassEdDSA.
+	// AccessClass is AccessClassEdDSA.
 	AccessClass    string
-	AccessSecret   secrets.Value
-	AccessIssuer   string
 	AccessAudience string
-	// AccessLifetime is the eddsa access token's exp - iat (EnvAccessTokenLifetime); go-api's 60 minutes under
-	// hs256_compat.
+	// AccessLifetime is the eddsa access token's exp - iat (EnvAccessTokenLifetime).
 	AccessLifetime time.Duration
-	// LegacyAudience is the audience of go-api's HS256 token under the eddsa class.
-	LegacyAudience string
 	SuccessorKey   secrets.Value
-	// RateLimitKey is EnvRateLimitKey; unset, the rate limiter keys from AccessSecret (then set).
+	// RateLimitKey is EnvRateLimitKey; unset, the rate limiter keys from SuccessorKey.
 	RateLimitKey secrets.Value
 	// LoginEnabled is set with LockoutKey: the login route is mounted.
 	LoginEnabled bool
@@ -414,7 +402,6 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
 		slog.String("client_addr_mode", string(c.ClientAddrMode)),
 		slog.Int("client_addr_key_count", len(c.ClientAddrKeys)),
-		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
 		slog.String("access_class", c.Session.AccessClass),
 		slog.String("access_lifetime", c.Session.AccessLifetime.String()),
@@ -734,17 +721,16 @@ func socialClients(lookup secrets.LookupEnv) (map[string]SocialClient, error) {
 	return out, nil
 }
 
-// accessTokenClass reads EnvAccessTokenClass: unset or empty is hs256_compat,
-// the two class names match exactly, anything else is refused (the value is
-// not echoed).
+// accessTokenClass reads EnvAccessTokenClass: unset or empty is eddsa, the class name matches exactly, the retired
+// hs256_compat is refused naming eddsa, anything else is refused (the value is not echoed).
 func accessTokenClass(lookup secrets.LookupEnv) (string, error) {
 	switch valueOf(lookup, EnvAccessTokenClass) {
-	case "", AccessClassHS256Compat:
-		return AccessClassHS256Compat, nil
-	case AccessClassEdDSA:
+	case "", AccessClassEdDSA:
 		return AccessClassEdDSA, nil
+	case retiredAccessClassHS256Compat:
+		return "", fmt.Errorf("%s=%s is retired: set %s (the default when it is unset)", EnvAccessTokenClass, retiredAccessClassHS256Compat, AccessClassEdDSA)
 	}
-	return "", fmt.Errorf("%s must be %s or %s", EnvAccessTokenClass, AccessClassHS256Compat, AccessClassEdDSA)
+	return "", fmt.Errorf("%s must be %s", EnvAccessTokenClass, AccessClassEdDSA)
 }
 
 // accessTokenLifetime reads EnvAccessTokenLifetime: unset is the access-token.v1 ceiling (60 minutes); a set value
@@ -762,12 +748,11 @@ func accessTokenLifetime(lookup secrets.LookupEnv) (time.Duration, error) {
 	return lifetime, nil
 }
 
-// sessionTokens resolves the session routes' settings. Under hs256_compat the
-// two secrets come together or not at all: a deployment with one of them meant
-// to serve the session routes, and silently serving none would hide that.
-// Under eddsa the successor key alone turns the session routes on; the access
-// secret only verifies go-api's HS256 token and needs the successor key, and
-// without it the rate limiter needs its own key.
+// sessionTokens resolves the session routes' settings. The successor key
+// alone turns the session routes on; the rate-limit key is optional (unset,
+// the limiter keys from the successor key). The retired HS256 settings
+// (RetiredHS256Settings) are read by nothing here; the runtime warns when one
+// is set.
 func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	class, err := accessTokenClass(lookup)
 	if err != nil {
@@ -775,50 +760,20 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	}
 	out := SessionTokens{
 		AccessClass:    class,
-		AccessIssuer:   stringOr(lookup, EnvAccessTokenIssuer, defaultAccessTokenIssuer),
 		AccessAudience: stringOr(lookup, EnvAccessTokenAudience, defaultAccessTokenAudience),
-		AccessLifetime: contracts.AccessTokenLifetimeCeiling,
 	}
-	if class == AccessClassEdDSA {
-		if out.AccessLifetime, err = accessTokenLifetime(lookup); err != nil {
-			return SessionTokens{}, err
-		}
-	}
-	out.LegacyAudience = contracts.PlatformAPIAudience
-	if raw, set := lookup(EnvLegacyJWTAudience); set {
-		if raw == "" || raw != strings.TrimSpace(raw) {
-			return SessionTokens{}, fmt.Errorf("%s is set but empty or has surrounding whitespace: unset it for go-api's default audience", EnvLegacyJWTAudience)
-		}
-		out.LegacyAudience = raw
-	}
-	// No auth-service token carries an ACR audience, under either class: acr-api
-	// and acr-mcp have a separate mint (ACP-ADR-13 decision 3, CHAOS-12248).
-	for _, setting := range []struct{ name, audience string }{
-		{EnvAccessTokenAudience, out.AccessAudience},
-		{EnvLegacyJWTAudience, out.LegacyAudience},
-	} {
-		if _, acr := contracts.ACRAccessTokenScope(setting.audience); acr {
-			return SessionTokens{}, fmt.Errorf("%s names an ACR audience; no auth-service token carries one (ACP-ADR-13)", setting.name)
-		}
-	}
-	access, hasAccess, err := secrets.ResolveSecret(EnvAccessTokenSecret, lookup)
-	if err != nil {
+	if out.AccessLifetime, err = accessTokenLifetime(lookup); err != nil {
 		return SessionTokens{}, err
+	}
+	// No auth-service token carries an ACR audience: acr-api and acr-mcp have a
+	// separate mint (ACP-ADR-13 decision 3, CHAOS-12248).
+	if _, acr := contracts.ACRAccessTokenScope(out.AccessAudience); acr {
+		return SessionTokens{}, fmt.Errorf("%s names an ACR audience; no auth-service token carries one (ACP-ADR-13)", EnvAccessTokenAudience)
 	}
 	successor, hasSuccessor, err := secrets.ResolveSecret(EnvSessionSuccessorKey, lookup)
 	if err != nil {
 		return SessionTokens{}, err
 	}
-	switch {
-	case class == AccessClassEdDSA && hasAccess && !hasSuccessor:
-		return SessionTokens{}, fmt.Errorf("%s needs %s (the session routes need it)", EnvAccessTokenSecret, EnvSessionSuccessorKey)
-	case class != AccessClassEdDSA && hasAccess != hasSuccessor:
-		return SessionTokens{}, fmt.Errorf(
-			"%s and %s are set together or not at all (the session routes need both)",
-			EnvAccessTokenSecret, EnvSessionSuccessorKey,
-		)
-	}
-	needs := sessionSecretNames(class)
 	_, hasLockout, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
 	if err != nil {
 		return SessionTokens{}, err
@@ -833,30 +788,19 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	}
 	if !hasSuccessor {
 		if linkRoutes {
-			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s)", EnvSocialLinkRoutes, needs)
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s)", EnvSocialLinkRoutes, EnvSessionSuccessorKey)
 		}
 		if hasLockout {
-			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s)", EnvLoginLockoutKey, needs)
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s)", EnvLoginLockoutKey, EnvSessionSuccessorKey)
 		}
 		if hasRateKey {
-			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s)", EnvRateLimitKey, needs)
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s)", EnvRateLimitKey, EnvSessionSuccessorKey)
 		}
 		return out, nil
 	}
-	if !hasAccess && !hasRateKey {
-		return SessionTokens{}, fmt.Errorf("%s is required while %s is unset (the rate limiter has no other key)", EnvRateLimitKey, EnvAccessTokenSecret)
-	}
-	if hasAccess && hasRateKey && rateKey.Reveal() == access.Reveal() {
-		return SessionTokens{}, fmt.Errorf("%s must differ from %s: one key per purpose", EnvRateLimitKey, EnvAccessTokenSecret)
-	}
-	if hasRateKey && len([]rune(rateKey.Reveal())) < minAccessTokenSecretLength {
+	if hasRateKey && len([]rune(rateKey.Reveal())) < minRateLimitKeyLength {
 		return SessionTokens{}, fmt.Errorf(
-			"%s must be at least %d characters", EnvRateLimitKey, minAccessTokenSecretLength,
-		)
-	}
-	if hasAccess && len([]rune(access.Reveal())) < minAccessTokenSecretLength {
-		return SessionTokens{}, fmt.Errorf(
-			"%s must be at least %d characters", EnvAccessTokenSecret, minAccessTokenSecretLength,
+			"%s must be at least %d characters", EnvRateLimitKey, minRateLimitKeyLength,
 		)
 	}
 	if raw, decodeErr := base64.RawURLEncoding.DecodeString(successor.Reveal()); decodeErr != nil || len(raw) != sessionSuccessorKeyBytes {
@@ -864,7 +808,7 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 			"%s must be %d bytes, base64url without padding", EnvSessionSuccessorKey, sessionSuccessorKeyBytes,
 		)
 	}
-	out.Enabled, out.AccessSecret, out.SuccessorKey = true, access, successor
+	out.Enabled, out.SuccessorKey = true, successor
 	out.RateLimitKey = rateKey
 	out.SocialLinkRoutes = linkRoutes
 	lockout, _, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
@@ -883,13 +827,10 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	return out, nil
 }
 
-// sessionSecretNames names the secrets that turn the session routes on under class.
-func sessionSecretNames(class string) string {
-	if class == AccessClassEdDSA {
-		return EnvSessionSuccessorKey
-	}
-	return EnvAccessTokenSecret + " and " + EnvSessionSuccessorKey
-}
+// RetiredHS256Settings are the environment names of the retired HS256
+// compatibility token: its key (and key file), its iss and the audience go-api's
+// HS256 token was checked with. Nothing reads them; a set one is logged.
+var RetiredHS256Settings = []string{"AUTH_JWT_SECRET_KEY", "AUTH_JWT_SECRET_KEY_FILE", "AUTH_JWT_ISSUER", "AUTH_LEGACY_JWT_AUDIENCE"}
 
 // strictBool reads an unset or blank name as false and accepts only "true"
 // and "false" otherwise: a typo must not silently leave a route unmounted.

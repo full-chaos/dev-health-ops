@@ -74,7 +74,7 @@ func (r enforceRun) served(t *testing.T) {
 }
 
 // enforceCaller is how the request reaches the operation: a user access token (the production edge for an at+jwt
-// bearer), the HS256 edge token as it is, or a superuser's edge token with a user subject.
+// bearer) or a superuser's edge token with a user subject.
 type enforceCaller struct {
 	user      bool
 	superuser bool
@@ -84,16 +84,15 @@ type enforceCaller struct {
 	// orgHeader is the X-Org-Id the request names; memberOfB makes the caller a member of servedOrgB.
 	orgHeader string
 	memberOfB bool
+	// role is the caller's membership role in ecOrg; "" is admin.
+	role string
 }
 
-var (
-	callerUser  = enforceCaller{user: true}
-	callerHS256 = enforceCaller{}
-)
+var callerUser = enforceCaller{user: true}
 
 // runGraphQLEnforce sends one document through the real /graphql pipeline (edge chain, org scope, dispatch handler)
 // into the real GraphQL server over a recording ClickHouse client, with gate on the request. For a user caller the
-// subject is a user access token, as the edge sets it for an at+jwt bearer (the test's edge token is hs256).
+// subject is a user access token, as the edge sets it for an at+jwt bearer.
 func runGraphQLEnforce(t *testing.T, gate *pdp.Gate, caller enforceCaller, document string) enforceRun {
 	t.Helper()
 	quietStdLog(t)
@@ -102,6 +101,9 @@ func runGraphQLEnforce(t *testing.T, gate *pdp.Gate, caller enforceCaller, docum
 		found:   map[uuid.UUID]bool{ecUser: true},
 		members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
 		roles:   map[[2]uuid.UUID]string{{ecUser, ecOrg}: "admin"},
+	}
+	if caller.role != "" {
+		store.roles[[2]uuid.UUID{ecUser, ecOrg}] = caller.role
 	}
 	if caller.memberOfB {
 		store.members[[2]uuid.UUID{ecUser, servedOrgB}] = true
@@ -130,7 +132,7 @@ func runGraphQLEnforce(t *testing.T, gate *pdp.Gate, caller enforceCaller, docum
 	auth := ecEdgeAuth(t, store)
 	chain := graphQLEdgeChain(newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(document): "gql"}, verifier, auth, store, "", nil),
 		graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes})
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: caller.superuser || caller.impersonate, tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query": `+jsonQuote(t, document)+`}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+token)
@@ -138,7 +140,7 @@ func runGraphQLEnforce(t *testing.T, gate *pdp.Gate, caller enforceCaller, docum
 		request.Header.Set("X-Org-Id", caller.orgHeader)
 	}
 	recorder := httptest.NewRecorder()
-	chain.ServeHTTP(recorder, request)
+	onPattern("/graphql", withRouteProfile(chain)).ServeHTTP(recorder, request)
 	gate.Wait()
 	client.mu.Lock()
 	defer client.mu.Unlock()
@@ -362,24 +364,6 @@ func TestGraphQLEnforceUncarriedObligationsAre503(t *testing.T) {
 			gate, _ := enforceGate(t, pdp.ModeEnforce, "analytics", pepOf(t, srv.URL))
 			runGraphQLEnforce(t, gate, callerUser, enforceDocAnalytics).code503(t, string(pdp.ReasonNotCarriedOut))
 		})
-	}
-}
-
-// G14: the HS256 edge token stays on today's path with every cell on and a PDP that denies: no ask, one exempt count
-// per distinct action.
-func TestGraphQLEnforceHS256IsExempt(t *testing.T) {
-	legacy := runGraphQLEnforce(t, nil, callerHS256, enforceDocTwo)
-	srv := pdptest.New(t)
-	srv.Deny("role_lacks_action")
-	decider := &countingDecider{next: pepOf(t, srv.URL)}
-	gate, reader := enforceGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
-	got := runGraphQLEnforce(t, gate, callerHS256, enforceDocTwo)
-	if got != legacy || len(decider.requests()) != 0 {
-		t.Fatalf("got %+v with %d asks, want today's %+v and no ask", got, len(decider.requests()), legacy)
-	}
-	exempt := (&gatedREST{reader: reader}).counter(t, "dev_health_query_api_pdp_exempt_total")
-	if exempt["action=analytics.read,class="+pdp.ClassHS256] != 1 || exempt["action=metrics.read,class="+pdp.ClassHS256] != 1 || len(exempt) != 2 {
-		t.Fatalf("exempt counts %v, want one per action for %s", exempt, pdp.ClassHS256)
 	}
 }
 
@@ -634,21 +618,20 @@ func TestGraphQLEnforceDelegatedBearerIsJudgedForTheTargetOrg(t *testing.T) {
 	}
 }
 
-// G13 (as superseded by the caller-class split): the envelope is an exempt class on every server: with every cell on
-// it asks nothing, runs as today and counts once per action on the exempt counter.
-func TestGraphQLEnforceEnvelopeIsExempt(t *testing.T) {
+// G13, after the envelope class was retired: every ingress refuses the envelope, so it never reaches an operation. A
+// subject with the envelope's skip reason that did reach one names no class: with every cell on it is refused
+// (authz_enforce_no_principal) before any read, asks nothing and counts nothing on the exempt counter.
+func TestGraphQLEnforceEnvelopeIsNotAnExemptClass(t *testing.T) {
 	claims := authctx.Claims{OrgID: ecOrg.String(), Role: "admin", Scope: pepgate.Legacy(ecOrg.String())}
 	envelope := graph.ShadowSubject{Bearer: "envelope.jws.value", SkipReason: policy.ShadowReasonEnvelope}
-	legacy, _, _ := runRootsAs(t, nil, nil, claims, envelope, enforceDocTwo)
 	decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
 	gate, reader := enforceGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
 	got, asks, _ := runRootsAs(t, gate, decider, claims, envelope, enforceDocTwo)
-	if got != legacy || asks != 0 {
-		t.Fatalf("got %+v with %d asks, want today's %+v and no ask", got, asks, legacy)
+	if !strings.Contains(got.body, `"reason":"`+string(pdp.ReasonNoPrincipal)+`"`) || got.statements != 0 || asks != 0 {
+		t.Fatalf("got %+v with %d asks, want the authz_enforce_no_principal refusal, no read and no ask", got, asks)
 	}
-	exempt := (&gatedREST{reader: reader}).counter(t, "dev_health_query_api_pdp_exempt_total")
-	if exempt["action=analytics.read,class="+pdp.ClassEnvelope] != 1 || exempt["action=metrics.read,class="+pdp.ClassEnvelope] != 1 || len(exempt) != 2 {
-		t.Fatalf("exempt counts %v, want one per action for %s", exempt, pdp.ClassEnvelope)
+	if exempt := (&gatedREST{reader: reader}).counter(t, "dev_health_query_api_pdp_exempt_total"); len(exempt) != 0 {
+		t.Fatalf("exempt counts %v, want none", exempt)
 	}
 }
 

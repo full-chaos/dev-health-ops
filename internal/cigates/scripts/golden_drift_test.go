@@ -34,7 +34,7 @@ func goldenDriftSelect(t *testing.T, list string) (verdict string, pkgs []string
 	return verdict, pkgs, res.code
 }
 
-var allGoldenPkgs = []string{"internal/adminops", "internal/fixturescli", "internal/auth/usersbackfill", "internal/api/session"}
+var allGoldenPkgs = []string{"internal/adminops", "internal/fixturescli", "internal/auth/usersbackfill"}
 
 func TestGoldenDriftSelect(t *testing.T) {
 	rows := []struct {
@@ -48,9 +48,9 @@ func TestGoldenDriftSelect(t *testing.T) {
 		{"5131 org_activity: migration and chain manifest", nulList("internal/pgmigrate/chain_manifest.tsv", "internal/orgactivity/orgactivity.go"), "select", allGoldenPkgs},
 		{"chain manifest alone", nulList("internal/pgmigrate/chain_manifest.tsv"), "select", allGoldenPkgs},
 		{"5088 no migration: usersbackfill Go change", nulList("internal/auth/usersbackfill/oauthsso.go", "internal/auth/authruntime/usersguard.go"), "select", []string{"internal/auth/usersbackfill"}},
-		{"5100 no migration: api/session writer guard", nulList("internal/api/session/social.go", "internal/auth/identity/providerid.go", "internal/api/sso/oauth.go"), "select", []string{"internal/api/session"}},
+		{"5100 no migration: api/session writer guard (no golden row: go-api mints no token)", nulList("internal/api/session/social.go", "internal/auth/identity/providerid.go", "internal/api/sso/oauth.go"), "none", nil},
 		{"planted Go-only change in usersbackfill", nulList("internal/auth/usersbackfill/planted.go"), "select", []string{"internal/auth/usersbackfill"}},
-		{"planted Go-only change in api/session", nulList("internal/api/session/planted.go"), "select", []string{"internal/api/session"}},
+		{"planted Go-only change in api/session (no golden row)", nulList("internal/api/session/planted.go"), "none", nil},
 		{"test file in a golden package", nulList("internal/adminops/users_integration_test.go"), "select", []string{"internal/adminops"}},
 		{"nested path under a golden package", nulList("internal/fixturescli/testdata/golden/finalize_synthetic.json"), "select", []string{"internal/fixturescli"}},
 		{"docs only", nulList("docs/reference/cli/index.md", "README.md"), "none", nil},
@@ -102,7 +102,6 @@ func TestGoldenDriftRegistryMatchesRealTests(t *testing.T) {
 		"TestFinalizeSyntheticWritesTheFrozenPythonRows":          false,
 		"TestOrgsBackfillInsertsThenRerunChangesNothing":          false,
 		"TestReconcileAfterBackfillIsZeroDiffAndSeesPlantedDrift": false,
-		"TestSessionRoutesMatchGolden":                            false,
 	}
 	funcRe := regexp.MustCompile(`(?m)^func (Test\w+)\(t \*testing\.T\)`)
 	rows := 0
@@ -148,8 +147,8 @@ func TestGoldenDriftRegistryMatchesRealTests(t *testing.T) {
 			t.Errorf("%s: regex %s matches no integration test", f[0], f[1])
 		}
 	}
-	if rows < 4 {
-		t.Errorf("registry has %d rows, want at least the 4 culprit packages", rows)
+	if rows < 3 {
+		t.Errorf("registry has %d rows, want at least the 3 culprit packages", rows)
 	}
 	for name, seen := range must {
 		if !seen {

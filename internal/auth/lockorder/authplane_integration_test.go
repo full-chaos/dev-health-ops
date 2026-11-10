@@ -6,8 +6,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -77,7 +79,24 @@ func (e *env) authPlaneOn(pool *pgxpool.Pool, schema authschema.ValidatedIdentif
 	if err != nil {
 		return nil, fmt.Errorf("session store: %w", err)
 	}
-	issuer, err := authapi.NewIssuer(jwtKey, "dev-health-ops", "dev-health-api")
+	keyDir, err := os.MkdirTemp("", "issuer-key-")
+	if err != nil {
+		return nil, err
+	}
+	closers = append(closers, func() { _ = os.RemoveAll(keyDir) })
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(private)
+	if err != nil {
+		return nil, err
+	}
+	keyPath := filepath.Join(keyDir, "k1.pem")
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		return nil, err
+	}
+	issuer, err := authapi.NewEdDSAIssuer("dev-health-api", token.NewFileSigner(token.FileConfig{KeyPath: keyPath, KeyID: "k1"}), "https://auth.example.test")
 	if err != nil {
 		return nil, fmt.Errorf("issuer: %w", err)
 	}

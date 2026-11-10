@@ -1,7 +1,6 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "generated_at": "2026-10-21T00:00:00Z",
-  "rewritten_anchors": [],
   "rows": [
     {
       "accepted_credential_classes": [
@@ -662,13 +661,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
       ],
       "graphql_field_name": null,
@@ -3782,6 +3780,70 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
+      "action": "admin.users",
+      "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/admin/service-accounts/{service_account_id}/keys [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Superuser: a valid access token whose user row is a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "route": "/api/v1/admin/service-accounts/{service_account_id}/keys",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/serviceaccount_keys.go",
+        "line": 31
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "the access-token.v1 JWS (typ at+jwt)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": false
+      },
       "action": "settings.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
@@ -4830,14 +4892,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
-      "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/users [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -4896,13 +4956,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
       ],
       "graphql_field_name": null,
@@ -6461,7 +6520,7 @@
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
-        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:477 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
+        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:488 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
         "credential_binding: the acr-api workload token is not bound to an organization (it carries no org claim); its holder may name any organization; an organization-bound claim is not in this leaf"
       ],
@@ -6553,7 +6612,7 @@
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
-        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:477 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
+        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:488 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
         "credential_binding: the acr-api workload token is not bound to an organization (it carries no org claim); its holder may name any organization; an organization-bound claim is not in this leaf"
       ],
@@ -6600,7 +6659,7 @@
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
-        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:477 names them on the main listener only); the read reports the user's active impersonation in its answer (impersonating) and applies no override; enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
+        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:488 names them on the main listener only); the read reports the user's active impersonation in its answer (impersonating) and applies no override; enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
         "credential_binding: the acr-api workload token is not bound to an organization (it carries no org claim); its holder may name any organization and user; an organization-bound claim is not in this leaf"
       ],
@@ -8177,13 +8236,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
       ],
       "graphql_field_name": null,
@@ -8446,11 +8504,11 @@
       },
       "action": null,
       "classification": "protected",
-      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the handler reads the caller's membership row live on every request (internal/api/acrcredentials/routes.go:113)",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the handler asks the caller's admin.orgs platform action live on every request (internal/api/policy/platform_decision.go:69) and, for a caller without it, reads the caller's membership row live (internal/api/acrcredentials/routes.go:149)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id, another organization's id, a credential that is not MCP-bound and one the caller did not approve all answer the same 404, acr's one refusal answer (internal/api/acrcredentials/routes.go:130); acr resolves the id only in the token organization the handler sends (internal/api/acrcredentials/routes.go:126); a caller with no membership row in that organization answers 403 (internal/api/acrcredentials/routes.go:118); a malformed id answers the same 404 without an acr call (internal/api/acrcredentials/routes.go:100)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id, another organization's id, a credential that is not MCP-bound and one the caller did not approve all answer the same 404, acr's one refusal answer (internal/api/acrcredentials/routes.go:124); acr resolves the id only in the token organization the handler sends (internal/api/acrcredentials/routes.go:107); a platform admin (admin.orgs, internal/api/policy/platform_decision.go:69) acts as that organization's admin with or without a membership row there; any other caller with no membership row in that organization answers 403 (internal/api/acrcredentials/routes.go:149); a malformed id answers the same 404 without an acr call (internal/api/acrcredentials/routes.go:103)",
       "gaps": [
-        "action: no catalog action is proven to equal this handler's own check (the caller's live membership row decides the acr actor type; acr decides whether the credential admits that actor); candidate for a ruling, this leaf does not extend the vocabulary"
+        "action: no catalog action is proven to equal this handler's own check (the caller's admin.orgs platform action, else the caller's live membership row, decides the acr actor type; acr decides whether the credential admits that actor); candidate for a ruling, this leaf does not extend the vocabulary"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/acr/credentials/{credential_id}/revoke [dev-health-ops-api @api]",
@@ -8487,12 +8545,12 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the token's org claim of the verified session user, the admin-route rule (internal/api/acrcredentials/routes.go:104); credential_id (path) supplied by the caller and resolved by acr in that organization",
+      "resource_resolver": "organization_from_session: the token's org claim of the verified session user, the admin-route rule (internal/api/acrcredentials/routes.go:107); credential_id (path) supplied by the caller and resolved by acr in that organization",
       "route": "/api/v1/acr/credentials/{credential_id}/revoke",
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/acrcredentials/routes.go",
-        "line": 60
+        "line": 62
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -10995,6 +11053,462 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
+      "action": null,
+      "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the body's organization",
+      "gaps": [
+        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/admin/service-accounts [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Superuser: a valid access token whose user row is a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the body's organization id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
+      "route": "/api/v1/admin/service-accounts",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/serviceaccounts.go",
+        "line": 31
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "the access-token.v1 JWS (typ at+jwt)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": false
+      },
+      "action": "admin.users",
+      "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Superuser: a valid access token whose user row is a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path credential id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "route": "/api/v1/admin/service-accounts/keys/{credential_id}/revoke",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/serviceaccount_keys.go",
+        "line": 37
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "the access-token.v1 JWS (typ at+jwt)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": false
+      },
+      "action": null,
+      "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "gaps": [
+        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/admin/service-accounts/{service_account_id}/disable [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Superuser: a valid access token whose user row is a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
+      "route": "/api/v1/admin/service-accounts/{service_account_id}/disable",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/serviceaccounts.go",
+        "line": 33
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "the access-token.v1 JWS (typ at+jwt)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": false
+      },
+      "action": null,
+      "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "gaps": [
+        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/admin/service-accounts/{service_account_id}/enable [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Superuser: a valid access token whose user row is a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
+      "route": "/api/v1/admin/service-accounts/{service_account_id}/enable",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/serviceaccounts.go",
+        "line": 35
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "the access-token.v1 JWS (typ at+jwt)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": false
+      },
+      "action": "admin.users",
+      "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/admin/service-accounts/{service_account_id}/keys [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Superuser: a valid access token whose user row is a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "route": "/api/v1/admin/service-accounts/{service_account_id}/keys",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/serviceaccount_keys.go",
+        "line": 33
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "the access-token.v1 JWS (typ at+jwt)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": false
+      },
+      "action": "admin.users",
+      "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Superuser: a valid access token whose user row is a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount_keys.go)",
+      "route": "/api/v1/admin/service-accounts/{service_account_id}/keys/rotate",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/serviceaccount_keys.go",
+        "line": 35
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "the access-token.v1 JWS (typ at+jwt)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": false
+      },
+      "action": null,
+      "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.users at the guard (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:225); the handler does not scope by the caller's organization; auth-service re-runs its actor rule on the service account's organization",
+      "gaps": [
+        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/admin/service-accounts/{service_account_id}/owner [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Superuser: a valid access token whose user row is a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "resource_resolver": "none: platform route; the caller's own organization is not read (internal/api/policy/guard.go:225); the path service account id is resolved by auth-service (internal/auth/authapi/provisioning_serviceaccount.go)",
+      "route": "/api/v1/admin/service-accounts/{service_account_id}/owner",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/serviceaccounts.go",
+        "line": 37
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "the access-token.v1 JWS (typ at+jwt)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": false
+      },
       "action": "settings.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
@@ -11719,14 +12233,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:206)",
-      "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/users [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -11785,13 +12297,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.users",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers user (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
       ],
       "graphql_field_name": null,
@@ -14896,5 +15407,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "ad73c1cc123bed0f0142431bd0d4b0ef72ad90ba"
+  "source_commit": "a1a2a0cd58b9319ed7392e374bd3870ab20c960c"
 }

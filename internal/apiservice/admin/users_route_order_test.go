@@ -9,12 +9,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 type superuserPolicyStore struct{}
@@ -39,20 +39,8 @@ func (superuserPolicyStore) ActiveImpersonation(context.Context, uuid.UUID) (*po
 // mountedUserRoutes mounts the real user routes (bodyFirst, guard, handler) over a database that records any call.
 func mountedUserRoutes(t *testing.T) (server *httptest.Server, bearer string, touched *bool) {
 	t.Helper()
-	const key = "route-order-test-signing-key-32-bytes!!!!"
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, superuserPolicyStore{}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth, bearer := routedAuth(t, superuserPolicyStore{})
 	touched = new(bool)
 	h := &handlers{store: pgStore{Pool: touchedDB{touched}}, guard: policy.NewGuard(auth, logger), logger: logger}
 	mux := http.NewServeMux()
@@ -63,10 +51,6 @@ func mountedUserRoutes(t *testing.T) (server *httptest.Server, bearer string, to
 	}
 	server = httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	bearer, err = signer.Access(edgetoken.AccessClaims{UserID: uuid.NewString(), Email: "root@example.test", IsSuperuser: true}, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
 	return server, bearer, touched
 }
 
@@ -117,3 +101,21 @@ func TestMountedUserRoutesValidateTheBodyBeforeAnyStoreCall(t *testing.T) {
 }
 
 func (superuserPolicyStore) ReadsPlatformRoles() bool { return false }
+
+// routedAuth is the api's routed Authenticator over store and an EdDSA user access token it accepts. The
+// superuser and any impersonation come from store's users and impersonation rows, never from a claim.
+func routedAuth(t *testing.T, store policy.Store) (*policy.Authenticator, string) {
+	t.Helper()
+	tokens := edtokens.New(t)
+	return tokens.AuthenticatorOver(t, store, slog.New(slog.DiscardHandler)), tokens.MustMint(t, edtokens.Claims{UserID: uuid.New()})
+}
+
+// profiled sets, in front of a hand-built chain, the route profiles NewServer sets before its scope layers.
+func profiled(t *testing.T, routes []httpapi.Route, next http.Handler) http.Handler {
+	t.Helper()
+	templates, err := httpapi.NewRouteTemplates(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy.RouteProfiles(templates.Match)(next)
+}

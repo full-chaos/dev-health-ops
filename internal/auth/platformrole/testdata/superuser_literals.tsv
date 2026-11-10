@@ -5,10 +5,8 @@
 internal/adminops/users.go	runUsersDelete	1	log key
 internal/api/billing/entitlements.go	handlers.entitlementAccessSQL	1	read: the off column of PlatformRoleRead
 internal/api/policy/accessroute_user.go	PGStore.AccessUser	1	grant-error text
-internal/api/policy/principal.go	userFromClaims	1	claim key (a hint; the decision is the live read)
 internal/api/policy/store.go	PGStore.UserState	1	grant-error text
 internal/api/policy/store.go	PGStore.superuserColumn	1	read: the off column of PlatformRoleRead
-internal/api/session/refresh.go	refreshUserInfo	1	response key
 internal/api/session/routes.go	handlers.me	1	response key
 internal/api/session/store.go	-	1	read: userColumns, used only through userColumnsFor
 internal/api/session/store.go	handlers.userColumnsFor	2	read: the off column of PlatformRoleRead
@@ -28,10 +26,10 @@ internal/apiservice/admin/userstore.go	pgStore.updateUser	1	write (an explicit v
 internal/apiservice/admin/userstore.go	pgStore.userColumns	2	read: the off column of PlatformRoleRead
 internal/auth/authapi/compat.go	refreshUserInfo	1	response key
 internal/auth/authapi/login.go	userInfo	1	response key
+internal/auth/authapi/provisioning_users.go	provisioningHandlers.usersUpdate	2	request key (a platform_admin grant or revoke; no public column is written)
 internal/auth/authapi/users.go	PGUsers.stateSQL	1	read: the off column of the switched statement
 internal/auth/authconfig/options.go	-	1	help text
 internal/auth/decisionstate/decisionstate.go	stateQuery	1	read: the state version digests the public users row (is_active, is_superuser); it decides nothing
-internal/auth/edgetoken/signer.go	Signer.AccessUntil	1	claim key
 internal/auth/restorefence/specs.go	-	4	restore fence of the public legacy column (a narrowing; it decides no platform power)
 internal/auth/usersbackfill/platformrole_command.go	platformRoleOwnedGate	1	message text
 internal/auth/usersbackfill/source.go	pageUsers	1	read: the users backfill source (public is the source by design)
@@ -47,7 +45,6 @@ internal/testsupport/authrows/accesstoken.go	-	1	test support claim key (checked
 internal/testsupport/pgseed/pgseed.go	SetUserState	1	test support write
 internal/testsupport/sessionscenario/sessionscenario.go	Run	1	test support read
 internal/testsupport/sessionscenario/sessionscenario.go	Seed	2	test support write and claim
-internal/testsupport/sessionscenario/target.go	MintTokens	1	test support claim key
 internal/testsupport/usertokens/usertokens.go	hs256Access	1	test support claim key
 internal/testsupport/venueoracle/gosubstrate.go	-	1	test support claim key
 internal/testsupport/venueoracle/gosubstrate.go	accessClaims	2	test support claim key

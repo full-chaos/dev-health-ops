@@ -152,3 +152,21 @@ func TestACredentialShapedCorpusReachesNoGoldenThroughItsProgramKey(t *testing.T
 		t.Fatalf("the key holds %q of the body, want its sha256", entry.BodySHA256)
 	}
 }
+
+func TestAKeyedAsTokenTakesTheRecordedRequestsKeyUnderEveryScheme(t *testing.T) {
+	recorded := mintJWT(`{"alg":"HS256","typ":"JWT"}`, `{"sub":"u1","iat":1,"exp":61}`, "sig")
+	sent := mintJWT(`{"alg":"EdDSA","typ":"at+jwt"}`, `{"sub":"prn_u1","iat":2,"exp":62}`, "other")
+	unkeyed := mintJWT(`{"alg":"EdDSA","typ":"at+jwt"}`, `{"sub":"prn_u2","iat":2,"exp":62}`, "other")
+	KeyAs(sent, recorded)
+	for _, scheme := range []string{"Bearer", "bearer", "Basic"} {
+		at := func(token string) string {
+			return headersDigest(map[string]string{"Authorization": scheme + " " + token})
+		}
+		if at(sent) != at(recorded) {
+			t.Errorf("%s: a token keyed as the recorded one has another key", scheme)
+		}
+		if at(unkeyed) == at(recorded) {
+			t.Errorf("%s: a token that was not keyed took the recorded key", scheme)
+		}
+	}
+}

@@ -170,10 +170,10 @@ func (f refreshRefusal) row(principal uuid.UUID, org uuid.UUID) publicaudit.Row 
 	return row
 }
 
-// revokeRefused ends the refused refresh's session (the go-api lineage for a go-api refresh token) and writes go-api's
+// revokeRefused ends the refused refresh's session and writes go-api's
 // refusal row: in the revocation's audited transaction when it revokes, else in a transaction of its own (acp
 // answers-11400-impl-1 G2). A failed write is go-api's 500. It returns false when it answered.
-func (h compatHandlers) revokeRefused(w http.ResponseWriter, r *http.Request, record session.Record, legacy *session.LegacyRefresh, refusal *refreshRefusal) bool {
+func (h compatHandlers) revokeRefused(w http.ResponseWriter, r *http.Request, record session.Record, refusal *refreshRefusal) bool {
 	ctx := r.Context()
 	written := false
 	var hook session.PublicRow
@@ -188,13 +188,7 @@ func (h compatHandlers) revokeRefused(w http.ResponseWriter, r *http.Request, re
 	}
 	revokeCtx := session.WithPublicRow(ctx, hook)
 	actor := session.Actor{RequestID: requestid.Audit(ctx)}
-	var revoked bool
-	var err error
-	if legacy != nil {
-		revoked, err = h.Sessions.RevokeLegacy(revokeCtx, *legacy, actor)
-	} else {
-		revoked, err = h.Sessions.Revoke(revokeCtx, record.ID, actor)
-	}
+	revoked, err := h.Sessions.Revoke(revokeCtx, record.ID, actor)
 	if err != nil {
 		h.fail(w, r, opCompatRefresh, err)
 		return false

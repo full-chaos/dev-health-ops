@@ -11,7 +11,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // A set-but-empty JWT_ISSUER or JWT_AUDIENCE reaches the api as "" (the
@@ -19,7 +18,6 @@ import (
 // api must stop at startup and name the key, never run with the claim check
 // switched off.
 func TestAPIStartupRefusesEmptyJWTClaimByKeyName(t *testing.T) {
-	secret := secrets.NewValue(strings.Repeat("fixture-key-", 3))
 	cases := []struct {
 		name     string
 		issuer   string
@@ -38,7 +36,7 @@ func TestAPIStartupRefusesEmptyJWTClaimByKeyName(t *testing.T) {
 			var logs bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&logs, nil))
 			_, err := Spec.ConfigureDependenciesWithLogger(context.Background(), config.Config{
-				APIAddress: "127.0.0.1:0", APIJWTSecret: secret, APIJWTIssuer: test.issuer, APIJWTAudience: test.audience,
+				APIAddress: "127.0.0.1:0", APIJWTIssuer: test.issuer, APIJWTAudience: test.audience,
 			}, health.NewRegistry(time.Second), logger)
 			var coded interface{ DependencyReason() string }
 			if !errors.As(err, &coded) || coded.DependencyReason() != test.reason {

@@ -17,11 +17,12 @@ Row (TAB separated): `<package dir>	<Test function>	<repo path>`
 
 This list is declared by hand: it holds the paths a venue test is KNOWN to depend on that are
 not Go packages of its test binary (a ClickHouse migration, a fixture tree, a contract file).
-Every Go package the test binary links is covered without a row: `ci/venue_oracle_closure.d/`
+Every Go package the test binary links is covered without a row: the dependency closure
 (CHAOS-9935) lists, per venue test package, the in-module packages `go list -test` says its test
 binary links, and a changed file directly in one of them (or under its testdata) selects every
-test of the package. `TestClosureFilesMatchTheTestBinaryDependencies` fails when a file is stale
-and prints the regenerate command. A path that is in neither still selects nothing on a pull
+test of the package. `venue-oracles --changed` derives it from the tree before it selects
+(`TestClosureFilesMatchTheTestBinaryDependencies` with `VENUE_CLOSURE_WRITE=1`); it is never
+committed, so it cannot go stale (CHAOS-13101). A path that is in neither still selects nothing on a pull
 request; the full run on main is the check for it. A closure file also carries `~dir` lines: a directory below a linked package that holds a file the
 package (or its tests) embeds (`go:embed` of `sql/*.sql`, `templates/`, `data/`); a changed file anywhere
 under it selects the same tests.

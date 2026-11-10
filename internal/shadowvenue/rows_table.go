@@ -107,4 +107,14 @@ C2	GET	/api/v1/admin/integrations	A	no	-	drift-S	mismatch	/api/v1/admin/integrat
 93	POST	/api/v1/admin/teams/{team_id}/confirm-members	A	no	-	-	match	/api/v1/admin/teams/{missing}/confirm-members	{}
 94	POST	/api/v1/admin/teams/{team_id}/dismiss-changes	A	no	-	-	match	/api/v1/admin/teams/{missing}/dismiss-changes	{}
 95	PUT	/api/v1/admin/sync-configs/{config_id}/repositories	A	no	-	-	match	/api/v1/admin/sync-configs/{missing}/repositories	{}
+96	GET	/api/v1/admin/users	A	no	-	-	match	/api/v1/admin/users	-
+97	GET	/api/v1/admin/users/{user_id}	A	no	-	-	match	/api/v1/admin/users/{missing}	-
+98	POST	/api/v1/admin/users	A	no	-	-	match	/api/v1/admin/users	{}
+99	PATCH	/api/v1/admin/users/{user_id}	A	no	-	-	match	/api/v1/admin/users/{missing}	{}
+100	POST	/api/v1/admin/users/{user_id}/password	A	no	-	-	match	/api/v1/admin/users/{missing}/password	{}
+101	DELETE	/api/v1/admin/users/{user_id}	A	no	-	-	match	/api/v1/admin/users/{missing}	-
+102	GET	/api/v1/admin/service-accounts/{service_account_id}/keys	A	no	-	-	match	/api/v1/admin/service-accounts/{missing}/keys	-
+103	POST	/api/v1/admin/service-accounts/{service_account_id}/keys	A	no	-	-	match	/api/v1/admin/service-accounts/{missing}/keys	{}
+104	POST	/api/v1/admin/service-accounts/{service_account_id}/keys/rotate	A	no	-	-	match	/api/v1/admin/service-accounts/{missing}/keys/rotate	{"overlap_seconds":0}
+105	POST	/api/v1/admin/service-accounts/keys/{credential_id}/revoke	A	no	-	-	match	/api/v1/admin/service-accounts/keys/crd_{missing}/revoke	{"reason":"venue"}
 `)

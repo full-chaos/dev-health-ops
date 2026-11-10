@@ -53,23 +53,12 @@ func TestSystemSchemaFilterFormsAgree(t *testing.T) {
 	}
 }
 
-// The write grant on go-api's refresh tokens is temporary and revoke-only:
-// SELECT on what the legacy exchange reads, UPDATE on revoked_at alone, and
-// CHAOS-10408 as its removal. This test goes with the grant.
-func TestLegacyRefreshTokenGrantIsRevokeOnlyAndNamesItsRemoval(t *testing.T) {
-	grant := LegacyRefreshTokenGrant()
-	if grant.Table != "refresh_tokens" || grant.RemovedBy != "CHAOS-10408" {
-		t.Fatalf("grant on %q removed by %q, want refresh_tokens removed by CHAOS-10408", grant.Table, grant.RemovedBy)
-	}
-	if strings.Join(grant.Update, ",") != "revoked_at" {
-		t.Fatalf("UPDATE on %v, want revoked_at only", grant.Update)
-	}
-	if got := strings.Join(grant.Select, ","); got != "token_hash,user_id,org_id,family_id,expires_at,revoked_at" {
-		t.Fatalf("SELECT on %s", got)
-	}
+// go-api's refresh tokens are no auth-service read: the grants pass only
+// revokes the retired refresh_tokens grant.
+func TestRefreshTokensIsNoPublicRead(t *testing.T) {
 	for _, entry := range PublicReadColumns() {
-		if entry.Table == grant.Table {
-			t.Fatal("refresh_tokens is in PublicReadColumns as well; the read-only manifest would hide the write grant")
+		if entry.Table == retiredRefreshTokensTable {
+			t.Fatalf("refresh_tokens is in PublicReadColumns: %v", entry.Columns)
 		}
 	}
 }
@@ -82,7 +71,10 @@ func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 	insert, update := UsersWriteGrant()
 	wantInsert := []string{"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
 		"is_active", "is_verified", "token_version", "created_at", "updated_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier"}
-	wantUpdate := []string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
+	// email, is_active, username, full_name, avatar_url: the admin email and profile changes and the soft delete go-api
+	// makes through auth-service (pm D6872, acp attest of PLAN-13376 v2, S1 ticket 13377).
+	wantUpdate := []string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at", "email", "is_active",
+		"username", "full_name", "avatar_url"}
 	if !reflect.DeepEqual(insert, wantInsert) || !reflect.DeepEqual(update, wantUpdate) {
 		t.Fatalf("UsersWriteGrant = %v / %v, want %v / %v", insert, update, wantInsert, wantUpdate)
 	}
@@ -94,7 +86,7 @@ func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 	have := map[string]bool{}
 	for _, column := range update {
 		have[column] = true
-		if column == "email" || column == "is_active" || column == "sso_provider_id" {
+		if column == "sso_provider_id" {
 			t.Errorf("UPDATE must not include %s", column)
 		}
 	}

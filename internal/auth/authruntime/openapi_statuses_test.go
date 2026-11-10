@@ -101,14 +101,8 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 		t.Fatal("configure built no API listener")
 	}
 
-	issuer, err := authapi.NewIssuer(testAccessSecret, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	bearer, err := issuer.Access(authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New(), Role: "member"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	bearer := legacyAccess(t, testAccessSecret, "dev-health-ops", "dev-health-api",
+		authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New(), Role: "member"})
 	credential := "dhr1_" + base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	wellFormed := map[string]string{
 		"/v1/token/refresh": `{"schema_version":"refresh-request.v1","refresh_credential":"` + credential + `"}`,

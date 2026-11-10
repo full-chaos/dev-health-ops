@@ -19,7 +19,7 @@ func TestShadowCountSkippedCountsOneSkippedWithAClosedReason(t *testing.T) {
 	if got := rec.resultReasons(); !slices.Equal(got, want) {
 		t.Fatalf("result/reason %v, want %v", got, want)
 	}
-	if got := ShadowReasons(); !slices.Equal(got, []string{"none", "hs256", "envelope", "no_user_bearer", "cap", "unmapped", "op_refused"}) {
+	if got := ShadowReasons(); !slices.Equal(got, []string{"none", "hs256", "envelope", "no_user_bearer", "cap", "unmapped", "op_refused", "never_decided", "high_risk_off"}) {
 		t.Fatalf("closed reasons %v", got)
 	}
 }

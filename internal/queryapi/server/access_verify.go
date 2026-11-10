@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/rand"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -56,9 +55,9 @@ func accessFromEnv(getenv getenvFunc) (accessOptions, bool, error) {
 	return accessOptions{issuer: issuer, keys: keys, meter: otel.Meter(accessVerifyMeterName)}, true, nil
 }
 
-// newQueryAccessValidator builds the validator over query-api's row table.
-// legacy nil: an HS256 token is refused on every row.
-func newQueryAccessValidator(opts accessOptions, legacy accessverify.LegacyVerifier) (*accessverify.Validator, error) {
+// newQueryAccessValidator builds the validator over query-api's row table: an
+// HS256 token is refused on every row.
+func newQueryAccessValidator(opts accessOptions) (*accessverify.Validator, error) {
 	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: opts.issuer, Audience: accessTokenAudienceAPI, Keys: opts.keys, DeniedKids: opts.denied})
 	if err != nil {
 		return nil, err
@@ -70,21 +69,15 @@ func newQueryAccessValidator(opts accessOptions, legacy accessverify.LegacyVerif
 	return accessverify.New(accessverify.Config{
 		Rows:   rows,
 		EdDSA:  verifier,
-		Legacy: legacy,
 		Meter:  opts.meter,
 		Logger: slog.Default(),
 		Now:    opts.now,
 	})
 }
 
-// routeEdgeVerifier routes a REST edge verifier's tokens by row. legacyOn
-// false (no edge secret): the validator gets no HS256 verifier.
-func routeEdgeVerifier(edge *principal.EdgeVerifier, opts accessOptions, legacyOn bool) error {
-	var legacy accessverify.LegacyVerifier
-	if legacyOn {
-		legacy = edge.LegacyAccess()
-	}
-	validator, err := newQueryAccessValidator(opts, legacy)
+// routeEdgeVerifier routes a REST edge verifier's tokens by row.
+func routeEdgeVerifier(edge *principal.EdgeVerifier, opts accessOptions) error {
+	validator, err := newQueryAccessValidator(opts)
 	if err != nil {
 		return err
 	}
@@ -92,25 +85,14 @@ func routeEdgeVerifier(edge *principal.EdgeVerifier, opts accessOptions, legacyO
 }
 
 // routeAuthenticator routes a /query or /graphql authenticator's tokens by
-// row; its HS256 verifier is AuthenticateLegacy (policy.RouteAccess requires
-// that, never Authenticate).
-func routeAuthenticator(auth *policy.Authenticator, opts accessOptions, legacyOn bool) error {
-	var legacy accessverify.LegacyVerifier
-	if legacyOn {
-		legacy = principal.LegacyVerifier(auth.AuthenticateLegacy)
-	}
-	validator, err := newQueryAccessValidator(opts, legacy)
+// row.
+func routeAuthenticator(auth *policy.Authenticator, opts accessOptions) error {
+	validator, err := newQueryAccessValidator(opts)
 	if err != nil {
 		return err
 	}
 	return auth.RouteAccess(principal.RoutedAccess(validator), queryAPIAccessService)
 }
-
-// unusedEdgeSecret keys the HS256 half of an edge verifier built for the
-// access-token issuer alone (no GO_API_EDGE_JWT_SECRET). The key is random
-// and held by no minter, and nothing consults it: the routed validator of
-// such a verifier has no HS256 verifier, so an HS256 token is refused first.
-func unusedEdgeSecret() string { return rand.Text() + rand.Text() }
 
 // routeProfile is the endpoint-profile key of the request: its method and the
 // mux pattern that routed it. query-api's muxes register paths without a
@@ -126,8 +108,9 @@ func withRouteProfile(next http.Handler) http.Handler {
 }
 
 // edgeCarrierToken reports whether token goes to the edge carrier rather than
-// the envelope verifier: the HS256 edge token always; the EdDSA user access
-// token only once auth routes by row.
+// the envelope verifier: the retired HS256 edge token always (the carrier
+// refuses it alg_not_allowed); the EdDSA user access token only once auth
+// routes by row.
 func edgeCarrierToken(auth *policy.Authenticator, token string) bool {
 	switch principal.AccessClassOf(token) {
 	case principal.AccessClassEdge:

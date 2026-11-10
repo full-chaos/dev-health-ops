@@ -21,7 +21,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -128,10 +127,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 	}
 
 	signer, _, _ := fileSigner(t)
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	issuer := newTestIssuer(t)
 	route := func(users Users) http.Handler {
 		routes, err := compatRoutes(CompatDeps{
 			Sessions: store, Users: users, Issuer: issuer, Projector: &fakeProjector{}, Logger: slog.New(slog.DiscardHandler),
@@ -153,24 +149,16 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 		server.ServeHTTP(response, request)
 		return response
 	}
-	hs256, err := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
 	legacy := func(principal uuid.UUID, sid *uuid.UUID, tv int64) string {
-		claims := edgetoken.AccessClaims{UserID: principal.String(), Email: "x@example.com", OrgID: org.String(), Role: "admin", TokenVersion: tv}
+		var wire *string
 		if sid != nil {
-			wire := session.WireSessionID(*sid)
-			claims.SessionID = &wire
+			text := session.WireSessionID(*sid)
+			wire = &text
 		}
-		compact, err := hs256.Access(claims, time.Now(), uuid.NewString())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return compact
+		return hs256AccessToken(t, principal.String(), org.String(), tv, wire)
 	}
 	userToken := func(principal, sid uuid.UUID) string {
-		eddsa, err := NewEdDSAIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience, signer, goldenIssuer)
+		eddsa, err := NewEdDSAIssuer(contracts.PlatformAPIAudience, signer, goldenIssuer)
 		if err != nil {
 			t.Fatal(err)
 		}

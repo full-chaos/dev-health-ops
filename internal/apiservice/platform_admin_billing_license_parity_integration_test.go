@@ -28,7 +28,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
@@ -248,15 +247,7 @@ VALUES ('` + msrInvoice + `', '` + msrOrgB.String() + `', 'in_msr_b', 'cus_msr_b
 	store := msrStore{PGStore: policy.PGStore{Pool: pool}, sessions: sessions}
 	clickHouse := unreachableClickHouse(t)
 	build := func(enforcer *policy.Enforcer) http.Handler {
-		verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-		if err != nil {
-			t.Fatal(err)
-		}
-		signer, err := edgetoken.NewSigner(probeKey, "dev-health-ops", "dev-health-api")
-		if err != nil {
-			t.Fatal(err)
-		}
-		auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
+		auth, err := policy.NewAuthenticator(store, quietLogger())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -270,7 +261,7 @@ VALUES ('` + msrInvoice + `', '` + msrOrgB.String() + `', 'in_msr_b', 'cus_msr_b
 			t.Fatal(err)
 		}
 		validator, err := accessverify.New(accessverify.Config{
-			Rows: realRows(t), EdDSA: eddsa, Legacy: legacyVerifier(auth.AuthenticateLegacy),
+			Rows: realRows(t), EdDSA: eddsa,
 			Meter: sdkmetric.NewMeterProvider().Meter("test"), Logger: quietLogger(), Now: func() time.Time { return probeNow },
 		})
 		if err != nil {
@@ -289,7 +280,7 @@ VALUES ('` + msrInvoice + `', '` + msrOrgB.String() + `', 'in_msr_b', 'cus_msr_b
 		}
 		scope := policy.NewScope(auth, quietLogger())
 		scope.DeclaredRows(scopeRows)
-		deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Verifier: verifier, Signer: signer}
+		deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard}
 		server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), scope.Layers()...)
 		if err != nil {
 			t.Fatal(err)

@@ -74,10 +74,9 @@ change to the set is a new rollout. The states and the moves between them are in
 
 | Service | Setting | Rule |
 | --- | --- | --- |
-| auth-service | `AUTH_ACCESS_TOKEN_CLASS` | `hs256_compat` (default) or `eddsa`. Chart key `authService.accessToken.class`, needs `authService.phase` 2 or more. |
+| auth-service | `AUTH_ACCESS_TOKEN_CLASS` | `eddsa` (default); the retired `hs256_compat` is a start error. Chart key `authService.accessToken.class`, needs `authService.phase` 2 or more. |
 | auth-service | `AUTH_TOKEN_ISSUER_URL` | The issuer, and the `iss` of every token. Chart key `authService.accessToken.issuerURL`. Required by `eddsa`. It mounts the discovery document. |
 | auth-service | `AUTH_JWT_AUDIENCE` | `dev-health-api` for the access token. `acr-api` and `acr-mcp` are refused. |
-| auth-service | `AUTH_LEGACY_JWT_AUDIENCE` | The audience that go-api's HS256 token is checked with under `eddsa`. Default `dev-health-api`. |
 | auth-service | `AUTH_ACCESS_TOKEN_LIFETIME` | Whole minutes, 5 to 60. Default 60. Needs `eddsa`. |
 | go-api, query-api | `AUTH_ACCESS_TOKEN_ISSUER` | The same URL, byte for byte. The chart renders it only under the `eddsa` class. Unset: neither service verifies an EdDSA token. |
 

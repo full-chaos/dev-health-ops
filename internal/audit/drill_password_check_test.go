@@ -24,6 +24,14 @@ const drillGoAPIPasswordPin = "UPDATE users SET password_hash = $2, token_versio
 
 const drillLegacyPasswordSQL = "UPDATE public.users SET password_hash = $2, token_version = token_version + 1, updated_at = now() WHERE id = $1"
 
+// validExpect refuses an expect tag that is not T or F before any attempt is read; the message never prints the tag.
+func validExpect(expect string) error {
+	if expect != "T" && expect != "F" {
+		return fmt.Errorf("the expect tag is not T or F")
+	}
+	return nil
+}
+
 // kindLabel prints a kind only when it is one of the known ones, so a stray string never reaches a message.
 func kindLabel(kind string) string {
 	switch kind {
@@ -44,6 +52,9 @@ func kindLabel(kind string) string {
 //
 // Messages name the try label and the kind, never a password or a hash.
 func checkPasswordAttempts(expect string, fenced bool, tries []drillPasswordOutcome) error {
+	if err := validExpect(expect); err != nil {
+		return err
+	}
 	if len(tries) != len(drillPasswordTryNames) {
 		return fmt.Errorf("the password attempts are not exactly %v: %d recorded", drillPasswordTryNames, len(tries))
 	}

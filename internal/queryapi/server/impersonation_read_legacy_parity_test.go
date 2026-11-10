@@ -41,7 +41,7 @@ func TestALiveRowCallersReadOnAnEnforcedQueryAPIRowEqualsTheLegacyAnswer(t *test
 	p := newDLPPDP(t)
 	snap := dlpSnap{platformRole: "platform_admin", members: map[string]string{org: "admin"}}
 	eddsa := m.mint(dlpSUI, map[string]any{"sid": sessionid.Wire(dlpSID(dlpSUI)), "org_id": org}, nil)
-	hs256 := ecMintEdgeToken(t, ecEdgeClaims{sub: dlpSUI.String(), orgID: org, role: "admin", isSuperuser: true})
+	hs256 := ecMintHS256Token(t, ecEdgeClaims{sub: dlpSUI.String(), orgID: org})
 	p.register(eddsa, "SUI/EdDSA/live row", snap)
 	p.register(hs256, "SUI/HS256/live row", snap)
 	legacy := dlpHandler(t, store, m, dlpGate(t, pdp.ModeOff, "", nil))

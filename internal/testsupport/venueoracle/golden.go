@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 )
@@ -321,11 +322,34 @@ func headersDigest(headers map[string]string) string {
 	for _, name := range names {
 		value := values[name]
 		if name == "authorization" {
-			value = bearerIdentity(value)
+			value = bearerIdentity(recordedCredential(value))
 		}
 		fmt.Fprintf(hash, "%d:%s=%d:%s\n", len(name), name, len(value), value)
 	}
 	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// recordedRequestTokens maps a token a replay sends to the token the recording sent for the same request (KeyAs).
+var recordedRequestTokens sync.Map
+
+// KeyAs keys every request that carries token, under any Authorization scheme, as the recorded request that
+// carried recorded: a replay that sends a credential of another class than the recording (a user access token
+// where the recording sent an HS256 token) still finds the recorded answer. It changes the request key only;
+// the plane under test receives token.
+func KeyAs(token, recorded string) {
+	recordedRequestTokens.Store(token, recorded)
+}
+
+// recordedCredential is an Authorization value with its credential replaced by the recorded one (KeyAs).
+func recordedCredential(value string) string {
+	scheme, credential, ok := strings.Cut(value, " ")
+	if !ok {
+		return value
+	}
+	if recorded, ok := recordedRequestTokens.Load(credential); ok {
+		return scheme + " " + recorded.(string)
+	}
+	return value
 }
 
 // bearerIdentity reduces "Bearer <jwt>" to the token's header and claims

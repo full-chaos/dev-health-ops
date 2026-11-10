@@ -20,7 +20,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
@@ -82,7 +81,7 @@ func fileSigner(t *testing.T) (*token.Signer, string, string) {
 
 func newEdDSAIssuer(t *testing.T, signer AccessSigner, audience string) *Issuer {
 	t.Helper()
-	issuer, err := NewEdDSAIssuer(testSecret, testIssuer, audience, signer, goldenIssuer)
+	issuer, err := NewEdDSAIssuer(audience, signer, goldenIssuer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +211,7 @@ func TestEdDSAIssuerIsByteExactAboutIss(t *testing.T) {
 			t.Errorf("a verifier pinned to %q accepted a token whose iss is %q", other, goldenIssuer)
 		}
 	}
-	slashed, err := NewEdDSAIssuer(testSecret, testIssuer, testAudience, signer, goldenIssuer+"/")
+	slashed, err := NewEdDSAIssuer(testAudience, signer, goldenIssuer+"/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,17 +322,15 @@ func (c *countingSigner) Check(ctx context.Context) error {
 	return c.inner.Check(ctx)
 }
 
-// NEVER BOTH: one issuer builds one class. The EdDSA issuer holds no HS256
-// signer and signs through its key set only; the HS256 issuer holds no
-// EdDSA minter and never calls a key-set signer.
-func TestAnIssuerMintsExactlyOneClassNeverBoth(t *testing.T) {
+// The EdDSA issuer signs through its key set only; an issuer with no minter mints nothing.
+func TestAnIssuerMintsTheEdDSAClassOnly(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	counter := &countingSigner{inner: signer}
 	grant := Grant{PrincipalID: uuid.New(), SessionID: uuid.New(), Role: "member"}
 
 	ed := newEdDSAIssuer(t, counter, testAudience)
-	if ed.signer != nil || ed.eddsa == nil {
-		t.Fatal("an EdDSA issuer holds an HS256 signer")
+	if ed.eddsa == nil {
+		t.Fatal("an EdDSA issuer holds no EdDSA minter")
 	}
 	compact, err := ed.AccessContext(context.Background(), grant)
 	if err != nil {
@@ -346,35 +343,8 @@ func TestAnIssuerMintsExactlyOneClassNeverBoth(t *testing.T) {
 		jwt.WithValidMethods([]string{"HS256"})); err == nil {
 		t.Fatal("the EdDSA issuer's token verifies as HS256")
 	}
-	if _, verifyErr := ed.verifier.Verify(compact); verifyErr == nil {
-		t.Fatal("go-api's HS256 verifier accepted the EdDSA token")
-	}
 
-	hs, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hs.eddsa != nil || hs.signer == nil {
-		t.Fatal("an HS256 issuer holds an EdDSA minter")
-	}
-	counter.calls = 0
-	compact, err = hs.AccessContext(context.Background(), grant)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counter.calls != 0 {
-		t.Fatal("the HS256 issuer called a key-set signer")
-	}
-	if _, verifyErr := hs.verifier.Verify(compact); verifyErr != nil {
-		t.Fatalf("HS256 token refused: %v", verifyErr)
-	}
-
-	both := &Issuer{signer: hs.signer, eddsa: ed.eddsa, verifier: hs.verifier, now: time.Now}
-	counter.calls = 0
-	if token, err := both.AccessContext(context.Background(), grant); err == nil || token != "" || counter.calls != 0 {
-		t.Fatalf("an issuer with both classes minted (%d bytes, err %v, %d signer calls)", len(token), err, counter.calls)
-	}
-	none := &Issuer{verifier: hs.verifier, now: time.Now}
+	none := &Issuer{now: time.Now}
 	if token, err := none.AccessContext(context.Background(), grant); err == nil || token != "" {
 		t.Fatalf("an issuer with no class minted (%d bytes, err %v)", len(token), err)
 	}
@@ -418,14 +388,14 @@ func TestEdDSACustodyFailureMintsNothingAndNeverFallsBackToHS256(t *testing.T) {
 func TestEdDSAIssuerRefusesWhatCannotFormAUserAccessToken(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	for _, audience := range []string{"", "query-api", "dev-health-api ", "Dev-Health-API", "other"} {
-		if _, err := NewEdDSAIssuer(testSecret, testIssuer, audience, signer, goldenIssuer); err == nil {
+		if _, err := NewEdDSAIssuer(audience, signer, goldenIssuer); err == nil {
 			t.Errorf("audience %q accepted", audience)
 		}
 	}
-	if _, err := NewEdDSAIssuer(testSecret, testIssuer, testAudience, nil, goldenIssuer); err == nil {
+	if _, err := NewEdDSAIssuer(testAudience, nil, goldenIssuer); err == nil {
 		t.Error("no signer accepted")
 	}
-	if _, err := NewEdDSAIssuer(testSecret, testIssuer, testAudience, signer, ""); err == nil {
+	if _, err := NewEdDSAIssuer(testAudience, signer, ""); err == nil {
 		t.Error("no issuer URL accepted")
 	}
 	issuer := newEdDSAIssuer(t, signer, testAudience)
@@ -443,8 +413,7 @@ func TestEdDSAIssuerRefusesWhatCannotFormAUserAccessToken(t *testing.T) {
 func TestRefreshRouteMintsOnlyTheSelectedClass(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	for class, issuer := range map[string]*Issuer{
-		"hs256_compat": func() *Issuer { i, _ := NewIssuer(testSecret, testIssuer, testAudience); return i }(),
-		"eddsa":        newEdDSAIssuer(t, signer, testAudience),
+		"eddsa": newEdDSAIssuer(t, signer, testAudience),
 	} {
 		t.Run(class, func(t *testing.T) {
 			f := newFixtureWith(t, issuer)
@@ -476,20 +445,10 @@ func TestRefreshRouteMintsOnlyTheSelectedClass(t *testing.T) {
 			if err := json.Unmarshal(header, &h); err != nil {
 				t.Fatal(err)
 			}
-			verifier, err := edgetoken.New(testSecret, testIssuer, testAudience)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, hsVerifyErr := verifier.Verify(compact)
-			switch class {
-			case "hs256_compat":
-				if h["alg"] != "HS256" || hsVerifyErr != nil {
-					t.Fatalf("hs256_compat minted header %v, HS256 verify err %v", h, hsVerifyErr)
-				}
-			case "eddsa":
-				if h["alg"] != "EdDSA" || h["typ"] != "at+jwt" || h["kid"] != "k1" || hsVerifyErr == nil {
-					t.Fatalf("eddsa minted header %v, HS256 verify err %v", h, hsVerifyErr)
-				}
+			_, hsVerifyErr := jwt.Parse(compact, func(*jwt.Token) (any, error) { return []byte(testSecret), nil },
+				jwt.WithValidMethods([]string{"HS256"}))
+			if h["alg"] != "EdDSA" || h["typ"] != "at+jwt" || h["kid"] != "k1" || hsVerifyErr == nil {
+				t.Fatalf("%s minted header %v, HS256 verify err %v", class, h, hsVerifyErr)
 			}
 		})
 	}
@@ -540,7 +499,7 @@ func TestEveryAccessAudienceTheMinterKnowsIsAUserTokenRowOfTheVocabulary(t *test
 		if minted[audience] {
 			t.Errorf("this minter knows the ACR audience %q", audience)
 		}
-		if _, err := NewEdDSAIssuer(testSecret, testIssuer, audience, signer, goldenIssuer); err == nil {
+		if _, err := NewEdDSAIssuer(audience, signer, goldenIssuer); err == nil {
 			t.Errorf("an EdDSA session issuer was built for the ACR audience %q", audience)
 		}
 	}

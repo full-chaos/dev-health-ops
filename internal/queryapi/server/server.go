@@ -369,12 +369,12 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// nothing else. It never falls through to mux or internalMux.
 	mcpMux := http.NewServeMux()
 
-	// CHAOS-4367 Wave 1 / CHAOS-4368 Wave 2 / CHAOS-4369 Wave 3: mount the
-	// real featureFlags, reviewEdges, and cognitiveLoad routes when their
-	// (shared) dependencies are configured. See query_route.go's doc
-	// comments for what "configured" means and why an unconfigured
-	// environment falls back to Wave 0's "nothing mounted" behavior
-	// instead of failing to start.
+	// Mount /query and its routes when their data stores are configured
+	// (loadQueryRouteConfig); without them, Wave 0's "nothing mounted". The
+	// envelope key is optional: one start line says when the class is retired.
+	if envelope, err := envelopeKeyFromEnv(getenv); err == nil {
+		envelope.logRetired()
+	}
 	//
 	// ready is CHAOS-4512's fix: nil until (and unless) /query mounts
 	// successfully, matching readyzHandler's documented "nothing
@@ -416,7 +416,7 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 		// digestByOperation's composite literal to stay exactly where it
 		// is, assigned directly, not returned from a helper).
 	} else {
-		log.Print("query-api: /query route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI/GO_API_ENVELOPE_* unset) -- staying Wave-0 empty")
+		log.Print("query-api: /query route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI unset) -- staying Wave-0 empty")
 		// Say so about the proof route too, with its own explicit zero.
 		// Previously this branch logged nothing about /query/proof, so an
 		// operator reading the log could not tell "the proof route is off"
@@ -426,9 +426,9 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 		mountProofWriteRoute(getenv, internalMux, nil)
 	}
 
-	// The live users-row store behind every edge-verified REST route below
-	// (CHAOS-6290): PGStore over the /query route's ONE registry pool, not a
-	// pool of its own; an error (edge secret set, no pool) refuses to start.
+	// The live users-row store behind every edge-verified REST route below (CHAOS-6290): PGStore over the
+	// /query route's ONE registry pool; an error (issuer set, no pool) refuses to start.
+	warnUnusedEdgeSecret(getenv, slog.Default())
 	edgeUsers, err := newEdgeUserStore(getenv, registryPool)
 	if err != nil {
 		log.Printf("query-api: build edge users store: %v", err)
@@ -469,7 +469,7 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// (trailing slash): every specific /api/v1/... registration above
 	// still wins (Go's ServeMux routes to the longest matching pattern);
 	// this only catches what none of them do, including an
-	// individually-unmounted route (its own CLICKHOUSE_URI/envelope vars
+	// individually-unmounted route (its own CLICKHOUSE_URI var
 	// unset) -- indistinguishable from "does not exist" to an outside
 	// caller either way.
 	mux.HandleFunc("/api/v1/", apiV1CatchAllNotFound)

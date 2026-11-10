@@ -89,11 +89,14 @@ func TestDomainRoleReadsOnlyTheOwnerLookupMembershipsColumns(t *testing.T) {
 			t.Errorf("domain role SELECT on memberships.%s = %t, want %t", column, held, want)
 		}
 	}
-	for _, privilege := range []string{"INSERT", "UPDATE", "DELETE"} {
+	// DELETE has no column form: has_any_column_privilege rejects it (22023), so it is checked table-wide only.
+	for privilege, query := range map[string]string{
+		"INSERT": `SELECT has_any_column_privilege($1, 'public.memberships', $2) OR has_table_privilege($1, 'public.memberships', $2)`,
+		"UPDATE": `SELECT has_any_column_privilege($1, 'public.memberships', $2) OR has_table_privilege($1, 'public.memberships', $2)`,
+		"DELETE": `SELECT has_table_privilege($1, 'public.memberships', $2)`,
+	} {
 		var held bool
-		if err := venue.Admin.QueryRow(ctx,
-			`SELECT has_any_column_privilege($1, 'public.memberships', $2) OR has_table_privilege($1, 'public.memberships', $2)`,
-			venue.DomainRole, privilege).Scan(&held); err != nil {
+		if err := venue.Admin.QueryRow(ctx, query, venue.DomainRole, privilege).Scan(&held); err != nil {
 			t.Fatal(err)
 		}
 		if held {

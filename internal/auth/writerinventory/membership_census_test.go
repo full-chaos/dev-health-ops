@@ -30,7 +30,7 @@ const (
 	cellOperatorCLI   = "internal/apiservice/admin/operator_provision_test.go|TestOperatorMembershipChangeGoesThroughTheRouteWhateverTheSwitchSays"
 	cellOrgCreateHTTP = "internal/apiservice/admin/orgcreate_provision_test.go|TestAdminCreateGoesToAuthWithTheSwitchOn"
 	cellOrgCreateCLI  = "internal/apiservice/admin/orgcreate_provision_test.go|TestOperatorCreateOrgRefusedWithTheSwitchOn"
-	cellUserCreate    = "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedAdminRoutesRefuseBeforeAnyDatabaseWork"
+	cellUserCreate    = "internal/apiservice/admin/users_owned_forward_test.go|TestUsersOwnedOrgScopedCreateForwardsMembership"
 )
 
 // Keyed File|Func|Verb on the allowlist's go-api public.memberships rows.

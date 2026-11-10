@@ -204,6 +204,8 @@ query-api authenticates every protected REST route with `authenticateRESTRequest
 | Users-row store unavailable | 503 |
 | Other store failure | 500 |
 
+On `/query`, `/query/proof`, `/query/proof-write` and `/query/run-operation`, `liveScope` (`internal/queryapi/server/internal_auth.go`) applies a live go-api impersonation row only to a caller that holds `admin.impersonate`, as go-api's `Scope.Impersonation` does: the caller then acts as the row's target. A caller without the action acts as itself, and its row is not read; on the write door (`/query/proof-write`) its row is read, and while it is live the write is refused with `403` `{"detail":"Not allowed in an impersonation session"}` (`policy.WriteImpersonationRefused`); a failed read of it is the bare `401`.
+
 For GraphQL, `OperationOrgGuard` (`internal/queryapi/graph/operation_org_guard.go`) reads every `orgId` argument before any field runs. It refuses an operation that names an invalid id, more than one organization, or an organization other than the caller's. A verified superuser who is not impersonating may name another organization, and the operation then runs against it. The per-field map is in [action map](action-map.md#graphql-field-map).
 
 ## auth-service

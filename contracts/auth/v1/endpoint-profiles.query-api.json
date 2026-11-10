@@ -1595,7 +1595,7 @@
       "action": "analytics.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read: a user access token's users row, session, token version and organization membership, and the impersonation session, are read on every request and nothing is cached between requests (a change between two requests answers the second); the internal identity headers read no state; the go_api_proof_orgs allowlist is read on every request",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); 403 for an organization not on the go_api_proof_orgs allowlist",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateInternalRequest); 403 Not allowed in an impersonation session for a caller that does not hold admin.impersonate while its go-api impersonation row is live (liveScope on the write door, errRevokedImpersonatorWrite, policy.WriteImpersonationRefused); 403 for an organization not on the go_api_proof_orgs allowlist",
       "gaps": [
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",

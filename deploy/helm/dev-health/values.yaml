@@ -165,6 +165,22 @@ goApi:
   # -- Extra pod volumes and go-api container mounts (for example a projected serviceAccountToken). Empty renders no key.
   extraVolumes: []
   extraVolumeMounts: []
+  # -- CHAOS-13092: the acr credential revoke route's client (POST /api/v1/acr/credentials/{credential_id}/revoke). Off by default,
+  #    and off renders nothing: the route answers 503. On, the chart projects a ServiceAccount token with acr's workload-exchange
+  #    audience into /var/run/dev-health/acr-revoke/token and renders ACR_REVOKE_URL (acr's internal API origin, no query),
+  #    ACR_REVOKE_TOKEN_URL (acr's token endpoint, <origin>/api/v1/oauth/token) and ACR_REVOKE_SUBJECT_FILE (that path). Both URLs
+  #    are https, or plain http on a <name>.svc.cluster.local host only with allowClusterHTTP: true
+  #    (ACR_REVOKE_ALLOW_CLUSTER_HTTP, always rendered "true" or "false"). audience = acr's workloadTokenExchange.audience. acr accepts the call only when its
+  #    acr.workload_bindings holds a row with role revoke for go-api's ServiceAccount in the caller's organization (one row per
+  #    organization, written out of band); bind first, then turn this on. goApi.extraEnv cannot set an ACR_REVOKE_* name.
+  acrRevoke:
+    enabled: false
+    url: ""
+    tokenURL: ""
+    audience: ""
+    allowClusterHTTP: false
+    # -- Lifetime the kubelet requests for the projected token, 600 to 86400 seconds; it rotates the file before expiry.
+    expirationSeconds: 3600
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -774,6 +790,9 @@ queryApi:
   #    a time and one stays ready).
   rollingUpdate: {}
   port: 8090
+  # -- The operator listener (DEV_HEALTH_HTTP_ADDR): /healthz, /readyz and /metrics. Probes and
+  #    the metrics scrape use it; it must differ from port, internal.port and mcp.port.
+  operatorPort: 8080
   # -- Comma-separated CORS allow-list for /graphql, the product GraphQL path
   #    query-api answers (CHAOS-6263): same format and meaning as the Python
   #    api's CORS_ALLOWED_ORIGINS and goApi.corsAllowedOrigins, and it must be
@@ -843,17 +862,11 @@ queryApi:
   #    wired correctly. Assert the /readyz BODY out of band; do not try to make
   #    these probes carry that check.
   livenessProbe:
-    httpGet:
-      path: /readyz
-      port: http
     initialDelaySeconds: 10
     periodSeconds: 15
     timeoutSeconds: 2
     failureThreshold: 3
   readinessProbe:
-    httpGet:
-      path: /readyz
-      port: http
     initialDelaySeconds: 5
     periodSeconds: 10
     timeoutSeconds: 2

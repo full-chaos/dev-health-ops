@@ -50,7 +50,7 @@ func resolveActorOn(ctx context.Context, store pgStore, actor string) (uuid.UUID
 		}
 		return id, nil
 	}
-	user, err := store.userByEmail(ctx, actor)
+	user, err := store.actorByEmail(ctx, actor)
 	if err != nil {
 		return uuid.Nil, err
 	}

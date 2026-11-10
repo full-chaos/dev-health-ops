@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/routescan"
 )
 
 // usersAdminRouteTwins maps each internal user-admin route to the legacy go-api row whose write it serves: the route's
@@ -37,7 +39,7 @@ func usersAdminRows(t *testing.T) map[string]map[string]any {
 }
 
 // Each user-admin row: protected, the go-api workload token only (no disambiguator), the provisioning workload path as
-// its validator, its legacy go-api row's tenant class, and a source line that holds its route.
+// its validator, its legacy go-api row's tenant class, and a source that names its route by symbol (routescan.RowSymbol).
 func TestTheUsersAdminRowsAcceptOnlyTheWorkloadToken(t *testing.T) {
 	registry := realRegistry(t)
 	legacy := map[string]map[string]any{}
@@ -78,15 +80,17 @@ func TestTheUsersAdminRowsAcceptOnlyTheWorkloadToken(t *testing.T) {
 		if row["tenant_requirement"] != twin["tenant_requirement"] {
 			t.Errorf("%s: tenant %v, the legacy row %s has %v", route, row["tenant_requirement"], usersAdminRouteTwins[route], twin["tenant_requirement"])
 		}
-		source := row["source"].(map[string]any)
-		raw, err := os.ReadFile(filepath.Join(root, source["file"].(string)))
+		file := row["source"].(map[string]any)["file"].(string)
+		raw, err := os.ReadFile(filepath.Join(root, file))
 		if err != nil {
 			t.Fatal(err)
 		}
-		lines := strings.Split(string(raw), "\n")
-		line := int(source["line"].(float64))
-		if line < 1 || line > len(lines) || !strings.Contains(lines[line-1], `"`+route+`"`) {
-			t.Errorf("%s: source %s:%d does not hold the route", route, source["file"], line)
+		regs, err := routescan.ScanWithMux(filepath.Join(root, filepath.Dir(file)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := routescan.RowSymbol(regs, raw, filepath.ToSlash(filepath.Join(root, file)), "POST", route, ""); err != nil {
+			t.Errorf("%s: %s", route, strings.ReplaceAll(err.Error(), filepath.ToSlash(root)+"/", ""))
 		}
 	}
 }

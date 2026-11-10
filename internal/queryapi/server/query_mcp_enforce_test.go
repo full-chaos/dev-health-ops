@@ -197,6 +197,26 @@ func TestQueryUserTokenDenyAndNoVerdict(t *testing.T) {
 	}
 }
 
+// E9: an allow whose tenant_scope is dropped, or names another organization, is not carried out on /query: 503, no
+// root field runs and nothing is read. (The MCP listener has no principal the PDP can judge before F13, so no decision,
+// and no obligation, reaches it; E5 pins its refusal.)
+func TestQueryAllowWithoutItsTenantScopeIsRefused(t *testing.T) {
+	for name, obligations := range map[string]map[string]any{
+		"tenant_scope dropped":        {"repository_scope": "organization"},
+		"tenant_scope of another org": {"tenant_scope": servedOrgB.String(), "repository_scope": "organization"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := pdptest.New(t)
+			srv.Obligations(obligations)
+			p := newQMPlane(t, qmEnv(t, srv, pdp.ModeEnforce, "analytics", ""), enforceDocAnalytics)
+			p.queryRun(t, "/query", enforceDocAnalytics, qmUser).code503(t, string(pdp.ReasonTenantMismatch))
+			if n := len(asks(srv)); n != 1 {
+				t.Fatalf("the PDP was asked %d times, want once", n)
+			}
+		})
+	}
+}
+
 // E4 (Q10a, D6721 F9b off): the user cells on and the header cells off: the header carrier on /query, run-operation
 // and MCP stays on today's path, with no ask.
 func TestHeaderCarrierFollowsItsOwnCellsOff(t *testing.T) {

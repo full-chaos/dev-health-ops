@@ -83,7 +83,7 @@ type bindingState struct {
 // aliasedPasswordFindings type-checks every source (imports are empty stubs, errors are ignored) and reports, as
 // "<line> <file>", each call whose format operand holds PASSWORD '%s' when the argument that fills that verb is a
 // constant string or a variable that every assignment binds to a constant string. The format operand is the first
-// constant or literal-bound string argument of the call. Variables are keyed by types.Object, so scope and overwrite
+// constant or literal-bound string argument of the call that holds a format verb. Variables are keyed by types.Object, so scope and overwrite
 // follow object identity. Residuals: string concatenation in the password position, indexed verbs (%[2]s) and *
 // width or precision operands shift the verb count.
 func aliasedPasswordFindings(sources map[string][]byte) (findings []string, parsed int, err error) {
@@ -231,6 +231,20 @@ func aliasedPasswordFindings(sources map[string][]byte) (findings []string, pars
 	return findings, len(fileName), nil
 }
 
+func unusedHasFormatVerb(text string) bool {
+	for j := 0; j+1 < len(text); j++ {
+		if text[j] != '%' {
+			continue
+		}
+		if text[j+1] == '%' {
+			j++
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func sortedKeys(groups map[string][]*ast.File) []string {
 	keys := make([]string, 0, len(groups))
 	for key := range groups {
@@ -353,6 +367,24 @@ func a() string {
 `); len(found) != 0 {
 		t.Errorf("a marker in a data argument is flagged: %q", found)
 	}
+	if found := aliasCaseFindings(t, `const pw = "x1"
+
+func a(t *testing.T) string {
+	return helper(t, "label", "CREATE ROLE r LOGIN PASSWORD '%s'", pw)
+}
+
+func helper(t *testing.T, label, format string, args ...any) string { return fmt.Sprintf(format, args...) }
+`); len(found) != 1 {
+		t.Errorf("a leading label constant before the real format: findings %q, want one", found)
+	}
+	// A run-time format followed by a constant data argument that holds the marker reads that argument as the
+	// format and flags the next argument: the scan fails closed on this shape (a named residual).
+	if found := aliasCaseFindings(t, `func a() string {
+	return fmt.Sprintf(build(), "x PASSWORD '%s'", "y")
+}
+`); len(found) != 1 {
+		t.Errorf("a run-time format with a constant marker data argument: findings %q, want one (fails closed)", found)
+	}
 }
 
 func TestIdentifierBindingsFollowObjects(t *testing.T) {
@@ -402,5 +434,15 @@ func b(role string) string {
 }
 `); len(found) != 1 {
 		t.Errorf("a literal-bound value beside a run-time value of the same name elsewhere: findings %q, want one", found)
+	}
+}
+
+func TestAliasPassFailsWhenNoStringConstantWasEvaluated(t *testing.T) {
+	_, parsed, err := aliasedPasswordFindings(map[string][]byte{"empty.go": []byte("package p\n\nfunc f() {}\n")})
+	if parsed != 1 {
+		t.Fatalf("parsed %d files, want 1", parsed)
+	}
+	if err == nil {
+		t.Fatal("a package with no string constant passed: the alias pass measured nothing")
 	}
 }

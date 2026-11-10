@@ -32,7 +32,7 @@ var (
 	authFuzzRow    = regexp.MustCompile(`"(\S+) (Fuzz\w+)"`)
 	authStageCall  = regexp.MustCompile(`(?m)^\s*bash ci/check_go\.sh auth ([a-z-]+)`)
 	authClosureFn  = regexp.MustCompile(`(?s)check_auth_closure\(\) \{(.*?)\n\}`)
-	authStagesWant = []string{"test", "race", "race-integration", "fuzz", "history", "vuln", "middleware", "fuzz-registry", "paths-selftest", "scope-selftest"}
+	authStagesWant = []string{"test-leg", "race-leg", "race-integration-leg", "fuzz", "history", "vuln", "middleware", "fuzz-registry", "paths-selftest", "scope-selftest"}
 )
 
 func testSteps0(jobs map[string]any) []map[string]any {
@@ -191,8 +191,8 @@ func authViolations(t *testing.T, root string) []string {
 
 	gateCode := shellCode(asString(gateSteps[0]["run"]))
 	for _, race := range []struct{ job, pair, env, run string }{
-		{"auth-race", `"auth-race=${RACE}"`, "RACE", "bash ci/check_go.sh auth race"},
-		{"auth-race-integration", `"auth-race-integration=${RACE_INTEGRATION}"`, "RACE_INTEGRATION", "bash ci/check_go.sh auth race-integration"},
+		{"auth-race", `"auth-race=${RACE}"`, "RACE", `bash ci/check_go.sh auth race-leg "${{ matrix.leg }}" 7`},
+		{"auth-race-integration", `"auth-race-integration=${RACE_INTEGRATION}"`, "RACE_INTEGRATION", `bash ci/check_go.sh auth race-integration-leg "${{ matrix.leg }}" 12`},
 	} {
 		if !strings.Contains(gateCode, race.pair) || asString(asMap(gate["env"])[race.env]) != "${{ needs."+race.job+".result }}" {
 			out = append(out, fmt.Sprintf("auth-gate must check the %s result in its pair loop: a failed or skipped %s must fail a relevant change", race.job, race.job))
@@ -211,7 +211,7 @@ func authViolations(t *testing.T, root string) []string {
 		}
 	}
 	for _, s := range stepsOf(jobs["auth-test"]) {
-		if r := asString(s["run"]); r == "bash ci/check_go.sh auth race" || r == "bash ci/check_go.sh auth race-integration" {
+		if r := asString(s["run"]); strings.Contains(r, "check_go.sh auth race") {
 			out = append(out, fmt.Sprintf("auth-test must not run `%s`: the race legs have their own job and cap", r))
 		}
 	}

@@ -1463,3 +1463,41 @@ func TestAuthCorpusVenueSigningKeyIsAPrivateFileOfTheRun(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-13520: with AUTH_CORPUS_PREBUILT_TAG (the images the CI bake step built and loaded), `up` runs --no-build (a missing image
+// fails, nothing builds), the trap removes the stub images of that tag, and a tag that is not a plain image tag is refused.
+func TestAuthCorpusPrebuiltImagesAreUsedAndNotRebuilt(t *testing.T) {
+	fake := newFakeDocker(t)
+	cmd := exec.Command("bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+	cmd.Env = fake.env("FAKE_FAIL_UP=1", "AUTH_CORPUS_PREBUILT_TAG=ci-prebuilt")
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("the failing up must fail the script: %s", out)
+	}
+	calls := fake.calls(t)
+	var ups, removals []string
+	for _, line := range strings.Split(strings.TrimSpace(calls), "\n") {
+		if strings.Contains(line, " up ") {
+			ups = append(ups, line)
+		}
+		if strings.HasPrefix(line, "image ") {
+			removals = append(removals, line)
+		}
+	}
+	if len(ups) == 0 {
+		t.Fatalf("no `compose up` call:\n%s", calls)
+	}
+	for _, u := range ups {
+		if !strings.Contains(u, " up --no-build ") || strings.Contains(u, " --build ") {
+			t.Errorf("a prebuilt run must `up --no-build`, got %q", u)
+		}
+	}
+	want := []string{"image rm authcorpus-providerstub:ci-prebuilt", "image rm authcorpus-smtpsink:ci-prebuilt"}
+	if strings.Join(removals, "\n") != strings.Join(want, "\n") {
+		t.Errorf("image commands:\n%s\nwant:\n%s", strings.Join(removals, "\n"), strings.Join(want, "\n"))
+	}
+	bad := exec.Command("bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+	bad.Env = fake.env("AUTH_CORPUS_PREBUILT_TAG=Bad Tag")
+	if out, err := bad.CombinedOutput(); err == nil || !strings.Contains(string(out), "AUTH_CORPUS_PREBUILT_TAG must be a lower-case image tag") {
+		t.Errorf("a bad AUTH_CORPUS_PREBUILT_TAG must be refused by name, got err=%v:\n%s", err, out)
+	}
+}

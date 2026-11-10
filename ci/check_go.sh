@@ -5820,7 +5820,9 @@ check_auth() {
     test) check_auth_test ;;
     race) check_auth_race ;;
     race-integration) check_auth_race_integration ;;
-    test-leg|race-leg|race-integration-leg) check_auth_leg "${1%-leg}" "${2:-}" "${3:-}" ;;
+    test-leg) check_auth_leg test "${2:-}" "${3:-}" ;;
+    race-leg) check_auth_leg race "${2:-}" "${3:-}" ;;
+    race-integration-leg) check_auth_leg race-integration "${2:-}" "${3:-}" ;;
     history) check_auth_history ;;
     fuzz) check_auth_fuzz "${2:-}" ;;
     fuzz-registry) check_auth_fuzz_registry ;;

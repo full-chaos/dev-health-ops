@@ -92,9 +92,19 @@ forge_token() {
 # A forge probe file holds "<s> <go-api forged> <go-api genuine> <query-api forged> <query-api genuine> <auth-service forged>
 # <auth-service genuine>" lines: s = seconds since the decision; each verdict A (accepted), R (refused) or X (any other
 # answer), "-" when not asked. The forged token carries the claims of a live session; the genuine one is that session's own.
-# kid_refused_at FILE FORGED_FIELD GENUINE_FIELD -> the seconds of the forged token's first refusal.
+# kid_refused_at FILE FORGED_FIELD GENUINE_FIELD -> the seconds of the forged token's first refusal, only when that refusal
+# is the kid: on every line up to and including it the genuine token is accepted (the session is live, so the refusal is
+# not the session revoke), the forged token is accepted on every line before it and refused on every line after it. A
+# malformed line, a refusal on which the genuine token is not accepted, or no refusal at all is no answer (rc 1).
 kid_refused_at() {
-  awk -v f="$2" 'NF != 7 { bad = 1; next } $f == "R" && !seen { seen = 1; at = $1 } END { if (bad || !seen) exit 1; print at }' "$1"
+  awk -v f="$2" -v g="$3" '
+    NF != 7 { bad = 1; next }
+    $f == "-" && $g == "-" { next }
+    !seen && $f == "A" && $g == "A" { next }
+    !seen && $f == "R" && $g == "A" { seen = 1; at = $1; next }
+    seen && $f == "R" { next }
+    { bad = 1 }
+    END { if (bad || !seen) exit 1; print at }' "$1"
 }
 
 # floor_remaining_seconds "refused: floor_not_reached (floor reached in 1h2m3s)" -> seconds

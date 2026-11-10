@@ -77,8 +77,8 @@ if [ "${PRINT_PLAN}" = 1 ]; then
     '                and is denied, c signs, the sessions of b are revoked (refresh refused), a session of a and the session of c still' \
     '                refresh; every verb on b refused; a manifest that names b active changes nothing.' \
     '                Window a (no restart): literal WINDOW_A lines, seconds go-api and query-api keep accepting a b-token (bound 330 s).' \
-    '                Window b (pm): compromise c -successor d, then restart go-api and query-api one at a time right after the key' \
-    '                drop: literal WINDOW_B lines; a verifier that still accepts the old kid is a FINDING (exit 1 at the end).' \
+    '                Window b: compromise c -successor d, then restart go-api and query-api one at a time right after the key' \
+    '                drop: literal WINDOW_B lines; a verifier that still accepts the old kid fails the run.' \
     'S3 rollback:    auth-service, go-api and query-api recreated on the previous image (no class flip): new tokens are EdDSA under the active kid, go-api accepts them, the' \
     '                compromised kid stays out of the JWKS and denied, the revoked sessions stay refused, a b-token is refused;' \
     '                back to eddsa: c signs, b is still absent.' \
@@ -376,12 +376,6 @@ me_accepts() { verdict_is "$(api_code "$1" /api/v1/auth/me)" accepted; }
 me_refuses() { verdict_is "$(api_code "$1" /api/v1/auth/me)" refused; }
 query_refuses() { [ "$(query_code "$1")" = 401 ]; }
 query_serves() { local c; c="$(query_code "$1")"; [ "${c}" != 401 ] && [ "${c}" != 000 ] && [ "${c:0:1}" != 5 ]; }
-FINDINGS=0
-soft_check() { # soft_check NAME CMD...: a failure is recorded as a FINDING and the run goes on
-  local name="$1"
-  shift
-  if "$@"; then rec_pass "${name}"; else rec_line "FINDING: ${name}"; printf 'FINDING: %s\n' "${name}" >&2; FINDINGS=1; fi
-}
 jwks_lacks() { # a served key set without KID: an unreachable or malformed document is not "lacks"
   local doc rc=0
   doc="$(jwks_doc)" || return 1
@@ -535,12 +529,13 @@ scenario_compromise() {
     check d1-control-query-api-serves-the-forged-token-before-apply eq "$(probe_verdict query "${forged}")" A
     check d2-control-auth-service-accepts-the-forged-token-before-apply eq "$(probe_verdict validate "${forged}")" A
   fi
+  # D0: t0 is the decision to drop the key, before the dry run; every refusal is timed from it.
+  t0="$(date +%s)"
   keys_cmd compromise -kid "${old}" -successor "${new}"
   check s2-dry-run-moves-old-compromised out_has "${old}: active -> compromised"
   check s2-dry-run-moves-new-active out_has "${new}: pending -> active"
   keys_cmd compromise -kid "${old}" -successor "${new}" -apply
   t_apply="$(date +%s)"
-  t0="${t_apply}"
   if [ -n "${forged}" ]; then
     if [ "${mode}" = cache ]; then
       forge_probe "${forged}" "${genuine}" "${probe}" "${t0}" $((VERIFIER_CACHE_BOUND + 15)) 1 &
@@ -602,10 +597,10 @@ scenario_compromise() {
       after="$(elapsed_since "${t0}")"
       rec_line "WINDOW_B verifier=${svc} old_kid=${old} restart_after_drop restart_took_s=$(elapsed_since "${started}") refused_at_s=${after} refused=${refused} last_code=${last_code} forged=${fv} genuine=${gv}"
       printf 'WINDOW_B %s refused=%s at %s s after the drop (forged %s, genuine %s)\n' "${svc}" "${refused}" "${after}" "${fv}" "${gv}"
-      soft_check "s2-${svc}-refuses-old-right-after-its-restart" eq "${refused}" 1
+      check "s2-${svc}-refuses-old-right-after-its-restart" eq "${refused}" 1
       if [ -n "${forged}" ]; then
-        soft_check "d4-${svc}-refuses-the-forged-${old}-token-right-after-its-restart" eq "${fv}" R
-        soft_check "d4-${svc}-accepts-the-live-session-right-after-its-restart" eq "${gv}" A
+        check "d4-${svc}-refuses-the-forged-${old}-token-right-after-its-restart" eq "${fv}" R
+        check "d4-${svc}-accepts-the-live-session-right-after-its-restart" eq "${gv}" A
       fi
     done
   fi
@@ -756,10 +751,6 @@ if [ "${STAGE}" = drill ]; then
   scenario_issuer_rollback c d
   say "records:"
   for f in "${DIR}"/records/*.txt; do printf '%s  %s\n' "$(sha256sum "${f}" | cut -c1-64)" "${f##*/}"; done
-  if [ "${FINDINGS}" != 0 ]; then
-    say "FINDINGS recorded: see the records (lines starting with FINDING)"
-    exit 1
-  fi
   say "drill done"
   exit 0
 fi
@@ -884,8 +875,4 @@ say "records:"
 for f in "${DIR}"/records/*.txt; do
   printf '%s  %s\n' "$(sha256sum "${f}" | cut -c1-64)" "${f##*/}"
 done
-if [ "${FINDINGS}" != 0 ]; then
-  say "FINDINGS recorded: see the records (lines starting with FINDING)"
-  exit 1
-fi
 say "rotation rehearsal done"

@@ -34,7 +34,10 @@ import (
 // A declared rewrite (the inventory's rewritten_anchors) lets a change rewrite the text of an anchored line on purpose;
 // see the cells below. source_commit is still a commit that is an ancestor of HEAD, always.
 //
-// NOT enforced: that the anchor's line is the RIGHT symbol (the rows gate in
+// A free-text cite may instead name a symbol, <dir>/<file>.go#<Name> (func or type) or #<Recv>.<Name> (method), with an
+// optional `anchor` text inside it; it is resolved by symbol through routescan.ResolveSymbol, never by line (below).
+//
+// NOT enforced: that a line anchor's line is the RIGHT symbol (the rows gate in
 // internal/queryapi/server owns that), and anchors in other repos' inventories.
 // The fixtures below run on every build; the check over the real inventories
 // is in endpoint_profile_source_commit_history_test.go behind the
@@ -108,16 +111,88 @@ func staleAnchorProblem(name, what string, a lineAnchor, commit, then, now strin
 // CHAOS-11371. A free-text cite in a row string (disclosure_behavior, resource_resolver, ...) is a full repo path and a
 // line, <dir>/<file>.go:<n>, and is judged like a structured anchor: the file exists at source_commit and in the tree,
 // and line n holds the same text at both, or a text unique in both. A cite with no directory (store.go:125) or with only
-// a line (:359) names no file the gate can open, so it is refused. NOT enforced: that the line is the RIGHT symbol.
+// a line (:359) names no file the gate can open, so it is refused. NOT enforced for this legacy line form: that the line
+// is the RIGHT symbol.
+//
+// CHAOS-13479. The symbol form, <dir>/<file>.go#<Name> or #<Recv>.<Name>, then an optional `anchor` (backticks, no
+// space before), survives a line shift. It holds when the symbol is declared once and the anchor is on one of its lines,
+// both at source_commit and in the tree; a missing or doubled symbol or anchor fails by name. "#" never follows ".go" in
+// the line form; a "#" after a URL (://) is a fragment, not a cite. A malformed symbol cite or one with no directory is
+// refused. The symbol cites are cut out of the text before the line form is read, so an anchor is never read as a line.
 var (
 	fullCite     = regexp.MustCompile(`[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\.go:\d+`)
 	baseNameCite = regexp.MustCompile(`(?:^|[^A-Za-z0-9_./-])[A-Za-z0-9_-]+\.go:\d+`)
 	lineOnlyCite = regexp.MustCompile(`(?:^|[\s(,;]):\d+\b`)
+	symbolHead   = regexp.MustCompile(`[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.go#`)
+	symbolBody   = regexp.MustCompile("^([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)?)(?:`([^`\\n]+)`)?")
 )
 
-func collectFreeTextCites(node any, cites map[lineAnchor]bool, undirected map[string]bool) {
+const (
+	writeLineCite   = "write <dir>/<file>.go:<line>"
+	writeSymbolCite = "write <dir>/<file>.go#<Name> or #<Recv>.<Name>, optionally followed by a `quoted anchor`"
+)
+
+// symbolCite is one free-text symbol cite: a func, method or type of file and an optional text inside it.
+type symbolCite struct {
+	file, symbol, anchor string
+}
+
+func (c symbolCite) String() string {
+	if c.anchor == "" {
+		return c.file + "#" + c.symbol
+	}
+	return c.file + "#" + c.symbol + "`" + c.anchor + "`"
+}
+
+// takeSymbolCites blanks the symbol cites so the line-form regexes never read an anchor.
+func takeSymbolCites(text string, symbols map[symbolCite]bool, refused map[string]string) string {
+	out := []byte(text)
+	for _, at := range symbolHead.FindAllStringIndex(text, -1) {
+		word := strings.LastIndexAny(text[:at[0]], " \t\n(,;") + 1
+		if strings.Contains(text[word:at[0]], "://") {
+			continue
+		}
+		end := at[1]
+		body := symbolBody.FindStringSubmatch(text[at[1]:])
+		if body != nil {
+			end += len(body[0])
+		}
+		next := func(i int) byte {
+			if i < len(text) {
+				return text[i]
+			}
+			return ' '
+		}
+		malformed := body == nil || isIdentChar(next(end)) || next(end) == '`' || next(end) == '#' || (next(end) == '.' && isIdentChar(next(end+1))) ||
+			(at[0] > 0 && strings.ContainsRune("/:", rune(text[at[0]-1])))
+		if malformed {
+			end = at[1] + strings.IndexAny(text[at[1]:]+" ", " \t\n);,")
+		}
+		token := text[at[0]:end]
+		for i := at[0]; i < end; i++ {
+			out[i] = ' '
+		}
+		file := text[at[0] : at[1]-1]
+		switch {
+		case malformed:
+			refused[strings.TrimRight(token, ".")] = "is not a symbol cite: " + writeSymbolCite
+		case !strings.Contains(file, "/"):
+			refused[token] = "has no directory: " + writeSymbolCite
+		default:
+			symbols[symbolCite{file: file, symbol: body[1], anchor: body[2]}] = true
+		}
+	}
+	return string(out)
+}
+
+func isIdentChar(b byte) bool {
+	return b == '_' || ('0' <= b && b <= '9') || ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z')
+}
+
+func collectFreeTextCites(node any, cites map[lineAnchor]bool, symbols map[symbolCite]bool, undirected map[string]string) {
 	switch value := node.(type) {
 	case string:
+		value = takeSymbolCites(value, symbols, undirected)
 		for _, cite := range fullCite.FindAllString(value, -1) {
 			at := strings.LastIndex(cite, ":")
 			if n, err := strconv.Atoi(cite[at+1:]); err == nil {
@@ -125,26 +200,27 @@ func collectFreeTextCites(node any, cites map[lineAnchor]bool, undirected map[st
 			}
 		}
 		for _, loose := range baseNameCite.FindAllString(value, -1) {
-			undirected[strings.TrimLeft(loose, " (,;")] = true
+			undirected[strings.TrimLeft(loose, " (,;")] = "has no directory or no file: " + writeLineCite
 		}
 		for _, loose := range lineOnlyCite.FindAllString(value, -1) {
-			undirected[strings.TrimLeft(loose, " (,;")] = true
+			undirected[strings.TrimLeft(loose, " (,;")] = "has no directory or no file: " + writeLineCite
 		}
 	case map[string]any:
 		for _, child := range value {
-			collectFreeTextCites(child, cites, undirected)
+			collectFreeTextCites(child, cites, symbols, undirected)
 		}
 	case []any:
 		for _, child := range value {
-			collectFreeTextCites(child, cites, undirected)
+			collectFreeTextCites(child, cites, symbols, undirected)
 		}
 	}
 }
 
 func freeTextCiteProblems(repo, name, commit string, structured map[lineAnchor]bool, rewrites map[lineAnchor]rewrittenEntry, rows any) []string {
 	cites := map[lineAnchor]bool{}
-	undirected := map[string]bool{}
-	collectFreeTextCites(rows, cites, undirected)
+	symbols := map[symbolCite]bool{}
+	undirected := map[string]string{}
+	collectFreeTextCites(rows, cites, symbols, undirected)
 	var problems []string
 	loose := make([]string, 0, len(undirected))
 	for cite := range undirected {
@@ -152,8 +228,9 @@ func freeTextCiteProblems(repo, name, commit string, structured map[lineAnchor]b
 	}
 	sort.Strings(loose)
 	for _, cite := range loose {
-		problems = append(problems, fmt.Sprintf("%s: free-text cite %q has no directory or no file: write <dir>/<file>.go:<line>", name, cite))
+		problems = append(problems, fmt.Sprintf("%s: free-text cite %q %s", name, cite, undirected[cite]))
 	}
+	problems = append(problems, symbolCiteProblems(repo, name, commit, symbols)...)
 	ordered := make([]lineAnchor, 0, len(cites))
 	for a := range cites {
 		if _, declared := rewrites[a]; declared || !structured[a] {
@@ -179,6 +256,35 @@ func freeTextCiteProblems(repo, name, commit string, structured map[lineAnchor]b
 		}
 		if problem := staleAnchorProblem(name, "free-text cite ", a, commit, then, string(raw)); problem != "" {
 			problems = append(problems, problem)
+		}
+	}
+	return problems
+}
+
+// symbolCiteProblems judges each symbol cite in the file at source_commit, then in the tree: it must resolve in both.
+func symbolCiteProblems(repo, name, commit string, symbols map[symbolCite]bool) []string {
+	ordered := make([]symbolCite, 0, len(symbols))
+	for c := range symbols {
+		ordered = append(ordered, c)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].String() < ordered[j].String() })
+	var problems []string
+	for _, c := range ordered {
+		then, err := gitOut(repo, "show", commit+":"+c.file)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s: free-text cite %s: %s does not exist at source_commit %s", name, c, c.file, commit))
+			continue
+		}
+		now, err := os.ReadFile(filepath.Join(repo, c.file))
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s: free-text cite %s: %v", name, c, err))
+			continue
+		}
+		for _, side := range []struct{ where, source string }{{"at source_commit " + commit, then}, {"in the tree", string(now)}} {
+			if _, err := routescan.ResolveSymbol([]byte(side.source), c.file, c.symbol, c.anchor); err != nil {
+				problems = append(problems, fmt.Sprintf("%s: free-text cite %s %s: %v", name, c, side.where, err))
+				break // one problem per cite, as for a line cite
+			}
 		}
 	}
 	return problems
@@ -700,11 +806,10 @@ func TestSourceCommitRewrittenAnchorStaysExemptWithoutAFreeTextCite(t *testing.T
 	}
 }
 
-// A symbol cite, <dir>/<file>.go#<Name> or #<Recv>.<Name> with an optional `anchor`, names a func, method or type and a
-// text inside it; it holds when both resolve to one place at source_commit and in the tree, whatever lines they are on.
+// Symbol-cite cells: the cite holds by name at source_commit and in the tree, whatever line the symbol is on.
 const symbolBefore = "package x\n\n// a is doc.\nfunc a() int {\n\treturn 1\n}\n\ntype T struct{}\n\nfunc (t *T) m() string {\n\treturn \"m\"\n}\n"
 
-// symbolTip is symbolBefore with a line appended below every symbol (the fixture repo needs a tip commit).
+// symbolTip moves no symbol; the fixture repo needs a tip commit.
 const symbolTip = symbolBefore + "\nvar tip = 0\n"
 
 // symbolLine is the line of func a in symbolBefore.
@@ -730,8 +835,7 @@ func shiftedByRoutescan(t *testing.T) string {
 	return string(raw)
 }
 
-// A shift above the cited symbol: every symbol cite holds. The line cite of func a either passes only by the legacy
-// shifted-unique-line rule while it reads another line (one line inserted), or goes stale (ShiftedTree's comment lines).
+// A shift above func a: symbol cites hold; its line cite passes only by the shifted-unique-line rule, or goes stale.
 func TestSourceCommitSymbolCiteSurvivesALineShiftThatMovesTheLineCite(t *testing.T) {
 	text := "answers 404 (" + strings.Join(symbolCites, "; ") + ")"
 	line := fmt.Sprintf("internal/x/routes.go:%d", symbolLine)

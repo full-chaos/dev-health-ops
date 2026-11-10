@@ -93,8 +93,10 @@ concurrency:
   # The CHAOS-4921 protection itself is unchanged: two different commits'
   # pushes to main, or two merge_group entries, still never share a group
   # and so can never cancel or displace each other's image build.
-  group: ${{ github.workflow }}${{ github.event.action == 'labeled' && github.event.label.name != 'hotfix-image' && '-other-label' || '' }}-${{ github.event.pull_request.number || github.event.inputs.ref || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  # A ready_for_review run gets its own group keyed by the head sha and is never cancelled: a synchronize run of the
+  # same sha (a push right before the flip) cannot cancel it, and its ready-reuse job waits for that run instead.
+  group: ${{ github.workflow }}${{ github.event.action == 'labeled' && github.event.label.name != 'hotfix-image' && '-other-label' || '' }}-${{ github.event.pull_request.number || github.event.inputs.ref || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read
@@ -258,7 +260,7 @@ jobs:
   # ---------------------------------------------------------------------------
   go-build:
     name: Build Go Image
-    needs: [changes, resolve]
+    needs: [changes, resolve, ready-reuse]
     # CHAOS-4921 M2: a push to MAIN always builds, whatever the paths filter says.
     #
     # The filter decides whether a change is RELEVANT. On a PR that is the right
@@ -281,7 +283,8 @@ jobs:
       (github.event_name == 'merge_group' && needs.changes.outputs.docs_only != 'true') ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true') &&
-      needs.resolve.outputs.promoted != 'true'
+      needs.resolve.outputs.promoted != 'true' &&
+      !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-build')
     # ubuntu-26.04-arm is not a real enterprise hosted label (chris 2026-09-04 16:59): an arm64 leg is routed to the ARC
     # pool (fork-PR-safe, variable-gated) and falls back to ubuntu-latest (x64), where buildx/QEMU cross-builds it. No
     # matrix `include` supplies the runner: an include that matches no combination (the queue matrix is amd64 only)
@@ -484,7 +487,8 @@ jobs:
   # a container, in isolation, before the real build leg risks a
   # registry write.
   dind-smoke-test:
-    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) && ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
+    needs: ready-reuse
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) && ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-build-dho-arm64')
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 5
     steps:
@@ -558,7 +562,7 @@ jobs:
   # confirmed broken.
   go-build-dho-arm64:
     name: go-build-dho-arm64
-    needs: [changes, resolve, dind-smoke-test]
+    needs: [changes, resolve, dind-smoke-test, ready-reuse]
     if: >-
       (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) &&
       (always() &&
@@ -571,7 +575,8 @@ jobs:
       github.event_name == 'release' ||
       (github.event_name == 'merge_group' && needs.changes.outputs.docs_only != 'true') ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      needs.changes.outputs.code == 'true'))
+      needs.changes.outputs.code == 'true')) &&
+      !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-build-dho-arm64')
     runs-on: ${{ ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
@@ -818,7 +823,7 @@ jobs:
   # target matrix needed; otherwise the go-build/go-merge shape.
   go-api-tools-build:
     name: Build go-api-tools Image
-    needs: [changes, resolve]
+    needs: [changes, resolve, ready-reuse]
     # Same push-on-main-regardless-of-filter rule as go-build
     # above (CHAOS-4921 M2): the artefact for this commit must exist
     # whatever the paths filter says.
@@ -829,7 +834,8 @@ jobs:
       (github.event_name == 'merge_group' && needs.changes.outputs.docs_only != 'true') ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true') &&
-      needs.resolve.outputs.promoted != 'true'
+      needs.resolve.outputs.promoted != 'true' &&
+      !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-api-tools-build')
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -1762,7 +1768,7 @@ jobs:
   image-queue-gate:
     name: image-queue-gate
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'hotfix-image')
-    needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64]
+    needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64, ready-reuse]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1783,6 +1789,12 @@ jobs:
           GATED_JOB_2: go-build|queue-heavy|${{ needs.go-build.result }}
           GATED_JOB_3: go-api-tools-build|queue-heavy|${{ needs.go-api-tools-build.result }}
           GATED_JOB_4: go-build-dho-arm64|queue-heavy|${{ needs.go-build-dho-arm64.result }}
+          # Ready flip: a job skipped because ready-reuse named its unit (GATE_REUSE_n: <job>|<unit>) passes, with a REUSED
+          # line naming the source run.
+          READY_REUSED: ${{ needs.ready-reuse.outputs.reused }}
+          GATE_REUSE_1: go-build|go-build
+          GATE_REUSE_2: go-api-tools-build|go-api-tools-build
+          GATE_REUSE_3: go-build-dho-arm64|go-build-dho-arm64
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh
@@ -1792,7 +1804,7 @@ jobs:
   # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
   cancel-stacked-queue-children:
     name: cancel-stacked-queue-children
-    needs: [changes, resolve, go-build, dind-smoke-test, go-build-dho-arm64, go-merge, go-api-tools-build, go-api-tools-merge, fan-in-latest, image-queue-gate]
+    needs: [changes, resolve, go-build, dind-smoke-test, go-build-dho-arm64, go-merge, go-api-tools-build, go-api-tools-merge, fan-in-latest, image-queue-gate, ready-reuse]
     if: failure() && github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1814,3 +1826,52 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
         run: bash ci/cancel_stacked_queue_runs.sh
+
+  # Ready flip: names the legs that already passed on this exact head sha (ci/ready_reuse.sh, read from the BASE commit
+  # so a change cannot rewrite its own judge); each leg below skips when its unit is in `passed`, and its gate prints
+  # REUSED for it. Every other event, and a base without the script, passes [] and every leg runs.
+  ready-reuse:
+    name: ready-reuse
+    runs-on: ubuntu-latest
+    # The judge waits up to 20 minutes for a run of the same sha still in flight.
+    timeout-minutes: 24
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      passed: ${{ steps.reuse.outputs.passed || '[]' }}
+      reused: ${{ steps.reuse.outputs.reused }}
+    steps:
+      - name: Check out the reuse judge from the base commit
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review' && !contains(github.event.pull_request.labels.*.name, 'hotfix-image')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: ci/ready_reuse.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Name the legs that already passed on this head sha
+        id: reuse
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review' && !contains(github.event.pull_request.labels.*.name, 'hotfix-image')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          READY_REUSE_UNITS: |
+            go-build prefix 1 - Build Go Image (
+            go-api-tools-build prefix 1 - Build go-api-tools Image (
+            go-build-dho-arm64 exact 1 - go-build-dho-arm64
+            go-build-dho-arm64 exact 1 - dind-smoke-test
+        run: |
+          if [ ! -f ci/ready_reuse.sh ]; then
+            echo "READY REUSE OFF: the base commit has no ci/ready_reuse.sh; every leg runs"
+            echo 'passed=[]' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          bash ci/ready_reuse.sh

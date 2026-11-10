@@ -75,7 +75,7 @@ func TestIntegrationShardsSkipOnPullRequestWiring(t *testing.T) {
 	if strings.Contains(text, "types: [opened, synchronize, reopened, ready_for_review, labeled") {
 		t.Error("a labeled trigger reruns the whole workflow on every label change; the label applies at the next push")
 	}
-	if !strings.Contains(text, "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}") {
+	if !strings.Contains(text, "cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}") {
 		t.Error("a main push run must never be cancelled in progress: every merge sha needs its own integration verdict")
 	}
 }

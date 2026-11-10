@@ -5,6 +5,7 @@
 # handler or gate), carry (a middleware). TestEveryPlatformActionSiteIsListed holds this list; no deciding row may read the
 # superuser flag.
 # file	function	action	origin
+internal/api/acrcredentials/routes.go	handlers.actor	admin.orgs	handler
 internal/api/billing/audit.go	handlers.getAudit	admin.billing	handler
 internal/api/billing/audit.go	handlers.listAudit	admin.billing	handler
 internal/api/billing/audit.go	handlers.resolveAudit	admin.billing	handler
@@ -50,7 +51,6 @@ internal/auth/authapi/compat_guard.go	guardRefresh	admin.orgs	4
 internal/auth/authapi/provisioning.go	provisioningHandlers.actorRule	admin.orgs	9
 internal/auth/authapi/provisioning.go	provisioningHandlers.targetsRule	admin.users	9
 internal/auth/authapi/provisioning_users.go	provisioningHandlers.usersActorRule	admin.users	9
-internal/auth/authapi/provisioning_users.go	provisioningHandlers.usersUpdate	admin.users	9
 internal/auth/authapi/refresh.go	handlers.refresh	admin.orgs	4
 internal/queryapi/datahealth/datahealth.go	RequireOperator	admin.stats	6
 internal/queryapi/graph/operation_org_guard.go	operationOrgDecision	admin.orgs	handler

@@ -16,6 +16,11 @@ import (
 // (username, avatar_url) or in no guarded auth column (full_name, the principal's display name).
 const EventUserProfileUpdated = "auth.user.profile_updated"
 
+// EventUserTouched records an admin PATCH that changes no profile column: go-api bumps public.users.updated_at on every
+// PATCH that finds the user, also with no field change or with a platform role change only. No reader outside
+// auth.security_audit_events serves it.
+const EventUserTouched = "auth.user.touched"
+
 // OffStreamPublicProfile marks a change of profile columns no consumer of the provisioning stream reads: no
 // provisioning event names them (CHAOS-13376 consumer census: the one stream consumer, the revision feed, invalidates
 // by aggregate and reads no profile column).
@@ -26,7 +31,15 @@ func init() { offStreamReasons[OffStreamPublicProfile] = true }
 // publicProjectionEventTypes are the events whose state change is an update of public (ops schema) columns and of
 // unguarded auth columns only. Commit cannot write them: its changed-row count only sees guarded auth tables, so it
 // would refuse the change as a no-op. A type is added here, in review, with the code that writes it.
-var publicProjectionEventTypes = map[string]bool{EventUserProfileUpdated: true}
+var publicProjectionEventTypes = map[string]bool{EventUserProfileUpdated: true, EventUserTouched: true}
+
+// commitAdmitsPublicProjection is the one exception to Commit's refusal of a public projection type: a platform role
+// change with the touch and no profile column is one Commit (the role rows are guarded), its own audit row
+// EventUserTouched, off the stream (OffStreamPublicProfile). Every other public projection type, and EventUserTouched
+// with any other off-stream reason or none, stays refused.
+func commitAdmitsPublicProjection(eventType, offStream string) bool {
+	return eventType == EventUserTouched && offStream == OffStreamPublicProfile
+}
 
 // ErrNotPublicProjection reports a CommitPublicProjection of an event type outside publicProjectionEventTypes.
 // Nothing is written.

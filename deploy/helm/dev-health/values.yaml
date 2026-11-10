@@ -33,9 +33,10 @@ goApi:
   sessionIssue:
     secretName: ""
     secretKey: AUTH_SESSION_ISSUE_TOKEN
-    # -- Optional, absent by default. "workload" (the only value): go-api presents its workload token on the session issue route and
+    # -- Optional, absent by default. "workload" (the only mode; "" = absent): go-api presents its workload token on the session issue route and
     #    reads no AUTH_SESSION_ISSUE_TOKEN. The chart renders AUTH_SESSION_ISSUE_CREDENTIAL=workload, renders no token reference, and
     #    ignores secretName and secretKey. goApi.extraEnv cannot set AUTH_SESSION_ISSUE_CREDENTIAL while this is set. Absent = the token reference.
+    #    "" = absent (CHAOS-13467): a venue that layers values.prod.yaml sets credential: "" to keep the token reference.
     # credential: workload
     # -- CHAOS-13039: go-api presents its workload token on the session issue route instead of AUTH_SESSION_ISSUE_TOKEN. Off by
     #    default, and off renders nothing. On (sessions on, authService.accessToken.issuerURL set, secretName set) the chart renders
@@ -789,6 +790,9 @@ queryApi:
   #    a time and one stays ready).
   rollingUpdate: {}
   port: 8090
+  # -- The operator listener (DEV_HEALTH_HTTP_ADDR): /healthz, /readyz and /metrics. Probes and
+  #    the metrics scrape use it; it must differ from port, internal.port and mcp.port.
+  operatorPort: 8080
   # -- Comma-separated CORS allow-list for /graphql, the product GraphQL path
   #    query-api answers (CHAOS-6263): same format and meaning as the Python
   #    api's CORS_ALLOWED_ORIGINS and goApi.corsAllowedOrigins, and it must be
@@ -858,17 +862,11 @@ queryApi:
   #    wired correctly. Assert the /readyz BODY out of band; do not try to make
   #    these probes carry that check.
   livenessProbe:
-    httpGet:
-      path: /readyz
-      port: http
     initialDelaySeconds: 10
     periodSeconds: 15
     timeoutSeconds: 2
     failureThreshold: 3
   readinessProbe:
-    httpGet:
-      path: /readyz
-      port: http
     initialDelaySeconds: 5
     periodSeconds: 10
     timeoutSeconds: 2

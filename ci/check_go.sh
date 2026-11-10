@@ -691,6 +691,21 @@ run_in_modules() {
 
 check_vet() {
   run_in_modules "go vet" go vet -mod=readonly -trimpath ./...
+  check_authhistory_vet
+}
+
+# check_authhistory_vet vets the packages that carry files behind //go:build authhistory, which neither the default-tag vet
+# nor check_integration_vet compiles. The packages are derived from the tree; none found refuses (a vacuous pass).
+check_authhistory_vet() {
+  local file pkgs=()
+  while IFS= read -r -d '' file; do
+    head -n 20 "${ROOT}/${file}" | grep -Eq '^//go:build .*authhistory' || continue
+    pkgs+=("./$(dirname "${file}")")
+  done < <(git -C "${ROOT}" ls-files --cached --others --exclude-standard -z -- '*.go')
+  [ "${#pkgs[@]}" -gt 0 ] || die "authhistory vet: no file carries the authhistory build tag"
+  mapfile -t pkgs < <(printf '%s\n' "${pkgs[@]}" | sort -u)
+  printf 'go vet -tags=authhistory: %s\n' "${pkgs[*]}"
+  auth_go vet -mod=readonly -trimpath -tags=authhistory "${pkgs[@]}"
 }
 
 # Race-excluded proof (CHAOS-8135, CHAOS-8118, CHAOS-11406): a test compiled out of the -race leg by a `!race` build tag must

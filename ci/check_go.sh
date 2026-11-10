@@ -1378,7 +1378,7 @@ test_split_jobs_finish() {
     rc=0
     wait "${SPLIT_JOB_PIDS[${i}]}" || rc=$?
     read -r slog sjson slegjson serr <<<"${SPLIT_JOB_FILES[${i}]}"
-    printf 'go test (shard %s/%s, split %s): rc %s\n' "${shard}" "${count}" "${SPLIT_JOB_LABELS[${i}]}" "${rc}"
+    printf 'split part ended (shard %s/%s): %s rc %s\n' "${shard}" "${count}" "${SPLIT_JOB_LABELS[${i}]}" "${rc}"
     cat -- "${slog}"
     cat -- "${slog}" >>"${log}"
     cat -- "${sjson}" >>"${json}"

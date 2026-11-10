@@ -36,31 +36,23 @@ When lifecycle event publishing is enabled with `ACR_AUTH_PROJECTION_URL`, its d
 - Check `internal_service_credential_audits` for the entitlement outcomes. Accepted authentication records the workload subject in `principal_id`, with `credential_id` NULL. Refusals before or at verification have no principal. Older rows also have no principal; the schema added this column in migration `0157`.
 - Check `devhealth_acr_internal_requests_total` for other outcomes. A `svc_acr_` refusal does not enter the workload verifier. Health and entitlements share 100 attempts per minute per client address; principal access has its own 6,000-per-minute budget. An exhausted budget returns `429`.
 
-## Stop issuing
+## Retire the old credentials
 
-Stop operational issuance of `svc_acr_` credentials after the workload calls pass these checks. Remove the old bearer from the consumer's secret input. The commands still allow `service-credentials create` and `service-credentials rotate` for service `acr`; this step changes the operator workflow, not the mint implementation.
+The `svc_acr_` class is retired. The current build does not mint, list, rotate or revoke it: the `dho service-credentials` commands are removed and the go-api internal ACR routes refuse the class. After the checks pass:
 
-The old scopes are `entitlements:read`, `llm_config:read` and `principal_access:read`. They do not make a `svc_acr_` bearer valid on the current internal ACR routes.
-
-## Revoke the old credentials
-
-1. Run `dho service-credentials list --service acr` against the intended semantic database. Identify each old row by its credential id and prefix.
-2. Run `dho service-credentials revoke <credential_id>` for each old credential.
-3. List the rows again and check `revoked_at`. Revoke sets this timestamp even when a row was already revoked.
-
-Create and rotate show the token once. The table stores its SHA-256 and first 16 characters. Keep token values out of logs, tickets and chat.
+1. Remove the old `svc_acr_<redacted>` bearer from the consumer's secret input and from any secret store that holds it.
+2. Treat each remaining `svc_acr_` value as dead. It cannot reach the internal ACR routes.
+3. Keep token values out of logs, tickets and chat.
 
 ## Rollback
 
-Rollback changes which credential the `acr-api` consumer sends. It can point to a still-valid service credential only if the server build still accepts that credential on the target routes.
+Rollback changes which credential the `acr-api` consumer sends. On a server build that still accepts `svc_acr_` on the internal ACR routes, set `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=service_token` and point `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` at a credential that is still valid. Keep the internal go-api origin. Workload mode can leave this file mounted, but it never reads it.
 
-On such a server build, set `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=service_token` and point `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` at that valid credential. Keep the internal go-api origin. Workload mode can leave this file mounted, but it never reads it.
+On a server build that refuses `svc_acr_`, a `svc_acr_` credential gets the uniform `401` body `{"detail":"Unauthorized"}` whatever its state. Changing the consumer alone cannot restore that path, and the current build has no command that mints a new `svc_acr_` credential. To go back, roll the server to a build that accepts the class and use a credential that is still valid.
 
-After the server stops accepting `svc_acr_` on the internal ACR routes, a `svc_acr_` credential is refused with the uniform `401` body `{"detail":"Unauthorized"}` whatever its state. Consumer rollback to this credential therefore needs a server build that still accepts it. Changing the consumer alone cannot restore that path.
+A revoked or expired credential is never reactivated. Do not clear `revoked_at`, extend an expiry or restore a deleted row to undo retirement.
 
-A revoked or expired service credential is never reactivated. `service-credentials rotate` refuses both. Revoke is final. If rollback needs a credential after the old one has ended, mint a **new** credential with `dho service-credentials create --service acr --scope entitlements:read`, adding only the other supported scopes the consumer needs. Use it only with a server build that accepts it. Never clear `revoked_at` or extend an expired row to undo retirement.
-
-Rotation is for a still-active credential. It allows at most 3,600 seconds of overlap with its replacement. It cannot undo revocation.
+If the workload path fails, keep `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload` and repair its cause. Use the refusal reasons in the check step to find it. A failed exchange sends no request, and acr-api never falls back to the service token.
 
 ## Source of each fact
 
@@ -83,8 +75,6 @@ Rotation is for a still-active credential. It allows at most 3,600 seconds of ov
 - `internal/auth/authapi/acr_events.go`
 - `internal/auth/authconfig/workload.go`
 - `internal/auth/authruntime/acr_events.go`
-- `internal/apiservice/admin/servicecredentials.go`
-- `internal/adminops/servicecredentials.go`
 - `cmd/auth-migrate/main.go`
 - `internal/storage/postgres/authschema/publicreads.go`
 - `internal/storage/postgres/authschema/apply.go`

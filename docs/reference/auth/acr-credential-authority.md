@@ -24,7 +24,7 @@ This page describes behavior built on the main branch. Enable the required setti
 | ACR client credential (`acr_client_credential`) | ACR owns this credential. It is distinct from the workload token used for calls to ops. |
 | `acr-api` workload token, header `typ` = `workload+jwt`, audience `dev-health-api` | The four go-api internal ACR routes listed below. The subject must match the workload registry. |
 | `acr-api` workload token, audience `auth-service` | `POST /internal/v1/acr/credential-events`, when enabled. Its live workload row must allow `credentials.project`. |
-| Service credential, such as `svc_acr_<redacted>` | None of these routes accepts it. The service credential commands can still create, list, rotate and revoke stored rows. |
+| Service credential, such as `svc_acr_<redacted>` | Retired class. None of these routes accepts it, and no endpoint profile may list it. The `dho service-credentials` commands are removed, so no build issues, rotates or revokes it. |
 
 The four go-api routes use `GET`:
 
@@ -120,7 +120,6 @@ For workload exchange and binding settings, see [Workload registry](workload-reg
 - `internal/apiservice/acr/workloadsubject.go`
 - `internal/apiservice/acr/llmconfig.go`
 - `internal/apiservice/acr/access.go`
-- `internal/apiservice/admin/servicecredentials.go`
 - `internal/pgmigrate/archive/sql/0157_add_internal_service_credential_audits_principal_id.sql`
 - `internal/auth/contracts/workload_token.go`
 - `internal/auth/contracts/acr_credential_lifecycle_event.go`

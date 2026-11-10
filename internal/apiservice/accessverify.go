@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-go/authverify"
 
@@ -19,6 +20,10 @@ const (
 	envAccessTokenIssuer   = "AUTH_ACCESS_TOKEN_ISSUER"
 	accessTokenAudienceAPI = "dev-health-api"
 )
+
+// jwksTestHook lets a test give the JWKS client its HTTP client and clock, and
+// the meter; nil in production.
+var jwksTestHook func(*authverify.JWKSClientConfig, *metric.Meter)
 
 // buildAccessVerify constructs the profile-routed access-token validator over
 // the FULL go-api endpoint-profile row table. It is go-api's only access-token
@@ -37,7 +42,12 @@ func buildAccessVerify(lookup func(string) (string, bool), auth *policy.Authenti
 		}
 		return nil, nil, nil
 	}
-	keys, err := authverify.NewJWKSClient(authverify.JWKSClientConfig{Issuer: issuer})
+	jwks := accessverify.JWKSConfig(issuer)
+	meter := otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify")
+	if jwksTestHook != nil {
+		jwksTestHook(&jwks, &meter)
+	}
+	keys, err := accessverify.NewJWKSKeys(jwks, goAPIAccessService, meter)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -52,7 +62,7 @@ func buildAccessVerify(lookup func(string) (string, bool), auth *policy.Authenti
 	cfg := accessverify.Config{
 		Rows:   rows,
 		EdDSA:  verifier,
-		Meter:  otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"),
+		Meter:  meter,
 		Logger: logger,
 	}
 	validator, err := accessverify.New(cfg)

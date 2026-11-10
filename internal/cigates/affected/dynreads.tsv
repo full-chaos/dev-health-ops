@@ -2,6 +2,7 @@
 ci/tools/gotestfuncs	main.go
 cmd/auth-migrate	bootstrap.go
 cmd/auth-migrate	restorefence.go
+cmd/cigate	chposture.go
 cmd/cigate	docs_prepare_refusals_test.go
 cmd/cigate	main.go
 cmd/cigate	main_test.go

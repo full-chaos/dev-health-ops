@@ -1,6 +1,7 @@
 // Package writerinventory (tests only) finds every Go SQL writer (INSERT, UPDATE, DELETE, TRUNCATE, ON CONFLICT DO UPDATE) of an auth table and compares it with a keyed allowlist (stale entries fail).
 //
 // The scan cannot see SQL built at runtime (Sprintf, table names from variables, constants imported from another package), SQL joined to a map field with a runtime suffix beyond the field text, or SQL outside non-test Go files of the root module.
+// ScanDynamic finds each statement whose table is such a runtime name, and DynamicAllowlist lists each of those sites with its table set.
 package writerinventory
 
 import (
@@ -30,6 +31,10 @@ func (w Writer) Key() string {
 var publicTables = []string{
 	"users", "refresh_tokens", "email_verification_tokens", "password_reset_tokens",
 	"login_attempts", "org_invites", "memberships", "sso_providers", "impersonation_sessions", "organizations",
+	"internal_service_credentials", "internal_service_credential_audits", "audit_logs", "saml_assertion_replays",
+	"external_ingest_tokens", "worker_operator_audits", "integration_credentials", "provider_oauth_credentials",
+	"provider_oauth_revocations", "pagerduty_webhook_bindings", "github_app_installations", "org_ip_allowlist",
+	"billing_audit_log", "permissions", "role_permissions",
 }
 
 const unresolved = "\x00"
@@ -573,6 +578,11 @@ func Scan(root string, watched map[string]bool) ([]Writer, error) {
 
 // scanVisit is Scan that also calls visit with each SQL string that holds a watched writer.
 func scanVisit(root string, watched map[string]bool, visit func(w Writer, sql string)) ([]Writer, error) {
+	return scanWalk(root, watched, visit, walkStrings, nil)
+}
+
+// scanWalk is scanVisit with the string walker given; raw, when set, is called with every string the walker yields.
+func scanWalk(root string, watched map[string]bool, visit func(w Writer, sql string), walk func(ast.Node, *evaluator, func(string)), raw func(file, fn, sql string)) ([]Writer, error) {
 	byDir := map[string][]string{}
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -594,6 +604,9 @@ func scanVisit(root string, watched map[string]bool, visit func(w Writer, sql st
 	}
 	seen := map[string]Writer{}
 	record := func(file, fn, sql string) {
+		if raw != nil {
+			raw(file, fn, sql)
+		}
 		for _, tv := range sqlWriters(sql, watched) {
 			w := Writer{File: file, Func: fn, Table: tv[0], Verb: tv[1]}
 			seen[w.Key()] = w
@@ -645,7 +658,7 @@ func scanVisit(root string, watched map[string]bool, visit func(w Writer, sql st
 				})
 				ev := &evaluator{pkg: pkg, local: local, inFunc: true, visiting: map[string]bool{}}
 				name := funcName(fd)
-				walkStrings(fd.Body, ev, func(s string) { record(rel, name, s) })
+				walk(fd.Body, ev, func(s string) { record(rel, name, s) })
 			}
 		}
 		for _, f := range files {
@@ -662,7 +675,7 @@ func scanVisit(root string, watched map[string]bool, visit func(w Writer, sql st
 						continue
 					}
 					ev := &evaluator{pkg: pkg, visiting: map[string]bool{name: true}}
-					walkStrings(values[i], ev, func(s string) { record(rel, "pkgdecl:"+name, s) })
+					walk(values[i], ev, func(s string) { record(rel, "pkgdecl:"+name, s) })
 				}
 			}
 		}

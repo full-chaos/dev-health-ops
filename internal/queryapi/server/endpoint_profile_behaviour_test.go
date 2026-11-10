@@ -101,7 +101,7 @@ func newAccessStackRefusing(t *testing.T, store queryAPIUserStore, setup *access
 		*seen = append(*seen, claims)
 		w.WriteHeader(http.StatusOK)
 	}))
-	query := newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(iaDocument): "probe", digestHex(legacyMutationDocument): "probe", digestHex(legacyNotedQueryDocument): "probe", digestHex(legacyNotedMutationDocument): "probe", digestHex(legacyHolderSubscriptionDocument): "probe"}, verifier, auth, store, "", nil)
+	query := newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(iaDocument): "probe", digestHex(legacyMutationDocument): "probe", digestHex(legacyNotedQueryDocument): "probe", digestHex(legacyNotedMutationDocument): "probe", digestHex(legacyHolderSubscriptionDocument): "probe", digestHex(nonHolderUnparsableDocument): "probe"}, verifier, auth, store, "", nil)
 
 	publicMux, internalMux, mcpMux := http.NewServeMux(), http.NewServeMux(), http.NewServeMux()
 	mountQueryRouteSets(getenv, publicMux, internalMux, mcpMux, queryRouteHandlers{

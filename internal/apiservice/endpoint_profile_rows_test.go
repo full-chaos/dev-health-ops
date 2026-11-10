@@ -146,6 +146,9 @@ var dispatchedLevels = map[string]string{
 // route behind policy.Admin, AdminOrg, Authenticated, Superuser or Optional
 // accepts the user access token with no HS256 opt-in; no row lists the retired
 // ops access token. The row's source line is a citation: it is not compared.
+// An Optional route serves an anonymous caller (legacy
+// get_current_user_optional), so its row is public with a rationale; every
+// other guarded row is protected.
 func TestEndpointProfileRowsSitAtTheirRegistrationAndNameTheirGuard(t *testing.T) {
 	problems, checked, drift := rowRegistrationProblems(t, scanRegistrations(t, "../api", "."), loadGoAPIRows(t), mountedRoutes(t), treePath)
 	for _, problem := range problems {
@@ -206,8 +209,15 @@ func rowRegistrationProblems(t *testing.T, regs []registration, rows []map[strin
 		case guarded[reg.Level]:
 			validator, _ := row["primary_validator"].(map[string]any)
 			description, _ := validator["description"].(string)
-			if row["classification"] != "protected" || hs256 || !user || validation["legacy_hs256"] != false || !strings.HasPrefix(description, "policy."+reg.Level+":") {
+			classification := "protected"
+			if reg.Level == "Optional" {
+				classification = "public"
+			}
+			if row["classification"] != classification || hs256 || !user || validation["legacy_hs256"] != false || !strings.HasPrefix(description, "policy."+reg.Level+":") {
 				bad("%s: registered at policy.%s, row says %v %v %v %q", route.key(), reg.Level, row["classification"], classes, validation, description)
+			}
+			if rationale, _ := row["public_rationale"].(string); classification == "public" && strings.TrimSpace(rationale) == "" {
+				bad("%s: registered at policy.Optional, the public row has no public_rationale", route.key())
 			}
 		case hs256:
 			bad("%s: the row accepts the retired ops access token (registration level %q)", route.key(), reg.Level)
@@ -349,6 +359,44 @@ func TestEveryGuardedRowRefusesAnAnonymousCaller(t *testing.T) {
 	}
 	if checked < 150 {
 		t.Fatalf("only %d guarded rows were probed", checked)
+	}
+}
+
+// TestEveryOptionalRowServesAnAnonymousCaller is the behavioural half for
+// policy.Optional: a route whose row names that guard serves a request with no
+// credential through the real mounted handler (legacy
+// get_current_user_optional). The rig's store is down, so the served answer is
+// the handler's 5xx, never a 401 or 403 refusal; the row is public.
+func TestEveryOptionalRowServesAnAnonymousCaller(t *testing.T) {
+	byKey := map[string]map[string]any{}
+	for _, row := range loadGoAPIRows(t) {
+		byKey[rowKey(t, row)] = row
+	}
+	checked := 0
+	for _, route := range mountedRoutes(t) {
+		row := byKey[route.key()]
+		validator, _ := row["primary_validator"].(map[string]any)
+		description, _ := validator["description"].(string)
+		if row == nil || !strings.HasPrefix(description, "policy.Optional:") {
+			continue
+		}
+		target := regexp.MustCompile(`\{[^}]*\}`).ReplaceAllString(route.Pattern, "00000000-0000-4000-8000-000000000001")
+		request := httptest.NewRequest(route.Method, target, nil)
+		for _, match := range regexp.MustCompile(`\{([^}]*)\}`).FindAllStringSubmatch(route.Pattern, -1) {
+			request.SetPathValue(match[1], "00000000-0000-4000-8000-000000000001")
+		}
+		recorder := httptest.NewRecorder()
+		route.Handler.ServeHTTP(recorder, request)
+		if recorder.Code/100 != 5 {
+			t.Errorf("%s: a policy.Optional row answered %d to an anonymous request, want the store-down 5xx of a served read: %s", route.key(), recorder.Code, recorder.Body.String())
+		}
+		if row["classification"] != "public" {
+			t.Errorf("%s: a policy.Optional row serves an anonymous caller and is classified %v, want public", route.key(), row["classification"])
+		}
+		checked++
+	}
+	if checked < 2 {
+		t.Fatalf("only %d policy.Optional rows were probed", checked)
 	}
 }
 

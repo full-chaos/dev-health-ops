@@ -19,11 +19,13 @@ func TestQueryAPIRoleReadsMembershipsFromThePublicTableOnlyAndNeverFromTheAuthSc
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	h := startQueryAPISessionsHarness(t, ctx, true)
+	// startGrantHarness creates public.memberships in its production shape: uuid ids, id without a default.
+	const membershipUser, membershipOrg = "00000000-0000-0000-0000-0000000000a1", "00000000-0000-0000-0000-0000000000b1"
 	for _, statement := range []string{
 		"CREATE TABLE auth.memberships (id uuid PRIMARY KEY, organization_id uuid, principal_id uuid, role text, status text)",
 		"CREATE TABLE auth.organizations (id uuid PRIMARY KEY, slug text, name text, status text)",
 		"ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS joined_at timestamptz",
-		"INSERT INTO public.memberships (user_id, org_id, role) VALUES ('u1', 'o1', 'admin')",
+		"INSERT INTO public.memberships (id, user_id, org_id, role) VALUES (gen_random_uuid(), '" + membershipUser + "', '" + membershipOrg + "', 'admin')",
 		"INSERT INTO auth.memberships (id, organization_id, principal_id, role, status) VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'owner', 'active')",
 	} {
 		if _, err := h.admin.Exec(ctx, statement); err != nil {
@@ -36,7 +38,7 @@ func TestQueryAPIRoleReadsMembershipsFromThePublicTableOnlyAndNeverFromTheAuthSc
 	}
 	pool := connectAs(t, ctx, h.uri, h.role, queryAPISessionsPassword)
 	var role string
-	if err := pool.QueryRow(ctx, "SELECT role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1", "u1", "o1").Scan(&role); err != nil || role != "admin" {
+	if err := pool.QueryRow(ctx, "SELECT role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1", membershipUser, membershipOrg).Scan(&role); err != nil || role != "admin" {
 		t.Fatalf("the public membership read as query-api's login: role %q, %v", role, err)
 	}
 	for _, statement := range []string{
@@ -47,7 +49,7 @@ func TestQueryAPIRoleReadsMembershipsFromThePublicTableOnlyAndNeverFromTheAuthSc
 		"SELECT organization_id FROM auth.memberships",
 		"SELECT * FROM auth.organizations",
 		"SELECT slug FROM auth.organizations",
-		"INSERT INTO public.memberships (user_id, org_id, role) VALUES ('u2', 'o1', 'member')",
+		"INSERT INTO public.memberships (id, user_id, org_id, role) VALUES (gen_random_uuid(), gen_random_uuid(), '" + membershipOrg + "', 'member')",
 		"UPDATE public.memberships SET role = 'owner'",
 		"DELETE FROM public.memberships",
 		"UPDATE auth.memberships SET role = 'owner'",

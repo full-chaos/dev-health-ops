@@ -968,6 +968,11 @@ func domainPosture() RolePosture {
 			{"users", "id", "SELECT"},
 			{"users", "email", "SELECT"},
 			{"users", "full_name", "SELECT"},
+			// The billing owner lookup's join key, org and role filters and ordering column.
+			{"memberships", "user_id", "SELECT"},
+			{"memberships", "org_id", "SELECT"},
+			{"memberships", "role", "SELECT"},
+			{"memberships", "created_at", "SELECT"},
 		},
 		// The heavy worker reads an org's categorization opt-in (pgmigrate 0156)
 		// and an opted-in org's categorize configuration and budget limit

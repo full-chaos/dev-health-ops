@@ -798,14 +798,26 @@ func TestCheckAPIAuthorizationRefusesAMissingDeclaredGrant(t *testing.T) {
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); err != nil {
 		t.Fatalf("fully granted api role failed readiness: %v", err)
 	}
+	retired := map[string]bool{}
+	for _, name := range APIPosture(false).RetiredTables {
+		retired[name] = true
+	}
 	for _, table := range APIPosture(false).RequiredTables {
 		if _, err := admin.Exec(ctx, "REVOKE ALL ON TABLE public."+table.TableName+" FROM "+role); err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); !errors.Is(err, ErrPostureRefused) {
+		err := CheckAPIAuthorization(ctx, api, role, grantSchema, false)
+		switch {
+		case retired[table.TableName] && err != nil:
+			// RolePosture.RetiredTables: nothing held on a retired table is ready.
+			t.Fatalf("api role holding nothing on the retired %s: readiness error %v, want ready", table.TableName, err)
+		case !retired[table.TableName] && !errors.Is(err, ErrPostureRefused):
 			t.Fatalf("api role missing its %s grant: readiness error %v, want ErrPostureRefused", table.TableName, err)
 		}
 		acrEntitlementTables(t, ctx, admin, role)
+	}
+	if len(retired) == 0 {
+		t.Fatal("the api posture retires no table: the retired branch above is not exercised")
 	}
 }
 

@@ -52,9 +52,9 @@ func apiPosture() RolePosture {
 			// LAST of org_deletion.py's 46 purge targets. Widened in
 			// place, per the one-entry rule below.
 			{"organizations", true, true, true},
-			// SELECT for the internal acr routes' svc_acr_ bearer check
-			// (internal/apiservice/acr); UPDATE for the entitlement route's
-			// last_used_at stamp (api/internal/acr.py, CHAOS-9993).
+			// Retired (RetiredTables below): no go-api code reads or writes it
+			// since the svc_acr_ bearer check and the service-credentials verbs
+			// went; the grant stays exact until the table is dropped.
 			{"internal_service_credentials", false, true, false},
 			// The entitlement route's per-outcome audit row (INSERT only).
 			{"internal_service_credential_audits", true, false, false},
@@ -346,6 +346,7 @@ func apiPosture() RolePosture {
 		ColumnScoped: []ColumnPrivilege{
 			{"billing_audit_log", "actor_id", "UPDATE"},
 		},
+		RetiredTables: []string{"internal_service_credentials"},
 	}
 }
 

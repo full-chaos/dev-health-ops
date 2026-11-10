@@ -25,6 +25,7 @@ func eventContext(event, ref, headRef, refName, prNumber, sha string) ctxMap {
 		"github.workflow": "W", "github.event_name": event, "github.sha": sha, "github.run_id": "1",
 		// `inputs.*` only exists in a workflow_dispatch payload; no modelled event carries one.
 		"github.event.inputs.ref": "",
+		"github.event.inputs.pr":  "",
 		// no modelled event is a `labeled` pull_request action
 		"github.event.action": "", "github.event.label.name": "",
 		"github.event.pull_request.head.sha": "",
@@ -512,6 +513,7 @@ func TestWorkflowConcurrencyPlantedDefects(t *testing.T) {
 	const codeql = ".github/workflows/codeql-analysis.yml"
 	const dockerImages = ".github/workflows/docker-images.yml"
 	canonGroup := "group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}"
+	codeqlGroup := "group: ${{ github.workflow }}-${{ github.event.inputs.pr && 'pr-' || '' }}${{ github.event.inputs.pr || github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}"
 	cancelExpr := "cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}"
 	readyHead := "${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}"
 	readyGroup := "${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}" + readyHead
@@ -533,10 +535,10 @@ func TestWorkflowConcurrencyPlantedDefects(t *testing.T) {
 			[]mutation{{dockerImages, cancelExpr, "cancel-in-progress: true"}},
 			[]string{"docker-images.yml", "cancels a push to main"}},
 		{"CHAOS-4906: main push keyed by ref instead of commit sha",
-			[]mutation{{codeql, canonGroup, "group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"}},
+			[]mutation{{codeql, codeqlGroup, "group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"}},
 			[]string{"codeql-analysis.yml", "not keyed by commit sha"}},
 		{"CHAOS-4906: workflow drops its concurrency group",
-			[]mutation{{codeql, canonGroup, "# group dropped"}},
+			[]mutation{{codeql, codeqlGroup, "# group dropped"}},
 			[]string{"codeql-analysis.yml", "no concurrency group"}},
 		{"ready flip: a synchronize run of the same sha may cancel the ready run (#6048)",
 			[]mutation{{goYml, cancelExpr, "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}"}},

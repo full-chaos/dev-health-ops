@@ -54,15 +54,16 @@ var ErrPostureRefused = errors.New("postgres: role posture refused (live grants 
 // other role does not hold it" check needs to exist in this query itself —
 // but no single invocation of it proves that property alone, either.
 const rolePostureQuery = `
-WITH required_table_privileges(table_name, allow_insert, allow_update, allow_delete) AS (
-	SELECT * FROM unnest($3::text[], $4::boolean[], $5::boolean[], $9::boolean[])
+WITH required_table_privileges(table_name, allow_insert, allow_update, allow_delete, retired) AS (
+	SELECT * FROM unnest($3::text[], $4::boolean[], $5::boolean[], $9::boolean[], $12::boolean[])
 ), required_tables AS (
 	SELECT
 		class.oid,
 		required.table_name,
 		required.allow_insert,
 		required.allow_update,
-		required.allow_delete
+		required.allow_delete,
+		required.retired
 	FROM required_table_privileges AS required
 	JOIN pg_catalog.pg_class AS class ON class.relname = required.table_name
 	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
@@ -212,9 +213,10 @@ SELECT
 	AND NOT has_database_privilege(current_user, current_database(), 'TEMPORARY')
 ` + ambientGrantOptionSQL + `	AND NOT has_schema_privilege(current_user, 'public', 'CREATE')
 	AND (
-		SELECT count(*) FROM required_tables
+		-- A retired table may be gone (RolePosture.RetiredTables).
+		SELECT count(*) FROM required_tables WHERE NOT retired
 	) = (
-		SELECT count(*) FROM required_table_privileges
+		SELECT count(*) FROM required_table_privileges WHERE NOT retired
 	)
 	AND (
 		SELECT count(*) FROM column_scoped_relations
@@ -384,7 +386,10 @@ SELECT
 			SELECT COALESCE(on_table.privileges, '{}'::text[]) AS table_level,
 				COALESCE(on_table.privileges, '{}'::text[]) || COALESCE(on_columns.privileges, '{}'::text[]) AS any_column
 		) AS held
-		WHERE NOT ('SELECT' = ANY (held.table_level))
+		-- A retired table on which nothing at all is held passes; one with any
+		-- privilege is judged exactly like any other required table below.
+		WHERE NOT (required.retired AND cardinality(held.any_column) = 0)
+		AND (NOT ('SELECT' = ANY (held.table_level))
 			OR 'SELECT WITH GRANT OPTION' = ANY (held.table_level)
 			OR 'SELECT WITH GRANT OPTION' = ANY (held.any_column)
 			OR ('INSERT' = ANY (held.table_level)) <> required.allow_insert
@@ -441,7 +446,7 @@ SELECT
 			OR 'REFERENCES' = ANY (held.table_level)
 			OR 'REFERENCES' = ANY (held.any_column)
 			OR 'TRIGGER' = ANY (held.table_level)
-			OR 'MAINTAIN' = ANY (held.table_level)
+			OR 'MAINTAIN' = ANY (held.table_level))
 	)
 	AND NOT EXISTS (
 		SELECT 1
@@ -608,6 +613,12 @@ type RolePosture struct {
 	// "name(text)". EXECUTE on any other public function stays refused, and
 	// PUBLIC may never hold EXECUTE on one of these.
 	RequiredFunctions []string
+	// RetiredTables names RequiredTables entries no code of the role uses any
+	// more. The migration still grants them exactly, so a binary that does
+	// use one stays ready while a roll replaces it; readiness accepts the
+	// table dropped, no privilege held on it (by any route), or exactly the
+	// declared flags. A partial or wider grant is refused, as for any row.
+	RetiredTables []string
 }
 
 // domainPosture is the domain runtime role's declared manifest under the
@@ -968,6 +979,11 @@ func domainPosture() RolePosture {
 			{"users", "id", "SELECT"},
 			{"users", "email", "SELECT"},
 			{"users", "full_name", "SELECT"},
+			// The billing owner lookup's join key, org and role filters and ordering column.
+			{"memberships", "user_id", "SELECT"},
+			{"memberships", "org_id", "SELECT"},
+			{"memberships", "role", "SELECT"},
+			{"memberships", "created_at", "SELECT"},
 		},
 		// The heavy worker reads an org's categorization opt-in (pgmigrate 0156)
 		// and an opted-in org's categorize configuration and budget limit
@@ -982,7 +998,7 @@ func domainPosture() RolePosture {
 // (removed in e23ede618; see git history at eda2d6b91) — the
 // same sole authority domainPosture defers to.
 //
-//   - internal_service_credentials, worker_operator_audits,
+//   - internal_service_credentials (retired: RetiredTables), worker_operator_audits,
 //     worker_job_routes: coordinator-exclusive, verified confidence (workerctl
 //     and/or reconciler call sites, no domain-hot-path site for any of them).
 //
@@ -1277,6 +1293,10 @@ func coordinatorPosture() RolePosture {
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
 		},
 		RequiredSequences: []string{"worker_operator_audits_id_seq"},
+		// No coordinator code reads internal_service_credentials any more (its
+		// svc_worker_ bearer check is gone, CHAOS-10044); the table is dropped
+		// in a later migration.
+		RetiredTables: []string{"internal_service_credentials"},
 	}
 }
 
@@ -1412,7 +1432,7 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	}
 }
 
-// rolePostureArgs builds rolePostureQuery's parameters ($1..$11) from a role's
+// rolePostureArgs builds rolePostureQuery's parameters ($1..$12) from a role's
 // declared posture, refusing an internally inconsistent one. It is separate
 // from CheckRolePosture so the differential oracle for the query runs the
 // production argument construction, not a copy of it.
@@ -1466,13 +1486,48 @@ func rolePostureArgs(expectedRole, riverSchema string, posture RolePosture) ([]a
 	); err != nil {
 		return nil, err
 	}
+	retired, err := retiredTableFlags(posture)
+	if err != nil {
+		return nil, err
+	}
 	return []any{
 		expectedRole, riverSchema,
 		tableNames, allowInserts, allowUpdates,
 		columnTables, columnNames, columnPrivileges,
 		allowDeletes, posture.RequiredSequences,
-		requiredFunctions,
+		requiredFunctions, retired,
 	}, nil
+}
+
+// retiredTableFlags is $12: one flag per RequiredTables entry, true for a
+// table RetiredTables names. A retired name must be exactly one RequiredTables
+// entry and no column-scoped table: the retired rule judges table-wide flags
+// only.
+func retiredTableFlags(posture RolePosture) ([]bool, error) {
+	flags := make([]bool, len(posture.RequiredTables))
+	seen := make(map[string]bool, len(posture.RetiredTables))
+	for _, name := range posture.RetiredTables {
+		if seen[name] {
+			return nil, fmt.Errorf("postgres: retired table %q is named twice", name)
+		}
+		seen[name] = true
+		matches := 0
+		for i, table := range posture.RequiredTables {
+			if table.TableName == name {
+				flags[i] = true
+				matches++
+			}
+		}
+		if matches != 1 {
+			return nil, fmt.Errorf("postgres: retired table %q is %d RequiredTables entries, want exactly 1", name, matches)
+		}
+		for _, column := range posture.ColumnScoped {
+			if column.TableName == name {
+				return nil, fmt.Errorf("postgres: retired table %q is also column-scoped", name)
+			}
+		}
+	}
+	return flags, nil
 }
 
 var functionSignaturePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*\((?:[a-z][a-z0-9_ ]*(?:, [a-z][a-z0-9_ ]*)*)?\)$`)

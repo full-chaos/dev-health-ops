@@ -1120,6 +1120,9 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// users is column-scoped to the heartbeat count and the billing owner
 		// lookup (domainPosture's ColumnScoped): password_hash stays unreadable.
 		"DO $$ BEGIN IF to_regclass('public.users') IS NOT NULL THEN GRANT SELECT (id, email, full_name) ON TABLE public.users TO " + domainRole + "; END IF; END $$",
+		// The billing owner lookup's join, filters and ordering
+		// (domainPosture's ColumnScoped): no other memberships column.
+		"DO $$ BEGIN IF to_regclass('public.memberships') IS NOT NULL THEN GRANT SELECT (user_id, org_id, role, created_at) ON TABLE public.memberships TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.audit_logs') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.audit_logs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_partitions TO " + domainRole + "; END IF; END $$",

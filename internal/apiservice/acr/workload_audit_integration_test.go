@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	adminapi "github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
@@ -90,7 +89,7 @@ func TestAuditSvcAcrRefusalHasNoActor(t *testing.T) {
 	ctx, pool := auditPool(t)
 	const token = "svc_acr_audit-shape-probe-0123456789"
 	if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-		VALUES (gen_random_uuid(), 'acr', $1, $2, '["entitlements:read"]'::json, now())`, adminapi.HashServiceToken(token), token[:16]); err != nil {
+		VALUES (gen_random_uuid(), 'acr', $1, $2, '["entitlements:read"]'::json, now())`, storedTokenHash(token), token[:16]); err != nil {
 		t.Fatal(err)
 	}
 	handler := authServer(t, &fakeStore{}, PostgresCredentialStore{Pool: pool}, nil)
@@ -136,7 +135,7 @@ func TestAuditCheckRefusesBothCredentialAndPrincipal(t *testing.T) {
 	ctx, pool := auditPool(t)
 	const token = "svc_acr_audit-check-probe-0123456789"
 	if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-		VALUES (gen_random_uuid(), 'acr', $1, $2, '["entitlements:read"]'::json, now())`, adminapi.HashServiceToken(token), token[:16]); err != nil {
+		VALUES (gen_random_uuid(), 'acr', $1, $2, '["entitlements:read"]'::json, now())`, storedTokenHash(token), token[:16]); err != nil {
 		t.Fatal(err)
 	}
 	var credentialID string

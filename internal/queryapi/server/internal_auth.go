@@ -121,11 +121,13 @@ const (
 type edgeScope func(ctx context.Context, user *policy.User) (org string, session *policy.Impersonation, err error)
 
 // liveScope is /query's scope: nothing in front of /query decided anything,
-// so the org is the token's own and the session is read here, once, for a
-// caller the live users row confirms is a superuser.
+// so the org is the token's own and the session is read here, once. As in
+// go-api's Scope.Impersonation, a session is applied only to a caller that
+// holds admin.impersonate now. A caller without the action acts as itself,
+// and its row is not read.
 func liveScope(store policy.Store) edgeScope {
 	return func(ctx context.Context, user *policy.User) (string, *policy.Impersonation, error) {
-		if !user.IsSuperuser {
+		if !user.Holds(policy.ActionAdminImpersonate) {
 			return user.OrgID, nil, nil
 		}
 		session, err := store.ActiveImpersonation(ctx, user.ID)

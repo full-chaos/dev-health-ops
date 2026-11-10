@@ -54,9 +54,11 @@ func TestAppendOnlyTablesGrantNoMutation(t *testing.T) {
 // must never change. signing_keys is the sharpest: a runtime that can INSERT a
 // signing key can mint itself a key and publish the matching public half,
 // which converts a service compromise into a token-forging capability.
+// workloads is the registry the runtime resolves workload callers against; only
+// the migration role writes it (auth-migrate workloads verbs, the restore fence).
 func TestReadOnlyTablesGrantNoWrite(t *testing.T) {
 	byTable := postureByTable(t)
-	for _, table := range []string{"signing_keys", "actions", "roles", "role_actions"} {
+	for _, table := range []string{"signing_keys", "actions", "roles", "role_actions", "workloads"} {
 		entry, declared := byTable[table]
 		if !declared {
 			t.Errorf("%s has no declared posture", table)

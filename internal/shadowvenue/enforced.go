@@ -1,6 +1,8 @@
 package shadowvenue
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +22,10 @@ const (
 	VerdictEnforcedDeny     = "ENFORCED_DENY"
 	VerdictStatusDiffers    = "MISMATCH_STATUS"
 	VerdictUnevidencedNoOrg = "UNEVIDENCED_NOORG"
+	// VerdictEvidencedNoOrg is the named rule for a no-org superuser slot the counter does not cover (the handler served
+	// it, reason served_org): the go-api log shows the decision point skipped the request (result "skipped", no
+	// decision_id) and the enforced and yardstick runs gave the same status and the same normalized answer.
+	VerdictEvidencedNoOrg   = "EVIDENCED_NOORG"
 	VerdictUnevidencedSeam  = "UNEVIDENCED_SEAM"
 	VerdictControlNotDenied = "CONTROL_NOT_ENFORCED"
 	// VerdictMismatchCaller: the slot's token is not the one the plan wanted (sub or org claim).
@@ -76,6 +82,13 @@ type EnforcedInput struct {
 	Log        *Evidence
 	// Leaves, when set, replaces the body_norm_sha comparison with the per-leaf parity after the frozen volatile set.
 	Leaves *LeafParity
+	// J1 turns on the counter proof of form B (D6894): an equal 5xx cell whose yardstick cell is a MATCH with a decision id
+	// is past the guard when its namespace's decision counter equals the judged slots exactly and the idle sweep holds.
+	// Attributed lists the requests of the run that are no slot (the drive's sign-in).
+	J1         bool
+	Attributed []AttributedRequest
+	// Process names the go-api process each scrape came from (nil = none given: no counter proof stands).
+	Process *ProcessFacts
 }
 
 // liveEnforcement is what one /metrics scrape of the running go-api says: the namespaces whose enforcement gauge is 1,
@@ -206,6 +219,9 @@ func JudgeEnforced(in EnforcedInput) Report {
 	} else if slices.Min(digests) != slices.Max(digests) {
 		void("the data digest differs (yardstick before %.12s, yardstick after %.12s, before %.12s, after %.12s): the seeded state is not the yardstick's, or a run left a change", in.YardDigest, in.YardDigestAfter, in.DigestBefore, in.DigestAfter)
 	}
+	if sent, yard := ScheduleSHA12(in.Slots), yardScheduleSHA12(in.Yard); sent != yard {
+		void("the schedule differs: the run's sent slots (sha12 %s) are not the yardstick's (sha12 %s) in the same order, so the cells cannot be paired position by position", sent, yard)
+	}
 	reasons, err := ParseUnjudgedReasons(in.MetricsBefore, in.MetricsAfter)
 	if err != nil {
 		void("the unjudged counter is unreadable: %v", err)
@@ -315,6 +331,17 @@ func JudgeEnforced(in EnforcedInput) Report {
 			}
 		}
 	}
+	// EVIDENCED_NOORG: a no-org superuser slot the counter left UNEVIDENCED (the handler served it) passes on the log proof
+	// that the decision point skipped it, its answer being equal to the yardstick's in status and body (bodyVerdict did not
+	// give it MISMATCH_BODY or MISMATCH_STATUS, so it is still UNEVIDENCED_NOORG only if both are equal).
+	for i, sv := range report.Slots {
+		if in.Strict && sv.Verdict == VerdictUnevidencedNoOrg && sv.Caller == "superuser" && noOrgSkipProof(in.Log, sv.Slot, in.Grace) {
+			report.Slots[i].Verdict = VerdictEvidencedNoOrg
+		}
+	}
+	if in.J1 {
+		applyCounterProof(&report, in, func(row, caller string, k int) string { return yard[cell{row, caller, k}].Verdict }, unjudgedRoutes)
+	}
 	outbound := judgeOutboundEnforced(&report, in, byRow)
 	for _, reason := range outbound.voids {
 		void("%s", reason)
@@ -348,6 +375,45 @@ func JudgeEnforced(in EnforcedInput) Report {
 	}
 	report.Pass = !report.Void && !slices.ContainsFunc(report.Reasons, func(s string) bool { return strings.HasPrefix(s, "FAIL") })
 	return report
+}
+
+// applyCounterProof is form B: it lifts the equal 5xx cells that have no log proof to EQUAL_PAST_GUARD, one cell at a
+// time, when (1) the yardstick cell is a MATCH (the 4a log has its decision id), (2) the enforced run's answer equals
+// the yardstick's in status and body (already so for a VOID_PARITY cell), (3) its namespace's counter proof stands and
+// (4) its answer is none of the guard's deny digests. The digests and the counter table go to the record.
+func applyCounterProof(report *Report, in EnforcedInput, yardVerdict func(row, caller string, k int) string, unjudgedRoutes map[string]bool) {
+	idle := idleSweep(in.Log, in.Slots, in.Attributed, in.Grace)
+	report.Notes = append(report.Notes, "judge-enforced: idle sweep: "+idle.note)
+	for _, u := range idle.unattributed {
+		report.Reasons = append(report.Reasons, "FAIL: unattributed request in the go-api log (unknown traffic): "+u)
+	}
+	first, _ := driveSpan(in.Slots)
+	processNote, process := sameProcess(in.Process, readLive(in.MetricsBefore), readLive(in.MetricsAfter), first)
+	report.Notes = append(report.Notes, "judge-enforced: same process: "+processNote)
+	if !process {
+		report.Reasons = append(report.Reasons, "FAIL: same process not shown: "+processNote)
+	}
+	proof, notes, fails := counterProof(in, report.Slots, idle, process)
+	report.Notes = append(report.Notes, notes...)
+	for _, f := range fails {
+		report.Reasons = append(report.Reasons, "FAIL: "+f)
+	}
+	deny := guardDenyDigests(report.Slots)
+	report.Notes = append(report.Notes, fmt.Sprintf("judge-enforced: guard deny body digests (%d): %s", len(deny), strings.Join(deny, " ")))
+	for i, sv := range report.Slots {
+		if sv.Verdict != VerdictVoidParity || sv.Status < 500 || unjudgedRoutes[sv.Key()] {
+			continue
+		}
+		if yardVerdict(sv.Row, sv.Caller, sv.K) == VerdictMatch && proof[in.Namespaces[sv.Key()]] {
+			report.Slots[i].Verdict = VerdictEqualPastGuard
+		}
+	}
+	for i, sv := range report.Slots {
+		if sv.Verdict == VerdictEqualPastGuard && slices.Contains(deny, sv.BodyNormSHA) {
+			report.Slots[i].Verdict = VerdictVoidParity
+			report.Reasons = append(report.Reasons, fmt.Sprintf("FAIL: slot %d row %s %s: the answer carries the guard's deny digest %.12s: it is not past the guard", sv.Seq, sv.Row, sv.Caller, sv.BodyNormSHA))
+		}
+	}
 }
 
 // RowNamespaces maps each go-api shadow row key to its action namespace.
@@ -480,9 +546,15 @@ func judgeOutboundEnforced(report *Report, in EnforcedInput, byRow map[string]ro
 			}
 			continue
 		}
-		allowed, reached := 0, 0
+		allowed, reached, refusedHit := 0, 0, 0
 		for _, y := range in.YardOutbound {
-			if y.Row != row || denied(y.Status) {
+			if y.Row != row {
+				continue
+			}
+			if denied(y.Status) {
+				if y.Hits > 0 {
+					refusedHit++
+				}
 				continue
 			}
 			allowed++
@@ -492,7 +564,7 @@ func judgeOutboundEnforced(report *Report, in EnforcedInput, byRow map[string]ro
 		}
 		if reached == 0 {
 			check.noReach = append(check.noReach, row)
-			check.fails = append(check.fails, fmt.Sprintf("FAIL: row %s VOID: in the yardstick %d allowed slots, %d reached the stub; the row is no evidence", row, allowed, reached))
+			check.fails = append(check.fails, fmt.Sprintf("FAIL: row %s VOID: in the yardstick %d allowed slots, %d reached the stub (%d answered 401/403 with a stub hit: a relayed refusal or a call before the guard); the row is no evidence", row, allowed, reached, refusedHit))
 		}
 	}
 	for i := range report.Slots {
@@ -522,13 +594,19 @@ func keyOfYard(yard []OutboundSlot, row string) string {
 // bodyVerdict gives a status-equal cell its body verdict: a differing normalized body is MISMATCH_BODY; an equal 5xx
 // is EQUAL_PAST_GUARD only with the log proof that the decision point allowed the request, PDP_UNAVAILABLE when the log
 // shows no verdict, else VOID_PARITY (also when the route has an unjudged count for another reason than no_org or
-// served_org). A cell the yardstick skipped (the counter decides it) needs no proof.
+// served_org). A cell the yardstick skipped (the counter decides it) needs no proof here.
 func bodyVerdict(in EnforcedInput, slot Slot, y YardSlot, verdict string, unjudged, differs bool) string {
 	switch {
 	case differs:
 		return VerdictMismatchBody
 	case slot.Status < 500 || y.Verdict == VerdictSkipped || y.Verdict == VerdictSkippedSeam:
 		return verdict
+	}
+	if slot.Key() == orgDeleteKey && orgDeletionRefusedProof(in.Log, slot, in.Grace) {
+		if unjudged {
+			return VerdictVoidParity
+		}
+		return VerdictEqualPastGuard
 	}
 	switch pastGuard(in.Log, slot, in.Grace) {
 	case proofAllow:
@@ -572,4 +650,73 @@ func pastGuard(ev *Evidence, slot Slot, grace time.Duration) guardProof {
 		return proofAllow
 	}
 	return proofNone
+}
+
+// noOrgSkipProof reads the go-api log for a no-org superuser slot: exactly one result line of its route and caller kind in
+// its window, with result "skipped" and no decision_id, is the proof that the decision point was not asked (the
+// superuser has no token organization) while the handler answered.
+func noOrgSkipProof(ev *Evidence, slot Slot, grace time.Duration) bool {
+	if ev == nil {
+		return false
+	}
+	from, to := slot.Start.Add(-windowSkew), slot.End.Add(grace)
+	n, skipped := 0, false
+	for _, l := range ev.results {
+		if l.route == slot.Key() && l.caller == callerKind(slot.Caller) && !l.at.Before(from) && !l.at.After(to) {
+			n++
+			skipped = l.result == "skipped" && l.decision == ""
+		}
+	}
+	return n == 1 && skipped
+}
+
+// orgDeleteKey is row 13, the organization delete; its 5xx in the venue is the ClickHouse refusal that precedes any
+// change (orgdeletion_clickhouse.go: refusalDSNUnset), after the guard.
+const orgDeleteKey = "DELETE /api/v1/admin/orgs/{org_id}"
+
+// OrgDeletionRefusedMsg is the go-api ERROR line of a refused organization delete; reason dsn_unset is the venue's
+// ClickHouse URI left unset on purpose (row 13 stays the designed 503).
+const OrgDeletionRefusedMsg = "admin: org deletion refused"
+
+// orgDeletionRefusedProof is the EQUAL_PAST_GUARD proof of row 13: exactly one refusal line with reason dsn_unset for
+// the organization named by the last segment of the slot's path, in the slot's window. The line carries the org id and
+// no request id, and the slots are sequential with a gap, so the pair (org id, window) is the match.
+func orgDeletionRefusedProof(ev *Evidence, slot Slot, grace time.Duration) bool {
+	if ev == nil {
+		return false
+	}
+	org := slot.Path[strings.LastIndex(slot.Path, "/")+1:]
+	from, to := slot.Start.Add(-windowSkew), slot.End.Add(grace)
+	n := 0
+	for _, l := range ev.refusals {
+		if l.orgID == org && !l.at.Before(from) && !l.at.After(to) {
+			if l.reason != "dsn_unset" {
+				return false
+			}
+			n++
+		}
+	}
+	return n == 1
+}
+
+// ScheduleSHA12 is the first 12 hex digits of the sha-256 of the sent slots' row, caller, k and route key, in order: the
+// schedule of a run. The path (the pool org), the status and the time are not part of it, so the yardstick run and the
+// enforced run, which use other throwaway orgs, share one schedule when they send the same cells in the same order.
+func ScheduleSHA12(slots []Slot) string {
+	h := sha256.New()
+	for _, s := range slots {
+		if s.Gap() {
+			continue
+		}
+		fmt.Fprintf(h, "%s\t%s\t%d\t%s\n", s.Row, s.Caller, s.K, s.Key())
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}
+
+func yardScheduleSHA12(yard []YardSlot) string {
+	h := sha256.New()
+	for _, y := range yard {
+		fmt.Fprintf(h, "%s\t%s\t%d\t%s\n", y.Row, y.Caller, y.K, y.Key)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }

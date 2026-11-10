@@ -80,8 +80,9 @@
 #   CHANGES_RESULT     needs.changes.result       (selector gates only)
 #   CHANGES_CODE       needs.changes.outputs.code (selector gates only)
 #   HEAVY_ON_PR        "true" or "false": the PR carries ci:full (queue-heavy only)
-#   GATED_JOB_1..N     "<job name>|<policy>|<needs.<job>.result>", consecutive; an optional 4th field "|<unit>" names the
-#                      ready-reuse unit of the job: a skip is then a pass when READY_REUSED names that unit (prints REUSED)
+#   GATED_JOB_1..N     "<job name>|<policy>|<needs.<job>.result>", consecutive
+#   GATE_REUSE_n       optional "<job name>|<ready-reuse unit>": a skip of that job is a pass when READY_REUSED names the
+#                      unit on a pull_request run (prints REUSED <job> from run <id> attempt <a> job <ids>)
 #   READY_REUSED       the ready-reuse job's `reused` output ("unit=run:attempt:job[,job...]" entries; empty off a ready flip)
 #   GATE_TIMEOUT_NOTE_n  optional "<job name>|<names of the shards that ran to the job time limit>" (CHAOS-11331); a
 #                      failure or cancelled result of that job then reads JOB TIMEOUT (a slow runner or a hung test, no assertion failed); the verdict is unchanged
@@ -279,10 +280,12 @@ while true; do
   policy="${rest%%|*}"
   result="${rest#*|}"
   reuse_unit=""
-  if [[ "${result}" == *"|"* ]]; then
-    reuse_unit="${result#*|}"
-    result="${result%%|*}"
-  fi
+  for reuse_var in ${!GATE_REUSE_@}; do
+    reuse_spec="${!reuse_var}"
+    if [[ "${reuse_spec}" == *"|"* && "${reuse_spec%%|*}" == "${job_name}" ]]; then
+      reuse_unit="${reuse_spec#*|}"
+    fi
+  done
 
   printf '%s result: %s\n' "${job_name}" "${result:-<empty>}"
   validate_policy "${job_name}" "${policy}"

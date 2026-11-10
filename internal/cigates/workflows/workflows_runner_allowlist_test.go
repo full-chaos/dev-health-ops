@@ -153,7 +153,7 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	for _, p := range draftGatedJobs {
 		pinned[p] = true
 		if j, ok := job(p[0], p[1]); ok {
-			v := str(j["if"])
+			v := withoutReuse(str(j["if"]))
 			if !(v == draftGate || strings.HasPrefix(v, draftGate+" && (")) {
 				add("%s:%s lost the draft gate: got %q", p[0], p[1], v)
 			}
@@ -162,7 +162,7 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	for _, p := range sortedPairs(heavyGatedJobs) {
 		pinned[p] = true
 		if j, ok := job(p[0], p[1]); ok {
-			v, gate := str(j["if"]), heavyGatedJobs[p]
+			v, gate := withoutReuse(str(j["if"])), heavyGatedJobs[p]
 			if !(v == gate || strings.HasPrefix(v, gate+" && (")) {
 				add("%s:%s lost the heavy gate (merge queue, main push, ci:full pull request): got %q, want it to start with %q", p[0], p[1], v, gate)
 			}
@@ -246,10 +246,10 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	// the reproducibility twin pair: the hosted leg is the LITERAL negation
 	if hosted, ok := job("go.yml", "go-container-reproducibility"); ok {
 		if sh, ok := job("go.yml", "go-container-reproducibility-self-hosted"); ok {
-			if got := ungated(str(sh["if"])); got != allowlistCondition {
+			if got := ungated(withoutReuse(str(sh["if"]))); got != allowlistCondition {
 				add("go-container-reproducibility-self-hosted's if does not EXACTLY match the allow-list condition: got %q", got)
 			}
-			if got := ungated(str(hosted["if"])); got != "!("+allowlistCondition+")" {
+			if got := ungated(withoutReuse(str(hosted["if"]))); got != "!("+allowlistCondition+")" {
 				add("go-container-reproducibility's if must be the literal negation !(...) of the self-hosted leg's condition: got %q", got)
 			}
 		}
@@ -258,7 +258,7 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	// dind-smoke-test routing sites
 	for _, f := range []string{"go.yml", "docker-images.yml"} {
 		if j, ok := job(f, "dind-smoke-test"); ok {
-			if got := ungated(str(j["if"])); got != dindWant(f) {
+			if got := ungated(withoutReuse(str(j["if"]))); got != dindWant(f) {
 				add("%s:dind-smoke-test if does not EXACTLY match the allow-list condition: got %q", f, got)
 			}
 		}

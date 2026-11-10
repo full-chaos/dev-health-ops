@@ -216,7 +216,7 @@ func dockerMatrixViolations(t *testing.T, root string) []string {
 		}
 	}
 	for _, job := range []string{"go-build", "go-build-dho-arm64", "go-api-tools-build"} {
-		cond := strings.TrimSpace(asString(pinJob(dock, job)["if"]))
+		cond := withoutReuse(asString(pinJob(dock, job)["if"]))
 		ctx := queueContext("merge_group", "refs/heads/gh-readonly-queue/main/pr-1-abc")
 		if v, err := queueEval(cond, ctx); err != nil || !v.truthy() {
 			add("%s does not run on a merge_group entry (err %v)", job, err)
@@ -232,10 +232,10 @@ func dockerMatrixViolations(t *testing.T, root string) []string {
 	for _, docs := range []string{"false", "true"} {
 		dctx := queueContext("merge_group", "refs/heads/gh-readonly-queue/main/pr-1-abc")
 		dctx["needs.changes.outputs.docs_only"] = docs
-		dv, derr := queueEval(strings.TrimSpace(asString(build["if"])), dctx)
+		dv, derr := queueEval(withoutReuse(asString(build["if"])), dctx)
 		gctx := queueContext("merge_group", "refs/heads/gh-readonly-queue/main/pr-1-abc")
 		gctx["needs.go-storage-integration-plan.outputs.docs_only"] = docs
-		gv, gerr := queueEval(strings.TrimSpace(asString(cb["if"])), gctx)
+		gv, gerr := queueEval(withoutReuse(asString(cb["if"])), gctx)
 		if derr != nil || gerr != nil {
 			add("coverage docs_only=%s: eval errors docker %v go %v", docs, derr, gerr)
 			continue

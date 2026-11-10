@@ -44,8 +44,27 @@ const reuseJob = "ready-reuse"
 var (
 	reuseClauseRe = regexp.MustCompile(`!contains\(fromJSON\(needs\.ready-reuse\.outputs\.passed\), '([a-z0-9-]+)'\)`)
 	draftReadRe   = regexp.MustCompile(`github\.event\.pull_request\.draft|github\.event\.action|PR_DRAFT`)
-	gatedJobRe    = regexp.MustCompile(`^([^|]+)\|([^|]+)\|(.*?)(?:\|([a-z0-9-]+))?$`)
+	gatedJobRe    = regexp.MustCompile(`^([^|]+)\|([^|]+)\|(.*)$`)
 )
+
+// topLevelOr reports a || outside every paren and quoted string.
+func topLevelOr(e string) bool {
+	depth, quoted := 0, false
+	for i := 0; i < len(e); i++ {
+		switch c := e[i]; {
+		case c == '\'':
+			quoted = !quoted
+		case quoted:
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+		case depth == 0 && strings.HasPrefix(e[i:], "||"):
+			return true
+		}
+	}
+	return false
+}
 
 func readyReuseUnits(job yamlMap) (map[string]bool, string) {
 	steps := stepsOf(job)
@@ -67,7 +86,7 @@ func readyReuseJobDefects(job yamlMap) []string {
 		out = append(out, "name is not "+reuseJob)
 	}
 	if job["needs"] != nil {
-		out = append(out, "needs nothing: it is the first job")
+		out = append(out, "needs nothing: every leg waits on it")
 	}
 	perms := asMap(job["permissions"])
 	if perms["actions"] != "read" || perms["contents"] != "read" {
@@ -203,10 +222,12 @@ func readyReuseWiringViolations(t *testing.T, root string) []string {
 			c := strings.TrimSpace(cond)
 			if inner, wrapped := strings.CutPrefix(c, "${{"); wrapped {
 				if strings.TrimSpace(strings.TrimSuffix(inner, "}}")) != ms[0][0] {
-					add("%s: job %s must be (<its condition>) && <reuse clause>", name, id)
+					add("%s: job %s must be <its condition> && <reuse clause>", name, id)
 				}
-			} else if !strings.HasSuffix(c, ") && "+ms[0][0]) || !strings.HasPrefix(c, "(") {
-				add("%s: job %s must be (<its condition>) && <reuse clause>", name, id)
+			} else if rest, ok := strings.CutSuffix(c, " && "+ms[0][0]); !ok {
+				add("%s: job %s must be <its condition> && <reuse clause>", name, id)
+			} else if topLevelOr(rest) {
+				add("%s: job %s: its condition has a top-level ||, so the appended reuse clause binds to its last operand only", name, id)
 			}
 			if !strings.Contains(" "+strings.Trim(needs, "[]")+" ", " "+reuseJob+" ") {
 				add("%s: job %s reads the reuse output but does not need %s", name, id, reuseJob)
@@ -219,28 +240,39 @@ func readyReuseWiringViolations(t *testing.T, root string) []string {
 				add("%s: unit %s is declared but no job skips for it", name, u)
 			}
 		}
-		// A gate counts a reused skip only through the unit of that job.
+		// A gate counts a reused skip only through the unit of that job (GATE_REUSE_n: <job>|<unit>).
 		for _, id := range sortedKeys(jobs) {
 			for _, s := range stepsOf(jobs[id]) {
 				env := asMap(s["env"])
+				gated, reuse := map[string]bool{}, map[string]string{}
 				for _, k := range sortedKeys(env) {
-					if !strings.HasPrefix(k, "GATED_JOB_") {
-						continue
+					v := asString(env[k])
+					if strings.HasPrefix(k, "GATED_JOB_") {
+						if m := gatedJobRe.FindStringSubmatch(v); m != nil {
+							gated[m[1]] = true
+						}
 					}
-					m := gatedJobRe.FindStringSubmatch(asString(env[k]))
-					if m == nil {
-						continue
+					if strings.HasPrefix(k, "GATE_REUSE_") {
+						job, unit, _ := strings.Cut(v, "|")
+						reuse[job] = unit
 					}
-					want := jobUnit[m[1]]
-					if m[1] == "go-container-reproducibility" {
+				}
+				for job := range gated {
+					want := jobUnit[job]
+					if job == "go-container-reproducibility" {
 						want = jobUnit["go-container-reproducibility-self-hosted"]
 					}
-					if m[4] != want {
-						add("%s: %s %s names reuse unit %q, want %q", name, id, k, m[4], want)
+					if reuse[job] != want {
+						add("%s: %s judges %s with reuse unit %q, want %q", name, id, job, reuse[job], want)
 					}
-					if want != "" && env["READY_REUSED"] != "${{ needs.ready-reuse.outputs.reused }}" {
-						add("%s: %s judges reused legs without READY_REUSED", name, id)
+				}
+				for job := range reuse {
+					if !gated[job] {
+						add("%s: %s has a GATE_REUSE row for %s, which it does not judge", name, id, job)
 					}
+				}
+				if len(reuse) > 0 && env["READY_REUSED"] != "${{ needs.ready-reuse.outputs.reused }}" {
+					add("%s: %s judges reused legs without READY_REUSED", name, id)
 				}
 			}
 		}
@@ -275,14 +307,17 @@ func TestReadyReuseWiringPlantedDefects(t *testing.T) {
 			mutation{goYml, " && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'graphql-wire-parity')", ""},
 			[]string{"go.yml", "draft-gated job graphql-wire-parity has no reuse clause"}},
 		{"a leg skips for an undeclared unit",
-			mutation{".github/workflows/security-scan.yml", "outputs.passed), 'gitleaks')", "outputs.passed), 'gitleak')"},
-			[]string{"security-scan.yml", "unit gitleak, which ready-reuse does not declare"}},
+			mutation{".github/workflows/security-scan.yml", "outputs.passed), 'semgrep')", "outputs.passed), 'semgre')"},
+			[]string{"security-scan.yml", "unit semgre, which ready-reuse does not declare"}},
 		{"the judge comes from the PR tree",
 			mutation{goYml, "          ref: ${{ github.event.pull_request.base.sha }}\n          sparse-checkout: ci/ready_reuse.sh", "          sparse-checkout: ci/ready_reuse.sh"},
 			[]string{"go.yml", "from the BASE commit"}},
 		{"a gate entry without its unit",
-			mutation{goYml, "${{ needs.graphql-wire-parity.result }}|graphql-wire-parity", "${{ needs.graphql-wire-parity.result }}"},
-			[]string{"go.yml", "GATED_JOB_7 names reuse unit \"\", want \"graphql-wire-parity\""}},
+			mutation{goYml, "          GATE_REUSE_6: graphql-wire-parity|graphql-wire-parity\n", ""},
+			[]string{"go.yml", "go-queue-gate judges graphql-wire-parity with reuse unit \"\", want \"graphql-wire-parity\""}},
+		{"the reuse clause binds to the last operand of a top-level ||",
+			mutation{".github/workflows/go-auth-service.yml", "    if: needs.auth-changes.outputs.relevant == 'true' && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'auth-test')", "    if: needs.auth-changes.outputs.relevant == 'true' || github.event_name == 'push' && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'auth-test')"},
+			[]string{"go-auth-service.yml", "auth-test: its condition has a top-level ||"}},
 		{"a leg reads the reuse output without needing the judge",
 			mutation{".github/workflows/go-workers-compose-proof.yml", "    needs: ready-reuse\n", ""},
 			[]string{"go-workers-compose-proof.yml", "does not need ready-reuse"}},
@@ -292,4 +327,41 @@ func TestReadyReuseWiringPlantedDefects(t *testing.T) {
 			expectViolation(t, readyReuseWiringViolations(t, plantTree(t, root, files, c.mut)), c.want...)
 		})
 	}
+}
+
+var reuseSuffixRe = regexp.MustCompile(` && !contains\(fromJSON\(needs\.ready-reuse\.outputs\.passed\), '[a-z0-9-]+'\)$`)
+
+// withoutReuse drops the ready-flip reuse clause from a job condition, so a guard of the job's own condition reads it as
+// before; TestReadyReuseWiring guards the clause itself.
+func withoutReuse(cond string) string {
+	return reuseSuffixRe.ReplaceAllString(strings.TrimSpace(cond), "")
+}
+
+// needsWithoutReuse drops ready-reuse from a needs value (a list or a scalar), in the original order.
+func needsWithoutReuse(v any) any {
+	l, ok := v.([]any)
+	if !ok {
+		return v
+	}
+	var out []any
+	for _, n := range l {
+		if n != reuseJob {
+			out = append(out, n)
+		}
+	}
+	if len(out) == 1 {
+		return out[0]
+	}
+	return out
+}
+
+// dropReuse drops ready-reuse from a needs list.
+func dropReuse(needs []string) []string {
+	var out []string
+	for _, n := range needs {
+		if n != reuseJob {
+			out = append(out, n)
+		}
+	}
+	return out
 }

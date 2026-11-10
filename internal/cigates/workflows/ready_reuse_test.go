@@ -283,6 +283,7 @@ func readyReuseScenarios() []scenario {
 		s("codeql without an analysis for the merge sha not reused", rdyWorld{units: rdyUnitCodeQL, polls: [][]rdyRun{{codeqlRun}}}, `[]`),
 		s("twin with one leg run reused", rdyWorld{units: rdyUnitTwin, polls: [][]rdyRun{{rdyDoneRun(100, rdyOK(71, "go-container-reproducibility"), rdyJobWith(72, "go-container-reproducibility", "skipped", 1))}}}, `["repro"]`, "job 71"),
 		s("twin with both legs skipped not reused", rdyWorld{units: rdyUnitTwin, polls: [][]rdyRun{{rdyDoneRun(100, rdyJobWith(71, "go-container-reproducibility", "skipped", 1), rdyJobWith(72, "go-container-reproducibility", "skipped", 1))}}}, `[]`),
+		s("twin with a failed leg not reused", rdyWorld{units: rdyUnitTwin, polls: [][]rdyRun{{rdyDoneRun(100, rdyOK(71, "go-container-reproducibility"), rdyJobWith(72, "go-container-reproducibility", "failure", 1))}}}, `[]`),
 		s("unit lines AND together", rdyWorld{units: rdyUnitA + "\na exact 1 - leg-b", polls: [][]rdyRun{{rdyDoneRun(100, rdyOK(11, "leg-a"), rdyJobWith(12, "leg-b", "skipped", 1))}}}, `[]`),
 		s("newest passing run is the source", rdyWorld{units: rdyUnitA, polls: [][]rdyRun{{rdyDoneRun(100, rdyJobWith(11, "leg-a", "failure", 1)), rdyDoneRun(90, rdyOK(9, "leg-a"))}}}, `["a"]`, "from run 90"),
 		s("no other run reuses nothing", rdyWorld{units: rdyUnitA, polls: [][]rdyRun{{}}}, `[]`, "READY REUSE NONE"),
@@ -321,6 +322,48 @@ func TestReadyReuseJudgePlantedDefects(t *testing.T) {
 		p("drop the codeql merge check", `codeql-merge) codeql_merge_ok || return 1 ;;`, `codeql-merge) ;;`, "codeql without an analysis for the merge sha not reused", "passed="),
 		p("do not wait for runs in flight", `[ -z "${pending}" ] && break`, `break`, "in-flight run waited then reused", "passed="),
 		p("wait for a newer waiting ready run", `if [ "${waiter:-0}" != 0 ]; then`, `if false; then`, "newer waiting ready run not waited for", "output has"),
-		p("twin accepts no run at all", `if $ok >= 1 and`, `if $ok >= 0 and`, "twin with both legs skipped not reused", "passed="),
+		p("twin accepts a failed leg", `if $ok >= 1 and ($m | all(.conclusion == "success" or .conclusion == "skipped"))`, `if $ok >= 1`, "twin with a failed leg not reused", "passed="),
 	})
+}
+
+// A gate counts a skipped job as passed only when ready-reuse named that job's unit, on a pull_request run, in the
+// "unit=run:attempt:job" form; it then prints the REUSED line. Any other skip keeps its policy verdict.
+func TestAggregateGateCountsOnlyANamedReuse(t *testing.T) {
+	base := map[string]string{
+		"GATE_NAME": "go-queue-gate", "EVENT_NAME": "pull_request", "CHANGES_RESULT": "success", "CHANGES_CODE": "true",
+		"HEAVY_ON_PR": "true", "GATED_JOB_1": "go-container-smoke|queue-heavy|skipped", "GATE_REUSE_1": "go-container-smoke|go-container",
+	}
+	with := func(kv ...string) map[string]string {
+		env := map[string]string{}
+		for k, v := range base {
+			env[k] = v
+		}
+		for i := 0; i+1 < len(kv); i += 2 {
+			if kv[i+1] == "" {
+				delete(env, kv[i])
+			} else {
+				env[kv[i]] = kv[i+1]
+			}
+		}
+		return env
+	}
+	v := runGate(t, with("READY_REUSED", "graphql-wire-parity=7:1:70 go-container=42:2:420,421"))
+	assertVerdict(t, "go-queue-gate", v, true, "a skip whose unit ready-reuse named")
+	if !strings.Contains(v.stdout, "REUSED go-container-smoke from run 42 attempt 2 job 420,421") {
+		t.Fatalf("the reused skip must print its source run: %q", v.stdout)
+	}
+	for _, c := range []struct {
+		name string
+		env  map[string]string
+	}{
+		{"no ready-reuse output", with()},
+		{"another unit named", with("READY_REUSED", "graphql-wire-parity=7:1:70")},
+		{"a merge_group run", with("READY_REUSED", "go-container=42:2:420", "EVENT_NAME", "merge_group")},
+		{"a malformed source", with("READY_REUSED", "go-container=42:two:420")},
+		{"no reuse row for the job", with("READY_REUSED", "go-container=42:2:420", "GATE_REUSE_1", "")},
+	} {
+		assertVerdict(t, "go-queue-gate", runGate(t, c.env), false, c.name)
+	}
+	failed := runGate(t, with("READY_REUSED", "go-container=42:2:420", "GATED_JOB_1", "go-container-smoke|queue-heavy|failure"))
+	assertVerdict(t, "go-queue-gate", failed, false, "a failed job whose unit ready-reuse named")
 }

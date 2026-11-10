@@ -364,61 +364,6 @@ env:
   GOPROXY: https://proxy.golang.org|direct
 
 jobs:
-  # Ready flip: names the legs that already passed on this exact head sha (ci/ready_reuse.sh, read from the BASE commit
-  # so a change cannot rewrite its own judge); each leg below skips when its unit is in `passed`, and its gate prints
-  # REUSED for it. Every other event, and a base without the script, passes [] and every leg runs.
-  ready-reuse:
-    name: ready-reuse
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      actions: read
-      contents: read
-    outputs:
-      passed: ${{ steps.reuse.outputs.passed || '[]' }}
-      reused: ${{ steps.reuse.outputs.reused }}
-    steps:
-      - name: Check out the reuse judge from the base commit
-        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          sparse-checkout: ci/ready_reuse.sh
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - name: Name the legs that already passed on this head sha
-        id: reuse
-        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MERGE_SHA: ${{ github.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          READY_REUSE_UNITS: |
-            go-arm64-numeric-parity exact 1 - go-arm64-numeric-parity
-            go-golden-drift exact 1 - go-golden-drift
-            go-storage-integration-shard exact 1 integ go-storage-integration
-            go-container prefix 1 - go-container-build (
-            go-container prefix 1 - go-container-smoke (
-            go-container exact 1 - go-container-security
-            go-container exact 1 - go-auth-compose-proof
-            go-container exact 1 - go-auth-web-proxy-proof
-            go-container-reproducibility twin 2 - go-container-reproducibility
-            go-container-reproducibility exact 1 - dind-smoke-test
-            graphql-wire-parity exact 1 - graphql-wire-parity
-        run: |
-          if [ ! -f ci/ready_reuse.sh ]; then
-            echo "READY REUSE OFF: the base commit has no ci/ready_reuse.sh; every leg runs"
-            echo 'passed=[]' >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          bash ci/ready_reuse.sh
-
   # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
   # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/
   # lane-4904-acr-runners/contract-v1.6-signed.md -- supersedes v1.5.1's
@@ -452,13 +397,13 @@ jobs:
     name: go-arm64-numeric-parity
     needs: ready-reuse
     if: >-
-      ((!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
       (vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
       github.event_name == 'release' ||
-      github.event_name == 'schedule'))) &&
+      github.event_name == 'schedule')) &&
       !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-arm64-numeric-parity')
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 10
@@ -710,7 +655,7 @@ jobs:
   # sensitive the way six simultaneous shard legs are.
   dind-smoke-test:
     needs: ready-reuse
-    if: ((!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))) && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container-reproducibility')
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container-reproducibility')
     runs-on: [self-hosted, oci-arc-runners]
     # CHAOS-4906 (09-04): job-level `concurrency:` serialization was tried
     # here and on go-container-reproducibility-self-hosted, then REVERTED
@@ -763,8 +708,8 @@ jobs:
   # stays for go-container-reproducibility only.
   go-storage-integration-shard:
     name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
-    needs: [ready-reuse, go-storage-integration-plan]
-    if: (needs.go-storage-integration-plan.result == 'success' && needs.go-storage-integration-plan.outputs.legs != '0') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-storage-integration-shard')
+    needs: [go-storage-integration-plan, ready-reuse]
+    if: needs.go-storage-integration-plan.result == 'success' && needs.go-storage-integration-plan.outputs.legs != '0' && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-storage-integration-shard')
     runs-on: ubuntu-latest
     # CHAOS-11331: 35 min = the longest measured packages-shard job wall x2 (1056 s x2 = 2112 s, floored to whole minutes), the
     # rule of the other caps in this file. Runs 41193580536 and 41195412958 (merge_group, after the #5369 weights): shard 6
@@ -858,7 +803,7 @@ jobs:
   go-golden-drift:
     name: go-golden-drift
     needs: ready-reuse
-    if: (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-golden-drift')
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-golden-drift')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -919,21 +864,21 @@ jobs:
     # always(): a skipped shard matrix (the plan's explicit legs=0) must still be judged here, never skip this job.
     if: always()
     needs:
-      - ready-reuse
       - go-storage-integration-plan
       - go-storage-integration-shard
+      - ready-reuse
     permissions:
       actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      # "unit=run:attempt:job" entries of ready-reuse; the shard unit names the source run's go-storage-integration job.
-      READY_REUSED: ${{ needs.ready-reuse.outputs.reused }}
-      EVENT_NAME: ${{ github.event_name }}
       PLAN_RESULT: ${{ needs.go-storage-integration-plan.result }}
       SHARD_RESULT: ${{ needs.go-storage-integration-shard.result }}
       PLAN_LEGS: ${{ needs.go-storage-integration-plan.outputs.legs }}
       SKIP_REASON: ${{ needs.go-storage-integration-plan.outputs.skip_reason }}
+      # "unit=run:attempt:job" entries of ready-reuse; the shard unit names the source run's go-storage-integration job.
+      READY_REUSED: ${{ needs.ready-reuse.outputs.reused }}
+      EVENT_NAME: ${{ github.event_name }}
     # The names of the shards that ended at their time limit ("" when none). Written by the naming step, which runs on
     # every red verdict (its `if: failure()` holds whenever the verdict step above exits 1), so go-queue-gate can read it.
     outputs:
@@ -1106,8 +1051,8 @@ jobs:
   # commit metadata for the publish path, and the fixed phase1-ci metadata here is what smoke asserts.
   go-container-build:
     # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
-    needs: [ready-reuse, go-storage-integration-plan]
-    if: ((!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container')
+    needs: [go-storage-integration-plan, ready-reuse]
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true' && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container')
     name: go-container-build (${{ matrix.platform }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1153,8 +1098,8 @@ jobs:
 
   go-container-smoke:
     # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
-    needs: [ready-reuse, go-storage-integration-plan, go-container-build]
-    if: ((!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container')
+    needs: [go-storage-integration-plan, go-container-build, ready-reuse]
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true' && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container')
     # Every Go image is smoked on both architectures it ships for. The arm64
     # leg runs on the same x64 host: the Dockerfile's build stage is
     # `--platform=$BUILDPLATFORM` (Go cross-compiles natively), and only the
@@ -1206,8 +1151,8 @@ jobs:
     # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
     # CHAOS-11415: one job scans the six images of go-container-build (amd64), each by the id that job reported. Every
     # target is scanned even when an earlier one fails; the job is red if any step is red.
-    needs: [ready-reuse, go-storage-integration-plan, go-container-build]
-    if: ((!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container')
+    needs: [go-storage-integration-plan, go-container-build, ready-reuse]
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true' && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -1424,16 +1369,16 @@ jobs:
   go-container-reproducibility:
     name: go-container-reproducibility
     # Heavy (merge queue, main push, ci:full PR); a docs-only change skips it. go-queue-gate judges the pair as one.
-    needs: [ready-reuse, go-storage-integration-plan]
+    needs: [go-storage-integration-plan, ready-reuse]
     if: >-
-      ((!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
       needs.go-storage-integration-plan.outputs.docs_only != 'true' &&
       (!(vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
       github.event_name == 'release' ||
-      github.event_name == 'schedule')))) &&
+      github.event_name == 'schedule'))) &&
       !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container-reproducibility')
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -1445,16 +1390,16 @@ jobs:
 
   go-container-reproducibility-self-hosted:
     name: go-container-reproducibility
-    needs: [ready-reuse, dind-smoke-test, go-storage-integration-plan]
+    needs: [dind-smoke-test, go-storage-integration-plan, ready-reuse]
     if: >-
-      ((!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
       needs.go-storage-integration-plan.outputs.docs_only != 'true' &&
       (vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
       github.event_name == 'release' ||
-      github.event_name == 'schedule'))) &&
+      github.event_name == 'schedule')) &&
       !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container-reproducibility')
     runs-on: [self-hosted, oci-arc-runners]
     # CHAOS-4906 (09-04): a job-level `concurrency:` group was added here
@@ -1523,8 +1468,8 @@ jobs:
   # is the part that RUNS them together.
   go-auth-compose-proof:
     # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
-    needs: [ready-reuse, go-storage-integration-plan, go-container-build]
-    if: ((!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container')
+    needs: [go-storage-integration-plan, go-container-build, ready-reuse]
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true' && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1593,8 +1538,8 @@ jobs:
   # name on dev-health-web, else main.
   go-auth-web-proxy-proof:
     # Heavy: runs in the merge queue, on the main push, and on a pull request only with ci:full; a docs-only change skips it.
-    needs: [ready-reuse, go-storage-integration-plan, go-container-build]
-    if: ((!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container')
+    needs: [go-storage-integration-plan, go-container-build, ready-reuse]
+    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true' && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-container')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -1700,8 +1645,8 @@ jobs:
 
   graphql-wire-parity:
     # Fast (runs on a pull request); a docs-only change skips it, here and in the merge queue.
-    needs: [ready-reuse, go-storage-integration-plan]
-    if: ((!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (needs.go-storage-integration-plan.outputs.docs_only != 'true')) && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'graphql-wire-parity')
+    needs: [go-storage-integration-plan, ready-reuse]
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (needs.go-storage-integration-plan.outputs.docs_only != 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'graphql-wire-parity')
     # CHAOS-4696: query-api's registered-document consts must digest-match
     # what a real client actually sends. The wire form can ONLY be
     # computed correctly by the web repo's own pinned @urql/core/graphql
@@ -1815,7 +1760,6 @@ jobs:
     name: go-queue-gate
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
     needs:
-      - ready-reuse
       - go-storage-integration-plan
       - go-storage-integration
       - go-container-build
@@ -1826,6 +1770,7 @@ jobs:
       - go-auth-compose-proof
       - go-auth-web-proxy-proof
       - graphql-wire-parity
+      - ready-reuse
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1834,8 +1779,6 @@ jobs:
       - name: Aggregate the heavy Go results
         env:
           GATE_NAME: go-queue-gate
-          # Ready flip: a leg skipped because ready-reuse named its unit passes, with a REUSED line naming the source run.
-          READY_REUSED: ${{ needs.ready-reuse.outputs.reused }}
           EVENT_NAME: ${{ github.event_name }}
           GATE_HAS_SELECTOR: "true"
           CHANGES_RESULT: ${{ needs.go-storage-integration-plan.result }}
@@ -1845,15 +1788,81 @@ jobs:
           GATED_JOB_1: go-storage-integration|unconditional|${{ needs.go-storage-integration.result }}
           # CHAOS-11331: the shards that ran to their time limit; the gate says JOB TIMEOUT for them, not a test failure.
           GATE_TIMEOUT_NOTE_1: go-storage-integration|${{ needs.go-storage-integration.outputs.timed_out }}
-          GATED_JOB_2: go-container-smoke|queue-heavy|${{ needs.go-container-smoke.result }}|go-container
-          GATED_JOB_3: go-container-security|queue-heavy|${{ needs.go-container-security.result }}|go-container
+          GATED_JOB_2: go-container-smoke|queue-heavy|${{ needs.go-container-smoke.result }}
+          GATED_JOB_3: go-container-security|queue-heavy|${{ needs.go-container-security.result }}
           # The hosted and self-hosted twins: exactly one is routed per event, so the pair is one result (the
           # self-hosted twin's when the hosted one skipped).
-          GATED_JOB_4: go-container-reproducibility|queue-heavy|${{ needs.go-container-reproducibility.result == 'skipped' && needs.go-container-reproducibility-self-hosted.result || needs.go-container-reproducibility.result }}|go-container-reproducibility
-          GATED_JOB_5: go-auth-compose-proof|queue-heavy|${{ needs.go-auth-compose-proof.result }}|go-container
-          GATED_JOB_6: go-auth-web-proxy-proof|queue-heavy|${{ needs.go-auth-web-proxy-proof.result }}|go-container
-          GATED_JOB_7: graphql-wire-parity|queue-heavy|${{ needs.graphql-wire-parity.result }}|graphql-wire-parity
-          GATED_JOB_8: go-container-build|queue-heavy|${{ needs.go-container-build.result }}|go-container
+          GATED_JOB_4: go-container-reproducibility|queue-heavy|${{ needs.go-container-reproducibility.result == 'skipped' && needs.go-container-reproducibility-self-hosted.result || needs.go-container-reproducibility.result }}
+          GATED_JOB_5: go-auth-compose-proof|queue-heavy|${{ needs.go-auth-compose-proof.result }}
+          GATED_JOB_6: go-auth-web-proxy-proof|queue-heavy|${{ needs.go-auth-web-proxy-proof.result }}
+          GATED_JOB_7: graphql-wire-parity|queue-heavy|${{ needs.graphql-wire-parity.result }}
+          GATED_JOB_8: go-container-build|queue-heavy|${{ needs.go-container-build.result }}
+          # Ready flip: a job skipped because ready-reuse named its unit (GATE_REUSE_n: <job>|<unit>) passes, with a REUSED
+          # line naming the source run.
+          READY_REUSED: ${{ needs.ready-reuse.outputs.reused }}
+          GATE_REUSE_1: go-container-smoke|go-container
+          GATE_REUSE_2: go-container-security|go-container
+          GATE_REUSE_3: go-container-reproducibility|go-container-reproducibility
+          GATE_REUSE_4: go-auth-compose-proof|go-container
+          GATE_REUSE_5: go-auth-web-proxy-proof|go-container
+          GATE_REUSE_6: graphql-wire-parity|graphql-wire-parity
+          GATE_REUSE_7: go-container-build|go-container
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh
+
+  # Ready flip: names the legs that already passed on this exact head sha (ci/ready_reuse.sh, read from the BASE commit
+  # so a change cannot rewrite its own judge); each leg below skips when its unit is in `passed`, and its gate prints
+  # REUSED for it. Every other event, and a base without the script, passes [] and every leg runs.
+  ready-reuse:
+    name: ready-reuse
+    runs-on: ubuntu-latest
+    # The judge waits up to 20 minutes for a run of the same sha still in flight.
+    timeout-minutes: 24
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      passed: ${{ steps.reuse.outputs.passed || '[]' }}
+      reused: ${{ steps.reuse.outputs.reused }}
+    steps:
+      - name: Check out the reuse judge from the base commit
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: ci/ready_reuse.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Name the legs that already passed on this head sha
+        id: reuse
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          READY_REUSE_UNITS: |
+            go-arm64-numeric-parity exact 1 - go-arm64-numeric-parity
+            go-golden-drift exact 1 - go-golden-drift
+            go-storage-integration-shard exact 1 integ go-storage-integration
+            go-container prefix 1 - go-container-build (
+            go-container prefix 1 - go-container-smoke (
+            go-container exact 1 - go-container-security
+            go-container exact 1 - go-auth-compose-proof
+            go-container exact 1 - go-auth-web-proxy-proof
+            go-container-reproducibility twin 2 - go-container-reproducibility
+            go-container-reproducibility exact 1 - dind-smoke-test
+            graphql-wire-parity exact 1 - graphql-wire-parity
+        run: |
+          if [ ! -f ci/ready_reuse.sh ]; then
+            echo "READY REUSE OFF: the base commit has no ci/ready_reuse.sh; every leg runs"
+            echo 'passed=[]' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          bash ci/ready_reuse.sh

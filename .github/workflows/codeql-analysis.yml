@@ -42,52 +42,6 @@ permissions:
   contents: read
 
 jobs:
-  # Ready flip: names the legs that already passed on this exact head sha (ci/ready_reuse.sh, read from the BASE commit
-  # so a change cannot rewrite its own judge); each leg below skips when its unit is in `passed`, and its gate prints
-  # REUSED for it. Every other event, and a base without the script, passes [] and every leg runs.
-  ready-reuse:
-    name: ready-reuse
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      actions: read
-      contents: read
-      security-events: read
-    outputs:
-      passed: ${{ steps.reuse.outputs.passed || '[]' }}
-      reused: ${{ steps.reuse.outputs.reused }}
-    steps:
-      - name: Check out the reuse judge from the base commit
-        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          sparse-checkout: ci/ready_reuse.sh
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - name: Name the legs that already passed on this head sha
-        id: reuse
-        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MERGE_SHA: ${{ github.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          READY_REUSE_UNITS: |
-            analyze exact 1 codeql-merge Analyze (go)
-        run: |
-          if [ ! -f ci/ready_reuse.sh ]; then
-            echo "READY REUSE OFF: the base commit has no ci/ready_reuse.sh; every leg runs"
-            echo 'passed=[]' >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          bash ci/ready_reuse.sh
-
   # The code_scanning ruleset needs a CodeQL result on every pull request, and a workflow skipped by a path filter
   # uploads none. So the workflow always starts. `changes` decides docs-only FAIL CLOSED: true only when git's diff of
   # the event's own base and head commits is non-empty and every changed path (and every rename source) is a docs path; any error, any other path, and every
@@ -195,7 +149,7 @@ jobs:
 
   analyze:
     name: Analyze
-    needs: [ready-reuse, changes, refresh-target]
+    needs: [changes, refresh-target, ready-reuse]
     if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (!cancelled() && needs.changes.outputs.docs_only != 'true' && (needs.refresh-target.result == 'success' || !(github.event_name == 'workflow_dispatch' && inputs.pr != ''))) && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'analyze')
     runs-on: ubuntu-latest
     # CodeQL needs SARIF upload and audit access for security results.
@@ -256,7 +210,7 @@ jobs:
   # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
   cancel-stacked-queue-children:
     name: cancel-stacked-queue-children
-    needs: [changes, refresh-target, analyze-docs-only, analyze]
+    needs: [changes, refresh-target, analyze-docs-only, analyze, ready-reuse]
     if: failure() && github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -278,3 +232,50 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
         run: bash ci/cancel_stacked_queue_runs.sh
+
+  # Ready flip: names the legs that already passed on this exact head sha (ci/ready_reuse.sh, read from the BASE commit
+  # so a change cannot rewrite its own judge); each leg below skips when its unit is in `passed`, and its gate prints
+  # REUSED for it. Every other event, and a base without the script, passes [] and every leg runs.
+  ready-reuse:
+    name: ready-reuse
+    runs-on: ubuntu-latest
+    # The judge waits up to 20 minutes for a run of the same sha still in flight.
+    timeout-minutes: 24
+    permissions:
+      actions: read
+      contents: read
+      security-events: read
+    outputs:
+      passed: ${{ steps.reuse.outputs.passed || '[]' }}
+      reused: ${{ steps.reuse.outputs.reused }}
+    steps:
+      - name: Check out the reuse judge from the base commit
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: ci/ready_reuse.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Name the legs that already passed on this head sha
+        id: reuse
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          READY_REUSE_UNITS: |
+            analyze exact 1 codeql-merge Analyze (go)
+        run: |
+          if [ ! -f ci/ready_reuse.sh ]; then
+            echo "READY REUSE OFF: the base commit has no ci/ready_reuse.sh; every leg runs"
+            echo 'passed=[]' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          bash ci/ready_reuse.sh

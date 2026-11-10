@@ -163,7 +163,7 @@ func queueGateViolations(t *testing.T, root string) []string {
 		if got := asString(j["if"]); got != g.condition {
 			add("%s:%s: the if must be exactly %q (always(), so a cancelled run reports; pull_request and merge_group only), got %q", g.file, g.job, g.condition, got)
 		}
-		if got := needsList(j); !reflect.DeepEqual(got, g.needs) {
+		if got := dropReuse(needsList(j)); !reflect.DeepEqual(got, g.needs) {
 			add("%s:%s: needs %v, want %v", g.file, g.job, got, g.needs)
 		}
 		var env yamlMap

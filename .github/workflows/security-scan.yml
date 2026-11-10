@@ -33,52 +33,6 @@ permissions:
   contents: read
 
 jobs:
-  # Ready flip: names the legs that already passed on this exact head sha (ci/ready_reuse.sh, read from the BASE commit
-  # so a change cannot rewrite its own judge); each leg below skips when its unit is in `passed`, and its gate prints
-  # REUSED for it. Every other event, and a base without the script, passes [] and every leg runs.
-  ready-reuse:
-    name: ready-reuse
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      actions: read
-      contents: read
-    outputs:
-      passed: ${{ steps.reuse.outputs.passed || '[]' }}
-      reused: ${{ steps.reuse.outputs.reused }}
-    steps:
-      - name: Check out the reuse judge from the base commit
-        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          sparse-checkout: ci/ready_reuse.sh
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - name: Name the legs that already passed on this head sha
-        id: reuse
-        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MERGE_SHA: ${{ github.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          READY_REUSE_UNITS: |
-            semgrep exact 1 - Semgrep SAST
-            gitleaks exact 1 - Gitleaks Secret Scan
-        run: |
-          if [ ! -f ci/ready_reuse.sh ]; then
-            echo "READY REUSE OFF: the base commit has no ci/ready_reuse.sh; every leg runs"
-            echo 'passed=[]' >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          bash ci/ready_reuse.sh
-
   # CHAOS-9919: a docs-only PR changes nothing Semgrep scans. Gitleaks stays
   # unfiltered because a secret can sit in a doc. Neither of these two jobs is a required
   # check, so a skipped job leaves no check "expected". Push and merge_group always scan (a PR touching this file runs both jobs).
@@ -105,8 +59,8 @@ jobs:
               - '!mkdocs.yml'
 
   semgrep:
-    needs: [ready-reuse, changes]
-    if: ((!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true')) && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'semgrep')
+    needs: [changes, ready-reuse]
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (github.event_name != 'pull_request' || needs.changes.outputs.code == 'true') && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'semgrep')
     name: Semgrep SAST
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -170,8 +124,6 @@ jobs:
 
   gitleaks:
     name: Gitleaks Secret Scan
-    needs: ready-reuse
-    if: ${{ !contains(fromJSON(needs.ready-reuse.outputs.passed), 'gitleaks') }}
     runs-on: ubuntu-latest
     # CHAOS-8294: the pinned scanner binary runs directly (the release tarball, sha256-verified), not through gitleaks/gitleaks-action.
     # The action needs a license secret for an organization (a Dependabot run gets no secrets: "License key is required") and does not
@@ -276,3 +228,49 @@ jobs:
         with:
           sarif_file: results.sarif
           category: ${{ github.event_name == 'pull_request' && 'gitleaks' || format('gitleaks-{0}-{1}', github.event_name, github.sha) }}
+
+  # Ready flip: names the legs that already passed on this exact head sha (ci/ready_reuse.sh, read from the BASE commit
+  # so a change cannot rewrite its own judge); each leg below skips when its unit is in `passed`, and its gate prints
+  # REUSED for it. Every other event, and a base without the script, passes [] and every leg runs.
+  ready-reuse:
+    name: ready-reuse
+    runs-on: ubuntu-latest
+    # The judge waits up to 20 minutes for a run of the same sha still in flight.
+    timeout-minutes: 24
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      passed: ${{ steps.reuse.outputs.passed || '[]' }}
+      reused: ${{ steps.reuse.outputs.reused }}
+    steps:
+      - name: Check out the reuse judge from the base commit
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: ci/ready_reuse.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Name the legs that already passed on this head sha
+        id: reuse
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          READY_REUSE_UNITS: |
+            semgrep exact 1 - Semgrep SAST
+        run: |
+          if [ ! -f ci/ready_reuse.sh ]; then
+            echo "READY REUSE OFF: the base commit has no ci/ready_reuse.sh; every leg runs"
+            echo 'passed=[]' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          bash ci/ready_reuse.sh

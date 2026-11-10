@@ -70,6 +70,13 @@ var jobPermAllowlist = map[jobKey]jobPermRow{
 	{"security-scan.yml", "changes"}:                              {map[string]string{"contents": "read", "pull-requests": "read"}, "reads pull requests for the change filter"},
 	{"security-scan.yml", "semgrep"}:                              {map[string]string{"contents": "read", "security-events": "write"}, "uploads the code scanning result"},
 	{"security-scan.yml", "gitleaks"}:                             {map[string]string{"contents": "read", "security-events": "write"}, "uploads the code scanning result"},
+	{"codeql-analysis.yml", "ready-reuse"}:                        {map[string]string{"actions": "read", "contents": "read", "security-events": "read"}, "the ready-flip judge reads this sha's runs, jobs and the CodeQL analysis of the merge commit"},
+	{"docker-images.yml", "ready-reuse"}:                          {map[string]string{"actions": "read", "contents": "read"}, "the ready-flip judge reads this sha's runs and jobs"},
+	{"go-auth-service.yml", "ready-reuse"}:                        {map[string]string{"actions": "read", "contents": "read"}, "the ready-flip judge reads this sha's runs and jobs"},
+	{"go-workers-compose-proof.yml", "ready-reuse"}:               {map[string]string{"actions": "read", "contents": "read"}, "the ready-flip judge reads this sha's runs and jobs"},
+	{"go.yml", "ready-reuse"}:                                     {map[string]string{"actions": "read", "contents": "read"}, "the ready-flip judge reads this sha's runs and jobs"},
+	{"security-scan.yml", "ready-reuse"}:                          {map[string]string{"actions": "read", "contents": "read"}, "the ready-flip judge reads this sha's runs and jobs"},
+	{"venue-oracles-changed.yml", "ready-reuse"}:                  {map[string]string{"actions": "read", "contents": "read"}, "the ready-flip judge reads this sha's runs and jobs"},
 	{"venue-oracles-main-alert.yml", "alert"}:                     {map[string]string{"contents": "read", "actions": "read", "issues": "write"}, "opens the issue for a red main run"},
 	{"freeze-provider-worlds.yml", "*"}:                           {map[string]string{"contents": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
 	{"go-quality.yml", "*"}:                                       {map[string]string{"contents": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
@@ -299,7 +306,7 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 		{"a job adds a read scope", mutation{testWf, jobRead, "    permissions:\n      contents: read\n      packages: read\n    outputs:\n"}, "test.yml job changes: effective permissions map[contents:read packages:read] are not exactly contents: read and have no allowlist row"},
 		{"a job without a block inherits a non-read workflow map", mutation{testWf, topRead, "permissions:\n  contents: read\n  packages: read\n"}, "test.yml job test: effective permissions map[contents:read packages:read] are not exactly contents: read and have no allowlist row"},
 		{"a new job inherits a workflow-level read grant", mutation{".github/workflows/go-quality.yml", "jobs:\n", "jobs:\n  unreviewed-job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n"}, "go-quality.yml job unreviewed-job: inherits effective permissions map[contents:read packages:read] but is not in the job list of its wildcard row"},
-		{"a listed job is renamed away", mutation{".github/workflows/go-workers-compose-proof.yml", "jobs:\n  go-workers-compose-proof:\n", "jobs:\n  go-workers-compose-proof-renamed:\n"}, "go-workers-compose-proof.yml: the wildcard row lists job go-workers-compose-proof, which has no inheriting job of that name"},
+		{"a listed job is renamed away", mutation{".github/workflows/go-workers-compose-proof.yml", "\n  go-workers-compose-proof:\n", "\n  go-workers-compose-proof-renamed:\n"}, "go-workers-compose-proof.yml: the wildcard row lists job go-workers-compose-proof, which has no inheriting job of that name"},
 		{"job block widened to write", mutation{testWf, jobRead, "    permissions:\n      contents: write\n    outputs:\n"}, "test.yml job changes: effective permissions map[contents:write] are not exactly contents: read and have no allowlist row"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

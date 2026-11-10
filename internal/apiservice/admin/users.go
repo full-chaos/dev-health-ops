@@ -579,7 +579,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 			policy.WriteDetail(w, http.StatusForbidden, "Admin password verification failed", nil)
 			return nil
 		}
-		admin, err := g.store.fullUserByID(ctx, actingID)
+		admin, err := g.store.actorByID(ctx, actingID)
 		if err != nil {
 			h.logger.ErrorContext(ctx, "admin: set password acting-admin lookup failed", "error", err)
 			policy.WriteInternal(w)

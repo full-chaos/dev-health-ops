@@ -79,7 +79,7 @@ func TestQueryRefusesANonHoldersNonQueryDocumentBesideALiveRowUnderTheSwitch(t *
 }
 
 // TestQueryFailsClosedForANonHoldersWriteWhoseRowReadFailsUnderTheSwitch: switch on, the row read fails: a non-query
-// document gets the bare 401 of a failed live read on /query, no resolver (go-api answers 503 there; ticket 13517);
+// document gets the bare 401 of a failed live read on /query, no resolver (go-api answers 503 there);
 // a query is served as itself.
 func TestQueryFailsClosedForANonHoldersWriteWhoseRowReadFailsUnderTheSwitch(t *testing.T) {
 	quietStdLog(t)

@@ -54,10 +54,6 @@ func PublicReadColumns() []ColumnGrant {
 		// impersonation. Its reader arrives in O3b (CHAOS-12399), the grant first.
 		// id: a delegated session's end finds its row by id (ImpersonationEndColumns).
 		{Table: "impersonation_sessions", Columns: []string{"id", "admin_user_id", "ended_at", "expires_at"}},
-		// The session issue route checks go-api's auth-session-issuer
-		// service credential by its hash (last_used_at is not read or
-		// stamped).
-		{Table: "internal_service_credentials", Columns: []string{"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"}},
 	}
 }
 
@@ -143,6 +139,14 @@ func SessionReaderReadsWith(platformRolesOwned, workloadReader bool) []ColumnGra
 // role holds nothing gets no statement: the migration login no longer holds
 // GRANT OPTION on the table, so a REVOKE there would fail with 42501.
 const retiredRefreshTokensTable = "refresh_tokens"
+
+// retiredPublicReadTables are public tables the auth runtime role once read by a
+// grant and reads no more. A grants pass that finds the role still holding a
+// direct privilege on one revokes it (a narrowing, acknowledged once); one where
+// the role holds nothing, or the table is gone, sends no statement on it.
+// internal_service_credentials left PublicReadColumns when its last auth-service
+// reader went.
+var retiredPublicReadTables = []string{retiredRefreshTokensTable, "internal_service_credentials"}
 
 // runtimeHoldsPublicGrant reports whether role holds a direct table or column
 // privilege on public.<table>, read from the ACLs (the set REVOKE removes).
@@ -541,24 +545,26 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 		logger.InfoContext(ctx, "applying public read grants",
 			"schema", publicSchema, "table", entry.Table, "columns", len(columns), "deferred", len(entry.Columns)-len(columns))
 	}
-	exists, err := publicTableState(ctx, conn, retiredRefreshTokensTable)
-	if err != nil {
-		return nil, err
-	}
-	held := false
-	if exists {
-		held, err = runtimeHoldsPublicGrant(ctx, conn, retiredRefreshTokensTable, options.RuntimeRole)
+	for _, retired := range retiredPublicReadTables {
+		exists, err := publicTableState(ctx, conn, retired)
 		if err != nil {
 			return nil, err
 		}
-	}
-	if held {
-		tableID, err := NewValidatedIdentifier(retiredRefreshTokensTable)
-		if err != nil {
-			return nil, err
+		held := false
+		if exists {
+			held, err = runtimeHoldsPublicGrant(ctx, conn, retired, options.RuntimeRole)
+			if err != nil {
+				return nil, err
+			}
 		}
-		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
-		statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+		if held {
+			tableID, err := NewValidatedIdentifier(retired)
+			if err != nil {
+				return nil, err
+			}
+			table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
+			statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+		}
 	}
 	return statements, nil
 }

@@ -51,8 +51,8 @@ shows where that happens today.
 | `sso_oidc_exchange` | optional_feature | human | |
 | `org_context_header` | active | human | |
 | `impersonation_session` | active | human | |
-| `internal_svc_acr_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |
-| `internal_svc_worker_token` | **unconsumed** | service_account | mint retired; stored rows list/revoke only |
+| `internal_svc_acr_token` | **retired** | service_account | no route accepts it; the service-credentials verbs are gone |
+| `internal_svc_worker_token` | **retired** | service_account | no route accepts it; the service-credentials verbs are gone |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
 | `acr_browser_refresh_token` | optional_feature | human | |
@@ -75,7 +75,7 @@ shows where that happens today.
 | `effective_principal_envelope` | retired | human | no endpoint-profile row accepts it; query-api refuses it on every route |
 | `refresh_credential` | active | human | |
 | `user_access_token` | **unconsumed** | human | |
-| `internal_svc_authsess_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |
+| `internal_svc_authsess_token` | **retired** | service_account | no route accepts it; the service-credentials verbs are gone |
 | `link_credential` | active | human | |
 | `pagerduty_webhook_signature` | active | external_source | |
 | `workload_token` | optional_feature | workload | |
@@ -117,9 +117,9 @@ only the go-api workload token and refuse this credential from the bearer text,
 counted in `auth.session.retired_credential_refusals{operation}`. It shares the
 `internal_service_credentials` table with `svc_acr_` and `svc_worker_`, which
 carry other prefixes, services and scopes. No route takes it, so no validator
-accepts it; the verbs of `dev-hops service-credentials` still mint, rotate,
-list and revoke stored rows. Its second scope, `memberships:write`, is retired: no service
-may hold it, the mint refuses it, and the internal provisioning routes
+accepts it, and the `service-credentials` verbs that minted, rotated, listed and
+revoked its rows are gone. Its second scope, `memberships:write`, is retired: no service
+may hold it, nothing mints it, and the internal provisioning routes
 (`/internal/v1/memberships/*`, `/internal/v1/invites/*`, `/internal/v1/organizations/*`,
 `/internal/v1/service-accounts/*`, `/internal/v1/grants/*`) refuse this credential
 and take the go-api workload token only. The route and
@@ -351,18 +351,16 @@ disabled in production." The webhook validators in
 `internal/api/billing/webhooksig.go`) fail closed: each answers 500
 when its secret is unset.
 
-## Unconsumed credential: `svc_worker_*`
+## Retired credential: `svc_worker_*`
 
-**Mint retired.** `dho service-credentials create` and `rotate` refuse
-`--service worker-operator` before a database is opened (exit 1, one JSON error line on
-stderr); no `svc_worker_*` token is issued any more. `list` and `revoke` keep working on
-the rows already stored, active and revoked. No row was migrated or deleted.
+**Retired.** The mint was retired first, and the `service-credentials`
+verbs that listed and revoked the stored rows are gone; `dho service-credentials` is an
+unknown command. No row was migrated or deleted: the rows stay until a later migration
+drops `internal_service_credentials`.
 
 `WORKER_OPERATOR_TOKEN_PREFIX = "svc_worker_"` was minted through
-the same code path as `svc_acr_*`
-(`internal/apiservice/admin/servicecredentials.go`), with
-its own scope set (`workers:read`, `workers:operate`,
-`internal/apiservice/admin/servicecredentials.go:36-44`). No HTTP route in ops, web, or acr was found
+the same code path as `svc_acr_*`, with its own scope set (`workers:read`,
+`workers:operate`). No HTTP route in ops, web, or acr was found
 that validates a `svc_worker_`-prefixed bearer token — the internal acr routes (`internal/apiservice/acr/internalauth.go`)
 accept only the acr-api workload token. A consumer, if any, lives in the Go
 worker binaries or `dev-health-go`, outside this repository's HTTP routes.

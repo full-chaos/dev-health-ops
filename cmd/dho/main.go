@@ -31,7 +31,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/reconcilerservice"
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 	"github.com/full-chaos/dev-health-ops/internal/schedulerservice"
-	"github.com/full-chaos/dev-health-ops/internal/servicecredcli"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunnerservice"
 	"github.com/full-chaos/dev-health-ops/internal/synccli"
 	"github.com/full-chaos/dev-health-ops/internal/websmoke"
@@ -62,7 +61,6 @@ func commands() []cli.Command {
 		reconcilerservice.Command(),
 		rivermigrate.Command(),
 		schedulerservice.Command(),
-		servicecredcli.Command(),
 		streamrunnerservice.Command(),
 		synccli.Command(),
 		websmoke.Command(),

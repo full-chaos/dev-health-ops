@@ -17,8 +17,6 @@ internal/adminops/bundles_integration_test.go	var-call:?.EncodeToString#1	stdlib
 internal/adminops/bundles_integration_test.go	var-call:vb@4b7a733f	read bundles_integration_test.go:45 vb: returns a bundleStep literal from its args; no global write, no registration, no I/O
 internal/adminops/bundles_integration_test.go	var-call:withKey@4c2665fc	read bundles_integration_test.go:49 withKey: returns a bundleStep literal with a fresh env map; no global write, no registration, no I/O
 internal/adminops/llmsettings_integration_test.go	var-call:llm@ecbc0afc	read llmsettings_integration_test.go:41 llm: append onto a fresh slice literal and returns an llmStep; no global write, no registration, no I/O
-internal/adminops/servicecredentials_integration_test.go	var-call:csql@d43eb2b5	read servicecredentials_integration_test.go:44 csql: returns a credStep literal; no global write, no registration, no I/O
-internal/adminops/servicecredentials_integration_test.go	var-call:cverb@d4e5dd1b	read servicecredentials_integration_test.go:43 cverb: returns a credStep literal from its args; no global write, no registration, no I/O
 internal/apiservice/billingvenue/billing_webhook_venue_oracle_integration_test.go	var-call:funclit#1	read :36-42 webhookLicenseSeed: fills a local 32-byte slice in a loop and returns it; no global write, no registration, no I/O
 internal/apiservice/credentials_github_repos_venue_integration_test.go	var-call:ghItem@b8ae916c	read :75 ghItem: fmt.Sprintf of its args into a string; no global write, no registration, no I/O
 internal/apiservice/metricsvenue/counter_parity_venue_oracle_integration_test.go	blank-import:embed	import _ "embed" only enables //go:embed on :232 (a compile-time directive); stdlib embed has no init effect

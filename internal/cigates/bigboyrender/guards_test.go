@@ -617,6 +617,30 @@ func TestRunRefusesAnUnknownVerb(t *testing.T) {
 	}
 }
 
+// RetiredTables grants nothing: a literal list of names that are rows of the same posture leaves the delta as it
+// was; any other form, or a name that is not a row, fails the step.
+func TestPostureDeltaReadsARetiredTablesListAsNoGrant(t *testing.T) {
+	withRetired := func(list string) string {
+		return strings.Replace(postureV2, "return []RequiredTable{\n", "return Posture{\n\t\tRetiredTables: "+list+",\n\t\tRequiredTables: []RequiredTable{\n", 1)
+	}
+	_, _, plain := posture(t, "api", "api_authorization.go", postureV1, postureV2)
+	code, stdout, lines := posture(t, "api", "api_authorization.go", postureV1, withRetired(`[]string{"beta"}`))
+	if code != 0 || strings.Contains(stdout, "unparsable") || strings.Join(lines, "\n") != strings.Join(plain, "\n") || len(plain) == 0 {
+		t.Errorf("a retired row: exit %d, stdout %q, lines %v; want the plain delta %v", code, stdout, lines, plain)
+	}
+	for name, list := range map[string]string{
+		"not a row":  `[]string{"gamma"}`,
+		"identifier": `retired`,
+		"call":       `retiredTables()`,
+		"not quoted": `[]string{beta}`,
+	} {
+		code, stdout, lines := posture(t, "api", "api_authorization.go", postureV1, withRetired(list))
+		if code == 0 || !strings.Contains(stdout, "unparsable") || len(lines) != 0 {
+			t.Errorf("%s: exit %d, stdout %q, lines %v", name, code, stdout, lines)
+		}
+	}
+}
+
 // A row's OptionalDelete is not a grant (GrantStatements renders none for it), so the users.d render and the bigboy
 // grants comparison leave it out too.
 func TestOptionalDeleteIsNotRendered(t *testing.T) {

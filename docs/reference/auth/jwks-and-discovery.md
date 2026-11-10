@@ -98,6 +98,10 @@ succeed, a key that left the JWKS stops verifying at most `CacheTTL` plus `Timeo
 refreshes fail, the old keys stay usable until `CacheTTL` plus `OutageGrace` after the last good refresh (10 minutes
 5 seconds). A compromised key also needs the sessions that hold its tokens revoked.
 
+"Left the JWKS" means left the JWKS of every auth-service pod. Each pod reads the key states on its own 15 second
+timer, so the bound runs from D, the moment the LAST pod stops listing the key: until D, a successful refresh that a
+pod which still lists the key answers puts the key back in memory, so the key verifies again until a refresh after D.
+
 go-api and query-api count every discovery and JWKS GET in `devhealth_auth_jwks_fetch_total` (labels `service`,
 `document` = `discovery` or `jwks`, `result` = `ok` for a `200`, `fail` for any other status or a transport error or
 timeout). `devhealth_auth_jwks_grace_state` is `0` while the keys are fresh, `1` while they are served from the outage

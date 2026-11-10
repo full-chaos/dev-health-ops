@@ -11,6 +11,8 @@ lifecycle: active
 
 An External Push token (`fcpush_…`, credential class `external_push_ingest_token`) is a customer-push write credential. This page says which service decides it, what auth-service holds about it, and which settings control that. It lists only what is merged on the main branch.
 
+For ACR ownership and lifecycle delivery, see [ACR credential authority](acr-credential-authority.md).
+
 ## Who decides
 
 - go-api owns the token. It creates, rotates, revokes and validates it, through the `/api/v1/admin/customer-push` routes. Rotation takes effect at once: the old token stops working when the replacement is issued.

@@ -11,6 +11,8 @@ lifecycle: active
 
 These steps need an authenticated organization administrator. Authority and settings: [External Push credential authority](../../reference/auth/external-push-authority.md).
 
+For the internal ACR consumer, see [Migrate ACR service credentials](acr-service-credential-migration.md).
+
 ## List
 
 The administration UI lists the push tokens of a source and of the organization. Each token row shows an "External Push" badge, and each provider integration credential shows an "Integration" badge (web change `77e46db0`, dev-health-web main). The label comes from which list shows the row.

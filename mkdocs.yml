@@ -174,6 +174,7 @@ nav:
           - operate/security/index.md
           - Production hardening: operate/security/hardening.md
           - External Push credentials: operate/security/external-push-credentials.md
+          - Migrate ACR service credentials: operate/security/acr-service-credential-migration.md
       - Runbooks:
           - operate/runbooks/index.md
           - Ingestion failure: operate/runbooks/ingestion-failure.md
@@ -254,6 +255,7 @@ nav:
       - Auth endpoint profiles: reference/auth/endpoint-profiles.md
       - Auth service configuration: reference/auth/configuration.md
       - Auth External Push authority: reference/auth/external-push-authority.md
+      - Auth ACR credential authority: reference/auth/acr-credential-authority.md
       - Auth organization roles and members: reference/auth/org-member-roles.md
       - Auth platform administrator: reference/auth/platform-admin.md
       - Auth resource grants: reference/auth/resource-grants.md

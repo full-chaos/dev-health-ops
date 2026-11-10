@@ -45,11 +45,15 @@ func TestExportRunsAsTheOwnerAndStopsAsTheLeastPrivilegeMigrator(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 
-	_, err = ExportManifest(ctx, pool, db.schema)
-	if !errors.Is(err, ErrExport) || !strings.Contains(err.Error(), "reading section public.") {
-		t.Fatalf("export as the least-privilege migrator = %v, want ErrExport naming a public section", err)
-	}
-	if _, err := ExportManifest(ctx, db.admin, db.schema); err != nil {
-		t.Errorf("export as the owner: %v", err)
-	}
+	t.Run("migrator_stops_at_a_public_section", func(t *testing.T) {
+		_, err := ExportManifest(ctx, pool, db.schema)
+		if !errors.Is(err, ErrExport) || !strings.Contains(err.Error(), "reading section public.") {
+			t.Fatalf("export as the least-privilege migrator = %v, want ErrExport naming a public section", err)
+		}
+	})
+	t.Run("owner_exports", func(t *testing.T) {
+		if _, err := ExportManifest(ctx, db.admin, db.schema); err != nil {
+			t.Fatalf("export as the owner: %v", err)
+		}
+	})
 }

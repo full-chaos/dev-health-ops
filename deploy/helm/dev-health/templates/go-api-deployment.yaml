@@ -222,7 +222,7 @@ url takes no query. goApi.extraEnv never sets an ACR_REVOKE_* name.
 {{- $https := and (eq $u.scheme "https") (ne $hostname "") }}
 {{- $clusterHTTP := and $arCluster (eq $u.scheme "http") (regexMatch `^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+svc\.cluster\.local$` $hostname) }}
 {{- if not (or $https $clusterHTTP) }}{{- fail (printf "goApi.acrRevoke.%s must be https, or plain http on a <name>.svc.cluster.local host with goApi.acrRevoke.allowClusterHTTP: true" $key) }}{{- end }}
-{{- if or (regexMatch `^[^/]*//[^/]*@` $raw) (contains "#" $raw) }}{{- fail (printf "goApi.acrRevoke.%s must carry no user info and no fragment, empty ones included" $key) }}{{- end }}
+{{- if or (regexMatch `^[^/]*//[^/?#]*@` $raw) (contains "#" $raw) }}{{- fail (printf "goApi.acrRevoke.%s must carry no user info and no fragment, empty ones included" $key) }}{{- end }}
 {{- if and (eq $key "url") (contains "?" $raw) }}{{- fail "goApi.acrRevoke.url must carry no query, an empty one included" }}{{- end }}
 {{- end }}
 {{- if not (and (kindIs "string" $arCfg.audience) $arCfg.audience) }}{{- fail "goApi.acrRevoke.audience is required when goApi.acrRevoke.enabled: acr's workloadTokenExchange.audience" }}{{- end }}

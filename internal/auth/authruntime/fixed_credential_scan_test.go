@@ -394,4 +394,13 @@ func TestIdentifierBindingsFollowObjects(t *testing.T) {
 `); len(found) != 1 {
 		t.Errorf("a literal-bound value in the same function: findings %q, want one", found)
 	}
+	if found := aliasCaseFindings(t, `func a() string { value := build(); return value }
+
+func b(role string) string {
+	value := "x"
+	return fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", role, value)
+}
+`); len(found) != 1 {
+		t.Errorf("a literal-bound value beside a run-time value of the same name elsewhere: findings %q, want one", found)
+	}
 }

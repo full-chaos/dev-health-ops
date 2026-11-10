@@ -2556,6 +2556,11 @@ declare -A INTEGRATION_SPLIT_UNIT_SHARD=()
 declare -A INTEGRATION_SPLIT_PART=()
 declare -A INTEGRATION_SPLIT_SHARDS=()
 declare -A INTEGRATION_SPLIT_SHARD_WEIGHT=()
+# Per packages shard (check_integration_package_shard shadows both with locals): the names a split-by-test package runs in the
+# shard, keyed by its "./dir", and its planned weight there. Declared here so every other caller of run_integration_packages and
+# warn_integration_weight_drift reads an empty associative array, never an undeclared name bash would index arithmetically.
+declare -A INTEGRATION_RUN_FILTER=()
+declare -A INTEGRATION_DRIFT_WEIGHT=()
 # The wall of one packages shard's go test runs (CHAOS-13520): a warning above WARN, a failure above FAIL.
 INTEGRATION_SHARD_WALL_WARN_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_WARN_SECONDS:-300}"
 INTEGRATION_SHARD_WALL_FAIL_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_FAIL_SECONDS:-600}"
@@ -3245,14 +3250,14 @@ load_integration_shard_manifest() {
 # ('_shards.tsv' holds the shards row instead), so a key cannot hide in a
 # misnamed file and two PRs adding the same package collide on the file name.
 #
-# A package file may also hold `split-by-test<TAB>N` (CHAOS-13520, N >= 2): the package then runs as N parts, each a set of
-# the top-level test names its shards select, that the same plan places like packages; and `<TestName><TAB><seconds>` rows,
-# the measured seconds of its slow tests (unlisted tests share what is left of the package weight). A test row without the
-# split row fails.
+# Below its package row, a package may have a `split-by-test<TAB>N` row (CHAOS-13520, N >= 2): the package then runs as N
+# parts, each a set of the top-level test names its shards select, that the same plan places like packages; and below that,
+# `<TestName><TAB><seconds>` rows, the measured seconds of its slow tests (unlisted tests share what is left of the package
+# weight). Such a row belongs to the package row above it (in a single manifest file as in a package file); one with no
+# package row above it, or a test row with no split row above it, fails.
 load_integration_shard_manifest_file() {
   local file="$1" as_dir="$2" base="$3"
-  local line_number=0 key value extra package_rows=0 split=0 file_key="" test_name
-  local -A file_tests=()
+  local line_number=0 key value extra package_rows=0 file_key=""
 
   while IFS=$'\t ' read -r key value extra; do
     line_number=$((line_number + 1))
@@ -3282,15 +3287,20 @@ load_integration_shard_manifest_file() {
       continue
     fi
     if [ "${key}" = "split-by-test" ] || [[ "${key}" =~ ^(Test|Fuzz|Example)[A-Za-z0-9_]*$ ]]; then
-      { [ "${as_dir}" -eq 1 ] && [ "${base}" != "_shards.tsv" ]; } \
-        || die "integration shard manifest ${file}:${line_number}: a '${key}' row belongs in a package file of the manifest directory"
+      { [ "${as_dir}" -eq 0 ] || [ "${base}" != "_shards.tsv" ]; } \
+        || die "integration shard manifest ${file}:${line_number}: _shards.tsv holds only the 'shards' row"
+      [ -n "${file_key}" ] \
+        || die "integration shard manifest ${file}:${line_number}: a '${key}' row belongs below its package row"
       if [ "${key}" = "split-by-test" ]; then
         [ "${value}" -ge 2 ] || die "integration shard manifest ${file}:${line_number}: split-by-test needs at least 2 parts, got '${value}'"
-        [ "${split}" -eq 0 ] || die "integration shard manifest ${file}:${line_number}: split-by-test more than once"
-        split="${value}"
+        [ -z "${INTEGRATION_SPLIT_KEYS[${file_key}]+set}" ] || die "integration shard manifest ${file}:${line_number}: split-by-test more than once for '${file_key}'"
+        INTEGRATION_SPLIT_KEYS["${file_key}"]="${value}"
       else
-        [ -z "${file_tests[${key}]+set}" ] || die "integration shard manifest ${file}:${line_number}: test '${key}' more than once"
-        file_tests["${key}"]="${value}"
+        [ -n "${INTEGRATION_SPLIT_KEYS[${file_key}]+set}" ] \
+          || die "integration shard manifest ${file}:${line_number}: test rows need a split-by-test row above them"
+        [ -z "${INTEGRATION_SPLIT_TEST_SECONDS[${file_key}|${key}]+set}" ] \
+          || die "integration shard manifest ${file}:${line_number}: test '${key}' more than once for '${file_key}'"
+        INTEGRATION_SPLIT_TEST_SECONDS["${file_key}|${key}"]="${value}"
       fi
       continue
     fi
@@ -3312,15 +3322,6 @@ load_integration_shard_manifest_file() {
 
   if [ "${as_dir}" -eq 1 ] && [ "${base}" != "_shards.tsv" ] && [ "${package_rows}" -eq 0 ]; then
     die "integration shard manifest ${file} holds no package row"
-  fi
-  if [ "${#file_tests[@]}" -gt 0 ] && [ "${split}" -eq 0 ]; then
-    die "integration shard manifest ${file}: test rows need a split-by-test row"
-  fi
-  if [ "${split}" -ne 0 ]; then
-    INTEGRATION_SPLIT_KEYS["${file_key}"]="${split}"
-    for test_name in "${!file_tests[@]}"; do
-      INTEGRATION_SPLIT_TEST_SECONDS["${file_key}|${test_name}"]="${file_tests[${test_name}]}"
-    done
   fi
 }
 

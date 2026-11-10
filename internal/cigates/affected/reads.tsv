@@ -135,7 +135,9 @@ internal/cigates/scripts	test	contracts
 internal/cigates/scripts	test	docker
 internal/cigates/scripts	test	deploy
 internal/cigates/scripts	test	docs
+internal/cigates/splitshards	test	.github
 internal/cigates/splitshards	test	ci
+internal/cigates/splitshards	test	contracts
 internal/cigates/suitecatalog	test	.github
 internal/cigates/suitecatalog	test	ci
 internal/cigates/testshard	test	.github

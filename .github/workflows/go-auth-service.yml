@@ -334,8 +334,12 @@ jobs:
         uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
         env:
           AUTH_CORPUS_IMAGE_TAG: ci-prebuilt
-          # compose.yml's bugsink service requires it at parse time; bake builds none of its images.
+          # Parse-only values: bake reads the whole compose set, and these have no default there (the corpus script sets the
+          # real ones at run time; bugsink's image is not built here).
           BUGSINK_SECRET_KEY: bake-parse-only
+          AUTH_CORPUS_STUB_DIR: ${{ runner.temp }}/corpus-stub-parse-only
+          AUTH_CORPUS_API_PORT: "18080"
+          AUTH_CORPUS_OPERATOR_PORT: "18081"
         with:
           source: .
           files: |
@@ -392,8 +396,12 @@ jobs:
         env:
           AUTH_CORPUS_IMAGE_TAG: ci-prebuilt
           AUTH_CORPUS_CACHE_WRITE: "1"
-          # compose.yml's bugsink service requires it at parse time; bake builds none of its images.
+          # Parse-only values: bake reads the whole compose set, and these have no default there (the corpus script sets the
+          # real ones at run time; bugsink's image is not built here).
           BUGSINK_SECRET_KEY: bake-parse-only
+          AUTH_CORPUS_STUB_DIR: ${{ runner.temp }}/corpus-stub-parse-only
+          AUTH_CORPUS_API_PORT: "18080"
+          AUTH_CORPUS_OPERATOR_PORT: "18081"
         with:
           source: .
           files: |

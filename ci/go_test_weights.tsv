@@ -62,6 +62,7 @@ internal/jobruntime	10
 internal/jobs	9
 internal/jobs/metrics/daily	45
 internal/jobs/metrics/remaining	13
+internal/jobs/metrics/remaining/stepcause	52
 internal/jobs/workgraph/units	44
 internal/loadharness	22
 internal/platform/logging	30

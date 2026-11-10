@@ -95,6 +95,12 @@ func authCorpusCacheViolations(doc yamlMap, hcl string) []string {
 		if tag := asString(env["AUTH_CORPUS_IMAGE_TAG"]); tag != "ci-prebuilt" {
 			add("%s: the bake step must tag the stub images ci-prebuilt (AUTH_CORPUS_IMAGE_TAG), got %q", jobName, tag)
 		}
+		// The bake parse needs every no-default interpolation of compose.yml and the corpus override.
+		for _, v := range []string{"BUGSINK_SECRET_KEY", "AUTH_CORPUS_STUB_DIR", "AUTH_CORPUS_API_PORT", "AUTH_CORPUS_OPERATOR_PORT"} {
+			if asString(env[v]) == "" {
+				add("%s: the bake step must set %s for the compose parse", jobName, v)
+			}
+		}
 		write := asString(env["AUTH_CORPUS_CACHE_WRITE"])
 		switch {
 		case jobName == "auth-corpus-queue" && write != "":
@@ -143,15 +149,19 @@ func TestAuthCorpusBuildCacheIsReadOnlyOnPullRequests(t *testing.T) {
 
 func TestAuthCorpusBuildCachePlantedDefectsAreCaught(t *testing.T) {
 	wf, hcl := authCorpusCacheInputs(t, rootOf(t))
-	const legBake = "          AUTH_CORPUS_IMAGE_TAG: ci-prebuilt\n          # compose.yml's bugsink"
+	const legBake = "          AUTH_CORPUS_IMAGE_TAG: ci-prebuilt\n          # Parse-only values"
+	const legStub = legBake + ": bake reads the whole compose set, and these have no default there (the corpus script sets the\n" +
+		"          # real ones at run time; bugsink's image is not built here).\n          BUGSINK_SECRET_KEY: bake-parse-only\n" +
+		"          AUTH_CORPUS_STUB_DIR: ${{ runner.temp }}/corpus-stub-parse-only\n"
 	for _, c := range []struct{ name, file, old, repl, want string }{
-		{"a pull request leg writes the cache", "wf", legBake, "          AUTH_CORPUS_IMAGE_TAG: ci-prebuilt\n          AUTH_CORPUS_CACHE_WRITE: \"1\"\n          # compose.yml's bugsink", "must never write the cache"},
+		{"a pull request leg writes the cache", "wf", legBake, "          AUTH_CORPUS_IMAGE_TAG: ci-prebuilt\n          AUTH_CORPUS_CACHE_WRITE: \"1\"\n          # Parse-only values", "must never write the cache"},
 		{"the bake file writes unconditionally", "hcl", `cache-to   = AUTH_CORPUS_CACHE_WRITE == "1" ? ["type=gha,scope=authcorpus-smtpsink,mode=max"] : []`, `cache-to   = ["type=gha,scope=authcorpus-smtpsink,mode=max"]`, "only when AUTH_CORPUS_CACHE_WRITE is 1"},
 		{"a target reads another scope", "hcl", `cache-from = ["type=gha,scope=authcorpus-go-api"]`, `cache-from = ["type=gha,scope=authcorpus-auth-service"]`, "only its own scope"},
 		{"the seed job runs on pull requests", "wf", "  auth-corpus-image-cache:\n    if: github.event_name == 'push' && ", "  auth-corpus-image-cache:\n    if: github.event_name != 'merge_group' && ", "only on a push to main"},
 		{"the seed job gets a wider token", "wf", "    permissions:\n      contents: read\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n",
 			"    permissions:\n      contents: read\n      actions: write\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n", "exactly contents: read"},
 		{"the seed job reads a secret", "wf", "  auth-corpus-image-cache:\n    if: " + seedIf + "\n", "  auth-corpus-image-cache:\n    if: " + seedIf + "\n    env:\n      T: ${{ secrets.GITHUB_TOKEN }}\n", "must read no secret"},
+		{"the bake parse lacks the stub directory", "wf", legStub, strings.TrimSuffix(legStub, "          AUTH_CORPUS_STUB_DIR: ${{ runner.temp }}/corpus-stub-parse-only\n"), "AUTH_CORPUS_STUB_DIR"},
 		{"the legs rebuild instead of using the baked images", "wf", "        env:\n          AUTH_CORPUS_PREBUILT_TAG: ci-prebuilt\n        run: bash ci/auth_corpus_external.sh", "        run: bash ci/auth_corpus_external.sh", "AUTH_CORPUS_PREBUILT_TAG"},
 		{"a shell step reads the cache token", "wf", "        run: bash ci/auth_corpus_external.sh \"${{ matrix.leg }}\"",
 			"        run: echo \"${ACTIONS_RUNTIME_TOKEN}\"; bash ci/auth_corpus_external.sh \"${{ matrix.leg }}\"", "reads the actions cache token"},

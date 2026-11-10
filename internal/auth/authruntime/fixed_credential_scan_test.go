@@ -321,6 +321,11 @@ const pw = "x1"
 
 func a() string { return fmt.Sprintf(f, pw) }
 `,
+		"const-expression": `const f = "CREATE ROLE r LOGIN " + "PASSWORD '%s'"
+const pw = "x1"
+
+func a() string { return fmt.Sprintf(f, pw) }
+`,
 		"short-declaration": `const pw = "x1"
 
 func a() string {

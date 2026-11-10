@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -374,8 +375,21 @@ func TestTheRowGateRefusesARowForARouteNothingServes(t *testing.T) {
 // still registers its route, and every anchor with a note still holds the
 // symbol the note names, so a pinned file:line cannot drift silently.
 func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
+	problems, checked := authRowAnchorProblems(t, "../../..", loadAuthServiceRows(t))
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	if checked < 10 {
+		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
+	}
+}
+
+// authRowAnchorProblems checks the auth-service rows against the source under root.
+func authRowAnchorProblems(t *testing.T, root string, rows []map[string]any) (problems []string, checked int) {
+	t.Helper()
+	constants := authPatternConstants
 	lineOf := func(path string, line int) string {
-		raw, err := os.ReadFile(filepath.Join("../../..", path))
+		raw, err := os.ReadFile(filepath.Join(root, path))
 		if err != nil {
 			t.Fatalf("anchor file %s: %v", path, err)
 		}
@@ -385,34 +399,6 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		}
 		return lines[line-1]
 	}
-	constants := map[string]string{
-		"/v1/token/refresh": "PatternRefresh", "/v1/sessions/current": "PatternCurrent",
-		"/v1/sessions/revoke": "PatternRevoke", "/v1/sessions/revoke-all": "PatternRevokeAll",
-		"/api/v1/auth/login": "PatternCompatLogin", "/api/v1/auth/refresh": "PatternCompatRefresh",
-		"/api/v1/auth/logout": "PatternCompatLogout", "/api/v1/auth/social-login": "PatternCompatSocialLogin",
-		"/internal/v1/sessions":       "PatternIssueSession",
-		"/internal/v1/token/exchange": "Pattern",
-		"/.well-known/jwks.json":      "PatternJWKS", "/.well-known/openid-configuration": "PatternDiscovery",
-		"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
-		"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
-		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
-		"/api/v1/auth/change-password": "PatternChangePassword", "/api/v1/auth/register": "PatternRegister",
-		"/internal/v1/memberships/add": "PatternMembershipAdd", "/internal/v1/memberships/role": "PatternMembershipRole",
-		"/internal/v1/memberships/remove": "PatternMembershipRemove", "/internal/v1/memberships/transfer": "PatternMembershipTransfer",
-		"/internal/v1/invites/create": "PatternInviteCreate", "/internal/v1/invites/accept": "PatternInviteAccept",
-		"/internal/v1/organizations/deprovision":        "PatternOrgDeprovision",
-		"/internal/v1/organizations/reactivate":         "PatternOrgReactivate",
-		"/internal/v1/invites/revoke":                   "PatternInviteRevoke",
-		"/internal/v1/organizations/suspend":            "PatternOrgSuspend",
-		"/internal/v1/organizations/state":              "PatternOrgState",
-		"/internal/v1/organizations/onboard":            "PatternOrgOnboard",
-		"/internal/v1/organizations/create":             "PatternOrgCreate",
-		"/oauth/authorize":                              "PatternOAuthAuthorize",
-		"/.well-known/oauth-authorization-server/oauth": "PatternOAuthMetadata",
-		"/oauth/.well-known/openid-configuration":       "PatternOAuthDiscovery",
-		"/oauth/.well-known/jwks.json":                  "PatternOAuthJWKS",
-	}
-	checked := 0
 	var walk func(node any, where string)
 	walk = func(node any, where string) {
 		switch value := node.(type) {
@@ -422,9 +408,9 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 			if hasPath && hasLine {
 				note, _ := value["note"].(string)
 				if note == "" {
-					t.Errorf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(line))
+					problems = append(problems, fmt.Sprintf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(line)))
 				} else if !strings.Contains(lineOf(path, int(line)), note) {
-					t.Errorf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(lineOf(path, int(line))))
+					problems = append(problems, fmt.Sprintf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(lineOf(path, int(line)))))
 				}
 				checked++
 			}
@@ -437,21 +423,48 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 			}
 		}
 	}
-	for _, row := range loadAuthServiceRows(t) {
+	for _, row := range rows {
 		id, _ := row["id"].(string)
 		route, _ := row["route"].(string)
 		source := row["source"].(map[string]any)
 		text := lineOf(source["file"].(string), int(source["line"].(float64)))
 		if !strings.Contains(text, `"`+route+`"`) && (constants[route] == "" || !strings.Contains(text, "Pattern: "+constants[route]+",")) {
-			t.Errorf("row %q: %v:%v holds no registration of %s: %q", id, source["file"], source["line"], route, strings.TrimSpace(text))
+			problems = append(problems, fmt.Sprintf("row %q: %v:%v holds no registration of %s: %q", id, source["file"], source["line"], route, strings.TrimSpace(text)))
 		}
 		checked++
 		walk(row["primary_validator"], id+"/primary_validator")
 		walk(row["issued_credential"], id+"/issued_credential")
 	}
-	if checked < 10 {
-		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
-	}
+	return problems, checked
+}
+
+// authPatternConstants are the pattern constants the auth-service registrations name, by route.
+var authPatternConstants = map[string]string{
+	"/v1/token/refresh": "PatternRefresh", "/v1/sessions/current": "PatternCurrent",
+	"/v1/sessions/revoke": "PatternRevoke", "/v1/sessions/revoke-all": "PatternRevokeAll",
+	"/api/v1/auth/login": "PatternCompatLogin", "/api/v1/auth/refresh": "PatternCompatRefresh",
+	"/api/v1/auth/logout": "PatternCompatLogout", "/api/v1/auth/social-login": "PatternCompatSocialLogin",
+	"/internal/v1/sessions":       "PatternIssueSession",
+	"/internal/v1/token/exchange": "Pattern",
+	"/.well-known/jwks.json":      "PatternJWKS", "/.well-known/openid-configuration": "PatternDiscovery",
+	"/v1/identities/social": "PatternSocialLink", "/v1/identities/social/{id}": "PatternSocialUnlink",
+	"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
+	"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
+	"/api/v1/auth/change-password": "PatternChangePassword", "/api/v1/auth/register": "PatternRegister",
+	"/internal/v1/memberships/add": "PatternMembershipAdd", "/internal/v1/memberships/role": "PatternMembershipRole",
+	"/internal/v1/memberships/remove": "PatternMembershipRemove", "/internal/v1/memberships/transfer": "PatternMembershipTransfer",
+	"/internal/v1/invites/create": "PatternInviteCreate", "/internal/v1/invites/accept": "PatternInviteAccept",
+	"/internal/v1/organizations/deprovision":        "PatternOrgDeprovision",
+	"/internal/v1/organizations/reactivate":         "PatternOrgReactivate",
+	"/internal/v1/invites/revoke":                   "PatternInviteRevoke",
+	"/internal/v1/organizations/suspend":            "PatternOrgSuspend",
+	"/internal/v1/organizations/state":              "PatternOrgState",
+	"/internal/v1/organizations/onboard":            "PatternOrgOnboard",
+	"/internal/v1/organizations/create":             "PatternOrgCreate",
+	"/oauth/authorize":                              "PatternOAuthAuthorize",
+	"/.well-known/oauth-authorization-server/oauth": "PatternOAuthMetadata",
+	"/oauth/.well-known/openid-configuration":       "PatternOAuthDiscovery",
+	"/oauth/.well-known/jwks.json":                  "PatternOAuthJWKS",
 }
 
 // TestClassConsumersNameEveryAuthRouteThatAcceptsThem: every auth-service row

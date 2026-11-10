@@ -13,12 +13,18 @@ import (
 	"testing"
 )
 
-func packagesShardsOfThePlan(t *testing.T) map[int][]string {
+// packagesShardsOfThePlan: per packages shard, its packages and their planned weights: a whole package at its manifest weight
+// (SHARD rows), a split-by-test package at the weight of its parts in that shard (SHARD-SPLIT-PACKAGE rows, CHAOS-13520).
+func packagesShardsOfThePlan(t *testing.T) (map[int][]string, map[int]map[string]int) {
 	t.Helper()
 	stdout, _ := realPlan(t)
 	byShard := map[int][]string{}
+	weights := map[int]map[string]int{}
 	for _, l := range strings.Split(stdout, "\n") {
 		m := shardRow.FindStringSubmatch(l)
+		if m == nil {
+			m = splitRow.FindStringSubmatch(l)
+		}
 		if m == nil || splitPackages[m[2]] {
 			continue
 		}
@@ -26,19 +32,25 @@ func packagesShardsOfThePlan(t *testing.T) map[int][]string {
 		if err != nil {
 			t.Fatal(err)
 		}
+		w, _ := strconv.Atoi(m[3])
 		byShard[s] = append(byShard[s], m[2])
+		if weights[s] == nil {
+			weights[s] = map[string]int{}
+		}
+		weights[s][m[2]] = w
 	}
-	return byShard
+	return byShard, weights
 }
 
 func TestAPackagesShardStartsItsLongestPackageFirstAndTheOrderIsStable(t *testing.T) {
 	t.Parallel()
-	_, weights := manifestRows(t)
+	byShard, planned := packagesShardsOfThePlan(t)
 	checked := 0
-	for shard, pkgs := range packagesShardsOfThePlan(t) {
+	for shard, pkgs := range byShard {
 		if len(pkgs) < 2 {
 			continue
 		}
+		weights := planned[shard]
 		want := append([]string(nil), pkgs...)
 		sort.SliceStable(want, func(i, j int) bool {
 			if weights[want[i]] != weights[want[j]] {
@@ -84,8 +96,9 @@ func fixedWeightManifest(t *testing.T) (string, map[string]int) {
 		}
 		var key, real string
 		for _, l := range strings.Split(readText(t, f), "\n") {
-			if strings.TrimSpace(l) != "" && !strings.HasPrefix(l, "#") {
-				key, real, _ = strings.Cut(l, "\t")
+			// The package row; a split-by-test row (CHAOS-13520) is left out of this fixed-weight fixture.
+			if k, v, _ := strings.Cut(l, "\t"); strings.TrimSpace(l) != "" && !strings.HasPrefix(l, "#") && strings.Contains(k, "/") {
+				key, real = k, v
 			}
 		}
 		w := 60 + 60*(i%3)
@@ -153,17 +166,18 @@ func TestTheSortDoesNotChangeTheLocaleOfTheGoTestChild(t *testing.T) {
 
 func TestTheGoTestGroupsOfAShardKeepTheLongestFirstOrder(t *testing.T) {
 	t.Parallel()
-	_, weights := manifestRows(t)
-	byWeight := func(a, b string) bool {
-		if weights[a] != weights[b] {
-			return weights[a] > weights[b]
-		}
-		return a < b
-	}
+	byShard, planned := packagesShardsOfThePlan(t)
 	checked := 0
-	for shard, pkgs := range packagesShardsOfThePlan(t) {
+	for shard, pkgs := range byShard {
 		if len(pkgs) < 2 {
 			continue
+		}
+		weights := planned[shard]
+		byWeight := func(a, b string) bool {
+			if weights[a] != weights[b] {
+				return weights[a] > weights[b]
+			}
+			return a < b
 		}
 		r := runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", strconv.Itoa(shard), "--dry-run")
 		if r.code != 0 {
@@ -193,7 +207,6 @@ func TestTheGoTestGroupsOfAShardKeepTheLongestFirstOrder(t *testing.T) {
 
 func TestTheShardPathStartsLongestFirstAndTheUnshardedVerbStillSorts(t *testing.T) {
 	t.Parallel()
-	_, weights := manifestRows(t)
 	root, err := filepath.EvalSymlinks(rootOf(t))
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +225,8 @@ func TestTheShardPathStartsLongestFirstAndTheUnshardedVerbStillSorts(t *testing.
 	keyOf := func(c goTestCall, p string) string { return path.Join(c.dir, strings.TrimPrefix(p, "./")) }
 
 	shard, shardPkgs := 0, []string(nil)
-	for s, p := range packagesShardsOfThePlan(t) {
+	byShard, planned := packagesShardsOfThePlan(t)
+	for s, p := range byShard {
 		if len(p) >= 2 && (shard == 0 || s < shard) {
 			shard, shardPkgs = s, p
 		}
@@ -220,6 +234,7 @@ func TestTheShardPathStartsLongestFirstAndTheUnshardedVerbStillSorts(t *testing.
 	if shard == 0 {
 		t.Fatal("no packages shard held two packages")
 	}
+	weights := planned[shard]
 	longest := shardPkgs[0]
 	for _, p := range shardPkgs {
 		if weights[p] > weights[longest] || (weights[p] == weights[longest] && p < longest) {

@@ -5002,14 +5002,20 @@ check_integration_prepull() {
 # manifest weight descending, then key ascending in byte order. One go test starts its packages in argument order, four
 # at a time, so a long package that starts last sets the shard wall (CHAOS-8935). LC_ALL=C is local to this function:
 # it must not reach the go test child, which keeps the caller's locale.
+# integration_run_weight KEY: the weight a packages shard orders KEY by: a split-by-test package's planned weight in this shard
+# (INTEGRATION_DRIFT_WEIGHT of check_integration_package_shard), else the manifest weight.
+integration_run_weight() {
+  printf '%s\n' "${INTEGRATION_DRIFT_WEIGHT[$1]:-${INTEGRATION_SHARD_WEIGHTS[$1]}}"
+}
+
 sort_integration_shard_packages() {
   local i j tmp_pkg tmp_key LC_ALL=C
   for ((i = 1; i < ${#run_keys[@]}; i++)); do
     tmp_pkg="${run_pkgs[${i}]}"
     tmp_key="${run_keys[${i}]}"
     for ((j = i - 1; j >= 0; j--)); do
-      if [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -gt "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
-        || { [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -eq "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
+      if [ "$(integration_run_weight "${run_keys[${j}]}")" -gt "$(integration_run_weight "${tmp_key}")" ] \
+        || { [ "$(integration_run_weight "${run_keys[${j}]}")" -eq "$(integration_run_weight "${tmp_key}")" ] \
           && [[ ! "${run_keys[${j}]}" > "${tmp_key}" ]]; }; then
         break
       fi

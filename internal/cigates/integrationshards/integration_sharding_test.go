@@ -53,6 +53,28 @@ func manifestText(t *testing.T, root string) string {
 	return b.String()
 }
 
+// manifestSplitKeys: the packages of the manifest with a `split-by-test N` row (CHAOS-13520): each runs as N parts of its
+// test names, in up to N packages shards, so a shard runs only some of its names (internal/cigates/splitshards holds that
+// every name runs in exactly one shard).
+func manifestSplitKeys(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	last := ""
+	for _, l := range strings.Split(manifestText(t, root), "\n") {
+		if strings.TrimSpace(l) == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		k, _, _ := strings.Cut(l, "\t")
+		switch {
+		case strings.Contains(k, "/"):
+			last = k
+		case k == "split-by-test":
+			out[last] = true
+		}
+	}
+	return out
+}
+
 type shardEnv struct {
 	manifest, providerManifest, githubOutput string
 	extra                                    []string
@@ -133,9 +155,10 @@ func manifestRows(t *testing.T) (int, map[string]int) {
 		if err != nil {
 			t.Fatalf("manifest row %q", l)
 		}
-		if k == "shards" {
+		switch {
+		case k == "shards":
 			shards = n
-		} else {
+		case strings.Contains(k, "/"):
 			weights[k] = n
 		}
 	}
@@ -149,6 +172,7 @@ var (
 	planHeader = regexp.MustCompile(`^integration shard plan: ([0-9]+) shard\(s\), ([0-9]+) package\(s\)$`)
 	shardRow   = regexp.MustCompile(`^  SHARD ([0-9]+) ([A-Za-z0-9_./-]+) weight=([0-9]+)s$`)
 	shardTotal = regexp.MustCompile(`^integration shard ([0-9]+): estimated ([0-9]+)s, ([0-9]+) package\(s\)$`)
+	splitRow   = regexp.MustCompile(`^  SHARD-SPLIT-PACKAGE ([0-9]+) ([A-Za-z0-9_./-]+) weight=([0-9]+)s$`)
 )
 
 type planFacts struct {
@@ -179,6 +203,28 @@ func checkShardPlan(stdout, githubOutput string, f planFacts) (map[int]map[strin
 		return nil, fmt.Errorf("the plan header counts %d package(s), discovery found %d", n, len(f.expected))
 	}
 	assignments := map[int]map[string]int{}
+	// The parts of a split-by-test package (CHAOS-13520): SHARD-SPLIT-PACKAGE rows, in up to N shards each.
+	splitIn := map[int]map[string]int{}
+	splitSeen := map[string]bool{}
+	for _, l := range lines {
+		m := splitRow.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		shard, _ := strconv.Atoi(m[1])
+		if shard < 1 || shard > declared {
+			return nil, fmt.Errorf("shard %d is outside 1..%d: %q", shard, declared, l)
+		}
+		w, _ := strconv.Atoi(m[3])
+		if splitIn[shard] == nil {
+			splitIn[shard] = map[string]int{}
+		}
+		if _, dup := splitIn[shard][m[2]]; dup || w <= 0 {
+			return nil, fmt.Errorf("split package %s is listed twice in shard %d, or at no weight", m[2], shard)
+		}
+		splitIn[shard][m[2]] = w
+		splitSeen[m[2]] = true
+	}
 	for _, l := range lines {
 		if !strings.HasPrefix(l, "  SHARD ") {
 			continue
@@ -211,8 +257,16 @@ func checkShardPlan(stdout, githubOutput string, f planFacts) (map[int]map[strin
 			return nil, fmt.Errorf("the plan adds %s", p)
 		}
 	}
+	for p := range splitSeen {
+		if count[p] > 0 {
+			return nil, fmt.Errorf("%s is planned whole and split", p)
+		}
+		if !f.expected[p] {
+			return nil, fmt.Errorf("the plan adds %s", p)
+		}
+	}
 	for p := range f.expected {
-		if count[p] == 0 {
+		if count[p] == 0 && !splitSeen[p] {
 			return nil, fmt.Errorf("the plan misses %s", p)
 		}
 	}
@@ -226,6 +280,14 @@ func checkShardPlan(stdout, githubOutput string, f planFacts) (map[int]map[strin
 	for _, p := range []string{providerPackage, dailyPackage, workerservicePackage} {
 		if count[p] == 0 {
 			return nil, fmt.Errorf("the plan lacks %s", p)
+		}
+	}
+	for shard, rows := range splitIn {
+		if assignments[shard] == nil {
+			assignments[shard] = map[string]int{}
+		}
+		for p, w := range rows {
+			assignments[shard][p] = w
 		}
 	}
 	type tot struct{ seconds, count int }
@@ -519,6 +581,9 @@ type taggedFacts struct {
 	// effect is, per package without an init or TestMain hook, "<key>/<file> <finding>" of the first package-level
 	// side effect gotestfuncs reports in a tag-only file that no reviewed row covers.
 	effect map[string]string
+	// partial: the split-by-test packages (CHAOS-13520); a shard runs only its part of their names, so the per-shard
+	// completeness checks skip them (internal/cigates/splitshards holds that each name runs in exactly one shard).
+	partial map[string]bool
 }
 
 var (
@@ -561,7 +626,7 @@ func integrationTaggedFacts(t *testing.T) taggedFacts {
 		if withTag == nil || plain == nil {
 			return
 		}
-		taggedVal = taggedFacts{tagged: map[string]map[string]bool{}, untagged: map[string]map[string]bool{}, hook: map[string]string{}, effect: map[string]string{}}
+		taggedVal = taggedFacts{tagged: map[string]map[string]bool{}, untagged: map[string]map[string]bool{}, hook: map[string]string{}, effect: map[string]string{}, partial: manifestSplitKeys(t, root)}
 		tagOnly := map[string][]string{}
 		for _, k := range keys {
 			inPlain := map[string]bool{}
@@ -675,6 +740,15 @@ func checkTaggedSelection(stdout string, shardKeys map[string]bool, f taggedFact
 		unfiltered[k] = true
 	}
 	for k := range shardKeys {
+		if f.partial[k] {
+			if f.hookOf(k) != "" && !unfiltered[k] {
+				return fmt.Errorf("%s has a tag-only hook (%s) but no SHARD-UNFILTERED line", k, f.hookOf(k))
+			}
+			if len(selected[k]) == 0 {
+				return fmt.Errorf("split package %s runs in this shard but selects no name", k)
+			}
+			continue
+		}
 		if f.hookOf(k) != "" {
 			if !unfiltered[k] {
 				return fmt.Errorf("%s has a tag-only hook (%s) but no SHARD-UNFILTERED line", k, f.hookOf(k))
@@ -2115,8 +2189,21 @@ func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.
 			want[p] = true
 		}
 	}
-	if len(selected) != len(got) || !sameSet(got, want) {
-		t.Errorf("the packages shards run %d packages (%d distinct), want %d", len(selected), len(got), len(want))
+	repeats := 0
+	for _, shard := range shards {
+		for k := range wants[shard] {
+			if tf := integrationTaggedFacts(t); tf.partial[k] {
+				repeats++
+			}
+		}
+	}
+	for k := range integrationTaggedFacts(t).partial {
+		if got[k] {
+			repeats--
+		}
+	}
+	if len(selected) != len(got)+repeats || !sameSet(got, want) {
+		t.Errorf("the packages shards run %d packages (%d distinct, %d repeats of split packages), want %d", len(selected), len(got), repeats, len(want))
 	}
 	tf := integrationTaggedFacts(t)
 	plantShard, plantKey := 0, ""
@@ -2320,7 +2407,12 @@ func censusDefects(calls []goTestCall, groups int, keys map[string]bool, f tagge
 			if f.tagged[key][n] || f.hookOf(key) != "" {
 				want = 1
 			}
-			if got := count[key][n]; got != want {
+			got := count[key][n]
+			// A split-by-test package runs only its part here: a name runs at most once, never one it does not select.
+			if f.partial[key] && got <= want {
+				continue
+			}
+			if got != want {
 				d = append(d, fmt.Sprintf("%s %s runs %d time(s), want %d", key, n, got, want))
 			}
 		}

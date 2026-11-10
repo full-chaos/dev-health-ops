@@ -99,7 +99,10 @@ var (
 	// functionList is a RequiredFunctions literal of quoted signatures; any other form is unreadable.
 	functionList = regexp.MustCompile(`RequiredFunctions[` + pySpace + `]*:[` + pySpace + `]*\[\]string\{([^}]*)\}`)
 	functionItem = regexp.MustCompile(`"([a-z_][a-z0-9_]*\([a-z0-9_, ]*\))"`)
-	columnRow    = regexp.MustCompile(`\{[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"(SELECT|INSERT|UPDATE|REFERENCES)"[` + pySpace + `]*\}`)
+	// retiredList is a RetiredTables literal of quoted table names; any other form is unreadable.
+	retiredList = regexp.MustCompile(`RetiredTables[` + pySpace + `]*:[` + pySpace + `]*\[\]string\{([^}]*)\}`)
+	retiredItem = regexp.MustCompile(`"([` + pyWord + `]+)"`)
+	columnRow   = regexp.MustCompile(`\{[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"(SELECT|INSERT|UPDATE|REFERENCES)"[` + pySpace + `]*\}`)
 )
 
 // keyedFields is the keys of re.finditer(r"\b(\w+)\s*:(?!=)", s): a word run that starts at a word boundary, optional
@@ -172,6 +175,7 @@ func loadPostureSource(src, fn string) (posture, bool) {
 	// whatever its value (RequiredSequences: []string{...}, a name or a call) is a grant it cannot read back, so
 	// it must fail rather than vanish from the delta.
 	functionLists := functionList.FindAllStringSubmatch(body, -1)
+	retiredLists := retiredList.FindAllStringSubmatch(body, -1)
 	for _, key := range keyedFields(body) {
 		switch key {
 		case "RequiredTables", "ColumnScoped":
@@ -179,7 +183,25 @@ func loadPostureSource(src, fn string) (posture, bool) {
 			if len(functionLists) != 1 {
 				return posture{}, false
 			}
+		case "RetiredTables":
+			// Grants nothing: a retired table stays a RequiredTables row, granted exactly as before. The list must
+			// be a literal of names that are rows here.
+			if len(retiredLists) != 1 {
+				return posture{}, false
+			}
 		default:
+			return posture{}, false
+		}
+	}
+	for _, list := range retiredLists {
+		rest := list[1]
+		for _, m := range retiredItem.FindAllStringSubmatch(list[1], -1) {
+			if p.tables[m[1]] == nil {
+				return posture{}, false
+			}
+			rest = strings.Replace(rest, m[0], "", 1)
+		}
+		if strings.Trim(rest, ", \t\n") != "" {
 			return posture{}, false
 		}
 	}

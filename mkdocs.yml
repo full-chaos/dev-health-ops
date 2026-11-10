@@ -134,6 +134,7 @@ nav:
           - Sync and coverage: admin/troubleshooting/sync-and-coverage.md
   - Install and operate:
       - operate/index.md
+      - Auth control plane architecture: operate/architecture/auth-control-plane.md
       - Plan:
           - operate/plan/index.md
           - Prerequisites: operate/plan/prerequisites.md
@@ -248,6 +249,7 @@ nav:
           - Authentication and authorization: reference/api/authentication.md
           - Errors, pagination, and limits: reference/api/errors-pagination-rate-limits.md
       - Auth: reference/auth/credential-classes.md
+      - Auth credential reference: reference/auth/credential-reference.md
       - Auth authentication and authorization: reference/auth/authn-authz.md
       - Auth policy catalog: reference/auth/policy-catalog.md
       - Auth action map: reference/auth/action-map.md

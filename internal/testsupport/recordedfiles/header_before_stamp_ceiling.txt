@@ -2,12 +2,10 @@
 # The list only shrinks: a golden leaves it when the verb records it again. -day-one admits a path on it and no other.
 internal/adminops/testdata/golden/billing.json
 internal/adminops/testdata/golden/bundles.json
-internal/adminops/testdata/golden/credential_args.json
 internal/adminops/testdata/golden/llmsettings.json
 internal/adminops/testdata/golden/orgdelete.json
 internal/adminops/testdata/golden/reconcile.json
 internal/adminops/testdata/golden/stripe.json
-internal/adminops/testdata/golden/svc_verbs.json
 internal/adminops/testdata/golden/users.json
 internal/aicli/testdata/golden/allowlist.json
 internal/api/billing/stripeclient/testdata/golden/stripe-api-version.golden.json

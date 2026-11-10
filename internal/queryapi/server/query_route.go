@@ -7021,6 +7021,16 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			}
 		}
 
+		if row := nonHolderRowOf(r.Context()); row != nonHolderRowNone && !legacyDocumentReads(query) {
+			log.Printf("query-api: refused a non-query document of a caller without admin.impersonate beside its go-api impersonation row: operation=%s row_unreadable=%t", operation, row == nonHolderRowUnreadable)
+			if row == nonHolderRowUnreadable {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			policy.WriteImpersonationRefused(w)
+			return
+		}
+
 		if requireKind != "" {
 			kind, kindErr := digest.DocumentKind(query)
 			if kind != requireKind {

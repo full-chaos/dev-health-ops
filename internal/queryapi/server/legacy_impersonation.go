@@ -66,15 +66,51 @@ var errLegacyImpersonationRefused = errors.New("legacy impersonation caller refu
 
 type legacyImpersonationRefusedKey struct{}
 
+// nonHolderRow is what liveScope read of the go-api row of a caller without
+// admin.impersonate while the refusal is on; the dispatch refuses that
+// caller's non-query documents on it, as go-api's Scope.Impersonation does
+// on a request that does not only read.
+type nonHolderRow int
+
+const (
+	nonHolderRowNone       nonHolderRow = iota
+	nonHolderRowLive                    // the row is live: the impersonation refusal (403)
+	nonHolderRowUnreadable              // the read failed: /query's failed live read (401)
+)
+
+// legacyRefusal is the request's refusal state.
+type legacyRefusal struct{ nonHolder nonHolderRow }
+
 // withLegacyImpersonationRefused marks the request so liveScope refuses the
 // admin's own bearer beside a live go-api row instead of serving it as the target.
 func withLegacyImpersonationRefused(ctx context.Context) context.Context {
-	return context.WithValue(ctx, legacyImpersonationRefusedKey{}, true)
+	return context.WithValue(ctx, legacyImpersonationRefusedKey{}, &legacyRefusal{})
 }
 
 func legacyImpersonationRefused(ctx context.Context) bool {
-	refused, _ := ctx.Value(legacyImpersonationRefusedKey{}).(bool)
+	_, refused := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal)
 	return refused
+}
+
+func markNonHolderRow(ctx context.Context, row nonHolderRow) {
+	if state, ok := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal); ok {
+		state.nonHolder = row
+	}
+}
+
+func nonHolderRowOf(ctx context.Context) nonHolderRow {
+	if state, ok := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal); ok {
+		return state.nonHolder
+	}
+	return nonHolderRowNone
+}
+
+// legacyDocumentReads reports whether text, the document the resolver runs,
+// is one query operation by its AST (digest.DocumentKind); a mutation, a
+// subscription and a text that does not parse are not.
+func legacyDocumentReads(text string) bool {
+	kind, err := digest.DocumentKind(text)
+	return err == nil && kind == digest.KindQuery
 }
 
 // graphQLEdgeReads is /graphql's read test for the read limit of the legacy

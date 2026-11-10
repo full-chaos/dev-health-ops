@@ -129,13 +129,23 @@ type edgeScope func(ctx context.Context, user *policy.User) (org string, session
 // liveScope is /query's scope: nothing in front of /query decided anything,
 // so the org is the token's own and the session is read here, once. As in
 // go-api's Scope.Impersonation, a session is applied only to a caller that
-// holds admin.impersonate now. A caller without the action acts as itself,
-// and its row is not read. With AUTH_PROXY_IMPERSONATION on, a holder's live
-// row refuses the request (the legacy impersonation caller): the
-// impersonation is a delegated session.
+// holds admin.impersonate now. A caller without the action acts as itself.
+// With AUTH_PROXY_IMPERSONATION on, a holder's live row refuses the request
+// (the legacy impersonation caller: the impersonation is a delegated
+// session), and a non-holder's row is read and marked for the dispatch,
+// which refuses its non-query documents (go-api's read limit). With the
+// switch off a non-holder's row is not read.
 func liveScope(store policy.Store) edgeScope {
 	return func(ctx context.Context, user *policy.User) (string, *policy.Impersonation, error) {
 		if !user.Holds(policy.ActionAdminImpersonate) {
+			if legacyImpersonationRefused(ctx) {
+				switch session, err := store.ActiveImpersonation(ctx, user.ID); {
+				case err != nil:
+					markNonHolderRow(ctx, nonHolderRowUnreadable)
+				case session != nil:
+					markNonHolderRow(ctx, nonHolderRowLive)
+				}
+			}
 			return user.OrgID, nil, nil
 		}
 		session, err := store.ActiveImpersonation(ctx, user.ID)

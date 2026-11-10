@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -182,36 +180,5 @@ func TestInvalidImpersonationSwitchStartsWithOneWarnAndRefuses(t *testing.T) {
 				t.Fatalf("%s=%q: /graphql refuse=%v, want %v (fail closed)", impersonationProxyEnv, raw, refuse, wantWarn || raw == "true")
 			}
 		})
-	}
-}
-
-// TestQueryLeavesANonHoldersWriteBesideALiveRow: the refusal follows admin.impersonate: a plain member (no platform
-// action) beside a live row, or whose row read fails, keeps today's answer on a mutation, the switch on.
-func TestQueryLeavesANonHoldersWriteBesideALiveRow(t *testing.T) {
-	quietStdLog(t)
-	minter := newAccessMinter(t)
-	member := func(session *policy.Impersonation, sessionErr error) *accessStore {
-		store := newAccessStore()
-		store.sessions = map[uuid.UUID]*policy.Impersonation{}
-		if session != nil {
-			store.sessions[ecUser] = session
-		}
-		store.errSession = sessionErr
-		return store
-	}
-	for name, store := range map[string]func() *accessStore{
-		"live row":       func() *accessStore { return member(legacySession(), nil) },
-		"row read fails": func() *accessStore { return member(nil, errors.New("session store timeout")) },
-	} {
-		for signing, token := range actionOnlyHolderTokens(t, minter) {
-			for _, route := range legacyQueryRoutes {
-				t.Run(name+" "+signing+" "+route.listener+" "+route.path, func(t *testing.T) {
-					s := legacyStack(t, minter, store(), true)
-					if got := postDocument(s, route.listener, route.path, token, legacyMutationDocument); got.Status != http.StatusOK || len(*s.seen) != 1 {
-						t.Fatalf("got %d %s, ran %d; want today's 200 and one run", got.Status, got.Body, len(*s.seen))
-					}
-				})
-			}
-		}
 	}
 }

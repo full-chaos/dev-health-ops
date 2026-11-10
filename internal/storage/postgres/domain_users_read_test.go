@@ -91,12 +91,13 @@ func TestDomainUsersReadersAreTheKnownFiles(t *testing.T) {
 	t.Parallel()
 
 	usersSQL := regexp.MustCompile(`(?i)\b(FROM|JOIN|UPDATE|INTO)\s+(public\.)?users\b`)
+	systemFiles, systemErr := filepath.Glob("../../jobs/system/*.go")
+	operationalFiles, operationalErr := filepath.Glob("../../jobs/operational/*.go")
+	if systemErr != nil || operationalErr != nil || len(systemFiles) == 0 || len(operationalFiles) == 0 {
+		t.Fatalf("no sources in internal/jobs/system or internal/jobs/operational (err=%v, %v)", systemErr, operationalErr)
+	}
 	var readers []string
-	for _, dir := range []string{"../../jobs/system", "../../jobs/operational"} {
-		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
-		if err != nil || len(files) == 0 {
-			t.Fatalf("no sources in %s (err=%v)", dir, err)
-		}
+	for _, files := range [][]string{systemFiles, operationalFiles} {
 		for _, file := range files {
 			if strings.HasSuffix(file, "_test.go") {
 				continue

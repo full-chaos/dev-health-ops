@@ -238,7 +238,11 @@ infra_class() {
 up_once() {
   local status=0
   set +e
-  { timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up "${UP_BUILD}" --detach --wait --wait-timeout 900 "$1"; } 2>&1 | tee -- "$2"
+  if [ "${UP_BUILD}" = --build ]; then
+    { timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --build --detach --wait --wait-timeout 900 "$1"; } 2>&1 | tee -- "$2"
+  else
+    { timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --no-build --detach --wait --wait-timeout 900 "$1"; } 2>&1 | tee -- "$2"
+  fi
   status="${PIPESTATUS[0]}"
   set -e
   return "${status}"

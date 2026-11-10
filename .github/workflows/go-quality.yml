@@ -349,10 +349,8 @@ jobs:
             ~/.cache/go-build
             ~/go/pkg/mod
           key: go-quality-v2-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
-          # CHAOS-13520: a test leg falls back to the newest cache of any test leg (a new leg name has no entry of its own yet).
           restore-keys: |
             go-quality-v2-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
-            ${{ startsWith(matrix.name, 'test-') && 'go-quality-v2-test-' || format('go-quality-v2-{0}-', matrix.name) }}
 
       - name: Build into the restored Go cache (GitHub-hosted legs)
         # CHAOS-10486: check_go.sh builds into DEV_HEALTH_GO_CACHE, else an inherited or configured GOCACHE, else

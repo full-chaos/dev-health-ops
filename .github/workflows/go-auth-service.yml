@@ -309,7 +309,6 @@ jobs:
     timeout-minutes: 30
     env:
       CHECK_GO_JOB_CAP_MIN: 30
-      AUTH_CORPUS_PREBUILT_TAG: ci-prebuilt
     strategy:
       fail-fast: false
       matrix:
@@ -321,15 +320,9 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
       # CHAOS-13520: the six images the corpus runs are built here, from the gha cache auth-corpus-image-cache seeds on main
-      # (read only: a pull request never writes the cache), and loaded; ci/auth_corpus_external.sh then starts them with
+      # (read only: a pull request never writes the cache; the cache lines are in ci/auth_corpus.bake.hcl), and loaded;
+      # ci/auth_corpus_external.sh then starts them with
       # --no-build (AUTH_CORPUS_PREBUILT_TAG). The cache token stays inside the bake action; no shell step sees it.
-      - name: Log in to GitHub Container Registry (the mirrored buildkit image)
-        continue-on-error: true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
         with:
@@ -346,28 +339,19 @@ jobs:
           files: |
             compose.yml
             ci/auth_corpus_external.override.yml
-          targets: |
-            auth-service
-            auth-migrate
-            go-api
-            auth-keys-init
-            providerstub
-            smtpsink
+            ci/auth_corpus.bake.hcl
+          targets: authcorpus
           load: true
-          set: |
-            auth-service.cache-from=type=gha,scope=authcorpus-auth-service
-            auth-migrate.cache-from=type=gha,scope=authcorpus-auth-migrate
-            go-api.cache-from=type=gha,scope=authcorpus-go-api
-            auth-keys-init.cache-from=type=gha,scope=authcorpus-auth-keys-init
-            providerstub.cache-from=type=gha,scope=authcorpus-providerstub
-            smtpsink.cache-from=type=gha,scope=authcorpus-smtpsink
       - name: Run the auth-flow corpus against the external go-api
         if: matrix.leg != 'acp-nokeys'
+        env:
+          AUTH_CORPUS_PREBUILT_TAG: ci-prebuilt
         run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}"
       # Non-vacuity: leg acp without the auth-service keys must fail, and by name (not pass as "unserved").
       - name: Leg acp without the auth-service keys fails by name
         if: matrix.leg == 'acp-nokeys'
         env:
+          AUTH_CORPUS_PREBUILT_TAG: ci-prebuilt
           NOKEYS_LOG: ${{ runner.temp }}/acp-nokeys.log
         run: |
           status=0
@@ -388,13 +372,14 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # No secrets: the mirrored buildkit image is pulled anonymously; the cache is written through the runtime token the bake
-    # action holds.
+    # No secrets: the mirrored buildkit image is public; the cache is written through the runtime token the bake action holds,
+    # so the job token needs no more than contents: read.
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
         with:
@@ -404,6 +389,7 @@ jobs:
         uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
         env:
           AUTH_CORPUS_IMAGE_TAG: ci-prebuilt
+          AUTH_CORPUS_CACHE_WRITE: "1"
           # compose.yml's bugsink service requires it at parse time; bake builds none of its images.
           BUGSINK_SECRET_KEY: bake-parse-only
         with:
@@ -411,27 +397,9 @@ jobs:
           files: |
             compose.yml
             ci/auth_corpus_external.override.yml
-          targets: |
-            auth-service
-            auth-migrate
-            go-api
-            auth-keys-init
-            providerstub
-            smtpsink
+            ci/auth_corpus.bake.hcl
+          targets: authcorpus
           load: true
-          set: |
-            auth-service.cache-from=type=gha,scope=authcorpus-auth-service
-            auth-migrate.cache-from=type=gha,scope=authcorpus-auth-migrate
-            go-api.cache-from=type=gha,scope=authcorpus-go-api
-            auth-keys-init.cache-from=type=gha,scope=authcorpus-auth-keys-init
-            providerstub.cache-from=type=gha,scope=authcorpus-providerstub
-            smtpsink.cache-from=type=gha,scope=authcorpus-smtpsink
-            auth-service.cache-to=type=gha,scope=authcorpus-auth-service,mode=max
-            auth-migrate.cache-to=type=gha,scope=authcorpus-auth-migrate,mode=max
-            go-api.cache-to=type=gha,scope=authcorpus-go-api,mode=max
-            auth-keys-init.cache-to=type=gha,scope=authcorpus-auth-keys-init,mode=max
-            providerstub.cache-to=type=gha,scope=authcorpus-providerstub,mode=max
-            smtpsink.cache-to=type=gha,scope=authcorpus-smtpsink,mode=max
 
   auth-gate:
     if: always()
@@ -479,7 +447,7 @@ jobs:
   # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
   auth-cancel-stacked-queue-children:
     name: cancel-stacked-queue-children
-    needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz, auth-corpus-queue, auth-gate]
+    needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz, auth-corpus-queue, auth-corpus-image-cache, auth-gate]
     if: failure() && github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5

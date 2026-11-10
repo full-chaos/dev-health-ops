@@ -498,6 +498,8 @@ internal/storage/postgres	api_authorization_platform_roles_test.go	internal/api	
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/apiservice	tree	*
 internal/storage/postgres	api_authorization_platform_roles_test.go	internal/pgmigrate/sql	dir	*
 internal/storage/postgres	coordinator_posture_scheduler_coverage_test.go	internal/scheduler	tree	*.go
+internal/storage/postgres	domain_users_read_test.go	internal/jobs/operational	dir	*
+internal/storage/postgres	domain_users_read_test.go	internal/jobs/system	dir	*
 internal/storage/postgres	openers_test.go	.	tree	*.go
 internal/storage/postgres	posture_cache_cadence_test.go	internal/storage/postgres	dir	*
 internal/storage/postgres	posture_identity_sites_test.go	internal	tree	*.go

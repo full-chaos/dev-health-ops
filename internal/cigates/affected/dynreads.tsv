@@ -605,6 +605,7 @@ internal/shadowvenue	mint.go
 internal/shadowvenue	requestsites_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go
+internal/storage/postgres	domain_users_read_test.go
 internal/storage/postgres	openers_test.go
 internal/storage/postgres	posture_identity_sites_test.go
 internal/storage/postgres	venue_posture_coverage_test.go

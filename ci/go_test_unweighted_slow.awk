@@ -35,7 +35,8 @@ BEGIN {
   if (nrows == 0) { print "go_test_unweighted_slow: weights file holds no row: " weights > "/dev/stderr"; bad = 2; exit 2 }
 }
 FILENAME == ARGV[1] {
-  if (NF >= 3) { key[$2] = $3; modof[$2] = $1; nplan++ }
+  # A split package (ci/go_test_splits.tsv) has one plan line per part in the shard; it counts once.
+  if (NF >= 3) { if (!($2 in key)) nplan++; key[$2] = $3; modof[$2] = $1 }
   next
 }
 $1 ~ /^(ok|FAIL|\?)[ ]*$/ && NF >= 3 { nsummary++; seen[$2] = 1 }

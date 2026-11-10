@@ -103,10 +103,22 @@ func weightRows(t *testing.T) []weightRow {
 	return rows
 }
 
-// shardPlan is the root-module part of a shard (the plan also holds the packages of nested modules): its whole packages.
+// shardPlan is the root-module part of a shard (the plan also holds the packages of nested modules): its packages, a split
+// package (ci/go_test_splits.tsv) once however many of its parts the shard holds.
 func shardPlan(t *testing.T, shard, count int) []string {
 	t.Helper()
-	pkgs, _ := shardPlanParts(t, shard, count)
+	pkgs, parts := shardPlanParts(t, shard, count)
+	seen := map[string]bool{}
+	for _, p := range pkgs {
+		seen[p] = true
+	}
+	for _, p := range parts {
+		pkg, _, _ := strings.Cut(p, "#")
+		if !seen[pkg] {
+			seen[pkg] = true
+			pkgs = append(pkgs, pkg)
+		}
+	}
 	return pkgs
 }
 

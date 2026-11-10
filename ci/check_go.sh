@@ -1345,7 +1345,7 @@ check_test_shard_split_list() {
 # Appends to SPLIT_JOB_PIDS, SPLIT_JOB_LABELS and SPLIT_JOB_FILES of check_test_shard; test_split_jobs_finish waits for them.
 test_split_job_start() {
   local module_dir="$1" pkg="$2" lines="$3" census_keys="$4" key regex n slog sjson slegjson serr
-  key="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p { print $2; exit }')"
+  key="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p && key == "" { key = $2 } END { print key }')"
   regex="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p { printf "%s%s", (n++ ? "|" : ""), $3 }')"
   n="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p' | wc -l)"
   slog="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-log.XXXXXX")"

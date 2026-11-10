@@ -8,7 +8,6 @@
 # parts = ceil(measured seconds / 150), the measured time from the test legs of run 42838102780 (PR #6046, ae06059f).
 deploy/helm/dev-health	5
 internal/cigates/affected	3
-internal/cigates/affectedreject	2
 internal/cigates/bigboy	2
 internal/cigates/chartgates	4
 internal/cigates/checkgo	5

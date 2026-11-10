@@ -1,0 +1,4 @@
+{
+  "list other org category": "200 {\"category\":\"general\",\"settings\":[{\"key\":\"other_org\",\"value\":\"b\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null}]}",
+  "list with settings is a server error": "200 {\"category\":\"general\",\"settings\":[{\"key\":\"empty_value\",\"value\":\"\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null},{\"key\":\"null_value\",\"value\":null,\"category\":\"general\",\"is_encrypted\":false,\"description\":\"no value\"},{\"key\":\"site_name\",\"value\":\"Acme\",\"category\":\"general\",\"is_encrypted\":false,\"description\":\"the name\"},{\"key\":\"unicode\",\"value\":\"Café 東京\",\"category\":\"general\",\"is_encrypted\":false,\"description\":null}]}"
+}

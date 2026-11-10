@@ -63,7 +63,7 @@ type setting struct {
 
 func (s pgStore) settingsByCategory(ctx context.Context, orgID, category string) ([]setting, error) {
 	rows, err := s.Pool.Query(ctx,
-		`SELECT id, key, value, is_encrypted, description FROM settings WHERE org_id = $1 AND category = $2`, orgID, category)
+		`SELECT id, key, value, is_encrypted, description FROM settings WHERE org_id = $1 AND category = $2 ORDER BY key`, orgID, category)
 	if err != nil {
 		return nil, err
 	}

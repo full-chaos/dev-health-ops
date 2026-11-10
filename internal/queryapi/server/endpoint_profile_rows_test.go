@@ -221,7 +221,8 @@ func dedupSorted(in []string) []string {
 // file holds the one registration of its route (the pattern, or the constant it
 // is written as) and method, and every validator anchor's note resolves to one
 // place; the rows' lines are citations and are not compared. The anchors of the
-// envelope credential class still carry the text their line must hold.
+// envelope credential class carry a note and name a file that exists; their text
+// is the credential-class pin check's (internal/auth/contracts).
 func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 	problems, checked, drift := queryRowAnchorProblems(t, "../../..", loadQueryAPIRows(t))
 	t.Logf("citation note: %d query-api row sources and validator anchors cite a line other than the one they resolve to", drift)
@@ -249,20 +250,10 @@ func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 	}
 }
 
-func anchorLineOf(t *testing.T, root, path string, line int) string {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(root, path))
-	if err != nil {
-		t.Fatalf("anchor file %s: %v", path, err)
-	}
-	lines := strings.Split(string(raw), "\n")
-	if line < 1 || line > len(lines) {
-		t.Fatalf("anchor %s:%d is outside the file (%d lines)", path, line, len(lines))
-	}
-	return lines[line-1]
-}
-
-// anchorWalk checks every ops anchor under a node: it carries a note, and its line holds the note.
+// anchorWalk checks every ops anchor under a node: it carries a note and its file exists. The anchors it walks are
+// credential-classes.json anchors, whose text and symbol the pin check in internal/auth/contracts owns
+// (TestCredentialClassAnchorsPointAtTheirPinnedLineText; TestEnvelopeAndLLMKeyAnchorsAllHaveAPin proves each has a pin),
+// so the cited line is not read here.
 func anchorWalk(t *testing.T, root string, problems *[]string, checked *int) func(node any, where string) {
 	var walk func(node any, where string)
 	walk = func(node any, where string) {
@@ -274,8 +265,8 @@ func anchorWalk(t *testing.T, root string, problems *[]string, checked *int) fun
 				note, _ := value["note"].(string)
 				if note == "" {
 					*problems = append(*problems, fmt.Sprintf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(line)))
-				} else if text := anchorLineOf(t, root, path, int(line)); !strings.Contains(text, note) {
-					*problems = append(*problems, fmt.Sprintf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(text)))
+				} else if _, err := os.Stat(filepath.Join(root, path)); err != nil {
+					*problems = append(*problems, fmt.Sprintf("%s: anchor file %s: %v", where, path, err))
 				}
 				*checked++
 			}

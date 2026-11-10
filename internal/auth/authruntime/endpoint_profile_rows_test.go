@@ -28,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/routescan"
 )
 
 const authServiceRows = "../../../contracts/auth/v1/endpoint-profiles.auth-service.json"
@@ -371,74 +372,101 @@ func TestTheRowGateRefusesARowForARouteNothingServes(t *testing.T) {
 	}
 }
 
-// TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols: a row's source line
-// still registers its route, and every anchor with a note still holds the
-// symbol the note names, so a pinned file:line cannot drift silently.
+// TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols: a row's source names
+// its route by symbol (routescan.RowSymbol: the registration of its method and
+// route, the registration of its pattern constant, or that constant's spec),
+// and every anchor's note resolves to one place (routescan.ResolveNote). The
+// cited lines are citations: a drift count is logged, never compared.
 func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
-	problems, checked := authRowAnchorProblems(t, "../../..", loadAuthServiceRows(t))
+	problems, checked, drift := authRowAnchorProblems(t, "../../..", loadAuthServiceRows(t))
 	for _, problem := range problems {
 		t.Error(problem)
 	}
 	if checked < 10 {
 		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
 	}
+	t.Logf("citation note: %d of %d auth-service sources and anchors cite a line other than the one they resolve to", drift, checked)
 }
 
-// authRowAnchorProblems checks the auth-service rows against the source under root.
-func authRowAnchorProblems(t *testing.T, root string, rows []map[string]any) (problems []string, checked int) {
+// authRowAnchorProblems resolves the auth-service rows in the source under root, by symbol. drift counts the cited
+// lines that are not the resolved ones.
+func authRowAnchorProblems(t *testing.T, root string, rows []map[string]any) (problems []string, checked, drift int) {
 	t.Helper()
-	constants := authPatternConstants
-	lineOf := func(path string, line int) string {
+	sources := map[string][]byte{}
+	read := func(path string) []byte {
+		if raw, ok := sources[path]; ok {
+			return raw
+		}
 		raw, err := os.ReadFile(filepath.Join(root, path))
 		if err != nil {
 			t.Fatalf("anchor file %s: %v", path, err)
 		}
-		lines := strings.Split(string(raw), "\n")
-		if line < 1 || line > len(lines) {
-			t.Fatalf("anchor %s:%d is outside the file (%d lines)", path, line, len(lines))
-		}
-		return lines[line-1]
+		sources[path] = raw
+		return raw
 	}
-	var walk func(node any, where string)
-	walk = func(node any, where string) {
-		switch value := node.(type) {
-		case map[string]any:
-			path, hasPath := value["path"].(string)
-			line, hasLine := value["line"].(float64)
-			if hasPath && hasLine {
-				note, _ := value["note"].(string)
-				if note == "" {
-					problems = append(problems, fmt.Sprintf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(line)))
-				} else if !strings.Contains(lineOf(path, int(line)), note) {
-					problems = append(problems, fmt.Sprintf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(lineOf(path, int(line)))))
-				}
-				checked++
-			}
-			for key, child := range value {
-				walk(child, where+"/"+key)
-			}
-		case []any:
-			for index, child := range value {
-				walk(child, where+"["+strconv.Itoa(index)+"]")
-			}
-		}
-	}
+	scanned := map[string][]routescan.Registration{}
+	trim := func(err error) string { return strings.ReplaceAll(err.Error(), filepath.ToSlash(root)+"/", "") }
 	for _, row := range rows {
 		id, _ := row["id"].(string)
+		method, _ := row["method"].(string)
 		route, _ := row["route"].(string)
 		source := row["source"].(map[string]any)
-		text := lineOf(source["file"].(string), int(source["line"].(float64)))
-		if !strings.Contains(text, `"`+route+`"`) && (constants[route] == "" || !strings.Contains(text, "Pattern: "+constants[route]+",")) {
-			problems = append(problems, fmt.Sprintf("row %q: %v:%v holds no registration of %s: %q", id, source["file"], source["line"], route, strings.TrimSpace(text)))
+		file, line := source["file"].(string), int(source["line"].(float64))
+		dir := filepath.Join(root, filepath.Dir(file))
+		if _, ok := scanned[dir]; !ok {
+			regs, err := routescan.ScanWithMux(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scanned[dir] = regs
 		}
+		at, err := routescan.RowSymbol(scanned[dir], read(file), filepath.ToSlash(filepath.Join(root, file)), method, route, authPatternConstants[route])
 		checked++
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("row %q: %s", id, trim(err)))
+		} else if at != line {
+			drift++
+		}
+		own := func() (routescan.Registration, error) {
+			if err != nil {
+				return routescan.Registration{}, err
+			}
+			return routescan.Registration{File: file, Line: at}, nil
+		}
+		var walk func(node any, where string)
+		walk = func(node any, where string) {
+			switch value := node.(type) {
+			case map[string]any:
+				path, hasPath := value["path"].(string)
+				anchorLine, hasLine := value["line"].(float64)
+				if hasPath && hasLine {
+					checked++
+					note, _ := value["note"].(string)
+					if note == "" {
+						problems = append(problems, fmt.Sprintf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(anchorLine)))
+					} else if problem, drifted := routescan.ResolveNote(read(path), path, note, int(anchorLine), file, own); problem != "" {
+						problems = append(problems, where+": "+problem)
+					} else if drifted {
+						drift++
+					}
+				}
+				for key, child := range value {
+					walk(child, where+"/"+key)
+				}
+			case []any:
+				for index, child := range value {
+					walk(child, where+"["+strconv.Itoa(index)+"]")
+				}
+			}
+		}
 		walk(row["primary_validator"], id+"/primary_validator")
 		walk(row["issued_credential"], id+"/issued_credential")
 	}
-	return problems, checked
+	return problems, checked, drift
 }
 
-// authPatternConstants are the pattern constants the auth-service registrations name, by route.
+// authPatternConstants are the pattern constants the auth-service registrations name, by route: a constant from another
+// package (PatternJWKS) resolves only through its name.
 var authPatternConstants = map[string]string{
 	"/v1/token/refresh": "PatternRefresh", "/v1/sessions/current": "PatternCurrent",
 	"/v1/sessions/revoke": "PatternRevoke", "/v1/sessions/revoke-all": "PatternRevokeAll",

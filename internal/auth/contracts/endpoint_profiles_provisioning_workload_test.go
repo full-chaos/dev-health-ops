@@ -189,10 +189,15 @@ func TestAProvisioningConsumerAnchorLineNamesTheRouteItDescribes(t *testing.T) {
 	}
 }
 
-// provisioningConsumerProblems checks each provisioning consumer anchor that cites a quoted route line against the
-// source under root; checked counts the anchors measured per class.
+// provisioningConsumerProblems checks each provisioning consumer anchor whose PINNED text quotes a route: the text
+// TestCredentialClassAnchorsPointAtTheirPinnedLineText proves is in its symbol, so a moved line is never read or
+// skipped here. The file must exist under root; checked counts the anchors measured per class.
 func provisioningConsumerProblems(t *testing.T, document classRegistryDocument, root string) (problems []string, checked map[string]int) {
 	t.Helper()
+	pinnedText := map[string]string{}
+	for _, pin := range loadAnchorPins(t) {
+		pinnedText[anchorKey(pin.Path, pin.Line)] = pin.Text
+	}
 	described := regexp.MustCompile(`auth-service POST (/internal/v1/[a-z0-9/_-]+)`)
 	quoted := regexp.MustCompile(`"(/internal/v1/[a-z0-9/_-]+)"`)
 	checked = map[string]int{}
@@ -202,16 +207,16 @@ func provisioningConsumerProblems(t *testing.T, document classRegistryDocument, 
 			if m == nil || consumer.Anchor == nil || consumer.Anchor.Repo != "ops" {
 				continue
 			}
-			raw, err := os.ReadFile(filepath.Join(root, consumer.Anchor.Path))
-			if err != nil {
-				t.Fatal(err)
-			}
-			lines := strings.Split(string(raw), "\n")
-			if consumer.Anchor.Line < 1 || consumer.Anchor.Line > len(lines) {
-				problems = append(problems, fmt.Sprintf("%s %s: anchor %s:%d is outside the file", class.ClassID, m[1], consumer.Anchor.Path, consumer.Anchor.Line))
+			if _, err := os.Stat(filepath.Join(root, consumer.Anchor.Path)); err != nil {
+				problems = append(problems, fmt.Sprintf("%s %s: anchor file %s: %v", class.ClassID, m[1], consumer.Anchor.Path, err))
 				continue
 			}
-			if q := quoted.FindStringSubmatch(lines[consumer.Anchor.Line-1]); q != nil {
+			text, pinned := pinnedText[anchorKey(consumer.Anchor.Path, consumer.Anchor.Line)]
+			if !pinned {
+				problems = append(problems, fmt.Sprintf("%s %s: anchor %s:%d has no pin in credentialanchors/credential-anchor-lines.json", class.ClassID, m[1], consumer.Anchor.Path, consumer.Anchor.Line))
+				continue
+			}
+			if q := quoted.FindStringSubmatch(text); q != nil {
 				if q[1] != m[1] {
 					problems = append(problems, fmt.Sprintf("%s consumer of %s is anchored at %s:%d, a line that names %s", class.ClassID, m[1], consumer.Anchor.Path, consumer.Anchor.Line, q[1]))
 				}

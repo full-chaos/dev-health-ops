@@ -29,7 +29,6 @@ package apiservice
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/acrcredentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
@@ -65,8 +64,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
-	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushevent"
@@ -80,7 +78,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.opentelemetry.io/otel"
 )
 
 const (
@@ -204,9 +201,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	// The /api/v1/auth/* proxy to auth-service (CHAOS-10231): each flag off
 	// keeps go-api's own handler; on, only the innermost handler forwards,
 	// behind go-api's guard, validator and rate limiter.
-	proxy := newAuthProxy(deps.AuthProxy, logger)
+	proxy := newAuthProxy(deps.AuthProxy, logger).withImpersonatingCallerRefusal(deps.Guard)
 	routes = append(routes, session.Routes(session.Deps{
-		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier, Signer: deps.Signer,
+		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth,
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
 		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit, Inner: proxy.inner, Issuer: deps.SessionIssuer,
@@ -245,7 +242,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// in this process already uses. StateSecret is
 			// SSO_STATE_SECRET only (statePurposeSecrets);
 			// HKDF derives one key per protocol from it (state.go).
-			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, Signer: deps.Signer, Inner: proxy.inner,
+			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, Inner: proxy.inner,
 			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
@@ -281,9 +278,14 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			AuthSchema:         deps.AuthSchema,
 			OrgReactivator:     deps.OrgReactivator,
 			OrgProvisioner:     deps.OrgProvisioner,
+			OrgDeletionAuth:    deps.OrgDeletionAuth,
+			OrgDeprovisioner:   deps.OrgDeprovisioner,
 			OrgSuspender:       deps.OrgSuspender,
 			OrgState:           deps.OrgState,
 			Delegator:          deps.Delegator,
+			ServiceAccountKeys: deps.ServiceAccountKeys,
+			ServiceAccounts:    deps.ServiceAccounts,
+			UsersAdmin:         deps.UsersAdmin,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -400,6 +402,8 @@ func configureWith(
 	adjust func(*Deps),
 ) ([]lifecycle.Component, error) {
 	removedenv.ObserveOrgsOwned(ctx, envsecrets.ProcessLookup, logger)
+	warnRetiredJWTSecretKey(ctx, envsecrets.ProcessLookup, logger)
+	warnSharedStateSecret(ctx, cfg, logger)
 	if err := checkTrustedProxies(logger); err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_trusted_proxies", "api_trusted_proxies_invalid", err)
 	}
@@ -410,6 +414,7 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
 		}
 	}
+	authProxy.WarnInvalidImpersonation(ctx, logger)
 	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_acr_project_scope", "api_acr_project_scope_config_invalid", err)
@@ -459,9 +464,19 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
+	deps.OrgDeletionAuth, deps.OrgDeprovisioner = orgDeletionDeprovisioner(ctx, logger, authProxy, deps.OrgProvisioner,
+		provisioningCred, sessionCred, envsecrets.ProcessLookup)
+	deps.ServiceAccountKeys, err = serviceAccountKeys(authProxy, provisioningCred)
+	if err == nil {
+		deps.ServiceAccounts, err = serviceAccounts(authProxy, provisioningCred)
+	}
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_service_account_keys", "api_service_account_keys_config_invalid", err)
+	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {
-		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, logger)
+		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, authProxy, logger)
 		if err != nil {
 			closeComponents(depComponents)
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
@@ -475,7 +490,6 @@ func configureWith(
 		}
 		protected.guard.SetEnforcer(enforcer)
 		protected.guard.SetShadow(newShadow(decisionPoint, envsecrets.ProcessLookup, logger))
-		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		// ReadOnce first: the org scope and the route's guard read the token
 		// org's membership once per request.
 		scope = []func(http.Handler) http.Handler{protected.auth.ReadOnce, protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
@@ -485,6 +499,11 @@ func configureWith(
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
+	}
+	deps.UsersAdmin, err = usersAdminClient(authProxy, deps.UsersOwned, sharedWorkloadClient(provisioningCred, sessionCred))
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_users_admin", "api_users_admin_config_invalid", err)
 	}
 	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, acrSubjectSourceOf(deps.Pool, deps.AuthSchema))
 	if err != nil {
@@ -532,12 +551,6 @@ func configureWith(
 	if deps.GitHubStateSigner.Secret == "" {
 		logger.Warn("config_missing: GITHUB_APP_STATE_SECRET is not set; the GitHub App install routes answer 503")
 	}
-	refreshAccepted, err := accessverify.NewRefreshCounter(otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"), goAPIAccessService)
-	if err != nil {
-		closeComponents(depComponents)
-		return nil, dependencyFailure(ctx, logger, "api_refresh_counter", "api_refresh_counter_invalid", err)
-	}
-	session.SetRefreshAccepted(refreshAccepted)
 	deps.RegisterLimit, err = registerLimit(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
@@ -695,35 +708,45 @@ func NewInternalServer(cfg config.Config, logger *slog.Logger, routes []httpapi.
 
 // protection is the protected-route runtime built over the api pool.
 type protection struct {
-	auth     *policy.Authenticator
-	scope    *policy.Scope
-	guard    *policy.Guard
-	verifier *edgetoken.Verifier
-	signer   *edgetoken.Signer
+	auth  *policy.Authenticator
+	scope *policy.Scope
+	guard *policy.Guard
 	// authSchema is AUTH_DATABASE_SCHEMA, as the users store reads it.
 	authSchema string
 }
 
-// newProtection builds the principal service. The api verifies the access
-// token the Python api mints, so with a database it needs the same key:
-// JWT_SECRET_KEY is required, and a missing or short key stops startup.
-func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, logger *slog.Logger) (protection, error) {
-	if !cfg.APIJWTSecret.Configured() {
-		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
+// retiredJWTSecretKey is the retired HS256 access-token key: go-api reads it no more.
+const retiredJWTSecretKey = "JWT_SECRET_KEY"
+
+// warnRetiredJWTSecretKey logs one WARN when JWT_SECRET_KEY is still set. A
+// leftover value is config hygiene, never a refused start (D6465).
+func warnRetiredJWTSecretKey(ctx context.Context, lookup func(string) (string, bool), logger *slog.Logger) {
+	if value, _ := lookup(retiredJWTSecretKey); value != "" {
+		logger.WarnContext(ctx, retiredJWTSecretKey+" is set but unused (HS256 retired)")
 	}
-	verifier, err := edgetoken.New(cfg.APIJWTSecret.Reveal(), cfg.APIJWTIssuer, cfg.APIJWTAudience)
-	if err != nil {
-		return protection{}, fmt.Errorf("access-token verifier: %w", err)
+}
+
+// warnSharedStateSecret logs one WARN when SSO_STATE_SECRET equals GITHUB_APP_STATE_SECRET. One key per
+// purpose is config hygiene, never a refused start (product rule 3); the line names the keys, never a value.
+func warnSharedStateSecret(ctx context.Context, cfg config.Config, logger *slog.Logger) {
+	if cfg.SSOStateSecret.Configured() && cfg.GitHubAppStateSecret.Configured() &&
+		cfg.SSOStateSecret.Reveal() == cfg.GitHubAppStateSecret.Reveal() {
+		logger.WarnContext(ctx, "SSO_STATE_SECRET equals GITHUB_APP_STATE_SECRET: set one key per purpose")
 	}
-	signer, err := edgetoken.NewSigner(cfg.APIJWTSecret.Reveal(), cfg.APIJWTIssuer, cfg.APIJWTAudience)
-	if err != nil {
-		return protection{}, fmt.Errorf("access-token signer: %w", err)
+}
+
+// newProtection builds the principal service. Access tokens are verified by
+// the endpoint-profile row only (buildAccessVerify); go-api holds no token key.
+// JWT_AUDIENCE still names go-api's audience, never an ACR one (ACP-ADR-13).
+func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, proxy AuthProxyConfig, logger *slog.Logger) (protection, error) {
+	if err := acraudience.Refuse("api", cfg.APIJWTAudience); err != nil {
+		return protection{}, err
 	}
 	authSchema, err := policy.AuthSchemaFromEnv(envsecrets.ProcessGetenv)
 	if err != nil {
 		return protection{}, err
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}, logger)
 	if err != nil {
 		return protection{}, err
 	}
@@ -738,8 +761,11 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	}
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
-	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger), authSchema: authSchema,
-		verifier: verifier, signer: signer}, nil
+	// With impersonation through auth-service, the delegated bearer is the
+	// impersonation; auth-service still writes go-api's session row, so the
+	// admin's own bearer beside it is refused but on status and stop.
+	scope.RefuseLegacyImpersonation(proxy.ImpersonationOn())
+	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger), authSchema: authSchema}, nil
 }
 
 // closeComponents releases what buildDeps opened when startup fails later.

@@ -89,16 +89,6 @@ var queryAPIOptions = func() []Option {
 			Usage: "audience the edge envelope must carry",
 		},
 		{
-			Flag: "edge-jwt-issuer", Env: "GO_API_EDGE_JWT_ISSUER", Kind: KindString,
-			Services: q, Group: GroupRoutes,
-			Usage: "issuer of the edge JWT the proof route verifies",
-		},
-		{
-			Flag: "edge-jwt-audience", Env: "GO_API_EDGE_JWT_AUDIENCE", Kind: KindString,
-			Services: q, Group: GroupRoutes,
-			Usage: "audience of the edge JWT the proof route verifies",
-		},
-		{
 			Flag: "access-token-issuer", Env: "AUTH_ACCESS_TOKEN_ISSUER", Kind: KindString,
 			Services: q, Group: GroupRoutes,
 			Usage: "https issuer of EdDSA user access tokens (go-api's value): set, the REST, /query and /graphql routes validate the edge and user access tokens by their endpoint-profile row against its JWKS; unset, they do not",
@@ -112,7 +102,13 @@ var queryAPIOptions = func() []Option {
 			// The name is authzenforce's: one reader of the variable (internal/authzenforce census_test.go).
 			Flag: "authz-enforce", Env: authzenforce.QueryAPI.Env(), Kind: KindString,
 			Services: q, Group: GroupRoutes,
-			Usage: "comma list of catalog action namespaces (analytics, metrics, git, work_items, ...) whose REST routes the PDP decides (the 5.17 cells; unset: none). A listed namespace needs QUERY_API_PDP_MODE shadow or enforce for the client, else its routes answer 503; with no namespace listed the PDP never refuses. An item that is not a namespace is ignored and stays off (one ERROR), never a start failure",
+			Usage: "comma list of catalog action namespaces (analytics, metrics, git, work_items, ...) whose REST routes and GraphQL root fields of a user access token caller the PDP decides (the 5.17 cells; unset: none). A listed namespace needs QUERY_API_PDP_MODE shadow or enforce for the client, else its routes answer 503; with no namespace listed the PDP never refuses. An item that is not a namespace is ignored and stays off (one ERROR), never a start failure",
+		},
+		{
+			// The name is authzenforce's: one reader of the variable (internal/authzenforce census_test.go).
+			Flag: "headers-authz-enforce", Env: authzenforce.QueryAPIHeaders.Env(), Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "comma list of catalog action namespaces whose GraphQL root fields are decided for the X-DH-Internal-* header carrier (the MCP listener, /query on the internal listener; D6721, unset: none). That carrier has no principal the PDP can judge, so a listed namespace refuses its operations with 503 authz_enforce_no_principal; unset, they stay on today's path. An item that is not a namespace is ignored and stays off (one ERROR), never a start failure",
 		},
 		{
 			Flag: "auth-proxy-url", Env: "AUTH_PROXY_URL", Kind: KindString,
@@ -255,7 +251,7 @@ var queryAPIOptions = func() []Option {
 			Usage: "enable the work units route (default off; it also needs its dependencies configured, or it stays unmounted)",
 		},
 		{Env: "GO_API_REGISTRY_POSTGRES_URI", Secret: true, Services: q, Group: GroupCredentials, Usage: "registry PostgreSQL DSN the /query route reads its operation registry from (the query-api role's own login)"},
-		{Env: "GO_API_EDGE_JWT_SECRET", Secret: true, Services: q, Group: GroupCredentials, Usage: "shared secret the proof route verifies the edge JWT with"},
+		{Env: "GO_API_EDGE_JWT_SECRET", Secret: true, Services: q, Group: GroupCredentials, Usage: "retired HS256 edge secret: nothing verifies with it; a set value only logs one WARN that it is unused"},
 	}
 	// Read from the process environment by the code below the routes (identity
 	// mapping, the LLM model choice, two work-graph switches): declared so the service's whole contract is here, environment

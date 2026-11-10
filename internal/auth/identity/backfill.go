@@ -128,6 +128,8 @@ func (s *Store) BackfillUser(ctx context.Context, t BackfillTarget, dryRun bool)
 	if !found {
 		res.Inserted = true
 		res.RoleSkipped = t.Superuser && t.PlatformRolesOwned
+		// insertBackfill grants in the same commit (the same rule as its grant), so the grant counts here, dry run or not.
+		res.RoleGranted = t.Superuser && !t.PlatformRolesOwned
 		if !dryRun {
 			if err := s.insertBackfill(ctx, t, src); err != nil {
 				if !errors.Is(err, errPrincipalExists) {

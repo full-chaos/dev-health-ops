@@ -71,6 +71,7 @@ func TestConfiguredServiceReportsItsDependenciesOnTheOperatorListener(t *testing
 		"GO_API_ENVELOPE_ISSUER":       "dev-health-ops-edge",
 		"GO_API_ENVELOPE_AUDIENCE":     "query-api",
 		"GO_API_META_ENABLED":          "true",
+		"AUTH_ACCESS_TOKEN_ISSUER":     "https://auth.query.test",
 	}, queryComponent, operatorComponent)
 	query, operator := addrs[queryComponent], addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)

@@ -39,10 +39,9 @@ devhealth_acr_workload_refused_total	reason,route	code: internal/apiservice/acr/
 devhealth_api_auth_proxy_impersonation_config_invalid		code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
+devhealth_api_orgdelete_auth_deprovision_skipped_total	reason	code: internal/apiservice/admin/orgdeletion_auth.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
-devhealth_auth_legacy_logout_accepted_total	class,service	code: internal/auth/accessverify/logout.go
-devhealth_auth_refresh_token_accepted_total	class,service	code: internal/auth/accessverify/refresh.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
 dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
 dev_health_api_ingest_auth_audit_failures_total	reason	code: internal/api/externalingest/refusalaudit.go
@@ -114,8 +113,6 @@ devhealth_query_api_complexity_timeseries_calls_total		code: internal/queryapi/g
 devhealth_query_api_complexity_timeseries_outcome_total	outcome	code: internal/queryapi/graph/telemetry.go
 devhealth_query_api_data_health_calls_total	field	code: internal/queryapi/graph/telemetry.go
 devhealth_query_api_data_health_outcome_total	field,outcome	code: internal/queryapi/graph/telemetry.go
-dev_health_query_api_edge_rejected_total	reason	code: internal/queryapi/principal/edge_telemetry.go
-devhealth_query_api_edge_verify_total	outcome	code: internal/queryapi/principal/edge_telemetry.go
 dev_health_query_api_envelope_rejected_total	reason	code: internal/queryapi/principal/telemetry.go
 devhealth_query_api_envelope_verify_total	outcome	code: internal/queryapi/principal/telemetry.go
 devhealth_query_api_experiments_calls_total		code: internal/queryapi/graph/telemetry.go

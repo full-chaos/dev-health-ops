@@ -2,21 +2,19 @@ package apiservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // plantedStore records every users-row read by id and every other read.
@@ -57,23 +55,19 @@ func (s *plantedStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (
 	return &policy.Impersonation{AdminUserID: s.superuser, TargetUserID: s.target, TargetOrgID: s.target}, nil
 }
 
-// countingRoutedValidator is the routed validator over the legacy path; it
-// records every bearer it is asked to validate.
+// countingRoutedValidator is a routed validator that refuses every bearer
+// (the planted tokens are HS256, a retired class); it records every bearer it
+// is asked to validate.
 type countingRoutedValidator struct {
 	mu      sync.Mutex
-	legacy  func(context.Context, string) (*policy.User, error)
 	bearers []string
 }
 
-func (v *countingRoutedValidator) Validate(ctx context.Context, _, _, bearer string) (*policy.RoutedResult, error) {
+func (v *countingRoutedValidator) Validate(_ context.Context, _, _, bearer string) (*policy.RoutedResult, error) {
 	v.mu.Lock()
 	v.bearers = append(v.bearers, bearer)
 	v.mu.Unlock()
-	user, err := v.legacy(ctx, bearer)
-	if err != nil {
-		return nil, err
-	}
-	return &policy.RoutedResult{Legacy: user}, nil
+	return nil, errors.New("hs256 refused")
 }
 
 const plantedRoute = "/api/v1/planted"
@@ -84,20 +78,16 @@ const plantedRoute = "/api/v1/planted"
 // valid superuser token with a live impersonation session). OrgScope and
 // Impersonation must decide with the caller Principal read, never the replaced value.
 func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
-	key := strings.Repeat("fixture-key-", 3)
-	for _, mode := range []string{"legacy", "routed"} {
+	tokens := edtokens.New(t)
+	for _, mode := range []string{"routed"} {
 		t.Run(mode, func(t *testing.T) {
-			verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-			if err != nil {
-				t.Fatal(err)
-			}
 			caller, swapUser := uuid.New(), uuid.New()
 			store := &plantedStore{superuser: swapUser, target: uuid.New()}
-			auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
+			auth, err := policy.NewAuthenticator(store, quietLogger())
 			if err != nil {
 				t.Fatal(err)
 			}
-			validator := &countingRoutedValidator{legacy: auth.AuthenticateLegacy}
+			validator := &countingRoutedValidator{}
 			if mode == "routed" {
 				if err := auth.RouteAccess(validator, goAPIAccessService); err != nil {
 					t.Fatal(err)
@@ -107,17 +97,8 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 			scope.DeclaredRows(func(profile string) (policy.BearerRow, bool) {
 				return policy.BearerRow{AccessToken: true}, profile == http.MethodGet+" "+plantedRoute
 			})
-			sign := func(sub uuid.UUID, superuser bool) string {
-				token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-					"sub": sub.String(), "type": "access", "org_id": uuid.NewString(), "is_superuser": superuser,
-					"iss": "dev-health-ops", "aud": "dev-health-api", "exp": time.Now().Add(time.Hour).Unix(),
-				}).SignedString([]byte(key))
-				if err != nil {
-					t.Fatal(err)
-				}
-				return token
-			}
-			original, swapped := sign(caller, false), sign(swapUser, true)
+			// swapUser's users row says superuser and it holds a live impersonation session.
+			original, swapped := tokens.MustMint(t, edtokens.Claims{UserID: caller}), tokens.MustMint(t, edtokens.Claims{UserID: swapUser})
 			trapped := 0
 			trap := func(next http.Handler) http.Handler {
 				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -143,11 +124,22 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 			if trapped != 1 {
 				t.Fatalf("trap ran %d times", trapped)
 			}
-			if recorder.Code != http.StatusForbidden || recorder.Header().Get("X-Impersonating") != "" {
+			// The validator refuses the caller's token, the planted route (no
+			// guard) answers with no org, and the validator saw only the caller's
+			// bearer: the scope decides with the caller Principal read, never the
+			// swapped header.
+			wantCode, wantReads := http.StatusForbidden, []uuid.UUID{caller}
+			if mode == "routed" {
+				wantCode, wantReads = http.StatusOK, nil
+				if recorder.Body.String() != "org=" {
+					t.Fatalf("routed: body %q, want no org", recorder.Body.String())
+				}
+			}
+			if recorder.Code != wantCode || recorder.Header().Get("X-Impersonating") != "" {
 				t.Fatalf("%d %s %v: the scope did not decide with the caller", recorder.Code, recorder.Body.String(), recorder.Header())
 			}
-			if slices.Contains(store.userReads, swapUser) || !slices.Equal(store.userReads, []uuid.UUID{caller}) {
-				t.Fatalf("users reads %v: want exactly one, for the caller %s (swapped %s)", store.userReads, caller, swapUser)
+			if slices.Contains(store.userReads, swapUser) || !slices.Equal(store.userReads, wantReads) {
+				t.Fatalf("users reads %v: want %v, for the caller %s (swapped %s)", store.userReads, wantReads, caller, swapUser)
 			}
 			if slices.Contains(validator.bearers, swapped) || (mode == "routed" && !slices.Equal(validator.bearers, []string{original})) {
 				t.Fatalf("validated %d bearers, swapped included=%v", len(validator.bearers), slices.Contains(validator.bearers, swapped))
@@ -159,7 +151,7 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 // TestGoAPIScopeDeclaresTheEndpointProfileRows: the api listener's scope
 // decides with the go-api endpoint-profile rows.
 func TestGoAPIScopeDeclaresTheEndpointProfileRows(t *testing.T) {
-	protected, err := newProtection(apiTestConfig(), nil, false, quietLogger())
+	protected, err := newProtection(apiTestConfig(), nil, false, AuthProxyConfig{}, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

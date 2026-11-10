@@ -3,10 +3,13 @@ package refresh
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/puddle/v2"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
@@ -162,5 +165,36 @@ func TestTheReadCarriesATwoSecondDeadlineAndTheCachePeriodIsSixtySeconds(t *test
 	}
 	if ageCachePeriod != 60*time.Second {
 		t.Errorf("cache period %v, want 60s", ageCachePeriod)
+	}
+}
+
+// CHAOS-13459: the meter's last collection at pod stop can run after the domain pool is closed. That read is shutdown, not a
+// failure: it must record no sample and leave the failure counter at 0. A real pgxpool is used so the test follows pgx's own error.
+func TestAReadOnAClosedPoolAtShutdownRecordsNoSampleAndNoFailure(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://probe:probe@127.0.0.1:1/probe?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.Close()
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	if _, err := RegisterAgeProbe(provider.Meter("age-test"), pool, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	h := &ageHarness{t: t, reader: reader}
+	gauge, failed := h.collect()
+	if len(gauge) != 0 {
+		t.Errorf("gauge = %v, want no sample on a closed pool", gauge)
+	}
+	if len(failed) != 1 || failed[0] != 0 {
+		t.Errorf("read-failure counter = %v, want 0: a closed pool at shutdown is not a read failure", failed)
+	}
+}
+
+func TestAWrappedClosedPoolErrorIsAlsoNotAFailure(t *testing.T) {
+	h := newAgeHarness(t, fakeRow{err: fmt.Errorf("acquire: %w", puddle.ErrClosedPool)})
+	if _, failed := h.collect(); len(failed) != 1 || failed[0] != 0 {
+		t.Errorf("read-failure counter = %v, want 0", failed)
 	}
 }

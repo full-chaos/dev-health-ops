@@ -21,7 +21,6 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
@@ -168,16 +167,12 @@ func (r iprValuesRow) Scan(dest ...any) error {
 }
 
 // iprRig mounts the real users, orgs and impersonation routes behind the real guard and scope middlewares. With
-// enforce, the admin and members cells are on, the /admin/users rows name admin.users (as adminUsersRows does in
-// internal/api/policy), and every PDP question is counted.
+// enforce, the admin and members cells are on over the production rows (the /admin/users rows name admin.users), and
+// every PDP question is counted.
 func iprRig(t *testing.T, live, enforce bool) (http.Handler, *iprPDP) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	verifier, err := edgetoken.New("impersonation-read-parity-key-32-bytes!!", "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, iprStore{live: live}, logger)
+	auth, err := policy.NewAuthenticator(iprStore{live: live}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,9 +185,6 @@ func iprRig(t *testing.T, live, enforce bool) (http.Handler, *iprPDP) {
 		rows, err := policy.ParseShadowRows(authv1.GoAPIEndpointProfiles, "dev-health-ops-api")
 		if err != nil {
 			t.Fatal(err)
-		}
-		for _, pattern := range []string{"GET /api/v1/admin/users", "GET /api/v1/admin/users/{user_id}", "POST /api/v1/admin/users"} {
-			rows[pattern] = policy.ShadowRow{Action: rule.ActionAdminUsers, Namespace: "admin", ResourceType: "platform", HighRisk: true}
 		}
 		enforcer, err := policy.NewEnforcer(policy.EnforceConfig{Decider: pdp, Rows: rows,
 			Switch: authzenforce.Parse(authzenforce.GoAPI, "admin,members"), Timeout: time.Second, Logger: logger})
@@ -281,24 +273,21 @@ func TestAnAdminReadWithNoImpersonationStillAsksThePDP(t *testing.T) {
 	}
 }
 
-// A live-row platform admin's writes keep today's answers: the enforced admin-or create is refused before any PDP
-// call; the delete (its row names no action, so it is not enforced) keeps its handler's platform question, answered
-// as origin/main f496ee5d answers it with the same cells and fake (no allow for admin.users: no verdict, 503, one call).
+// A live-row platform admin's /admin/users writes are refused before any PDP call with the admin cell on: every one of
+// the four rows names admin.users and is enforced (D6833: the accepted write narrowing of the read-only impersonation
+// flaw). The create and the delete stand for them here; apiservice pins all four.
 func TestAnImpersonationWriteOnAdminRoutesKeepsItsAnswer(t *testing.T) {
 	enforced, pdp := iprRig(t, true, true)
 	pdp.take()
-	if got := iprServe(enforced, http.MethodPost, "/api/v1/admin/users"); got.status != http.StatusForbidden ||
-		got.body != `{"detail":"Not allowed in an impersonation session"}` {
-		t.Errorf("POST /api/v1/admin/users: %d %s, want the impersonation 403", got.status, got.body)
-	}
-	if calls := pdp.take(); len(calls) != 0 {
-		t.Errorf("POST /api/v1/admin/users: %d PDP calls %v, want 0", len(calls), calls)
-	}
-	got := iprServe(enforced, http.MethodDelete, "/api/v1/admin/users/"+iprOtherUser.String())
-	calls := pdp.take()
-	t.Logf("CELL|delete|enforce-on=%d %s|pdp_calls=%d %v", got.status, got.body, len(calls), calls)
-	if want := (iprAnswer{http.StatusServiceUnavailable, `{"detail":"Authorization service temporarily unavailable"}`}); got != want || len(calls) != 1 {
-		t.Errorf("DELETE /api/v1/admin/users/{id}: %d %s, %d PDP calls; want today's %d %s and %d", got.status, got.body, len(calls),
-			want.status, want.body, 1)
+	for _, write := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/admin/users"},
+		{http.MethodDelete, "/api/v1/admin/users/" + iprOtherUser.String()},
+	} {
+		got := iprServe(enforced, write.method, write.path)
+		calls := pdp.take()
+		t.Logf("CELL|%s %s|enforce-on=%d %s|pdp_calls=%d %v", write.method, write.path, got.status, got.body, len(calls), calls)
+		if got.status != http.StatusForbidden || got.body != `{"detail":"Not allowed in an impersonation session"}` || len(calls) != 0 {
+			t.Errorf("%s %s: %d %s, %d PDP calls; want the impersonation 403 and 0", write.method, write.path, got.status, got.body, len(calls))
+		}
 	}
 }

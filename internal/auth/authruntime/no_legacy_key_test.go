@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -34,10 +35,9 @@ func noLegacyKeyConfig(t *testing.T) authconfig.Config {
 		authconfig.EnvTokenIssuerURL:      accessCheckIssuer,
 		authconfig.EnvRateLimitKey:        noLegacyKeyRateLimitKey,
 	})
-	delete(env, authconfig.EnvAccessTokenSecret)
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
-		t.Fatalf("eddsa without %s does not load: %v", authconfig.EnvAccessTokenSecret, err)
+		t.Fatalf("eddsa with no HS256 key does not load: %v", err)
 	}
 	return cfg
 }
@@ -50,8 +50,8 @@ func TestEdDSAWithoutTheLegacyKeyKeysTheLimiterFromTheRateLimitKey(t *testing.T)
 
 // The production builders with no AUTH_JWT_SECRET_KEY under eddsa: the session
 // routes mount, an EdDSA bearer reaches the (unreachable) session store, an
-// HS256 bearer is a 401 and no route panics, and the validate route is not
-// mounted.
+// HS256 bearer is a 401 and no route panics, and the validate route is
+// mounted (rule 1: legacy served it; rule 3: a missing key is no unmount).
 func TestEdDSASessionRoutesBuildAndServeWithoutTheLegacyKey(t *testing.T) {
 	cfg := noLegacyKeyConfig(t)
 	dir := t.TempDir()
@@ -75,16 +75,20 @@ func TestEdDSASessionRoutesBuildAndServeWithoutTheLegacyKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the session routes do not build without the legacy key: %v", err)
 	}
+	validate := 0
 	for _, route := range routes {
 		if route.Pattern == authapi.PatternCompatValidate {
-			t.Fatal("the validate route is mounted without the legacy key")
+			validate++
 		}
+	}
+	if validate != 1 {
+		t.Fatalf("the validate route is mounted %d times without the legacy key, want once", validate)
 	}
 	grant := authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()}
 	if _, err := issuer.Access(grant); err != nil {
 		t.Fatalf("the production issuer mints no access token without the legacy key: %v", err)
 	}
-	minter, err := authapi.NewEdDSAIssuer("", cfg.Session.AccessIssuer, authapi.AccessTokenAudience, signer, accessCheckIssuer)
+	minter, err := authapi.NewEdDSAIssuer(authapi.AccessTokenAudience, signer, accessCheckIssuer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,14 +96,7 @@ func TestEdDSASessionRoutesBuildAndServeWithoutTheLegacyKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hs, err := authapi.NewIssuer(testAccessSecret, cfg.Session.AccessIssuer, "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy, err := hs.Access(grant)
-	if err != nil {
-		t.Fatal(err)
-	}
+	legacy := legacyAccess(t, testAccessSecret, "dev-health-ops", "dev-health-api", grant)
 	handler := mountRoutes(routes)
 	if status, reason := routeAnswer(t, handler, http.MethodGet, authapi.PatternCurrent, "", eddsa); status != http.StatusServiceUnavailable || reason != "store_unavailable" {
 		t.Errorf("EdDSA bearer: %d %q; want 503 store_unavailable", status, reason)
@@ -109,11 +106,10 @@ func TestEdDSASessionRoutesBuildAndServeWithoutTheLegacyKey(t *testing.T) {
 	}
 }
 
-// The interim until ticket 13154 lets policy.NewAuthenticator run with no
-// HS256 verifier: the production builder leaves POST /api/v1/auth/validate
-// unmounted without AUTH_JWT_SECRET_KEY and says so in one log line naming
-// the route. With the key the route mounts and the line is absent.
-func TestTheValidateRouteUnmountWithoutTheLegacyKeyIsLoggedOnce(t *testing.T) {
+// Product rules 1 and 3: the production builder mounts POST /api/v1/auth/validate
+// under eddsa with or without AUTH_JWT_SECRET_KEY (the routed check needs no HS256
+// verifier), and logs no not-mounted line either way.
+func TestTheValidateRouteMountsWithOrWithoutTheLegacyKey(t *testing.T) {
 	dir := t.TempDir()
 	writeSigningKey(t, dir, "k1.pem")
 	signer := token.NewFileSigner(token.FileConfig{KeyPath: filepath.Join(dir, "k1.pem"), KeyID: "k1"})
@@ -126,7 +122,7 @@ func TestTheValidateRouteUnmountWithoutTheLegacyKeyIsLoggedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const line = "auth validate route not mounted: no legacy key"
+	const line = "auth validate route not mounted"
 	for name, cfg := range map[string]authconfig.Config{
 		"no legacy key": noLegacyKeyConfig(t),
 		"legacy key":    accessCheckConfig(t, accessCheckIssuer),
@@ -150,14 +146,14 @@ func TestTheValidateRouteUnmountWithoutTheLegacyKeyIsLoggedOnce(t *testing.T) {
 				Msg   string `json:"msg"`
 				Route string `json:"route"`
 			}
-			if json.Unmarshal(scanner.Bytes(), &record) == nil && record.Msg == line {
+			if json.Unmarshal(scanner.Bytes(), &record) == nil && strings.HasPrefix(record.Msg, line) {
 				if record.Route != authapi.PatternCompatValidate {
 					t.Errorf("%s: the line names route %q, want %q", name, record.Route, authapi.PatternCompatValidate)
 				}
 				lines++
 			}
 		}
-		want := map[string][2]int{"no legacy key": {0, 1}, "legacy key": {1, 0}}[name]
+		want := [2]int{1, 0}
 		if mounted != want[0] || lines != want[1] {
 			t.Errorf("%s: validate mounted %d times, %d not-mounted lines; want %d and %d", name, mounted, lines, want[0], want[1])
 		}

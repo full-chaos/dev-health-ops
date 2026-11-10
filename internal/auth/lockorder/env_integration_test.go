@@ -32,7 +32,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
@@ -43,9 +42,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/legacyjwt"
 )
 
 // env is one Postgres with go-api's schema and the auth schema, the auth
@@ -80,7 +81,9 @@ type env struct {
 	// issuePlane is go-api's workload principal and its token key: the session
 	// issue route takes only the go-api workload token.
 	issuePlane *issuePlane
-	signer     *edgetoken.Signer
+	signer     *legacyjwt.Signer
+	// tokens mints the routed EdDSA user access tokens go-api's routes verify.
+	tokens     *edtokens.Issuer
 	linkSecret string
 	inviteKey  string
 	root       string
@@ -209,42 +212,24 @@ func newEnv(t *testing.T) (*env, error) {
 	}
 
 	const jwtKey = "lockorder-test-signing-key-32-bytes-long!!"
-	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		return nil, err
-	}
-	if e.signer, err = edgetoken.NewSigner(jwtKey, "dev-health-ops", "dev-health-api"); err != nil {
+	if e.signer, err = legacyjwt.NewSigner(jwtKey, "dev-health-ops", "dev-health-api"); err != nil {
 		return nil, err
 	}
 	logger := slog.New(slog.NewTextHandler(e.goLog, nil))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: admin0}, logger)
-	if err != nil {
-		return nil, err
-	}
+	e.tokens = edtokens.New(t)
+	auth := e.tokens.Authenticator(t, policy.PGStore{Pool: admin0}, logger)
 	guard := policy.NewGuard(auth, logger)
+	var mounted, issuerMounted []httpapi.Route
 	e.linkSecret = "lockorder-link-secret-" + uuid.NewString()
 	mux := http.NewServeMux()
 	for _, route := range admin.Routes(admin.Deps{Pool: goPool, Guard: guard, Logger: logger, ClickHouseDSN: ch.URI}) {
 		if strings.HasPrefix(route.Pattern, "/api/v1/admin/orgs/") {
 			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+			mounted = append(mounted, route)
 		}
 	}
-	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier, Signer: e.signer,
-		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger}) {
-		switch route.Pattern {
-		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard", "/api/v1/auth/refresh":
-			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
-		}
-	}
-	e.webhookKey = "lockorder-webhook-" + uuid.NewString()
-	for _, route := range billing.Routes(billing.Deps{Pool: goPool, Guard: guard, Logger: logger,
-		Stripe: stripeclient.New(stripeclient.Options{Key: "sk_test_lockorder"}), WebhookSecret: secrets.NewValue(e.webhookKey)}) {
-		if route.Pattern == stripeWebhookPath {
-			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
-		}
-	}
-	e.server = httptest.NewServer(mux)
-	closers = append(closers, e.server.Close)
+	// go-api mints no pair of its own: both servers' accept and onboard take theirs from auth-service's issue route
+	// (the auth plane starts first).
 	if err := e.startAuthPlane(ctx, schema, logger, jwtKey); err != nil {
 		return nil, err
 	}
@@ -252,15 +237,42 @@ func newEnv(t *testing.T) (*env, error) {
 	if err != nil {
 		return nil, err
 	}
+	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth,
+		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger, Issuer: issuer}) {
+		switch route.Pattern {
+		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard":
+			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+			mounted = append(mounted, route)
+		}
+	}
+	e.webhookKey = "lockorder-webhook-" + uuid.NewString()
+	for _, route := range billing.Routes(billing.Deps{Pool: goPool, Guard: guard, Logger: logger,
+		Stripe: stripeclient.New(stripeclient.Options{Key: "sk_test_lockorder"}), WebhookSecret: secrets.NewValue(e.webhookKey)}) {
+		if route.Pattern == stripeWebhookPath {
+			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+			mounted = append(mounted, route)
+		}
+	}
+	profiled, err := routeProfiled(mounted, mux)
+	if err != nil {
+		return nil, err
+	}
+	e.server = httptest.NewServer(profiled)
+	closers = append(closers, e.server.Close)
 	issuerMux := http.NewServeMux()
-	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier, Signer: e.signer,
+	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth,
 		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger, Issuer: issuer}) {
 		switch route.Pattern {
 		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard":
 			issuerMux.Handle(route.Method+" "+route.Pattern, route.Handler)
+			issuerMounted = append(issuerMounted, route)
 		}
 	}
-	e.issuerServer = httptest.NewServer(issuerMux)
+	issuerProfiled, err := routeProfiled(issuerMounted, issuerMux)
+	if err != nil {
+		return nil, err
+	}
+	e.issuerServer = httptest.NewServer(issuerProfiled)
 	closers = append(closers, e.issuerServer.Close)
 
 	rootID := uuid.New()
@@ -268,15 +280,24 @@ func newEnv(t *testing.T) (*env, error) {
 VALUES ($1, $2, true, true, true, 0, now(), now())`, rootID, "root-"+rootID.String()[:8]+"@example.com"); err != nil {
 		return nil, fmt.Errorf("seed root: %w", err)
 	}
-	if e.root, err = e.token(rootID, true); err != nil {
+	if e.root, err = e.token(rootID); err != nil {
 		return nil, err
 	}
 	return e, nil
 }
 
-func (e *env) token(id uuid.UUID, superuser bool) (string, error) {
-	return e.signer.Access(edgetoken.AccessClaims{UserID: id.String(), Email: id.String() + "@example.com", IsSuperuser: superuser},
-		time.Now(), uuid.NewString())
+// token is a routed user access token of id; the superuser is the users row (root's is_superuser), never a claim.
+func (e *env) token(id uuid.UUID) (string, error) {
+	return e.tokens.Mint(edtokens.Claims{UserID: id})
+}
+
+// routeProfiled sets, in front of mux, the route profiles NewServer sets before its routes.
+func routeProfiled(routes []httpapi.Route, mux http.Handler) (http.Handler, error) {
+	templates, err := httpapi.NewRouteTemplates(routes)
+	if err != nil {
+		return nil, err
+	}
+	return policy.RouteProfiles(templates.Match)(mux), nil
 }
 
 // barrier holds the first statement whose SQL starts with the armed prefix,
@@ -502,7 +523,7 @@ func (e *env) deleteOrg(ctx context.Context, org uuid.UUID) response {
 }
 
 func (e *env) acceptInvite(ctx context.Context, user uuid.UUID, token string) response {
-	bearer, err := e.token(user, false)
+	bearer, err := e.token(user)
 	if err != nil {
 		return response{status: -1, raw: err.Error()}
 	}

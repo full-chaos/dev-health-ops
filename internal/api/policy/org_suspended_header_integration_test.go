@@ -38,7 +38,8 @@ func TestLegacyGuardRefusesAnXOrgIdOfASuspendedOrganization(t *testing.T) {
 	pgseed.Membership(ctx, t, pool, uuid.NewString(), user.String(), home.String(), "admin")
 	pgseed.Membership(ctx, t, pool, uuid.NewString(), user.String(), other.String(), "admin")
 
-	auth := authenticator(t, PGStore{Pool: pool})
+	// The auth session read is faked (pgAuthenticator): the subject is the X-Org-Id organization row, not session liveness.
+	auth := pgAuthenticator(t, PGStore{Pool: pool})
 	scope := NewScope(auth, quiet())
 	scope.DeclaredRows(func(string) (BearerRow, bool) { return BearerRow{AccessToken: true}, true })
 	chain := func(level Authz) http.Handler {

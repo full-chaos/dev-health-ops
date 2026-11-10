@@ -18,8 +18,7 @@ const (
 
 // In practice the read-then-insert window is shared only by writers of one
 // key running at once: external ingest (one consumer) against provider sync
-// on shared github/gitlab keys, and internal ingest replicas against each
-// other or, for work items, against external ingest and provider sync.
+// on shared keys, and for work items against other external writers.
 func applyContract(
 	ctx context.Context, conn productClickHouse, contract storedversion.Contract,
 	orgID, insert string, rows []storedversion.Row,
@@ -30,13 +29,6 @@ func applyContract(
 	}
 	contract.Log(ctx, orgID, storedVersionCarriedEvent, storedVersionRefusedEvent, outcomes)
 	return nil
-}
-
-func internalWriter(name, insert string, contract storedversion.Contract) storedversion.Spec {
-	return storedversion.Spec{
-		Name: name, Contract: contract, Insert: insert, NullIsUnstated: true,
-		Carry: func(payload map[string]any) map[string]bool { return internalCarry(contract, payload) },
-	}
 }
 
 func externalWriter(kind, system string) (storedversion.Spec, error) {
@@ -71,22 +63,15 @@ func StoredVersionSpecs() (map[string][]storedversion.Spec, error) {
 	}
 	specs := map[string][]storedversion.Spec{
 		"git_pull_requests": {
-			internalWriter("internal pull-requests", internalPullRequestInsert, internalPullRequestContract),
 			external("pull_request.v1", "github"),
 		},
 		"git_pull_request_reviews": {
-			internalWriter("internal reviews", internalReviewInsert, internalReviewContract),
 			external("review.v1", "github"),
 		},
 		"git_commits": {
-			internalWriter("internal commits", internalCommitInsert, internalCommitContract),
 			external("commit.v1", "github"),
 		},
-		"deployments": {
-			internalWriter("internal deployments", internalDeploymentInsert, internalDeploymentContract),
-		},
 		"work_items": {
-			internalWriter("internal work-items", internalWorkItemInsert, internalWorkItemContract),
 			external("work_item.v1", "jira"), external("work_item.v1", "github"),
 			external("work_item.v1", "gitlab"), external("work_item.v1", "linear"),
 		},

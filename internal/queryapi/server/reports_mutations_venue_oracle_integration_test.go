@@ -24,7 +24,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/reports"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -256,7 +255,7 @@ func jsonString(text string) string {
 }
 
 // startGoMutationServer builds the Go side: the real dispatch pipeline
-// (digest -> registered operation, principal envelope, org context, raw body)
+// (digest -> registered operation, internal identity headers, org context, raw body)
 // over the real gqlgen executor and the real Writer, with the pool logged in
 // as a role holding only the query-api manifest.
 func startGoMutationServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue) (http.HandlerFunc, func()) {
@@ -330,7 +329,7 @@ func startGoMutationServer(t *testing.T, ctx context.Context, venue *venueoracle
 	}
 	gql := newGraphQLServer(&graph.Resolver{Postgres: pool, ReportWriter: writer})
 
-	verifier, priv := iaVerifier(t)
+	verifier, _ := iaVerifier(t)
 	byDigest := map[string]string{}
 	static := routeswitch.StaticSwitch{}
 	for op, doc := range oracleDocuments() {
@@ -342,13 +341,12 @@ func startGoMutationServer(t *testing.T, ctx context.Context, venue *venueoracle
 		mux.Register(op, gql)
 	}
 	handler := newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, nil, nil, "", nil)
-	envelopes = func(org string) string {
-		return iaEnvelope(t, priv, principal.Claims{OrgID: org, Role: "admin"})
-	}
 	return handler, func() {}
 }
 
-var envelopes func(org string) string
+// goAdmin is the Go side's caller: an admin of org on the internal identity headers, as the internal listener takes
+// them (the effective-principal envelope is a retired class).
+func goAdmin(org string) func(*http.Request) { return iaHeaders(org, "admin", false, false) }
 
 func withRole(t *testing.T, raw, role, password string) string {
 	t.Helper()
@@ -368,7 +366,7 @@ func doGo(t *testing.T, handler http.HandlerFunc, c oracleCase, doc string, requ
 	}
 	req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+envelopes(c.org))
+	goAdmin(c.org)(req)
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	body, _ := io.ReadAll(rec.Result().Body)

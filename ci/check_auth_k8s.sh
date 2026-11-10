@@ -106,8 +106,9 @@ K_RENDER() {
 
 # --- tooling: kind by checksum, not by whatever the runner ships ---------------
 printf 'step 0: kind %s (sha256 pinned) and the pinned node image\n' "${KIND_VERSION}"
-curl --fail --silent --show-error --location --output "${WORK}/kind" \
-  "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-${ARCH}"
+# CHAOS-13426: authenticated with GH_TOKEN when set (CI), retried; anonymous for a local run.
+bash "${ROOT}/ci/lib/fetch_pinned_release.sh" kubernetes-sigs/kind "${KIND_VERSION}" "kind-linux-${ARCH}" "${KIND_SHA256}" \
+  "${WORK}/kind"
 printf '%s  %s\n' "${KIND_SHA256}" "${WORK}/kind" | sha256sum --check --status \
   || die "kind ${KIND_VERSION} does not match its pinned sha256"
 chmod +x "${WORK}/kind"
@@ -183,6 +184,7 @@ HELM_ARGS=(
   --set authService.database.secretName=auth-db
   --set authService.migrate.secretName=auth-migrate-db
   --set authService.signingKey.secretName=auth-key --set authService.signingKey.keyId=k8s-proof
+  --set authService.accessToken.issuerURL=https://auth.k8s-proof.example
   --set-json 'authService.networkPolicy.egress.database.to=[{"podSelector":{"matchLabels":{"app":"auth-postgres"}}}]'
   --set-json 'authService.networkPolicy.allowedFrom=[{"matchLabels":{"role":"auth-consumer"}}]'
   --set-json 'authService.networkPolicy.metricsFrom=[{"matchLabels":{"role":"auth-scraper"}}]'

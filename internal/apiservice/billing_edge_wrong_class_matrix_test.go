@@ -239,7 +239,7 @@ func TestBillingEdgeWrongClassMatrix(t *testing.T) {
 		t.Errorf("%d class cells of %d classes", driven, len(classes))
 	}
 	slices.Sort(undriven)
-	want := slices.Clone(matrixNotDriven)
+	want := matrixNotDriven(t)
 	slices.Sort(want)
 	if !slices.Equal(undriven, want) {
 		t.Errorf("classes with no request-head marker %v, want %v", undriven, want)

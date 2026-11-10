@@ -26,7 +26,7 @@ func (f *ownerFixture) switchOrg(t *testing.T, bearer, body string) *httptest.Re
 
 // With the sessions aggregate on, switch-org is auth-service's route: go-api forwards it unread whatever the bearer
 // (none, go-api's own, one addressed to auth-service, a broken one) and whatever the body, answers with auth-service's
-// answer, and reads nothing itself, so an eddsa session_access_token (audience auth-service) is never judged by go-api.
+// answer, and reads no store for a bearer it cannot verify (a go-api bearer is read once, to refuse an impersonating admin), so an eddsa session_access_token (audience auth-service) is never judged by go-api.
 func TestSwitchOrgIsForwardedUnreadUnderTheSessionsFlag(t *testing.T) {
 	stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -40,11 +40,14 @@ func TestSwitchOrgIsForwardedUnreadUnderTheSessionsFlag(t *testing.T) {
 		"session-route bearer": {sessionRouteBearer, switchOrgBody},
 		"broken bearer":        {"not-a-token", switchOrgBody},
 		"body not json":        {sessionRouteBearer, `{"org_id": `},
-		"superuser token":      {ownerSuperuserBearer(t, f.store.admin), switchOrgBody},
 	} {
 		t.Run(name, func(t *testing.T) {
 			before := len(stub.requests())
+			readsBefore := f.reads.Load()
 			recorder := f.switchOrg(t, c.bearer, c.body)
+			if name != "go-api access token" && f.reads.Load() != readsBefore {
+				t.Fatal("go-api read its store for a bearer it cannot verify")
+			}
 			if recorder.Code != http.StatusTeapot || recorder.Body.String() != ownerUpstreamBody {
 				t.Fatalf("answer %d %s, want auth-service's 418", recorder.Code, recorder.Body.String())
 			}
@@ -66,9 +69,6 @@ func TestSwitchOrgIsForwardedUnreadUnderTheSessionsFlag(t *testing.T) {
 				t.Fatal("go-api's impersonation layer ran on a route it forwards unread")
 			}
 		})
-	}
-	if got := f.reads.Load(); got != 0 {
-		t.Fatalf("go-api made %d store reads for a route auth-service authenticates", got)
 	}
 }
 

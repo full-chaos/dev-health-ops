@@ -58,6 +58,10 @@ var goOnlyRoutes = map[string]struct {
 	"POST /internal/v1/grants/list":                  {false, "internal read route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/organizations/state":          {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/organizations/rename":         {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/users/create":                 {false, "internal user-admin route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/users/update":                 {false, "internal user-admin route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/users/password":               {false, "internal user-admin route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/users/delete":                 {false, "internal user-admin route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/service-accounts/create":      {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/service-accounts/disable":     {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/service-accounts/enable":      {false, "internal provisioning route; no go-api twin; writes no policy body"},
@@ -112,11 +116,12 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	routes, err := sessionRoutes(cfg, logger, pool, schema, probeSigner(cfg), mustLimits(t), nil)
+	signer := keySigner(t)
+	routes, err := sessionRoutes(cfg, logger, pool, schema, signer, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
+	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), signer)
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}

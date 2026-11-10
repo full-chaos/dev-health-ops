@@ -39,6 +39,18 @@ type membershipJoin struct {
 	// SignIn is a federated sign-in's join: under the locks, a disabled account
 	// and a membership in another organization refuse.
 	SignIn bool
+	// AdminCreate is go-api's admin create into the organization: like go-api,
+	// it joins a suspended organization (pm D6914). Every other join refuses one.
+	AdminCreate bool
+}
+
+// joinOrgStateRefusal is the organization state check of a join: a suspended
+// organization refuses every join but an admin create.
+func joinOrgStateRefusal(orgActive bool, m membershipJoin) error {
+	if !orgActive && !m.AdminCreate {
+		return ErrOrganizationSuspended
+	}
+	return nil
 }
 
 // joinPublicMembershipColumns are the public.memberships columns a join
@@ -54,8 +66,8 @@ var joinPublicMembershipColumns = []string{"id", "user_id", "org_id", "role", "j
 // go-api's own JIT join takes), then the auth organization row FOR SHARE: the
 // auth lock order (membership.Store readPairs), so the joins and membership changes of
 // one account run one after the other. A missing auth organization is
-// ErrOrganizationNotFound and a suspended one ErrOrganizationSuspended; neither
-// writes. A public row in the
+// ErrOrganizationNotFound and a suspended one ErrOrganizationSuspended (but for
+// an admin create, joinOrgStateRefusal); neither writes. A public row in the
 // organization is errJoinAlreadyMember and an auth row without one is
 // ErrMembershipDiverged; neither writes. No public.users row, or no
 // public.organizations row, is ErrLegacyProjection. Every go-api membership
@@ -99,7 +111,7 @@ func (s *Store) insertJoinMembership(ctx context.Context, tx audit.TxOps, m memb
 	// Then the organization row FOR SHARE (step 3): every membership and invite
 	// writer reaches it before any membership row, so an organization
 	// deprovision (FOR UPDATE) and a join run one after the other, and a join
-	// never lands in a suspended organization.
+	// lands in a suspended organization only as an admin create.
 	var orgActive bool
 	err = tx.QueryRow(ctx, `SELECT disabled_at IS NULL FROM `+s.q+`.organizations WHERE id = $1 FOR SHARE`, m.OrgID).Scan(&orgActive)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -108,8 +120,8 @@ func (s *Store) insertJoinMembership(ctx context.Context, tx audit.TxOps, m memb
 	if err != nil {
 		return err
 	}
-	if !orgActive {
-		return ErrOrganizationSuspended
+	if err := joinOrgStateRefusal(orgActive, m); err != nil {
+		return err
 	}
 	var public, auth bool
 	if err := tx.QueryRow(ctx, `SELECT

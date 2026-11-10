@@ -13,17 +13,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/egressallow"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -51,6 +50,11 @@ func TestMain(m *testing.M) {
 	// configure refuses a bad TRUSTED_PROXIES at start: no test reads the outer value; a test sets its own.
 	_ = os.Unsetenv("TRUSTED_PROXIES")
 	_ = os.Unsetenv("TRUSTED_PROXIES_NETWORK_FENCED")
+	// configure refuses a start with a database and no access-token issuer (the only verifier); a test that needs it
+	// unset clears it.
+	if _, set := os.LookupEnv(envAccessTokenIssuer); !set {
+		_ = os.Setenv(envAccessTokenIssuer, "https://auth.example.test")
+	}
 	// RunTests is m.Run, and fails the run when a test that ran did not use its golden.
 	os.Exit(venueoracle.RunTests(m))
 }
@@ -183,9 +187,7 @@ func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
 	cfg := config.Config{
 		APIAddress:     "127.0.0.1:0",
 		APIDatabaseURI: secrets.NewValue("postgres://user:pass@127.0.0.1:1/nonexistent"),
-		// With a database the api authenticates callers, so it needs the key.
-		APIJWTSecret: secrets.NewValue(strings.Repeat("fixture-key-", 3)),
-		APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
+		APIJWTIssuer:   "dev-health-ops", APIJWTAudience: "dev-health-api",
 	}
 	components, err := configure(context.Background(), cfg, registry, quietLogger())
 	if err != nil {
@@ -297,60 +299,33 @@ func TestCommandRunsTheServiceThroughTheShell(t *testing.T) {
 	}
 }
 
-// apiTestConfig is a configuration with the api database and signing key
-// set. The DSN points at a closed local port and the key is a fixture built
-// at runtime.
+// apiTestConfig is a configuration with the api database set. The DSN
+// points at a closed local port.
 func apiTestConfig() config.Config {
 	return config.Config{
 		APIAddress:          "127.0.0.1:0",
 		APIDatabaseURI:      secrets.NewValue("postgresql://devhealth_api@127.0.0.1:1/devhealth?connect_timeout=1"),
 		APIDatabaseRole:     "devhealth_api",
 		RiverDatabaseSchema: "river",
-		APIJWTSecret:        secrets.NewValue(strings.Repeat("fixture-key-", 3)),
 		APIJWTIssuer:        "dev-health-ops",
 		APIJWTAudience:      "dev-health-api",
 	}
 }
 
-// TestConfigureRefusesADatabaseWithoutAUsableSigningKey: with a database the
-// api authenticates callers, so JWT_SECRET_KEY must be present and at least
-// 32 characters; the error names the key and never carries configuration.
-func TestConfigureRefusesADatabaseWithoutAUsableSigningKey(t *testing.T) {
-	cases := map[string]struct {
-		mutate func(*config.Config)
-		names  string
-	}{
-		"no signing key": {func(cfg *config.Config) { cfg.APIJWTSecret = secrets.Value{} }, "JWT_SECRET_KEY"},
-		"short key":      {func(cfg *config.Config) { cfg.APIJWTSecret = secrets.NewValue("short") }, "32 characters"},
-	}
-	for name, test := range cases {
-		t.Run(name, func(t *testing.T) {
-			cfg := apiTestConfig()
-			test.mutate(&cfg)
-			components, err := configure(context.Background(), cfg, health.NewRegistry(time.Second), quietLogger())
-			if err == nil {
-				t.Fatalf("configure accepted it: %d components", len(components))
-			}
-			if !strings.Contains(err.Error(), test.names) {
-				t.Fatalf("error %q does not name %q", err, test.names)
-			}
-			if strings.Contains(err.Error(), "fixture-key") || strings.Contains(err.Error(), "127.0.0.1:1") {
-				t.Fatalf("error leaks configuration: %v", err)
-			}
-		})
-	}
-	// Without a database no caller is authenticated, so no key is needed.
+// TestConfigureStartsTransportOnlyWithoutADatabase: without a database no
+// caller is authenticated and the api still starts.
+func TestConfigureStartsTransportOnlyWithoutADatabase(t *testing.T) {
 	cfg := apiTestConfig()
-	cfg.APIDatabaseURI, cfg.APIJWTSecret = secrets.Value{}, secrets.Value{}
+	cfg.APIDatabaseURI = secrets.Value{}
 	if _, err := configure(context.Background(), cfg, health.NewRegistry(time.Second), quietLogger()); err != nil {
 		t.Fatalf("transport-only configure: %v", err)
 	}
 }
 
-// TestConfigureInstallsTheScopeMiddlewaresWithADatabase proves the wiring:
-// a request carrying a valid token for a caller the (unreachable) database
-// cannot confirm fails in the org scope (503, the database is unavailable),
-// where a server without the scope would answer 404.
+// TestConfigureInstallsTheScopeMiddlewaresWithADatabase proves the wiring: a
+// user access token on a row route whose keys the (unreachable) issuer cannot
+// serve fails in the org scope (503, a dependency is unavailable), where a
+// server without the scope would answer 404.
 func TestConfigureInstallsTheScopeMiddlewaresWithADatabase(t *testing.T) {
 	cfg := apiTestConfig()
 	components, err := configure(context.Background(), cfg, health.NewRegistry(time.Second), quietLogger())
@@ -368,13 +343,8 @@ func TestConfigureInstallsTheScopeMiddlewaresWithADatabase(t *testing.T) {
 			server = candidate
 		}
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": uuid.NewString(), "type": "access", "exp": time.Now().Add(time.Hour).Unix(),
-	}).SignedString([]byte(cfg.APIJWTSecret.Reveal()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
+	token := newEdDSAMinter(t).mint(uuid.New(), nil)
+	request := httptest.NewRequest(http.MethodGet, probeAuthenticated, nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
@@ -410,36 +380,25 @@ func (s scopeStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*po
 // security or CORS header (they are inner), while an impersonated request's
 // response carries the impersonation headers and the security headers.
 func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T) {
-	key := strings.Repeat("fixture-key-", 3)
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	store := scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.AuthenticatorOver(t, store, quietLogger())
 	scope := policy.NewScope(auth, quietLogger())
 	cfg := apiTestConfig()
 	cfg.CORSAllowedOrigins = []string{"https://app.example"}
-	server, err := NewServer(cfg, quietLogger(), nil, scope.Layers()...)
+	// One handler on a real org-scoped go-api row that takes a user access token (the access check judges
+	// a bearer only on a row); it answers 404 as an unrouted path did.
+	const scopedRoute = "/api/v1/billing/invoices"
+	routes := []httpapi.Route{{Method: http.MethodGet, Pattern: scopedRoute, Handler: http.NotFoundHandler()}}
+	server, err := NewServer(cfg, quietLogger(), routes, scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sign := func(sub uuid.UUID, superuser bool) string {
-		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub": sub.String(), "type": "access", "org_id": uuid.NewString(), "is_superuser": superuser,
-			"exp": time.Now().Add(time.Hour).Unix(),
-		}).SignedString([]byte(key))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return token
-	}
+	// No token org: the X-Org-Id header names the org. The admin's users row says superuser.
+	sign := func(sub uuid.UUID) string { return tokens.MustMint(t, edtokens.Claims{UserID: sub}) }
 
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
-	request.Header.Set("Authorization", "Bearer "+sign(uuid.New(), false))
+	request := httptest.NewRequest(http.MethodGet, scopedRoute, nil)
+	request.Header.Set("Authorization", "Bearer "+sign(uuid.New()))
 	request.Header.Set("X-Org-Id", uuid.NewString())
 	request.Header.Set("Origin", "https://app.example")
 	recorder := httptest.NewRecorder()
@@ -457,8 +416,8 @@ func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T
 		t.Fatalf("the org scope 403 lacks the plane stamp the prover reads: %v", recorder.Header())
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
-	request.Header.Set("Authorization", "Bearer "+sign(store.admin, true))
+	request = httptest.NewRequest(http.MethodGet, scopedRoute, nil)
+	request.Header.Set("Authorization", "Bearer "+sign(store.admin))
 	recorder = httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound || recorder.Header().Get("X-Impersonating") != "true" ||

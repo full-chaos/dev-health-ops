@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/pep"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -514,26 +513,6 @@ func TestShadowHighRiskRowAsksWhenTheSecondSwitchIsOn(t *testing.T) {
 	}
 }
 
-func TestShadowLegacyHS256BearerIsSkipped(t *testing.T) {
-	rec := recordShadow(t)
-	pdp := newTestPDP(t, allowAll)
-	sh, _ := newShadowFor(t, pdp.client(t), nil)
-	store := newStore()
-	withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
-	guard := NewGuard(authenticator(t, store), quiet())
-	guard.SetShadow(sh)
-	mux := http.NewServeMux()
-	mux.Handle("GET /api/v1/admin/teams", guard.Wrap(AdminOrg, echo))
-	got := serve(mux, http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
-	sh.wg.Wait()
-	if got.status != http.StatusOK {
-		t.Fatalf("status %d %s", got.status, got.body)
-	}
-	if _, results := rec.snapshot(); !slices.Equal(results, []string{"skipped"}) || len(pdp.calls()) != 0 {
-		t.Fatalf("results %v calls %d, want [skipped] and 0", results, len(pdp.calls()))
-	}
-}
-
 func TestShadowOffAsksNothing(t *testing.T) {
 	rec := recordShadow(t)
 	pdp := newTestPDP(t, allowAll)
@@ -644,7 +623,7 @@ func TestShadowCounterLabelSetsAreClosed(t *testing.T) {
 // The skipped counter carries one reason label from one closed list: go-api never sets one, so every go-api skip and
 // every non-skip result is "none"; a caller-supplied reason outside the list is "none", never a new value.
 func TestShadowResultReasonIsFromTheClosedList(t *testing.T) {
-	if got := ShadowReasons(); !slices.Equal(got, []string{"none", "hs256", "envelope", "no_user_bearer", "cap", "unmapped", "op_refused"}) {
+	if got := ShadowReasons(); !slices.Equal(got, []string{"none", "hs256", "envelope", "no_user_bearer", "cap", "unmapped", "op_refused", "never_decided", "high_risk_off"}) {
 		t.Fatalf("closed reasons %v, want [none hs256 envelope no_user_bearer cap unmapped op_refused]", got)
 	}
 	rec := recordShadow(t)

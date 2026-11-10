@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
@@ -234,31 +233,14 @@ var optionRegistry = []Option{
 			"unset, GET /.well-known/openid-configuration is not served (the JWKS still is)",
 	},
 	{
-		Env: EnvAccessTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
-		Usage: "HS256 key of the compatibility access token (go-api's JWT_SECRET_KEY value, at least 32 characters); " +
-			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Under hs256_compat set together with " +
-			EnvSessionSuccessorKey + "; with neither, no session route is mounted. Under eddsa optional (it only verifies go-api's HS256 token) and it needs " +
-			EnvSessionSuccessorKey,
-	},
-	{
 		Env: EnvSessionSuccessorKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "32-byte session successor key, base64url without padding; " +
-			EnvSessionSuccessorKey + "_FILE reads it from a mounted file instead",
-	},
-	{
-		Flag: "jwt-issuer", Env: EnvAccessTokenIssuer, Kind: KindString,
-		Default: defaultAccessTokenIssuer, Group: GroupSession,
-		Usage: "iss of the compatibility access token (go-api's JWT_ISSUER)",
+			EnvSessionSuccessorKey + "_FILE reads it from a mounted file instead. Set, it mounts the session routes",
 	},
 	{
 		Flag: "jwt-audience", Env: EnvAccessTokenAudience, Kind: KindString,
 		Default: defaultAccessTokenAudience, Group: GroupSession,
-		Usage: "aud of the compatibility access token (go-api's JWT_AUDIENCE)",
-	},
-	{
-		Env: EnvLegacyJWTAudience, Kind: KindString, Default: contracts.PlatformAPIAudience, Group: GroupSession,
-		Usage: "aud that the eddsa access token class checks go-api's HS256 compatibility token with (go-api's JWT_AUDIENCE); hs256_compat uses " +
-			EnvAccessTokenAudience + ". Set but empty is refused at start",
+		Usage: "aud of the access token (go-api's JWT_AUDIENCE)",
 	},
 	{
 		Env: EnvAuthorizeCallerSubjects, Kind: KindString, Group: GroupSession,
@@ -284,8 +266,8 @@ var optionRegistry = []Option{
 	{
 		Env: EnvRateLimitKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "key the rate-limit counters digest identifiers with, at least 32 characters; " + EnvRateLimitKey +
-			"_FILE reads it from a mounted file instead. Unset, the limiter is keyed from " + EnvAccessTokenSecret +
-			"; required while that is unset; needs the session secrets",
+			"_FILE reads it from a mounted file instead. Unset, the limiter is keyed from " + EnvSessionSuccessorKey +
+			" (its own HKDF subkey); needs the session secrets",
 	},
 	{
 		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,
@@ -324,7 +306,7 @@ var optionRegistry = []Option{
 	{
 		Flag: "membership-routes", Env: EnvMembershipRoutes, Kind: KindString, Group: GroupSession, Default: "false",
 		Usage: "\"true\" mounts the internal membership, invite and organization deprovision routes go-api calls with its service credential; needs " +
-			EnvInviteTokenSecret + " and " + EnvInviteTokenSecretPrevious,
+			EnvInviteTokenSecret + " (" + EnvInviteTokenSecretPrevious + " is optional)",
 	},
 	{
 		Env: EnvInviteTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
@@ -334,7 +316,7 @@ var optionRegistry = []Option{
 	{
 		Env: EnvInviteTokenSecretPrevious, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "retired invite token key, accepted and never used to sign (go-api's LINK_TOKEN_SECRET_PREVIOUS); " +
-			EnvInviteTokenSecretPrevious + "_FILE reads it from a mounted file instead. Required while " + EnvMembershipRoutes + " is true",
+			EnvInviteTokenSecretPrevious + "_FILE reads it from a mounted file instead. Optional: unset or empty, no previous key is accepted",
 	},
 	{
 		Flag: "social-github-client-id", Env: "SOCIAL_GITHUB_CLIENT_ID", Kind: KindString, Group: GroupSession,

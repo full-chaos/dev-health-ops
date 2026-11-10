@@ -1,0 +1,12 @@
+{{- /*
+Runs the authService.enforce query-api checks and the queryApi.extraEnv refusals on every render, so a values file that sets
+them fails even while queryApi.enabled is false (the default). Renders nothing.
+*/ -}}
+{{- $_ := include "dev-health.queryApiPdpMode" . }}
+{{- $_ := include "dev-health.authzEnforceQueryApi" (dict "key" "queryApi" "context" .) }}
+{{- $_ := include "dev-health.authzEnforceQueryApi" (dict "key" "queryApiHeaders" "context" .) }}
+{{- range .Values.queryApi.extraEnv }}
+{{- if has (upper (trim (toString .name))) (list "QUERY_API_PDP_MODE" "QUERY_API_AUTHZ_ENFORCE" "QUERY_API_HEADERS_AUTHZ_ENFORCE") }}
+{{- fail (printf "queryApi.extraEnv must not set %s: authService.enforce.queryApiPdpMode, queryApi and queryApiHeaders render it, and a later entry would shadow the rendered value" (upper (trim (toString .name)))) }}
+{{- end }}
+{{- end }}

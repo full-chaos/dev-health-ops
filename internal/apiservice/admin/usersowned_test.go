@@ -4,10 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -41,36 +37,6 @@ func (d failingDB) QueryRow(context.Context, string, ...any) pgx.Row {
 type failingRow struct{}
 
 func (failingRow) Scan(...any) error { return errors.New("unexpected database call") }
-
-// Every admin users route refuses with the moved-operation answer before it
-// does any database work, reads included: a database failure cannot replace
-// the refusal. A panic means the handler went on to the request's own state.
-func TestUsersOwnedAdminRoutesRefuseBeforeAnyDatabaseWork(t *testing.T) {
-	for name, route := range map[string]func(*handlers) http.HandlerFunc{
-		"create":       func(h *handlers) http.HandlerFunc { return h.createUser },
-		"update":       func(h *handlers) http.HandlerFunc { return h.updateUser },
-		"set-password": func(h *handlers) http.HandlerFunc { return h.setUserPassword },
-		"delete":       func(h *handlers) http.HandlerFunc { return h.deleteUser },
-	} {
-		t.Run(name, func(t *testing.T) {
-			h := &handlers{store: pgStore{Pool: failingDB{t}, UsersOwned: true}, logger: slog.New(slog.NewTextHandler(&strings.Builder{}, nil))}
-			recorder := httptest.NewRecorder()
-			func() {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						t.Errorf("the handler went past the switch: %v", recovered)
-					}
-				}()
-				request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/users/"+uuid.NewString(), nil)
-				request.SetPathValue("user_id", uuid.NewString())
-				route(h)(recorder, request)
-			}()
-			if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), `"reason":"operation_moved"`) {
-				t.Fatalf("status %d body %q, want 409 operation_moved", recorder.Code, recorder.Body.String())
-			}
-		})
-	}
-}
 
 // The operator verbs that change a user refuse before they open a
 // transaction (the pool is nil: any database work panics).

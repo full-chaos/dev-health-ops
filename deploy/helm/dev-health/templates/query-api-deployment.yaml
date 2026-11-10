@@ -17,6 +17,25 @@ exits 2 on the `query-api` argument, so the render refuses it by name.
 {{- if and .Values.queryApi.internal.enabled (eq (int .Values.queryApi.internal.port) (int .Values.queryApi.port)) }}
 {{- fail "queryApi.internal.port must differ from queryApi.port (the public listener)" }}
 {{- end }}
+{{- if or (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.port)) (and .Values.queryApi.internal.enabled (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.internal.port))) (and .Values.queryApi.mcp.enabled (eq (int .Values.queryApi.operatorPort) (int .Values.queryApi.mcp.port))) }}
+{{- fail "queryApi.operatorPort must differ from queryApi.port, queryApi.internal.port and queryApi.mcp.port: each listener has its own port" }}
+{{- end }}
+{{- /*
+Probe handlers are chart-owned (the operator listener): values carry timings only. The one handler
+allowed in values is the previous chart default (httpGet /readyz on port http), which an upgrade
+still carries and which is dropped; any other handler fails the render.
+*/}}
+{{- range $probe := list "livenessProbe" "readinessProbe" }}
+{{- $v := index $.Values.queryApi $probe }}
+{{- range $h := list "tcpSocket" "exec" "grpc" }}
+{{- if hasKey $v $h }}
+{{- fail (printf "queryApi.%s.%s is set: probe handlers are chart-owned (the operator listener); only timings belong in values" $probe $h) }}
+{{- end }}
+{{- end }}
+{{- if and (hasKey $v "httpGet") (ne (toJson $v.httpGet) (toJson (dict "path" "/readyz" "port" "http"))) }}
+{{- fail (printf "queryApi.%s.httpGet is set to a custom handler: probe handlers are chart-owned (the operator listener); only timings belong in values" $probe) }}
+{{- end }}
+{{- end }}
 {{- range .Values.queryApi.extraEnv }}
 {{- if and (eq .name "CORS_ALLOWED_ORIGINS") $.Values.queryApi.corsAllowedOrigins }}
 {{- fail "queryApi.extraEnv sets CORS_ALLOWED_ORIGINS and queryApi.corsAllowedOrigins is set too: two values for one variable; keep one (extraEnv when the value comes from a Secret)" }}
@@ -134,6 +153,9 @@ spec:
             - name: http
               containerPort: {{ .Values.queryApi.port }}
               protocol: TCP
+            - name: operator
+              containerPort: {{ .Values.queryApi.operatorPort }}
+              protocol: TCP
             {{- if .Values.queryApi.internal.enabled }}
             - name: internal
               containerPort: {{ .Values.queryApi.internal.port }}
@@ -171,6 +193,8 @@ spec:
           env:
             - name: QUERY_API_ADDR
               value: {{ printf ":%v" .Values.queryApi.port | quote }}
+            - name: DEV_HEALTH_HTTP_ADDR
+              value: {{ printf ":%v" .Values.queryApi.operatorPort | quote }}
             {{- if (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") }}
             {{- /* The auth schema the sid check reads auth-service sessions in. */}}
             - name: AUTH_DATABASE_SCHEMA
@@ -184,6 +208,18 @@ spec:
             {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
             - name: AUTH_PLATFORM_ROLES_OWNED
               value: "true"
+            {{- end }}
+            {{- with (include "dev-health.queryApiPdpMode" .) }}
+            - name: QUERY_API_PDP_MODE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (include "dev-health.authzEnforceQueryApi" (dict "key" "queryApi" "context" .)) }}
+            - name: QUERY_API_AUTHZ_ENFORCE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (include "dev-health.authzEnforceQueryApi" (dict "key" "queryApiHeaders" "context" .)) }}
+            - name: QUERY_API_HEADERS_AUTHZ_ENFORCE
+              value: {{ . | quote }}
             {{- end }}
             {{- if .Values.queryApi.internal.enabled }}
             {{- /*
@@ -264,14 +300,10 @@ spec:
             {{- with .Values.queryApi.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- with .Values.queryApi.livenessProbe }}
           livenessProbe:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.queryApi.readinessProbe }}
+            {{- toYaml (merge (omit .Values.queryApi.livenessProbe "httpGet") (dict "httpGet" (dict "path" "/healthz" "port" "operator"))) | nindent 12 }}
           readinessProbe:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- toYaml (merge (omit .Values.queryApi.readinessProbe "httpGet") (dict "httpGet" (dict "path" "/readyz" "port" "operator"))) | nindent 12 }}
           resources:
             {{- toYaml .Values.queryApi.resources | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}

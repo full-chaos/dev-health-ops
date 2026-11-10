@@ -7,7 +7,6 @@ internal/apiservice/billingvenue	TestVenueOracleBillingLedger	internal/api/pyjso
 internal/apiservice/billingvenue	TestVenueOracleBillingLedger	internal/api/pytime
 internal/apiservice/billingvenue	TestVenueOracleBillingLedger	internal/api/webhookintake
 internal/apiservice/billingvenue	TestVenueOracleBillingLedger	internal/apiservice
-internal/apiservice/billingvenue	TestVenueOracleBillingLedger	internal/auth/edgetoken
 internal/apiservice/billingvenue	TestVenueOracleBillingLedger	internal/auth/httpapi
 internal/apiservice/billingvenue	TestVenueOracleBillingLedger	internal/httpguard
 internal/apiservice/billingvenue	TestVenueOracleBillingLedger	internal/jobcontract

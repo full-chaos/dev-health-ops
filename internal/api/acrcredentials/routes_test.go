@@ -12,32 +12,41 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/full-chaos/dev-health-go/pep/pepfake"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrlisting"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrrevoke"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
-const unitKey = "acr-credentials-unit-test-key-acr-credentials-unit-key"
+var tokens = edtokens.Fresh()
 
 // users is the policy store: every user exists and is active; superusers and live impersonation sessions are
-// planted per test. The route's own membership read goes to members, never to this store.
+// planted per test, and role is the membership the access check reads for the principal ("member" when unset).
+// The route's own membership read goes to members, never to this store.
 type users struct {
 	mu         sync.Mutex
+	role       string
 	superusers map[uuid.UUID]bool
+	platforms  map[uuid.UUID]*rule.Platform
 	sessions   map[uuid.UUID]*policy.Impersonation
 }
 
 func (u *users) UserState(_ context.Context, id uuid.UUID) (policy.UserState, bool, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	return policy.UserState{IsActive: true, IsSuperuser: u.superusers[id]}, true, nil
+	return policy.UserState{IsActive: true, IsSuperuser: u.superusers[id], Platform: u.platforms[id]}, true, nil
 }
-func (*users) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
-	return "member", true, nil
+func (u *users) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.role == "" {
+		return "member", true, nil
+	}
+	return u.role, true, nil
 }
 func (*users) OrgMembership(context.Context, uuid.UUID, uuid.UUID) (string, bool, bool, error) {
 	return "member", true, true, nil
@@ -98,22 +107,16 @@ type fixture struct {
 
 func newFixture(t *testing.T, scopeRun bool) *fixture {
 	t.Helper()
-	verifier, err := edgetoken.New(unitKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := &fixture{t: t, store: &users{superusers: map[uuid.UUID]bool{}, sessions: map[uuid.UUID]*policy.Impersonation{}},
+	f := &fixture{t: t, store: &users{superusers: map[uuid.UUID]bool{}, platforms: map[uuid.UUID]*rule.Platform{},
+		sessions: map[uuid.UUID]*policy.Impersonation{}},
 		members: &members{rows: map[[2]uuid.UUID]memberRow{}}, revoker: &revoker{}, scopeRun: scopeRun}
-	f.auth, err = policy.NewAuthenticator(verifier, f.store, quiet())
-	if err != nil {
-		t.Fatal(err)
-	}
+	f.auth = tokens.AuthenticatorOver(t, f.store, quiet())
 	f.build(Deps{Guard: policy.NewGuard(f.auth, quiet()), Members: f.members, Revoker: f.revoker, Logger: quiet()})
 	return f
 }
 
 // build mounts Routes on a mux behind the api listener's request-wide Scope layers (Principal, OrgScope,
-// Impersonation), as apiservice composes them.
+// Impersonation) and, outermost, the route-row match, as apiservice composes them.
 func (f *fixture) build(deps Deps) {
 	routes := Routes(deps)
 	if len(routes) != 1 || routes[0].Method != http.MethodPost || routes[0].Pattern != RevokePattern || !routes[0].EmptyBody {
@@ -127,24 +130,18 @@ func (f *fixture) build(deps Deps) {
 		for i := len(layers) - 1; i >= 0; i-- {
 			handler = layers[i](handler)
 		}
+		handler = policy.RouteProfiles(func(r *http.Request) (string, bool) {
+			_, pattern := mux.Handler(r)
+			return pattern, pattern != ""
+		})(handler)
 	}
 	f.handler = handler
 }
 
-func (f *fixture) sign(user uuid.UUID, org string, extra jwt.MapClaims) string {
+// sign mints a routed access token for user in org; a non-nil actor makes it a delegated bearer.
+func (f *fixture) sign(user uuid.UUID, org string, actor *uuid.UUID) string {
 	f.t.Helper()
-	claims := jwt.MapClaims{
-		"sub": user.String(), "type": "access", "org_id": org, "role": "member", "is_superuser": false,
-		"iss": "dev-health-ops", "aud": "dev-health-api", "exp": time.Now().Add(time.Hour).Unix(), "tv": 0,
-	}
-	for k, v := range extra {
-		claims[k] = v
-	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(unitKey))
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	return token
+	return tokens.MustMint(f.t, edtokens.Claims{UserID: user, OrgID: org, Actor: actor})
 }
 
 func (f *fixture) post(token, credential string) *httptest.ResponseRecorder {
@@ -172,25 +169,29 @@ const (
 	bodyUnavail    = `{"detail":"Credential service unavailable"}`
 	bodyNotMember  = `{"detail":"Organization access denied"}`
 	bodyImpersonal = `{"detail":"Not allowed in an impersonation session"}`
+	bodyRefused    = `{"detail":{"message":"Invalid or expired token"}}`
 )
 
-func TestTheActorIsTheLiveMembershipRowNeverTheRoleClaim(t *testing.T) {
+// The principal's role (the access check's membership read) never picks the actor: the route's own live
+// membership row does.
+func TestTheActorIsTheLiveMembershipRowNeverThePrincipalRole(t *testing.T) {
 	cases := []struct {
-		name, claimRole, rowRole, wantActor string
+		name, principalRole, rowRole, wantActor string
 	}{
 		{"member", "member", "member", acrrevoke.ActorUser},
 		{"admin row", "member", "admin", acrrevoke.ActorAdmin},
 		{"owner row", "member", "owner", acrrevoke.ActorAdmin},
-		{"admin claim, member row", "admin", "member", acrrevoke.ActorUser},
-		{"owner claim, viewer row", "owner", "viewer", acrrevoke.ActorUser},
-		{"admin claim, empty row role", "admin", "", acrrevoke.ActorUser},
+		{"admin principal, member row", "admin", "member", acrrevoke.ActorUser},
+		{"owner principal, viewer row", "owner", "viewer", acrrevoke.ActorUser},
+		{"admin principal, empty row role", "admin", "", acrrevoke.ActorUser},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t, true)
 			user, org := uuid.New(), uuid.New()
+			f.store.role = tc.principalRole
 			f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: tc.rowRole, found: true}
-			got := f.post(f.sign(user, org.String(), jwt.MapClaims{"role": tc.claimRole}), credOne)
+			got := f.post(f.sign(user, org.String(), nil), credOne)
 			if got.Code != http.StatusNoContent || got.Body.Len() != 0 || got.Header().Get("Cache-Control") != "no-store" {
 				t.Fatalf("answer %d %q %v", got.Code, got.Body.String(), got.Header())
 			}
@@ -202,21 +203,27 @@ func TestTheActorIsTheLiveMembershipRowNeverTheRoleClaim(t *testing.T) {
 	}
 }
 
-func TestTheOrganizationAndActorAreCanonical(t *testing.T) {
-	f := newFixture(t, true)
+// A non-canonical organization or subject is refused at the access-token contract (401): the route is not
+// reached, so no membership is read and no revoke is sent. (The HS256 path folded both to canonical form.)
+func TestANonCanonicalOrganizationOrSubjectIsRefusedAtTheContract(t *testing.T) {
 	user, org := uuid.New(), uuid.New()
-	f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "member", found: true}
-	got := f.post(f.sign(user, strings.ToUpper(org.String()), jwt.MapClaims{"sub": strings.ToUpper(user.String())}), credOne)
-	if got.Code != http.StatusNoContent {
-		t.Fatalf("answer %d %s", got.Code, got.Body.String())
-	}
-	if call := f.revoker.calls[0]; call.org != org.String() || call.actorID != user.String() {
-		t.Fatalf("call = %+v", call)
+	for name, claims := range map[string]edtokens.Claims{
+		"upper-case org_id": {UserID: user, OrgID: strings.ToUpper(org.String())},
+		"upper-case sub":    {UserID: user, OrgID: org.String(), Subject: strings.ToUpper(edtokens.PrincipalID(user))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, true)
+			f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "member", found: true}
+			expect(t, f.post(tokens.MustMint(t, claims), credOne), http.StatusUnauthorized, bodyRefused)
+			if len(f.revoker.calls) != 0 || f.members.calls != 0 {
+				t.Fatalf("revoke %+v, %d reads", f.revoker.calls, f.members.calls)
+			}
+		})
 	}
 }
 
 func TestRefusalsSendNoRevoke(t *testing.T) {
-	user, org := uuid.New(), uuid.New()
+	user, org, actor := uuid.New(), uuid.New(), uuid.New()
 	cases := []struct {
 		name   string
 		plant  func(*fixture) (token, credential string)
@@ -226,9 +233,10 @@ func TestRefusalsSendNoRevoke(t *testing.T) {
 	}{
 		{"no token", func(*fixture) (string, string) { return "", credOne }, http.StatusUnauthorized, `{"detail":{"message":"Not authenticated"}}`, 0},
 		{"no org claim", func(f *fixture) (string, string) { return f.sign(user, "", nil), credOne }, http.StatusForbidden, `{"detail":"Organization context required"}`, 0},
-		{"org claim not a uuid", func(f *fixture) (string, string) { return f.sign(user, "not-a-uuid", nil), credOne }, http.StatusForbidden, bodyNotMember, 0},
+		{"org claim not a uuid", func(f *fixture) (string, string) { return f.sign(user, "not-a-uuid", nil), credOne }, http.StatusUnauthorized, bodyRefused, 0},
 		{"no membership row", func(f *fixture) (string, string) {
-			return f.sign(user, org.String(), jwt.MapClaims{"role": "admin"}), credOne
+			f.store.role = "admin"
+			return f.sign(user, org.String(), nil), credOne
 		}, http.StatusForbidden, bodyNotMember, 1},
 		{"membership read fails", func(f *fixture) (string, string) {
 			f.members.rows[[2]uuid.UUID{user, org}] = memberRow{err: errors.New("db down")}
@@ -246,11 +254,11 @@ func TestRefusalsSendNoRevoke(t *testing.T) {
 			f.store.superusers[user] = true
 			f.store.sessions[user] = &policy.Impersonation{ID: uuid.New(), AdminUserID: user, TargetUserID: uuid.New(), TargetOrgID: org, TargetRole: "member", ExpiresAt: time.Now().Add(time.Hour)}
 			f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "admin", found: true}
-			return f.sign(user, org.String(), jwt.MapClaims{"is_superuser": true}), credOne
+			return f.sign(user, org.String(), nil), credOne
 		}, http.StatusForbidden, bodyImpersonal, 0},
 		{"delegated bearer", func(f *fixture) (string, string) {
 			f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "admin", found: true}
-			return f.sign(user, org.String(), jwt.MapClaims{"impersonating_user_id": uuid.NewString()}), credOne
+			return f.sign(user, org.String(), &actor), credOne
 		}, http.StatusForbidden, bodyImpersonal, 0},
 	}
 	for _, tc := range cases {
@@ -273,9 +281,9 @@ func TestRefusalsSendNoRevoke(t *testing.T) {
 func TestADelegatedBearerIsRefusedEvenWhenItsRowAdmitsIt(t *testing.T) {
 	f := newFixture(t, true)
 	f.auth.DelegatedRows(func(string) bool { return true })
-	user, org := uuid.New(), uuid.New()
+	user, org, actor := uuid.New(), uuid.New(), uuid.New()
 	f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "admin", found: true}
-	expect(t, f.post(f.sign(user, org.String(), jwt.MapClaims{"impersonating_user_id": uuid.NewString()}), credOne), http.StatusForbidden, bodyImpersonal)
+	expect(t, f.post(f.sign(user, org.String(), &actor), credOne), http.StatusForbidden, bodyImpersonal)
 	if len(f.revoker.calls) != 0 || f.members.calls != 0 {
 		t.Fatalf("revoke %+v, %d reads", f.revoker.calls, f.members.calls)
 	}
@@ -369,19 +377,148 @@ func TestTheRouteTakesNoOtherMethod(t *testing.T) {
 	}
 }
 
-// A platform superuser is no organization admin here: with no membership row it is refused, with a member row it acts
-// as a user, and only a live impersonation session (not the flag) is the impersonation refusal.
-func TestAPlatformSuperuserGetsNoBypass(t *testing.T) {
-	user, org := uuid.New(), uuid.New()
-	f := newFixture(t, true)
-	f.store.superusers[user] = true
-	token := f.sign(user, org.String(), jwt.MapClaims{"is_superuser": true, "role": "admin"})
-	expect(t, f.post(token, credOne), http.StatusForbidden, bodyNotMember)
-	f.members.rows[[2]uuid.UUID{user, org}] = memberRow{role: "member", found: true}
-	if got := f.post(token, credOne); got.Code != http.StatusNoContent {
-		t.Fatalf("answer %d %s", got.Code, got.Body.String())
+// Product rule 1 (a platform admin is never forced to hold an organization membership row): a holder of admin.orgs
+// revokes as the admin of the token's organization, with no membership read, whatever row it holds there, and the acr
+// call names the platform admin as the actor.
+func TestAPlatformAdminRevokesAsTheOrganizationAdmin(t *testing.T) {
+	cases := []struct {
+		name   string
+		row    *memberRow
+		err    error
+		status int
+		body   string
+	}{
+		{"no row", nil, nil, http.StatusNoContent, ""},
+		{"no row, acr refuses", nil, acrrevoke.ErrNotFound, http.StatusNotFound, bodyNotFound},
+		{"no row, already revoked", nil, acrrevoke.ErrConflict, http.StatusConflict, bodyConflict},
+		{"no row, acr unavailable", nil, &acrrevoke.Error{Kind: acrlisting.KindUnavailable, Status: 503}, http.StatusServiceUnavailable, bodyUnavail},
+		{"member row", &memberRow{role: "member", found: true}, nil, http.StatusNoContent, ""},
+		{"viewer row", &memberRow{role: "viewer", found: true}, nil, http.StatusNoContent, ""},
+		{"a failing row read is never made", &memberRow{err: errors.New("db down")}, nil, http.StatusNoContent, ""},
 	}
-	if len(f.revoker.calls) != 1 || f.revoker.calls[0].actorType != acrrevoke.ActorUser {
-		t.Fatalf("revoke calls %+v", f.revoker.calls)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			user, org := uuid.New(), uuid.New()
+			f.store.superusers[user] = true
+			f.revoker.err = tc.err
+			if tc.row != nil {
+				f.members.rows[[2]uuid.UUID{user, org}] = *tc.row
+			}
+			expect(t, f.post(f.sign(user, org.String(), nil), credOne), tc.status, tc.body)
+			want := revokeCall{org: org.String(), credential: credOne, actorType: acrrevoke.ActorAdmin, actorID: user.String()}
+			if len(f.revoker.calls) != 1 || f.revoker.calls[0] != want {
+				t.Fatalf("revoke calls = %+v, want %+v", f.revoker.calls, want)
+			}
+			if f.members.calls != 0 {
+				t.Fatalf("%d membership reads, want 0", f.members.calls)
+			}
+		})
+	}
+}
+
+// The platform action decides, never the superuser flag: a role holding admin.orgs alone revokes as the admin; one
+// holding every other platform action but not admin.orgs takes the membership path and, with no row, is refused.
+func TestOnlyAdminOrgsIsThePlatformAdminPath(t *testing.T) {
+	var others []string
+	for _, action := range rule.PlatformActions {
+		if action != rule.ActionAdminOrgs {
+			others = append(others, action)
+		}
+	}
+	orgsOnly, allButOrgs := rule.PlatformOf(rule.ActionAdminOrgs), rule.PlatformOf(others...)
+	for _, tc := range []struct {
+		name     string
+		platform *rule.Platform
+		status   int
+		body     string
+		calls    int
+		reads    int
+	}{
+		{"admin.orgs alone", &orgsOnly, http.StatusNoContent, "", 1, 0},
+		{"every action but admin.orgs", &allButOrgs, http.StatusForbidden, bodyNotMember, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			user, org := uuid.New(), uuid.New()
+			f.store.platforms[user] = tc.platform
+			expect(t, f.post(f.sign(user, org.String(), nil), credOne), tc.status, tc.body)
+			if len(f.revoker.calls) != tc.calls || f.members.calls != tc.reads {
+				t.Fatalf("revoke %+v, %d reads", f.revoker.calls, f.members.calls)
+			}
+			if tc.calls == 1 && f.revoker.calls[0].actorType != acrrevoke.ActorAdmin {
+				t.Fatalf("revoke %+v, want the admin actor", f.revoker.calls)
+			}
+		})
+	}
+}
+
+// Each refusal ahead of the platform question still holds for a platform admin: a delegated bearer (here admitted by
+// its row, so the handler's own refusal decides), a live impersonation session and a token with no organization send
+// no revoke and read no membership.
+func TestAPlatformAdminKeepsTheRefusals(t *testing.T) {
+	user, org, actor := uuid.New(), uuid.New(), uuid.New()
+	cases := []struct {
+		name  string
+		plant func(*fixture) string
+		body  string
+	}{
+		{"delegated bearer", func(f *fixture) string {
+			f.auth.DelegatedRows(func(string) bool { return true })
+			return f.sign(user, org.String(), &actor)
+		}, bodyImpersonal},
+		{"live impersonation session", func(f *fixture) string {
+			f.store.sessions[user] = &policy.Impersonation{ID: uuid.New(), AdminUserID: user, TargetUserID: uuid.New(), TargetOrgID: org,
+				TargetRole: "member", ExpiresAt: time.Now().Add(time.Hour)}
+			return f.sign(user, org.String(), nil)
+		}, bodyImpersonal},
+		{"no org claim", func(f *fixture) string { return f.sign(user, "", nil) }, bodyNotMember},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			f.store.superusers[user] = true
+			expect(t, f.post(tc.plant(f), credOne), http.StatusForbidden, tc.body)
+			if len(f.revoker.calls) != 0 || f.members.calls != 0 {
+				t.Fatalf("revoke %+v, %d reads", f.revoker.calls, f.members.calls)
+			}
+		})
+	}
+}
+
+// With the admin cell on, the platform question is the decision point's: its allow makes a caller without the flag
+// the admin actor, and no verdict is the decision point's 503, before any membership read or revoke.
+func TestThePlatformQuestionIsTheDecisionPointsWithTheAdminCellOn(t *testing.T) {
+	const bearer = "pdp-bearer"
+	allow := pepfake.Rule{PrincipalReference: bearer, Action: rule.ActionAdminOrgs, ResourceType: "platform", ResourceKey: "platform"}
+	bad := allow
+	bad.MinimumAssurance = "bogus"
+	for _, tc := range []struct {
+		name   string
+		rule   pepfake.Rule
+		status int
+		calls  int
+	}{
+		{"allow", allow, http.StatusNoContent, 1},
+		{"no verdict", bad, http.StatusServiceUnavailable, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			user, org := uuid.New(), uuid.New()
+			inner := f.handler
+			f.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				inner.ServeHTTP(w, r.WithContext(policy.WithPlatformDecider(r.Context(), pepfake.New(tc.rule), bearer)))
+			})
+			got := f.post(f.sign(user, org.String(), nil), credOne)
+			if got.Code != tc.status {
+				t.Fatalf("answer %d %s, want %d", got.Code, got.Body.String(), tc.status)
+			}
+			if len(f.revoker.calls) != tc.calls || f.members.calls != 0 {
+				t.Fatalf("revoke %+v, %d reads", f.revoker.calls, f.members.calls)
+			}
+			if tc.calls == 1 && f.revoker.calls[0].actorType != acrrevoke.ActorAdmin {
+				t.Fatalf("revoke %+v, want the admin actor", f.revoker.calls)
+			}
+		})
 	}
 }

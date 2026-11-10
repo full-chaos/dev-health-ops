@@ -89,7 +89,7 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	literals := 0
+	literals, enforceLiterals := 0, 0
 	fset := token.NewFileSet()
 	calls := map[string][]string{}
 	for _, name := range files {
@@ -110,6 +110,9 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 				if sel, ok := node.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "OperationShadow" {
 					literals++
 				}
+				if sel, ok := node.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "OperationEnforce" {
+					enforceLiterals++
+				}
 			case *ast.FuncDecl:
 				switch node.Name.Name {
 				case "newGraphQLServerWithLimits", "newMCPGraphQLServer", "useGraphQLGuards":
@@ -123,7 +126,7 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 					}
 					switch fun := call.Fun.(type) {
 					case *ast.Ident:
-						if fun.Name == "graphQLShadow" || fun.Name == "useGraphQLGuards" {
+						if fun.Name == "graphQLShadow" || fun.Name == "useGraphQLGuards" || fun.Name == "graphQLEnforce" {
 							calls[node.Name.Name] = append(calls[node.Name.Name], fun.Name)
 						}
 					case *ast.SelectorExpr:
@@ -144,8 +147,12 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 	if literals != 1 {
 		t.Errorf("%d graph.OperationShadow literals in the server package, want the one in graphQLShadow", literals)
 	}
-	if got := calls["useGraphQLGuards"]; !slices.Equal(got, []string{"graphQLShadow", "guard"}) {
-		t.Errorf("useGraphQLGuards: calls %v, want the shadow before the org guard", got)
+	if enforceLiterals != 1 {
+		t.Errorf("%d graph.OperationEnforce literals in the server package, want the one in graphQLEnforce", enforceLiterals)
+	}
+	// CHAOS-10865: the decision runs after the org guard, so it decides for the organization the guard admitted.
+	if got := calls["useGraphQLGuards"]; !slices.Equal(got, []string{"graphQLShadow", "guard", "graphQLEnforce"}) {
+		t.Errorf("useGraphQLGuards: calls %v, want the shadow, the org guard, then the decision", got)
 	}
 	for _, fn := range []string{"newGraphQLServerWithLimits", "newMCPGraphQLServer"} {
 		if got := calls[fn]; !slices.Equal(got, []string{"useGraphQLGuards"}) {
@@ -156,12 +163,12 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 
 // The plane hands the MCP listener a handler that carries the process's gate.
 func TestGraphQLShadowMCPPlaneIsGated(t *testing.T) {
-	raw, err := os.ReadFile("server.go")
+	raw, err := os.ReadFile("pdp_gate.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "MCPHandler: withGate(mcpMux, gate)") {
-		t.Fatal("server.go does not wrap the MCP listener's handler with the process's gate")
+	if !strings.Contains(string(raw), "withGate(mcpMux, gate)") {
+		t.Fatal("pdp_gate.go (gatedListenerHandlers) does not wrap the MCP listener's handler with the process's gate")
 	}
 }
 
@@ -213,7 +220,9 @@ func (p *subjectProbe) handler() *routeswitch.Mux {
 }
 
 // C13: /graphql puts the caller's bearer and its class on the context after authentication; /query does the same for
-// its bearer (CHAOS-12659 G6), here the envelope, which the shadow never asks about.
+// its bearer (CHAOS-12659 G6). The routed edge token is a user access token (the HS256 class is retired), so its
+// subject is the user token class with no skip reason; the shadow only observes (graph.OperationShadow.InterceptOperation).
+// The retired envelope never reaches the operation: /query refuses it before any run.
 func TestGraphQLShadowSubjectReachesTheOperation(t *testing.T) {
 	store := &fakeEdgeStore{
 		states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
@@ -226,9 +235,9 @@ func TestGraphQLShadowSubjectReachesTheOperation(t *testing.T) {
 	mux := probe.handler()
 	auth := ecEdgeAuth(t, store)
 	byDigest := map[string]string{digestHex(iaDocument): "probe"}
-	edge := internalidentity.Public(graphQLEdgeChain(newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, auth, store, "", nil),
-		graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes}))
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5})
+	edge := internalidentity.Public(onPattern("/graphql", withRouteProfile(graphQLEdgeChain(newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, auth, store, "", nil),
+		graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes}))))
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query": `+jsonQuote(t, iaDocument)+`}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+token)
@@ -237,8 +246,8 @@ func TestGraphQLShadowSubjectReachesTheOperation(t *testing.T) {
 	if recorder.Code != http.StatusOK || len(probe.subjects) != 1 || !probe.found[0] {
 		t.Fatalf("/graphql: %d, subjects %+v found %v", recorder.Code, probe.subjects, probe.found)
 	}
-	if got := probe.subjects[0]; got.Bearer != token || got.UserAccessToken || got.SkipReason != policy.ShadowReasonHS256 {
-		t.Fatalf("/graphql subject: class fields %+v, want the edge token as hs256 and not a user token", got)
+	if got := probe.subjects[0]; got.Bearer != token || !got.UserAccessToken || got.SkipReason != policy.ShadowReasonNone {
+		t.Fatalf("/graphql subject: class fields %+v, want the edge token as a user access token with no skip reason", got)
 	}
 
 	probe = &subjectProbe{}
@@ -249,11 +258,8 @@ func TestGraphQLShadowSubjectReachesTheOperation(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+envelope)
 	recorder = httptest.NewRecorder()
 	query.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || len(probe.subjects) != 1 || !probe.found[0] {
-		t.Fatalf("/query: %d, subjects %+v found %v, want a run with the envelope's subject", recorder.Code, probe.subjects, probe.found)
-	}
-	if got := probe.subjects[0]; got.Bearer != envelope || got.UserAccessToken || got.SkipReason != policy.ShadowReasonEnvelope {
-		t.Fatalf("/query subject: class fields %+v, want the envelope as envelope and not a user token", got)
+	if recorder.Code != http.StatusUnauthorized || len(probe.subjects) != 0 {
+		t.Fatalf("/query: %d, subjects %+v, want the envelope refused with no run", recorder.Code, probe.subjects)
 	}
 }
 

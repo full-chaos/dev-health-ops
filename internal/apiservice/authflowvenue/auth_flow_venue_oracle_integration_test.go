@@ -36,12 +36,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	mailpkg "github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/authplane"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/authrows"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/proofprincipals"
@@ -389,13 +389,15 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 				r.checkUniformLength(s.name, goResponse)
 			}
 		}
-		if r.external && r.forwarded.Has(authrows.Sessions) {
-			// auth-service answers a sign-in with an opaque refresh credential, a sid claim and (for alice) her
-			// earliest organization: each ruled difference is classified by authrows, any other still differs.
+		if r.forwarded.Has(authrows.Sessions) {
+			// auth-service answers a sign-in with an opaque refresh credential, a sid claim and (for alice, when it
+			// answers the login itself: local_login forwarded) her earliest organization: each ruled difference is
+			// classified by authrows, any other still differs.
 			// On the six sign-in steps the eddsa class's iss and prn_ sub differ from the HS256 recording by design: the
 			// access_token member is compared by one place holder on both planes, its value was checked above.
 			var unvalued bool
-			pyCompared.Body, goProjected.Body, unvalued = authrows.SignInBodies(s.name, pyCompared.Body, goProjected.Body, r.goBlanked)
+			pyCompared.Body, goProjected.Body, unvalued = authrows.SignInBodiesLogin(s.name, pyCompared.Body, goProjected.Body, r.goBlanked,
+				r.forwarded.Has(authrows.LocalLogin))
 			if unvalued {
 				if err := r.golden.Unvalued(authrows.AccessTokenPattern); err != nil {
 					r.t.Error(err)
@@ -790,7 +792,10 @@ func sessionsForwardedLeg() bool {
 func TestAuthFlowVenueOracle(t *testing.T) {
 	spec := venueGolden("auth-flow-venue-oracle", t.Name(), "7783ad744176666041e916fb2a1f92d4337bee8a3cb46759dcb25079cfbb207b")
 	spec.Scrub, spec.KeyScrub = authScrub, requestKeyScrub
-	if sessionsForwardedLeg() {
+	// In process, go-api runs as production does (AUTH_PROXY_SESSIONS=true): the sign-in pairs come from auth-service's
+	// issue route (authplane), as on an external leg that forwards sessions.
+	inProcess := os.Getenv(sessionscenario.EnvBaseURL) == ""
+	if inProcess || sessionsForwardedLeg() {
 		// CHAOS-13107: auth-service's eddsa class adds session_access_token, a fresh token per run, to every token answer.
 		spec.GoBlanked = map[string]string{authrows.SessionAccessTokenPattern: authrows.SessionAccessTokenReason,
 			// The six sign-in steps' access token is auth-service's eddsa class (authrows.AccessTokenUser).
@@ -830,7 +835,13 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	}
 	pyHost, pyPort := pySink.HostPort(t)
 	var seeded map[string]map[string]any
-	venue := venueoracle.Start(t, ctx, venueoracle.Options{External: external,
+	var planeKey authplane.Key
+	if !isExternal {
+		// The seed's tokens and the plane's sign-in tokens are signed by one issuer key, as auth-service signs both in
+		// production.
+		planeKey = authplane.NewKey(t)
+	}
+	venue := venueoracle.Start(t, ctx, venueoracle.Options{External: external, TokenIssuer: planeKey.Tokens,
 		Golden: golden, Root: venueRoot(), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PythonEnv: []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS=" + fromAddress,
 			"SMTP_HOST=" + pyHost, "SMTP_PORT=" + strconv.Itoa(pyPort), "APP_BASE_URL=" + appBaseURL},
@@ -901,12 +912,18 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+	} else {
+		if r.forwarded, err = authrows.ParseForwarded(string(authrows.Sessions)); err != nil {
+			t.Fatal(err)
+		}
+		r.sessionIssuer = authplane.IssuerURL
 	}
 	if r.ledger, err = authrows.NewLedger(r.forwarded, r.usersOwned); err != nil {
 		t.Fatal(err)
 	}
 	if r.goBase == "" {
-		r.goBase = startGoAPI(t, ctx, venue, admin.InviteConfig{Mail: goSender, LinkSecret: sessionscenario.Key, AppBaseURL: appBaseURL, AppBaseURLSet: true})
+		r.goBase = startGoAPI(t, ctx, venue, admin.InviteConfig{Mail: goSender, LinkSecret: sessionscenario.Key, AppBaseURL: appBaseURL, AppBaseURLSet: true},
+			planeKey)
 	}
 	tok := venue.Tokens
 	const (
@@ -1186,8 +1203,9 @@ func flushValkey(t *testing.T, ctx context.Context, uris ...string) {
 
 // startGoAPI builds the dho api route set against the venue's Go copy as
 // the api role, sending its link e-mail with mailConfig. Its rate limits
-// count in the venue's Go Valkey.
-func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mailConfig admin.InviteConfig) string {
+// count in the venue's Go Valkey. Sessions are auth-service's (AUTH_PROXY_SESSIONS=true): an in-process auth plane on
+// the Go copy's auth schema, signing with key, issues every pair and answers every forwarded refresh.
+func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mailConfig admin.InviteConfig, key authplane.Key) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
@@ -1198,18 +1216,12 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	if os.Getenv("DEV_HEALTH_VENUE_GO_LOG") != "" {
 		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
-	verifier, err := edgetoken.New(sessionscenario.Key, "dev-health-ops", "dev-health-api")
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(sessionscenario.Key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	venue.ApplyAuthSchema(t, ctx)
+	plane := authplane.Start(t, ctx, venue.AdminURI(t, venue.GoDB), key, sessionscenario.Key)
 	routeVenueTokens(t, ctx, venue, auth, logger)
 	valkeyClient, err := valkey.Open(ctx, valkey.DefaultConfig(venue.ValkeyURI))
 	if err != nil {
@@ -1225,8 +1237,8 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := apiservice.Deps{Pool: pool, Valkey: valkeyClient, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger),
-		Verifier: verifier, Signer: signer, Invites: mailConfig}
+	deps := apiservice.Deps{Pool: pool, Valkey: valkeyClient, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger), Invites: mailConfig, SessionIssuer: plane.Issuer,
+		AuthProxy: apiservice.AuthProxyConfig{Upstream: plane.URL, On: map[apiservice.AuthAggregate]bool{apiservice.AuthSessions: true}}}
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.Layers()...)
 	if err != nil {
@@ -1238,8 +1250,8 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 }
 
 // routeVenueTokens routes auth by the go-api endpoint-profile rows: the venue's tokens verify as user access
-// tokens of its issuer (their sessions live in the Go copy's auth schema, venueoracle.WriteAuthSessions), and the
-// HS256 tokens the go-api session routes mint in this flow verify on the rows that list legacy_hs256.
+// tokens of its issuer (their sessions live in the Go copy's auth schema, venueoracle.WriteAuthSessions); an HS256
+// token is refused on every row (its class is retired).
 func routeVenueTokens(t *testing.T, ctx context.Context, venue *venueoracle.Venue, auth *policy.Authenticator, logger *slog.Logger) {
 	t.Helper()
 	venue.WriteAuthSessions(t, ctx)
@@ -1247,18 +1259,7 @@ func routeVenueTokens(t *testing.T, ctx context.Context, venue *venueoracle.Venu
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := func(ctx context.Context, token string) (any, error) {
-		user, err := auth.AuthenticateLegacy(ctx, token)
-		switch {
-		case err == nil:
-			return user, nil
-		case policy.IsRefusal(err), policy.IsClaimTypeError(err):
-			return nil, err
-		default:
-			return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
-		}
-	}
-	validator, err := accessverify.New(accessverify.Config{Rows: rows, EdDSA: venue.TokenIssuer.Verifier(t), Legacy: legacy,
+	validator, err := accessverify.New(accessverify.Config{Rows: rows, EdDSA: venue.TokenIssuer.Verifier(t),
 		Meter: noop.NewMeterProvider().Meter("venue"), Logger: logger})
 	if err != nil {
 		t.Fatal(err)

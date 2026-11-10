@@ -293,6 +293,25 @@ PostgreSQL URI — auto-computed when postgresql.enabled
 {{- end }}
 {{- end }}
 
+{{/*
+The Secret and key that hold the bundled PostgreSQL password, as the body of a
+secretKeyRef (name, key): postgresql.credentialsSecret.existingSecret when its
+name is set, else the chart's <fullname>-postgresql-credentials (key
+POSTGRES_PASSWORD, rendered with the store whenever existingSecret is unset).
+The StatefulSet's POSTGRES_PASSWORD and the backup CronJob's PGPASSWORD both
+read it, so the two cannot name different Secrets.
+*/}}
+{{- define "dev-health.postgresqlPasswordSecretKeyRef" -}}
+{{- $existing := .Values.postgresql.credentialsSecret.existingSecret -}}
+{{- if $existing.name -}}
+name: {{ $existing.name | quote }}
+key: {{ $existing.key | default "POSTGRES_PASSWORD" | quote }}
+{{- else -}}
+name: {{ include "dev-health.fullname" . }}-postgresql-credentials
+key: POSTGRES_PASSWORD
+{{- end -}}
+{{- end }}
+
 {{/* Go PgBouncer topology helpers. The poolers have stable in-cluster Service
 names; role credentials and runtime DSNs remain Secret values. */}}
 {{- define "dev-health.goPgbouncerSecretName" -}}
@@ -928,6 +947,30 @@ AUTH_PROXY_URL on go-api, so it is refused unless go-api reaches auth-service. R
 {{- $list := default (list) (default dict .Values.authService.enforce).goApi -}}
 {{- if $list -}}
 {{- if ne (include "dev-health.authProxyOn" .) "true" }}{{- fail "authService.enforce.goApi needs go-api to reach auth-service: set authService.phase to 2 or higher" }}{{- end -}}
+{{- join "," $list -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+query-api's PDP mode (authService.enforce.queryApiPdpMode), "" when unset. Rendered as QUERY_API_PDP_MODE.
+*/}}
+{{- define "dev-health.queryApiPdpMode" -}}
+{{- $m := toString (default "" (default dict .Values.authService.enforce).queryApiPdpMode) -}}
+{{- if not (has $m (list "" "off" "shadow" "enforce")) }}{{- fail "authService.enforce.queryApiPdpMode must be off, shadow or enforce" }}{{- end -}}
+{{- $m -}}
+{{- end -}}
+
+{{/*
+A query-api enforcement list as one comma list, "" when empty. Call with (dict "key" "queryApi"|"queryApiHeaders" "context" $).
+A non-empty list needs the PDP mode shadow or enforce: the binary answers 503 for a listed namespace without a client, and
+mode off builds none. The chart refuses it at render. Names are checked against the namespaces query-api decides.
+*/}}
+{{- define "dev-health.authzEnforceQueryApi" -}}
+{{- $list := default (list) (index (default dict .context.Values.authService.enforce) .key) -}}
+{{- if $list -}}
+{{- $key := printf "authService.enforce.%s" .key -}}
+{{- range $list }}{{- if not (has . (list "analytics" "metrics" "git" "work_items" "integrations" "reports" "org")) }}{{- fail (printf "%s: %v is not a namespace query-api enforces (analytics, metrics, git, work_items, integrations, reports, org)" $key .) }}{{- end }}{{- end -}}
+{{- if not (has (include "dev-health.queryApiPdpMode" .context) (list "shadow" "enforce")) }}{{- fail (printf "%s needs authService.enforce.queryApiPdpMode shadow or enforce: without a decision point client the listed namespaces answer 503" $key) }}{{- end -}}
 {{- join "," $list -}}
 {{- end -}}
 {{- end -}}

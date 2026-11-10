@@ -425,6 +425,8 @@ func sloExpectedRows() []sloRow {
 			pin: "Metric exists; not measured under load. Alert: `" + outbox.alert + "` (above " + outbox.target + " seconds)."},
 		{label: "Revocation propagation", sli: "`auth.session.revocation_lag`", target: "target not set", window: "-", source: "no ticket or page states one", noAlert: true,
 			pin: "The SLI is named; the metric is not on main yet. No alert."},
+		{label: "Signing-key compromise", sli: "Seconds from the decision to drop a signing key", target: "go-api and query-api without a restart: 330 s; auth-service: 20 s", window: "per compromise", source: "this page: the verifiers' JWKS cache (5 min) and refresh floor (30 s); auth-service's key-state refresh (15 s)", noAlert: true,
+			pin: "Measured in the compose key-compromise drill, not in production: two runs, go-api 277 s and 274 s, query-api 277 s and 274 s, auth-service 18 s and 3 s ([emergency rotation](../../operate/runbooks/auth-signing-key-emergency-rotation-and-rollback.md#the-key-compromise-drill-compose-2026-11-10)). A restart of go-api and query-api closes their window at once. No alert."},
 		{label: "Readiness", sli: "`dev_health_runtime_ready == 1`", target: "99.9%", window: "30 days", source: "this page, kept",
 			pin: "Proposed, not measured in production."},
 		{label: "Readiness", sli: "Time to ready after a start", target: "under 60 s", window: "per start", source: "this page, kept",
@@ -599,7 +601,7 @@ func TestAuthSLOBuilderGuardPlantedDefects(t *testing.T) {
 
 func TestAuthSLOTableGuardRowCount(t *testing.T) {
 	runPlanted(t, []planted{
-		{"row-appended", []string{sloTableRel}, mut(sloTableRel, "| Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |\n", "| Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |\n| Extra | x | target 1 ms | 1 minute | none | none |\n"), sloTableRowsBindToTheRules, "SLO table has 11 rows, want 10"},
+		{"row-appended", []string{sloTableRel}, mut(sloTableRel, "| Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |\n", "| Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |\n| Extra | x | target 1 ms | 1 minute | none | none |\n"), sloTableRowsBindToTheRules, "SLO table has 12 rows, want 11"},
 	})
 }
 
@@ -663,7 +665,7 @@ func TestAuthSLOTableGuardRowSetDefects(t *testing.T) {
 	runPlanted(t, []planted{
 		{"row-dropped", []string{sloTableRel}, sloRowsMut(func(t *testing.T, doc string) string {
 			return strings.Replace(doc, sloRowLine(t, doc, "Exchange ")+"\n", "", 1)
-		}), sloTableRowsBindToTheRules, "SLO table has 9 rows, want 10"},
+		}), sloTableRowsBindToTheRules, "SLO table has 10 rows, want 11"},
 		{"row-replaced-by-a-duplicate", []string{sloTableRel}, sloRowsMut(func(t *testing.T, doc string) string {
 			return strings.Replace(doc, sloRowLine(t, doc, "Refresh "), sloRowLine(t, doc, "Session issue "), 1)
 		}), sloTableRowsBindToTheRules, "(Refresh): first cell: no unmatched row"},
@@ -879,6 +881,7 @@ var sloRowPrefixes = []struct{ prefix, label string }{
 	{"Exchange ", "Exchange"},
 	{"Audit outbox ", "Audit outbox"},
 	{"Revocation propagation ", "Revocation propagation"},
+	{"Signing-key compromise ", "Signing-key compromise"},
 	{"Readiness | Fraction", "Readiness"},
 	{"Readiness | Time to ready", "Readiness"},
 }

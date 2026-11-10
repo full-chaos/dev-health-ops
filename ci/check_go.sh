@@ -390,7 +390,9 @@ usage() {
          A path that ci/venue_oracle_triggers.d/ declares for a test (code outside
          its package whose behaviour the test compares; CHAOS-9172) selects that
          test too, and so does a file directly in a package of the dependency
-         closure (ci/venue_oracle_closure.d/, CHAOS-9935). No row selected is a loud no-op. With --list print the selected rows
+         closure (CHAOS-9935): derived from the tree (`go list -deps -test`) into
+         VENUE_CLOSURE_DIR when that directory does not exist, else into a fresh
+         temp directory, never committed (CHAOS-13101). No row selected is a loud no-op. With --list print the selected rows
          (SELECT, package, test, tab-separated) and run nothing.
          With SHARD COUNT (D6039a, CHAOS-9935) only the SHARD-th of COUNT
          cost-balanced slices of the SELECTED rows (ci/venue_oracle_shard.awk,
@@ -689,6 +691,21 @@ run_in_modules() {
 
 check_vet() {
   run_in_modules "go vet" go vet -mod=readonly -trimpath ./...
+  check_authhistory_vet
+}
+
+# check_authhistory_vet vets the packages that carry files behind //go:build authhistory, which neither the default-tag vet
+# nor check_integration_vet compiles. The packages are derived from the tree; none found refuses (a vacuous pass).
+check_authhistory_vet() {
+  local file pkgs=()
+  while IFS= read -r -d '' file; do
+    head -n 20 "${ROOT}/${file}" | grep -Eq '^//go:build .*authhistory' || continue
+    pkgs+=("./$(dirname "${file}")")
+  done < <(git -C "${ROOT}" ls-files --cached --others --exclude-standard -z -- '*.go')
+  [ "${#pkgs[@]}" -gt 0 ] || die "authhistory vet: no file carries the authhistory build tag"
+  mapfile -t pkgs < <(printf '%s\n' "${pkgs[@]}" | sort -u)
+  printf 'go vet -tags=authhistory: %s\n' "${pkgs[*]}"
+  auth_go vet -mod=readonly -trimpath -tags=authhistory "${pkgs[@]}"
 }
 
 # Race-excluded proof (CHAOS-8135, CHAOS-8118, CHAOS-11406): a test compiled out of the -race leg by a `!race` build tag must
@@ -1045,6 +1062,11 @@ check_test() {
 # with no row weighs 1, and ci/go_race_shard.awk (longest-processing-time) places them: a wrong weight costs balance, never
 # coverage. internal/gqlgenguard stays alone (see SERIAL_HEAVY_TEST_PACKAGE), in whichever shard the split puts it.
 GO_TEST_WEIGHTS="${GO_TEST_WEIGHTS:-${ROOT}/ci/go_test_weights.tsv}"
+# ci/go_test_pins.tsv (CHAOS-13422): the packages ci/go_race_shard.awk places first: the heavy ones each on its own shard, then the apart ones, then the serial one.
+GO_TEST_PINS="${GO_TEST_PINS:-${ROOT}/ci/go_test_pins.tsv}"
+# GO_TEST_SERIAL_FACTOR (CHAOS-13422): the other packages of a test shard overlap, so a shard's wall is about their summed time / 1.9
+# (1.80-2.01 over the 5 shards of PR #5995's run at 9244407eb); the serial package adds its whole wall, so it weighs 2x in the split.
+GO_TEST_SERIAL_FACTOR=2
 GO_TEST_SHARD_CAP_SECONDS="${GO_TEST_SHARD_CAP_SECONDS:-1800}"
 GO_TEST_SHARD_WALL_PERCENT=85
 
@@ -1055,6 +1077,7 @@ check_test_shard_args() {
   { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
     || die "test shard ${shard} is outside 1..${count}"
   [ -f "${GO_TEST_WEIGHTS}" ] || die "test shards need ${GO_TEST_WEIGHTS}"
+  [ -f "${GO_TEST_PINS}" ] || die "test shards need ${GO_TEST_PINS}"
 }
 
 # check_test_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package of the shard, key = import path relative
@@ -1073,7 +1096,8 @@ check_test_shard_plan() {
       selected=$((selected + 1))
     done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./... \
       | quality_filter "${module_dir}" "${modpath}" \
-      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")
+      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" \
+          -v serial="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}" -v serialx="${GO_TEST_SERIAL_FACTOR}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")
   done
   [ "${selected}" -gt 0 ] || [ "${QUALITY_FILTER_ACTIVE}" -eq 1 ] \
     || die "test shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"
@@ -1659,7 +1683,7 @@ check_race_weights_rows() {
 
 # check_plan_reads: the declared-read guard of the plan verdict (`cmd/cigate plan-reads`) over the whole tree: every
 # package that names a path of a declared class in a string literal has a reads.tsv row, and --reach recomputes
-# reach.tsv (the programs that call each code-scope unbounded site: go/packages, SSA and RTA over the module; about
+# reach.d/ (the programs that call each code-scope unbounded site: go/packages, SSA and RTA over the module; about
 # 3 min and a 6.5 GiB live heap on 4 cores under the tool's own 8 GiB soft limit; a peak RSS over the 10 GiB budget, reachBudgetMiB, fails: >= 30% under a 16 GiB scope, e.g. capped.sh's GOMEMLIMIT 85% of MemoryMax) and fails on any difference. It runs in the static leg, which runs on every change. With PLAN_READS_REACH_CACHE set (the
 # GitHub-hosted legs only, go-quality.yml) a pull request reuses a store of the same input hash; PLAN_READS_REACH_FRESH (every
 # other event) computes fresh and only stores (CHAOS-11421).
@@ -1923,21 +1947,20 @@ venue_oracle_changed_selects() {
   if vo_grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
     own=0
   fi
-  # The dependency closure of the package's test binary (ci/venue_oracle_closure.d/, CHAOS-9935): a
-  # file directly in, or under testdata of, any package the test binary links selects every
-  # test of the package. Derived by a Go test from `go list -test`, so a missing hand row cannot
-  # hide a dependency. The directory is absent in a scratch tree that holds no Go module.
-  if [ -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
-    local closure_file="${ROOT}/ci/venue_oracle_closure.d/${1//\//__}.txt"
-    [ -f "${closure_file}" ] && [ -r "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is missing or not a readable regular file; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+  # The dependency closure of the package's test binary (VENUE_CLOSURE_DIR, CHAOS-9935): a file directly in, or under
+  # testdata of, any package the test binary links selects every test of the package. Derived from `go list -test`
+  # (venue_oracle_closure_derive), so a missing hand row cannot hide a dependency. A scratch tree with no Go module has none.
+  if [ -d "${VENUE_CLOSURE_DIR:-}" ]; then
+    local closure_file="${VENUE_CLOSURE_DIR}/${1//\//__}.txt"
+    [ -f "${closure_file}" ] && [ -r "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is missing or not a readable regular file; the derivation did not write it"
     # a file that is empty, or holds a line that is not `<dir>` or `~<dir>`, was not written by the generator: refuse it
-    [ -s "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is empty; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+    [ -s "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is empty; the derivation did not write it"
     if vo_grep -qvE '^(~[^[:cntrl:]]+|[^~[:cntrl:]][^[:cntrl:]]*)$' "${closure_file}"; then
-      die "venue-oracles --changed: ${closure_file} has a line that is not a package directory or ~directory; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+      die "venue-oracles --changed: ${closure_file} has a line that is not a package directory or ~directory; the derivation did not write it"
     fi
     # a path with an empty, "." or ".." segment, a leading slash or a trailing slash can never match a changed path
     if vo_grep -qE '^~?/|//|/$|(^|[~/])\.\.?(/|$)' "${closure_file}"; then
-      die "venue-oracles --changed: ${closure_file} has a line that is not a clean relative directory (empty, dot or slash segment); regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+      die "venue-oracles --changed: ${closure_file} has a line that is not a clean relative directory (empty, dot or slash segment); the derivation did not write it"
     fi
     [ "${own}" -ne 0 ] || return 0
     if [ -n "${VENUE_CHANGED_DIRS:-}" ] && vo_grep -qxFf "${closure_file}" < <(printf '%s\n' "${VENUE_CHANGED_DIRS}"); then
@@ -2026,17 +2049,36 @@ venue_oracle_known_summary() {
   printf 'KNOWN-DIVERGENCE skips: %d (tickets %s)\n' "${count}" "${tickets:-none}"
 }
 
+# venue_oracle_closure_derive DIR: write the dependency closure of every venue test binary into DIR, one <package>.txt
+# each, from `go list -deps -test` over this tree (CHAOS-13101: derived, never committed). Its output goes to stderr.
+venue_oracle_closure_derive() {
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off VENUE_CLOSURE_WRITE=1 VENUE_CLOSURE_DIR="$1" \
+    go test -mod=readonly -trimpath -count=1 -run '^TestClosureFilesMatchTheTestBinaryDependencies$' ./internal/testsupport/venuechanged >&2) \
+    || die "venue-oracles --changed: could not derive the venue test closures into $1 (see above)"
+  [ -d "$1" ] || die "venue-oracles --changed: the derivation of the venue test closures wrote no $1"
+}
+
 check_venue_oracles() {
   local shard="${1:-}" shard_count="${2:-}" changed="${VENUE_CHANGED_FILE:-}"
   if [ -n "${changed}" ]; then
     [ -r "${changed}" ] || die "venue-oracles --changed: ${changed} is missing or unreadable"
   fi
   if [ -n "${changed}" ]; then
-    # CHAOS-9935: in the real tree (it holds the generator of the closure files) a missing closure directory is an
-    # error, never "no closure": the selection would silently drop every dependency rule and read as a green no-op.
-    # A scratch tree with no Go module has neither the generator nor the directory and keeps the package and row rules.
-    if [ -d "${ROOT}/internal/testsupport/venuechanged" ] && [ ! -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
-      die "venue-oracles --changed: ${ROOT}/ci/venue_oracle_closure.d is missing; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+    # CHAOS-9935, CHAOS-13101: in the real tree (it holds the generator) the closure is derived before any selection:
+    # into VENUE_CLOSURE_DIR when that directory does not exist yet (the hosted job derives once and its later steps
+    # read it), into a temp directory removed at exit when it is unset; an existing VENUE_CLOSURE_DIR is read as it is. A failed
+    # derivation stops the run, never "no closure". A scratch tree with no Go module has no generator and keeps the
+    # package and row rules, plus ci/venue_oracle_closure.d when a test fixture writes one.
+    if [ -d "${ROOT}/internal/testsupport/venuechanged" ]; then
+      if [ -z "${VENUE_CLOSURE_DIR:-}" ]; then
+        VENUE_CLOSURE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-closure.XXXXXX")" \
+          || die "venue-oracles --changed: no temp directory for the venue test closures"
+        trap 'rm -rf -- "${VENUE_CLOSURE_TMP}"' EXIT
+        VENUE_CLOSURE_DIR="${VENUE_CLOSURE_TMP}/closure"
+      fi
+      [ -d "${VENUE_CLOSURE_DIR}" ] || venue_oracle_closure_derive "${VENUE_CLOSURE_DIR}"
+    else
+      VENUE_CLOSURE_DIR="${VENUE_CLOSURE_DIR:-${ROOT}/ci/venue_oracle_closure.d}"
     fi
     # The package directory of every changed path (a path under .../testdata belongs to the package
     # above it), for the closure rule of venue_oracle_changed_selects.
@@ -4816,7 +4858,6 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/contracts FuzzTimestampUnmarshal"
   "./internal/auth/contracts FuzzParseAccessToken"
   "./internal/auth/contracts FuzzParseWorkloadToken"
-  "./internal/auth/edgetoken FuzzVerifyToken"
   "./internal/auth/signedtoken FuzzValidSignedToken"
   "./internal/auth/httpapi FuzzParseLimit"
   "./internal/auth/httpapi FuzzParseForwardedTrust"
@@ -5154,8 +5195,13 @@ check_auth_paths_selftest() {
 # a new package can miss. Every Go package of the module that LOOKS like auth (any
 # path segment starting with auth or audit) or imports the auth schema adapter
 # must be inside the gate (AUTH_PACKAGES) or named, with a reason, in
-# ci/auth_gate_scope_exempt.txt (package<TAB>reason). An exemption that is
-# gated, or that names no package, is stale and fails.
+# ci/auth_gate_scope_exempt.txt (package<TAB>class<TAB>reason). An exemption that is
+# gated, or that names no package, is stale and fails. A test-only row fails when
+# the package imports the auth schema adapter outside its tests (or looks like
+# auth by path); a package row on a package with test imports only is
+# over-broad and fails. The decision is
+# `cmd/cigate scope-verdict` (internal/cigates/scope.go), over the candidate
+# sources (`scope-candidates -sources`: segment, import, testimport).
 # auth_scope_candidates: the import path of every Go package of the module that
 # LOOKS like auth (a path segment starting with auth or audit) or imports the
 # auth schema adapter. One definition for the scope selftest AND the relevance
@@ -5174,42 +5220,32 @@ auth_scope_tags() {
 
 # auth_scope_candidates: discovery runs once with no tag, once with every derived
 # tag, and once per tag (a `!tag` file is visible only without it; an `a && b`
-# file only with both), and unions the results.
+# file only with both), and unions the results. `auth_scope_candidates -sources`
+# prints path<TAB>source lines instead of paths. A failed pass fails the whole
+# list: a pass that did not run must not shrink the candidate set.
 auth_scope_candidates() {
-  local module tag tags all=""
+  local module tag tags all="" mode=("$@")
   module="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)"
   tags="$(auth_scope_tags)"
   [ -n "${tags}" ] || die "auth scope: no build tag found in the module; derivation is broken"
   for tag in ${tags}; do all+="${all:+,}${tag}"; done
   {
     for set in "" "${all}" ${tags}; do
-      auth_go list -mod=readonly -tags="${set}" -e -json ./... | auth_go run -trimpath -mod=readonly ./cmd/cigate scope-candidates "${module}"
+      auth_go list -mod=readonly -tags="${set}" -e -json ./... | auth_go run -trimpath -mod=readonly ./cmd/cigate scope-candidates "${mode[@]}" "${module}" || exit $?
     done
   } | LC_ALL=C sort -u
 }
 
 check_auth_scope_selftest() {
-  local exempt="${ROOT}/ci/auth_gate_scope_exempt.txt" gated candidates missing stale pkg reason
-  gated="$(auth_go list -mod=readonly "${AUTH_PACKAGES[@]}" | LC_ALL=C sort -u)"
-  [ -n "${gated}" ] || die "auth scope: the gate selects no package"
-  candidates="$(auth_scope_candidates)"
-  [ -n "${candidates}" ] || die "auth scope: no candidate package found; the selftest would measure nothing"
-  missing=""
-  while IFS= read -r pkg; do
-    [ -n "${pkg}" ] || continue
-    printf '%s\n' "${gated}" | grep -qx -- "${pkg}" && continue
-    grep -qE "^${pkg//\//\\/}	" "${exempt}" 2>/dev/null && continue
-    missing+="${pkg} "
-  done <<<"${candidates}"
-  [ -z "${missing}" ] || die "auth scope: package(s) look like auth or import the auth schema but are neither in the gate nor exempt with a reason in ci/auth_gate_scope_exempt.txt: ${missing}"
-  stale=""
-  while IFS=$'\t' read -r pkg reason; do
-    case "${pkg}" in ''|'#'*) continue ;; esac
-    [[ "${reason}" =~ [^[:space:]] ]] || stale+="${pkg}(no reason) "
-    if printf '%s\n' "${gated}" | grep -qx -- "${pkg}" || ! printf '%s\n' "${candidates}" | grep -qx -- "${pkg}"; then stale+="${pkg} "; fi
-  done <"${exempt}"
-  [ -z "${stale}" ] || die "auth scope: stale or reasonless exemption(s) (gated, no longer a candidate, or no reason): ${stale}"
-  printf 'auth scope: %s candidate packages, all gated or exempt\n' "$(printf '%s\n' "${candidates}" | wc -l | tr -d ' ')"
+  local exempt="${ROOT}/ci/auth_gate_scope_exempt.txt" dir rc=0
+  # Files, not <(...): `go run` starts the built binary without the shell's extra fds.
+  dir="$(mktemp -d -t dev-health-auth-scope.XXXXXX)" || die "auth scope: no temp dir"
+  auth_go list -mod=readonly "${AUTH_PACKAGES[@]}" | LC_ALL=C sort -u >"${dir}/gated" || rc=$?
+  [ "${rc}" -eq 0 ] && { auth_scope_candidates -sources >"${dir}/sources" || rc=$?; }
+  [ "${rc}" -eq 0 ] && { auth_go run -trimpath -mod=readonly ./cmd/cigate scope-verdict \
+    --gated "${dir}/gated" --sources "${dir}/sources" --exempt "${exempt}" || rc=$?; }
+  rm -rf -- "${dir}"
+  [ "${rc}" -eq 0 ] || die "auth scope: the scope selftest refused (rc ${rc}; reason above)"
 }
 
 check_auth() {

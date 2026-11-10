@@ -157,10 +157,10 @@ func TestTheStoreErrorCounterIsOnTheServiceScrape(t *testing.T) {
 		t.Fatalf("limits %v, err %v", limits, err)
 	}
 	defer components[0].Shutdown(context.Background())
-	if _, err := sessionRoutes(cfg, discard(), pool, schema, nil, limits, nil); err != nil {
+	if _, err := sessionRoutes(cfg, discard(), pool, schema, &stubSigner{}, limits, nil); err != nil {
 		t.Fatal(err)
 	}
-	_, credentialComponents, err := credentialRoutes(cfg, discard(), pool, schema, limits, nil)
+	_, credentialComponents, err := credentialRoutes(cfg, discard(), pool, schema, limits, &stubSigner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,15 +266,12 @@ func TestTheDormantMountSetBootsWithoutTheStoreSecret(t *testing.T) {
 	}
 }
 
-func TestRateLimitIsKeyedFromItsOwnKeyWhenSetAndFromTheSessionSecretWhenNot(t *testing.T) {
+// The limiter has one key, AUTH_RATE_LIMIT_KEY; a leftover HS256 key beside it is never the limiter's key.
+func TestRateLimitIsKeyedFromItsOwnKeyOnly(t *testing.T) {
 	t.Parallel()
 	rateKey := strings.Repeat("r", 40)
-	fallback := limitConfig(t, sessionEnvironment(map[string]string{}))
-	if got := rateLimitSecret(fallback); got != testAccessSecret {
-		t.Fatal("unset, the rate-limit secret is not the session secret")
-	}
-	own := limitConfig(t, sessionEnvironment(map[string]string{authconfig.EnvRateLimitKey: rateKey}))
+	own := limitConfig(t, sessionEnvironment(map[string]string{authconfig.EnvRateLimitKey: rateKey, "AUTH_JWT_SECRET_KEY": testAccessSecret}))
 	if got := rateLimitSecret(own); got != rateKey || got == testAccessSecret {
-		t.Fatal("set, the rate-limit secret is not AUTH_RATE_LIMIT_KEY alone")
+		t.Fatal("the rate-limit secret is not AUTH_RATE_LIMIT_KEY alone")
 	}
 }

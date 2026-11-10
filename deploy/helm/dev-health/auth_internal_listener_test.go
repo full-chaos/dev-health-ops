@@ -112,7 +112,7 @@ func TestAuthInternalListenerRendersThePortServiceAndPolicy(t *testing.T) {
 	if overrides[internalAddressEnv] != ":8097" {
 		t.Errorf("the rendered args set %s = %q, want :8097", internalAddressEnv, overrides[internalAddressEnv])
 	}
-	if _, err := authconfig.Load(authconfig.Spec{Overrides: overrides, LookupEnv: containerLookup(t, authDoc(docs, "Deployment", "a-dev-health-auth-service"), "auth-service")}); err != nil {
+	if _, err := authconfig.Load(authconfig.Spec{Overrides: overrides, LookupEnv: withDefaultIssuer(containerLookup(t, authDoc(docs, "Deployment", "a-dev-health-auth-service"), "auth-service"))}); err != nil {
 		t.Errorf("auth-service refuses the rendered internal listener: %v", err)
 	}
 

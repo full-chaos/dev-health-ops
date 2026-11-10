@@ -302,7 +302,9 @@
               "assertion_key",
               "invited_by",
               "joined_at",
-              "owner_principal_id"
+              "owner_principal_id",
+              "username",
+              "avatar_url"
             ]
           }
         },

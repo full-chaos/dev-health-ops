@@ -7,11 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -383,11 +381,10 @@ func assertSourceHealthServed(t *testing.T, body string) {
 func TestSourceHealthRoute_ServedToAViewerOverTheSignedEnvelope(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 	seedSourceHealth(t, pool, sourceHealthFixture())
-	handler, priv := sourceHealthHandler(t, pool)
-	valid := time.Now().Add(time.Hour)
+	handler := sourceHealthHandler(t, pool)
 
 	post := func(role, org, asked string) *httpResult {
-		token := signDataHealthEnvelope(t, priv, principal.Claims{OrgID: org, Role: role}, valid)
+		token := iaHeaders(org, role, false, false)
 		rec := postGraphQLWithVariables(t, handler, registeredSourceHealthDocument, token, map[string]any{"orgId": asked})
 		return &httpResult{code: rec.Code, body: rec.Body.String()}
 	}
@@ -427,7 +424,7 @@ type httpResult struct {
 func TestSourceHealthRoute_NoDataHealthFieldIsReachableThroughIt(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 	seedSourceHealth(t, pool, sourceHealthFixture())
-	handler, priv := sourceHealthHandler(t, pool)
+	handler := sourceHealthHandler(t, pool)
 	ch := &countingMCPClient{}
 	listener := internalidentity.MCP(newMCPHandlerWithLimits(ch, pool, allMCPRootsEnabled(), getenvFunc(func(string) string { return "" }), mcpDefaultLimits()))
 	for _, selection := range []string{
@@ -447,7 +444,7 @@ func TestSourceHealthRoute_NoDataHealthFieldIsReachableThroughIt(t *testing.T) {
 
 	// The operator-only operation is refused as it was.
 	rec := postGraphQLWithVariables(t, handler, registeredConnectorsDataHealthDocument,
-		signDataHealthEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "viewer"}, time.Now().Add(time.Hour)), map[string]any{"teamId": "ALL"})
+		iaHeaders("org-1", "viewer", false, false), map[string]any{"teamId": "ALL"})
 	if !strings.Contains(rec.Body.String(), "Data health requires operator access") || strings.Contains(rec.Body.String(), "github") {
 		t.Fatalf("connectorsDataHealth must stay operator-only: %s", rec.Body.String())
 	}
@@ -455,11 +452,11 @@ func TestSourceHealthRoute_NoDataHealthFieldIsReachableThroughIt(t *testing.T) {
 
 func TestSourceHealthRoute_FailedReadFailsLoudly(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
-	handler, priv := sourceHealthHandler(t, pool)
+	handler := sourceHealthHandler(t, pool)
 	if _, err := pool.Exec(t.Context(), `DROP TABLE job_runs CASCADE`); err != nil {
 		t.Fatal(err)
 	}
-	token := signDataHealthEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "viewer"}, time.Now().Add(time.Hour))
+	token := iaHeaders("org-1", "viewer", false, false)
 	rec := postGraphQLWithVariables(t, handler, registeredSourceHealthDocument, token, map[string]any{"orgId": "org-1"})
 	body := rec.Body.String()
 	if !strings.Contains(body, `"errors"`) || strings.Contains(body, `"sourceHealth":[]`) {
@@ -470,9 +467,9 @@ func TestSourceHealthRoute_FailedReadFailsLoudly(t *testing.T) {
 	}
 }
 
-func sourceHealthHandler(t *testing.T, pool *pgxpool.Pool) (http.HandlerFunc, ed25519.PrivateKey) {
+func sourceHealthHandler(t *testing.T, pool *pgxpool.Pool) http.HandlerFunc {
 	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,8 +477,8 @@ func sourceHealthHandler(t *testing.T, pool *pgxpool.Pool) (http.HandlerFunc, ed
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
-	return handler, priv
+	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
+	return handler
 }
 
 // The member-level field over the MCP listener: acr sends the least role, and
@@ -519,8 +516,8 @@ func serveSourceHealthAsViewer(t *testing.T, configs []sourceHealthConfig) []sou
 	t.Helper()
 	pool := startTestRegistryPostgres(t)
 	seedSourceHealth(t, pool, configs)
-	handler, priv := sourceHealthHandler(t, pool)
-	token := signDataHealthEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "viewer"}, time.Now().Add(time.Hour))
+	handler := sourceHealthHandler(t, pool)
+	token := iaHeaders("org-1", "viewer", false, false)
 	rec := postGraphQLWithVariables(t, handler, registeredSourceHealthDocument, token, map[string]any{"orgId": "org-1"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())

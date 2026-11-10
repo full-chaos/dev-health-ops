@@ -36,8 +36,8 @@ func mustVerifyOutcomeCounter() metric.Int64Counter {
 }
 
 // recordVerifyOutcome increments the verify-outcome counter. outcome is
-// one of "verified", "rejected", or "unsupported_schema_version" -- see
-// Verify's doc comment.
+// one of "verified", "rejected", "unsupported_schema_version" or
+// "not_configured" (a nil verifier) -- see Verify's doc comment.
 func recordVerifyOutcome(outcome string) {
 	verifyOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }

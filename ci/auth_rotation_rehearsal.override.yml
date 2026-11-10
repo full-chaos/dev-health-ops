@@ -2,8 +2,9 @@
 # ci/auth_webproof_compose.override.yml (private project, auth proxy flags on) and turns the stack into the EdDSA
 # form of the rotation: auth-service signs from a key SET (custody manifest in the rehearsal_keys volume),
 # go-api verifies against the https issuer served by issuer-tls. compose.yml and the chart are not changed.
-# REHEARSAL_ACCESS_CLASS is eddsa, or hs256_compat for the issuer-rollback scenario; the verifier issuer is
-# set only under eddsa, as the chart renders it (authEdDSAIssuer).
+# REHEARSAL_ACCESS_CLASS is eddsa; the driver sets it empty (not unset) when it recreates the services on the previous
+# image for the rollback scenario, so that image runs with its own default class. hs256_compat is retired and does not
+# start. The verifier issuer is set on the current and the previous image alike: go-api and query-api have no other verifier.
 services:
   issuer-tls:
     image: ghcr.io/nginx/nginx-unprivileged:1.30-alpine@sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e
@@ -31,7 +32,7 @@ services:
       AUTH_SIGNING_KEY_FILE: ""
       AUTH_SIGNING_KEY_ID: ""
       AUTH_SIGNING_KEYSET_FILE: /run/auth/keys/keyset.json
-      AUTH_ACCESS_TOKEN_CLASS: ${REHEARSAL_ACCESS_CLASS:-eddsa}
+      AUTH_ACCESS_TOKEN_CLASS: ${REHEARSAL_ACCESS_CLASS-eddsa}
       AUTH_TOKEN_ISSUER_URL: ${REHEARSAL_ISSUER_URL:?}
     volumes:
       - type: volume

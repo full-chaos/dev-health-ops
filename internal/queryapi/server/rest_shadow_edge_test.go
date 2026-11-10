@@ -12,22 +12,20 @@ import (
 	"github.com/google/uuid"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 // CHAOS-13073 r1 (acp ruling D6714 / 13106 option D): a delegated token is counted impersonation_refused before any skip
-// class, on the routed and the unrouted path, with or without an organization, for HS256, the EdDSA user access token
-// and the EdDSA envelope the PDP cannot judge. A non-delegated HS256 token is skipped/hs256, and an org-required
-// refusal is observed on both paths. Routed (issuer set) an HS256 token is the retired class: 401 alg_not_allowed
-// before any shadow observation, delegated or not. Every other cell keeps its legacy answer.
+// class, on the routed and the unrouted path, with or without an organization, for the EdDSA user access token, and an
+// org-required refusal is observed. The retired HS256 class is the one generic-401 cell of the plane
+// (TestQueryAPIHS256IsRefusedOnEveryRow). The effective-principal envelope is a retired class on both paths: the 401 of
+// an unaccepted bearer and no shadow observation, delegated or not. Every other cell keeps its legacy answer.
 func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 	forbidden := answer{http.StatusForbidden, `{"detail":"Organization context required"}`}
 	served := answer{http.StatusOK, fmt.Sprintf(`{"org":%q}`, ecOrg.String())}
 	refused := shadowResultsMetric + "|reason=none,result=impersonation_refused"
-	skippedHS := shadowResultsMetric + "|reason=hs256,result=skipped"
 	delegate := uuid.NewString()
 	type cell struct {
 		name      string
@@ -38,21 +36,13 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 		status    answer
 		want      string
 	}
-	envelopeOrgless := answer{http.StatusOK, `{"org":""}`}
-	algRefused := answer{http.StatusUnauthorized, restRefusal}
+	unaccepted := answer{http.StatusUnauthorized, restRefusal}
 	var cells []cell
 	for _, routed := range []bool{true, false} {
 		path := map[bool]string{true: "routed", false: "unrouted"}[routed]
-		hsServed, hsForbidden, hsRefused, hsSkipped := served, forbidden, refused, skippedHS
-		if routed {
-			hsServed, hsForbidden, hsRefused, hsSkipped = algRefused, algRefused, "", ""
-		}
 		cells = append(cells,
-			cell{path + " hs256 org delegated", routed, "hs256", true, true, hsServed, hsRefused},
-			cell{path + " hs256 orgless delegated", routed, "hs256", false, true, hsForbidden, hsRefused},
-			cell{path + " hs256 orgless not delegated", routed, "hs256", false, false, hsForbidden, hsSkipped},
-			cell{path + " envelope org delegated", routed, "envelope", true, true, served, refused},
-			cell{path + " envelope orgless delegated", routed, "envelope", false, true, envelopeOrgless, refused},
+			cell{path + " envelope org delegated", routed, "envelope", true, true, unaccepted, ""},
+			cell{path + " envelope orgless delegated", routed, "envelope", false, true, unaccepted, ""},
 		)
 	}
 	cells = append(cells,
@@ -71,19 +61,13 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 			if tc.routed {
 				setup = testAccess(m.keys, nil, accessTestNow)
 			}
-			f := newRESTFixture(t, newAccessStore(), setup, true)
+			f := newRESTFixture(t, newAccessStore(), setup)
 			org := ""
 			if tc.org {
 				org = ecOrg.String()
 			}
 			var token string
 			switch tc.kind {
-			case "hs256":
-				claims := ecEdgeClaims{sub: ecUser.String(), orgID: org, tokenVersion: 5}
-				if tc.delegated {
-					claims.impersonatingUserID = delegate
-				}
-				token = ecMintEdgeToken(t, claims)
 			case "user":
 				extra := map[string]any{"act": map[string]any{"sub": wirePrincipal(uuid.MustParse(delegate))}}
 				if !tc.org {
@@ -114,11 +98,6 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 			if tc.want == "" {
 				if d := settleQuiet(t, before); len(d) != 0 {
 					t.Fatalf("5.12 counters %v, want none", d)
-				}
-				if tc.routed && tc.kind == "hs256" {
-					if got := f.reader.counts(t)[accessverify.RefusedMetric+"|profile=GET /api/v1/home,reason=alg_not_allowed,service=dev-health-query-api"]; got != 1 {
-						t.Fatalf("the routed HS256 refusal is not counted alg_not_allowed: %d", got)
-					}
 				}
 				return
 			}

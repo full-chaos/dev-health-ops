@@ -345,58 +345,10 @@ func TestSignerCheckBurstRunsOneCheck(t *testing.T) {
 	}
 }
 
-func TestPreflightIsANoOpUnderHS256(t *testing.T) {
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel()
-	for _, ctx := range []context.Context{context.Background(), cancelled} {
-		if err := issuer.Preflight(ctx); err != nil {
-			t.Fatalf("hs256 preflight: %v", err)
-		}
-	}
-	if issuer.eddsa != nil {
-		t.Fatal("an hs256 issuer holds an EdDSA minter")
-	}
-}
-
-func TestPreflightRefusesAnIssuerWithoutExactlyOneClass(t *testing.T) {
-	hs, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ed := newEdDSAIssuer(t, readableKeySigner(t), testAudience)
-	for name, issuer := range map[string]*Issuer{
-		"none": {verifier: hs.verifier, now: time.Now},
-		"both": {signer: hs.signer, eddsa: ed.eddsa, verifier: hs.verifier, now: time.Now},
-	} {
-		if err := issuer.Preflight(context.Background()); !errors.Is(err, errIssue) {
-			t.Fatalf("%s: %v, want errIssue", name, err)
-		}
-	}
-}
-
-// hs256_compat: the routes call the same collaborators as before and answer
-// 200; the issuer holds no signer to check.
-func TestRefreshAndIssueUnderHS256AreUnchanged(t *testing.T) {
-	hs, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f, counter := newRefreshFixtureWith(t, hs)
-	response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
-	if response.Code != http.StatusOK || counter.exchanges.Load() != 1 {
-		t.Fatalf("refresh status %d, %d exchanges: %s", response.Code, counter.exchanges.Load(), response.Body)
-	}
-	if _, err := contracts.ParseRefreshResponse(repoRoot(t), response.Body.Bytes()); err != nil {
-		t.Fatalf("not refresh-response.v1: %v", err)
-	}
-	c := newCompatFixture(t)
-	issued := c.do(http.MethodPost, PatternIssueSession, issueBody(c.principal, c.org.String(), "pwd"), issuerBearer())
-	if issued.Code != http.StatusOK || len(c.sessions.created) != 1 || len(c.projector.userCalls) != 1 || len(c.projector.orgCalls) != 1 {
-		t.Fatalf("issue status %d, created %d, projected %v %v", issued.Code, len(c.sessions.created), c.projector.userCalls, c.projector.orgCalls)
+func TestPreflightRefusesAnIssuerWithoutAMinter(t *testing.T) {
+	none := &Issuer{now: time.Now}
+	if err := none.Preflight(context.Background()); !errors.Is(err, errIssue) {
+		t.Fatalf("none: %v, want errIssue", err)
 	}
 }
 

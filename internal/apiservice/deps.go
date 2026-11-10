@@ -24,7 +24,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing/processlicense"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
@@ -119,11 +118,6 @@ type Deps struct {
 	// Guard to wrap a handler with its authorization level.
 	Auth  *policy.Authenticator
 	Guard *policy.Guard
-	// Verifier and Signer are the access/refresh token keys (JWT_SECRET_KEY),
-	// nil without a pool: the session routes (internal/api/session) mint
-	// and verify with them.
-	Verifier *edgetoken.Verifier
-	Signer   *edgetoken.Signer
 	// AccessVerify is the profile-routed access-token validator; nil when
 	// AUTH_ACCESS_TOKEN_ISSUER is unset. When set, Auth routes through it.
 	AccessVerify *accessverify.Validator
@@ -206,7 +200,7 @@ type Deps struct {
 	// SELECT on projects. See EnvACRAccessProjectScope for the acr
 	// DisallowUnknownFields dependency and the roll order.
 	ACRAccessProjectScope bool
-	// ACRRevoker is the credential revoke route's acr client (EnvACRRevokeURL and its two siblings); nil is not
+	// ACRRevoker is the credential revoke route's acr client (EnvACRRevokeURL and its three siblings); nil is not
 	// configured, and the route answers 503.
 	ACRRevoker acrcredentials.Revoker
 	// SessionIssuer issues the session and sso routes' token pairs at
@@ -224,14 +218,28 @@ type Deps struct {
 	// auth-service; nil (AUTH_PROXY_ORG_PROVISIONING off) leaves go-api the
 	// writer.
 	OrgProvisioner authprovision.Provisioner
+	// OrgDeletionAuth is AUTH_PROXY_URL set: the organization delete asks auth-service to deprovision with
+	// AUTH_PROXY_ORG_PROVISIONING off too, through OrgDeprovisioner (nil when the workload inputs are missing or invalid).
+	OrgDeletionAuth  bool
+	OrgDeprovisioner admin.OrgDeprovisioner
+	// ServiceAccountKeys sends the admin service account key verbs to auth-service; nil
+	// (AUTH_PROXY_SERVICE_ACCOUNT_KEYS off) answers the key routes 503 config_missing.
+	ServiceAccountKeys authprovision.ServiceAccountKeys
+	// ServiceAccounts sends the admin service account lifecycle verbs to auth-service; nil
+	// (AUTH_PROXY_SERVICE_ACCOUNT_KEYS off) leaves the lifecycle routes unmounted.
+	ServiceAccounts authprovision.ServiceAccounts
 	// OrgSuspender suspends an organization in auth-service before the admin PATCH writes is_active=false; nil with
 	// AUTH_PROXY_ORG_PROVISIONING off.
 	OrgSuspender orgreactivate.Suspender
 	// OrgState reads the organization's state in auth-service whose revision the two verbs above send; set with them.
 	OrgState orgreactivate.StateReader
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the go-api
-	// routes and verbs that write public.users refuse.
+	// routes and verbs that write public.users refuse; the admin users routes
+	// send their writes to auth-service through UsersAdmin.
 	UsersOwned bool
+	// UsersAdmin is the client of auth-service's user-admin routes while users
+	// are owned, built from the shared workload token; nil otherwise.
+	UsersAdmin authprovision.UsersAdmin
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
 	// from the auth platform role assignments and a public is_superuser write
 	// refuses.

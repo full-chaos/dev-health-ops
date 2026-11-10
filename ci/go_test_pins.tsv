@@ -1,0 +1,13 @@
+# Test packages ci/go_race_shard.awk places first, each on the then-lightest shard, heaviest first (CHAOS-13422): the five heaviest
+# packages of the go-quality test leg by median wall (517-792 s, ci/go_test_weights.tsv; internal/cigates/testshard checks they are the five heaviest) must not share a shard, so with five test shards each
+# runs beside lighter packages only. Format: package<TAB>reason. Key = import path relative to the module root.
+# One heavy row per test shard (internal/cigates/testshard checks the count, that each row names a real package, and that they land on distinct shards),
+# plus apart rows (internal/cigates/testshard names each one and the package it must not share a shard with), placed after the heavy rows,
+# plus the serial package, placed last, onto the then-lightest shard.
+deploy/helm/dev-health	helm chart render and lint: median 792 s
+internal/cigates/affected	affected-package planner suites: median 564 s
+internal/cigates/chartgates	apart: median 392 s on main, 674-925 s on the PR shard beside internal/cigates/integrationshards (co-location contention), so never on that shard
+internal/cigates/integrationshards	integration shard plan checks: median 730 s
+internal/cigates/scripts	runs the ci scripts: median 663 s
+internal/cigates/workflows	workflow and quality-leg checks: median 517 s
+internal/gqlgenguard	serial: runs alone after the shard's other packages (check_go.sh SERIAL_HEAVY_TEST_PACKAGE), so its whole wall adds to the shard

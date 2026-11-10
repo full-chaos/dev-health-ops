@@ -1,0 +1,159 @@
+//go:build integration
+
+package apiservice
+
+import (
+	"context"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
+	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
+)
+
+// ruleOneServer is the api listener with the wired handlers over pool and ch: the profile-routed validator with
+// issuer's key, as production builds it.
+func ruleOneServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, issuer *edtokens.Issuer) http.Handler {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	auth, err := policy.NewAuthenticator(issuer.Store(policy.PGStore{Pool: pool}), logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegated, err := goAPIDelegatedRows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.DelegatedRows(delegated)
+	validator, err := accessverify.New(accessverify.Config{
+		Rows: realRows(t), EdDSA: issuer.Verifier(t),
+		Meter: sdkmetric.NewMeterProvider().Meter("test"), Logger: logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.RouteAccess(routedAccessVerify{validator}, goAPIAccessService); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := goAPIScopeRows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := policy.NewScope(auth, logger)
+	scope.DeclaredRows(rows)
+	deps := Deps{Pool: pool, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger)}
+	server, err := NewServer(apiTestConfig(), logger, Routes(deps, logger), scope.Layers()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server.Handler()
+}
+
+// Product rule 1 (D6773): through the wired handlers on Postgres and ClickHouse, a platform admin whose token
+// names an org it holds no membership row in gets, with a user access token, the HS256 path's answer byte for
+// byte. A user without the platform action and without the membership gets the HS256 path's answer too
+// (CHAOS-13227: the X-Org-Id refusal). CHAOS-13126 retired the HS256 class on every routed row: on the listener the
+// HS256 token is the generic 401. The HS256 answers are the executed legacy runs on main 98c7d4f56 (log
+// 13154-legacy-rec-int-98c7d4f5.log sha256 2faa72118ecc, LEGACY-REC-INT lines) and d7e374652 (log
+// 13154-legacy-rec-plain-d7e37465.log sha256 bb390396dbdf, LEGACY-REC-PLAIN lines); the sync config's id and its
+// created_at / updated_at are this run's, so the body is compared with them named.
+func TestProductRule1PlatformAdminWithoutMembershipWiredHandlers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	pg, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pg.Close(context.Background()) })
+	pool, err := pgxpool.New(ctx, pg.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	pgschema.Apply(ctx, t, pool)
+	chc, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = chc.Close(context.Background()) })
+	chschema.Apply(ctx, t, chc)
+	ch, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(chc.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ch.Close() })
+
+	org, super, plain := uuid.New(), uuid.New(), uuid.New()
+	pgseed.Org(ctx, t, pool, org.String(), "enterprise")
+	for _, user := range []struct {
+		id        uuid.UUID
+		email     string
+		superuser bool
+	}{{super, "rule-one-super@example.com", true}, {plain, "rule-one-plain@example.com", false}} {
+		if _, err := pool.Exec(ctx, `INSERT INTO users (id, email, password_hash, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, 'not-a-hash', true, true, $3, 0, now(), now())`, user.id, user.email, user.superuser); err != nil {
+			t.Fatal(err)
+		}
+	}
+	syncID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, created_at, updated_at)
+VALUES ($1, $2, 'rule-one', 'github', '[]'::json, '{}'::json, true, now(), now())`, syncID, org); err != nil {
+		t.Fatal(err)
+	}
+
+	issuer := edtokens.New(t)
+	routed := ruleOneServer(t, pool, ch, issuer)
+	eddsa := func(id uuid.UUID) string {
+		token, err := issuer.Mint(edtokens.Claims{UserID: id, OrgID: org.String()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	serve := func(handler http.Handler, path, token string) (int, string) {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code, recorder.Body.String()
+	}
+	stamp := regexp.MustCompile(`"(created_at|updated_at)":"[^"]+"`)
+	named := func(body string) string {
+		return stamp.ReplaceAllString(strings.ReplaceAll(body, syncID.String(), "<sync_id>"), `"$1":"<time>"`)
+	}
+	legacy := map[string]string{
+		"/api/v1/admin/settings/general": `{"category":"general","settings":[]}`,
+		"/api/v1/admin/teams":            `[]`,
+		"/api/v1/admin/sync-configs": `[{"id":"<sync_id>","name":"rule-one","provider":"github","credential_id":null,"sync_targets":[],"sync_options":{},` +
+			`"is_active":true,"parent_id":null,"children_count":null,"last_sync_at":null,"last_sync_success":null,"last_sync_error":null,` +
+			`"created_at":"<time>","updated_at":"<time>"}]`,
+	}
+	for _, path := range []string{"/api/v1/admin/settings/general", "/api/v1/admin/teams", "/api/v1/admin/sync-configs"} {
+		wantBody := legacy[path]
+		gotStatus, gotBody := serve(routed, path, eddsa(super))
+		t.Logf("%s platform admin: HS256 200 %.200s | user access token %d %.200s", path, wantBody, gotStatus, gotBody)
+		if gotStatus != http.StatusOK || named(gotBody) != wantBody {
+			t.Errorf("%s platform admin without membership: user access token %d %s, HS256 200 %s", path, gotStatus, gotBody, wantBody)
+		}
+		if status, body := serve(routed, path, eddsa(plain)); status != http.StatusForbidden || body != `{"detail": "X-Org-Id not permitted for this user"}` {
+			t.Errorf("%s user without the platform action or the membership: user access token %d %s, HS256 403 X-Org-Id not permitted", path, status, body)
+		}
+	}
+}

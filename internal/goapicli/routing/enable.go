@@ -72,7 +72,7 @@ func runEnable(argv []string) error {
 	if err := common.requirePostgres(); err != nil {
 		return err
 	}
-	credential, err := envelopeCredential()
+	credential, err := accessTokenCredential()
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func runEnable(argv []string) error {
 	// Neither flag defaults to a HARDCODED
 	// `http://localhost:8090/...` -- an operator who forgets ONE of the
 	// two must not silently send that half of the preflight -- and the
-	// effective-principal envelope -- to whatever happens to answer on
+	// platform admin's user access token -- to whatever happens to answer on
 	// localhost:8090, rather than a refusal. See resolveEndpointURL's
 	// doc comment (main.go) for the executed repro.
 	// Resolved HERE, after every other precondition, so the FIRST thing
@@ -165,12 +165,12 @@ func runEnable(argv []string) error {
 		return refuse("-expect-build %q does not match the running build %q -- the flag is a cross-check, never the source", expectBuild, running)
 	}
 
-	// The envelope's subject, read only AFTER /buildinfo answered 200 --
+	// The user access token's subject, read only AFTER /buildinfo answered 200 --
 	// which is the deployed verifier accepting this exact token. This
 	// process never verifies it itself (one validator per credential
 	// class), so the order is what makes naming the subject honest rather
-	// than an assertion of its own. See goapiproof.EnvelopeSubject.
-	principalID, err := credential.EnvelopeSubject(ctx)
+	// than an assertion of its own. See goapiproof.TokenSubject.
+	principalID, err := credential.TokenSubject(ctx)
 	if err != nil {
 		return refuse("%v", err)
 	}

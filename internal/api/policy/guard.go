@@ -151,17 +151,34 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		if g.pdp.shadow != nil || g.pdp.enforcer != nil {
 			bearer, _ = BearerToken(r.Header.Get("Authorization"))
 		}
+		// With the admin cell on, the handler's platform questions go to the decision point too (HoldsPlatform).
+		platform := g.pdp.enforcer.platformDecisionsFor(r, bearer, user)
+		if platform != nil {
+			r = r.WithContext(context.WithValue(r.Context(), platformDecisionsKey, platform))
+		}
 		// A route whose namespace is switched on is decided by the decision point, not by the legacy checks below.
-		switch verdict := g.enforceVerdict(r, user, bearer, level == Superuser && gt.kind == gatePlatform); verdict {
-		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused, enforceSessionRowUnavailable:
+		switch verdict := g.enforceVerdict(r, user, bearer, level == Superuser && gt.kind == gatePlatform, gt, platform); verdict {
+		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused, enforceSessionRowUnavailable, enforceDenyNoOrg:
 			writeEnforceRefusal(w, level, verdict)
 			return
 		case enforceAllow:
 			next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
 			return
 		}
+		// With the admin cell on, the action of an admin-or or platform wrap is the decision point's answer for a caller
+		// it can judge, and go-api's own set otherwise; every other check is main's.
+		holds := func(action string) (bool, error) {
+			if platform == nil {
+				return user.Holds(action), nil
+			}
+			return platform.holds(r.Context(), action)
+		}
+		refuse := func(err error) {
+			g.observeShadow(r, caller, bearer, false, gt)
+			WritePlatformDecisionRefusal(w, err)
+		}
 		if user.OrgID == "" && !user.Holds(gt.orglessAction()) && !OrglessMayReach(r.Method, r.URL.Path) {
-			g.observeShadow(r, caller, bearer, false)
+			g.observeShadow(r, caller, bearer, false, gt)
 			WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 			return
 		}
@@ -175,19 +192,36 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				acting.OrgID = org
 				user = &acting
 			}
-			if !user.IsAdmin() && !(gt.kind == gateAdminOr && user.Holds(gt.action)) {
-				g.observeShadow(r, caller, bearer, false)
+			admitted := user.IsAdmin()
+			if !admitted && gt.kind == gateAdminOr {
+				held, err := holds(gt.action)
+				if err != nil {
+					refuse(err)
+					return
+				}
+				admitted = held
+			}
+			if !admitted {
+				g.observeShadow(r, caller, bearer, false, gt)
 				WriteDetail(w, http.StatusForbidden, "Admin access required", nil)
 				return
 			}
 			if level == AdminOrg && user.OrgID == "" {
-				g.observeShadow(r, caller, bearer, false)
+				g.observeShadow(r, caller, bearer, false, gt)
 				WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 				return
 			}
 		case Superuser:
-			if gt.kind != gatePlatform || !user.Holds(gt.action) {
-				g.observeShadow(r, caller, bearer, false)
+			held := false
+			if gt.kind == gatePlatform {
+				var err error
+				if held, err = holds(gt.action); err != nil {
+					refuse(err)
+					return
+				}
+			}
+			if !held {
+				g.observeShadow(r, caller, bearer, false, gt)
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
 			}
@@ -201,13 +235,13 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				if session != nil {
 					g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
 						slog.String("path", r.Pattern), slog.String("action", gt.action))
-					g.observeShadowAs(r, caller, bearer, false, true)
+					g.observeShadowAs(r, caller, bearer, false, true, gt)
 					WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
 					return
 				}
 			}
 		}
-		g.observeShadow(r, caller, bearer, true)
+		g.observeShadow(r, caller, bearer, true, gt)
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
 	}))
 }
@@ -327,7 +361,7 @@ const stopImpersonationPattern = "POST /api/v1/admin/impersonate/stop"
 
 // RefuseImpersonatingCaller returns next behind the impersonation write
 // refusal (403) for a caller whose bearer, authenticated as the route's row
-// does (HS256 and user access token), belongs to an admin with an active
+// does (the user access token), belongs to an admin with an active
 // impersonation session. It is for a route the scope layers
 // skip, so it reads the session itself. It follows the live row, not the
 // caller's admin.impersonate. A bearer go-api cannot verify (auth-service's)
@@ -356,7 +390,7 @@ func (g *Guard) RefuseImpersonatingCaller(next http.Handler) http.Handler {
 			WriteAuthFailure(w, "", ErrUnavailable)
 		case session != nil:
 			g.logger.WarnContext(r.Context(), "api guard: route refused in an impersonation session",
-				slog.String("path", r.URL.Path), slog.String("admin_user_id", session.AdminUserID.String()))
+				slog.String("path", r.Pattern), slog.String("admin_user_id", session.AdminUserID.String()))
 			WriteDetail(w, http.StatusForbidden, msgImpersonationReadOnly, nil)
 		default:
 			next.ServeHTTP(w, r)

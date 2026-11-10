@@ -1,15 +1,11 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"log"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 // fakeEdgeUsers is the users-row source of an edge verifier under test.
@@ -52,86 +47,30 @@ func (f *fakeEdgeUsers) ActiveImpersonation(context.Context, uuid.UUID) (*policy
 	return nil, errors.New("ActiveImpersonation must not be read")
 }
 
-// authWithEdgeUsers runs authenticateRESTRequest with a valid HS256 edge token
-// for the fixture subject against a verifier reading users.
-func authWithEdgeUsers(t *testing.T, users policy.Store) (bool, *httptest.ResponseRecorder) {
-	t.Helper()
-	edgeVerifier, err := principal.NewEdgeVerifier(edgeTestSecret, "dev-health-ops", "dev-health-api", users)
-	if err != nil {
-		t.Fatalf("NewEdgeVerifier: %v", err)
-	}
-	envelopeVerifier, err := principal.NewVerifier(t.TempDir()+"/missing-jwks.json", "test-issuer", "test-audience")
-	if err != nil {
-		t.Fatalf("principal.NewVerifier: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
-	req.Header.Set("Authorization", "Bearer "+signTestEdgeToken(t, validTestEdgeClaims("22222222-2222-2222-2222-222222222222")))
-	rec := httptest.NewRecorder()
-	_, ok := authenticateRESTRequest(rec, req, envelopeVerifier, edgeVerifier, "test")
-	return ok, rec
-}
-
-// CHAOS-6290: the REST plane refuses the access token of a user the users row
-// says is inactive, missing or stale, and serves the active one.
-func TestAuthenticateRESTRequestEdgeUsersRow(t *testing.T) {
-	const refused = `{"detail":{"message":"Invalid or expired token"}}` + "\n"
-	cases := []struct {
-		name     string
-		users    *fakeEdgeUsers
-		wantOK   bool
-		wantCode int
-		wantBody string
-	}{
-		{"active is served", &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true}, true, http.StatusOK, ""},
-		{"inactive is refused", &fakeEdgeUsers{state: policy.UserState{IsActive: false}, found: true}, false, http.StatusUnauthorized, refused},
-		{"missing is refused", &fakeEdgeUsers{found: false}, false, http.StatusUnauthorized, refused},
-		{"stale token_version is refused", &fakeEdgeUsers{state: policy.UserState{IsActive: true, TokenVersion: 2}, found: true}, false, http.StatusUnauthorized, refused},
-		// Same answer as the Go api guard for the same store failure
-		// (policy.WriteAuthFailure: guard.go currentUser): 503 when the store
-		// is unavailable, 500 otherwise -- never a pass.
-		{"store unavailable answers 503", &fakeEdgeUsers{err: errors.Join(policy.ErrUnavailable, errors.New("down"))}, false, http.StatusServiceUnavailable, ""},
-		{"store error answers 500", &fakeEdgeUsers{err: errors.New("permission denied for table users")}, false, http.StatusInternalServerError, ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ok, rec := authWithEdgeUsers(t, tc.users)
-			if ok != tc.wantOK {
-				t.Fatalf("ok = %v, want %v; body=%s", ok, tc.wantOK, rec.Body.String())
-			}
-			if !tc.wantOK && rec.Code != tc.wantCode {
-				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.wantCode, rec.Body.String())
-			}
-			if tc.wantBody != "" && rec.Body.String() != tc.wantBody {
-				t.Fatalf("body = %q, want %q", rec.Body.String(), tc.wantBody)
-			}
-		})
-	}
-}
-
 func edgeSettings(kv map[string]string) getenvFunc {
 	return func(key string) string { return kv[key] }
 }
 
-// The edge secret without a users store is a build error, never a JWT-only
+// The issuer without a users store is a build error, never a JWT-only
 // verifier (CHAOS-6290 fail closed): there is no registry pool when the /query
 // route is not configured.
 func TestNewEdgeUserStoreFailsClosedWithoutPool(t *testing.T) {
-	store, err := newEdgeUserStore(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}), nil)
+	store, err := newEdgeUserStore(edgeSettings(map[string]string{accessTokenIssuerEnvVar: accessTestIssuer}), nil)
 	if err == nil {
 		t.Fatalf("newEdgeUserStore = (%v, nil), want an error when there is no registry pool", store)
 	}
-	if _, err := buildEdgeVerifierFromEnv(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}), nil); err == nil {
+	if _, err := buildEdgeVerifierFromEnv(edgeSettings(map[string]string{accessTokenIssuerEnvVar: accessTestIssuer}), nil); err == nil {
 		t.Fatal("buildEdgeVerifierFromEnv built a verifier with a nil users store")
 	}
 }
 
-func TestNewEdgeUserStoreOffWithoutEdgeSecret(t *testing.T) {
+func TestNewEdgeUserStoreOffWithoutTheIssuer(t *testing.T) {
 	store, err := newEdgeUserStore(edgeSettings(nil), nil)
 	if err != nil || store != nil {
-		t.Fatalf("newEdgeUserStore = (%v, %v), want (nil, nil) when the edge secret is unset", store, err)
+		t.Fatalf("newEdgeUserStore = (%v, %v), want (nil, nil) when AUTH_ACCESS_TOKEN_ISSUER is unset", store, err)
 	}
 	if v, err := buildEdgeVerifierFromEnv(edgeSettings(nil), nil); v != nil || err != nil {
-		t.Fatalf("buildEdgeVerifierFromEnv = (%v, %v), want (nil, nil) without the edge secret", v, err)
+		t.Fatalf("buildEdgeVerifierFromEnv = (%v, %v), want (nil, nil) without AUTH_ACCESS_TOKEN_ISSUER", v, err)
 	}
 }
 
@@ -144,7 +83,7 @@ func TestNewEdgeUserStoreReusesTheGivenPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := newEdgeUserStore(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}), pool)
+	store, err := newEdgeUserStore(edgeSettings(map[string]string{accessTokenIssuerEnvVar: accessTestIssuer}), pool)
 	if err != nil {
 		t.Fatalf("newEdgeUserStore: %v", err)
 	}
@@ -216,131 +155,6 @@ func TestEdgeUserStoreIsBuiltOnceAndPassedToEveryEdgeRoute(t *testing.T) {
 	}
 	if verifierCallsWithStore != verifierCalls {
 		t.Fatalf("%d of %d buildEdgeVerifierFromEnv calls pass the shared edgeUsers store", verifierCallsWithStore, verifierCalls)
-	}
-}
-
-// P3 of the r1 review: a users-store failure logs its cause, so a missing grant on `users` is
-// told apart from any other internal error.
-func TestAuthenticateRESTRequestLogsTheUsersLookupCause(t *testing.T) {
-	var logged bytes.Buffer
-	previous := log.Writer()
-	log.SetOutput(&logged)
-	defer log.SetOutput(previous)
-	ok, rec := authWithEdgeUsers(t, &fakeEdgeUsers{err: errors.New("permission denied for table users")})
-	if ok || rec.Code != http.StatusInternalServerError {
-		t.Fatalf("ok=%v status=%d, want a 500 refusal", ok, rec.Code)
-	}
-	if !strings.Contains(logged.String(), "permission denied for table users") {
-		t.Fatalf("the users lookup failure was logged without its cause:\n%s", logged.String())
-	}
-}
-
-func authWithEdgeUsersAndOrg(t *testing.T, users policy.Store, orgID string) (bool, *httptest.ResponseRecorder) {
-	t.Helper()
-	edgeVerifier, err := principal.NewEdgeVerifier(edgeTestSecret, "dev-health-ops", "dev-health-api", users)
-	if err != nil {
-		t.Fatalf("NewEdgeVerifier: %v", err)
-	}
-	envelopeVerifier, err := principal.NewVerifier(t.TempDir()+"/missing-jwks.json", "test-issuer", "test-audience")
-	if err != nil {
-		t.Fatalf("principal.NewVerifier: %v", err)
-	}
-	claims := validTestEdgeClaims(orgID)
-	if orgID == "" {
-		delete(claims, "org_id")
-	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
-	req.Header.Set("Authorization", "Bearer "+signTestEdgeToken(t, claims))
-	rec := httptest.NewRecorder()
-	_, ok := authenticateRESTRequest(rec, req, envelopeVerifier, edgeVerifier, "test")
-	return ok, rec
-}
-
-func TestAuthenticateRESTRequestOrglessEdgeToken(t *testing.T) {
-	active := &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true}
-	super := &fakeEdgeUsers{state: policy.UserState{IsActive: true, IsSuperuser: true}, found: true}
-
-	ok, rec := authWithEdgeUsersAndOrg(t, active, "")
-	if ok || rec.Code != http.StatusForbidden {
-		t.Fatalf("orgless non-superuser: ok=%v status=%d body=%s, want refused 403", ok, rec.Code, rec.Body.String())
-	}
-	if want := `{"detail":"Organization context required"}`; rec.Body.String() != want {
-		t.Fatalf("body = %q, want %q", rec.Body.String(), want)
-	}
-	if ok, rec := authWithEdgeUsersAndOrg(t, super, ""); !ok {
-		t.Fatalf("orgless superuser refused: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if ok, rec := authWithEdgeUsersAndOrg(t, active, "22222222-2222-2222-2222-222222222222"); !ok {
-		t.Fatalf("org'd token refused: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-// The token's org needs a live membership row: a removed member is the same
-// 401 as a bad token, a failed read is 503, and a superuser (admin.orgs) is
-// served in an org it is no member of.
-func TestAuthenticateRESTRequestEdgeTokenOrgNeedsLiveMembership(t *testing.T) {
-	const org = "22222222-2222-2222-2222-222222222222"
-	state := policy.UserState{IsActive: true}
-	removed := &fakeEdgeUsers{state: state, found: true, notMember: true}
-	ok, rec := authWithEdgeUsersAndOrg(t, removed, org)
-	if ok || rec.Code != http.StatusUnauthorized || strings.TrimSpace(rec.Body.String()) != `{"detail":{"message":"Invalid or expired token"}}` {
-		t.Fatalf("removed member: ok=%v status=%d body=%s, want 401 refusal", ok, rec.Code, rec.Body.String())
-	}
-	down := &fakeEdgeUsers{state: state, found: true, memberErr: errors.Join(policy.ErrUnavailable, errors.New("down"))}
-	if ok, rec := authWithEdgeUsersAndOrg(t, down, org); ok || rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("membership store down: ok=%v status=%d, want 503", ok, rec.Code)
-	}
-	super := &fakeEdgeUsers{state: policy.UserState{IsActive: true, IsSuperuser: true}, found: true, notMember: true}
-	if ok, rec := authWithEdgeUsersAndOrg(t, super, org); !ok {
-		t.Fatalf("superuser on a non-member org: status=%d body=%s, want served (admin.orgs)", rec.Code, rec.Body.String())
-	}
-}
-
-// A planted route behind authenticateRESTRequest: the handler never runs for
-// an orgless non-superuser, and runs for the others.
-func TestOrglessEdgeTokenNeverReachesAPlantedRoute(t *testing.T) {
-	ran := 0
-	for _, tc := range []struct {
-		name  string
-		users *fakeEdgeUsers
-		org   string
-		code  int
-		ran   int
-	}{
-		{"orgless member", &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true}, "", http.StatusForbidden, 0},
-		{"orgless superuser", &fakeEdgeUsers{state: policy.UserState{IsActive: true, IsSuperuser: true}, found: true}, "", http.StatusOK, 1},
-		{"member with org", &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true}, "22222222-2222-2222-2222-222222222222", http.StatusOK, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ran = 0
-			edgeVerifier, err := principal.NewEdgeVerifier(edgeTestSecret, "dev-health-ops", "dev-health-api", tc.users)
-			if err != nil {
-				t.Fatal(err)
-			}
-			envelopeVerifier, err := principal.NewVerifier(t.TempDir()+"/missing-jwks.json", "test-issuer", "test-audience")
-			if err != nil {
-				t.Fatal(err)
-			}
-			mux := http.NewServeMux()
-			mux.HandleFunc("/api/v1/planted", func(w http.ResponseWriter, r *http.Request) {
-				if _, ok := authenticateRESTRequest(w, r, envelopeVerifier, edgeVerifier, "test"); !ok {
-					return
-				}
-				ran++
-				w.WriteHeader(http.StatusOK)
-			})
-			claims := validTestEdgeClaims(tc.org)
-			if tc.org == "" {
-				delete(claims, "org_id")
-			}
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/planted", nil)
-			req.Header.Set("Authorization", "Bearer "+signTestEdgeToken(t, claims))
-			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, req)
-			if rec.Code != tc.code || ran != tc.ran {
-				t.Fatalf("status=%d ran=%d, want %d/%d", rec.Code, ran, tc.code, tc.ran)
-			}
-		})
 	}
 }
 

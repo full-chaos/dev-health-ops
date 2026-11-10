@@ -91,7 +91,8 @@ import (
 //
 // While auth-service owns sessions the role also holds QueryAPISessionRead (the
 // auth schema's USAGE and the sessions columns the session check reads); the
-// readiness check and the river grant leg add it under the same flag.
+// readiness check and the river grant leg add it under the same flag. Readiness
+// also accepts its Widened form, exactly, so the grant can widen after query-api rolls.
 //
 // Any future query-api Postgres access edits this function in the SAME PR
 // that adds it, the discipline domainPosture and apiPosture already follow.
@@ -153,6 +154,7 @@ func QueryAPIPosture() RolePosture {
 // a session reader role (authschema.SessionReaderReads; this package cannot
 // import authschema, whose tests import this package, so
 // TestQueryAPIAuthReadsEqualTheReaderColumnsInBothStates in rivermigrate pins it).
+// Readiness holds the role to this read or to Widened, exactly one of the two.
 type QueryAPISessionRead struct {
 	Schema  string
 	Table   string
@@ -170,6 +172,19 @@ type QueryAPIAuthTable struct {
 // Tables is the whole read: the sessions table, then Also.
 func (r QueryAPISessionRead) Tables() []QueryAPIAuthTable {
 	return append([]QueryAPIAuthTable{{Table: r.Table, Columns: r.Columns}}, r.Also...)
+}
+
+// Widened is the read the session rule needs (sessionrule.Revoked): the sessions
+// columns plus created_at and web_session_id, and the principal's password stamp
+// in users, then Also. It is the second set readiness accepts while the grant
+// widens; once both granters emit it, it replaces the read and this form goes.
+func (r QueryAPISessionRead) Widened() QueryAPISessionRead {
+	return QueryAPISessionRead{
+		Schema:  r.Schema,
+		Table:   r.Table,
+		Columns: append(append([]string(nil), r.Columns...), "created_at", "web_session_id"),
+		Also:    append([]QueryAPIAuthTable{{Table: "users", Columns: []string{"principal_id", "password_updated_at"}}}, r.Also...),
+	}
 }
 
 // QueryAPISessionReadFor is the read in the named auth schema: the sessions
@@ -215,7 +230,8 @@ func CheckQueryAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expecte
 
 // CheckQueryAPIAuthorizationWithSessions is CheckQueryAPIAuthorization with the
 // auth session read added to the manifest. A nil sessions is the manifest alone;
-// a non-nil one is required to be held exactly, and nothing else in its schema.
+// a non-nil one, or its Widened form, is required to be held exactly, and nothing
+// else in its schema.
 func CheckQueryAPIAuthorizationWithSessions(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, sessions *QueryAPISessionRead) error {
 	if sessions != nil && !validRuntimeIdentifier(sessions.Schema) {
 		return ErrUnavailable
@@ -288,9 +304,27 @@ func diffQueryAPIGrants(database string, posture RolePosture, grants []roleacl.G
 }
 
 // diffQueryAPIGrantsWithSessions is diffQueryAPIGrants with the auth session read
-// (USAGE on its schema, column SELECT on its sessions columns) added to the
-// allowed and required sets when sessions is non-nil.
+// added when sessions is non-nil: the grants must equal the manifest plus either
+// the read or its Widened form. A refusal names the difference against both.
 func diffQueryAPIGrantsWithSessions(database string, posture RolePosture, sessions *QueryAPISessionRead, grants []roleacl.Grant) string {
+	old := diffQueryAPIGrantsWithRead(database, posture, sessions, grants)
+	if old == "" || sessions == nil {
+		return old
+	}
+	widened := sessions.Widened()
+	next := diffQueryAPIGrantsWithRead(database, posture, &widened, grants)
+	switch next {
+	case "":
+		return ""
+	case old:
+		return old
+	}
+	return old + "; against the widened session read: " + next + "; expected the old session read or the widened session read"
+}
+
+// diffQueryAPIGrantsWithRead compares the grants with the manifest plus the one
+// session read (USAGE on its schema, column SELECT on its columns) when non-nil.
+func diffQueryAPIGrantsWithRead(database string, posture RolePosture, sessions *QueryAPISessionRead, grants []roleacl.Grant) string {
 	key := func(class, object, privilege string) string { return class + "\x00" + object + "\x00" + privilege }
 	allowed := map[string]struct{}{
 		key("database", database, "CONNECT"): {},

@@ -95,7 +95,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), oracleOrgA
 		body := `{"query": ` + jsonString(document) + `, "variables": ` + variables + `}`
 		request := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader([]byte(body)))
 		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Authorization", "Bearer "+envelopes(oracleOrgA))
+		goAdmin(oracleOrgA)(request)
 		recorder := httptest.NewRecorder()
 		goHandler(recorder, request)
 		answer, _ := io.ReadAll(recorder.Result().Body)

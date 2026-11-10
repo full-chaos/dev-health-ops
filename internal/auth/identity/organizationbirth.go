@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -232,27 +233,27 @@ func (s *Store) lockOrgless(ctx context.Context, tx audit.TxOps, principal uuid.
 	return nil
 }
 
-// insertOrganizationCreatedLog is go-api's audit_logs row of an onboarding.
-func insertOrganizationCreatedLog(ctx context.Context, tx audit.TxOps, b organizationBirth, req OnboardOrganizationRequest) error {
+// insertOrganizationCreatedLog is go-api's audit_logs row of an onboarding, through publicaudit (D6509) at the
+// transaction's time, the now() the row took before. changes keeps pyjson.Marshal's compact form.
+func insertOrganizationCreatedLog(ctx context.Context, tx publicaudit.Tx, b organizationBirth, req OnboardOrganizationRequest) error {
 	changes := pyjson.NewObject()
 	changes.Set("organization_name", b.Name)
 	encoded, err := pyjson.Marshal(changes)
 	if err != nil {
 		return err
 	}
-	metadata := []byte("{}")
-	if len(req.RequestMetadata) > 0 {
-		metadata = req.RequestMetadata
-	}
 	description := "Organization created during onboarding"
 	if req.Description != nil {
 		description = *req.Description
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO public.audit_logs
-	(id, org_id, user_id, action, resource_type, resource_id, description, changes, request_metadata, status, created_at)
-VALUES ($1, $2, $3, 'create', 'organization', $4, $5, $6::json, $7::json, 'success', now())`,
-		uuid.New(), b.ID, req.Principal, b.ID.String(), description, string(encoded), string(metadata))
-	return err
+	at, err := publicaudit.TxTime(ctx, tx)
+	if err != nil {
+		return err
+	}
+	principal := req.Principal
+	return publicaudit.InsertInAuditTx(ctx, tx, publicaudit.Row{OrgID: b.ID, UserID: &principal, Action: "create",
+		ResourceType: "organization", ResourceID: b.ID.String(), Description: &description, Changes: encoded,
+		RequestMetadata: req.RequestMetadata, CreatedAt: at})
 }
 
 // CreateOrganization creates an organization for a platform actor, with its

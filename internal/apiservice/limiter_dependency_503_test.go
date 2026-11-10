@@ -9,13 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/valkey-io/valkey-go"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/valkeyreply"
 )
 
@@ -68,19 +67,10 @@ func TestLimiterRoutesAnswerTheStoreFailureByItsKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, newProbeStore(), quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
-	token := probeHS256(t, probeKey, jwt.MapClaims{"sub": probeUser.String(), "org_id": probeOrg.String(), "role": "admin", "tv": 3, "email": "user@example.test"})
+	// The admin role and the email come from the probe store's membership and users rows.
+	tokens := edtokens.New(t)
+	auth := tokens.AuthenticatorOver(t, newProbeStore(), quietLogger())
+	token := tokens.MustMint(t, edtokens.Claims{UserID: probeUser, OrgID: probeOrg.String(), TokenVersion: 3})
 
 	for _, route := range limiterRoutes() {
 		for _, c := range []struct {
@@ -95,7 +85,7 @@ func TestLimiterRoutesAnswerTheStoreFailureByItsKind(t *testing.T) {
 			{"Valkey availability reply", fmt.Errorf("rate limit script: %w", valkeyreply.Error(t, "LOADING Valkey is loading the dataset in memory")), http.StatusServiceUnavailable, `{"detail":{"message":"Authentication service unavailable"}}`},
 		} {
 			t.Run(route.name+"/"+c.kind, func(t *testing.T) {
-				deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
+				deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 					Limits: failingLimitStore{failID: route.limitID, err: c.err}}
 				cfg := apiTestConfig()
 				cfg.CORSAllowedOrigins = []string{"https://app.example"}

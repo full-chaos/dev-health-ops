@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // loadPeopleDrilldownPRsValidationErrorGolden decodes a testdata JSON file
@@ -59,7 +60,7 @@ func TestNewPeopleDrilldownPRsHandlerPersonNotFound(t *testing.T) {
 	handler := newPeopleDrilldownPRsHandler(newPeopleDetailNotFoundReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/nobody/drilldown/prs", nil)
 	req.SetPathValue("person_id", "nobody")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -80,7 +81,7 @@ func TestNewPeopleDrilldownPRsHandlerDataUnavailable(t *testing.T) {
 	handler := newPeopleDrilldownPRsHandler(newPeopleDetailFailingReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/drilldown/prs", nil)
 	req.SetPathValue("person_id", "anyone")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -96,7 +97,7 @@ func TestNewPeopleDrilldownPRsHandlerRejectsComparativeParams(t *testing.T) {
 			handler := newPeopleDrilldownPRsHandler(newPeopleDetailFailingReader(t))
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/drilldown/prs?"+key+"=x", nil)
 			req.SetPathValue("person_id", "anyone")
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			serveRoute(t, handler, rec, req)
 			if rec.Code != http.StatusBadRequest {
@@ -125,7 +126,7 @@ func TestNewPeopleDrilldownPRsHandlerValidationErrorsMatchPython(t *testing.T) {
 			handler := newPeopleDrilldownPRsHandler(newPeopleDetailFailingReader(t))
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/drilldown/prs?"+tc.query, nil)
 			req.SetPathValue("person_id", "anyone")
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			serveRoute(t, handler, rec, req)
 
@@ -182,7 +183,7 @@ func TestNewPeopleDrilldownPRsHandlerSuccessIsAResponseModelBody(t *testing.T) {
 	handler := newPeopleDrilldownPRsHandler(reader)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/drilldown/prs", nil)
 	req.SetPathValue("person_id", "anyone")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {

@@ -21,7 +21,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -128,10 +127,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 	}
 
 	signer, _, _ := fileSigner(t)
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	issuer := newTestIssuer(t)
 	route := func(users Users) http.Handler {
 		routes, err := compatRoutes(CompatDeps{
 			Sessions: store, Users: users, Issuer: issuer, Projector: &fakeProjector{}, Logger: slog.New(slog.DiscardHandler),
@@ -139,7 +135,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 			Limits:      mustLimits(t, httpapi.NewMemoryCounters(nil)),
 			Validate: &ValidateConfig{Sessions: policy.PGStore{Pool: runtime, AuthSchema: schema.String()},
 				IssuerURL: goldenIssuer, Keys: signer},
-		}, validateRowsBoth)
+		}, validateRowsUser)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -153,24 +149,16 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 		server.ServeHTTP(response, request)
 		return response
 	}
-	hs256, err := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
 	legacy := func(principal uuid.UUID, sid *uuid.UUID, tv int64) string {
-		claims := edgetoken.AccessClaims{UserID: principal.String(), Email: "x@example.com", OrgID: org.String(), Role: "admin", TokenVersion: tv}
+		var wire *string
 		if sid != nil {
-			wire := session.WireSessionID(*sid)
-			claims.SessionID = &wire
+			text := session.WireSessionID(*sid)
+			wire = &text
 		}
-		compact, err := hs256.Access(claims, time.Now(), uuid.NewString())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return compact
+		return hs256AccessToken(t, principal.String(), org.String(), tv, wire)
 	}
 	userToken := func(principal, sid uuid.UUID) string {
-		eddsa, err := NewEdDSAIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience, signer, goldenIssuer)
+		eddsa, err := NewEdDSAIssuer(contracts.PlatformAPIAudience, signer, goldenIssuer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -186,11 +174,21 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 
 	alice := user("alice")
 	live := create(store, alice)
-	t.Run("c1 sid-less token of an active user", func(t *testing.T) {
-		expectAnswer(t, "c1", check(t, server, legacy(alice, nil, 0)), http.StatusOK, valid(alice, "x@example.com"))
+	// c1: under the EdDSA configuration the HS256 class is retired: an HS256
+	// token of an active user, sid-less or naming a live session, is refused
+	// alg_not_allowed before any store read (a dead store still answers 200).
+	t.Run("c1 HS256 token refused before any store read", func(t *testing.T) {
+		expectAnswer(t, "c1 sid-less", check(t, server, legacy(alice, nil, 0)), http.StatusOK, nullAnswer)
+		expectAnswer(t, "c1 live session", check(t, server, legacy(alice, &live, 0)), http.StatusOK, nullAnswer)
+		dead, err := pgxpool.New(ctx, "postgres://validate:none@127.0.0.1:1/none?connect_timeout=1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(dead.Close)
+		expectAnswer(t, "c1 dead store", check(t, route(PGUsers{Pool: dead, AuthSchema: schema}), legacy(alice, &live, 0)),
+			http.StatusOK, nullAnswer)
 	})
 	t.Run("c2 live session", func(t *testing.T) {
-		expectAnswer(t, "c2 HS256", check(t, server, legacy(alice, &live, 0)), http.StatusOK, valid(alice, "x@example.com"))
 		expectAnswer(t, "c2 user token", check(t, server, userToken(alice, live)), http.StatusOK, valid(alice, "alice@example.com"))
 	})
 	t.Run("c3 ended sessions and stale versions", func(t *testing.T) {
@@ -198,34 +196,29 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 		if ok, err := store.Revoke(ctx, revoked, session.Actor{}); err != nil || !ok {
 			t.Fatalf("revoke: %v %v", ok, err)
 		}
-		expectAnswer(t, "revoked", check(t, server, legacy(alice, &revoked, 0)), http.StatusOK, nullAnswer)
 		expectAnswer(t, "revoked, user token", check(t, server, userToken(alice, revoked)), http.StatusOK, nullAnswer)
-		expectAnswer(t, "stale token_version", check(t, server, legacy(alice, &live, 5)), http.StatusOK, nullAnswer)
-		expectAnswer(t, "stale token_version, sid-less", check(t, server, legacy(alice, nil, 5)), http.StatusOK, nullAnswer)
 
 		bob := user("bob")
 		bobs := create(store, bob)
 		exec(`UPDATE users SET is_active = false WHERE id = $1`, bob)
-		expectAnswer(t, "deactivated", check(t, server, legacy(bob, &bobs, 0)), http.StatusOK, nullAnswer)
-		expectAnswer(t, "deactivated, sid-less", check(t, server, legacy(bob, nil, 0)), http.StatusOK, nullAnswer)
+		expectAnswer(t, "deactivated", check(t, server, userToken(bob, bobs)), http.StatusOK, nullAnswer)
 
 		carol := user("carol")
 		carols := create(store, carol)
 		exec(`UPDATE users SET token_version = 1 WHERE id = $1`, carol)
-		expectAnswer(t, "stale pin", check(t, server, legacy(carol, &carols, 1)), http.StatusOK, nullAnswer)
+		expectAnswer(t, "stale pin", check(t, server, userToken(carol, carols)), http.StatusOK, nullAnswer)
 
 		dave := user("dave")
 		daves := create(store, dave)
 		exec(`INSERT INTO auth.users (principal_id, email, email_lower, password_updated_at) VALUES ($1, $2, $2, clock_timestamp())
 			ON CONFLICT (principal_id) DO UPDATE SET password_updated_at = EXCLUDED.password_updated_at`, dave.String(), "dave@example.com")
-		expectAnswer(t, "older than a password change", check(t, server, legacy(dave, &daves, 0)), http.StatusOK, nullAnswer)
+		expectAnswer(t, "older than a password change", check(t, server, userToken(dave, daves)), http.StatusOK, nullAnswer)
 
 		erin := user("erin")
 		const life = 2 * time.Second
 		erins := create(newStore(life), erin)
-		expectAnswer(t, "before its lifetime ends", check(t, server, legacy(erin, &erins, 0)), http.StatusOK, valid(erin, "x@example.com"))
+		expectAnswer(t, "before its lifetime ends", check(t, server, userToken(erin, erins)), http.StatusOK, valid(erin, "erin@example.com"))
 		time.Sleep(life + 500*time.Millisecond)
-		expectAnswer(t, "expired", check(t, server, legacy(erin, &erins, 0)), http.StatusOK, nullAnswer)
 		expectAnswer(t, "expired, user token", check(t, server, userToken(erin, erins)), http.StatusOK, nullAnswer)
 	})
 	t.Run("c6 store fault", func(t *testing.T) {
@@ -234,7 +227,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 			t.Fatal(err)
 		}
 		t.Cleanup(dead.Close)
-		expectAnswer(t, "c6", check(t, route(PGUsers{Pool: dead, AuthSchema: schema}), legacy(alice, &live, 0)),
+		expectAnswer(t, "c6", check(t, route(PGUsers{Pool: dead, AuthSchema: schema}), userToken(alice, live)),
 			http.StatusServiceUnavailable, `{"detail":{"message":"`+sessionissue.UnavailableText+`"}}`)
 	})
 }

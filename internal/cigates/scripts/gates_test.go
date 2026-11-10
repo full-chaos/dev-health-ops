@@ -127,6 +127,44 @@ func TestAuthGovulncheckExceptions(t *testing.T) {
 	}
 }
 
+func TestAuthGovulncheckPerFinding(t *testing.T) {
+	const hdr = `{"config":{}}` + "\n"
+	finding := func(mod, ver, fixed string) string {
+		f := ""
+		if fixed != "" {
+			f = `"fixed_version":"` + fixed + `",`
+		}
+		return `{"finding":{"osv":"GO-9",` + f + `"trace":[{"module":"` + mod + `","version":"` + ver + `","function":"F"}]}}` + "\n"
+	}
+	row := []cigates.VulnException{{OSV: "GO-9", Module: "m/saml", Version: "v0.5.1", Ticket: "CHAOS-1", Reason: "dark"}}
+	exact := finding("m/saml", "v0.5.1", "")
+	const warn = "WARN excepted GO-9 m/saml@v0.5.1 (CHAOS-1)"
+	const both = "auth govulncheck: 1 reachable\nauth govulncheck: 1 excepted\n"
+	cases := []struct {
+		name, in, stdout string
+		stderr           []string
+	}{
+		{"wrong module then exact match", hdr + finding("m/other", "v0.5.1", "") + exact, both, []string{warn, "reachable GO-9 m/other@v0.5.1"}},
+		{"exact match then wrong module", hdr + exact + finding("m/other", "v0.5.1", ""), both, []string{warn, "reachable GO-9 m/other@v0.5.1"}},
+		{"wrong version then exact match", hdr + finding("m/saml", "v0.5.2", "") + exact, both, []string{warn, "reachable GO-9 m/saml@v0.5.2"}},
+		{"exact match then wrong version", hdr + exact + finding("m/saml", "v0.5.2", ""), both, []string{warn, "reachable GO-9 m/saml@v0.5.2"}},
+		{"exact no fix then exact with fix", hdr + exact + finding("m/saml", "v0.5.1", "v0.5.2"), both, []string{warn, "the exception (CHAOS-1) ends now"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			rc := cigates.AuthGovulncheck(strings.NewReader(c.in), row, &out, &errb)
+			ok := rc == 1 && out.String() == c.stdout
+			for _, s := range c.stderr {
+				ok = ok && strings.Contains(errb.String(), s)
+			}
+			if !ok {
+				t.Fatalf("rc=%d out=%q err=%q", rc, out.String(), errb.String())
+			}
+		})
+	}
+}
+
 func TestReadVulnExceptions(t *testing.T) {
 	good := "# c\n\nGO-9\tm/saml\tv0.5.1\tCHAOS-1\tdark\n"
 	rows, err := cigates.ReadVulnExceptions(strings.NewReader(good))
@@ -232,5 +270,41 @@ func TestAffectedIntegration(t *testing.T) {
 	var out, errb bytes.Buffer
 	if rc := affected.PlanVerdict([]string{"--event", "pull_request", "--changed", write("e.txt", "a/x.go\n"), "--golist", write("e.json", "{}"), "--keys", k, "--root", root}, &out, &errb); rc != 1 {
 		t.Fatalf("empty go list must fail, rc=%d", rc)
+	}
+}
+
+// Presence of fixed_version is its key, not its value: a present value ("", "?", null, a number, a version) is never read as
+// absent, so an exception row never covers a record that carries the field.
+func TestAuthGovulncheckFixedVersionPresence(t *testing.T) {
+	const hdr = `{"config":{}}` + "\n"
+	record := func(fixedField string) string {
+		return `{"finding":{"osv":"GO-9",` + fixedField + `"trace":[{"module":"m/saml","version":"v0.5.1","function":"F"}]}}` + "\n"
+	}
+	row := []cigates.VulnException{{OSV: "GO-9", Module: "m/saml", Version: "v0.5.1", Ticket: "CHAOS-1", Reason: "dark"}}
+	absent := record("")
+	cases := []struct {
+		name, in string
+		rc       int
+		stdout   string
+		stderr   string
+	}{
+		{"absent stays excepted", hdr + absent, 0, "auth govulncheck: 0 reachable\nauth govulncheck: 1 excepted\n", "WARN excepted GO-9 m/saml@v0.5.1 (CHAOS-1)"},
+		{"question mark is a present value", hdr + record(`"fixed_version":"?",`), 1, "auth govulncheck: 1 reachable\n", "fixed in ?: the exception (CHAOS-1) ends now"},
+		{"empty string is a present value", hdr + record(`"fixed_version":"",`), 1, "auth govulncheck: 1 reachable\n", `fixed in "": the exception (CHAOS-1) ends now`},
+		{"null is a present value", hdr + record(`"fixed_version":null,`), 1, "auth govulncheck: 1 reachable\n", "the exception (CHAOS-1) ends now"},
+		{"a version is a present value", hdr + record(`"fixed_version":"v0.5.2",`), 1, "auth govulncheck: 1 reachable\n", "fixed in v0.5.2: the exception (CHAOS-1) ends now"},
+		{"absent then question mark", hdr + absent + record(`"fixed_version":"?",`), 1, "auth govulncheck: 1 reachable\nauth govulncheck: 1 excepted\n", "fixed in ?: the exception (CHAOS-1) ends now"},
+		{"question mark then absent", hdr + record(`"fixed_version":"?",`) + absent, 1, "auth govulncheck: 1 reachable\nauth govulncheck: 1 excepted\n", "fixed in ?: the exception (CHAOS-1) ends now"},
+		{"absent then empty string", hdr + absent + record(`"fixed_version":"",`), 1, "auth govulncheck: 1 reachable\nauth govulncheck: 1 excepted\n", `fixed in "": the exception (CHAOS-1) ends now`},
+		{"empty string then absent", hdr + record(`"fixed_version":"",`) + absent, 1, "auth govulncheck: 1 reachable\nauth govulncheck: 1 excepted\n", `fixed in "": the exception (CHAOS-1) ends now`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			rc := cigates.AuthGovulncheck(strings.NewReader(c.in), row, &out, &errb)
+			if rc != c.rc || out.String() != c.stdout || !strings.Contains(errb.String(), c.stderr) {
+				t.Fatalf("rc=%d out=%q err=%q", rc, out.String(), errb.String())
+			}
+		})
 	}
 }

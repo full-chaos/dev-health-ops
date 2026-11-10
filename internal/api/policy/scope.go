@@ -318,26 +318,6 @@ func (s *Scope) refusesLegacyCaller(r *http.Request) bool {
 	return method != r.Method || !liveRowExempt(profile)
 }
 
-// pyTruthy is bool() of a decoded JSON value.
-func pyTruthy(value any) bool {
-	switch typed := value.(type) {
-	case nil:
-		return false
-	case bool:
-		return typed
-	case float64:
-		return typed != 0
-	case string:
-		return typed != ""
-	case []any:
-		return len(typed) > 0
-	case map[string]any:
-		return len(typed) > 0
-	default:
-		return true
-	}
-}
-
 // orgDeniedBody is OrgIdMiddleware._deny's body: json.dumps with its default
 // separators, so ": " with a space, unlike every JSONResponse body.
 var orgDeniedBody = []byte(`{"detail": "X-Org-Id not permitted for this user"}`)

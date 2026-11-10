@@ -83,6 +83,9 @@ type workItemScopeReadStats struct {
 	ItemsInPartition      int
 	ItemsOutsidePartition int
 	DuplicateItems        int
+	// ItemsWonOutsideScopes is the number of items of the read's scopes whose
+	// org winner is a row of another scope: the item counts there, not here.
+	ItemsWonOutsideScopes int
 	FilterValues          int
 	Unfiltered            bool
 }
@@ -91,11 +94,24 @@ type workItemScopeRead struct {
 	// Scopes are the work scopes the read covers: the ones the partition's
 	// repositories have an item in for the day. The stale-key rule of the
 	// families is bounded by them.
-	Scopes       map[workItemScopeKey]struct{}
+	Scopes map[workItemScopeKey]struct{}
+	// Items are the org set: each item once in the organization, at its org
+	// winner (countWorkItemOncePerOrg). Attributions are theirs, by item id.
 	Items        []workItemMetricsRow
-	Transitions  []workItemStateTransition
 	Attributions map[string]workItemPrimaryAttribution
-	Stats        workItemScopeReadStats
+	// ScopeItems are the scope set: each item once per work scope
+	// (countWorkItemOncePerScope). ScopeAttributions are theirs, by
+	// workitemmetrics.AttributionKey(scope, id): an item that is a row of two
+	// scopes has two.
+	ScopeItems        []workItemMetricsRow
+	ScopeAttributions map[string]workItemPrimaryAttribution
+	Transitions       []workItemStateTransition
+	Stats             workItemScopeReadStats
+}
+
+// empty says that neither set has an item: the read computes nothing.
+func (read workItemScopeRead) empty() bool {
+	return len(read.Items) == 0 && len(read.ScopeItems) == 0
 }
 
 // staleKeyScope is the read's work scopes as the scope of the stale-key rule:
@@ -108,10 +124,20 @@ func (read workItemScopeRead) staleKeyScope() staleKeyScope {
 	return newStaleKeyScope(tuples...)
 }
 
-// stateItems is the column subset the work_item_state compute reads.
+// stateItems is the column subset the work_item_state compute reads, of the
+// org set.
 func (read workItemScopeRead) stateItems() []workItemStateWorkItem {
-	items := make([]workItemStateWorkItem, 0, len(read.Items))
-	for _, item := range read.Items {
+	return stateItemsOf(read.Items)
+}
+
+// scopeStateItems is stateItems of the scope set.
+func (read workItemScopeRead) scopeStateItems() []workItemStateWorkItem {
+	return stateItemsOf(read.ScopeItems)
+}
+
+func stateItemsOf(rows []workItemMetricsRow) []workItemStateWorkItem {
+	items := make([]workItemStateWorkItem, 0, len(rows))
+	for _, item := range rows {
 		items = append(items, item.workItemStateWorkItem)
 	}
 	return items
@@ -208,6 +234,137 @@ func countWorkItemOncePerProviderAndID(rows []workItemScopedRow) (kept []workIte
 		kept = append(kept, rows[index])
 	}
 	return kept, duplicates
+}
+
+// countWorkItemOncePerScope is the scope view's rule (CHAOS-10797): each item
+// counts once in each work scope it is a row of
+// (workitemmetrics.OncePerProviderScopeAndID). rows are the rows of the read's
+// scopes; a row of another scope does not compete, so a run of listed
+// repositories counts in a scope what a run of the whole organization counts
+// there. A kept row's attribution is keyed by its scope (attributionScope).
+func countWorkItemOncePerScope(rows []workItemScopedRow) (kept []workItemScopedRow, duplicates int) {
+	versions := make([]workitemmetrics.ItemVersion, len(rows))
+	for index, row := range rows {
+		versions[index] = workitemmetrics.ItemVersion{
+			Provider: row.Provider, WorkItemID: row.WorkItemID, RepoID: row.RepoID.String(), LastSynced: row.LastSynced,
+			Scope: row.workScopeID(),
+		}
+	}
+	indexes, duplicates := workitemmetrics.OncePerProviderScopeAndID(versions)
+	kept = make([]workItemScopedRow, 0, len(indexes))
+	for _, index := range indexes {
+		row := rows[index]
+		row.attributionScope = row.workScopeID()
+		kept = append(kept, row)
+	}
+	return kept, duplicates
+}
+
+// countWorkItemOncePerOrg is the org view's rule (CHAOS-10796): each item
+// counts once in the organization, at its org winner. inScopes are the rows of
+// the read's scopes; others are stored rows of the day that can be rows of
+// other scopes (the org winner read, or an unfiltered read). The rule
+// (countWorkItemOncePerProviderAndID) runs over inScopes and the rows of others
+// that are copies of an item of inScopes in another scope; the result keeps
+// the winners of the read's scopes. An item whose winner is a row of another
+// scope is not kept: the partition of that scope counts it. So the result does
+// not depend on which partition reads it, and a run of listed repositories
+// counts what a run of the whole organization counts.
+//
+// The rule is not applied before the union: that would keep the newest row
+// of the read's scopes even when a newer row is in another scope.
+func countWorkItemOncePerOrg(
+	inScopes, others []workItemScopedRow, scopes map[workItemScopeKey]struct{},
+) (kept []workItemScopedRow, duplicates, wonOutside int) {
+	type identity struct{ provider, workItemID string }
+	items := make(map[identity]struct{}, len(inScopes))
+	for _, row := range inScopes {
+		items[identity{row.Provider, row.WorkItemID}] = struct{}{}
+	}
+	candidates := append(make([]workItemScopedRow, 0, len(inScopes)), inScopes...)
+	for _, row := range others {
+		if _, ofScopes := scopes[workItemScopeKey{provider: row.Provider, scope: row.workScopeID()}]; ofScopes {
+			continue // a row of the read's scopes is in inScopes already
+		}
+		if _, copyOfItem := items[identity{row.Provider, row.WorkItemID}]; copyOfItem {
+			candidates = append(candidates, row)
+		}
+	}
+	winners, duplicates := countWorkItemOncePerProviderAndID(candidates)
+	kept = keepWorkItemsOfScopes(winners, scopes)
+	return kept, duplicates, len(winners) - len(kept)
+}
+
+// workItemIDsOf is the sorted set of the rows' item ids: the list of the org
+// winner read.
+func workItemIDsOf(rows []workItemScopedRow) []string {
+	seen := make(map[string]struct{}, len(rows))
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if _, duplicate := seen[row.WorkItemID]; duplicate {
+			continue
+		}
+		seen[row.WorkItemID] = struct{}{}
+		ids = append(ids, row.WorkItemID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// loadWorkItemOrgWinnerRows is the org winner read (F7 of CHAOS-8863): the
+// stored rows of the given item ids for the day, in every repository of the
+// organization, with the columns the org rule and the scope rule read
+// (repo_id, last_synced, provider, id and the four scope columns) and no
+// metrics column. Its day predicate is the predicate of loadWorkItemScopeItems
+// (workitemmetrics.PassesDayPredicate): a version that does not pass the day's
+// predicate does not compete. The id list is in the statement text, so the
+// read is done once per chunk of the list (package querybound) and the rows
+// are unioned; reads is the number of statements.
+func loadWorkItemOrgWinnerRows(
+	ctx context.Context, conn repositoryRows, organizationID string, ids []string, start, end time.Time,
+) (rows []workItemScopedRow, reads int, err error) {
+	for _, chunk := range querybound.ChunkStringsByRenderedBytes(ids, maxWorkItemScopeFilterBytes) {
+		reads++
+		if rows, err = loadWorkItemOrgWinnerChunk(ctx, conn, organizationID, chunk, start, end, rows); err != nil {
+			return nil, reads, err
+		}
+	}
+	return rows, reads, nil
+}
+
+// workItemOrgWinnerReadSQL is the statement of one chunk of the org winner
+// read. Its arguments are the organization, the ids, the day's end and start.
+const workItemOrgWinnerReadSQL = `
+SELECT repo_id, last_synced,
+       work_item_id, provider, project_key, project_id, native_team_key, project_name
+FROM work_items FINAL
+WHERE org_id = ? AND work_item_id IN ?
+  AND created_at < ?
+  AND (status != 'done' OR completed_at >= ?)`
+
+func loadWorkItemOrgWinnerChunk(
+	ctx context.Context, conn repositoryRows, organizationID string, ids []string, start, end time.Time,
+	into []workItemScopedRow,
+) ([]workItemScopedRow, error) {
+	rows, err := conn.Query(ctx, workItemOrgWinnerReadSQL, organizationID, ids, end.UTC(), start.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("load work item org winner rows: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row workItemScopedRow
+		if err := rows.Scan(
+			&row.RepoID, &row.LastSynced,
+			&row.WorkItemID, &row.Provider, &row.ProjectKey, &row.ProjectID, &row.NativeTeamKey, &row.ProjectName,
+		); err != nil {
+			return nil, fmt.Errorf("scan work item org winner row: %w", err)
+		}
+		into = append(into, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate work item org winner rows: %w", err)
+	}
+	return into, nil
 }
 
 // loadWorkItemPartitionScopes reads the work scopes that the given
@@ -573,7 +730,9 @@ func loadWorkItemScopeRead(
 	if err != nil {
 		return workItemScopeRead{}, err
 	}
-	read := workItemScopeRead{Scopes: scopes, Attributions: map[string]workItemPrimaryAttribution{}}
+	read := workItemScopeRead{
+		Scopes: scopes, Attributions: map[string]workItemPrimaryAttribution{}, ScopeAttributions: map[string]workItemPrimaryAttribution{},
+	}
 	read.Stats.Scopes = len(scopes)
 	if len(scopes) == 0 {
 		return read, nil
@@ -597,9 +756,29 @@ func loadWorkItemScopeRead(
 	if err != nil {
 		return workItemScopeRead{}, err
 	}
-	kept, duplicates := countWorkItemOncePerProviderAndID(keepWorkItemsOfScopes(stored, scopes))
+	inScopes := keepWorkItemsOfScopes(stored, scopes)
+	// The org winner (CHAOS-10796): the rule runs over every stored row of
+	// the items, in every work scope, and the read keeps the winners of its
+	// own scopes. A filtered read of some scopes has not seen the rows of
+	// other scopes, so it reads them (the org winner read). An unfiltered read
+	// holds the organization's whole day, and the scopes of a run of the
+	// whole organization are every scope of the day: either has every row.
+	var outside []workItemScopedRow
+	orgWinnerReads := 0
+	if filtered && !scope.everyRepository {
+		outside, orgWinnerReads, err = loadWorkItemOrgWinnerRows(ctx, conn, run.OrganizationID, workItemIDsOf(inScopes), scope.start, scope.end)
+		if err != nil {
+			return workItemScopeRead{}, err
+		}
+	} else {
+		outside = stored
+	}
+	kept, duplicates, wonOutside := countWorkItemOncePerOrg(inScopes, outside, scopes)
 	read.Stats.DuplicateItems = duplicates
-	if withTransitions && len(kept) > 0 {
+	read.Stats.ItemsWonOutsideScopes = wonOutside
+	scopeKept, _ := countWorkItemOncePerScope(inScopes)
+	anyItem := len(kept) > 0 || len(scopeKept) > 0
+	if withTransitions && anyItem {
 		read.Transitions, err = loadWorkItemScopeTransitions(ctx, conn, run.OrganizationID, scope.end, values, emptyScope, filtered)
 		if err != nil {
 			return workItemScopeRead{}, err
@@ -607,7 +786,7 @@ func loadWorkItemScopeRead(
 	}
 	var attributions map[workItemAttributionAddress]workItemPrimaryAttribution
 	var teamSets map[workItemAttributionAddress][]string
-	if len(kept) > 0 {
+	if anyItem {
 		attributions, err = loadWorkItemScopeAttributions(ctx, conn, run.OrganizationID, values, emptyScope, filtered)
 		if err != nil {
 			return workItemScopeRead{}, err
@@ -623,6 +802,15 @@ func loadWorkItemScopeRead(
 	for _, repoID := range scope.repoIDs {
 		inPartition[repoID] = struct{}{}
 	}
+	// The attribution of a kept row is the one of its own stored row.
+	attributionOf := func(row workItemScopedRow) (workItemPrimaryAttribution, bool) {
+		address := workItemAttributionAddress{row.RepoID, row.WorkItemID}
+		attribution, found := attributions[address]
+		if coOwners := coOwnerTeams(teamSets[address], attribution.TeamID); len(coOwners) > 0 {
+			attribution.CoOwnerTeamIDs, found = coOwners, true
+		}
+		return attribution, found
+	}
 	read.Items = make([]workItemMetricsRow, 0, len(kept))
 	for _, row := range kept {
 		if _, listed := inPartition[row.RepoID]; listed {
@@ -631,13 +819,15 @@ func loadWorkItemScopeRead(
 			read.Stats.ItemsOutsidePartition++
 		}
 		read.Items = append(read.Items, row.workItemMetricsRow)
-		address := workItemAttributionAddress{row.RepoID, row.WorkItemID}
-		attribution, found := attributions[address]
-		if coOwners := coOwnerTeams(teamSets[address], attribution.TeamID); len(coOwners) > 0 {
-			attribution.CoOwnerTeamIDs, found = coOwners, true
-		}
-		if found {
+		if attribution, found := attributionOf(row); found {
 			read.Attributions[row.WorkItemID] = attribution
+		}
+	}
+	read.ScopeItems = make([]workItemMetricsRow, 0, len(scopeKept))
+	for _, row := range scopeKept {
+		read.ScopeItems = append(read.ScopeItems, row.workItemMetricsRow)
+		if attribution, found := attributionOf(row); found {
+			read.ScopeAttributions[workitemmetrics.AttributionKey(row.attributionScope, row.WorkItemID)] = attribution
 		}
 	}
 	slog.InfoContext(ctx, WorkItemScopeReadLogMessage,
@@ -649,6 +839,9 @@ func loadWorkItemScopeRead(
 		"items_in_partition", read.Stats.ItemsInPartition,
 		"items_outside_partition", read.Stats.ItemsOutsidePartition,
 		"duplicate_items", read.Stats.DuplicateItems,
+		"items_won_outside_scopes", read.Stats.ItemsWonOutsideScopes,
+		"scope_items", len(read.ScopeItems),
+		"org_winner_reads", orgWinnerReads,
 		"filter_values", read.Stats.FilterValues,
 		"unfiltered", read.Stats.Unfiltered,
 	)

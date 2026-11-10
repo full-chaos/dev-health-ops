@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 type sessionlessAnswer struct {
@@ -31,20 +31,9 @@ type sessionlessAnswer struct {
 // legacy caller (the admin's own bearer beside a live go-api session row),
 // and names each answer.
 func TestSessionlessRoutesAnswerTheLegacyImpersonationCaller(t *testing.T) {
-	key := strings.Repeat("fixture-key-", 3)
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	store := &legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.AuthenticatorOver(t, store, quietLogger())
 	rows, err := goAPIScopeRows()
 	if err != nil {
 		t.Fatal(err)
@@ -68,24 +57,20 @@ func TestSessionlessRoutesAnswerTheLegacyImpersonationCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
+	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 		AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 	server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	access, err := signer.Access(edgetoken.AccessClaims{UserID: store.admin.String(), Email: "admin@example.com", OrgID: uuid.NewString(),
-		Role: "member", IsSuperuser: true, TokenVersion: 1}, time.Now().UTC(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	access := tokens.MustMint(t, edtokens.Claims{UserID: store.admin, OrgID: uuid.NewString(), TokenVersion: 1})
 
 	serve := func(method, pattern, bearer string, extra map[string]string) sessionlessAnswer {
 		store.mu.Lock()
 		store.sessionReads = 0
 		store.mu.Unlock()
 		before := len(stub.requests())
-		path := tokenOrgRouteParameter.ReplaceAllStringFunc(pattern, func(string) string { return uuid.NewString() })
+		path := routeParam.ReplaceAllStringFunc(pattern, func(string) string { return uuid.NewString() })
 		request := httptest.NewRequest(method, path, strings.NewReader("{}"))
 		if bearer != "" {
 			request.Header.Set("Authorization", "Bearer "+bearer)
@@ -108,7 +93,7 @@ func TestSessionlessRoutesAnswerTheLegacyImpersonationCaller(t *testing.T) {
 	if got := serve(http.MethodGet, "/api/v1/admin/impersonate/status", access, nil); got.status != http.StatusOK || !got.stamped || got.sessionRead != 1 {
 		t.Fatalf("control status: %+v, want 200 stamped after one session read", got)
 	}
-	if got := serve(http.MethodPost, "/api/v1/admin/impersonate/start", access, nil); got.status != http.StatusForbidden || got.stamped || got.sessionRead != 1 {
+	if got := serve(http.MethodPost, "/api/v1/admin/impersonate", access, nil); got.status != http.StatusForbidden || got.stamped || got.sessionRead != 1 {
 		t.Fatalf("control start: %+v, want the 403 refusal after one session read", got)
 	}
 

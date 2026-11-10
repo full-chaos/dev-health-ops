@@ -55,8 +55,7 @@ func newPGEnv(t *testing.T, ctx context.Context) *pgEnv {
 		t.Fatalf("admin pool: %v", err)
 	}
 	t.Cleanup(admin.Close)
-	// go-api's tables: a session pins public.users.token_version, and the
-	// legacy exchange reads and revokes public.refresh_tokens.
+	// go-api's tables: a session pins public.users.token_version.
 	pgschema.Apply(ctx, t, admin)
 	role, err := containers.RoleName("local_login_runtime", instance)
 	if err != nil {

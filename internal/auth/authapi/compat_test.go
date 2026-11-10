@@ -125,7 +125,10 @@ func keyOrder(t *testing.T, body string) []string {
 			}
 		case string:
 			if expectKey {
-				keys = append(keys, strings.Repeat(".", depth-1)+v)
+				// session_access_token is the member the EdDSA answer adds to go-api's recorded wire.
+				if v != "session_access_token" || depth != 1 {
+					keys = append(keys, strings.Repeat(".", depth-1)+v)
+				}
 				expectKey = false
 				continue
 			}
@@ -290,14 +293,12 @@ type compatFixture struct {
 	appendMu   sync.Mutex
 	appendErr  error
 	social     SocialExchange
-	creds      *fakeServiceCredentials
-	// serviceCreds, when set, replaces creds as the issue route's credential checker.
-	serviceCreds ServiceCredentials
-	orgB         uuid.UUID
-	orgD         uuid.UUID
-	counters     httpapi.CounterStore
-	// workload, usersWrap and meter, when set, feed the issue route's workload
-	// path, a counting Users and a readable meter.
+	orgB       uuid.UUID
+	orgD       uuid.UUID
+	counters   httpapi.CounterStore
+	// workload is the session issue routes' workload path (testIssueWorkload
+	// by default; nil leaves them unmounted); usersWrap and meter, when set,
+	// feed a counting Users and a readable meter.
 	workload  *SessionIssueWorkload
 	usersWrap Users
 	meter     metric.Meter
@@ -310,8 +311,8 @@ const (
 
 func newCompatFixture(t *testing.T) *compatFixture {
 	t.Helper()
-	f := &compatFixture{fixture: newFixture(t), attempts: &fakeAttempts{}, orgB: uuid.New(), orgD: uuid.New(),
-		counters: httpapi.NewMemoryCounters(nil), creds: &fakeServiceCredentials{id: uuid.NewString()}}
+	f := &compatFixture{fixture: newUncheckedFixture(t), attempts: &fakeAttempts{}, orgB: uuid.New(), orgD: uuid.New(),
+		counters: httpapi.NewMemoryCounters(nil), workload: testIssueWorkload()}
 	hash := "hash:" + compatPassword
 	f.loginUsers = &fakeLoginUsers{byEmail: map[string]*local.User{
 		compatEmail: {ID: f.principal, IsActive: true, IsVerified: true, PasswordHash: &hash},
@@ -330,13 +331,6 @@ func newCompatFixture(t *testing.T) *compatFixture {
 }
 
 func (f *compatFixture) buildCompat() {
-	var creds ServiceCredentials
-	if f.creds != nil {
-		creds = f.creds
-	}
-	if f.serviceCreds != nil {
-		creds = f.serviceCreds
-	}
 	var users Users = f.users
 	if f.usersWrap != nil {
 		users = f.usersWrap
@@ -357,7 +351,6 @@ func (f *compatFixture) buildCompat() {
 			f.appended = append(f.appended, event)
 			return f.appendErr
 		},
-		ServiceCredentials: creds,
 		Login: &LoginConfig{
 			Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey),
 			Compare: func(hash, password string) bool { return hash == "hash:"+password },
@@ -499,7 +492,7 @@ func TestCompatRefreshAnswersGoAPIsBodyWithTheRotatedCredential(t *testing.T) {
 	if !reflect.DeepEqual(user, want) {
 		t.Fatalf("user %v, want %v", user, want)
 	}
-	bearer, _, err := f.issuer.Verify(body["access_token"].(string))
+	bearer, _, err := eddsaBearer(t, body["access_token"].(string))
 	if err != nil || bearer.SessionID != f.record.ID || bearer.PrincipalID != f.principal {
 		t.Fatalf("access token: %+v %v", bearer, err)
 	}
@@ -808,7 +801,7 @@ func TestCompatLoginStartsAnAuditedSessionAndAnswersGoAPIsLoginResponse(t *testi
 	if user["org_id"] != f.orgB.String() || user["role"] != "member" || user["username"] != "ada" {
 		t.Fatalf("user %v", user)
 	}
-	bearer, _, err := f.issuer.Verify(body["access_token"].(string))
+	bearer, _, err := eddsaBearer(t, body["access_token"].(string))
 	if err != nil || bearer.SessionID != created.issued.Session.ID {
 		t.Fatalf("access token %+v %v", bearer, err)
 	}

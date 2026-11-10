@@ -22,6 +22,7 @@ package routing
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -43,20 +44,23 @@ import (
 const (
 	verbTestBuild = "b18e56fa79cfe20ce0f75df148144b832d92be36"
 	// verbTestOperation is a catalog operation: every routing verb refuses it, and status lists it.
-	verbTestOperation = "featureFlagTimeseries"
-	// verbTestBearer is a syntactically valid effective-principal envelope
-	// -- three base64url segments carrying verbTestPrincipalID as `sub` --
-	// so CHAOS-5505's audit row can be written for a verb this suite
-	// calls. It is NOT signed and would be rejected by a real verifier;
-	// these tests never call one (startQueryAPI's fake /buildinfo below
-	// accepts any non-empty Authorization header), and EnvelopeSubject
-	// itself never verifies the envelope, only decodes it -- see its own
-	// doc comment (internal/goapiproof/routing_audit.go) for why that is
-	// safe here but would not be outside a verb that already called the
-	// real /buildinfo first.
-	verbTestBearer      = "eyJhbGciOiJFZERTQSIsImtpZCI6ImdvLWFwaS1lbnZlbG9wZS10ZXN0In0.eyJzdWIiOiJiMGExYzJkMy0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEifQ.c2lnbmF0dXJl" // gitleaks:allow -- fabricated fixture, unsigned, never accepted by any real verifier
+	verbTestOperation   = "featureFlagTimeseries"
 	verbTestPrincipalID = "b0a1c2d3-0000-4000-8000-000000000001"
 )
+
+// verbTestTokenFile is a 0600 file holding a user-access-token-shaped value (typ at+jwt) carrying verbTestPrincipalID
+// as `sub`, so an audit row can be written for a verb this suite calls. It is NOT signed and would be refused by a
+// real verifier; these tests never call one (startQueryAPI's fake /buildinfo accepts any non-empty Authorization
+// header), and TokenSubject never verifies the token, only decodes it. Built at run time, so no token literal is in
+// the tree.
+func verbTestTokenFile(t *testing.T) string {
+	t.Helper()
+	return tokenFile(t, strings.Join([]string{
+		base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"EdDSA","typ":"at+jwt"}`)),
+		base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"` + verbTestPrincipalID + `"}`)),
+		base64.RawURLEncoding.EncodeToString([]byte("signature")),
+	}, "."))
+}
 
 func startVerbPostgres(t *testing.T) (*pgxpool.Pool, string) {
 	t.Helper()
@@ -219,7 +223,7 @@ func queryRow(t *testing.T, dsn, sql string, into ...any) error {
 // a decision recorded against a digest the running binary does not have went unreported.
 func TestEnableRefusesWhenThePlanesDisagreeOnTheSchemaDigest(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
+	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 
 	disagreeing := startQueryAPI(t, "sha256:not-the-digest-this-binary-has", map[string]string{verbTestOperation: "d"})
 	_, _, err := captureVerb(t, enableArgs(disagreeing, dsn)...)
@@ -239,7 +243,7 @@ func TestEnableRefusesWhenThePlanesDisagreeOnTheSchemaDigest(t *testing.T) {
 // process that agrees.
 func TestEnableDryRunNeverWritesADecision(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
+	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 	seedClassRoot(t, pool)
 	server := queryAPIFor(t)
 
@@ -258,7 +262,7 @@ func TestEnableDryRunNeverWritesADecision(t *testing.T) {
 // A catalog operation has no routing state: every verb refuses it with exit 3 and writes nothing.
 func TestEveryVerbRefusesACatalogOperationAndWritesNothing(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
+	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 	server := queryAPIFor(t)
 
 	for name, argv := range map[string][]string{
@@ -283,7 +287,7 @@ func TestEveryVerbRefusesACatalogOperationAndWritesNothing(t *testing.T) {
 // -operations is required: there is no "all-registered" for a verb that acts on class roots only.
 func TestVerbsRequireAnExplicitClassOperationSet(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
+	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 	server := queryAPIFor(t)
 	for name, argv := range map[string][]string{
 		"enable":  enableArgs(server, dsn, "-operations", ""),
@@ -434,7 +438,7 @@ func TestStatusListsTheClassDecisionsAndNamesTheMissingOnesDark(t *testing.T) {
 
 func TestEnableExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
+	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 	server := queryAPIFor(t)
 
 	_, _, err := captureVerb(t, enableArgs(server, dsn, "-expect-build", "0000000000000000000000000000000000000000")...)
@@ -446,7 +450,7 @@ func TestEnableExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
 
 func TestEnableRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
+	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 	empty := startQueryAPI(t, localSchemaDigest(), map[string]string{})
 	for name, argv := range map[string][]string{"enable": enableArgs(empty, dsn)} {
 		t.Run(name, func(t *testing.T) {
@@ -461,7 +465,7 @@ func TestEnableRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
 // Both endpoints come from the environment alone, and one explicit flag mixed with the environment is refused.
 func TestEnableDerivesBothEndpointsFromTheEnvVarAloneNoFlags(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
+	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 	seedClassRoot(t, pool)
 	server := queryAPIFor(t)
 	t.Setenv("GO_API_QUERY_API_URL", server.URL)
@@ -484,7 +488,7 @@ func TestEnableDerivesBothEndpointsFromTheEnvVarAloneNoFlags(t *testing.T) {
 // A buildinfo refusal never prints the URL path (it can carry a credential-shaped segment).
 func TestEnableBuildInfoRefusalNeverPrintsTheURLPath(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
+	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/registry", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, w, map[string]any{"schema_digest": localSchemaDigest(), "operations": []map[string]string{{"operation": verbTestOperation, "document_digest": "d"}}})
@@ -528,7 +532,7 @@ func TestDisableRefusesAnExplicitlyEmptyCandidateBuildGuard(t *testing.T) {
 // the write's own lock.
 func TestEnableAndDisableEmitStructuredLinesPerDecision(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
+	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 	op := seedClassRoot(t, pool)
 	server := queryAPIFor(t)
 
@@ -558,7 +562,7 @@ func TestEnableAndDisableEmitStructuredLinesPerDecision(t *testing.T) {
 // seed creates one shadow decision, and a second run changes nothing.
 func TestSeedCreatesOneShadowDecisionAndASecondRunChangesNothing(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
-	t.Setenv(bearerEnvVar, verbTestBearer)
+	t.Setenv(accessTokenFileEnvVar, verbTestTokenFile(t))
 	server := queryAPIFor(t)
 	argv := []string{"seed", "-registry-url", server.URL + "/registry", "-buildinfo-url", server.URL + "/buildinfo", "-postgres-uri", dsn,
 		"-operations", verbTestClassOperation, "-recorded-by", "lane-routing-verbs", "-review-evidence", "seed fixture"}

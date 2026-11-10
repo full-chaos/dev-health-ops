@@ -156,6 +156,9 @@ func (s Store) OrgConfig(ctx context.Context, orgID string) (OrgConfig, bool, er
 		if raw[key] != "" {
 			byo[key] = raw[key]
 		}
+		if mark := unboundMarkPrefix + key; raw[mark] != "" {
+			byo[mark] = raw[mark]
+		}
 	}
 	settings, err := s.applyGate(ctx, orgID, byo)
 	if err != nil {
@@ -199,8 +202,8 @@ func storedKeyInBaseURL(raw orgSettings, baseURL string) bool {
 	if baseURL == "" {
 		return false
 	}
-	for _, key := range append([]string{keyAPIKey}, otherPurposeAPIKeys()...) {
-		if BaseURLCarriesKey(baseURL, raw[key]) {
+	for _, key := range keysForLeakChecks(raw) {
+		if BaseURLCarriesKey(baseURL, key) {
 			return true
 		}
 	}

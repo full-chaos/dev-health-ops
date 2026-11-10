@@ -18,10 +18,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
-const delegatedTestToken = "svc_authsess_" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-
 type delegatedServer struct {
 	mu     sync.Mutex
+	token  string
 	paths  []string
 	bodies []string
 	auth   []string
@@ -51,7 +50,8 @@ func newDelegatedClient(t *testing.T, s *delegatedServer) *Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := New(base, delegatedTestToken, 2*time.Second)
+	s.token = testToken(t)
+	client, err := newTestClient(t, base, s.token, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestStartDelegatedSendsTheBodyAndCredentialAndReadsTheSession(t *testing.T)
 			t.Errorf("body[%s] = %q, want %q", k, body[k], v)
 		}
 	}
-	if s.auth[0] != "Bearer "+delegatedTestToken || s.agents[0] != "admin-ui" || s.fwd[0] != "198.51.100.23" {
+	if s.auth[0] != "Bearer "+s.token || s.agents[0] != "admin-ui" || s.fwd[0] != "198.51.100.23" {
 		t.Errorf("headers = %q %q %q", s.auth[0], s.agents[0], s.fwd[0])
 	}
 }
@@ -181,7 +181,7 @@ func TestDelegatedCallsNeverFollowARedirect(t *testing.T) {
 	}))
 	defer server.Close()
 	base, _ := url.Parse(server.URL)
-	client, err := New(base, delegatedTestToken, time.Second)
+	client, err := newTestClient(t, base, testToken(t), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

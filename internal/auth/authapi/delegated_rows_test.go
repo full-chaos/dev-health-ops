@@ -92,7 +92,7 @@ func TestDelegatedBearerRowsEqualTheGoAllowlist(t *testing.T) {
 }
 
 func TestDelegatedRowsListExactlyTheCallerClasses(t *testing.T) {
-	want := []string{"internal_svc_authsess_token", "workload_token"}
+	want := []string{"workload_token"}
 	found := 0
 	for _, row := range embeddedRows(t) {
 		if row.Route != PatternDelegatedSession && row.Route != PatternDelegatedSessionEnd {
@@ -114,7 +114,7 @@ func TestDelegatedRoutesTakeTheCallerClassesOnly(t *testing.T) {
 	w.sessions.delegated, w.sessions.records[record.ID] = record, record
 	endBody := `{"session_id":"` + record.ID.String() + `"}`
 	workload, _ := w.mint("workload+jwt", nil)
-	for name, header := range map[string]map[string]string{"session issuer": issuerBearer, "go-api workload": workload} {
+	for name, header := range map[string]map[string]string{"go-api workload": workload} {
 		if r := w.do(http.MethodPost, PatternDelegatedSession, delegatedBody(w.compatFixture, w.record.ID), header); r.Code != http.StatusCreated {
 			t.Errorf("%s start: %d %s", name, r.Code, r.Body)
 		}
@@ -127,6 +127,7 @@ func TestDelegatedRoutesTakeTheCallerClassesOnly(t *testing.T) {
 	for name, header := range map[string]map[string]string{
 		"no bearer":                 nil,
 		"another token prefix":      {"Authorization": "Bearer svc_other_" + strings.Repeat("A", 43)},
+		"retired session issuer":    retiredSessionIssuerBearer,
 		"another workload audience": wrongAudience,
 	} {
 		expectError(t, w.do(http.MethodPost, PatternDelegatedSession, delegatedBody(w.compatFixture, w.record.ID), header), http.StatusUnauthorized, "invalid_credentials")

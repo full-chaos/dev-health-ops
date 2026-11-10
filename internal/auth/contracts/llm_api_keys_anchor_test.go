@@ -48,9 +48,9 @@ func TestLLMAPIKeyClassAnchorsAndHoldersResolve(t *testing.T) {
 		switch typed := node.(type) {
 		case map[string]any:
 			if path, ok := typed["path"].(string); ok {
-				if line, ok := typed["line"].(float64); ok {
+				if _, ok := typed["line"].(float64); ok {
 					anchors++
-					checkAnchor(t, root, path, int(line), typed["line_end"])
+					checkAnchor(t, root, path)
 				}
 			}
 			for _, child := range typed {
@@ -80,19 +80,11 @@ func TestLLMAPIKeyClassAnchorsAndHoldersResolve(t *testing.T) {
 	}
 }
 
-func checkAnchor(t *testing.T, root, path string, line int, lineEnd any) {
+// checkAnchor needs the anchor's file to exist; its text, symbol and range are the pin's
+// (TestCredentialClassAnchorsPointAtTheirPinnedLineText), and TestEnvelopeAndLLMKeyAnchorsAllHaveAPin proves each has one.
+func checkAnchor(t *testing.T, root, path string) {
 	t.Helper()
-	source, err := os.ReadFile(filepath.Join(root, path))
-	if err != nil {
+	if _, err := os.Stat(filepath.Join(root, path)); err != nil {
 		t.Errorf("anchor %s does not resolve: %v", path, err)
-		return
-	}
-	lines := strings.Count(string(source), "\n")
-	end := line
-	if value, ok := lineEnd.(float64); ok {
-		end = int(value)
-	}
-	if line < 1 || end < line || end > lines {
-		t.Errorf("anchor %s:%d-%d is outside the file (%d lines)", path, line, end, lines)
 	}
 }

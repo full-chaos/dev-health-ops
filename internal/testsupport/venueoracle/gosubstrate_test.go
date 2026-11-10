@@ -13,7 +13,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
@@ -212,29 +211,6 @@ func TestGoMintedTokensKeyTheCallerThePythonTokenKeyed(t *testing.T) {
 	token := custom.mintGo(t, map[string]map[string]any{"t": {"user_id": u1, "email": "e"}})["t"]
 	if identity := bearerIdentity("Bearer " + token); !strings.Contains(identity, `"aud":"aud-y"`) || !strings.Contains(identity, `"iss":"iss-x"`) {
 		t.Errorf("the recorded caller does not carry JWT_ISSUER/JWT_AUDIENCE: %s", identity)
-	}
-}
-
-// A venue built with LegacyHS256Tokens mints the recording's class: an HS256 token under the venue's key whose
-// identity is the recorded caller's, and no user access token.
-func TestLegacyVenueMintsTheRecordedHS256Token(t *testing.T) {
-	const u1 = "00000000-0000-4000-8000-000000000001"
-	v := frozenVenue()
-	v.legacyTokenKey = strings.Repeat("legacy-venue-key-", 3)
-	token := v.mintGo(t, map[string]map[string]any{"t": {"user_id": u1, "email": "a@b.c", "token_version": 2}})["t"]
-	want := `Bearer header:{"alg":"HS256","typ":"JWT"} claims:{"aud":"dev-health-api","email":"a@b.c","is_superuser":false,"iss":"dev-health-ops","org_id":"","role":"member","sub":"` + u1 + `","tv":2,"type":"access"}`
-	if identity := bearerIdentity("Bearer " + token); identity != want {
-		t.Errorf("identity %s, want %s", identity, want)
-	}
-	verifier, err := edgetoken.New(v.legacyTokenKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := verifier.Verify(token); err != nil {
-		t.Errorf("the legacy token does not verify under the venue key: %v", err)
-	}
-	if v.TokenIssuer != nil {
-		t.Error("a legacy venue built a user access token issuer")
 	}
 }
 

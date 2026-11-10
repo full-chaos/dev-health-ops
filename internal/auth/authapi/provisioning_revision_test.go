@@ -10,7 +10,6 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 )
 
 const stateRoute = "/internal/v1/organizations/state"
@@ -211,8 +210,7 @@ func TestOrgStateRefusesABadServiceCredential(t *testing.T) {
 	t.Parallel()
 	f := newProvFixtureWith(t, docWithRow(t, stateRoute))
 	expectRefusal(t, f.post(stateRoute, f.stateBody(), map[string]string{}), http.StatusUnauthorized, reasonInvalidCredentials)
-	f.creds.refusal = servicecred.RefusedRevoked
-	expectRefusal(t, f.post(stateRoute, f.stateBody(), nil), http.StatusUnauthorized, reasonInvalidCredentials)
+	expectRefusal(t, f.post(stateRoute, f.stateBody(), map[string]string{"Authorization": "Bearer " + provisioningToken}), http.StatusUnauthorized, reasonInvalidCredentials)
 	if f.reactivate.gets != 0 {
 		t.Fatal("a refused credential reached the store")
 	}
@@ -241,15 +239,15 @@ func TestOrgStateNeedsItsProfileRowToStart(t *testing.T) {
 	}
 }
 
-func TestOrgStateNeedsAnAuthServicePostRowListingExactlyTheAdmittedClasses(t *testing.T) {
+func TestOrgStateNeedsAnAuthServicePostRowListingExactlyTheWorkloadToken(t *testing.T) {
 	t.Parallel()
 	bare := docWithoutRow(t, nil, stateRoute)
 	for name, edit := range map[string]func(row map[string]any){
 		"another service": func(row map[string]any) { row["service"] = "dev-health-ops-api" },
 		"another method":  func(row map[string]any) { row["method"] = "GET" },
-		"another class":   func(row map[string]any) { row["accepted_credential_classes"] = []any{"workload_token"} },
+		"another class":   func(row map[string]any) { row["accepted_credential_classes"] = []any{serviceSessionIssuerClass} },
 		"an extra class": func(row map[string]any) {
-			row["accepted_credential_classes"] = []any{serviceSessionIssuerClass, workloadTokenClass, "extra_class"}
+			row["accepted_credential_classes"] = []any{workloadTokenClass, serviceSessionIssuerClass}
 		},
 	} {
 		var document map[string]any

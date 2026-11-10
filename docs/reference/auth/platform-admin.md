@@ -48,7 +48,7 @@ The closed list is `contracts/auth/v1/vocabulary/roles.v1.json`.
 
 The chart renders the switch from `authService.platformRolesOwned`, and it needs users owned. The flip and its rollback
 are in [Auth platform roles flip and rollback](../../operate/runbooks/auth-platform-roles-flip-and-rollback.md). While the switch is off, `dho auth platform-role-grant` and `platform-role-revoke`
-refuse. The public user record is the authority for who the user is (D6651). The platform role assignment is
+refuse. The public user record is the authority for who the user is. The platform role assignment is
 auth-native data.
 
 ## Impersonation
@@ -59,6 +59,9 @@ A caller who holds the platform action `admin.impersonate` can start an imperson
 - The start is refused for yourself, for a user who is not active, for a superuser, and for a user with no organization membership.
 - While the session is live, an organization-scoped admin route acts in the target's organization. Without a session it
   acts in the organization claim of the caller's token. An `X-Org-Id` header does not move a superuser.
+- The session belongs to the admin user, not to the token or sign-in that started it. While it is live, the rules on
+  this list apply to each request of that admin, from any token, browser tab or client, until the admin stops the
+  session or it expires.
 - `EffectiveOrgID` (`internal/api/policy/scope.go`) decides this on every request, after a live check of the session. Nothing carries the session between requests.
 - The session honors only a caller who holds `admin.impersonate` at that request. A session changes the organization of the route. It adds no role.
 

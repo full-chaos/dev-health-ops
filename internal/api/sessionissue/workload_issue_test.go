@@ -66,29 +66,6 @@ func newWorkloadClient(t *testing.T, s *issueServer) *workloadtoken.Client {
 	return client
 }
 
-// With the session credential every issue carries exactly the AUTH_SESSION_ISSUE_TOKEN value as its one Bearer.
-func TestSessionIssueSendsExactlyTheSessionCredential(t *testing.T) {
-	s := newIssueServer(t)
-	client, err := sessionissue.New(s.URL, goldenToken, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runIssueCases(t, s, client)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.requests) != len(issueCases()) {
-		t.Fatalf("%d requests, want %d", len(s.requests), len(issueCases()))
-	}
-	for i, r := range s.requests {
-		if len(r.Auth) != 1 || r.Auth[0] != "Bearer "+goldenToken {
-			t.Errorf("request %d: Authorization is not exactly the session credential", i)
-		}
-	}
-	if s.exchanges != 0 {
-		t.Errorf("%d exchanges, want 0", s.exchanges)
-	}
-}
-
 // With the workload credential every issue carries exactly one Bearer, the workload token, and no byte of a session
 // credential; one exchange serves every issue of the token's lifetime.
 func TestWorkloadIssueCarriesOnlyTheWorkloadToken(t *testing.T) {
@@ -117,33 +94,6 @@ func TestWorkloadIssueCarriesOnlyTheWorkloadToken(t *testing.T) {
 	}
 	if s.exchanges != 1 {
 		t.Errorf("%d exchanges for %d issues, want 1", s.exchanges, len(s.requests))
-	}
-}
-
-// The body, path and every header but the bearer are what the session credential sends.
-func TestWorkloadIssueRequestsDifferFromTheGoldenOnlyInTheBearer(t *testing.T) {
-	s := newIssueServer(t)
-	s.exchange = issuedAnswer(mintWorkloadToken(t))
-	client, err := sessionissue.NewWorkload(s.URL, newWorkloadClient(t, s), time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want []goldenRequest
-	raw, err := os.ReadFile(goldenPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(raw, &want); err != nil {
-		t.Fatal(err)
-	}
-	got := runIssueCases(t, s, client)
-	for i := range got {
-		got[i].Headers["Authorization"] = want[i].Headers["Authorization"]
-	}
-	gotJSON, _ := json.Marshal(got)
-	wantJSON, _ := json.Marshal(want)
-	if string(gotJSON) != string(wantJSON) {
-		t.Fatalf("workload issue requests differ from the golden beyond the bearer\n got %s\nwant %s", gotJSON, wantJSON)
 	}
 }
 

@@ -6,9 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
-	"os"
 	"testing"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
@@ -22,7 +20,7 @@ import (
 // allowlist lookup that always denies, or an org check that is skipped each fail here.
 func TestProofWriteRunsARegisteredMutationForAnAllowlistedOrgOnly(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
-	pub, priv, err := ed25519.GenerateKey(nil)
+	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +28,7 @@ func TestProofWriteRunsARegisteredMutationForAnAllowlistedOrgOnly(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, proofWrite, _, err := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	_, _, proofWrite, _, err := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +39,7 @@ func TestProofWriteRunsARegisteredMutationForAnAllowlistedOrgOnly(t *testing.T) 
 	}
 
 	create := func(org string) (int, string) {
-		token := signDataHealthEnvelope(t, priv, principal.Claims{OrgID: org, Role: "admin"}, time.Now().Add(time.Hour))
+		token := iaHeaders(org, "admin", false, false)
 		rec := postGraphQLWithVariables(t, proofWrite, registeredCreateSavedReportDocument, token, map[string]any{
 			"orgId": org, "input": map[string]any{"name": "proof-write " + org},
 		})

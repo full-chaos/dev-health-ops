@@ -29,7 +29,7 @@ covers no credential: a service account holds none yet, so it cannot sign in or 
 ## Routes
 
 The routes are internal to auth-service. They sit behind `AUTH_MEMBERSHIP_ROUTES` with the other provisioning routes,
-take the session issuer service credential (`svc_authsess_` with `memberships:write`) or the go-api workload token,
+take the go-api workload token only (the `svc_authsess_` credential is refused),
 admitted as the other provisioning routes admit it, and have no go-api caller yet.
 
 | Route | Body | Answer |
@@ -49,7 +49,7 @@ name a superuser as an owner, nor move an account off a superuser owner. An acco
 
 A key is `fcsak_` and 32 random bytes. The registry keeps its SHA-256 digest, never the value. An account holds one live key, or two during a rotation's overlap.
 
-A key authenticates nowhere until CHAOS-12362 lands: no route accepts one yet.
+A key authenticates nowhere yet: no route accepts one.
 
 Issue and rotate need auth-service to own users (`AUTH_USERS_OWNED`). Revoke works either way.
 

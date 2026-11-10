@@ -178,10 +178,6 @@ func FuzzParseAccessToken(f *testing.F) {
 
 func sameOrg(a, b *string) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
 
-// workloadTokenFuzzInputCap bounds the fuzz input: ParseWorkloadToken has no size bound and no verifier
-// enforces one yet (CHAOS-11474).
-const workloadTokenFuzzInputCap = 64 << 10
-
 // workloadTokenFuzzCanary is assembled at run time so no source line holds a secret-shaped literal.
 var workloadTokenFuzzCanary = strings.Join([]string{"CANARY", "5c1e9d"}, "-")
 
@@ -248,13 +244,17 @@ func FuzzParseWorkloadToken(f *testing.F) {
 		if err != nil {
 			f.Fatal(err)
 		}
+		canaried := []byte(strings.Replace(string(raw), `"sub"`, `"`+workloadTokenFuzzCanary+`":"`+workloadTokenFuzzCanary+`","sub"`, 1))
+		if len(canaried) > WorkloadTokenMaxBytes {
+			f.Fatalf("seed %s is %d bytes, over WorkloadTokenMaxBytes: the fuzz guard would skip it", name, len(canaried))
+		}
 		f.Add(raw)
-		f.Add([]byte(strings.Replace(string(raw), `"sub"`, `"`+workloadTokenFuzzCanary+`":"`+workloadTokenFuzzCanary+`","sub"`, 1)))
+		f.Add(canaried)
 	}
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`[`))
 	f.Fuzz(func(t *testing.T, raw []byte) {
-		if len(raw) > workloadTokenFuzzInputCap {
+		if len(raw) > WorkloadTokenMaxBytes {
 			return
 		}
 		token, err := ParseWorkloadToken(root, raw)

@@ -12,7 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
-var errAuthorizeAuditNoSink = errors.New("authapi: a high-risk decision has no audit sink")
+var errAuthorizeAuditNoSink = errors.New("authapi: a high-risk or delegated decision has no audit sink")
 
 // highRiskAction reports whether the policy catalog classes the action high
 // risk. An action outside the catalog has no class.
@@ -29,17 +29,20 @@ func knownOrganization(orgID string, snap authorization.Snapshot) bool {
 	return err == nil && id.String() == orgID && snap.OrganizationStatus(orgID) != authorization.StatusUnknown
 }
 
-// auditHighRisk writes, in one transaction, one audit row for each decided
-// item whose action is high risk, allow or deny. A call with no such item
+// auditDecisions writes, in one transaction, one audit row for each decided
+// item whose action is high risk and one for each delegated item, allow or
+// deny. A delegated high-risk item writes both rows. A call with no such item
 // does not touch the sink. An error means the decisions must not be served.
-func (h authorizeHandlers) auditHighRisk(ctx context.Context, items []authorizeItem, docs []decisionDocument) error {
+func (h authorizeHandlers) auditDecisions(ctx context.Context, items []authorizeItem, docs []decisionDocument) error {
 	var events []audit.AuditEvent
 	caller, _ := ctx.Value(authorizeCallerKey{}).(AuthorizeCaller)
 	for i, item := range items {
-		if !highRiskAction(item.question.Action) {
-			continue
+		if highRiskAction(item.question.Action) {
+			events = append(events, authorizeAuditEvent(ctx, caller, item, docs[i]))
 		}
-		events = append(events, authorizeAuditEvent(ctx, caller, item, docs[i]))
+		if item.delegated {
+			events = append(events, delegatedAuditEvent(ctx, caller, item, docs[i]))
+		}
 	}
 	if len(events) == 0 {
 		return nil
@@ -51,8 +54,9 @@ func (h authorizeHandlers) auditHighRisk(ctx context.Context, items []authorizeI
 }
 
 // authorizeAuditEvent is the row of one high-risk decision: ids and closed
-// values only. The actor is the user the decision is about; the calling
-// policy-enforcement point is in the caller attributes.
+// values only. A decision whose internal Reason the wire does not name also
+// records it as decision_internal_reason. The actor is the user the decision
+// is about; the calling policy-enforcement point is in the caller attributes.
 func authorizeAuditEvent(ctx context.Context, caller AuthorizeCaller, item authorizeItem, doc decisionDocument) audit.AuditEvent {
 	q := item.question
 	actor := item.principal.ID.String()
@@ -69,6 +73,9 @@ func authorizeAuditEvent(ctx context.Context, caller AuthorizeCaller, item autho
 			"resource_type": q.ResourceType, "policy_revision": revision,
 		},
 	}
+	if _, internal := internalOnlyReasons[item.decision.Reason]; internal {
+		event.Attributes["decision_internal_reason"] = string(item.decision.Reason)
+	}
 	if item.orgKnown {
 		org := q.OrganizationID
 		event.OrganizationID = &org
@@ -80,5 +87,24 @@ func authorizeAuditEvent(ctx context.Context, caller AuthorizeCaller, item autho
 		principal := caller.Principal
 		audit.Caller{Workload: &principal, JTI: caller.TokenID}.Annotate(event.Attributes)
 	}
+	return event
+}
+
+// delegatedAuditEvent is the row of one delegated decision: the high-risk
+// row's ids, with the real actor as actor, the target user as subject and the
+// delegated session as target_kind/target_id. A row that names no actor has no
+// actor column.
+func delegatedAuditEvent(ctx context.Context, caller AuthorizeCaller, item authorizeItem, doc decisionDocument) audit.AuditEvent {
+	event := authorizeAuditEvent(ctx, caller, item, doc)
+	event.EventType = audit.EventAuthorizeDelegatedDecided
+	event.ActorPrincipalID = nil
+	if item.actor != uuid.Nil {
+		actor := item.actor.String()
+		event.ActorPrincipalID = &actor
+	}
+	target := item.principal.ID.String()
+	event.SubjectPrincipalID = &target
+	event.Attributes["target_kind"] = "session"
+	event.Attributes["target_id"] = item.session.String()
 	return event
 }

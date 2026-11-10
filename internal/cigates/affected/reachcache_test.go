@@ -11,7 +11,7 @@ import (
 )
 
 // CHAOS-11421: `plan-reads --reach --reach-cache DIR` reuses the stored reach rows only for a tree whose every input
-// hashes to the same key, and a reused result is still compared with reach.tsv. These tests run the built cigate on a
+// hashes to the same key, and a reused result is still compared with reach.d. These tests run the built cigate on a
 // fixture module (the planted faults of reach_test.go's style).
 
 func reachEnv(extra ...string) []string {
@@ -85,7 +85,7 @@ func TestReachCacheKeyCoversEveryInput(t *testing.T) {
 		{name: "go.sum", apply: func() { appendTo(t, p("go.sum"), "x\n") }},
 		{name: "edges.tsv", apply: func() { appendTo(t, p(tablesDir+"edges.tsv"), "# x\n") }},
 		{name: "dynreads.tsv", apply: func() { appendTo(t, p(tablesDir+"dynreads.tsv"), "# x\n") }},
-		{name: "reach.tsv", apply: func() { appendTo(t, p(tablesDir+"reach.tsv"), "# x\n") }},
+		{name: "a reach.d file", apply: func() { appendTo(t, p(tablesDir+"reach.d/b.tsv"), "# x\n") }},
 		{name: "reads.tsv", apply: func() { appendTo(t, p(tablesDir+"reads.tsv"), "# x\n") }},
 		{name: "a go:embed file", apply: func() { appendTo(t, p("b/assets/x.txt"), "y\n") }},
 		{name: "a non-Go file beside Go files", apply: func() { appendTo(t, p("b/notes.txt"), "y\n") }},
@@ -212,13 +212,13 @@ func TestReachCacheReusesOnlyAnUnchangedTree(t *testing.T) {
 		t.Fatalf("a changed edges.tsv must recompute: exit %d:\n%s%s", third.code, third.stdout, third.stderr)
 	}
 
-	// The call graph changes (c's test stops calling the site) while reach.tsv is stale: a different key, recomputed, RED.
+	// The call graph changes (c's test stops calling the site) while reach.d is stale: a different key, recomputed, RED.
 	if err := os.WriteFile(filepath.Join(f.root, "c", "c_test.go"), []byte(reachTest("c", "\t_ = b.Name()\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	fourth := reachRun(t, f.root, env, "--reach", "--reach-cache", store)
 	if fourth.code == 0 || strings.Contains(fourth.stdout, "reach: reused") || !strings.Contains(fourth.stdout, "does not call for") {
-		t.Fatalf("a changed .go file must recompute and fail on the stale reach.tsv: exit %d:\n%s%s", fourth.code, fourth.stdout, fourth.stderr)
+		t.Fatalf("a changed .go file must recompute and fail on the stale reach.d: exit %d:\n%s%s", fourth.code, fourth.stdout, fourth.stderr)
 	}
 }
 
@@ -258,13 +258,13 @@ func TestReachCacheStoreIsNeverTrusted(t *testing.T) {
 		refused("a missing row", strings.Join(lines[:len(lines)-1], "\n")+"\n")
 	}
 	refused("a header without the rows digest", "# reach-cache-v2 key "+key+"\n"+strings.SplitN(string(good), "\n", 2)[1])
-	// A store whose header digest matches its rows but whose rows differ from reach.tsv is still compared: RED.
+	// A store whose header digest matches its rows but whose rows differ from reach.d is still compared: RED.
 	rows := strings.SplitN(string(good), "\n", 2)[1]
 	rows += "b\tghost.go\tc\n"
 	digest := sha256.Sum256([]byte(rows))
 	write("# reach-cache-v2 key " + key + " rows-sha256 " + hex.EncodeToString(digest[:]) + "\n" + rows)
 	if res := reachRun(t, f.root, env, "--reach", "--reach-cache", store); res.code != 1 || !strings.Contains(res.stdout, "reach: reused") {
-		t.Fatalf("a consistent store that differs from reach.tsv must be reused and compared (RED), exit %d:\n%s%s", res.code, res.stdout, res.stderr)
+		t.Fatalf("a consistent store that differs from reach.d must be reused and compared (RED), exit %d:\n%s%s", res.code, res.stdout, res.stderr)
 	}
 	// A header of another key, an empty file, a truncated header: not reused; recomputed, green, store rewritten.
 	for name, body := range map[string]string{
@@ -286,14 +286,14 @@ func TestReachCacheStoresNothingOnARedRun(t *testing.T) {
 	if res := writeTables(t, f.root); res.code != 0 {
 		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
 	}
-	reach := filepath.Join(f.root, tablesDir, "reach.tsv")
+	reach := filepath.Join(f.root, tablesDir, "reach.d", "b.tsv")
 	b, err := os.ReadFile(reach)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 	if len(lines) < 2 {
-		t.Fatalf("fixture reach.tsv has no row to remove:\n%s", b)
+		t.Fatalf("fixture reach.d/b.tsv has no row to remove:\n%s", b)
 	}
 	if err := os.WriteFile(reach, []byte(strings.Join(lines[:len(lines)-1], "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -301,7 +301,7 @@ func TestReachCacheStoresNothingOnARedRun(t *testing.T) {
 	store := t.TempDir()
 	res := reachRun(t, f.root, reachEnv(), "--reach", "--reach-cache", store)
 	if res.code != 1 || !strings.Contains(res.stdout, "missing row") {
-		t.Fatalf("a reach.tsv with a row removed must fail with the missing row (exit 1):\n%s%s", res.stdout, res.stderr)
+		t.Fatalf("a reach.d file with a row removed must fail with the missing row (exit 1):\n%s%s", res.stdout, res.stderr)
 	}
 	if got := storeFiles(t, store); len(got) != 0 {
 		t.Fatalf("a red run stored %v", got)

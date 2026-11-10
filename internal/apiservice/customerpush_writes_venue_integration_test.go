@@ -296,7 +296,7 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	cfg := config.Config{
 		APIAddress: "127.0.0.1:0", RiverDatabaseSchema: "river", APIDatabaseRole: venue.Roles["api"],
 		APIDatabaseURI: secrets.NewValue(venue.GoAPIDatabaseURI(t)),
-		APIJWTSecret:   secrets.NewValue(venueKey), APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
+		APIJWTIssuer:   "dev-health-ops", APIJWTAudience: "dev-health-api",
 		CORSAllowedOrigins: []string{"http://localhost:3000"},
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
@@ -304,11 +304,9 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	python := golden.Python(t, venue, requests)
 	normalize := customerPushNormalizer(seeded, start)
 	var goMinted []string
-	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-writes-orgless.go-pin.json", SHA256: customerPushWritesOrglessPinSHA256, Ruling: customerPushOrglessRuling})
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
-		Golden:      golden,
-		Retirements: []venueoracle.Retirement{{Match: func(request venueoracle.Request) bool { return request.Name == "create: superuser x-org" }, Pin: orglessPin}},
-		Normalize:   func(_ venueoracle.Request, body string) string { return normalize(body) },
+		Golden:    golden,
+		Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
 		Inspect: func(_ venueoracle.Request, response venueoracle.Response) {
 			goMinted = append(goMinted, response.Body)
 		},
@@ -379,7 +377,6 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
-	orglessPin.Finish(t)
 	golden.Finish(t)
 }
 
@@ -467,6 +464,3 @@ func TestScrubCustomerPushTokensIsIdempotentAndHidesTheValue(t *testing.T) {
 		t.Fatalf("scrub = %s", once)
 	}
 }
-
-// customerPushWritesOrglessPinSHA256 is the digest of testdata/venue/customer-push-writes-orgless.go-pin.json.
-const customerPushWritesOrglessPinSHA256 = "5702b8e75ed33b45eb713521d5c233d0474e61e9a8e9138ed7b715bca7bea025"

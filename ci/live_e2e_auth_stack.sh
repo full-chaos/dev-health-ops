@@ -10,7 +10,16 @@
 #   bash ci/live_e2e_auth_stack.sh print-env SIDE STATE_DIR                 print NAME=VALUE lines of SIDE, secret values redacted
 #   bash ci/live_e2e_auth_stack.sh assert-audit STATE_DIR                   every delegated session issue used the workload credential
 #   bash ci/live_e2e_auth_stack.sh down STATE_DIR                           stop auth-service by pid
+#   bash ci/live_e2e_auth_stack.sh stop-auth STATE_DIR      stop auth-service by pid (the outage cell); start-auth starts it again with the same environment
+#   bash ci/live_e2e_auth_stack.sh start-auth STATE_DIR
+#   bash ci/live_e2e_auth_stack.sh verify-user STATE_DIR EMAIL  mark one user's e-mail verified in auth.users (the authority:
+#                                                          users are owned) and in its public.users projection
+#   bash ci/live_e2e_auth_stack.sh grant-platform-admin STATE_DIR EMAIL  test setup only: give one user an active platform_admin
+#                                                          row in auth.platform_role_assignments (written directly, as the bigboy fixture)
 # SIDE is go-api, query-api, auth-service or web. The flags are ci/live_e2e_auth_flags.tsv (the prod flag set).
+# CHAOS-13356: users are owned by auth-service, as prod (phase 4, usersOwnedStage owned): `up` copies the users the
+# caller already seeded into the auth schema with the seed tool (`dho auth users-backfill -insert-only`) before
+# auth-service starts, and auth-service sends the credentials mail through the console provider (no mail is delivered).
 # The https front (localhost:8443 to 127.0.0.1:8095) with STATE_DIR/tls is the caller's: the Go and web verifiers read
 # the issuer over https and nothing here serves TLS.
 set -euo pipefail
@@ -23,6 +32,13 @@ ISSUER="${LIVE_E2E_AUTH_ISSUER:-https://localhost:8443}"
 KEY_ID="${LIVE_E2E_AUTH_KEY_ID:-e2e-auth}"
 AUTH_API_ADDR="${LIVE_E2E_AUTH_API_ADDR:-127.0.0.1:8095}"
 AUTH_OPERATOR_ADDR="${LIVE_E2E_AUTH_OPERATOR_ADDR:-127.0.0.1:8096}"
+TOKENREVIEW_ADDR="${LIVE_E2E_TOKENREVIEW_ADDR:-127.0.0.1:8444}"
+# The workload exchange trusts a job-local fake of the Kubernetes API (cigate live-e2e tokenreview-serve) for the web workload only.
+TRUST_DOMAIN=live-e2e.test
+CLUSTER_ISSUER=https://kubernetes.default.svc.cluster.local
+WEB_NAMESPACE=live-e2e
+WEB_SERVICE_ACCOUNT=web
+WEB_SERVICE_ACCOUNT_UID=0b6c1d7e-3f2a-4a56-9d0c-5f3a1c2b7e11
 SCHEMA=auth
 RUNTIME_ROLE=devhealth_auth
 MIGRATION_ROLE=devhealth_auth_migrator
@@ -39,6 +55,11 @@ die() {
 # flag_rows SCOPE: NAME=VALUE for every row of the flag table with that scope.
 flag_rows() {
   awk -F'\t' -v scope="$1" '/^#/ || $1 == "scope" || NF == 0 { next } $1 == scope { print $2 "=" $3 }' "${FLAGS}"
+}
+
+# flag_value SCOPE NAME: the value of one flags row.
+flag_value() {
+  awk -F'\t' -v scope="$1" -v name="$2" '/^#/ || NF == 0 { next } $1 == scope && $2 == name { print $3 }' "${FLAGS}"
 }
 
 dsn() {
@@ -76,15 +97,26 @@ raw_env() {
         "SSL_CERT_FILE=${state}/tls/ca.pem"
       ;;
     web)
+      # web reads the session token with the class auth-service issues (its flags row), never a second copy.
+      local token_class
+      token_class="$(flag_value auth-service AUTH_ACCESS_TOKEN_CLASS)"
+      [ -n "${token_class}" ] || die "the flags table has no auth-service AUTH_ACCESS_TOKEN_CLASS row"
       printf '%s\n' \
+        "AUTH_ACCESS_TOKEN_CLASS=${token_class}" \
         "AUTH_ACCESS_TOKEN_ISSUER=${ISSUER}" \
-        "NODE_EXTRA_CA_CERTS=${state}/tls/ca.pem"
+        "NODE_EXTRA_CA_CERTS=${state}/tls/ca.pem" \
+        "AUTH_INTERNAL_URL=http://${AUTH_API_ADDR}" \
+        "AUTH_WORKLOAD_SUBJECT_FILE=${state}/workload/web.subject" \
+        "AUTH_WORKLOAD_ISSUER=${ISSUER}"
       ;;
     auth-service)
       : "${JWT_SECRET_KEY:?JWT_SECRET_KEY is not set}" "${AUTH_SESSION_SUCCESSOR_KEY:?AUTH_SESSION_SUCCESSOR_KEY is not set}"
       : "${AUTH_LOGIN_LOCKOUT_KEY:?AUTH_LOGIN_LOCKOUT_KEY is not set}" "${AUTH_RUNTIME_DATABASE_PASSWORD:?AUTH_RUNTIME_DATABASE_PASSWORD is not set}"
       : "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:?AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT is not set}"
+      : "${AUTH_AUTHORIZE_CALLER_SUBJECTS:?AUTH_AUTHORIZE_CALLER_SUBJECTS is not set}"
       flag_rows auth-service
+      # AUTH_REGISTER_LIMIT: go-api forwards register here (users owned) and every request of the run comes from one
+      # address, so the 3/hour default would refuse the 4th sign-up. go-api's venue value, same form; prod sets none.
       printf '%s\n' \
         "AUTH_SERVICE_HTTP_ADDR=${AUTH_API_ADDR}" \
         "AUTH_SERVICE_OPERATOR_HTTP_ADDR=${AUTH_OPERATOR_ADDR}" \
@@ -96,7 +128,18 @@ raw_env() {
         "AUTH_SESSION_SUCCESSOR_KEY=${AUTH_SESSION_SUCCESSOR_KEY}" \
         "AUTH_LOGIN_LOCKOUT_KEY=${AUTH_LOGIN_LOCKOUT_KEY}" \
         "AUTH_VALKEY_URI=${VALKEY_URI}" \
-        "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT}"
+        "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT}" \
+        "AUTH_AUTHORIZE_CALLER_SUBJECTS=${AUTH_AUTHORIZE_CALLER_SUBJECTS}" \
+        "AUTH_WORKLOAD_TRUST_DOMAIN=${TRUST_DOMAIN}" \
+        "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER=${CLUSTER_ISSUER}" \
+        "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL=https://${TOKENREVIEW_ADDR}" \
+        "AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE=${state}/tls/ca.pem" \
+        "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE=${state}/workload/reviewer.token" \
+        "EMAIL_PROVIDER=console" \
+        "EMAIL_FROM_ADDRESS=live-e2e@example.test" \
+        "AUTH_MAIL_ALLOW_CONSOLE=true" \
+        "APP_BASE_URL=${LIVE_E2E_APP_BASE_URL:-http://localhost:3000}" \
+        "AUTH_REGISTER_LIMIT=1000/hour"
       ;;
     *) die "unknown side ${side} (go-api, query-api, auth-service, web)" ;;
   esac
@@ -125,7 +168,7 @@ migrate_run() {
   local user="$1" password="$2"
   shift 2
   AUTH_MIGRATION_DATABASE_URI="$(dsn "${user}" "${password}")" \
-    AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=false \
+    AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=true \
     AUTH_RUNTIME_DATABASE_ROLE="${RUNTIME_ROLE}" AUTH_SCHEMA_OWNER_ROLE="${MIGRATION_ROLE}" \
     "${STATE}/bin/auth-migrate" "$@"
 }
@@ -169,8 +212,8 @@ up() {
   mkdir -p "${STATE}/bin" "${STATE}/logs" "${STATE}/tls"
   mkdir -m 700 "${STATE}/workload"
 
-  printf 'step 1: build auth-service and auth-migrate\n'
-  (cd "${ROOT}" && go build -trimpath -o "${STATE}/bin/auth-service" ./cmd/auth-service && go build -trimpath -o "${STATE}/bin/auth-migrate" ./cmd/auth-migrate)
+  printf 'step 1: build auth-service, auth-migrate and cigate\n'
+  (cd "${ROOT}" && go build -trimpath -o "${STATE}/bin/auth-service" ./cmd/auth-service && go build -trimpath -o "${STATE}/bin/auth-migrate" ./cmd/auth-migrate && go build -trimpath -o "${STATE}/bin/cigate" ./cmd/cigate)
 
   printf 'step 2: signing key (dho mint envelope-keys)\n'
   "${dho}" mint envelope-keys --dir "${STATE}/keys" --key-id "${KEY_ID}" --skip-existing >/dev/null
@@ -208,6 +251,10 @@ up() {
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" restore-fence init -if-absent >/dev/null
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" workloads seed -apply >/dev/null
 
+  printf 'step 4b: the seed tool: copy the users the caller seeded into the auth schema (compose auth-users-backfill)\n'
+  AUTH_DATABASE_URI="$(dsn "${RUNTIME_ROLE}" "${runtime_password}")" AUTH_DATABASE_SCHEMA="${SCHEMA}" AUTH_USERS_OWNED=true \
+    "${dho}" auth users-backfill -insert-only >/dev/null
+
   printf 'step 5: api workload bootstrap credential (compose auth-workload-bootstrap)\n'
   migrate_run "${MIGRATION_ROLE}" "${migration_password}" workloads bootstrap-create -workload api -out "${STATE}/workload/api.bootstrap" -apply >/dev/null
   local principal
@@ -215,15 +262,40 @@ up() {
     psql -v ON_ERROR_STOP=1 -At -c "SELECT principal_id FROM ${SCHEMA}.workloads WHERE name = 'api'")"
   [[ "${principal}" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || die "the api workload row has no principal id"
 
+  printf 'step 5b: web workload binding (the ServiceAccount identity the fake TokenReview vouches for)\n'
+  migrate_run "${MIGRATION_ROLE}" "${migration_password}" workloads bind -workload web -environment live-e2e -trust-domain "${TRUST_DOMAIN}" \
+    -issuer "${CLUSTER_ISSUER}" -namespace "${WEB_NAMESPACE}" -service-account "${WEB_SERVICE_ACCOUNT}" -uid "${WEB_SERVICE_ACCOUNT_UID}" -apply >/dev/null
+  local web_principal
+  web_principal="$(PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" \
+    psql -v ON_ERROR_STOP=1 -At -c "SELECT principal_id FROM ${SCHEMA}.workloads WHERE name = 'web'")"
+  [[ "${web_principal}" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || die "the web workload row has no principal id"
+
   printf 'step 6: job-local CA and localhost certificate\n'
   make_tls
+
+  printf 'step 6b: web subject token and the fake TokenReview (test code: the exchange trusts it by configuration)\n'
+  "${STATE}/bin/cigate" live-e2e subject-jws "${STATE}/workload/web.subject"
+  "${STATE}/bin/cigate" live-e2e reviewer-token "${STATE}/workload/reviewer.token"
+  (
+    cd "${STATE}"
+    TR_NAMESPACE="${WEB_NAMESPACE}" TR_SERVICE_ACCOUNT="${WEB_SERVICE_ACCOUNT}" TR_UID="${WEB_SERVICE_ACCOUNT_UID}" \
+      nohup "${STATE}/bin/cigate" live-e2e tokenreview-serve "${TOKENREVIEW_ADDR}" "${STATE}/tls/tls.crt" "${STATE}/tls/tls.key" \
+      "${STATE}/workload/web.subject" "${STATE}/workload/reviewer.token" >"${STATE}/logs/tokenreview.log" 2>&1 &
+    echo "$!" >"${STATE}/tokenreview.pid"
+  )
+  for _ in $(seq 1 30); do
+    if curl -sS -o /dev/null --cacert "${STATE}/tls/ca.pem" "https://${TOKENREVIEW_ADDR}/" 2>/dev/null; then break; fi
+    sleep 1
+  done
 
   printf 'step 7: start auth-service\n'
   export AUTH_RUNTIME_DATABASE_PASSWORD="${runtime_password}"
   AUTH_SESSION_SUCCESSOR_KEY="$(new_secret)"
   AUTH_LOGIN_LOCKOUT_KEY="$(new_secret)"
   AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT="$(principal_ref "${principal}")"
-  export AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT
+  AUTH_AUTHORIZE_CALLER_SUBJECTS="$(principal_ref "${web_principal}")"
+  export AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT AUTH_AUTHORIZE_CALLER_SUBJECTS
+  raw_env auth-service "${STATE}" >"${STATE}/auth-service.env"
   (
     cd "${STATE}"
     nohup bash "${SELF}" with-env auth-service "${STATE}" -- "${STATE}/bin/auth-service" \
@@ -257,15 +329,88 @@ assert_audit() {
   [ "${workload}" -eq "${total}" ] || die "a delegated session issue has no workload marker"
 }
 
-down() {
-  STATE="$(cd "$1" && pwd)"
-  local pidfile="${STATE}/auth-service.pid" pid
+stop_pid() {
+  local pidfile="$1" pid
   [ -f "${pidfile}" ] || return 0
   pid="$(cat "${pidfile}")"
   [[ "${pid}" =~ ^[0-9]+$ ]] || die "pid file holds no pid"
   if [ -d "/proc/${pid}" ] && [ "$(readlink "/proc/${pid}/cwd")" = "${STATE}" ]; then
     kill "${pid}" || true
   fi
+}
+
+down() {
+  STATE="$(cd "$1" && pwd)"
+  stop_pid "${STATE}/auth-service.pid"
+  stop_pid "${STATE}/tokenreview.pid"
+}
+
+stop_auth() {
+  STATE="$(cd "$1" && pwd)"
+  stop_pid "${STATE}/auth-service.pid"
+  for _ in $(seq 1 30); do
+    curl -fsS "http://${AUTH_OPERATOR_ADDR}/readyz" >/dev/null 2>&1 || return 0
+    sleep 1
+  done
+  die "auth-service still answers after stop"
+}
+
+# start_auth STATE: auth-service again, with the environment `up` saved (mode 0600, job-local).
+start_auth() {
+  STATE="$(cd "$1" && pwd)"
+  [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
+  if curl -fsS "http://${AUTH_OPERATOR_ADDR}/readyz" >/dev/null 2>&1; then die "auth-service already answers"; fi
+  (
+    cd "${STATE}"
+    # shellcheck disable=SC2016 # the loop is the child's, $1 and $2 are its own arguments
+    nohup bash -c 'while IFS= read -r line; do export "${line%%=*}=${line#*=}"; done <"$1"; exec "$2"' _ \
+      "${STATE}/auth-service.env" "${STATE}/bin/auth-service" >>"${STATE}/logs/auth-service.log" 2>&1 &
+    echo "$!" >"${STATE}/auth-service.pid"
+  )
+  for _ in $(seq 1 60); do
+    if curl -fsS "http://${AUTH_OPERATOR_ADDR}/readyz" >/dev/null 2>&1; then return 0; fi
+    sleep 1
+  done
+  die "auth-service did not become ready again"
+}
+
+# verify_user STATE EMAIL: the e-mail of one user is verified, in auth.users (the authority while users are owned; its
+# guard admits a write only in a transaction that names itself the audit transaction, authschema 0006) and in the
+# public.users projection go-api still reads. Exactly one row each, or it fails.
+verify_user() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" n
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "verify-user: not an e-mail address"
+  n="$(PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -At -c \
+    "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; \
+     WITH a AS (UPDATE ${SCHEMA}.users SET email_verified_at = coalesce(email_verified_at, clock_timestamp()) WHERE email_lower = lower('${email}') RETURNING 1), \
+          p AS (UPDATE public.users SET is_verified = true WHERE lower(email) = lower('${email}') RETURNING 1) \
+     SELECT (SELECT count(*) FROM a) || ' ' || (SELECT count(*) FROM p)" | tail -n 1)"
+  [ "${n}" = "1 1" ] || die "verify-user: want one auth.users and one public.users row, got ${n:-none}"
+  printf 'verified %s in auth.users and public.users\n' "${email}"
+}
+
+# grant_platform_admin STATE EMAIL: test setup only. The user's platform_admin assignment is written directly into
+# auth.platform_role_assignments (no route, no audit or outbox row; the guard admits the write in a transaction that names
+# itself the audit transaction first, authschema 0006), active: an existing row of the user is made permanent again. A
+# read-back of the active rows (the platform role store's rule: not expired, the principal not disabled) must be exactly 1.
+grant_platform_admin() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" n
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "grant-platform-admin: not an e-mail address"
+  PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -qAt -c \
+    "SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true) IS NOT NULL; \
+     INSERT INTO ${SCHEMA}.platform_role_assignments (principal_id, role_key) \
+       SELECT u.principal_id, 'platform_admin' FROM ${SCHEMA}.users u WHERE u.email_lower = lower('${email}') \
+     ON CONFLICT (principal_id, role_key) DO UPDATE SET expires_at = NULL, updated_at = now()" >/dev/null \
+    || die "grant-platform-admin: the write failed"
+  n="$(PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -At -c \
+    "SELECT count(*) FROM ${SCHEMA}.platform_role_assignments r JOIN ${SCHEMA}.users u ON u.principal_id = r.principal_id \
+       JOIN ${SCHEMA}.principals p ON p.id = r.principal_id \
+     WHERE u.email_lower = lower('${email}') AND r.role_key = 'platform_admin' AND p.disabled_at IS NULL \
+       AND (r.expires_at IS NULL OR r.expires_at > now())" | tail -n 1)"
+  [ "${n}" = 1 ] || die "grant-platform-admin: want one active platform_admin row for the user, got ${n:-none}"
+  printf 'granted platform_admin to %s in auth.platform_role_assignments\n' "${email}"
 }
 
 verb="${1:-}"
@@ -290,5 +435,21 @@ case "${verb}" in
     [ "$#" -eq 2 ] || die "usage: down STATE_DIR"
     down "$2"
     ;;
-  *) die "usage: up | with-env | print-env | assert-audit | down" ;;
+  stop-auth)
+    [ "$#" -eq 2 ] || die "usage: stop-auth STATE_DIR"
+    stop_auth "$2"
+    ;;
+  start-auth)
+    [ "$#" -eq 2 ] || die "usage: start-auth STATE_DIR"
+    start_auth "$2"
+    ;;
+  verify-user)
+    [ "$#" -eq 3 ] || die "usage: verify-user STATE_DIR EMAIL"
+    verify_user "$2" "$3"
+    ;;
+  grant-platform-admin)
+    [ "$#" -eq 3 ] || die "usage: grant-platform-admin STATE_DIR EMAIL"
+    grant_platform_admin "$2" "$3"
+    ;;
+  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | verify-user | grant-platform-admin" ;;
 esac

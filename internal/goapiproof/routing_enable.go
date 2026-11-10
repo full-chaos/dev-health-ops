@@ -268,7 +268,7 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 	now := time.Now().UTC()
 	audit := RoutingAudit{
 		Action:          AuditActionEnable,
-		CredentialClass: CredentialClassEnvelope,
+		CredentialClass: CredentialClassUserAccessToken,
 		PrincipalID:     request.PrincipalID,
 		RecordedBy:      request.RecordedBy,
 		ReviewEvidence:  request.ReviewEvidence,

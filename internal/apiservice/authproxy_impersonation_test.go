@@ -36,7 +36,6 @@ func TestImpersonationFlagNameAndDefault(t *testing.T) {
 func TestImpersonationFlagIsStrictAndStandsAlone(t *testing.T) {
 	for name, env := range map[string]map[string]string{
 		"without a url": {EnvAuthProxyImpersonation: "true"},
-		"not a boolean": {EnvAuthProxyURL: "http://auth-service:8095", EnvAuthProxyImpersonation: "yes"},
 	} {
 		if _, err := ParseAuthProxyConfig(lookupFrom(env)); err == nil {
 			t.Errorf("%s: accepted %v", name, env)
@@ -59,13 +58,16 @@ func impersonationLogger() (*slog.Logger, *bytes.Buffer) {
 }
 
 func TestImpersonationDelegatorFollowsTheSwitchAndTheSessionsFlag(t *testing.T) {
-	token := testIssueToken(t)
 	url := "http://auth-service:8095"
 	ctx := context.Background()
 
 	off := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: url, AuthProxyFlagEnv(AuthSessions): "true"})
 	logger, logs := impersonationLogger()
-	issuer, err := sessionIssuer(off, lookupFrom(map[string]string{sessionissue.EnvToken: token}), sessionCredential{})
+	_, session, err := newCredentials(off, issueEnv(workloadEnv(t, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer, err := sessionIssuer(off, session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +76,11 @@ func TestImpersonationDelegatorFollowsTheSwitchAndTheSessionsFlag(t *testing.T) 
 	}
 
 	on := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: url, AuthProxyFlagEnv(AuthSessions): "true", EnvAuthProxyImpersonation: "true"})
-	issuer, err = sessionIssuer(on, lookupFrom(map[string]string{sessionissue.EnvToken: token}), sessionCredential{})
+	_, session, err = newCredentials(on, issueEnv(workloadEnv(t, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer, err = sessionIssuer(on, session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +99,7 @@ func TestImpersonationDelegatorFollowsTheSwitchAndTheSessionsFlag(t *testing.T) 
 // answers unavailable, never a go-api session.
 func TestImpersonationWithoutSessionsLogsOnceAndRefusesEveryCall(t *testing.T) {
 	on := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095", EnvAuthProxyImpersonation: "true"})
-	issuer, err := sessionIssuer(on, lookupFrom(nil), sessionCredential{})
+	issuer, err := sessionIssuer(on, sessionCredential{})
 	if err != nil || issuer != nil {
 		t.Fatalf("sessions off built an issuer: %v %v", issuer, err)
 	}

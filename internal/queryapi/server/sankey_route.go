@@ -40,7 +40,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 )
@@ -62,28 +61,25 @@ func sankeySwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitch {
 }
 
 // loadSankeyRouteConfig reads this route's own dependency set --
-// ClickHouse plus the envelope verifier trio. Deliberately NOT
+// ClickHouse only; the envelope key is optional. Deliberately NOT
 // loadQueryRouteConfig, same reasoning as quadrant_route.go's own
 // loadQuadrantRouteConfig doc comment: this route never touches registry
 // Postgres.
-func loadSankeyRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadSankeyRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 func buildSankeyRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadSankeyRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadSankeyRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -145,7 +141,7 @@ var sankeyModeValues = []string{"investment", "expense", "state", "hotspot"}
 func writeSankeyResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *sankey.Response) {
 	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: sankey: encode response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+			orgID, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 		writeModelFailure(w)
 	}
 }
@@ -227,6 +223,10 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "sankey", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "sankey", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		mode := lastQueryValue(query, "mode")
@@ -271,7 +271,7 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -283,7 +283,7 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 		// 400/404, and the X-DevHealth-Deprecated header (set only after
 		// build_sankey_response succeeds) is never attached to that 503.
 		if !sankeyValidScopeLevels[scopeType] {
-			writeRESTDataUnavailable(w, r, "sankey", claims.OrgID,
+			writeRESTDataUnavailable(w, r, "sankey", org,
 				fmt.Errorf("sankey: ScopeFilter construction: scope_type %q is not one of the valid levels", scopeType))
 			return
 		}
@@ -315,22 +315,22 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 
 		params, windowErr := sankeyParamsFromFilters(mode, filters)
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "sankey", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "sankey", org)
 			return
 		}
 
-		resp, err := sankey.BuildResponse(r.Context(), client, claims.OrgID, params)
+		resp, err := sankey.BuildResponse(r.Context(), client, org, params)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1426-1428).
-			writeRESTDataUnavailable(w, r, "sankey", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "sankey", org, err)
 			return
 		}
 
 		// Python sets this header only on the GET route, and only once
 		// build_sankey_response has already succeeded (main.py:1423-1424).
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
-		writeSankeyResponse(w, r, claims.OrgID, resp)
+		writeSankeyResponse(w, r, org, resp)
 	}
 }
 
@@ -344,26 +344,30 @@ func newSankeyPostHandler(client sankey.QueryClient) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "sankey", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "sankey", claims)
+		if !ok {
+			return
+		}
 
 		bodyBytes, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
-			writeRESTError(w, r, "sankey", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "sankey", org, http.StatusBadRequest, "bad request")
 			return
 		}
 
 		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
 		if syntaxDetail != nil {
-			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			writePydanticValidationError(w, r, org, *syntaxDetail)
 			return
 		}
 		if bodyIsEmptyOrNull {
-			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
+			writePydanticValidationError(w, r, org, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
 		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
-			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
+			writePydanticValidationError(w, r, org, modelAttributesTypeError([]any{"body"}, decoded))
 			return
 		}
 
@@ -422,7 +426,7 @@ func newSankeyPostHandler(client sankey.QueryClient) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -439,17 +443,17 @@ func newSankeyPostHandler(client sankey.QueryClient) http.HandlerFunc {
 
 		params, windowErr := sankeyParamsFromFilters(mode, filters)
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "sankey", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "sankey", org)
 			return
 		}
 
-		resp, err := sankey.BuildResponse(r.Context(), client, claims.OrgID, params)
+		resp, err := sankey.BuildResponse(r.Context(), client, org, params)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1448-1452).
-			writeRESTDataUnavailable(w, r, "sankey", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "sankey", org, err)
 			return
 		}
-		writeSankeyResponse(w, r, claims.OrgID, resp)
+		writeSankeyResponse(w, r, org, resp)
 	}
 }

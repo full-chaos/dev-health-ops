@@ -76,4 +76,4 @@ symptom-to-fix diagnostics, and the recovery/backfill runbook, see
 For how a captured PR↔issue link (per-provider primary mapping vs. text-parse fallback) reaches
 *investment* work-unit evidence specifically — a separate consumer from the cycle-time attribution
 path above, with its own current defect — see
-[Investment work-graph consumption](../../contribute/architecture/team-attribution.md#investment-work-graph-consumption-structural-evidence-bridge-chaos-4752).
+[Investment work-graph consumption](../../contribute/architecture/team-attribution.md#investment-work-graph-consumption-structural-evidence-bridge).

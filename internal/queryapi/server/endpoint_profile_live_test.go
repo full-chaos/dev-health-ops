@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,12 +15,18 @@ import (
 	"strings"
 	"testing"
 
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
@@ -36,6 +43,7 @@ import (
 var (
 	liveTargetOrg = uuid.MustParse("55555555-5555-5555-5555-555555555555")
 	liveOtherOrg  = uuid.MustParse("66666666-6666-6666-6666-666666666666")
+	liveActor     = uuid.MustParse("77777777-7777-4777-8777-777777777777")
 	liveStatusRe  = regexp.MustCompile(`\b([45][0-9][0-9])\b`)
 	livePathVarRe = regexp.MustCompile(`\{[^}]+\}`)
 )
@@ -130,7 +138,7 @@ func liveStack(t *testing.T, shape func(*accessStore)) *behaviourStack {
 	if shape != nil {
 		shape(store)
 	}
-	stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow), true)
+	stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow))
 	stack.user = minter.mint(ecUser, nil, nil)
 	return stack
 }
@@ -139,7 +147,7 @@ func liveStack(t *testing.T, shape func(*accessStore)) *behaviourStack {
 func liveStackKeyDown(t *testing.T) *behaviourStack {
 	t.Helper()
 	minter := newAccessMinter(t)
-	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow), true)
+	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow))
 	stack.user = minter.mint(ecUser, nil, nil)
 	return stack
 }
@@ -154,7 +162,7 @@ func withSession(s *accessStore) {
 
 func edgeBearer(t *testing.T, orgID string) string {
 	t.Helper()
-	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: orgID, role: "admin", tokenVersion: 5})
+	return ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: orgID, tokenVersion: 5})
 }
 
 type liveObs struct {
@@ -257,11 +265,10 @@ func (o *liveObs) impersonationPolicy(rebinds bool) {
 
 func edgeSession(t *testing.T, o *liveObs, q liveReq, rebindHeader bool, sessionFailureStatus int) {
 	t.Helper()
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: true, tokenVersion: 5})
 	run := func(cell string, shape func(*accessStore)) (*behaviourStack, liveAnswer) {
 		stack := liveStack(t, shape)
 		q2 := q
-		q2.bearer = token
+		q2.bearer = stack.user
 		answer := stack.live(q2)
 		_ = cell
 		return stack, answer
@@ -315,6 +322,10 @@ type liveREST struct {
 	handler  http.Handler
 	envelope string
 	user     string
+	orgless  string
+	store    *accessStore
+	priv     ed25519.PrivateKey
+	minter   *accessMinter
 }
 
 func newLiveREST(t *testing.T, pattern string, shape func(*accessStore)) *liveREST {
@@ -326,11 +337,11 @@ func newLiveREST(t *testing.T, pattern string, shape func(*accessStore)) *liveRE
 	}
 	setup := testAccess(minter.keys, nil, accessTestNow)
 	verifier, priv := iaVerifier(t)
-	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(store))
+	edge, err := principal.NewEdgeVerifier(newQueryAPIUserStoreFrom(store))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
@@ -345,6 +356,64 @@ func newLiveREST(t *testing.T, pattern string, shape func(*accessStore)) *liveRE
 		handler:  mux,
 		envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}),
 		user:     minter.mint(ecUser, nil, nil),
+		orgless:  minter.mint(ecUser, map[string]any{"org_id": nil}, nil),
+		store:    store,
+		priv:     priv,
+		minter:   minter,
+	}
+}
+
+// stateCell is one current-state cell: the same credential answers ok, the store changes, and the next request
+// answers after.
+type stateCell struct {
+	name   string
+	change func(*accessStore)
+	after  int
+}
+
+// userStateCells change what a user access token's request reads between two requests: nothing read for the first
+// request may answer the second.
+var userStateCells = []stateCell{
+	{"users row deactivated after the first request", func(s *accessStore) {
+		s.states[ecUser] = policy.UserState{IsActive: false, TokenVersion: 5}
+	}, http.StatusUnauthorized},
+	{"session revoked after the first request", func(s *accessStore) { delete(s.liveSessions, accessTestSession) }, http.StatusUnauthorized},
+	{"token version moved after the first request", func(s *accessStore) {
+		s.states[ecUser] = policy.UserState{IsActive: true, TokenVersion: 6}
+	}, http.StatusUnauthorized},
+	{"membership removed after the first request", func(s *accessStore) { delete(s.members, [2]uuid.UUID{ecUser, ecOrg}) }, http.StatusUnauthorized},
+}
+
+// noStateRead is the change after which a credential that reads no state still answers: every store read fails.
+func noStateRead(s *accessStore) {
+	s.errUserState = fmt.Errorf("down: %w", policy.ErrUnavailable)
+	s.errSession = fmt.Errorf("down: %w", policy.ErrUnavailable)
+	s.errSessionState = fmt.Errorf("down: %w", policy.ErrUnavailable)
+	s.errIsMember = fmt.Errorf("down: %w", policy.ErrUnavailable)
+}
+
+// stackStateCells runs userStateCells on a listener stack: q with the stack's user token.
+func stackStateCells(t *testing.T, o *liveObs, label string, q liveReq) {
+	t.Helper()
+	stackStateCellsAs(t, o, label, q, nil)
+}
+
+// stackStateCellsAs is stackStateCells over a store base shapes first.
+func stackStateCellsAs(t *testing.T, o *liveObs, label string, q liveReq, base func(*accessStore)) {
+	t.Helper()
+	for _, cell := range userStateCells {
+		var store *accessStore
+		stack := liveStack(t, func(s *accessStore) {
+			if base != nil {
+				base(s)
+			}
+			store = s
+		})
+		q2 := q
+		q2.bearer = stack.user
+		o.wantStatus(label+"user token, first request ("+cell.name+")", stack.live(q2), http.StatusOK)
+		cell.change(store)
+		o.wantStatus(label+"user token, "+cell.name, stack.live(q2), cell.after)
 	}
 }
 
@@ -397,34 +466,159 @@ func driveREST(t *testing.T, row liveRow) *liveObs {
 	o.textHas("resource_resolver", "organization_from_credential")
 	disclosureKnown := row.str("disclosure_behavior") != "unknown"
 
-	orgless := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), role: "admin", tokenVersion: 5})
-	got := fixture(nil).do(row.method, path, orgless, nil)
-	o.wantStatus("edge token with no organization", got, http.StatusForbidden)
+	got := f.do(row.method, path, f.orgless, nil)
+	o.wantStatus("user token with no organization", got, http.StatusForbidden)
 	if !strings.Contains(got.body, "Organization context required") {
-		o.fail("edge token with no organization: body %q lacks the 403 text", trim(got.body))
+		o.fail("user token with no organization: body %q lacks the 403 text", trim(got.body))
 	}
 	if disclosureKnown {
 		o.textHas("disclosure_behavior", "403 Organization context required", "superuser, who passes")
 	}
-	o.wantStatus("superuser with no organization", fixture(asSuperuser).do(row.method, path, orgless, nil), http.StatusOK)
-	o.wantStatus("users store unavailable", fixture(func(s *accessStore) {
+	super := fixture(asSuperuser)
+	o.wantStatus("superuser with no organization", super.do(row.method, path, super.orgless, nil), http.StatusOK)
+	down := fixture(func(s *accessStore) {
 		s.errUserState = fmt.Errorf("down: %w", policy.ErrUnavailable)
-	}).do(row.method, path, edgeBearer(t, ecOrg.String()), nil), http.StatusServiceUnavailable)
+	})
+	o.wantStatus("users store unavailable", down.do(row.method, path, down.user, nil), http.StatusServiceUnavailable)
 	broken := fixture(func(s *accessStore) { s.errUserState = fmt.Errorf("syntax error") })
 	o.wantStatus("users store error", broken.do(row.method, path, broken.user, nil), http.StatusInternalServerError)
+	if strings.Contains(row.route, "{") {
+		restIDCells(t, o, row)
+		o.textHas("disclosure_behavior", "404 for a path id with no row in the caller's organization", "the same answer as an id that exists nowhere")
+	}
 	if disclosureKnown {
 		o.statusText()
 	} else {
 		o.unknownIsDeclared("disclosure_behavior")
 	}
 
-	for _, field := range []string{"current_state_cache_behavior", "impersonation_policy"} {
-		if row.str(field) != "unknown" {
-			o.fail("%s is %q: no live cell observes a REST row's %s", field, row.str(field), field)
+	restStateCells(t, o, row, path, fixture, accepted)
+	restImpersonationCells(t, o, row, path, fixture, accepted)
+	return o
+}
+
+// liveKnownPerson is the person id orgBoundPersonClient knows, in liveOtherOrg only.
+const liveKnownPerson = "0123456789abcdef0123456789abcdef"
+
+// orgBoundPersonClient answers the person lookup the way its statement reads: an identity only for the person id it
+// knows and only under the organization it binds; every other read has no rows.
+type orgBoundPersonClient struct{}
+
+func (orgBoundPersonClient) Query(_ context.Context, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	org, _ := bindingValue(bindings, "org_id")
+	person, _ := bindingValue(bindings, "person_id")
+	if strings.Contains(query, "lower(hex(MD5(identity)))") && org == liveOtherOrg.String() && person == liveKnownPerson {
+		return &personFoundScanner{identity: "alice@example.com"}, nil
+	}
+	return emptyScanner{}, nil
+}
+
+var livePersonHandlers = map[string]func(*people.Reader) http.HandlerFunc{
+	"/api/v1/people/{person_id}/summary":          newPeopleSummaryHandler,
+	"/api/v1/people/{person_id}/metric":           newPeopleMetricHandler,
+	"/api/v1/people/{person_id}/drilldown/issues": newPeopleDrilldownIssuesHandler,
+	"/api/v1/people/{person_id}/drilldown/prs":    newPeopleDrilldownPRsHandler,
+}
+
+// restIDCells drives the real handler of a row whose path names an id: the id is looked up under the credential's
+// organization only, so an id another organization holds answers the same 404 as an id nothing holds.
+func restIDCells(t *testing.T, o *liveObs, row liveRow) {
+	t.Helper()
+	ask := func(handler http.HandlerFunc, name, value, org, query string) liveAnswer {
+		target := livePathVarRe.ReplaceAllString(row.route, value)
+		if query != "" {
+			target += "?" + query
+		}
+		request := httptest.NewRequest(row.method, target, nil)
+		request.SetPathValue(name, value)
+		request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org)}))
+		recorder := httptest.NewRecorder()
+		serveRoute(t, handler, recorder, request)
+		return liveAnswer{recorder.Code, recorder.Body.String(), recorder.Header()}
+	}
+	if build, ok := livePersonHandlers[row.route]; ok {
+		t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+		reader, err := people.NewReader(orgBoundPersonClient{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler := build(reader)
+		query := ""
+		if strings.HasSuffix(row.route, "/metric") {
+			query = "metric=cycle_time"
+		}
+		own := ask(handler, "person_id", liveKnownPerson, liveOtherOrg.String(), query)
+		if own.status == http.StatusNotFound {
+			o.fail("the person in its own organization: status 404, want it found (body %q)", trim(own.body))
+		}
+		foreign := ask(handler, "person_id", liveKnownPerson, ecOrg.String(), query)
+		o.wantStatus("a person id another organization holds", foreign, http.StatusNotFound)
+		unknown := ask(handler, "person_id", strings.Repeat("f", 32), ecOrg.String(), query)
+		o.wantStatus("a person id nothing holds", unknown, http.StatusNotFound)
+		if foreign.body != unknown.body {
+			o.fail("a person of another organization answers %q, an unknown person %q: the answer tells them apart", trim(foreign.body), trim(unknown.body))
+		}
+		return
+	}
+	if row.route != "/api/v1/work-units/{work_unit_id}/explain" {
+		o.fail("no id cell drives the handler of %s", row.route)
+		return
+	}
+	t.Setenv("LLM_PROVIDER", "mock")
+	client := &capturingWorkUnitsClient{}
+	reader, err := investmentexplain.NewReader(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newWorkUnitExplainHandler(reader, nil, nil, nil, testPlatformGate{})
+	got := ask(handler, "work_unit_id", "wu-live-1", ecOrg.String(), "llm_provider=mock")
+	o.wantStatus("a work unit id with no row in the caller's organization", got, http.StatusNotFound)
+	if !strings.Contains(got.body, "Work unit wu-live-1 not found") {
+		o.fail("work unit not found: body %q", trim(got.body))
+	}
+	bound := false
+	for i, statement := range client.queries {
+		if !strings.Contains(statement, "work_unit_investments") {
+			continue
+		}
+		org, _ := bindingValue(client.bindings[i], "org_id")
+		unit, _ := bindingValue(client.bindings[i], "work_unit_id")
+		bound = bound || (org == ecOrg.String() && unit == "wu-live-1")
+	}
+	if !bound {
+		o.fail("no work unit read binds the caller's organization and the path id: an id of another organization is not refused by the read")
+	}
+}
+
+// restStateCells: a user access token's users row, session, token version and membership are read on every
+// request, so a change between two requests answers the second.
+func restStateCells(t *testing.T, o *liveObs, row liveRow, path string, fixture func(func(*accessStore)) *liveREST, accepted map[string]bool) {
+	t.Helper()
+	if accepted[classUserToken] {
+		for _, cell := range userStateCells {
+			f := fixture(nil)
+			o.wantStatus("user token, first request ("+cell.name+")", f.do(row.method, path, f.user, nil), http.StatusOK)
+			cell.change(f.store)
+			o.wantStatus("user token, "+cell.name, f.do(row.method, path, f.user, nil), cell.after)
 		}
 	}
-	o.unknownIsDeclared("current_state_cache_behavior", "impersonation_policy")
-	return o
+	o.textHas("current_state_cache_behavior", "none: per-request read", "nothing is cached between requests")
+}
+
+// restImpersonationCells: a REST row serves the organization its credential names, and an impersonation credential
+// names the target's: a delegated user access token is served as the target organization, never as the actor's.
+func restImpersonationCells(t *testing.T, o *liveObs, row liveRow, path string, fixture func(func(*accessStore)) *liveREST, accepted map[string]bool) {
+	t.Helper()
+	if accepted[classUserToken] {
+		f := fixture(func(s *accessStore) { s.members[[2]uuid.UUID{ecUser, liveTargetOrg}] = true })
+		delegated := f.minter.mint(ecUser, map[string]any{"org_id": liveTargetOrg.String(), "act": map[string]any{"sub": wirePrincipal(liveActor)}}, nil)
+		got := f.do(row.method, path, delegated, nil)
+		o.wantStatus("delegated user token for the target organization", got, http.StatusOK)
+		if org := restOrg(got); org != liveTargetOrg.String() {
+			o.fail("delegated user token: the handler saw org %q, want the target's %q", org, liveTargetOrg)
+		}
+	}
+	o.impersonationPolicy(true)
 }
 
 func driveInternal(t *testing.T, row liveRow) *liveObs {
@@ -437,34 +631,27 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 		stack := liveStack(t, nil)
 		o.wantStatus(listener+": no credential", stack.live(q), http.StatusUnauthorized)
 		o.wantStatus(listener+": unparseable bearer", stack.live(with(func(c *liveReq) { c.bearer = "not.a.token" })), http.StatusUnauthorized)
-		for name, bearer := range map[string]string{"envelope": stack.envelope, "edge token": stack.edge, "user token": stack.user} {
-			cell := listener + ": " + name
-			stack = liveStack(t, nil)
-			bearer = map[string]string{"envelope": stack.envelope, "edge token": stack.edge, "user token": stack.user}[name]
-			a := stack.live(with(func(c *liveReq) {
-				c.bearer = bearer
-				c.headers = map[string]string{"X-Org-Id": liveOtherOrg.String()}
-			}))
-			o.wantStatus(cell, a, http.StatusOK)
-			o.wantOrg(cell, stack, authctx.Claims{OrgID: ecOrg.String()})
-		}
+		o.wantStatus(listener+": edge token (retired HS256 class)", stack.live(with(func(c *liveReq) { c.bearer = stack.edge })), http.StatusUnauthorized)
+		o.wantStatus(listener+": envelope (retired class)", stack.live(with(func(c *liveReq) { c.bearer = stack.envelope })), http.StatusUnauthorized)
+		o.wantNoRun(listener+": envelope (retired class)", stack)
+		stack = liveStack(t, nil)
+		a := stack.live(with(func(c *liveReq) {
+			c.bearer = stack.user
+			c.headers = map[string]string{"X-Org-Id": liveOtherOrg.String()}
+		}))
+		o.wantStatus(listener+": user token", a, http.StatusOK)
+		o.wantOrg(listener+": user token", stack, authctx.Claims{OrgID: ecOrg.String()})
 		stack = liveStack(t, nil)
 		if row.route != "/query/proof-write" {
 			o.wantStatus(listener+": unregistered document", stack.live(with(func(c *liveReq) {
-				c.bearer = stack.edge
+				c.bearer = stack.user
 				c.body = documentBody("query Unregistered { nothing }")
 			})), http.StatusNotFound)
 		}
 
-		// Impersonation: the edge carrier reads the session; the envelope and
-		// the internal headers state it themselves and never read one.
+		// Impersonation: the edge carrier reads the session; the internal
+		// headers state it themselves and never read one.
 		sessionDown := func(s *accessStore) { asSuperuser(s); s.errSession = fmt.Errorf("session store timeout") }
-		stack = liveStack(t, sessionDown)
-		a := stack.live(with(func(c *liveReq) {
-			c.bearer = iaEnvelope(t, stack.priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin", ImpersonationActive: true})
-		}))
-		o.wantStatus(listener+": envelope claiming impersonation", a, http.StatusOK)
-		o.wantOrg(listener+": envelope claiming impersonation", stack, authctx.Claims{OrgID: ecOrg.String(), ImpersonationActive: true})
 		if listener == "internal" {
 			stack = liveStack(t, sessionDown)
 			a = stack.live(with(func(c *liveReq) {
@@ -480,10 +667,24 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 		if row.route == "/query/proof-write" {
 			proofWriteCells(t, o)
 		}
+		stackStateCells(t, o, listener+": ", q)
+		if listener == "internal" {
+			stack = liveStack(t, noStateRead)
+			o.wantStatus("internal headers, every store read failing", stack.live(with(func(c *liveReq) {
+				c.headers = map[string]string{
+					internalidentity.HeaderOrgID: ecOrg.String(), internalidentity.HeaderRole: "admin",
+					internalidentity.HeaderSuperuser: "false", internalidentity.HeaderImpersonationActive: "false",
+				}
+			})), http.StatusOK)
+		}
 	}
 	o.textHas("resource_resolver", "organization_from_credential")
 	o.impersonationPolicy(true)
-	o.unknownIsDeclared("current_state_cache_behavior")
+	o.textHas("current_state_cache_behavior", "none: per-request read", "nothing is cached between requests",
+		"the internal identity headers read no state")
+	if row.route == "/query/proof-write" {
+		o.textHas("current_state_cache_behavior", "the go_api_proof_orgs allowlist is read on every request")
+	}
 	o.statusText()
 	return o
 }
@@ -495,7 +696,7 @@ func proofWriteCells(t *testing.T, o *liveObs) {
 	t.Helper()
 	const mutation = "mutation LiveProofWrite { probe }"
 	for _, allowed := range []bool{true, false} {
-		verifier, priv := iaVerifier(t)
+		verifier, _ := iaVerifier(t)
 		ran := 0
 		mux := routeswitch.NewMux(routeswitch.StaticSwitch{"m": true})
 		mux.Register("m", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { ran++ }))
@@ -503,7 +704,7 @@ func proofWriteCells(t *testing.T, o *liveObs) {
 			func(_ context.Context, org string) bool { return allowed && org == ecOrg.String() })
 		request := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(documentBody(mutation)))
 		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Authorization", "Bearer "+iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}))
+		iaHeaders(ecOrg.String(), "admin", false, false)(request)
 		recorder := httptest.NewRecorder()
 		handler(recorder, request)
 		o.see(recorder.Code)
@@ -530,26 +731,101 @@ func driveBuildInfo(t *testing.T, row liveRow) *liveObs {
 		q.bearer = stack.edge
 		o.wantStatus(listener+": edge token (not an accepted class)", stack.live(q), http.StatusUnauthorized)
 		q.bearer = stack.envelope
-		first := stack.live(q)
-		o.wantStatus(listener+": envelope", first, http.StatusOK)
-		for name, claims := range map[string]principal.Claims{
-			"another organization":  {OrgID: liveOtherOrg.String(), Role: "viewer"},
-			"no organization":       {Role: "viewer"},
-			"impersonation active":  {OrgID: ecOrg.String(), Role: "admin", ImpersonationActive: true},
-			"another org and super": {OrgID: liveOtherOrg.String(), Role: "viewer", IsSuperuser: true},
-		} {
-			q.bearer = iaEnvelope(t, stack.priv, claims)
-			got := stack.live(q)
-			if got.status != http.StatusOK || got.body != first.body {
-				o.fail("%s: status %d body %q, want the same build identity %q: the credential's organization is not read", name, got.status, trim(got.body), trim(first.body))
+		o.wantStatus(listener+": envelope (retired class)", stack.live(q), http.StatusUnauthorized)
+		q.bearer = ""
+		identity := liveBuildIdentity(t)
+		if listener == "internal" {
+			for name, headers := range map[string][4]string{
+				"another organization":  {liveOtherOrg.String(), "viewer", "false", "false"},
+				"no organization":       {"", "viewer", "false", "false"},
+				"impersonation active":  {ecOrg.String(), "admin", "false", "true"},
+				"another org and super": {liveOtherOrg.String(), "viewer", "true", "false"},
+			} {
+				for _, store := range []func(*accessStore){nil, noStateRead} {
+					h := q
+					h.headers = map[string]string{internalidentity.HeaderOrgID: headers[0], internalidentity.HeaderRole: headers[1],
+						internalidentity.HeaderSuperuser: headers[2], internalidentity.HeaderImpersonationActive: headers[3]}
+					got := liveStack(t, store).live(h)
+					o.see(got.status)
+					if got.status != http.StatusOK || got.body != identity {
+						o.fail("internal headers, %s (every store read failing: %v): status %d body %q, want the build identity %q: the credential's organization and no state are read",
+							name, store != nil, got.status, trim(got.body), trim(identity))
+					}
+				}
 			}
 		}
+		buildInfoUserTokenCells(t, o, listener, q, identity)
+		stackStateCellsAs(t, o, listener+": platform admin, ", q, asSuperuser)
 	}
 	o.textHas("resource_resolver", "none:")
 	o.impersonationPolicy(false)
-	o.unknownIsDeclared("current_state_cache_behavior")
+	o.textHas("current_state_cache_behavior", "none: per-request read", "nothing is cached between requests",
+		"the internal identity headers read no state")
+	o.textHas("disclosure_behavior", "not a platform admin (admin.orgs)", "active impersonation session", "delegated")
 	o.statusText()
 	return o
+}
+
+// liveBuildIdentity is the body /buildinfo serves an accepted caller: the process's build identity.
+func liveBuildIdentity(t *testing.T) string {
+	t.Helper()
+	body, err := buildstamp.Body(version.Current("query-api"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body) + "\n"
+}
+
+// buildInfoUserTokenCells: /buildinfo serves a user access token only when its live users row is a platform admin
+// (admin.orgs) acting as itself; an organization role, an active impersonation session and a delegated token each get
+// the bare 401 every unaccepted class gets, before any build identity is written.
+func buildInfoUserTokenCells(t *testing.T, o *liveObs, listener string, q liveReq, identity string) {
+	t.Helper()
+	answer := func(shape func(*accessStore), extra map[string]any) liveAnswer {
+		minter := newAccessMinter(t)
+		store := newAccessStore()
+		if shape != nil {
+			shape(store)
+		}
+		stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow))
+		q2 := q
+		q2.bearer = minter.mint(ecUser, extra, nil)
+		return stack.live(q2)
+	}
+	for name, cell := range map[string]struct {
+		shape func(*accessStore)
+		extra map[string]any
+	}{
+		"platform-admin user token":             {asSuperuser, nil},
+		"platform-admin user token with no org": {asSuperuser, map[string]any{"org_id": nil}},
+	} {
+		got := answer(cell.shape, cell.extra)
+		o.see(got.status)
+		if got.status != http.StatusOK || got.body != identity {
+			o.fail("%s: %s: status %d body %q, want 200 and the build identity %q", listener, name, got.status, trim(got.body), trim(identity))
+		}
+	}
+	refused := map[string]struct {
+		shape func(*accessStore)
+		extra map[string]any
+	}{
+		"platform-admin user token with an active impersonation session": {func(s *accessStore) { asSuperuser(s); withSession(s) }, nil},
+		"delegated platform-admin user token":                            {asSuperuser, map[string]any{"act": map[string]any{"sub": wirePrincipal(liveActor)}}},
+	}
+	for _, role := range []string{"viewer", "member", "admin", "owner"} {
+		role := role
+		refused[role+" user token"] = struct {
+			shape func(*accessStore)
+			extra map[string]any
+		}{func(s *accessStore) { s.roles = map[[2]uuid.UUID]string{{ecUser, ecOrg}: role} }, nil}
+	}
+	for name, cell := range refused {
+		got := answer(cell.shape, cell.extra)
+		o.wantStatus(listener+": "+name, got, http.StatusUnauthorized)
+		if strings.Contains(got.body, identity) || strings.TrimSpace(got.body) != "unauthorized" {
+			o.fail("%s: %s: body %q, want the bare refusal and no build identity", listener, name, trim(got.body))
+		}
+	}
 }
 
 func driveGraphQL(t *testing.T, row liveRow) *liveObs {
@@ -593,7 +869,7 @@ func driveGraphQL(t *testing.T, row liveRow) *liveObs {
 			{"X-Org-Id of an organization the caller is a member of", func(s *accessStore) { s.members[[2]uuid.UUID{ecUser, liveOtherOrg}] = true }, liveOtherOrg.String(), http.StatusOK, liveOtherOrg.String()},
 			{"superuser X-Org-Id of another organization", asSuperuser, liveOtherOrg.String(), http.StatusOK, liveOtherOrg.String()},
 		} {
-			for name, bearer := range map[string]func(*behaviourStack) string{"edge token": func(s *behaviourStack) string { return s.edge }, "user token": func(s *behaviourStack) string { return s.user }} {
+			for name, bearer := range map[string]func(*behaviourStack) string{"user token": func(s *behaviourStack) string { return s.user }} {
 				stack = liveStack(t, cell.shape)
 				headers := map[string]string{}
 				if cell.header != "" {
@@ -609,7 +885,10 @@ func driveGraphQL(t *testing.T, row liveRow) *liveObs {
 			}
 		}
 		stack = liveStack(t, nil)
-		a = stack.live(request("query Unregistered { nothing }", nil, stack.edge))
+		o.wantStatus(listener+": edge token (retired HS256 class)", stack.live(request(iaDocument, nil, stack.edge)), http.StatusUnauthorized)
+		o.wantNoRun(listener+": edge token (retired HS256 class)", stack)
+		stack = liveStack(t, nil)
+		a = stack.live(request("query Unregistered { nothing }", nil, stack.user))
 		o.wantStatus(listener+": unregistered document", a, http.StatusNotFound)
 		if !strings.Contains(a.body, "UNREGISTERED_DOCUMENT") {
 			o.fail("unregistered document: body %q lacks UNREGISTERED_DOCUMENT", trim(a.body))
@@ -622,10 +901,11 @@ func driveGraphQL(t *testing.T, row liveRow) *liveObs {
 		cell := listener + ": user token, token key source unreadable"
 		o.wantStatus(cell, down.live(request(iaDocument, nil, down.user)), http.StatusServiceUnavailable)
 		o.wantNoRun(cell, down)
+		stackStateCells(t, o, listener+": ", request(iaDocument, nil, ""))
 	}
 	o.textHas("resource_resolver", "organization_from_header_or_credential", "X-Org-Id")
 	o.impersonationPolicy(true)
-	o.unknownIsDeclared("current_state_cache_behavior")
+	o.textHas("current_state_cache_behavior", "none: per-request read", "nothing is cached between requests")
 	o.statusText()
 	return o
 }
@@ -664,9 +944,15 @@ func driveMCP(t *testing.T, row liveRow) *liveObs {
 	sw[mcpRoutingOperationPrefix+"hotspots"] = false
 	cell("a root field the class row has off", post(fresh(sw), validMCPHeaders(), body), http.StatusNotFound)
 	o.textHas("resource_resolver", "internal identity headers", "a bearer token is refused")
-	o.unknownIsDeclared("current_state_cache_behavior", "impersonation_policy")
-	if got := row.str("impersonation_policy"); got != "unknown" {
-		o.fail("impersonation_policy is %q: no live cell observes an MCP row's impersonation effect (a claim of it is refused 403)", got)
+	cell("a valid identity again after a refused one", post(l, validMCPHeaders(), body), http.StatusOK)
+	o.textHas("current_state_cache_behavior", "none: no state read", "nothing is read or cached")
+	impersonating := mcpDo(l.mcp, http.MethodPost, mcpHeaders(mcpTestOrg, "member", "false", "true"), body)
+	o.see(impersonating.Code)
+	if reason, _ := mcpReason(t, impersonating); impersonating.Code != http.StatusForbidden || reason != mcpReasonElevatedClaim {
+		o.fail("an identity claiming impersonation: status %d reason %q, want 403 %s", impersonating.Code, reason, mcpReasonElevatedClaim)
+	}
+	if got := row.str("impersonation_policy"); got != "not_applicable_non_main_app" {
+		o.fail("impersonation_policy is %q: the MCP caller class refuses every impersonation claim (403 %s), so no override reaches it", got, mcpReasonElevatedClaim)
 	}
 	o.statusText()
 	return o
@@ -802,13 +1088,19 @@ func TestLiveRowGuardFiresOnPlantedRows(t *testing.T) {
 		row.raw["impersonation_policy"] = "exempt_no_org_context"
 		mustDefect(t, "exempt", driveRow(t, row), row.id, "impersonation_policy")
 	})
+	t.Run("R4d an MCP row whose impersonation policy is not the refused-claim value", func(t *testing.T) {
+		row := liveRowByID(t, "POST /query [dev-health-query-api @mcp]")
+		row.raw["impersonation_policy"] = "subject_to_impersonation_override"
+		mustDefect(t, "mcp", driveRow(t, row), row.id, "refuses every impersonation claim")
+	})
 	t.Run("R4b an override policy on a route that never reads the organization", func(t *testing.T) {
 		row := liveRowByID(t, buildinfo)
 		row.raw["impersonation_policy"] = "subject_to_impersonation_override"
 		mustDefect(t, "override", driveRow(t, row), row.id, "impersonation_policy")
 	})
-	t.Run("R4c an unknown action that lost its gap", func(t *testing.T) {
-		row := liveRowByID(t, query)
+	t.Run("R4c an unknown field that lost its gap", func(t *testing.T) {
+		row := liveRowByID(t, rest)
+		row.raw["disclosure_behavior"] = "unknown"
 		row.raw["gaps"] = []any{}
 		mustDefect(t, "gap", driveRow(t, row), row.id, "no declared gap")
 	})

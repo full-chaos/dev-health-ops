@@ -38,10 +38,15 @@ func newSwitchOrgLive(t *testing.T, ctx context.Context, owned bool, wrap func(S
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
+	// As production (eddsa class, AUTH_TOKEN_ISSUER_URL set): switch-org mounts only with the access check, and the
+	// bearer is an EdDSA session access token.
+	signer, _, _ := fileSigner(t)
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer})
 	if err != nil {
 		t.Fatal(err)
 	}
+	issuer := newEdDSAIssuer(t, signer, testAudience).WithAccessCheck(check)
+	bearers := newEdDSAIssuer(t, signer, AccessTokenAudience)
 	users := PGUsers{Pool: p.runtime, AuthSchema: p.schema, UsersOwned: owned}
 	var reads SwitchOrgReads = users
 	if wrap != nil {
@@ -52,11 +57,11 @@ func newSwitchOrgLive(t *testing.T, ctx context.Context, owned bool, wrap func(S
 		AppendAudit: func(context.Context, audit.AuditEvent) error { return nil },
 		Limits:      mustLimits(t, httpapi.NewMemoryCounters(nil)),
 		SwitchOrg:   &SwitchOrgConfig{Sessions: p.store, Reads: reads},
-	}, switchRows("ops_access_token_hs256"))
+	}, switchRows("user_access_token"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &switchOrgLive{preflightStore: p, owned: owned, ids: ids, issuer: issuer, server: serveRoutes(routes)}
+	return &switchOrgLive{preflightStore: p, owned: owned, ids: ids, issuer: bearers, server: serveRoutes(routes)}
 }
 
 func (l *switchOrgLive) exec(t *testing.T, ctx context.Context, sql string, args ...any) {
@@ -243,7 +248,7 @@ func testSwitchOrgIntegrationTwoSwitchesOneSession(t *testing.T, ctx context.Con
 }
 
 // Multi-org navigation: A to B with the first bearer, then back to A with the
-// successor's bearer; each switch leaves one live session.
+// successor's session access token; each switch leaves one live session.
 func testSwitchOrgIntegrationSwitchBackAndForth(t *testing.T, ctx context.Context, l *switchOrgLive) {
 	c := l.switchCase(t, ctx)
 	r := post(l.server, PatternCompatSwitchOrg, orgBody(c.orgB), c.bearer)
@@ -251,12 +256,12 @@ func testSwitchOrgIntegrationSwitchBackAndForth(t *testing.T, ctx context.Contex
 		t.Fatalf("A to B: %d %s", r.Code, r.Body)
 	}
 	var answer struct {
-		AccessToken string `json:"access_token"`
+		SessionAccessToken string `json:"session_access_token"`
 	}
 	if err := json.Unmarshal(r.Body.Bytes(), &answer); err != nil {
 		t.Fatal(err)
 	}
-	r = post(l.server, PatternCompatSwitchOrg, orgBody(c.orgA), map[string]string{"Authorization": "Bearer " + answer.AccessToken})
+	r = post(l.server, PatternCompatSwitchOrg, orgBody(c.orgA), map[string]string{"Authorization": "Bearer " + answer.SessionAccessToken})
 	if r.Code != http.StatusOK {
 		t.Fatalf("B to A: %d %s", r.Code, r.Body)
 	}

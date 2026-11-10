@@ -47,9 +47,9 @@ func TestGraphQLEdgeAnswersARemovedMembersTokenAsOnMain(t *testing.T) {
 	ran := 0
 	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { ran++; w.WriteHeader(http.StatusOK) }))
 	auth := ecEdgeAuth(t, store)
-	handler := graphQLEdgeChain(newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil),
-		graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes}).ServeHTTP
-	removed := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: removedOrg.String(), role: "admin", tokenVersion: 5})
+	handler := onPattern("/graphql", graphQLEdgeChain(newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil),
+		graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes})).ServeHTTP
+	removed := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: removedOrg.String(), tokenVersion: 5})
 	var logged bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&logged)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // AuthSchema is the auth-owned schema WriteAuthSessions creates on the Go copy: the api's default
@@ -23,6 +24,24 @@ const AuthSchema = "auth"
 // A venue without minted tokens writes nothing but the schema.
 func (v *Venue) WriteAuthSessions(t *testing.T, ctx context.Context) {
 	t.Helper()
+	admin := v.applyAuthSchema(t, ctx)
+	defer admin.Close()
+	if v.TokenIssuer == nil {
+		return
+	}
+	writeSessions(t, ctx, admin, v.TokenIssuer)
+}
+
+// ApplyAuthSchema is the schema part of WriteAuthSessions alone: an auth plane started on the Go copy projects its
+// users first, so the principals WriteAuthSessions writes afterwards are already whole.
+func (v *Venue) ApplyAuthSchema(t *testing.T, ctx context.Context) {
+	t.Helper()
+	v.applyAuthSchema(t, ctx).Close()
+}
+
+// applyAuthSchema applies the auth schema once and returns an admin pool on the Go copy.
+func (v *Venue) applyAuthSchema(t *testing.T, ctx context.Context) *pgxpool.Pool {
+	t.Helper()
 	if v.authRuntimeRole == "" {
 		t.Fatal("venue: WriteAuthSessions needs a venue built by Start")
 	}
@@ -30,7 +49,6 @@ func (v *Venue) WriteAuthSessions(t *testing.T, ctx context.Context) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close()
 	if _, ok := v.Roles["auth_runtime"]; !ok {
 		id, err := authschema.NewValidatedIdentifier(v.authRuntimeRole)
 		if err != nil {
@@ -46,10 +64,14 @@ func (v *Venue) WriteAuthSessions(t *testing.T, ctx context.Context) {
 			t.Fatalf("venue: auth schema: %v", err)
 		}
 	}
-	if v.TokenIssuer == nil {
-		return
-	}
-	for _, session := range v.TokenIssuer.Sessions() {
+	return admin
+}
+
+// writeSessions writes one principal and one live auth-service session row per session issuer minted, pinned at
+// the token's token_version, on admin's database (its auth schema already applied).
+func writeSessions(t *testing.T, ctx context.Context, admin *pgxpool.Pool, issuer *edtokens.Issuer) {
+	t.Helper()
+	for _, session := range issuer.Sessions() {
 		if _, err := admin.Exec(ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'user') ON CONFLICT (id) DO NOTHING`, session.Principal); err != nil {
 			t.Fatalf("venue: principal %s: %v", session.Principal, err)
 		}

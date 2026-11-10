@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
 	"log/slog"
@@ -27,27 +26,36 @@ import (
 // their own, by ruling or because they only dispatch literal Python
 // routes (which responseModelRoutes names) and answer 405 otherwise.
 var goRoutesWithoutPython = map[string]string{
-	"POST /api/v1/admin/orgs/{org_id}/transfer-ownership": "Go serves the web's shape; the ruled intentional divergence",
-	"POST /api/v1/admin/teams/{team_id}":                  "dispatches POST /api/v1/admin/teams/import; any other id is 405",
-	"POST /api/v1/admin/ip-allowlist/{entry_id}":          "dispatches POST /api/v1/admin/ip-allowlist/check; any other id is 405",
-	"POST /api/v1/auth/change-password":                   "Go-only self-service route (no Python ancestor); answers the switch-org token shape",
-	"GET /buildinfo":                                      "Go-only build stamp; the Python api has no such route",
-	"GET /api/v1/admin/llm-settings/models":               "Go-only list of the saved BYO provider's model ids; the Python api has no such route",
-	"GET /api/v1/admin/llm-settings/service-model":        "Go-only self-service acr_service_model toggle (CHAOS-10243); no Python ancestor",
-	"PUT /api/v1/admin/llm-settings/service-model":        "Go-only self-service acr_service_model toggle (CHAOS-10243); no Python ancestor",
-	"GET /api/v1/admin/llm-settings/own-model":            "Go-only org-admin own-model on/off toggle; no Python ancestor",
-	"PUT /api/v1/admin/llm-settings/own-model":            "Go-only org-admin own-model on/off toggle; no Python ancestor",
-	"GET /api/v1/admin/llm-settings/prompt-cache":         "Go-only org-admin BYO prompt-cache opt-in; no Python ancestor",
-	"PUT /api/v1/admin/llm-settings/prompt-cache":         "Go-only org-admin BYO prompt-cache opt-in; no Python ancestor",
-	"POST /api/v1/billing/plans/{plan_id}":                "answers 405 for every id; POST /api/v1/billing/plans/pull-stripe is its own pattern",
-	"HEAD /api/v1/billing/plans/pull-stripe":              "answers the 405 FastAPI gives a HEAD there (Allow: POST); without it the GET /plans/{plan_id} route's 405 would answer",
-	"GET /api/v1/auth/oauth/{first}/{second}":             "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
-	"HEAD /api/v1/auth/oauth/{first}/{second}":            "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
-	"POST /api/v1/auth/oauth/{first}/{second}":            "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
-	"PUT /api/v1/auth/oauth/{first}/{second}":             "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
-	"PATCH /api/v1/auth/oauth/{first}/{second}":           "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
-	"DELETE /api/v1/auth/oauth/{first}/{second}":          "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
-	"OPTIONS /api/v1/auth/oauth/{first}/{second}":         "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"POST /api/v1/admin/orgs/{org_id}/transfer-ownership":                  "Go serves the web's shape; the ruled intentional divergence",
+	"POST /api/v1/admin/teams/{team_id}":                                   "dispatches POST /api/v1/admin/teams/import; any other id is 405",
+	"POST /api/v1/admin/ip-allowlist/{entry_id}":                           "dispatches POST /api/v1/admin/ip-allowlist/check; any other id is 405",
+	"POST /api/v1/admin/impersonate/handoff/consume":                       "Go-only one-use consume of the impersonation start handoff; no Python ancestor",
+	"POST /api/v1/auth/change-password":                                    "Go-only self-service route (no Python ancestor); answers the switch-org token shape",
+	"GET /buildinfo":                                                       "Go-only build stamp; the Python api has no such route",
+	"GET /api/v1/admin/llm-settings/models":                                "Go-only list of the saved BYO provider's model ids; the Python api has no such route",
+	"GET /api/v1/admin/llm-settings/service-model":                         "Go-only self-service acr_service_model toggle (CHAOS-10243); no Python ancestor",
+	"PUT /api/v1/admin/llm-settings/service-model":                         "Go-only self-service acr_service_model toggle (CHAOS-10243); no Python ancestor",
+	"GET /api/v1/admin/llm-settings/own-model":                             "Go-only org-admin own-model on/off toggle; no Python ancestor",
+	"PUT /api/v1/admin/llm-settings/own-model":                             "Go-only org-admin own-model on/off toggle; no Python ancestor",
+	"GET /api/v1/admin/llm-settings/prompt-cache":                          "Go-only org-admin BYO prompt-cache opt-in; no Python ancestor",
+	"PUT /api/v1/admin/llm-settings/prompt-cache":                          "Go-only org-admin BYO prompt-cache opt-in; no Python ancestor",
+	"GET /api/v1/admin/service-accounts/{service_account_id}/keys":         "Go-only platform-admin proxy to the auth-service key verbs; no Python ancestor",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/keys":        "Go-only platform-admin proxy to the auth-service key verbs; no Python ancestor",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate": "Go-only platform-admin proxy to the auth-service key verbs; no Python ancestor",
+	"POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke":      "Go-only platform-admin proxy to the auth-service key verbs; no Python ancestor",
+	"POST /api/v1/admin/service-accounts":                                  "Go-only platform-admin proxy to the auth-service service account lifecycle verbs; no Python ancestor",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/disable":     "Go-only platform-admin proxy to the auth-service service account lifecycle verbs; no Python ancestor",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/enable":      "Go-only platform-admin proxy to the auth-service service account lifecycle verbs; no Python ancestor",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/owner":       "Go-only platform-admin proxy to the auth-service service account lifecycle verbs; no Python ancestor",
+	"POST /api/v1/billing/plans/{plan_id}":                                 "answers 405 for every id; POST /api/v1/billing/plans/pull-stripe is its own pattern",
+	"HEAD /api/v1/billing/plans/pull-stripe":                               "answers the 405 FastAPI gives a HEAD there (Allow: POST); without it the GET /plans/{plan_id} route's 405 would answer",
+	"GET /api/v1/auth/oauth/{first}/{second}":                              "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"HEAD /api/v1/auth/oauth/{first}/{second}":                             "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"POST /api/v1/auth/oauth/{first}/{second}":                             "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"PUT /api/v1/auth/oauth/{first}/{second}":                              "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"PATCH /api/v1/auth/oauth/{first}/{second}":                            "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"DELETE /api/v1/auth/oauth/{first}/{second}":                           "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"OPTIONS /api/v1/auth/oauth/{first}/{second}":                          "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
 }
 
 // retiredPythonRoutes are the table's routes the pinned FastAPI build no longer
@@ -108,24 +116,16 @@ func TestRouteResponseModelsMatchTheFrozenFastAPITable(t *testing.T) {
 	// admin and teamsidentity mount only with a pool and a ClickHouse
 	// connection; their route lists do not need either to be built.
 	routes := Routes(Deps{Guard: guard}, logger)
-	routes = append(routes, markResponseModels(admin.Routes(admin.Deps{Guard: guard, Logger: logger, Write: WriteError}))...)
+	// ServiceAccounts set: the lifecycle routes mount only with AUTH_PROXY_SERVICE_ACCOUNT_KEYS on.
+	routes = append(routes, markResponseModels(admin.Routes(admin.Deps{Guard: guard, Logger: logger, Write: WriteError, ServiceAccounts: stubAccounts{}}))...)
 	routes = append(routes, markResponseModels(teamsidentity.Routes(nil, guard, logger, nil, nil))...)
 	// billing mounts only with a pool; its route list needs neither a pool
 	// nor a Stripe client to be built.
 	routes = append(routes, markResponseModels(billing.Routes(billing.Deps{Guard: guard, Logger: logger}))...)
-	// session mounts only with a pool, an authenticator and the token keys;
-	// its route list needs none of them to work.
-	sessionKey := "response-model-registry-signing-key-0123456789"
-	verifier, err := edgetoken.New(sessionKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(sessionKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// session mounts only with a pool and an authenticator; its route list
+	// needs neither to work.
 	routes = append(routes, markResponseModels(session.Routes(session.Deps{Pool: &pgxpool.Pool{}, Guard: guard,
-		Auth: &policy.Authenticator{}, Verifier: verifier, Signer: signer}))...)
+		Auth: &policy.Authenticator{}}))...)
 	// sso mounts only with a pool; its route list does not use it.
 	routes = append(routes, markResponseModels(sso.Routes(sso.Deps{Pool: &pgxpool.Pool{}, Guard: guard, Logger: logger}))...)
 	patterns := map[string]httpapi.Route{}

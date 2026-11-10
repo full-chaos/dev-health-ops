@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	adminapi "github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
@@ -83,20 +84,22 @@ func TestAuditWritesPrincipalIDForWorkloadAccept(t *testing.T) {
 	}
 }
 
-func TestAuditSvcAcrRowHasNullPrincipalID(t *testing.T) {
+// A live svc_acr_ credential row is refused before any read: its audit row
+// names neither a credential nor a principal.
+func TestAuditSvcAcrRefusalHasNoActor(t *testing.T) {
 	ctx, pool := auditPool(t)
 	const token = "svc_acr_audit-shape-probe-0123456789"
 	if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-		VALUES (gen_random_uuid(), 'acr', $1, $2, '["entitlements:read"]'::json, now())`, hashToken(token), token[:16]); err != nil {
+		VALUES (gen_random_uuid(), 'acr', $1, $2, '["entitlements:read"]'::json, now())`, adminapi.HashServiceToken(token), token[:16]); err != nil {
 		t.Fatal(err)
 	}
 	handler := authServer(t, &fakeStore{}, PostgresCredentialStore{Pool: pool}, nil)
-	if rec := do(handler, entitlementPath+someOrg, "Bearer "+token); rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
+	if rec := do(handler, entitlementPath+someOrg, "Bearer "+token); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 	rows := auditRows(ctx, t, pool)
-	if len(rows) != 1 || rows[0].credential == nil || rows[0].principal != nil {
-		t.Fatalf("rows = %+v, want one row with a credential and a NULL principal_id", rows)
+	if len(rows) != 1 || rows[0].credential != nil || rows[0].principal != nil || rows[0].outcome != outcomeMissingToken {
+		t.Fatalf("rows = %+v, want one missing_or_malformed_token row with no credential and no principal", rows)
 	}
 }
 
@@ -133,7 +136,7 @@ func TestAuditCheckRefusesBothCredentialAndPrincipal(t *testing.T) {
 	ctx, pool := auditPool(t)
 	const token = "svc_acr_audit-check-probe-0123456789"
 	if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-		VALUES (gen_random_uuid(), 'acr', $1, $2, '["entitlements:read"]'::json, now())`, hashToken(token), token[:16]); err != nil {
+		VALUES (gen_random_uuid(), 'acr', $1, $2, '["entitlements:read"]'::json, now())`, adminapi.HashServiceToken(token), token[:16]); err != nil {
 		t.Fatal(err)
 	}
 	var credentialID string

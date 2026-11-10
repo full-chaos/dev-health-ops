@@ -214,24 +214,21 @@ func TestVenueOracleCustomerPushReads(t *testing.T) {
 	cfg := config.Config{
 		APIAddress: "127.0.0.1:0", RiverDatabaseSchema: "river", APIDatabaseRole: venue.Roles["api"],
 		APIDatabaseURI: secrets.NewValue(venue.GoAPIDatabaseURI(t)),
-		APIJWTSecret:   secrets.NewValue(venueKey), APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
+		APIJWTIssuer:   "dev-health-ops", APIJWTAudience: "dev-health-api",
 		CORSAllowedOrigins: []string{"http://localhost:3000"},
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := customerPushRequests(seed, venue.Tokens)
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads.go-pin.json", SHA256: customerPushReadsPinSHA256, Ruling: customerPushReadsRuling})
-	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads-orgclaim.go-pin.json", SHA256: customerPushReadsOrgClaimPinSHA256, Ruling: orgClaimRuling})
-	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads-orgless.go-pin.json", SHA256: customerPushReadsOrglessPinSHA256, Ruling: customerPushOrglessRuling})
 	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{Golden: golden, Retire: retiredCustomerPushReadsRequest, Pin: pin,
-		Retirements: []venueoracle.Retirement{
-			{Match: func(request venueoracle.Request) bool { return request.Name == "bad org claim" }, Pin: claimPin},
-			{Match: func(request venueoracle.Request) bool { return customerPushReadsOrglessRetired[request.Name] }, Pin: orglessPin},
+		KnownDivergences: []venueoracle.KnownDivergence{
+			{Match: func(request venueoracle.Request) bool { return request.Name == "bad org claim" }, Ticket: venueoracle.NotUUIDOrgClaimGap},
 		}})
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
-	venueoracle.FinishPins(t, pin, claimPin, orglessPin)
+	venueoracle.FinishPins(t, pin)
 	golden.Finish(t)
 }
 
@@ -247,17 +244,6 @@ func retiredCustomerPushReadsRequest(request venueoracle.Request) bool {
 	return request.Name == "batches huge offset" || request.Name == "batch offset huge"
 }
 
-// customerPushOrglessSuperusers is the "superuser" seed: its org claim (orgCommunity) names an organization it holds
-// no membership in. auth-service login mints such a user's access token with no org claim (auth/authapi/login.go:184-190).
-var customerPushOrglessSuperusers = []string{"superuser"}
-
-// customerPushOrglessRuling is orglessSuperuserRuling at the customer-push gate, which reads the token's own org.
-const customerPushOrglessRuling = orglessSuperuserRuling + " (apiservice/customerpush/gate.go:23-26)"
-
-// customerPushReadsOrglessRetired are the reads by the org-less superuser seed that customerPushOrglessRuling retired.
-var customerPushReadsOrglessRetired = map[string]bool{"superuser own org": true, "superuser x-org team": true}
-
-const (
-	customerPushReadsOrgClaimPinSHA256 = "e2c439fad270d63bc213c161481f124e5ccc03e57d4d50e12cd77adb88b86e70"
-	customerPushReadsOrglessPinSHA256  = "42b5efc5384476f92226dc2c4452d59daaee365a8f8bfffb97137d4364b0250c"
-)
+// customerPushOrglessSuperusers names no seed: the "superuser" seed (org claim orgCommunity, no membership row there)
+// keeps its recorded org claim, and its user access token gets the recorded (HS256) answer (product rule 1, D6773).
+var customerPushOrglessSuperusers []string

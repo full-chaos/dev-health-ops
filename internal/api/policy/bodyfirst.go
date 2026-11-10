@@ -59,6 +59,12 @@ func (g *Guard) bodyFirstOver(guarded http.Handler) http.Handler {
 	})
 }
 
+// BodyAfter reads r's body as BodyFirst does, but behind whatever wraps it:
+// a Go-only route with no FastAPI order to keep answers its guard first.
+func (g *Guard) BodyAfter(next http.Handler) http.Handler {
+	return g.bodyFirstOver(next)
+}
+
 // BodyFirstPlatform is BodyFirst over WrapPlatform.
 func (g *Guard) BodyFirstPlatform(action string, next http.Handler) http.Handler {
 	return g.bodyFirstOver(g.WrapPlatform(action, next))

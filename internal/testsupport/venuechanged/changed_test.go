@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -48,6 +49,7 @@ func selectedFrom(t *testing.T, root, file string) ([]string, error, string) {
 	t.Helper()
 	command := exec.Command("bash", filepath.Join(root, "ci", "check_go.sh"), "venue-oracles", "--changed", file, "--list")
 	command.Dir = root
+	command.Env = append(os.Environ(), "VENUE_CLOSURE_DIR="+derivedClosureDir(t))
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err := command.Run()
@@ -58,6 +60,26 @@ func selectedFrom(t *testing.T, root, file string) ([]string, error, string) {
 		}
 	}
 	return rows, err, stderr.String()
+}
+
+var derivedClosures struct {
+	sync.Once
+	lines map[string][]string
+}
+
+// derivedClosureDir writes the closures, derived once per test binary, into a temp directory of t: the verb reads it
+// instead of deriving them again on every call.
+func derivedClosureDir(t *testing.T) string {
+	t.Helper()
+	derivedClosures.Do(func() {
+		root := repoRoot(t)
+		derivedClosures.lines = computeClosures(t, root, venuePackages(t, root))
+	})
+	dir := t.TempDir()
+	if err := writeClosures(dir, derivedClosures.lines); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 // registryRows are the run rows of one package's registry file.
@@ -167,9 +189,10 @@ func TestTheWorkflowRunsTheHeavyStepsOnlyWhenSomethingIsSelected(t *testing.T) {
 		t.Fatal("the workflow does not select and then run through the verb")
 	}
 	const condition = "if: steps.select.outputs.run == 'true'"
-	// Go, registry login, image pre-pull, the run, and the upload (no Python is installed).
-	if got := strings.Count(text, condition); got != 5 {
-		t.Fatalf("%d heavy steps carry the selection condition, want 5 (setup-go, login, pre-pull, run, upload)", got)
+	// Registry login, image pre-pull, the run, and the upload (no Python is installed). Go is set up before the
+	// selection, which derives the closure of every venue test binary (CHAOS-13101).
+	if got := strings.Count(text, condition); got != 4 {
+		t.Fatalf("%d heavy steps carry the selection condition, want 4 (login, pre-pull, run, upload)", got)
 	}
 	if !strings.Contains(text, "if: steps.select.outputs.run == 'true' && always()") {
 		t.Fatal("the receipt upload is not gated on the selection")

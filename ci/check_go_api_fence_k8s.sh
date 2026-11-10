@@ -73,8 +73,9 @@ trap 'exit 143' TERM HUP
 K() { kubectl --context "kind-${CLUSTER}" "$@"; }
 
 printf 'step 0: kind %s, helm %s and kubectl %s by pinned sha256\n' "${KIND_VERSION}" "${HELM_VERSION}" "${KUBECTL_VERSION}"
-curl --fail --silent --show-error --location --output "${WORK}/kind" \
-  "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+# CHAOS-13426: authenticated with GH_TOKEN when set (CI), retried; anonymous for a local run.
+bash "${ROOT}/ci/lib/fetch_pinned_release.sh" kubernetes-sigs/kind "${KIND_VERSION}" kind-linux-amd64 "${KIND_SHA256_AMD64}" \
+  "${WORK}/kind"
 printf '%s  %s\n' "${KIND_SHA256_AMD64}" "${WORK}/kind" | sha256sum --check --status \
   || die "kind ${KIND_VERSION} does not match its pinned sha256"
 chmod +x "${WORK}/kind"

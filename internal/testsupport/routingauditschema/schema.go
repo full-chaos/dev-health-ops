@@ -14,7 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// DDL mirrors alembic 0130, which creates go_api_routing_audits.
+// DDL mirrors alembic 0130, which creates go_api_routing_audits, with the two CHECKs chain revision 0164
+// (internal/pgmigrate/sql) widens to admit user_access_token.
 //
 // The constraints are NOT trimmed to "what the test needs", for the same
 // reason registryschema.DDL's are not: the action and credential-class
@@ -50,9 +51,9 @@ CREATE TABLE go_api_routing_audits (
 	CONSTRAINT ck_go_api_routing_audits_action
 		CHECK (action IN ('enable', 'disable', 'repoint')),
 	CONSTRAINT ck_go_api_routing_audits_credential_class
-		CHECK (credential_class IN ('effective_principal_envelope', 'operator_direct')),
+		CHECK (credential_class IN ('effective_principal_envelope', 'operator_direct', 'user_access_token')),
 	CONSTRAINT ck_go_api_routing_audits_principal_pairing
-		CHECK ((credential_class = 'effective_principal_envelope') = (principal_id IS NOT NULL)),
+		CHECK ((credential_class IN ('effective_principal_envelope', 'user_access_token')) = (principal_id IS NOT NULL)),
 	CONSTRAINT ck_go_api_routing_audits_mode_before
 		CHECK (mode_before IS NULL OR mode_before IN ('python', 'shadow', 'canary', 'primary', 'disabled')),
 	CONSTRAINT ck_go_api_routing_audits_mode_after

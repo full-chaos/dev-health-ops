@@ -31,7 +31,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/flame"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -70,18 +69,15 @@ func flameSwitchFromEnv(getenv getenvFunc) *routeswitch.DynamicSwitch {
 }
 
 // loadFlameRouteConfig reads this route's own dependency set -- ClickHouse
-// plus the envelope verifier trio. Deliberately NOT loadQueryRouteConfig,
+// only; the envelope key is optional. Deliberately NOT loadQueryRouteConfig,
 // same reasoning as quadrant_route.go/people_route.go's own doc comments:
 // this route never touches registry Postgres.
-func loadFlameRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+func loadFlameRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 	clickHouseURI = getenv("CLICKHOUSE_URI")
-	jwksPath = getenv("GO_API_ENVELOPE_JWKS_PATH")
-	issuer = getenv("GO_API_ENVELOPE_ISSUER")
-	audience = getenv("GO_API_ENVELOPE_AUDIENCE")
-	if clickHouseURI == "" || jwksPath == "" || issuer == "" || audience == "" {
-		return "", "", "", "", false
+	if clickHouseURI == "" {
+		return "", false
 	}
-	return clickHouseURI, jwksPath, issuer, audience, true
+	return clickHouseURI, true
 }
 
 // buildFlameRoute constructs the handler, its own routeswitch Mux, and a
@@ -90,12 +86,12 @@ func loadFlameRouteConfig(getenv getenvFunc) (clickHouseURI, jwksPath, issuer, a
 // "stay unmounted, don't fail to build/start" contract every other
 // optionally-configured route in this binary follows.
 func buildFlameRoute(getenv getenvFunc, edgeUsers edgeUserStore) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadFlameRouteConfig(getenv)
+	clickHouseURI, cfgOK := loadFlameRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	verifier, err := principal.NewVerifier(jwksPath, issuer, audience)
+	verifier, err := envelopeVerifierFromEnv(getenv)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -154,6 +150,10 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "flame", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "flame", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 
@@ -175,7 +175,7 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 			validationErrors = append(validationErrors, missingFieldError([]any{"query", "entity_id"}, nil))
 		}
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -183,18 +183,18 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 		// query-param KEYS present -- regardless of value -- is a 400.
 		for key := range query {
 			if flameForbiddenQueryParams[key] {
-				writeRESTError(w, r, "flame", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "flame", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
 
-		resp, err := flame.BuildResponse(r.Context(), client, claims.OrgID, flame.Params{
+		resp, err := flame.BuildResponse(r.Context(), client, org, flame.Params{
 			EntityType: lastQueryValue(query, "entity_type"),
 			EntityID:   lastQueryValue(query, "entity_id"),
 		})
 		if err != nil {
 			if reqErr, ok := flame.AsRequestError(err); ok {
-				writeRESTError(w, r, "flame", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "flame", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -202,7 +202,7 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 			// not one of build_flame_response's own typed HTTPExceptions
 			// degrades to a generic 503, never a raw ClickHouse error on
 			// the wire.
-			writeRESTDataUnavailable(w, r, "flame", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "flame", org, err)
 			return
 		}
 
@@ -210,7 +210,7 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: flame: encode response failed: org_id=%s request_id=%s err=%v",
-				claims.OrgID, envelopeRequestID(r), encodeErr)
+				org, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 			writeModelFailure(w)
 		}
 	}

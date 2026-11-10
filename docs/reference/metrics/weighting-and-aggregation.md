@@ -30,7 +30,7 @@ Team count numbers (commits, after-hours and weekend commits, and the other team
 
 ## Time and scope
 
-A work unit is dated by its END day (CHAOS-9016, D6022). It is included when its end falls in the selected window:
+A work unit is dated by its END day. It is included when its end falls in the selected window:
 
 ```text
 selected_start <= to_ts AND to_ts < selected_end

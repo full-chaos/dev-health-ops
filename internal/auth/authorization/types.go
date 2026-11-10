@@ -97,6 +97,10 @@ const (
 
 	ReasonImpersonationDenied Reason = "impersonation_denied"
 	ReasonDelegationInvalid   Reason = "delegation_invalid"
+
+	// ReasonAllowedByPlatformAdmin allows a catalog-flagged organization action to a holder of admin.orgs with no
+	// membership role that holds it. It is internal: the wire reason_code is allowed_by_role.
+	ReasonAllowedByPlatformAdmin Reason = "allowed_by_platform_admin"
 )
 
 // AllReasons lists every Reason the package can return.
@@ -110,6 +114,7 @@ func AllReasons() []Reason {
 		ReasonWorkloadActionDenied, ReasonClockUnavailable, ReasonServiceAccountInactive,
 		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed,
 		ReasonImpersonationDenied, ReasonDelegationInvalid, ReasonRepositoryAllowlistTooLarge,
+		ReasonAllowedByPlatformAdmin,
 	}
 }
 

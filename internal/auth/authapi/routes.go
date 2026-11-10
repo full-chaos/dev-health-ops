@@ -65,12 +65,12 @@ func Routes(deps Deps) ([]httpapi.Route, error) {
 		return nil, err
 	}
 	h := handlers{Deps: deps, rec: rec}
-	return []httpapi.Route{
+	return withSessionBearerRoutes(deps, []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternRefresh, Handler: http.HandlerFunc(h.refresh)},
 		{Method: http.MethodGet, Pattern: PatternCurrent, Handler: http.HandlerFunc(h.current)},
 		{Method: http.MethodPost, Pattern: PatternRevoke, Handler: http.HandlerFunc(h.revoke)},
 		{Method: http.MethodPost, Pattern: PatternRevokeAll, Handler: http.HandlerFunc(h.revokeAll)},
-	}, nil
+	}), nil
 }
 
 // bearerToken is the credential of an "Authorization: Bearer <token>" header.

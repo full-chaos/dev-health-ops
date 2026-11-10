@@ -56,11 +56,14 @@ VALUES (gen_random_uuid(), $1::uuid, $2, $3::json, now(), now())`, orgID, tier, 
 }
 
 // Setting inserts a settings row for orgID (text: settings.org_id is not a uuid column).
+// An llm row gets one fixed updated_at: the writers store a config's rows in one
+// transaction, so seeded rows of one config share a stamp whatever their call order.
 func Setting(ctx context.Context, t testing.TB, pool *pgxpool.Pool, orgID, category, key, value string, encrypted bool) {
 	t.Helper()
 	exec(ctx, t, pool, "setting "+category+"/"+key, `
 INSERT INTO settings (id, org_id, category, key, value, is_encrypted, created_at, updated_at)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, now(), now())`, orgID, category, key, value, encrypted)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, now(),
+  CASE WHEN $2::text = 'llm' THEN timestamptz '2026-07-01 00:00:00+00' ELSE now() END)`, orgID, category, key, value, encrypted)
 }
 
 // Integration inserts an active integration for orgID.

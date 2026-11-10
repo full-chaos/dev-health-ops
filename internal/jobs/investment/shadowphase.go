@@ -93,7 +93,38 @@ const (
 	// tokens = 42e-9 USD for each token. Spend is summed in integers, so the
 	// same usage gives the same cost on every architecture.
 	shadowNanoUSDPerInputToken = 42
+	// attemptRatesUnpriced is the rates_version of an attempt row whose backend
+	// has no price in the price book; such a row carries no cost, and no reader
+	// may take its zero as a free call.
+	attemptRatesUnpriced = "unpriced"
 )
+
+// attemptBackend names the backend that served a classification, so each
+// attempt row is priced by that backend. The zero value is the platform jev
+// key at the TypeSafe platform rate.
+type attemptBackend struct {
+	provider string
+	baseURL  string
+	byo      bool
+}
+
+// price is the cost in USD of usage and the rates version it comes from. A
+// backend the price book does not know is unpriced: cost 0, never the TypeSafe
+// platform rate.
+func (backend attemptBackend) price(model string, at time.Time, usage categorize.SystemOneUsage, platformNanoUSD int64) (float64, string) {
+	if !backend.byo {
+		return float64(platformNanoUSD) / 1e9, shadowRatesVersion
+	}
+	price, err := llmbudget.PriceAt(backend.provider, model, backend.baseURL, at)
+	if err != nil || price == nil {
+		return 0, attemptRatesUnpriced
+	}
+	if !usage.Reported || usage.InputTokens < 0 || usage.OutputTokens < 0 {
+		return 0, price.Version
+	}
+	// Rates are micro-USD for each million tokens: tokens x rate / 1e12 is USD.
+	return (float64(float64(usage.InputTokens)*float64(price.Rates.Input)) + float64(float64(usage.OutputTokens)*float64(price.Rates.Output))) / 1e12, price.Version
+}
 
 // shadowClassifier is the decision completer as the phase uses it.
 type shadowClassifier interface {
@@ -638,7 +669,7 @@ func (phase *ShadowPhase) shadowRecord(cfg Config, result shadowResult) chwrite.
 // and the cost.
 func (phase *ShadowPhase) addAttempts(cfg Config, result shadowResult, record chwrite.ShadowRecord, buffer *chwrite.AttemptBuffer, summary *shadowSummary) {
 	exchange := result.exchange
-	rows := attemptRecords(cfg, chwrite.RoleShadow, phase.identity, phase.config, result.unit.workUnitID, exchange, record.State, record.ModelReturned)
+	rows := attemptRecords(cfg, chwrite.RoleShadow, attemptBackend{}, phase.identity, phase.config, result.unit.workUnitID, exchange, record.State, record.ModelReturned)
 	for index, row := range rows {
 		label := ShadowAttemptRetried
 		if index == len(rows)-1 {
@@ -662,10 +693,11 @@ const shadowUsageUnavailable = "unavailable"
 // state and modelReturned are already bounded by the caller. The last row
 // carries the state, the usage and the cost.
 func attemptRecords(
-	cfg Config, role string, identity decision.Identity, config, workUnitID string,
+	cfg Config, role string, backend attemptBackend, identity decision.Identity, config, workUnitID string,
 	exchange *shadowExchange, state, modelReturned string,
 ) []chwrite.AttemptRecord {
 	rows := make([]chwrite.AttemptRecord, 0, len(exchange.attempts))
+	_, ratesVersion := backend.price(identity.Model, cfg.ComputedAt, exchange.usage, exchange.billed)
 	for index, attempt := range exchange.attempts {
 		row := chwrite.AttemptRecord{
 			RunID: cfg.RunID, WorkUnitID: workUnitID, Role: role,
@@ -673,9 +705,9 @@ func attemptRecords(
 			Provider: identity.Provider, APIMode: identity.API, ModelRequested: identity.Model,
 			Attempt: shadowAttemptNumber(index), Kind: shadowAttemptKindFirst,
 			HTTPStatus: shadowHTTPStatus(attempt.StatusCode), ErrorClass: shadowErrorClass(attempt.Class),
-			RequestID: shadowRequestID(attempt.RequestID), RequestIDSource: shadowRequestIDSource(attempt.RequestIDSource), RatesVersion: shadowRatesVersion,
+			RequestID: shadowRequestID(attempt.RequestID), RequestIDSource: shadowRequestIDSource(attempt.RequestIDSource),
 			LatencyMS: shadowMillis(attempt.Latency), RetryWaitMS: shadowMillis(attempt.WaitBefore),
-			ComputedAt: cfg.ComputedAt,
+			ComputedAt: cfg.ComputedAt, RatesVersion: ratesVersion,
 		}
 		if index > 0 {
 			row.Kind = shadowAttemptKindRetry
@@ -684,7 +716,7 @@ func attemptRecords(
 			row.State, row.ModelReturned = state, modelReturned
 			if exchange.usage.Reported {
 				row.InputTokens, row.OutputTokens = shadowTokens(exchange.usage.InputTokens), shadowTokens(exchange.usage.OutputTokens)
-				row.BilledCostUSD = float64(exchange.billed) / 1e9
+				row.BilledCostUSD, _ = backend.price(identity.Model, cfg.ComputedAt, exchange.usage, exchange.billed)
 			} else if attempt.StatusCode == http.StatusOK && attempt.Class == "" {
 				row.UsageReason = shadowUsageUnavailable
 			}

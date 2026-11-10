@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -520,19 +521,17 @@ func (boundStore) Peek(context.Context, Hit) (int64, error)      { return 0, nil
 // soon as a limit is wired, counts each store error by limit id, and never
 // carries a caller key or a path.
 func TestRateLimitStoreErrorsAreWrittenAsPrometheusSeries(t *testing.T) {
-	before := scrapeStoreErrors(t)
 	limit := Limit{ID: "metrics_probe", Count: 5, Window: time.Hour}
 	handler := LimitWith(NewKeyedLimiter(failingStore{}, limit), func(*http.Request) string { return "secret-caller-key" }, WriteError)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	if got := scrapeStoreErrors(t); !strings.Contains(got, `dev_health_api_rate_limit_store_errors_total{limit="metrics_probe"} 0`) {
-		t.Fatalf("a wired limit has no zero series:\n%s", got)
-	}
+	const storeErrors = "dev_health_api_rate_limit_store_errors_total"
+	base := seriesValue(t, scrapeStoreErrors(t), storeErrors, "metrics_probe")
 	for range 3 {
 		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/orgs/secret-path/invites", nil))
 	}
 	after := scrapeStoreErrors(t)
-	if !strings.Contains(after, `dev_health_api_rate_limit_store_errors_total{limit="metrics_probe"} 3`) {
-		t.Fatalf("three store errors were not counted:\n%s", after)
+	if got := seriesValue(t, after, storeErrors, "metrics_probe") - base; got != 3 {
+		t.Fatalf("store errors counted = %d, want 3:\n%s", got, after)
 	}
 	if !strings.Contains(after, "# TYPE dev_health_api_rate_limit_store_errors_total counter") {
 		t.Fatalf("the series has no TYPE line:\n%s", after)
@@ -540,7 +539,24 @@ func TestRateLimitStoreErrorsAreWrittenAsPrometheusSeries(t *testing.T) {
 	if strings.Contains(after, "secret-caller-key") || strings.Contains(after, "secret-path") {
 		t.Fatalf("the metric carries a caller key or a path:\n%s", after)
 	}
-	_ = before
+}
+
+// seriesValue reads one limit's value from a scrape; the counters are
+// process-global, so a test asserts the delta from its own baseline.
+func seriesValue(t *testing.T, scrape, name, limitID string) int64 {
+	t.Helper()
+	prefix := name + `{limit="` + limitID + `"} `
+	for _, line := range strings.Split(scrape, "\n") {
+		if rest, ok := strings.CutPrefix(line, prefix); ok {
+			v, err := strconv.ParseInt(rest, 10, 64)
+			if err != nil {
+				t.Fatalf("series %q has a non-integer value: %v", line, err)
+			}
+			return v
+		}
+	}
+	t.Fatalf("no %s series for limit %q:\n%s", name, limitID, scrape)
+	return 0
 }
 
 func scrapeStoreErrors(t *testing.T) string {
@@ -660,9 +676,8 @@ func TestRateLimitRejectionsAreCountedByLimitIDOnly(t *testing.T) {
 	store := NewMemoryCounters(nil)
 	handler := LimitWith(NewKeyedLimiter(store, limit), func(*http.Request) string { return "secret-caller-key" }, WriteError)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	if got := scrapeRejections(t); !strings.Contains(got, `dev_health_api_rate_limit_rejections_total{limit="rejections_probe"} 0`) {
-		t.Fatalf("a wired limit has no zero rejections series:\n%s", got)
-	}
+	const rejections = "dev_health_api_rate_limit_rejections_total"
+	base := seriesValue(t, scrapeRejections(t), rejections, "rejections_probe")
 	var last int
 	for range 4 {
 		recorder := httptest.NewRecorder()
@@ -673,8 +688,8 @@ func TestRateLimitRejectionsAreCountedByLimitIDOnly(t *testing.T) {
 		t.Fatalf("fourth hit answered %d, want 429", last)
 	}
 	after := scrapeRejections(t)
-	if !strings.Contains(after, `dev_health_api_rate_limit_rejections_total{limit="rejections_probe"} 2`) {
-		t.Fatalf("two refused hits were not counted:\n%s", after)
+	if got := seriesValue(t, after, rejections, "rejections_probe") - base; got != 2 {
+		t.Fatalf("refused hits counted = %d, want 2:\n%s", got, after)
 	}
 	if !strings.Contains(after, "# TYPE dev_health_api_rate_limit_rejections_total counter") {
 		t.Fatalf("the series has no TYPE line:\n%s", after)
@@ -693,12 +708,16 @@ func TestRateLimitStoreErrorsAreNotCountedAsRejections(t *testing.T) {
 	limit := Limit{ID: "store_error_probe", Count: 2, Window: time.Hour}
 	handler := LimitWith(NewKeyedLimiter(failingStore{}, limit), func(*http.Request) string { return "k" }, WriteError)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	const rejections = "dev_health_api_rate_limit_rejections_total"
+	const storeErrors = "dev_health_api_rate_limit_store_errors_total"
+	rejBase := seriesValue(t, scrapeRejections(t), rejections, "store_error_probe")
+	errBase := seriesValue(t, scrapeStoreErrors(t), storeErrors, "store_error_probe")
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/x", nil))
-	if got := scrapeRejections(t); !strings.Contains(got, `dev_health_api_rate_limit_rejections_total{limit="store_error_probe"} 0`) {
-		t.Fatalf("a store error was counted as a rejection:\n%s", got)
+	if got := seriesValue(t, scrapeRejections(t), rejections, "store_error_probe") - rejBase; got != 0 {
+		t.Fatalf("a store error was counted as %d rejection(s)", got)
 	}
-	if got := scrapeStoreErrors(t); !strings.Contains(got, `dev_health_api_rate_limit_store_errors_total{limit="store_error_probe"} 1`) {
-		t.Fatalf("the store error was not counted:\n%s", got)
+	if got := seriesValue(t, scrapeStoreErrors(t), storeErrors, "store_error_probe") - errBase; got != 1 {
+		t.Fatalf("store errors counted = %d, want 1", got)
 	}
 }
 
@@ -706,12 +725,14 @@ func TestRateLimitPathBoundRefusalIsARejection(t *testing.T) {
 	limit := Limit{ID: "path_bound_probe", Count: 5, Window: time.Hour}
 	handler := LimitWith(NewKeyedLimiter(boundStore{}, limit), func(*http.Request) string { return "k" }, WriteError)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	const rejections = "dev_health_api_rate_limit_rejections_total"
+	base := seriesValue(t, scrapeRejections(t), rejections, "path_bound_probe")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/x", nil))
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("path bound answered %d, want 429", recorder.Code)
 	}
-	if got := scrapeRejections(t); !strings.Contains(got, `dev_health_api_rate_limit_rejections_total{limit="path_bound_probe"} 1`) {
-		t.Fatalf("the path-bound refusal was not counted:\n%s", got)
+	if got := seriesValue(t, scrapeRejections(t), rejections, "path_bound_probe") - base; got != 1 {
+		t.Fatalf("path-bound refusals counted = %d, want 1", got)
 	}
 }

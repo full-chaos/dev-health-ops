@@ -64,13 +64,16 @@ printf 'apiVersion: v1\nkind: Config\n' >"${SA}"
 chmod 0600 "${SA}"
 z="$(printf '0%.0s' $(seq 1 64))"
 printf 'DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE=registry.invalid/m@sha256:%s\nDEV_HEALTH_GO_AUTH_SERVICE_IMAGE=registry.invalid/s@sha256:%s\n' "${z}" "${z}" >"${T}/images.env"
+y="$(printf '1%.0s' $(seq 1 64))"
+printf 'DEV_HEALTH_GO_AUTH_SERVICE_IMAGE=registry.invalid/s@sha256:%s\n' "${y}" >"${T}/previous.env"
+printf 'DEV_HEALTH_GO_AUTH_SERVICE_IMAGE=registry.invalid/s:previous\n' >"${T}/previous-tag.env"
 printf 'DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE=registry.invalid/m:latest\nDEV_HEALTH_GO_AUTH_SERVICE_IMAGE=registry.invalid/s@sha256:%s\n' "${z}" >"${T}/tag.env"
 
 # go VAR=VALUE...: run the driver with a complete good environment, minus or plus the given overrides -> rc, out
 go() {
   rc=0
   out="$(env REHEARSAL_KUBECONFIG="${SA}" REHEARSAL_NAMESPACE=authrot-test REHEARSAL_RUN_TOKEN="${TOKEN}" \
-    REHEARSAL_SERVER=https://127.0.0.1:6443 REHEARSAL_DIR="${T}/d$((++n))" REHEARSAL_IMAGES_ENV="${T}/images.env" "$@" \
+    REHEARSAL_SERVER=https://127.0.0.1:6443 REHEARSAL_DIR="${T}/d$((++n))" REHEARSAL_IMAGES_ENV="${T}/images.env" REHEARSAL_PREVIOUS_IMAGES_ENV="${T}/previous.env" "$@" \
     env PATH="${T}/bin:${T}/binh:${PATH}" bash "${SCRIPT}" --stage rollback 2>&1)" || rc=$?
 }
 n=0
@@ -86,7 +89,7 @@ no_write_calls() { ! grep -v 'auth can-i' "${FAKE_LOG}" | grep -v '^helm .* list
 # plan: real helm template, no cluster call
 : >"${FAKE_LOG}"
 plan="$(PATH="${T}/bin:${PATH}" bash "${SCRIPT}" --print-plan 2>&1)" || plan="rc-failed: ${plan}"
-for needle in 'stage rollback' 'S3 chart' 'PASS: plan: the chart renders class eddsa' 'PASS: plan: the chart renders class hs256_compat' 'namespace-scoped ServiceAccount kubeconfig only'; do
+for needle in 'stage rollback' 'S3 chart' 'PASS: plan: the chart renders class eddsa' 'previous auth-service image' 'namespace-scoped ServiceAccount kubeconfig only'; do
   if grep -qF -- "${needle}" <<<"${plan}"; then ok "plan-names-${needle// /-}"; else bad "plan-names-${needle// /-}"; fi
 done
 if [ ! -s "${FAKE_LOG}" ]; then ok plan-makes-no-cluster-call; else bad plan-makes-no-cluster-call; fi
@@ -132,6 +135,8 @@ if no_write_calls; then ok no-server-env-refused-before-any-write; else bad no-s
 refused namespace-odd-name-refused 'plain namespace name' 'REHEARSAL_NAMESPACE=Bad;ns'
 refused non-hex-token-refused 'hex token' REHEARSAL_RUN_TOKEN=nothex
 refused tag-image-refused 'not a registry digest reference' REHEARSAL_IMAGES_ENV="${T}/tag.env"
+refused previous-tag-image-refused 'not a registry digest reference' REHEARSAL_PREVIOUS_IMAGES_ENV="${T}/previous-tag.env"
+refused previous-image-file-missing-refused 'names no file' REHEARSAL_PREVIOUS_IMAGES_ENV="${T}/nofile.env"
 for bad_id in "svc_authsess_$(printf '%043d' 0)" "postgresql://db.internal:5432/ops"; do
   refused run-id-refused 'REHEARSAL_RUN_ID' REHEARSAL_RUN_ID="${bad_id}"
   if ! grep -qF -- "${bad_id}" <<<"${out}"; then ok run-id-value-not-echoed; else bad run-id-value-not-echoed; fi
@@ -216,10 +221,11 @@ if ! grep -q -- '--from-literal' <<<"${body}"; then ok no-secret-value-on-argv; 
 if grep -qF 'shred -u' <<<"${body}" && grep -qE 'trap cleanup EXIT' <<<"${body}"; then ok keys-shredded-on-exit; else bad keys-shredded-on-exit; fi
 # the compromise needs the publish floor: the dry-run activate of b gates it, and the floor is the real 300 s
 if grep -qE '^readonly PENDING_FLOOR=300$' <<<"${body}" && grep -q 'keys_cmd activate -kid b' <<<"${body}"; then ok real-publish-floor-gates-the-compromise; else bad real-publish-floor-gates-the-compromise; fi
-# the rollback is the chart's own: an upgrade to hs256_compat, then helm rollback to the eddsa revision; a stays absent and compromised after both
-for cell in rollback-a-still-absent-from-the-jwks rollback-a-still-compromised rollback-key-a-refused-terminal forward-a-still-absent-from-the-jwks forward-a-still-compromised; do
+# the rollback is the chart's own: an upgrade to the previous auth-service image (no class flip: hs256_compat is retired), then helm rollback to the eddsa revision; a stays absent and compromised after both
+for cell in rollback-image-is-the-previous-one forward-image-is-the-current-one rollback-a-still-absent-from-the-jwks rollback-a-still-compromised rollback-key-a-refused-terminal forward-a-still-absent-from-the-jwks forward-a-still-compromised; do
   if grep -qE "^check ${cell} " <<<"${body}"; then ok "has-${cell}"; else bad "has-${cell}"; fi
 done
+if ! grep -qF 'hs256_compat' <<<"${body}"; then ok script-has-no-hs256-compat-class-flip; else bad script-has-no-hs256-compat-class-flip; fi
 if grep -qE '^hm rollback "\$\{RELEASE\}" "\$\{EVIDENCE_EDDSA_REVISION\}"' <<<"${body}"; then ok chart-rollback-targets-the-eddsa-revision; else bad chart-rollback-targets-the-eddsa-revision; fi
 
 # The ServiceAccount of the rehearsal gets one namespaced Role (Role + RoleBinding) and, for the one cluster-scoped read of its own Namespace object,

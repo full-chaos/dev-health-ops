@@ -217,6 +217,13 @@
           ],
           "description": "The authorization decision's wire reason code (authorization_decision.v1 reason_code, reason-codes.json decision_reason_code)."
         },
+        "decision_internal_reason": {
+          "type": "string",
+          "enum": [
+            "allowed_by_platform_admin"
+          ],
+          "description": "The internal reason of a decision whose wire reason code hides it. Present only on a platform-admin allow, whose decision_reason_code is allowed_by_role; absent on every other row."
+        },
         "action_key": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*){1,3}$"
@@ -295,7 +302,9 @@
               "assertion_key",
               "invited_by",
               "joined_at",
-              "owner_principal_id"
+              "owner_principal_id",
+              "username",
+              "avatar_url"
             ]
           }
         },

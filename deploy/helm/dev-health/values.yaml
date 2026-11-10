@@ -33,6 +33,11 @@ goApi:
   sessionIssue:
     secretName: ""
     secretKey: AUTH_SESSION_ISSUE_TOKEN
+    # -- Optional, absent by default. "workload" (the only mode; "" = absent): go-api presents its workload token on the session issue route and
+    #    reads no AUTH_SESSION_ISSUE_TOKEN. The chart renders AUTH_SESSION_ISSUE_CREDENTIAL=workload, renders no token reference, and
+    #    ignores secretName and secretKey. goApi.extraEnv cannot set AUTH_SESSION_ISSUE_CREDENTIAL while this is set. Absent = the token reference.
+    #    "" = absent (CHAOS-13467): a venue that layers values.prod.yaml sets credential: "" to keep the token reference.
+    # credential: workload
     # -- CHAOS-13039: go-api presents its workload token on the session issue route instead of AUTH_SESSION_ISSUE_TOKEN. Off by
     #    default, and off renders nothing. On (sessions on, authService.accessToken.issuerURL set, secretName set) the chart renders
     #    AUTH_SESSION_ISSUE_CREDENTIAL=workload, AUTH_WORKLOAD_BOOTSTRAP_FILE=/run/workload/api.bootstrap and AUTH_WORKLOAD_ISSUER
@@ -50,7 +55,7 @@ goApi:
   #    create (admin, onboard create_org) and its organization delete go to auth-service first; go-api writes none of those rows itself (503 and no write when auth-service
   #    refuses for a reason go-api has no answer for, or is down). Needs authService.phase 4 (the routes refuse until
   #    auth-service owns users), auth-service's AUTH_MEMBERSHIP_ROUTES on (authService.extraEnv, name AUTH_MEMBERSHIP_ROUTES, value "true": the render refuses the switch without it),
-  #    and a go-api credential (goApi.sessionIssue) minted with the memberships:write scope. Off renders nothing.
+  #    and go-api's workload token (auth-service's AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT names go-api's workload principal). Off renders nothing.
   #    The key is absent by default (an empty goApi.authProxy map is refused like any other hand-set flag map):
   #    authProxy:
   #      orgProvisioning: true
@@ -160,6 +165,22 @@ goApi:
   # -- Extra pod volumes and go-api container mounts (for example a projected serviceAccountToken). Empty renders no key.
   extraVolumes: []
   extraVolumeMounts: []
+  # -- CHAOS-13092: the acr credential revoke route's client (POST /api/v1/acr/credentials/{credential_id}/revoke). Off by default,
+  #    and off renders nothing: the route answers 503. On, the chart projects a ServiceAccount token with acr's workload-exchange
+  #    audience into /var/run/dev-health/acr-revoke/token and renders ACR_REVOKE_URL (acr's internal API origin, no query),
+  #    ACR_REVOKE_TOKEN_URL (acr's token endpoint, <origin>/api/v1/oauth/token) and ACR_REVOKE_SUBJECT_FILE (that path). Both URLs
+  #    are https, or plain http on a <name>.svc.cluster.local host only with allowClusterHTTP: true
+  #    (ACR_REVOKE_ALLOW_CLUSTER_HTTP, always rendered "true" or "false"). audience = acr's workloadTokenExchange.audience. acr accepts the call only when its
+  #    acr.workload_bindings holds a row with role revoke for go-api's ServiceAccount in the caller's organization (one row per
+  #    organization, written out of band); bind first, then turn this on. goApi.extraEnv cannot set an ACR_REVOKE_* name.
+  acrRevoke:
+    enabled: false
+    url: ""
+    tokenURL: ""
+    audience: ""
+    allowClusterHTTP: false
+    # -- Lifetime the kubelet requests for the projected token, 600 to 86400 seconds; it rotates the file before expiry.
+    expirationSeconds: 3600
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -231,8 +252,19 @@ authService:
   #    harness shows no mismatch and the decision point holds a per-caller limit. Needs go-api to reach auth-service
   #    (phase 2 or higher) and the workload credential inputs go-api's startup names. Rollback: remove the name from
   #    the list and roll go-api; no policy data changes. goApi.extraEnv cannot set the variable.
+  #    query-api has three keys, all unset by default (an unset key renders nothing, so a current install renders as before):
+  #    queryApiPdpMode (off, shadow or enforce) renders QUERY_API_PDP_MODE; queryApi lists the namespaces (analytics, metrics,
+  #    git, work_items, integrations, reports, org) whose REST routes and GraphQL root fields the decision point decides,
+  #    rendered as QUERY_API_AUTHZ_ENFORCE; queryApiHeaders lists the namespaces decided for the X-DH-Internal-* header carrier,
+  #    rendered as QUERY_API_HEADERS_AUTHZ_ENFORCE. A list needs queryApiPdpMode shadow or enforce (the binary answers 503 for a
+  #    listed namespace without a client). The decision point's client inputs (AUTH_PROXY_URL, the workload credential) still come
+  #    from queryApi.extraEnv; a mode on with a missing input never fails the start, and every PDP-gated request answers 503.
+  #    queryApi.extraEnv cannot set the three variables.
   enforce:
     goApi: []
+    queryApiPdpMode: ""
+    queryApi: []
+    queryApiHeaders: []
   # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a
   #    known account to the provider's organization and create a new account. true needs users owned (authService.phase 4
   #    with usersOwnedStage=owned): below it go-api's own sign-in join still writes, and two writers would race.
@@ -563,6 +595,13 @@ authService:
     sessionReaders:
       goApi: ""
       queryApi: ""
+    # -- The session reader roles that also read the workload registry row of the acr-api workload
+    #    (AUTH_WORKLOAD_READER_ROLES): go-api's API_DATABASE_ROLE, so its internal acr routes resolve the
+    #    acr principal from the registry. Each must also be a session reader (sessionReaders or
+    #    sessionReaderRoles); query-api's login must never be listed. Empty grants the read to nobody and
+    #    go-api's internal acr routes answer 503. Set it before the auth-grants step of the go-api release
+    #    that reads the registry.
+    workloadReaderRoles: []
     # -- Acknowledges ONE deliberate narrowing of the runtime role's grants: the
     #    16-hex digest a refused auth-migrate run prints. Rendered as
     #    `-ack-grant-narrowing=<digest>` into the auth-migrate Job and the
@@ -751,6 +790,9 @@ queryApi:
   #    a time and one stays ready).
   rollingUpdate: {}
   port: 8090
+  # -- The operator listener (DEV_HEALTH_HTTP_ADDR): /healthz, /readyz and /metrics. Probes and
+  #    the metrics scrape use it; it must differ from port, internal.port and mcp.port.
+  operatorPort: 8080
   # -- Comma-separated CORS allow-list for /graphql, the product GraphQL path
   #    query-api answers (CHAOS-6263): same format and meaning as the Python
   #    api's CORS_ALLOWED_ORIGINS and goApi.corsAllowedOrigins, and it must be
@@ -820,17 +862,11 @@ queryApi:
   #    wired correctly. Assert the /readyz BODY out of band; do not try to make
   #    these probes carry that check.
   livenessProbe:
-    httpGet:
-      path: /readyz
-      port: http
     initialDelaySeconds: 10
     periodSeconds: 15
     timeoutSeconds: 2
     failureThreshold: 3
   readinessProbe:
-    httpGet:
-      path: /readyz
-      port: http
     initialDelaySeconds: 5
     periodSeconds: 10
     timeoutSeconds: 2
@@ -2082,3 +2118,33 @@ postgresql:
   #    loopback: trust) stays in force. Switching it restarts the pod.
   hba:
     enabled: false
+  # -- Nightly pg_dump of the bundled PostgreSQL (CHAOS-13373). Off by default: with `enabled: false`
+  #    the render does not change. With `enabled: true` and postgresql.enabled, the chart adds the
+  #    CronJob <fullname>-postgresql-backup and the PVC <fullname>-postgresql-backups (kept on
+  #    uninstall). The Job runs the image above (pg_dump major == server major), reads the password
+  #    from the Secret and key the StatefulSet reads, writes <UTC ts>.dump (custom format, checked
+  #    with pg_restore --list) and <ts>.dump.sha256, then keeps the newest `keep` dumps. A failed
+  #    dump fails the Job. The PVC is a separate volume, not off-host: it survives a lost or broken
+  #    database volume, not a lost disk. Runbook: docs/operate/maintain/backup-and-restore.md.
+  backup:
+    enabled: false
+    # -- Cron schedule, read in `timeZone`.
+    schedule: "17 3 * * *"
+    # -- CronJob spec.timeZone. Empty leaves it out (the controller's own zone).
+    timeZone: "Etc/UTC"
+    # -- How many dumps (with their .sha256) stay on the PVC; older ones are deleted after a good dump.
+    keep: 7
+    size: 20Gi
+    # -- Empty = the cluster default StorageClass.
+    storageClass: ""
+    # -- A finished Job (and its pod log) is deleted this long after it ends. The stale-backup alert
+    #    (alerts/rules.yml PostgresBackupStale) depends on it: a successful Job's series lasts this
+    #    long, and the alert window is 25h minus it. Change both together.
+    ttlSecondsAfterFinished: 43200
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"

@@ -16,7 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // legacySessionStore is the legacy impersonation caller: an active superuser
@@ -75,20 +75,9 @@ var legacyAdmitted = []string{"GET /api/v1/admin/impersonate/status", "POST /api
 // scope's refusal is told from the route's by the impersonation headers,
 // which the scope stamps only when it lets the session through.
 func TestLegacyImpersonationCallerCensusUnderTheProxySwitch(t *testing.T) {
-	key := strings.Repeat("fixture-key-", 3)
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	store := &legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.AuthenticatorOver(t, store, quietLogger())
 	rows, err := goAPIScopeRows()
 	if err != nil {
 		t.Fatal(err)
@@ -113,17 +102,13 @@ func TestLegacyImpersonationCallerCensusUnderTheProxySwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = clickHouse.Close() })
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}
 	routes := Routes(deps, quietLogger())
 	server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	access, err := signer.Access(edgetoken.AccessClaims{UserID: store.admin.String(), Email: "admin@example.com", OrgID: uuid.NewString(),
-		Role: "member", IsSuperuser: true, TokenVersion: 1}, time.Now().UTC(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	access := tokens.MustMint(t, edtokens.Claims{UserID: store.admin, OrgID: uuid.NewString(), TokenVersion: 1})
 
 	var admitted, refused, sessionless []string
 	seen := map[string]bool{}
@@ -136,7 +121,7 @@ func TestLegacyImpersonationCallerCensusUnderTheProxySwitch(t *testing.T) {
 		store.mu.Lock()
 		store.sessionReads = 0
 		store.mu.Unlock()
-		path := tokenOrgRouteParameter.ReplaceAllStringFunc(route.Pattern, func(string) string { return uuid.NewString() })
+		path := routeParam.ReplaceAllStringFunc(route.Pattern, func(string) string { return uuid.NewString() })
 		request := httptest.NewRequest(route.Method, path, strings.NewReader("{}"))
 		request.Header.Set("Authorization", "Bearer "+access)
 		request.Header.Set("Content-Type", "application/json")

@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,10 +16,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
-// The operator gate, exercised through the real /query handler: a signed
-// envelope is verified by the real principal.Verifier, its claims reach the
-// resolver through the real middleware, and the read goes to a
-// real Postgres. No claims are built by hand.
+// The operator gate, exercised through the real /query handler: the internal
+// identity headers state the caller, its claims reach the resolver through
+// the real middleware, and the read goes to a real Postgres. No claims are
+// built by hand. The effective-principal envelope is a retired class.
 
 func signDataHealthEnvelope(t *testing.T, priv ed25519.PrivateKey, claims principal.Claims, expires time.Time) string {
 	t.Helper()
@@ -40,7 +39,7 @@ func signDataHealthEnvelope(t *testing.T, priv ed25519.PrivateKey, claims princi
 	return signed
 }
 
-func TestDataHealthRoute_OperatorGateThroughTheSignedEnvelope(t *testing.T) {
+func TestDataHealthRoute_OperatorGateThroughTheInternalIdentity(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 	if _, err := pool.Exec(t.Context(), `INSERT INTO sync_configurations (id, org_id, name, provider, created_at, updated_at) VALUES
 		('aaaaaaaa-0000-0000-0000-000000000001', 'org-1', 'gh-main', 'github', now(), now()),
@@ -52,33 +51,28 @@ func TestDataHealthRoute_OperatorGateThroughTheSignedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, otherPriv, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	verifier, err := principal.NewVerifier(writeTestJWKS(t, pub), itTestIssuer, itTestAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 
-	post := func(bearer string) (int, string) {
-		rec := postGraphQLWithVariables(t, handler, registeredConnectorsDataHealthDocument, bearer, map[string]any{"teamId": "ALL"})
+	post := func(carrier func(*http.Request)) (int, string) {
+		rec := postGraphQLWithVariables(t, handler, registeredConnectorsDataHealthDocument, carrier, map[string]any{"teamId": "ALL"})
 		return rec.Code, rec.Body.String()
 	}
 	valid := time.Now().Add(time.Hour)
 
 	for _, tc := range []struct {
-		name  string
-		token string
-		code  int
+		name    string
+		carrier func(*http.Request)
+		code    int
 	}{
-		{"no envelope", "", http.StatusUnauthorized},
-		{"envelope signed by another key", signDataHealthEnvelope(t, otherPriv, principal.Claims{OrgID: "org-1", Role: "admin"}, valid), http.StatusUnauthorized},
-		{"expired envelope", signDataHealthEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "admin"}, time.Now().Add(-time.Hour)), http.StatusUnauthorized},
+		{"no credential", nil, http.StatusUnauthorized},
+		{"the retired envelope", irBearer(signDataHealthEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "admin"}, valid)), http.StatusUnauthorized},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			code, body := post(tc.token)
+			code, body := post(tc.carrier)
 			if code != tc.code || strings.Contains(body, "gh-main") {
 				t.Fatalf("code=%d body=%s", code, body)
 			}
@@ -87,23 +81,21 @@ func TestDataHealthRoute_OperatorGateThroughTheSignedEnvelope(t *testing.T) {
 
 	const refusal = "Data health requires operator access"
 	for _, tc := range []struct {
-		name   string
-		claims principal.Claims
-		served bool
+		name          string
+		role          string
+		super, served bool
 	}{
-		{"role empty", principal.Claims{OrgID: "org-1"}, false},
-		{"role member", principal.Claims{OrgID: "org-1", Role: "member"}, false},
-		{"role viewer", principal.Claims{OrgID: "org-1", Role: "viewer"}, false},
-		{"role operator", principal.Claims{OrgID: "org-1", Role: "operator"}, true},
-		{"role admin", principal.Claims{OrgID: "org-1", Role: "admin"}, true},
-		{"role owner", principal.Claims{OrgID: "org-1", Role: "owner"}, true},
-		{"role ADMIN", principal.Claims{OrgID: "org-1", Role: "ADMIN"}, true},
-		{"superuser flag alone, member role", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true}, false},
-		{"superuser verified-only", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuserVerified: true}, false},
-		{"superuser verified and raw", principal.Claims{OrgID: "org-1", Role: "member", IsSuperuser: true, IsSuperuserVerified: true}, true},
+		{"role empty", "", false, false},
+		{"role member", "member", false, false},
+		{"role viewer", "viewer", false, false},
+		{"role operator", "operator", false, true},
+		{"role admin", "admin", false, true},
+		{"role owner", "owner", false, true},
+		{"role ADMIN", "ADMIN", false, true},
+		{"superuser, member role", "member", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			code, body := post(signDataHealthEnvelope(t, priv, tc.claims, valid))
+			code, body := post(iaHeaders("org-1", tc.role, tc.super, false))
 			if code != http.StatusOK {
 				t.Fatalf("code=%d body=%s", code, body)
 			}

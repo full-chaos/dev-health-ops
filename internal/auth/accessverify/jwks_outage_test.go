@@ -58,7 +58,7 @@ var jwksOutageModes = []string{"status503", "connectionClosed", "hang"}
 
 func jwksOutageFixture(t *testing.T, mode, publishedKid string) (*fixture, *httptest.Server) {
 	t.Helper()
-	f := newFixture(t, false, false)
+	f := newFixture(t, false)
 	srv := jwksIssuer(t, mode, publishedKid, f.pub)
 	client, err := authverify.NewJWKSClient(authverify.JWKSClientConfig{Issuer: srv.URL, HTTPClient: srv.Client(), Timeout: 300 * time.Millisecond, Now: func() time.Time { return now }})
 	if err != nil {

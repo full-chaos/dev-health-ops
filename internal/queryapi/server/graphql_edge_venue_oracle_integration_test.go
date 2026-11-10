@@ -5,10 +5,13 @@ package server
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -19,11 +22,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/envelopemint"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/issuerstub"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -171,21 +176,109 @@ func edgeOracleJWKS(t *testing.T) (string, ed25519.PrivateKey) {
 	return path, priv
 }
 
-// edgeOracleToken signs an access token the way Python's create_access_token
-// does, for the two states the mint mode cannot express (an expired token,
-// one signed with another key).
-func edgeOracleToken(t *testing.T, key string, user edgeUser, expires time.Time) string {
+// edgeIssuer is an in-test HTTPS access-token issuer (issuerstub): its URL is the iss of the tokens it mints, and
+// a plane built with AUTH_ACCESS_TOKEN_ISSUER = url fetches its discovery and JWKS from it.
+type edgeIssuer struct {
+	url    string
+	tokens *edtokens.Issuer
+	// other mints under a key the issuer's JWKS does not hold (same kid, same iss).
+	other *edtokens.Issuer
+}
+
+// startEdgeIssuer serves the issuer and makes this test process trust it: http.DefaultTransport (the transport of
+// the JWKS client Build makes) is replaced by a clone whose RootCAs is the stub's CA until the test ends. The test
+// that calls it must not be parallel and start no parallel subtests: the transport is process-wide.
+func startEdgeIssuer(t *testing.T) edgeIssuer {
 	t.Helper()
-	claims := jwt.MapClaims{
-		"sub": user.id.String(), "email": user.name + "@example.com", "org_id": user.tokenOrg, "role": user.tokenRole,
-		"is_superuser": user.superuser, "type": "access", "iss": defaultEdgeJWTIssuer, "aud": defaultEdgeJWTAudience,
-		"exp": expires.Unix(), "iat": time.Now().Add(-2 * time.Hour).Unix(), "jti": uuid.NewString(), "tv": 0,
-	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(key))
+	files, err := issuerstub.Prepare(t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return signed
+	priv, err := envelopemint.LoadPrivateKeyFromFile(files.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwks, err := os.ReadFile(files.JWKS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM, err := os.ReadFile(files.CA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caPEM) {
+		t.Fatal("issuer stub: ca.pem holds no certificate")
+	}
+	cert, err := tls.LoadX509KeyPair(files.ServerCert, files.ServerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerURL := fmt.Sprintf("https://localhost:%d", listener.Addr().(*net.TCPAddr).Port)
+	server := &http.Server{
+		Handler:           issuerstub.Handler(issuerURL, jwks),
+		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() { _ = server.ServeTLS(listener, "", "") }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	saved := http.DefaultTransport
+	base, ok := saved.(*http.Transport)
+	if !ok {
+		t.Fatalf("http.DefaultTransport is a %T, not an *http.Transport: it cannot be cloned", saved)
+	}
+	trusting := base.Clone()
+	if trusting.TLSClientConfig == nil {
+		trusting.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	trusting.TLSClientConfig.RootCAs = roots
+	http.DefaultTransport = trusting
+	t.Cleanup(func() {
+		if http.DefaultTransport != http.RoundTripper(trusting) {
+			t.Errorf("http.DefaultTransport was replaced again during the test: the restore would drop that replacement")
+		}
+		http.DefaultTransport = saved
+		if http.DefaultTransport != saved {
+			t.Errorf("http.DefaultTransport was not restored")
+		}
+	})
+
+	tokens, err := edtokens.FromKey(priv, issuerstub.DefaultKeyID, issuerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, otherPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := edtokens.FromKey(otherPriv, issuerstub.DefaultKeyID, issuerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return edgeIssuer{url: issuerURL, tokens: tokens, other: other}
+}
+
+// edgeUserClaims are the user access token claims of a seeded principal: its user, the org its token names and
+// the token version its session begins at (0, as the seed's tokens).
+func edgeUserClaims(user edgeUser) edtokens.Claims {
+	return edtokens.Claims{UserID: user.id, OrgID: user.tokenOrg}
+}
+
+// retiredClassCell sends an HS256 access token (the retired class) to a plane's /graphql and asserts the generic
+// 401: the same answer as a bearer that is no token at all, so the refusal does not tell the class apart.
+func retiredClassCell(t *testing.T, goBase, body, hs256 string) {
+	t.Helper()
+	retired := venueoracle.Do(t, goBase, edgePost("HS256 access token (retired class)", hs256, body, nil))
+	garbage := venueoracle.Do(t, goBase, edgePost("garbage bearer", "not-a-jwt", body, nil))
+	if retired.Status != 401 || retired.Body != garbage.Body || !strings.Contains(retired.Body, "Authentication required") {
+		t.Errorf("an HS256 access token: %d %s; want 401 and the generic answer of a garbage bearer (%d %s)",
+			retired.Status, truncateOracleBody(retired.Body), garbage.Status, truncateOracleBody(garbage.Body))
+	}
 }
 
 // edgeCase is one request and how the two planes must relate on it.
@@ -349,9 +442,10 @@ func enterRepositoryRoot(t *testing.T, root string) (leave func()) {
 
 // startEdgePlane builds query-api over the venue as prod does (the real Build over the real settings, the
 // real Listeners) and returns its settings and the base of its public listener.
-func startEdgePlane(t *testing.T, ctx context.Context, venue *venueoracle.Venue, root string) (map[string]string, string, func()) {
+func startEdgePlane(t *testing.T, ctx context.Context, venue *venueoracle.Venue, root, issuerURL string) (map[string]string, string, func()) {
 	t.Helper()
-	// query-api: the real Build over the real settings, the real Listeners.
+	// query-api: the real Build over the real settings, the real Listeners. Its access tokens are the live class:
+	// user access tokens of the issuer at issuerURL (startEdgeIssuer).
 	jwksPath, _ := edgeOracleJWKS(t)
 	settings := map[string]string{
 		"CLICKHOUSE_URI":               venue.AdminClickHouseURI(t, venue.GoClickHouseDB),
@@ -359,7 +453,7 @@ func startEdgePlane(t *testing.T, ctx context.Context, venue *venueoracle.Venue,
 		"GO_API_ENVELOPE_JWKS_PATH":    jwksPath,
 		"GO_API_ENVELOPE_ISSUER":       "edge-oracle-issuer",
 		"GO_API_ENVELOPE_AUDIENCE":     "edge-oracle-audience",
-		edgeJWTSecretEnvVar:            edgeOracleJWTKey,
+		accessTokenIssuerEnvVar:        issuerURL,
 		"CORS_ALLOWED_ORIGINS":         edgeOracleOrigin,
 	}
 	// The report writer stages its job contracts from a path relative to the
@@ -392,14 +486,15 @@ type edgeSuite struct {
 	member          string
 }
 
-// edgeOracleCases builds the requests of the edge oracle. mint signs the two time-bound tokens the venue's mint
-// mode cannot express: one signed with another key (valid in time) and one expired.
+// edgeOracleCases builds the requests of the edge oracle. wrongKey and expired are the member's user access tokens
+// the venue's mint cannot express: one signed with a key the issuer's JWKS does not hold (valid in time) and one
+// expired.
 //
 // schemeToken is the credential of the two cases that present a valid token under another scheme ("bearer", "Basic"):
 // empty means the venue's member token (the live oracle); the frozen oracle gives a valid token with fixed instants,
 // because the golden's request key holds a token sent under another scheme as written, and the venue's own token is
 // new in every run.
-func edgeOracleCases(t *testing.T, docs []registeredEdgeDocument, users []edgeUser, venue *venueoracle.Venue, mint func(key string, user edgeUser, expired bool) string, schemeToken string) edgeSuite {
+func edgeOracleCases(t *testing.T, docs []registeredEdgeDocument, venue *venueoracle.Venue, wrongKey, expired, schemeToken string) edgeSuite {
 	t.Helper()
 	token := func(name string) string {
 		value, ok := venue.Tokens[name]
@@ -451,8 +546,8 @@ func edgeOracleCases(t *testing.T, docs []registeredEdgeDocument, users []edgeUs
 		for _, c := range []struct{ name, token string }{
 			{"no credential", ""},
 			{"garbage bearer", "not-a-jwt"},
-			{"wrong key", mint("another-key-another-key-another-key-32b", users[0], false)},
-			{"expired", mint(edgeOracleJWTKey, users[0], true)},
+			{"wrong key", wrongKey},
+			{"expired", expired},
 			{"inactive user", token("inactive")},
 			{"revoked token version", token("revoked")},
 			{"viewer", token("viewer")},

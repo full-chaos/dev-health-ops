@@ -4,15 +4,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math"
 	"net/http"
-	"strconv"
 	"strings"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
@@ -37,12 +33,10 @@ type User struct {
 	ImpersonatedBy *string
 	TokenVersion   int
 	// SessionID is the auth-service session the token's sid claim names,
-	// checked live; nil for a token without sid (a go-api token).
+	// checked live.
 	SessionID *uuid.UUID
-	// superuserClaim is the verified legacy token's is_superuser claim, by
-	// Python truthiness; accessToken marks a user access token.
-	superuserClaim bool
-	accessToken    bool
+	// accessToken marks a user access token.
+	accessToken bool
 }
 
 // Holds reports whether the caller holds the platform action now.
@@ -94,24 +88,24 @@ var errRejected = errors.New("policy: credential refused")
 
 // Authenticator is AuthService.authenticate_access_token.
 type Authenticator struct {
-	verifier *edgetoken.Verifier
-	store    Store
-	logger   *slog.Logger
-	routed   *routedAccess
+	store  Store
+	logger *slog.Logger
+	routed *routedAccess
 	// delegated is the delegated_bearer lookup DelegatedRows set; nil
 	// admits a delegated session's bearer on no row.
 	delegated func(profile string) bool
 }
 
-// NewAuthenticator builds an Authenticator.
-func NewAuthenticator(verifier *edgetoken.Verifier, store Store, logger *slog.Logger) (*Authenticator, error) {
-	if verifier == nil || store == nil {
-		return nil, errors.New("policy: authenticator needs a verifier and a store")
+// NewAuthenticator builds an Authenticator. Only a routed decision
+// (RouteAccess) accepts a token: HS256 access verify is retired.
+func NewAuthenticator(store Store, logger *slog.Logger) (*Authenticator, error) {
+	if store == nil {
+		return nil, errors.New("policy: authenticator needs a store")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Authenticator{verifier: verifier, store: store, logger: logger}, nil
+	return &Authenticator{store: store, logger: logger}, nil
 }
 
 // BearerToken is extract_token_from_header: exactly two whitespace-separated
@@ -127,173 +121,41 @@ func BearerToken(authorization string) (string, bool) {
 	return parts[1], true
 }
 
-// Authenticate verifies token and checks the users row. It returns
-// (nil, errRejected) for every case Python answers with None, and a wrapped
-// store error (ErrUnavailable or other) when the lookup fails. After
-// RouteAccess the request's endpoint-profile row picks the validator.
-func (a *Authenticator) Authenticate(ctx context.Context, token string) (*User, error) {
-	if a.routed != nil {
-		return a.authenticateRouted(ctx, token)
-	}
-	return a.AuthenticateLegacy(ctx, token)
-}
-
-// AuthenticateLegacy is the HS256 ops access-token path: the token is
-// verified with the go-api key and the users row checked.
+// Authenticate verifies token against the request's endpoint-profile row
+// (RouteAccess) and checks the users row. It returns (nil, errRejected) for
+// every case Python answers with None, and a wrapped store error
+// (ErrUnavailable or other) when the lookup fails. Without RouteAccess every
+// token is refused.
 //
 // A request bound to a (ReadOnce) gets the answer of its first
-// Authenticate of the same token: the token is verified and the users row
-// read once for the whole request.
-func (a *Authenticator) AuthenticateLegacy(ctx context.Context, token string) (*User, error) {
+// Authenticate of the same token on the same route row: the token is
+// verified and the users row read once for the whole request.
+func (a *Authenticator) Authenticate(ctx context.Context, token string) (*User, error) {
+	if a.routed == nil {
+		a.logger.DebugContext(ctx, "api access token refused", slog.String("reason", "no_access_check"))
+		return nil, errRejected
+	}
 	reads := a.readsFor(ctx)
 	if reads == nil {
-		return a.authenticate(ctx, token)
+		return a.authenticateRouted(ctx, token)
 	}
+	key := RouteProfileFrom(ctx) + "\x00" + token
 	reads.mu.Lock()
-	defer reads.mu.Unlock()
-	if got, ok := reads.users[token]; ok {
+	got, ok := reads.users[key]
+	reads.mu.Unlock()
+	if ok {
 		return copyUser(got.user), got.err
 	}
-	user, err := a.authenticate(ctx, token)
-	reads.users[token] = userRead{user: copyUser(user), err: err}
+	// Not under reads.mu: the routed check reads the membership through the
+	// same record.
+	user, err := a.authenticateRouted(ctx, token)
+	reads.mu.Lock()
+	defer reads.mu.Unlock()
+	if got, ok := reads.users[key]; ok {
+		return copyUser(got.user), got.err
+	}
+	reads.users[key] = userRead{user: copyUser(user), err: err}
 	return user, err
-}
-
-func (a *Authenticator) authenticate(ctx context.Context, token string) (*User, error) {
-	claims, err := a.verifier.Verify(token)
-	if err != nil {
-		a.logger.DebugContext(ctx, "api access token refused", slog.String("reason", edgetoken.ReasonOf(err)))
-		return nil, errRejected
-	}
-	return a.CheckClaims(ctx, claims)
-}
-
-// CheckClaims is Authenticate's second half: the live users-row checks on
-// claims a caller has already verified with the SAME edgetoken.Verifier
-// (found, is_active, token_version). A caller that verifies the token itself,
-// to keep its own per-reason telemetry, calls this instead of Authenticate so
-// the decision stays one implementation across planes. It returns (nil,
-// errRejected) for every refusal and a wrapped store error (ErrUnavailable or
-// other) when the lookup fails; it never treats a failed lookup as a pass.
-func (a *Authenticator) CheckClaims(ctx context.Context, claims jwt.MapClaims) (*User, error) {
-	user, err := userFromClaims(claims)
-	if err != nil {
-		return nil, err
-	}
-	id, ok := ParsePyUUID(user.UserID)
-	if !ok {
-		a.logger.WarnContext(ctx, "api access token has an invalid user id claim")
-		return nil, errRejected
-	}
-	user.ID = id
-
-	state, found, err := a.store.UserState(ctx, id)
-	if err != nil {
-		a.logger.WarnContext(ctx, "api access token user lookup failed",
-			slog.String("user_id", user.UserID), slog.Bool("unavailable", errors.Is(err, ErrUnavailable)))
-		return nil, err
-	}
-	if !found {
-		a.logger.WarnContext(ctx, "api access token valid but user not found", slog.String("user_id", user.UserID))
-		return nil, errRejected
-	}
-	if !state.IsActive {
-		a.logger.WarnContext(ctx, "api access token valid but user is deactivated", slog.String("user_id", user.UserID))
-		return nil, errRejected
-	}
-	version, ok := tokenVersion(claims)
-	if !ok {
-		a.logger.WarnContext(ctx, "api access denied: stale-session check unreadable", slog.String("user_id", user.UserID))
-		return nil, errRejected
-	}
-	if version != state.TokenVersion {
-		a.logger.WarnContext(ctx, "api access denied: stale session", slog.String("user_id", user.UserID))
-		return nil, errRejected
-	}
-	sessionID, err := a.checkSession(ctx, claims, id, state.TokenVersion)
-	if err != nil {
-		return nil, err
-	}
-	user.SessionID = sessionID
-	user.IsSuperuser, user.Platform = state.IsSuperuser, state.Platform
-	user.TokenVersion = int(version)
-	return user, nil
-}
-
-// errClaimType is a claim whose JSON type Python's code path raises on
-// (TypeError/AttributeError outside the caught set): a 500, not a 401.
-var errClaimType = errors.New("policy: access token claim has an unsupported type")
-
-func userFromClaims(claims jwt.MapClaims) (*User, error) {
-	sub, ok := claims["sub"].(string)
-	if !ok {
-		// uuid.UUID(<non-str>) raises TypeError/AttributeError, which
-		// authenticate_access_token does not catch.
-		return nil, errClaimType
-	}
-	user := &User{UserID: sub, Role: "member"}
-	user.Email, _ = claims["email"].(string)
-	user.OrgID, _ = claims["org_id"].(string)
-	if role, present := claims["role"]; present {
-		user.Role, _ = role.(string)
-	}
-	user.Username = optionalString(claims, "username")
-	user.FullName = optionalString(claims, "full_name")
-	user.ImpersonatedBy = optionalString(claims, "impersonating_user_id")
-	user.superuserClaim = pyTruthy(claims["is_superuser"])
-	return user, nil
-}
-
-func optionalString(claims jwt.MapClaims, key string) *string {
-	value, ok := claims[key].(string)
-	if !ok {
-		return nil
-	}
-	return &value
-}
-
-// tokenVersion is `0 if tv is None else int(tv)` with the TypeError and
-// ValueError of int() mapped to ok=false.
-func tokenVersion(claims jwt.MapClaims) (int64, bool) {
-	raw, present := claims["tv"]
-	if !present || raw == nil {
-		return 0, true
-	}
-	switch value := raw.(type) {
-	case bool:
-		if value {
-			return 1, true
-		}
-		return 0, true
-	case float64:
-		if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) >= 1<<63 {
-			return 0, false
-		}
-		return int64(value), true
-	case string:
-		return pyIntString(value)
-	default:
-		return 0, false
-	}
-}
-
-// pyIntString is int(str) for base 10: surrounding whitespace, an optional
-// sign, and ASCII digits with single underscores between them.
-func pyIntString(value string) (int64, bool) {
-	text := strings.TrimFunc(value, isPySpace)
-	sign := ""
-	if strings.HasPrefix(text, "+") || strings.HasPrefix(text, "-") {
-		sign, text = text[:1], text[1:]
-	}
-	if text == "" || strings.HasPrefix(text, "_") || strings.HasSuffix(text, "_") || strings.Contains(text, "__") {
-		return 0, false
-	}
-	// ParseInt refuses anything but ASCII digits after the one sign.
-	parsed, err := strconv.ParseInt(sign+strings.ReplaceAll(text, "_", ""), 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return parsed, true
 }
 
 // isPySpace is str.isspace for the code points a latin-1 header or a JSON

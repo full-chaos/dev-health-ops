@@ -33,9 +33,9 @@ func TestSAMLACSReadsTheHTTPPostBindingAndTheJSONBody(t *testing.T) {
 				req.Header.Set("Content-Type", tc.contentType)
 			}
 			rec := httptest.NewRecorder()
-			got, ok := readSAMLResponse(rec, req)
-			if ok != tc.ok || got != tc.want {
-				t.Fatalf("readSAMLResponse = %q, %v (status %d %s); want %q, %v", got, ok, rec.Code, rec.Body, tc.want, tc.ok)
+			in, ok := decodeACS(rec, req)
+			if got := in.SAMLResponse; ok != tc.ok || got != tc.want {
+				t.Fatalf("decodeACS = %q, %v (status %d %s); want %q, %v", got, ok, rec.Code, rec.Body, tc.want, tc.ok)
 			}
 			if !ok && rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("refusal status %d, want 422", rec.Code)

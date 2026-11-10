@@ -20,7 +20,7 @@ Every row is run by exactly one runner. A runner refuses a row of the other laye
 - `pdp`: `state` (the GrantSnapshot input, incl. the clock) and `request` (the PDP Request fields) go through the real
   Evaluator. `expect` = `{allowed, reason, wire_reason_code, cache_class, expires_in_seconds, policy_revision, obligations}`; every field is compared.
   Runner: `internal/auth/authorization/golden_decision_test.go`. It fails when a manifest row is not run and when an
-  `AllReasons()` token has no pdp vector. There is no skip list.
+  `AllReasons()` token has no pdp vector. There is no skip list, but for `repository_allowlist_too_large` (see expect.obligations).
 - `pep`: `request_raw` (the body text) goes through `authapi.DecodeAuthorizationRequest`. `expect` = `{outcome, refusal, question}`:
   `accepted` with the decoded question, or `refused` with the refusal text. A caller-asserted actor, roles, principal id or
   organization is refused. Runner: `internal/auth/authapi/authorize_golden_test.go`. Main has no authorize HTTP handler yet.
@@ -39,7 +39,7 @@ and every row runs on the shipped catalog. `manifest.json` keeps an empty `catal
 
 `expect.reason` is an internal `authorization.Reason` token. `expect.wire_reason_code` is the decision `reason_code` the authorize
 routes send for it, and every pdp row carries the member. Both come from `authapi.wireReasonCode` (CHAOS-10841): the wire code is
-the Reason's own token, and the closed enum is `reason_code` in `jsonschema/authorization_decision.v1.schema.json`
+the Reason's own token (`allowed_by_platform_admin` is internal only and sends `allowed_by_role`), and the closed enum is `reason_code` in `jsonschema/authorization_decision.v1.schema.json`
 (= `decision_reason_code` in `vocabulary/reason-codes.json`).
 
 - A string: the Reason reaches the wire as a decision. The string equals `wireReasonCode(reason)` and is in the enum.
@@ -72,7 +72,11 @@ sorted by relative path (slash form, byte order). For each file the hashed bytes
   `repository_allowlist`. A principal that reads every repository of the organization (no grant row of any state, or a live wildcard grant)
   has `repository_scope: organization` and no allowlist. Otherwise `repository_allowlist` is present; `[]` means none and is never left out.
   The string `*` never appears in an emitted allowlist, and a repository request for `*` is refused with `invalid_request`.
-- A repository-kind allow carries `[request key]`. An organization-scope filtered allow carries the keys of the principal's live grants whose
-  role holds the action, sorted and unique, at most 256; one more is the deny `repository_allowlist_too_large`.
+- A repository-kind allow carries `[request key]` when it comes from exact grants and `repository_scope: organization` when it is org-wide in
+  fact (the membership default, a live wildcard grant); a delegated repository allow always carries `[request key]`. An organization-scope
+  filtered allow carries the keys of the principal's live grants whose role holds the action, sorted and unique, at most 256; one more is the deny
+  `repository_allowlist_too_large`. Catalog version 18 holds one filtered organization action, `acr.credential.issue` (device approval and consent
+  take their repository scopes from it); `metrics.read`, `analytics.read`, `analytics.export`, `git.read` and `work_items.read` are org-wide for every
+  active member (product rule 2). No vector reaches that deny; the runner leaves that one reason out of its coverage rule.
 - The rule equals `evaluateRepository`: a key is in the allowlist exactly when the repository decision of the same principal, action and key
   allows it. One row of any state ends the membership default, for an owner too.

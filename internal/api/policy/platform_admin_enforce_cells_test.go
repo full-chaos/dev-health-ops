@@ -25,33 +25,48 @@ type platformAdminRoute struct {
 }
 
 var platformAdminRoutes = map[string]platformAdminRoute{
-	"GET /api/v1/admin/orgs":                                             {rule.ActionAdminOrgs, false},
-	"GET /api/v1/admin/orgs/{org_id}":                                    {rule.ActionAdminOrgs, false},
-	"POST /api/v1/admin/orgs":                                            {rule.ActionAdminOrgs, true},
-	"PATCH /api/v1/admin/orgs/{org_id}":                                  {rule.ActionAdminOrgs, true},
-	"DELETE /api/v1/admin/orgs/{org_id}":                                 {rule.ActionAdminOrgs, false},
-	"GET /api/v1/admin/feature-flags":                                    {rule.ActionAdminFlags, false},
-	"PATCH /api/v1/admin/feature-flags/{flag_id}":                        {rule.ActionAdminFlags, true},
-	"GET /api/v1/admin/orgs/{org_id}/feature-overrides":                  {rule.ActionAdminFlags, false},
-	"POST /api/v1/admin/orgs/{org_id}/feature-overrides":                 {rule.ActionAdminFlags, true},
-	"PATCH /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":  {rule.ActionAdminFlags, true},
-	"DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}": {rule.ActionAdminFlags, false},
-	"GET /api/v1/admin/platform/audit-logs":                              {rule.ActionAdminAudit, false},
-	"GET /api/v1/admin/platform/stats":                                   {rule.ActionAdminStats, false},
-	"POST /api/v1/admin/impersonate":                                     {rule.ActionAdminImpersonate, true},
-	"POST /api/v1/admin/impersonate/stop":                                {rule.ActionAdminImpersonate, false},
+	"GET /api/v1/admin/orgs":                                               {rule.ActionAdminOrgs, false},
+	"GET /api/v1/admin/orgs/{org_id}":                                      {rule.ActionAdminOrgs, false},
+	"POST /api/v1/admin/orgs":                                              {rule.ActionAdminOrgs, true},
+	"PATCH /api/v1/admin/orgs/{org_id}":                                    {rule.ActionAdminOrgs, true},
+	"DELETE /api/v1/admin/orgs/{org_id}":                                   {rule.ActionAdminOrgs, false},
+	"GET /api/v1/admin/feature-flags":                                      {rule.ActionAdminFlags, false},
+	"PATCH /api/v1/admin/feature-flags/{flag_id}":                          {rule.ActionAdminFlags, true},
+	"GET /api/v1/admin/orgs/{org_id}/feature-overrides":                    {rule.ActionAdminFlags, false},
+	"POST /api/v1/admin/orgs/{org_id}/feature-overrides":                   {rule.ActionAdminFlags, true},
+	"PATCH /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":    {rule.ActionAdminFlags, true},
+	"DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":   {rule.ActionAdminFlags, false},
+	"GET /api/v1/admin/platform/audit-logs":                                {rule.ActionAdminAudit, false},
+	"GET /api/v1/admin/platform/stats":                                     {rule.ActionAdminStats, false},
+	"POST /api/v1/admin/impersonate":                                       {rule.ActionAdminImpersonate, true},
+	"POST /api/v1/admin/impersonate/stop":                                  {rule.ActionAdminImpersonate, false},
+	"POST /api/v1/admin/impersonate/handoff/consume":                       {rule.ActionAdminImpersonate, true},
+	"GET /api/v1/admin/service-accounts/{service_account_id}/keys":         {rule.ActionAdminUsers, false},
+	"POST /api/v1/admin/service-accounts/{service_account_id}/keys":        {rule.ActionAdminUsers, false},
+	"POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate": {rule.ActionAdminUsers, false},
+	"POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke":      {rule.ActionAdminUsers, false},
+}
+
+// adminOrUsersRoutes are the /admin/users rows: mounted WrapAdminOr(admin.users) (an org owner or admin passes too),
+// with whether the body is read first. TestPlatformAction_AdminRoutesAreWrappedByTheirAction (apiservice/admin) pins
+// the real mounts.
+var adminOrUsersRoutes = map[string]platformAdminRoute{
+	"GET /api/v1/admin/users":                     {rule.ActionAdminUsers, false},
+	"GET /api/v1/admin/users/{user_id}":           {rule.ActionAdminUsers, false},
+	"POST /api/v1/admin/users":                    {rule.ActionAdminUsers, true},
+	"PATCH /api/v1/admin/users/{user_id}":         {rule.ActionAdminUsers, true},
+	"POST /api/v1/admin/users/{user_id}/password": {rule.ActionAdminUsers, true},
+	"DELETE /api/v1/admin/users/{user_id}":        {rule.ActionAdminUsers, false},
 }
 
 // platformAdminGapRoutes are the platform-admin rows whose profile row names no action yet, with the guard level they
 // are mounted at. With the admin cell on, the decision point does not judge them.
 var platformAdminGapRoutes = map[string]Authz{
-	"GET /api/v1/admin/users":                     Admin,
-	"GET /api/v1/admin/users/{user_id}":           Admin,
-	"POST /api/v1/admin/users":                    Admin,
-	"PATCH /api/v1/admin/users/{user_id}":         Admin,
-	"POST /api/v1/admin/users/{user_id}/password": Admin,
-	"DELETE /api/v1/admin/users/{user_id}":        Admin,
-	"POST /api/v1/telemetry/report":               Authenticated,
+	"POST /api/v1/telemetry/report":                                    Authenticated,
+	"POST /api/v1/admin/service-accounts":                              Superuser,
+	"POST /api/v1/admin/service-accounts/{service_account_id}/disable": Superuser,
+	"POST /api/v1/admin/service-accounts/{service_account_id}/enable":  Superuser,
+	"POST /api/v1/admin/service-accounts/{service_account_id}/owner":   Superuser,
 }
 
 // productionGoAPIRows is the guard's action map as go-api builds it (apiservice/enforcer.go).
@@ -64,8 +79,8 @@ func productionGoAPIRows(t *testing.T) map[string]ShadowRow {
 	return rows
 }
 
-// The cell table covers exactly the production profile's platform-admin rows: every admin-namespace row except the
-// admin.billing rows (6.9), each with the action of its mount.
+// The cell tables cover exactly the production profile's platform-admin rows: every admin-namespace row except the
+// admin.billing rows (6.9), each with the action of its mount (the platform wraps and the admin-or /admin/users rows).
 func TestPlatformAdminCellsCoverTheProductionPlatformRows(t *testing.T) {
 	rows := productionGoAPIRows(t)
 	got := map[string]string{}
@@ -79,6 +94,9 @@ func TestPlatformAdminCellsCoverTheProductionPlatformRows(t *testing.T) {
 	}
 	want := map[string]string{}
 	for pattern, route := range platformAdminRoutes {
+		want[pattern] = route.action
+	}
+	for pattern, route := range adminOrUsersRoutes {
 		want[pattern] = route.action
 	}
 	if !maps.Equal(got, want) {
@@ -115,12 +133,20 @@ func platformAdminMux(guard *Guard) *http.ServeMux {
 			mux.Handle(pattern, guard.WrapPlatform(route.action, echo))
 		}
 	}
-	for pattern, level := range platformAdminGapRoutes {
-		if level == Admin {
-			mux.Handle(pattern, guard.WrapAdminOr(rule.ActionAdminUsers, echo))
+	for pattern, route := range adminOrUsersRoutes {
+		if route.bodyFirst {
+			mux.Handle(pattern, guard.BodyFirstAdminOr(route.action, echo))
 		} else {
-			mux.Handle(pattern, guard.Wrap(level, echo))
+			mux.Handle(pattern, guard.WrapAdminOr(route.action, echo))
 		}
+	}
+	for pattern, level := range platformAdminGapRoutes {
+		if level == Superuser {
+			// The service account lifecycle rows: WrapPlatform(admin.users), as admin/serviceaccounts.go mounts them.
+			mux.Handle(pattern, guard.WrapPlatform(rule.ActionAdminUsers, echo))
+			continue
+		}
+		mux.Handle(pattern, guard.Wrap(level, echo))
 	}
 	return mux
 }
@@ -267,7 +293,8 @@ func TestPlatformAdminRowsTakeThePDPVerdict(t *testing.T) {
 }
 
 // A live go-api impersonation row is refused on every platform-admin row before any decision point call (12735,
-// D6714: platform actions stay refused); the stop route alone asks the decision point, as the admin.
+// D6714: platform actions stay refused); the live-row exempt routes (stop, handoff consume) alone ask the decision
+// point, as the admin.
 func TestPlatformAdminRowsRefuseImpersonationExceptStop(t *testing.T) {
 	for pattern := range platformAdminRoutes {
 		t.Run(pattern, func(t *testing.T) {
@@ -275,9 +302,9 @@ func TestPlatformAdminRowsRefuseImpersonationExceptStop(t *testing.T) {
 			pdp := newTestPDP(t, allowAll)
 			h := impersonating(cellHandler(t, legacyStore(true, "admin"), userClaims(nil), productionEnforcer(t, pdp, "admin")))
 			got := serveCell(h, pattern, cellBearer())
-			if pattern == "POST "+stopImpersonationRoute {
+			if liveRowExempt(pattern) {
 				if got.status != http.StatusOK || len(pdp.calls()) != 1 || !slices.Equal(rec.snapshot(), []string{"admin/allow"}) {
-					t.Fatalf("stop while impersonating: %d %q, %d PDP calls, counted %v; want 200, 1, [admin/allow]", got.status, got.body, len(pdp.calls()), rec.snapshot())
+					t.Fatalf("exempt row while impersonating: %d %q, %d PDP calls, counted %v; want 200, 1, [admin/allow]", got.status, got.body, len(pdp.calls()), rec.snapshot())
 				}
 				return
 			}
@@ -359,39 +386,48 @@ func TestPlatformAdminRowsKeepTheLegacyAnswerWithTheCellOff(t *testing.T) {
 	}
 }
 
-// A legacy HS256 bearer is a caller the decision point cannot judge: the legacy answer stands and the request is
-// counted unjudged by route (answers-10852-2). Enforce turn-on waits for this count to reach 0 (F2).
-func TestPlatformAdminRowsKeepTheLegacyAnswerForAnHS256Caller(t *testing.T) {
-	for pattern := range platformAdminRoutes {
+// Rule 1 parity yardstick (product rules, D6773): a platform admin on a platform-admin row gets the answer the legacy
+// HS256 path gave at base ad73c1cc1 with the admin cell on: 200, the route reached as the caller (logs/13154-legacy-b-1.log
+// 833044a56374). The routed caller is the same principal (superuser on its users row, role "member" in its token's org)
+// and is judged by the production evaluator over a platform_admin state, as auth-service judges it. HS256 skipped the
+// decision point; a users-row superuser without an auth platform role is held in CHAOS-13209.
+const legacyPlatformAdminBody = "org= user=11111111-1111-4111-8111-111111111111 imp=-"
+
+func TestPlatformAdminRowsKeepTheLegacyAnswerForARoutedPlatformAdmin(t *testing.T) {
+	for pattern, route := range platformAdminRoutes {
 		t.Run(pattern, func(t *testing.T) {
-			rec := recordEnforce(t)
-			pdp := newTestPDP(t, denyWith("platform_role_absent"))
-			store := newStore()
-			store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
-			guard := NewGuard(authenticator(t, store), quiet())
-			guard.SetEnforcer(productionEnforcer(t, pdp, "admin"))
-			got := serveCell(platformAdminMux(guard), pattern, bearer(t, superClaims))
-			if got.status != http.StatusOK || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
-				t.Fatalf("HS256 superuser: %d %q, %d PDP calls, counted %v; want the legacy 200, 0, none", got.status, got.body, len(pdp.calls()), rec.snapshot())
+			pdp := newTestPDP(t, evaluatorVerdict(pdpState{authorization.StatusActive, rule.PlatformAdmin, true}))
+			got := serveCell(cellHandler(t, legacyStore(true, "member"), userClaims(nil), productionEnforcer(t, pdp, "admin")), pattern, cellBearer())
+			if got.status != http.StatusOK || got.body != legacyPlatformAdminBody {
+				t.Fatalf("routed platform admin: %d %q; want the legacy 200 %q", got.status, got.body, legacyPlatformAdminBody)
 			}
-			if !slices.Equal(rec.unjudgedSnapshot(), []string{pattern + "/" + enforceUnjudgedHS256}) {
-				t.Fatalf("unjudged %v, want [%s/%s]", rec.unjudgedSnapshot(), pattern, enforceUnjudgedHS256)
+			want := pdpSeen{Principal: shadowBearer, Action: route.action, Type: "platform", Key: "platform", Service: "dev-health-ops-api"}
+			if calls := pdp.calls(); len(calls) != 1 || calls[0] != want {
+				t.Fatalf("PDP saw %+v, want one platform question %+v", calls, want)
 			}
 		})
 	}
 }
 
-// GAP (flips in 10863 PR-1/PR-2): the platform-admin rows with no action are not judged by the decision point with
-// the admin cell on. A decision point that denies everything is never asked, and go-api's own superuser flag admits
-// the caller cross-org.
-func TestPlatformAdminGapRowsAreNotJudgedYet(t *testing.T) {
-	for pattern := range platformAdminGapRoutes {
+// The platform-admin rows with no action yet (the telemetry report row) are not decided by a route question with the
+// admin cell on: a superuser is answered by main's checks with no question. The telemetry report row's guard is
+// Authenticated; its handler asks (see the telemetry package).
+func TestPlatformAdminGapRowsKeepMainsAnswerAndAskTheWrapAction(t *testing.T) {
+	for pattern, level := range platformAdminGapRoutes {
 		t.Run(pattern, func(t *testing.T) {
 			rec := recordEnforce(t)
 			pdp := newTestPDP(t, denyWith("platform_role_absent"))
 			got := serveCell(cellHandler(t, legacyStore(true, "member"), userClaims(nil), productionEnforcer(t, pdp, "admin", "members")), pattern, cellBearer())
-			if got.status != http.StatusOK || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
-				t.Fatalf("GAP pin: %d %q, %d PDP calls, counted %v; today the legacy 200 with 0 calls", got.status, got.body, len(pdp.calls()), rec.snapshot())
+			if level == Superuser {
+				// A WrapPlatform gap row (the service account lifecycle rows): no route question, but the platform gate asks
+				// the decision point its own admin.users once, so a decision point that denies refuses a local superuser.
+				// The guard obeys a PDP deny (no fall-through). See
+				// TestServiceAccountKeyRowsAdminCellOnSuperuserWithoutMembershipIs200: the real evaluator allows superusers.
+				if got.status != http.StatusForbidden || len(pdp.calls()) != 1 || len(rec.snapshot()) != 0 {
+					t.Fatalf("superuser, PDP deny: %d %q, %d PDP calls, counted %v; want 403 after the one admin.users question", got.status, got.body, len(pdp.calls()), rec.snapshot())
+				}
+			} else if got.status != http.StatusOK || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
+				t.Fatalf("superuser: %d %q, %d PDP calls, counted %v; want main's 200 with 0 calls", got.status, got.body, len(pdp.calls()), rec.snapshot())
 			}
 		})
 	}
@@ -417,16 +453,19 @@ func TestPlatformAdminGapOrgScopeSelectsAnOrgByTheLocalFlag(t *testing.T) {
 	}
 }
 
-// Q1 status quo (open chris question, superuser cross-org without a membership; not decided here): a platform admin
-// whose access token names an org it has no membership in is refused at authentication (401), before any guard or
-// decision point. An org-less token reaches the decision point (TestPlatformAdminRowsTakeThePDPVerdict).
-func TestPlatformAdminRowsRefuseAnOrgClaimWithNoMembershipBeforeThePDP(t *testing.T) {
+// Product rule 1 (D6773): a platform admin whose access token names an org it holds no membership row in gets, on
+// every platform-admin row, the answer its HS256 token gave for the same org, and is decided by the decision point.
+// The HS256 answer is the executed legacy run on main 98c7d4f56 (log 13154-legacy-rec-98c7d4f5.log sha256
+// 8ba2f74cdd64, LEGACY-REC lines): 200 "org= user=<id> imp=-" on every row, 0 decision-point calls.
+func TestPlatformAdminRowsAnswerAnOrgClaimWithNoMembershipAsLegacy(t *testing.T) {
 	for pattern := range platformAdminRoutes {
 		t.Run(pattern, func(t *testing.T) {
-			pdp := newTestPDP(t, allowAll)
-			got := serveCell(cellHandler(t, legacyStore(true, ""), userClaims(nil), productionEnforcer(t, pdp, "admin")), pattern, cellBearer())
-			if got.status != http.StatusUnauthorized || len(pdp.calls()) != 0 {
-				t.Fatalf("%d %q, %d PDP calls; want 401 and 0", got.status, got.body, len(pdp.calls()))
+			routedPDP := newTestPDP(t, allowAll)
+			store := legacyStore(true, "")
+			got := serveCell(cellHandler(t, store, userClaims(nil), productionEnforcer(t, routedPDP, "admin")), pattern, cellBearer())
+			// The HS256 class never asked the decision point; the user access token, like the org-less one, does.
+			if got.status != http.StatusOK || got.body != legacyPlatformAdminBody || len(routedPDP.calls()) == 0 {
+				t.Fatalf("user access token %d %q (%d PDP calls), HS256 200 %q (0 PDP calls)", got.status, got.body, len(routedPDP.calls()), legacyPlatformAdminBody)
 			}
 		})
 	}

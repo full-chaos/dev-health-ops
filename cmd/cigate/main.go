@@ -4,8 +4,10 @@
 //	cigate plan-verdict [flags]          NONE / AFFECTED / FULL plan of a change set
 //	cigate plan-reads [flags]            guard of the declared-read table of the plan
 //	cigate govulncheck [--exceptions F]  gate govulncheck JSON on stdin
-//	cigate scope-candidates <module>     auth scope candidates from go list JSON on stdin
+//	cigate scope-candidates [-sources] <module>  auth scope candidates (with their sources) from go list JSON on stdin
+//	cigate scope-verdict --gated F --sources F --exempt F  auth scope selftest decision
 //	cigate metrics-proof [flags]         metrics.daily executed-proof readback against ClickHouse
+//	cigate ch-posture compare [flags]    worker login system.grants rows vs the declared ClickHouse posture
 //	cigate bigboy <verb> [args]          bigboy cut helpers: render-ch-users, grants-compare, pg-posture, bump-swap-values
 //	cigate docs <verb> [args]            documentation, docs-delivery and commit-message gates
 //	cigate plane-split-router [args]     bigboy traefik plane-split router from deploy values
@@ -42,7 +44,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: cigate governance|plan-verdict|plan-reads|govulncheck|scope-candidates|metrics-proof|bigboy|docs|docs-build|docs-prepare|plane-split-router|query-api-flags|route-coverage|web-env-parity|live-e2e|release [args]")
+		fmt.Fprintln(os.Stderr, "usage: cigate governance|plan-verdict|plan-reads|govulncheck|scope-candidates|scope-verdict|metrics-proof|ch-posture|bigboy|docs|docs-build|docs-prepare|plane-split-router|query-api-flags|route-coverage|web-env-parity|live-e2e|release [args]")
 		return 2
 	}
 	switch args[0] {
@@ -79,6 +81,8 @@ func run(args []string) int {
 		return livee2e.Run(args[1:], processEnv, os.Stdout, os.Stderr)
 	case "metrics-proof":
 		return metricsproof.Run(args[1:], processEnv, metricsproof.OpenClickHouse, os.Stdout, os.Stderr)
+	case "ch-posture":
+		return chPosture(args[1:], os.Stdout, os.Stderr)
 	case "bigboy":
 		return bigboyrender.Run(args[1:], os.Stdout, os.Stderr)
 	case "docs":
@@ -92,14 +96,41 @@ func run(args []string) int {
 	case "web-env-parity":
 		return routing.RunWebEnvParity(args[1:], routing.OSDeps(), os.Stdout, os.Stderr)
 	case "scope-candidates":
-		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: cigate scope-candidates <module>")
-			return 2
+		switch {
+		case len(args) == 2:
+			return cigates.AuthScopeCandidates(args[1], os.Stdin, os.Stdout, os.Stderr)
+		case len(args) == 3 && args[1] == "-sources":
+			return cigates.AuthScopeCandidateSources(args[2], os.Stdin, os.Stdout, os.Stderr)
 		}
-		return cigates.AuthScopeCandidates(args[1], os.Stdin, os.Stdout, os.Stderr)
+		fmt.Fprintln(os.Stderr, "usage: cigate scope-candidates [-sources] <module>")
+		return 2
+	case "scope-verdict":
+		return scopeVerdict(args[1:])
 	}
 	fmt.Fprintf(os.Stderr, "cigate: unknown command %q\n", args[0])
 	return 2
+}
+
+func scopeVerdict(args []string) int {
+	files := map[string]*os.File{"--gated": nil, "--sources": nil, "--exempt": nil}
+	if len(args) != 6 {
+		fmt.Fprintln(os.Stderr, "usage: cigate scope-verdict --gated FILE --sources FILE --exempt FILE")
+		return 2
+	}
+	for i := 0; i < len(args); i += 2 {
+		if f, known := files[args[i]]; !known || f != nil {
+			fmt.Fprintln(os.Stderr, "usage: cigate scope-verdict --gated FILE --sources FILE --exempt FILE")
+			return 2
+		}
+		f, err := os.Open(args[i+1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "auth scope: %v\n", err)
+			return 2
+		}
+		defer f.Close()
+		files[args[i]] = f
+	}
+	return cigates.AuthScopeVerdict(files["--gated"], files["--sources"], files["--exempt"], os.Stdout, os.Stderr)
 }
 
 // processEnv reads the environment through the registry, so a DSN password never reaches the process logger.

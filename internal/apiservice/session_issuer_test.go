@@ -26,8 +26,9 @@ func testIssueToken(t *testing.T) string {
 	return "svc_authsess_" + base64.RawURLEncoding.EncodeToString(random)
 }
 
+// The session issuer follows the sessions flag: off builds none (go-api mints), on builds the workload client's issuer,
+// and on with no workload credential is a start-up error naming the flag. AUTH_SESSION_ISSUE_TOKEN is never read.
 func TestSessionIssuerFollowsTheSessionsFlag(t *testing.T) {
-	token := testIssueToken(t)
 	on, err := ParseAuthProxyConfig(issueEnv(map[string]string{EnvAuthProxyURL: "http://auth-service:8095", "AUTH_PROXY_SESSIONS": "true"}))
 	if err != nil {
 		t.Fatal(err)
@@ -36,26 +37,17 @@ func TestSessionIssuerFollowsTheSessionsFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if issuer, err := sessionIssuer(off, issueEnv(map[string]string{sessionissue.EnvToken: token}), sessionCredential{}); issuer != nil || err != nil {
+	if issuer, err := sessionIssuer(off, sessionCredential{}); issuer != nil || err != nil {
 		t.Fatalf("flag off: %v %v, want go-api to mint", issuer, err)
 	}
-	issuer, err := sessionIssuer(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"}), sessionCredential{})
-	if err != nil || issuer == nil {
-		t.Fatalf("flag on with a credential: %v %v", issuer, err)
+	if issuer, err := sessionIssuer(on, sessionCredential{}); err == nil || issuer != nil || !strings.Contains(err.Error(), "AUTH_PROXY_SESSIONS") {
+		t.Fatalf("flag on without a workload credential: %v %v, want a start-up error naming the flag", issuer, err)
 	}
-	for name, env := range map[string]map[string]string{
-		"no credential":  {},
-		"empty":          {sessionissue.EnvToken: ""},
-		"acr credential": {sessionissue.EnvToken: "svc_acr_" + token[len("svc_authsess_"):]},
-	} {
-		issuer, err := sessionIssuer(on, issueEnv(env), sessionCredential{})
-		if err == nil || issuer != nil {
-			t.Errorf("flag on, %s: %v %v, want a start-up error", name, issuer, err)
-			continue
-		}
-		if !strings.Contains(err.Error(), "AUTH_PROXY_SESSIONS") || strings.Contains(err.Error(), token[len("svc_authsess_"):]) {
-			t.Errorf("flag on, %s: error %q must name the flag and never the credential", name, err)
-		}
+	_, session, err := newCredentials(on, issueEnv(workloadEnv(t, map[string]string{sessionissue.EnvToken: testIssueToken(t)})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issuer, err := sessionIssuer(on, session); err != nil || issuer == nil {
+		t.Fatalf("flag on with the workload credential: %v %v", issuer, err)
 	}
 }

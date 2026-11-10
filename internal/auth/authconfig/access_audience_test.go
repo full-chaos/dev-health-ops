@@ -37,7 +37,7 @@ func TestEdDSAClassMintsTheAPIAudienceAndTheSessionRouteTokenBeside(t *testing.T
 // guard.
 func TestTheAudienceRuleDoesNotApplyWithoutTheSessionRoutes(t *testing.T) {
 	env := eddsaEnv()
-	delete(env, EnvAccessTokenSecret)
+	delete(env, EnvRateLimitKey)
 	delete(env, EnvSessionSuccessorKey)
 	env[EnvAccessTokenAudience] = "auth-service"
 	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})

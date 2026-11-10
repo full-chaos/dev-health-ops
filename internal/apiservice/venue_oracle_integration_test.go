@@ -93,7 +93,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		APIAddress: "127.0.0.1:0", RiverDatabaseSchema: "river", APIDatabaseRole: venue.Roles["api"],
 		APIDatabaseURI:   secrets.NewValue(venue.GoAPIDatabaseURI(t)),
 		APIClickHouseURI: secrets.NewValue(venue.GoAPIClickHouseURI(t)),
-		APIJWTSecret:     secrets.NewValue(venueKey), APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
+		APIJWTIssuer:     "dev-health-ops", APIJWTAudience: "dev-health-api",
 		CORSAllowedOrigins:    []string{"http://localhost:3000"},
 		ValkeyURI:             secrets.NewValue(venue.ValkeyURI),
 		TelemetryEndpoint:     endpoint.URL + "/go",

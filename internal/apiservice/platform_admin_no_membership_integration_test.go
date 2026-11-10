@@ -20,7 +20,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -29,17 +28,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
-const ruleOneKey = "rule-one-legacy-signing-key-0123456789abcdef"
-
 // ruleOneServer is the api listener with the wired handlers over pool and ch: the profile-routed validator with
 // issuer's key, as production builds it.
 func ruleOneServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, issuer *edtokens.Issuer) http.Handler {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	verifier, err := edgetoken.New(ruleOneKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth, err := policy.NewAuthenticator(issuer.Store(policy.PGStore{Pool: pool}), logger)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +58,7 @@ func ruleOneServer(t *testing.T, pool *pgxpool.Pool, ch driver.Conn, issuer *edt
 	}
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
-	deps := Deps{Pool: pool, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier}
+	deps := Deps{Pool: pool, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger)}
 	server, err := NewServer(apiTestConfig(), logger, Routes(deps, logger), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)

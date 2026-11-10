@@ -8,14 +8,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
 
-// LegacyRefresh is a go-api refresh token whose signature, type and expiry the
-// caller verified: its subject, its org_id claim and its jti.
-type LegacyRefresh struct {
-	PrincipalID    uuid.UUID
-	OrganizationID *uuid.UUID
-	JTI            contracts.SecretString
-}
-
 // legacyJTIDigest is go-api's token_hash of a jti (the SHA-256 of its text),
 // as refresh_credentials.legacy_jti_hash stores it.
 func legacyJTIDigest(jti contracts.SecretString) []byte {

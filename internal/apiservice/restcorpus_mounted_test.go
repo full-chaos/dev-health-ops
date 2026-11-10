@@ -2,12 +2,10 @@ package apiservice
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,10 +17,6 @@ import (
 // every run. The fully wired route set (Deps with a Guard) is used, so the
 // guarded areas count as mounted.
 func TestDHOAPICorpusEntriesAreMountedRoutes(t *testing.T) {
-	verifier, err := edgetoken.New(strings.Repeat("fixture-key-", 3), "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth, err := policy.NewAuthenticator(scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +44,7 @@ func TestDHOAPICorpusEntriesAreMountedRoutes(t *testing.T) {
 	}
 	defer func() { _ = clickHouse.Close() }()
 	mounted := map[string]bool{}
-	for _, route := range Routes(Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier}, quietLogger()) {
+	for _, route := range Routes(Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}, quietLogger()) {
 		mounted[route.Method+" "+route.Pattern] = true
 	}
 

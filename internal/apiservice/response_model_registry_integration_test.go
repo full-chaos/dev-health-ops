@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
 	"log/slog"
@@ -44,6 +43,10 @@ var goRoutesWithoutPython = map[string]string{
 	"POST /api/v1/admin/service-accounts/{service_account_id}/keys":        "Go-only platform-admin proxy to the auth-service key verbs; no Python ancestor",
 	"POST /api/v1/admin/service-accounts/{service_account_id}/keys/rotate": "Go-only platform-admin proxy to the auth-service key verbs; no Python ancestor",
 	"POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke":      "Go-only platform-admin proxy to the auth-service key verbs; no Python ancestor",
+	"POST /api/v1/admin/service-accounts":                                  "Go-only platform-admin proxy to the auth-service service account lifecycle verbs; no Python ancestor",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/disable":     "Go-only platform-admin proxy to the auth-service service account lifecycle verbs; no Python ancestor",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/enable":      "Go-only platform-admin proxy to the auth-service service account lifecycle verbs; no Python ancestor",
+	"POST /api/v1/admin/service-accounts/{service_account_id}/owner":       "Go-only platform-admin proxy to the auth-service service account lifecycle verbs; no Python ancestor",
 	"POST /api/v1/billing/plans/{plan_id}":                                 "answers 405 for every id; POST /api/v1/billing/plans/pull-stripe is its own pattern",
 	"HEAD /api/v1/billing/plans/pull-stripe":                               "answers the 405 FastAPI gives a HEAD there (Allow: POST); without it the GET /plans/{plan_id} route's 405 would answer",
 	"GET /api/v1/auth/oauth/{first}/{second}":                              "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
@@ -113,20 +116,16 @@ func TestRouteResponseModelsMatchTheFrozenFastAPITable(t *testing.T) {
 	// admin and teamsidentity mount only with a pool and a ClickHouse
 	// connection; their route lists do not need either to be built.
 	routes := Routes(Deps{Guard: guard}, logger)
-	routes = append(routes, markResponseModels(admin.Routes(admin.Deps{Guard: guard, Logger: logger, Write: WriteError}))...)
+	// ServiceAccounts set: the lifecycle routes mount only with AUTH_PROXY_SERVICE_ACCOUNT_KEYS on.
+	routes = append(routes, markResponseModels(admin.Routes(admin.Deps{Guard: guard, Logger: logger, Write: WriteError, ServiceAccounts: stubAccounts{}}))...)
 	routes = append(routes, markResponseModels(teamsidentity.Routes(nil, guard, logger, nil, nil))...)
 	// billing mounts only with a pool; its route list needs neither a pool
 	// nor a Stripe client to be built.
 	routes = append(routes, markResponseModels(billing.Routes(billing.Deps{Guard: guard, Logger: logger}))...)
-	// session mounts only with a pool, an authenticator and the token keys;
-	// its route list needs none of them to work.
-	sessionKey := "response-model-registry-signing-key-0123456789"
-	verifier, err := edgetoken.New(sessionKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// session mounts only with a pool and an authenticator; its route list
+	// needs neither to work.
 	routes = append(routes, markResponseModels(session.Routes(session.Deps{Pool: &pgxpool.Pool{}, Guard: guard,
-		Auth: &policy.Authenticator{}, Verifier: verifier}))...)
+		Auth: &policy.Authenticator{}}))...)
 	// sso mounts only with a pool; its route list does not use it.
 	routes = append(routes, markResponseModels(sso.Routes(sso.Deps{Pool: &pgxpool.Pool{}, Guard: guard, Logger: logger}))...)
 	patterns := map[string]httpapi.Route{}

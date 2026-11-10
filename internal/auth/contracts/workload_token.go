@@ -16,6 +16,14 @@ const WorkloadTokenTyp = "workload+jwt"
 // It is the one place the value lives; the schema names it, the corpus pins it.
 const WorkloadTokenLifetimeCeiling = 300 * time.Second
 
+// WorkloadTokenMaxBytes bounds a compact workload token. Every verifier
+// refuses a longer bearer before it decodes any of it. The longest token the
+// issuer can mint is 1,548 bytes (an issuer URL at its pattern's limit, a
+// 64-byte kid, 12-digit times); the schema's own maxima give 1,841. It is also
+// the bound on the decoded document ParseWorkloadToken reads, which is shorter
+// than its compact form.
+const WorkloadTokenMaxBytes = 2048
+
 // WorkloadTokenHeader is the JWS protected header of a workload-token.v1 token.
 type WorkloadTokenHeader struct {
 	Alg string `json:"alg"`

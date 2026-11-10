@@ -54,6 +54,7 @@ func TestEverySessionRevokeSiteTellsTheStream(t *testing.T) {
 
 var principalDisableSites = map[string]string{
 	"internal/auth/identity/store.go":       "the projection ends the actor's delegated sessions",
+	"internal/auth/identity/adminusers.go":  "the admin soft delete ends the user's delegated sessions (delegationend.EndOfActor)",
 	"internal/auth/serviceaccount/store.go": "exempt: kind service_account only (store.go:330); Start refuses a non-user actor and target",
 	"internal/auth/workload/store.go":       "exempt: rule.ActiveRule admits user principals only",
 	"internal/auth/workload/enable.go":      "exempt: sets disabled_at NULL only",

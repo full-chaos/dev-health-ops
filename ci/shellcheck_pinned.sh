@@ -147,6 +147,9 @@ FILES=(
   # the bounded ghcr.io login fallback for merge_group jobs, and its fixture suite.
   "${ROOT}/ci/lib/ghcr_login.sh"
   "${ROOT}/ci/ghcr_login_test.sh"
+  # CHAOS-13426: the authenticated, retried, sha-checked pinned release download, and its fixture suite.
+  "${ROOT}/ci/lib/fetch_pinned_release.sh"
+  "${ROOT}/ci/fetch_pinned_release_test.sh"
   # the signing-key rotation rehearsal: its readers, its driver and their fixture suites.
   "${ROOT}/ci/lib/auth_rotation_probe.sh"
   "${ROOT}/ci/auth_rotation_probe_test.sh"

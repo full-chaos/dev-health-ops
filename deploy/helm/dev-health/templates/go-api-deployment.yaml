@@ -180,18 +180,59 @@ auth-service takes AUTH_WORKLOAD_BOOTSTRAP and AUTH_SESSION_ISSUE_WORKLOAD_SUBJE
 {{- if not (and (kindIs "string" $wbCfg.secretName) $wbCfg.secretName) }}{{- fail "goApi.sessionIssue.workloadBootstrap.secretName is required when goApi.sessionIssue.workloadBootstrap.enabled: the Secret that holds the bootstrap credential of the api workload" }}{{- end }}
 {{- if not (include "dev-health.validSecretKey" $wbKey) }}{{- fail "goApi.sessionIssue.workloadBootstrap.secretKey must be a valid Secret key" }}{{- end }}
 {{- range .Values.goApi.extraEnv }}
-{{- if has (upper (trim (toString .name))) (list "AUTH_SESSION_ISSUE_CREDENTIAL" "AUTH_WORKLOAD_BOOTSTRAP_FILE" "AUTH_WORKLOAD_ISSUER") }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.sessionIssue.workloadBootstrap renders it, and a later entry would shadow the rendered value" .name) }}{{- end }}
+{{- if has (toString .name) (list "AUTH_SESSION_ISSUE_CREDENTIAL" "AUTH_WORKLOAD_BOOTSTRAP_FILE" "AUTH_WORKLOAD_ISSUER") }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.sessionIssue.workloadBootstrap renders it, and a later entry would shadow the rendered value" .name) }}{{- end }}
 {{- end }}
 {{- end }}
 {{- /*
 goApi.sessionIssue.credential=workload: go-api presents its own workload token on the session issue route (the credential mode
 prod already runs), so it reads no AUTH_SESSION_ISSUE_TOKEN. The chart then renders AUTH_SESSION_ISSUE_CREDENTIAL=workload and no
-token reference, and ignores goApi.sessionIssue.secretName. Absent = token mode, rendered as before. goApi.extraEnv cannot set the name.
+token reference, and ignores goApi.sessionIssue.secretName. Absent or "" = token mode, rendered as before. goApi.extraEnv cannot set the name.
 */}}
 {{- $siWorkload := eq (toString (default dict .Values.goApi.sessionIssue).credential) "workload" }}
 {{- if $siWorkload }}
 {{- range .Values.goApi.extraEnv }}
-{{- if eq (upper (trim (toString .name))) "AUTH_SESSION_ISSUE_CREDENTIAL" }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.sessionIssue.credential renders it, and a later entry would shadow the rendered value" .name) }}{{- end }}
+{{- if eq (toString .name) "AUTH_SESSION_ISSUE_CREDENTIAL" }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.sessionIssue.credential renders it, and a later entry would shadow the rendered value" .name) }}{{- end }}
+{{- end }}
+{{- end }}
+{{- /*
+CHAOS-13092: goApi.acrRevoke wires the acr credential revoke route's client (internal/apiservice/acr_revoke.go). Off (the default)
+renders nothing. On, the chart projects a ServiceAccount token with acr's workload-exchange audience (acr
+workloadTokenExchange.audience) into /var/run/dev-health/acr-revoke/token (no subPath, so the kubelet rotation reaches it) and renders
+ACR_REVOKE_URL, ACR_REVOKE_TOKEN_URL and ACR_REVOKE_SUBJECT_FILE (derived from the mount). Both URLs must be https, or plain http on a
+cluster-local Service host (<name>.svc.cluster.local) with allowClusterHTTP: true. ACR_REVOKE_ALLOW_CLUSTER_HTTP is always rendered, "true" or "false".
+url takes no query. goApi.extraEnv never sets an ACR_REVOKE_* name.
+*/}}
+{{- range .Values.goApi.extraEnv }}
+{{- if hasPrefix "ACR_REVOKE_" (upper (trim (toString .name))) }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.acrRevoke renders the ACR_REVOKE_* names" .name) }}{{- end }}
+{{- end }}
+{{- $arCfg := default dict .Values.goApi.acrRevoke }}
+{{- $ar := eq (include "dev-health.authBool" (dict "value" (ternary $arCfg.enabled false (hasKey $arCfg "enabled")) "key" "goApi.acrRevoke.enabled")) "true" }}
+{{- $arExpiry := 3600 }}
+{{- $arCluster := false }}
+{{- if $ar }}
+{{- if hasKey $arCfg "allowClusterHTTP" }}
+{{- if not (kindIs "bool" $arCfg.allowClusterHTTP) }}{{- fail "goApi.acrRevoke.allowClusterHTTP must be a boolean" }}{{- end }}
+{{- $arCluster = $arCfg.allowClusterHTTP }}
+{{- end }}
+{{- range $key := list "url" "tokenURL" }}
+{{- $raw := index $arCfg $key }}
+{{- if not (and (kindIs "string" $raw) $raw) }}{{- fail (printf "goApi.acrRevoke.%s is required when goApi.acrRevoke.enabled" $key) }}{{- end }}
+{{- $u := urlParse $raw }}
+{{- $hostname := regexReplaceAll ":[0-9]*$" $u.host "" | lower }}
+{{- $https := and (eq $u.scheme "https") (ne $hostname "") }}
+{{- $clusterHTTP := and $arCluster (eq $u.scheme "http") (regexMatch `^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+svc\.cluster\.local$` $hostname) }}
+{{- if not (or $https $clusterHTTP) }}{{- fail (printf "goApi.acrRevoke.%s must be https, or plain http on a <name>.svc.cluster.local host with goApi.acrRevoke.allowClusterHTTP: true" $key) }}{{- end }}
+{{- if or (regexMatch `^[^/]*//[^/?#]*@` $raw) (contains "#" $raw) }}{{- fail (printf "goApi.acrRevoke.%s must carry no user info and no fragment, empty ones included" $key) }}{{- end }}
+{{- if and (eq $key "url") (contains "?" $raw) }}{{- fail "goApi.acrRevoke.url must carry no query, an empty one included" }}{{- end }}
+{{- end }}
+{{- if not (and (kindIs "string" $arCfg.audience) $arCfg.audience) }}{{- fail "goApi.acrRevoke.audience is required when goApi.acrRevoke.enabled: acr's workloadTokenExchange.audience" }}{{- end }}
+{{- if hasKey $arCfg "expirationSeconds" }}
+{{- $e := $arCfg.expirationSeconds }}
+{{- if not (and (has (kindOf $e) (list "int" "int64" "float64")) (eq (float64 $e) (floor (float64 $e))) (ge (int $e) 600) (le (int $e) 86400)) }}{{- fail "goApi.acrRevoke.expirationSeconds must be a whole number from 600 to 86400" }}{{- end }}
+{{- $arExpiry = int $e }}
+{{- end }}
+{{- range .Values.goApi.extraVolumes }}
+{{- if eq (toString .name) "acr-revoke-token" }}{{- fail "goApi.extraVolumes must not name acr-revoke-token: goApi.acrRevoke renders that volume" }}{{- end }}
 {{- end }}
 {{- end }}
 apiVersion: apps/v1
@@ -357,6 +398,16 @@ spec:
             {{- /* CHAOS-10743: always rendered, so an env entry beats a same-named variable from goApi.envFrom: "true" only where the request-port fence renders, "false" everywhere else (goApi.extraEnv may not set it: refused above). go-api reads only the exact string "true". */}}
             - name: TRUSTED_PROXIES_NETWORK_FENCED
               value: {{ ternary "true" "false" (and $fence true) | quote }}
+            {{- if $ar }}
+            - name: ACR_REVOKE_URL
+              value: {{ $arCfg.url | quote }}
+            - name: ACR_REVOKE_TOKEN_URL
+              value: {{ $arCfg.tokenURL | quote }}
+            - name: ACR_REVOKE_SUBJECT_FILE
+              value: "/var/run/dev-health/acr-revoke/token"
+            - name: ACR_REVOKE_ALLOW_CLUSTER_HTTP
+              value: {{ ternary "true" "false" $arCluster | quote }}
+            {{- end }}
           {{- with .Values.goApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -369,16 +420,19 @@ spec:
           resources:
             {{- toYaml .Values.goApi.resources | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
-          {{- if or $wb .Values.goApi.extraVolumeMounts }}
+          {{- if or $wb $ar .Values.goApi.extraVolumeMounts }}
           volumeMounts:
             {{- if $wb }}
             - {name: workload-bootstrap, mountPath: /run/workload, readOnly: true}
+            {{- end }}
+            {{- if $ar }}
+            - {name: acr-revoke-token, mountPath: /var/run/dev-health/acr-revoke, readOnly: true}
             {{- end }}
             {{- with .Values.goApi.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
-      {{- if or $wb .Values.goApi.extraVolumes }}
+      {{- if or $wb $ar .Values.goApi.extraVolumes }}
       volumes:
         {{- if $wb }}
         - name: workload-bootstrap
@@ -387,6 +441,15 @@ spec:
             defaultMode: 292
             items:
               - {key: {{ $wbKey | quote }}, path: api.bootstrap}
+        {{- end }}
+        {{- if $ar }}
+        - name: acr-revoke-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ $arCfg.audience | quote }}
+                  expirationSeconds: {{ $arExpiry }}
+                  path: token
         {{- end }}
         {{- with .Values.goApi.extraVolumes }}
         {{- toYaml . | nindent 8 }}

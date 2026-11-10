@@ -63,7 +63,7 @@ type setting struct {
 
 func (s pgStore) settingsByCategory(ctx context.Context, orgID, category string) ([]setting, error) {
 	rows, err := s.Pool.Query(ctx,
-		`SELECT id, key, value, is_encrypted, description FROM settings WHERE org_id = $1 AND category = $2 ORDER BY key`, orgID, category)
+		`SELECT id, key, value, is_encrypted, description FROM settings WHERE org_id = $1 AND category = $2`, orgID, category)
 	if err != nil {
 		return nil, err
 	}
@@ -171,10 +171,9 @@ func (h *handlers) loadCategory(ctx context.Context, w http.ResponseWriter, orgI
 }
 
 // listSettingsByCategory is settings.py's list_settings_by_category. Python
-// builds SettingResponse(**row) from a row that has no `category`, so legacy
-// crashed with an unhandled 500 on any category with a setting. Go answers
-// the rows instead (pm D6958): each row has the shape and masking of
-// getSetting. An empty category answers 200 with an empty list.
+// crashed (SettingResponse(**row) without `category`, an unhandled 500) on any
+// non-empty category; Go answers the rows by key, each shaped and masked as
+// getSetting answers it (pm D6958). An empty category answers 200 with [].
 func (h *handlers) listSettingsByCategory(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	orgID, ok := adminOrgID(w, policy.UserFrom(ctx))
@@ -190,7 +189,7 @@ func (h *handlers) listSettingsByCategory(w http.ResponseWriter, r *http.Request
 		return
 	}
 	settings := make([]pyjson.Value, 0, len(rows))
-	for _, row := range rows {
+	for _, row := range rowsByKey(rows) {
 		settings = append(settings, settingObject(row.Key, category, row.Value, row.IsEncrypted, row.Description))
 	}
 	out := pyjson.NewObject()

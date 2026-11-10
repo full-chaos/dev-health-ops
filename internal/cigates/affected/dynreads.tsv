@@ -71,6 +71,7 @@ internal/auth/authruntime	no_hs256_verify_census_test.go
 internal/auth/authruntime	query_api_accepts_integration_test.go
 internal/auth/authruntime	queryapi_enforce_parity_integration_test.go
 internal/auth/authruntime	session_routes_integration_test.go
+internal/auth/authruntime	wrong_class_gate_test.go
 internal/auth/contracts	access_token_goldens_test.go
 internal/auth/contracts	audit_attribute_parity_test.go
 internal/auth/contracts	authorization_goldens_test.go

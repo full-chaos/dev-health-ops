@@ -31,6 +31,7 @@ internal/atlassianteams	environment_proxy_test.go	unexpressed
 internal/atlassianteams	vendored_redirect_test.go	unexpressed
 internal/auth/authorization	imports_test.go	unexpressed
 internal/auth/authruntime	orgs_owned_removed_test.go	unexpressed
+internal/auth/authruntime	wrong_class_gate_test.go	cmd/auth-service
 internal/auth/contracts	credential_anchor_history_test.go	unexpressed
 internal/auth/contracts	endpoint_profile_source_commit_test.go	unexpressed
 internal/auth/delegationinput	deps_test.go	unexpressed

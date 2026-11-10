@@ -4,7 +4,9 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # No ready_for_review: no job here reads the draft state, so the checks of the last opened/synchronize run stand on the
+    # head sha at the flip (a rerun of the whole workflow there would only repeat them).
+    types: [opened, synchronize, reopened]
     branches: [ "**" ]
   merge_group:
   workflow_dispatch:

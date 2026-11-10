@@ -36,19 +36,44 @@ const (
 )
 
 func TestSettingsRoutesVenueOracle(t *testing.T) {
-	runSettingsOracle(t, true, "keyed", settingsRoutesEncryptedGoldenDigest)
+	runSettingsOracle(t, true, "keyed", settingsRoutesEncryptedGoldenDigest, settingsEncryptedPinDigest)
 }
 
 // TestSettingsRoutesWithoutEncryptionKeyVenueOracle runs the same routes on
 // planes that hold no SETTINGS_ENCRYPTION_KEY: encrypting or decrypting then
 // raises in Python, an unhandled 500.
 func TestSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
-	runSettingsOracle(t, false, "nokey", settingsRoutesNoEncryptionGoldenDigest)
+	runSettingsOracle(t, false, "nokey", settingsRoutesNoEncryptionGoldenDigest, settingsNoEncryptionPinDigest)
 }
 
-func runSettingsOracle(t *testing.T, withKey bool, mode, digest string) {
+// The Go-pin digests (testdata/governance/settings_<mode>.go-pin.json), each
+// on its own declaration line.
+const (
+	settingsEncryptedPinDigest    = "7b7ebfff29cc8b515fd9d2d350733d4ad6c3d13872aec7546ca8edd911e96fe3"
+	settingsNoEncryptionPinDigest = "d21c6f7e659e2047318db84151e3ae542a656582be146aa9f3446b35258a6bf6"
+)
+
+// settingsListRuling retires the Python answer of every list of a non-empty
+// category: legacy crashed there with an unhandled 500, Go answers the rows.
+const settingsListRuling = "pm D6958 (CHAOS-13515): legacy list_settings_by_category crashed (SettingResponse without category); Go answers 200 with the rows"
+
+// settingsListRetired names the requests whose Python answer is that crash.
+// With no encryption key a category that holds an encrypted, non-empty value
+// is a 500 on both planes, so its lists are compared, not retired.
+func settingsListRetired(withKey bool, name string) bool {
+	switch name {
+	case "list with settings is a server error", "list other org category", "W list after writes":
+		return true
+	case "list encrypted category", "list notifications":
+		return withKey
+	}
+	return false
+}
+
+func runSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest string) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, governanceGolden("settings_"+mode, t.Name(), digest))
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/governance/settings_" + mode + ".go-pin.json", SHA256: pinDigest, Ruling: settingsListRuling})
 	root := repoRoot(t)
 	nextID := goldenIDs("set")
 	const jwtKey = "venue-oracle-test-secret-key-for-settings-flow-32-bytes!"
@@ -267,7 +292,11 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 			deps.Decryptor = decryptor
 		}
 	})
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
+		Retire: func(request venueoracle.Request) bool { return settingsListRetired(withKey, request.Name) },
+		Pin:    pin,
+	})
 	t.Log(receipt)
 
 	compare := func(name, query string) {
@@ -285,6 +314,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 FROM settings ORDER BY org_id, category, key`)
 
 	if !withKey {
+		venueoracle.FinishPins(t, pin)
 		golden.Finish(t)
 		return
 	}
@@ -327,5 +357,6 @@ FROM settings ORDER BY org_id, category, key`)
 	if goCount == 0 || source == "" {
 		t.Fatalf("no encrypted rows to compare: python %q, go %d rows", source, goCount)
 	}
+	venueoracle.FinishPins(t, pin)
 	golden.Finish(t)
 }

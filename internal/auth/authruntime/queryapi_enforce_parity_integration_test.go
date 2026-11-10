@@ -174,9 +174,10 @@ func newQPVenue(t *testing.T, ctx context.Context) *qpVenue {
 	az.caller = session.WirePrincipalID(workloadID)
 	api := az.front.Config.Handler
 	issuerFront.Config.Handler = api
+	issuerFront.TLS = &tls.Config{Certificates: []tls.Certificate{authruntimeTestIssuerTLS}}
 	issuerFront.StartTLS()
 	t.Cleanup(issuerFront.Close)
-	qpTrust(t, issuerFront.Certificate())
+	qpTrustGuard(t)
 
 	v := &qpVenue{az: az, issuer: issuer, client: &http.Client{Timeout: 60 * time.Second}}
 	v.orgA = az.azOrg(t, ctx, true, true)
@@ -305,24 +306,17 @@ func (v *qpVenue) envelopeJWKS(t *testing.T) string {
 	return path
 }
 
-// qpTrust makes the test process trust the issuer listener's certificate: query-api's JWKS client uses the default
-// transport, and prod trusts the issuer's real certificate the same way (the system pool).
-func qpTrust(t *testing.T, cert *x509.Certificate) {
+// qpTrustGuard checks the JWKS client trust against the system pool, which TestMain points at the test certificate
+// with SSL_CERT_FILE.
+func qpTrustGuard(t *testing.T) {
 	t.Helper()
-	original := http.DefaultTransport
-	base, ok := original.(*http.Transport)
-	if !ok {
-		t.Fatalf("http.DefaultTransport is a %T", original)
-	}
 	pool, err := x509.SystemCertPool()
 	if err != nil {
-		pool = x509.NewCertPool()
+		t.Fatal("issuer trust not seen by the system pool")
 	}
-	pool.AddCert(cert)
-	trusting := base.Clone()
-	trusting.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
-	http.DefaultTransport = trusting
-	t.Cleanup(func() { http.DefaultTransport = original })
+	if _, err := authruntimeTestIssuerCert.Verify(x509.VerifyOptions{Roots: pool, DNSName: "127.0.0.1"}); err != nil {
+		t.Fatal("issuer trust not seen by the system pool")
+	}
 }
 
 // qpQuietLogs sends query-api's per-request log lines to a bounded tail, printed only when the test fails.

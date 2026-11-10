@@ -56,7 +56,8 @@ func authViolations(t *testing.T, root string) []string {
 		if requiredContexts[key] || requiredContexts[name] {
 			out = append(out, fmt.Sprintf("job %s reuses a required context name (CHAOS-4834 class: a second producer of a required check)", key))
 		}
-		if !strings.HasPrefix(key, "auth-") {
+		// One exempt id, matched exactly: the ready-flip judge, whose shape TestReadyReuseWiring pins.
+		if !strings.HasPrefix(key, "auth-") && key != reuseJob {
 			out = append(out, fmt.Sprintf("job %s must carry the auth- prefix", key))
 		}
 	}
@@ -156,10 +157,10 @@ func authViolations(t *testing.T, root string) []string {
 
 	for _, key := range []string{"auth-go-quality", "auth-test", "auth-race", "auth-race-integration", "auth-fuzz"} {
 		j := asMap(jobs[key])
-		if !reflect.DeepEqual(asList(j["needs"]), []any{"auth-changes"}) {
+		if !reflect.DeepEqual(needsWithoutReuse(j["needs"]), "auth-changes") {
 			out = append(out, fmt.Sprintf("%s.needs must be [auth-changes], got %v", key, j["needs"]))
 		}
-		if got := asString(j["if"]); got != "needs.auth-changes.outputs.relevant == 'true'" {
+		if got := withoutReuse(asString(j["if"])); got != "needs.auth-changes.outputs.relevant == 'true'" {
 			out = append(out, fmt.Sprintf("%s.if must be exactly needs.auth-changes.outputs.relevant == 'true', got %q", key, got))
 		}
 	}
@@ -168,7 +169,7 @@ func authViolations(t *testing.T, root string) []string {
 		out = append(out, fmt.Sprintf("auth-gate.if must be always(), got %q", asString(gate["if"])))
 	}
 	var needs []string
-	for _, n := range asList(gate["needs"]) {
+	for _, n := range asList(needsWithoutReuse(gate["needs"])) {
 		needs = append(needs, asString(n))
 	}
 	sort.Strings(needs)
@@ -314,12 +315,13 @@ func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 		want []string
 	}{
 		{"job reuses required context lint", []mutation{{wf, "\n  auth-go-quality:", "\n  lint:"}}, []string{"required context", "auth- prefix"}},
+		{"a second job without the auth- prefix", []mutation{{wf, "\n  auth-go-quality:", "\n  ready-reuse-2:"}}, []string{"job ready-reuse-2 must carry the auth- prefix"}},
 		{"trigger gains a path filter", []mutation{{wf, "pull_request:", "pull_request:\n    paths: ['internal/auth/**']"}}, []string{"paths filter"}},
 		{"registry gains a target with no fuzz job", []mutation{{cg, "AUTH_FUZZ_TARGETS=(\n", "AUTH_FUZZ_TARGETS=(\n  \"./internal/auth/x FuzzPlanted\"\n"}}, []string{"differs from the AUTH_FUZZ_TARGETS registry", "FuzzPlanted"}},
 		{"gate stops failing on a skipped job", []mutation{{wf, `[ "${pair#*=}" = "success" ]`, `[ "${pair#*=}" != "failure" ]`}}, []string{"failed, cancelled OR skipped"}},
 		{"gate job drops its always()", []mutation{{wf, "if: always()", "if: success()"}}, []string{"always()"}},
 		{"the auth race step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh auth race-leg \"${{ matrix.leg }}\" 7\n", "run: 'echo \"run: bash ci/check_go.sh auth race-leg\"'\n"}}, []string{"no longer calls auth stage \"race-leg\""}},
-		{"an auth gate job runs on a condition that is always false", []mutation{{wf, "    if: needs.auth-changes.outputs.relevant == 'true'\n", "    if: false && needs.auth-changes.outputs.relevant == 'true'\n"}}, []string{"if must be exactly"}},
+		{"an auth gate job runs on a condition that is always false", []mutation{{wf, "    if: needs.auth-changes.outputs.relevant == 'true' && ", "    if: false && needs.auth-changes.outputs.relevant == 'true' && "}}, []string{"if must be exactly"}},
 		{"the gate's success check is only echoed", []mutation{{wf, `[ "${pair#*=}" = "success" ] ||`, `echo '[ "${pair#*=}" = "success" ] ||'; true ||`}}, []string{"failed, cancelled OR skipped"}},
 		{"the closure loop survives only in a comment", []mutation{{cg, "for arch in amd64 arm64", "# for arch in amd64 arm64"}}, []string{"no longer covers cgo"}},
 		{"CGO_ENABLED=0 survives only in a comment", []mutation{{dockerfile, "CGO_ENABLED=0", allMarker + "# CGO_ENABLED=0"}}, []string{"no longer builds with CGO_ENABLED=0"}},

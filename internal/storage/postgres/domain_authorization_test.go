@@ -111,7 +111,7 @@ func TestRolePostureQueryIsReadOnlyAndChecksExactPrivilegeBoundary(t *testing.T)
 		"'USAGE'",
 		"'CREATE'",
 		"'TEMPORARY'",
-		"UNNEST($3::TEXT[], $4::BOOLEAN[], $5::BOOLEAN[], $9::BOOLEAN[])",
+		"UNNEST($3::TEXT[], $4::BOOLEAN[], $5::BOOLEAN[], $9::BOOLEAN[], $12::BOOLEAN[])",
 		"UNNEST($6::TEXT[], $7::TEXT[], $8::TEXT[])",
 		"UNNEST($10::TEXT[])",
 	} {

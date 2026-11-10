@@ -30,4 +30,8 @@ func TestCredentialAnchorPinsSurviveALineShift(t *testing.T) {
 	if report.checked < 180 {
 		t.Fatalf("only %d pins were checked on the shifted tree: the measurement did not happen", report.checked)
 	}
+	if report.drift < 1 {
+		t.Fatalf("no cited line drifted on the shifted tree (drift %d): the shift moved nothing the pins cite", report.drift)
+	}
+	t.Logf("shifted tree: %d pins checked, %d cited lines drifted", report.checked, report.drift)
 }

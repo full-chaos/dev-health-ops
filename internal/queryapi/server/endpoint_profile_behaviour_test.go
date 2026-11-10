@@ -65,12 +65,23 @@ func newAccessStack(t *testing.T, base *accessStore, setup *accessSetup) *behavi
 // newAccessStackOn is newAccessStack over a users store the caller wraps.
 func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup) *behaviourStack {
 	t.Helper()
+	return newAccessStackRefusing(t, store, setup, false)
+}
+
+// newAccessStackRefusing is newAccessStackOn with /graphql's legacy
+// impersonation refusal set to refuseLegacy.
+func newAccessStackRefusing(t *testing.T, store queryAPIUserStore, setup *accessSetup, refuseLegacy bool) *behaviourStack {
+	t.Helper()
 	getenv := getenvFunc(func(name string) string {
 		switch name {
 		case deploymentEnvEnv:
 			return "development"
 		case proofRouteEnabledEnv, proofWriteRouteEnabledEnv:
 			return "true"
+		case impersonationProxyEnv:
+			if refuseLegacy {
+				return "true"
+			}
 		}
 		return ""
 	})
@@ -90,7 +101,7 @@ func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup)
 		*seen = append(*seen, claims)
 		w.WriteHeader(http.StatusOK)
 	}))
-	query := newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil)
+	query := newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(iaDocument): "probe", digestHex(legacyMutationDocument): "probe", digestHex(legacyNotedQueryDocument): "probe", digestHex(legacyNotedMutationDocument): "probe", digestHex(legacyHolderSubscriptionDocument): "probe", digestHex(nonHolderUnparsableDocument): "probe"}, verifier, auth, store, "", nil)
 
 	publicMux, internalMux, mcpMux := http.NewServeMux(), http.NewServeMux(), http.NewServeMux()
 	mountQueryRouteSets(getenv, publicMux, internalMux, mcpMux, queryRouteHandlers{
@@ -101,7 +112,7 @@ func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup)
 		ProofWrite:   query,
 		RunOperation: query,
 		MCP:          newMCPHandlerWithLimits(&countingMCPClient{}, nil, allMCPRootsEnabled(), getenv, mcpDefaultLimits()),
-	}, graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes})
+	}, graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes, refuseLegacyImpersonation: refuseLegacy})
 	handler := markResponseModelRoutes(publicMux)
 	internalMux.Handle("/", handler)
 	plane := &Plane{Handler: handler, InternalHandler: internalMux, MCPHandler: mcpMux}

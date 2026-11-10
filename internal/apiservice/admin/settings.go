@@ -171,9 +171,9 @@ func (h *handlers) loadCategory(ctx context.Context, w http.ResponseWriter, orgI
 }
 
 // listSettingsByCategory is settings.py's list_settings_by_category. Python
-// builds SettingResponse(**row) from a row that has no `category`, so any
-// category with at least one setting fails validation (an unhandled 500); an
-// empty category answers 200 with an empty list.
+// crashed (SettingResponse(**row) without `category`, an unhandled 500) on any
+// non-empty category; Go answers the rows by key, each shaped and masked as
+// getSetting answers it (pm D6958). An empty category answers 200 with [].
 func (h *handlers) listSettingsByCategory(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	orgID, ok := adminOrgID(w, policy.UserFrom(ctx))
@@ -188,13 +188,13 @@ func (h *handlers) listSettingsByCategory(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if len(rows) > 0 {
-		h.internalError(ctx, w, "build setting response", errors.New("setting rows carry no category"))
-		return
+	settings := make([]pyjson.Value, 0, len(rows))
+	for _, row := range rowsByKey(rows) {
+		settings = append(settings, settingObject(row.Key, category, row.Value, row.IsEncrypted, row.Description))
 	}
 	out := pyjson.NewObject()
 	out.Set("category", category)
-	out.Set("settings", []pyjson.Value{})
+	out.Set("settings", settings)
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 

@@ -42,8 +42,9 @@ readonly ISSUER_URL="https://${ISSUER_HOST}:8443"
 readonly PENDING_FLOOR=300
 readonly KEY_STATE_REFRESH=15
 readonly RETIRING_FLOOR=4200
-# dev-health-go authverify JWKSClient: CacheTTL 5m, RefreshFloor 30s.
-readonly VERIFIER_CACHE_BOUND=330
+# go-api and query-api JWKS client (internal/auth/accessverify JWKSConfig): CacheTTL 5 s, Timeout 2 s, RefreshFloor 1 s, so a
+# dropped kid is refused at most 7 s after auth-service drops it, which is at most 20 s after the decision.
+readonly VERIFIER_CACHE_BOUND=30
 # auth-service checks a token against its own key set: key states are read again every 15 s, so a dropped kid is refused
 # within the 20 s of the key-compromise objective (docs/reference/auth/readiness-and-slo.md).
 readonly AUTH_SERVICE_BOUND=20
@@ -76,7 +77,7 @@ if [ "${PRINT_PLAN}" = 1 ]; then
     'S2 compromise:  stage c and d, register both (published 300 s+); sessions under b; compromise b -successor c: b leaves the JWKS' \
     '                and is denied, c signs, the sessions of b are revoked (refresh refused), a session of a and the session of c still' \
     '                refresh; every verb on b refused; a manifest that names b active changes nothing.' \
-    '                Window a (no restart): literal WINDOW_A lines, seconds go-api and query-api keep accepting a b-token (bound 330 s).' \
+    '                Window a (no restart): literal WINDOW_A lines, seconds go-api and query-api keep accepting a b-token (bound 30 s).' \
     '                Window b: compromise c -successor d, then restart go-api and query-api one at a time right after the key' \
     '                drop: literal WINDOW_B lines; a verifier that still accepts the old kid fails the run.' \
     'S3 rollback:    auth-service, go-api and query-api recreated on the previous image (no class flip): new tokens are EdDSA under the active kid, go-api accepts them, the' \
@@ -88,7 +89,7 @@ if [ "${PRINT_PLAN}" = 1 ]; then
     '                D1 a forged token: the claims of the live b session signed with the compromised key (header kid = that key).' \
     '                Before apply go-api, query-api and auth-service accept it (control); after apply each verifier is asked every' \
     '                5 s or less with the forged and the genuine token of that session: the first 401 with the genuine token still' \
-    '                accepted is a kid refusal, at most 330 s from t0 (JWKS cache 5 min + 30 s refresh floor). A refusal while the' \
+    '                accepted is a kid refusal, at most 30 s from t0 (auth-service drop 20 s + JWKS cache 5 s + fetch 2 s). A refusal while the' \
     '                genuine token is refused too is the session revoke, not the kid, and fails the cell.' \
     '                D2 auth-service (POST /api/v1/auth/validate) refuses the forged token at most 20 s from t0.' \
     '                D3 (window a) restart auth-service alone on a manifest that names the compromised key active: the JWKS' \
@@ -402,7 +403,7 @@ probe_verdict() { # probe_verdict go|query|validate TOKEN -> A, R or X; R is a 4
 }
 # forge_probe FORGED GENUINE OUT T0 UNTIL_S VERIFIERS: until UNTIL_S seconds after T0, ask auth-service and (VERIFIERS 1) go-api
 # and query-api with both tokens, both at once, one line per tick in the forge probe form (ci/lib/auth_rotation_probe.sh). A tick
-# is 1 s plus the call time while auth-service still accepts the forged token, then 3 s plus the call time. A column is asked two
+# is 1 s plus the call time until every asked column has refused the forged token, then 3 s plus the call time. A column is asked two
 # more ticks after its forged token's first refusal, then not again ("-"): a refusal that does not hold is seen.
 forge_probe() {
   local forged="$1" genuine="$2" out="$3" t0="$4" until_s="$5" s tag line
@@ -430,7 +431,7 @@ forge_probe() {
     done
     printf '%s\n' "${line}" >>"${out}"
     [ $((more[go] + more[query] + more[validate])) -gt 0 ] || break
-    if [ "${seen[validate]}" = 1 ]; then sleep 3; else sleep 1; fi
+    if [ "${seen[validate]}" = 1 ] && { [ "$6" != 1 ] || { [ "${seen[go]}" = 1 ] && [ "${seen[query]}" = 1 ]; }; }; then sleep 3; else sleep 1; fi
   done
   rm -f "${out}".*.f "${out}".*.g
 }

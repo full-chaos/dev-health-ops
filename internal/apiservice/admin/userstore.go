@@ -88,6 +88,37 @@ func (s pgStore) userByUsername(ctx context.Context, username string) (*fullUser
 	return scanFullUser(s.Pool.QueryRow(ctx, `SELECT `+columns+` FROM users WHERE lower(username) = $1`, pythonparity.Lower(username)))
 }
 
+// actorUser is the acting user's row as an actor-only lookup reads it: no
+// is_superuser, because authority comes from the principal, never this row.
+type actorUser struct {
+	ID           uuid.UUID
+	PasswordHash *string
+}
+
+const actorUserColumns = `id, password_hash`
+
+func scanActorUser(row pgx.Row) (*actorUser, error) {
+	var u actorUser
+	err := row.Scan(&u.ID, &u.PasswordHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// actorByID is UserService.get_by_id for the acting user.
+func (s pgStore) actorByID(ctx context.Context, id uuid.UUID) (*actorUser, error) {
+	return scanActorUser(s.Pool.QueryRow(ctx, `SELECT `+actorUserColumns+` FROM users WHERE id = $1`, id))
+}
+
+// actorByEmail is UserService.get_by_email (case-insensitive) for the acting user.
+func (s pgStore) actorByEmail(ctx context.Context, email string) (*actorUser, error) {
+	return scanActorUser(s.Pool.QueryRow(ctx, `SELECT `+actorUserColumns+` FROM users WHERE lower(email) = $1`, pythonparity.Lower(email)))
+}
+
 // listUsersFilter is list_users' shared WHERE clause (active_only + search
 // over email/username/full_name), applied by both list_all and list_by_org.
 type listUsersFilter struct {

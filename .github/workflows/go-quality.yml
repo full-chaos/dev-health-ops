@@ -43,7 +43,9 @@ name: Go quality
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # No ready_for_review: no job here reads the draft state, so the checks of the last opened/synchronize run stand on the
+    # head sha at the flip (a rerun of the whole workflow there would only repeat them).
+    types: [opened, synchronize, reopened]
     branches: ['**']
   push:
     branches: [main]
@@ -486,7 +488,7 @@ jobs:
         id: ghcr_login
         continue-on-error: true
         if: steps.relevance.outputs.relevant == 'true'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

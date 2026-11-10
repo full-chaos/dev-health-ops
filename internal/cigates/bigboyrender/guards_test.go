@@ -152,7 +152,7 @@ func TestRealManifestRendersOneGrantPerTableAndEqualsTheGolden(t *testing.T) {
 	if got := strings.Count(out, "<query>"); got != rows {
 		t.Errorf("%d grants for %d rows with a privilege", got, rows)
 	}
-	if !strings.Contains(out, "<query>GRANT SELECT, INSERT, ALTER DELETE ON default.teams</query>") {
+	if !strings.Contains(out, "<query>GRANT SELECT, INSERT ON default.teams</query>") {
 		t.Error("the teams grant is missing")
 	}
 	if diff := goldenDiff(queries(out), realGolden(t)); diff != "" {
@@ -614,5 +614,47 @@ func TestRunRefusesAnUnknownVerb(t *testing.T) {
 	}
 	if code, _, stderr := run("pg-posture", "other", "a", "b", "c"); code != 2 || !strings.Contains(stderr, "unknown role") {
 		t.Errorf("role: exit %d %q", code, stderr)
+	}
+}
+
+// RetiredTables grants nothing: a literal list of names that are rows of the same posture leaves the delta as it
+// was; any other form, or a name that is not a row, fails the step.
+func TestPostureDeltaReadsARetiredTablesListAsNoGrant(t *testing.T) {
+	withRetired := func(list string) string {
+		return strings.Replace(postureV2, "return []RequiredTable{\n", "return Posture{\n\t\tRetiredTables: "+list+",\n\t\tRequiredTables: []RequiredTable{\n", 1)
+	}
+	_, _, plain := posture(t, "api", "api_authorization.go", postureV1, postureV2)
+	code, stdout, lines := posture(t, "api", "api_authorization.go", postureV1, withRetired(`[]string{"beta"}`))
+	if code != 0 || strings.Contains(stdout, "unparsable") || strings.Join(lines, "\n") != strings.Join(plain, "\n") || len(plain) == 0 {
+		t.Errorf("a retired row: exit %d, stdout %q, lines %v; want the plain delta %v", code, stdout, lines, plain)
+	}
+	for name, list := range map[string]string{
+		"not a row":  `[]string{"gamma"}`,
+		"identifier": `retired`,
+		"call":       `retiredTables()`,
+		"not quoted": `[]string{beta}`,
+	} {
+		code, stdout, lines := posture(t, "api", "api_authorization.go", postureV1, withRetired(list))
+		if code == 0 || !strings.Contains(stdout, "unparsable") || len(lines) != 0 {
+			t.Errorf("%s: exit %d, stdout %q, lines %v", name, code, stdout, lines)
+		}
+	}
+}
+
+// A row's OptionalDelete is not a grant (GrantStatements renders none for it), so the users.d render and the bigboy
+// grants comparison leave it out too.
+func TestOptionalDeleteIsNotRendered(t *testing.T) {
+	manifest := "package clickhouse\n\nfunc APIPosture(database string) Posture {\n\treturn Posture{RequiredTables: []TableGrant{\n" +
+		"\t\t{Database: database, Table: \"teams\", AllowInsert: true, AllowSelect: true, OptionalDelete: true},\n" +
+		"\t\t{Database: database, Table: \"only_optional\", OptionalDelete: true},\n" +
+		"\t\t{Database: database, Table: \"identities\", AllowInsert: true, AllowSelect: true, AllowDelete: true},\n\t}}\n}\n"
+	got := bigboyrender.GrantsFromManifest(manifest)
+	want := []string{"GRANT SELECT, INSERT ON default.teams", "GRANT SELECT, INSERT, ALTER DELETE ON default.identities"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("render %q, want %q", got, want)
+	}
+	actual := "SELECT\tteams\nINSERT\tteams\nSELECT\tidentities\nINSERT\tidentities\nALTER DELETE\tidentities\n"
+	if code, out, _ := run("grants-compare", actual, manifest); code != 0 || !strings.HasSuffix(out, "GRANTS_CHECK_OK\n") {
+		t.Fatalf("grants-compare: exit %d %q", code, out)
 	}
 }

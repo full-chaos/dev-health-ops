@@ -180,15 +180,35 @@ func reconciliationTables() []domainTable {
 			},
 		},
 		{
-			// The native phone-home heartbeat's fleet count and audit row, in
-			// the exact statement shapes heartbeat_native.go issues on the
-			// domain pool. audit_logs carries its production columns because
-			// the INSERT names them and PostgreSQL resolves columns before it
-			// checks the ACL.
+			// The native phone-home heartbeat's fleet count and the billing
+			// owner lookup's users columns, in the statement shapes
+			// heartbeat_native.go and billingfence.go issue on the domain pool.
+			// audit_logs carries its production columns because the INSERT
+			// names them and PostgreSQL resolves columns before it checks the ACL.
 			name: "users",
-			ddl:  "CREATE TABLE public.users (id uuid PRIMARY KEY, email text NOT NULL)",
+			ddl: `CREATE TABLE public.users (
+				id uuid PRIMARY KEY, email text NOT NULL, username text, password_hash text,
+				full_name text, token_version integer NOT NULL DEFAULT 0)`,
 			exercise: []string{
 				"SELECT COUNT(*) FROM public.users",
+				"SELECT u.email, u.full_name FROM public.users u WHERE u.id = '00000000-0000-0000-0000-000000000000'::uuid",
+			},
+		},
+		{
+			// The billing owner lookup's memberships join, in billingfence.go's
+			// statement shape: user_id, org_id, role and created_at, no other column.
+			name: "memberships",
+			ddl: `CREATE TABLE public.memberships (
+				id uuid PRIMARY KEY, user_id uuid NOT NULL, org_id uuid NOT NULL,
+				role text NOT NULL DEFAULT 'member', invited_by_id uuid, joined_at timestamptz,
+				created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())`,
+			exercise: []string{
+				`SELECT u.email, u.full_name
+				FROM public.users u
+				JOIN public.memberships m ON m.user_id = u.id
+				WHERE m.org_id = '00000000-0000-0000-0000-000000000000'::uuid AND m.role = 'owner'
+				ORDER BY m.created_at
+				LIMIT 1`,
 			},
 		},
 		{

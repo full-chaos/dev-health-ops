@@ -258,7 +258,7 @@ func TestDockerImagesBuildButNeverPublishOnMergeGroup(t *testing.T) {
 
 	for _, name := range []string{"go-build", "go-build-dho-arm64", "go-api-tools-build"} {
 		job := pinJob(doc, name)
-		condition := asString(job["if"])
+		condition := withoutReuse(asString(job["if"]))
 		if condition == "" {
 			t.Fatalf("job %s has no if", name)
 		}

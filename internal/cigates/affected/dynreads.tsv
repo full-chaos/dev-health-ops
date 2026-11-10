@@ -2,9 +2,11 @@
 ci/tools/gotestfuncs	main.go
 cmd/auth-migrate	bootstrap.go
 cmd/auth-migrate	restorefence.go
+cmd/cigate	chposture.go
 cmd/cigate	docs_prepare_refusals_test.go
 cmd/cigate	main.go
 cmd/cigate	main_test.go
+cmd/credrefgen	main.go
 cmd/dev-health-migration-matrix	main.go
 cmd/dev-health-provider-fixture	main.go
 cmd/dev-health-provider-normalized-fixture	main.go
@@ -344,6 +346,7 @@ internal/cigates/workflows	providerstub_not_release_test.go
 internal/cigates/workflows	providersync_shard_budget_test.go
 internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go
+internal/cigates/workflows	ready_reuse_test.go
 internal/cigates/workflows	registry_retry_test.go
 internal/cigates/workflows	ttl_registry_test.go
 internal/cigates/workflows	venue_users_owned_test.go
@@ -603,8 +606,10 @@ internal/shadowvenue	claims.go
 internal/shadowvenue	drive.go
 internal/shadowvenue	mint.go
 internal/shadowvenue	requestsites_test.go
+internal/storage/clickhouse	worker_posture_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go
+internal/storage/postgres	domain_users_read_test.go
 internal/storage/postgres	openers_test.go
 internal/storage/postgres	posture_identity_sites_test.go
 internal/storage/postgres	venue_posture_coverage_test.go

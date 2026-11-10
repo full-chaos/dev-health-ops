@@ -65,13 +65,18 @@ func TestDrillAuthAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workload store: %v", err)
 	}
+	// The registry and its bootstrap credentials are written by the migration role only (here the drill superuser).
+	writer, err := workload.New(workload.Config{Pool: admin, Schema: schema})
+	if err != nil {
+		t.Fatalf("workload writer: %v", err)
+	}
 	secrets := filepath.Join(dir, "attempt-secrets.json")
 
 	switch phase {
 	case "seed":
-		drillAttemptSeed(t, ctx, store, secrets)
+		drillAttemptSeed(t, ctx, writer, store, secrets)
 	case "revoke":
-		drillAttemptRevoke(t, ctx, store, rt, schema, secrets)
+		drillAttemptRevoke(t, ctx, writer, store, rt, schema, secrets)
 	case "attempt":
 		drillAttemptTry(t, ctx, store, dir, secrets)
 	default:
@@ -86,11 +91,11 @@ type drillAttemptSecret struct {
 	PrincipalID  string `json:"principal_id"`
 }
 
-func drillAttemptSeed(t *testing.T, ctx context.Context, store *workload.Store, path string) {
+func drillAttemptSeed(t *testing.T, ctx context.Context, writer, store *workload.Store, path string) {
 	t.Helper()
 	var out []drillAttemptSecret
 	for _, name := range []string{drillAttemptRevokedName, drillAttemptDisabledName} {
-		principal, err := store.Register(ctx, workload.Spec{Name: name, Audiences: []string{"auth-service"}}, workload.Actor{})
+		principal, err := writer.Register(ctx, workload.Spec{Name: name, Audiences: []string{"auth-service"}}, workload.Actor{})
 		if err != nil {
 			t.Fatalf("register %s: %v", name, err)
 		}
@@ -98,7 +103,7 @@ func drillAttemptSeed(t *testing.T, ctx context.Context, store *workload.Store, 
 		if err != nil {
 			t.Fatal(err)
 		}
-		res, err := store.CreateBootstrap(ctx, name, value, nil, 24*time.Hour, workload.Actor{})
+		res, err := writer.CreateBootstrap(ctx, name, value, nil, 24*time.Hour, workload.Actor{})
 		if err != nil {
 			t.Fatalf("create the bootstrap credential of %s: %v", name, err)
 		}
@@ -130,10 +135,10 @@ func drillAttemptLoad(t *testing.T, path string) (revoked, disabled drillAttempt
 	return all[0], all[1]
 }
 
-func drillAttemptRevoke(t *testing.T, ctx context.Context, store *workload.Store, rt *pgxpool.Pool, schema authschema.ValidatedIdentifier, path string) {
+func drillAttemptRevoke(t *testing.T, ctx context.Context, writer, store *workload.Store, rt *pgxpool.Pool, schema authschema.ValidatedIdentifier, path string) {
 	t.Helper()
 	revoked, disabled := drillAttemptLoad(t, path)
-	if err := store.RevokeBootstrap(ctx, uuid.MustParse(revoked.CredentialID), workload.BootstrapReasonCompromised, workload.Actor{}); err != nil {
+	if err := writer.RevokeBootstrap(ctx, uuid.MustParse(revoked.CredentialID), workload.BootstrapReasonCompromised, workload.Actor{}); err != nil {
 		t.Fatalf("revoke the bootstrap credential: %v", err)
 	}
 	principal := uuid.MustParse(disabled.PrincipalID)

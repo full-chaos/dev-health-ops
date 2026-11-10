@@ -376,7 +376,7 @@ func (p *Parser) consumeOptional(
 }
 
 // ParseWithPositional is Parse for a parser with exactly one positional after its optionals
-// (nargs=None, required), as `service-credentials rotate <credential_id> ...` has: argparse's
+// (nargs=None, required): argparse's
 // consume_positionals over the A/O/- pattern of the arguments, where everything after the first
 // "--" is an argument ('A') and the "--" itself ('-') is absorbed by the positional next to it
 // (`-*A-*`) and dropped. The positional is nil when none was consumed (the caller reports the

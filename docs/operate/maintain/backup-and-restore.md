@@ -359,12 +359,12 @@ Order (nothing serves traffic until the last step):
    `postgresql.auto.conf` before it is promoted, so no client or job can write before the fence runs.
 3. Restore a second, shadow copy of the same base backup to the END of the WAL archive (no recovery target) and keep it
    away from clients. It is the source of everything the target time dropped.
-4. Export the manifest from the shadow copy with the owner login (the superuser or ops-table owner; the least-privilege migration login cannot read the legacy tables, and the command refuses the runtime role):
+4. Export the manifest from the shadow copy with the owner login: Secret `auth-migrate-database-owner`, key `AUTH_MIGRATION_DATABASE_URI`, never Secret `auth-migrate-database` (the least-privilege migration login `devhealth_auth_migrator` has no SELECT on the legacy `public` tables and stops with `reading section public.refresh_tokens`; the command refuses the runtime role). The migrator gets no grant for this:
    `auth-migrate restore-fence export -out manifest.json` (`AUTH_MIGRATION_DATABASE_URI`, `AUTH_RUNTIME_DATABASE_ROLE`
    and `AUTH_DATABASE_SCHEMA` in the environment; no secret on a command line). The manifest holds ids, states and
    revision floors, never a credential, a hash or a token.
-5. Apply it to the restored copy, on the owner login too (the least-privilege migration login stops in the privilege preflight): first the dry run, `auth-migrate restore-fence apply -manifest manifest.json` (it writes
-   nothing and prints the counts per table), then `... apply -manifest manifest.json -apply`. The migration DSN of the
+5. Apply it to the restored copy, with the same owner Secret (the least-privilege migration login stops in the privilege preflight): first the dry run, `auth-migrate restore-fence apply -manifest manifest.json` (it writes
+   nothing and prints the counts per table), then `auth-migrate restore-fence apply -manifest manifest.json -apply`. The migration DSN of the
    apply carries `options='-c default_transaction_read_only=off'` so the apply can write although the copy is read-only.
    One transaction does everything: the revision floors, every revocation made after the target time, and the fence row
    for the new timeline. It is idempotent: a second run for the same timeline and manifest changes nothing.
@@ -423,7 +423,7 @@ Order (nothing serves traffic until the last step):
    revoke the token at PagerDuty by hand.
 7. Reset the read-only default: `ALTER SYSTEM RESET default_transaction_read_only;` then `SELECT pg_reload_conf();`.
 8. Start auth-service. Its readiness check `restore_fence` must be true (`/readyz`).
-9. `auth-migrate restore-fence status` prints `fenced=true` and the timeline (and the stored operator actions).
+9. `auth-migrate restore-fence status` (the same owner Secret) prints `fenced=true` and the timeline (and the stored operator actions).
 
 What the apply puts back, so that nothing removed after the target time stays alive: sessions, refresh credentials,
 credential registry, signing keys, resource grants, memberships, service accounts, workloads, workload bindings,

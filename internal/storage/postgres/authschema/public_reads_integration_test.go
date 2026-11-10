@@ -27,12 +27,11 @@ var publicReadOracle = map[string][]string{
 	"memberships": {"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id", "id", "updated_at"},
 	"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users", "default_role",
 		"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at"},
-	"organizations":                {"id", "slug", "name", "is_active", "tier", "created_at", "updated_at"},
-	"saml_assertion_replays":       {"provider_id", "assertion_id", "expires_at"},
-	"org_licenses":                 {"org_id", "tier", "features_override"},
-	"org_activity":                 {"org_id", "has_data", "computed_at"},
-	"internal_service_credentials": {"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"},
-	"impersonation_sessions":       {"id", "admin_user_id", "ended_at", "expires_at"},
+	"organizations":          {"id", "slug", "name", "is_active", "tier", "created_at", "updated_at"},
+	"saml_assertion_replays": {"provider_id", "assertion_id", "expires_at"},
+	"org_licenses":           {"org_id", "tier", "features_override"},
+	"org_activity":           {"org_id", "has_data", "computed_at"},
+	"impersonation_sessions": {"id", "admin_user_id", "ended_at", "expires_at"},
 }
 
 type publicReadsEnv struct {
@@ -407,5 +406,36 @@ func TestPostureReportsAnOrdinaryRoleReachableOnlyThroughSetRole(t *testing.T) {
 	}
 	if found := env.violations(t, ctx); !strings.Contains(describe(found), helper) {
 		t.Errorf("a role reachable only through SET ROLE was not reported:\n%s", describe(found))
+	}
+}
+
+// The auth runtime reads no service credential table: the grants pass that refuses an absent manifest table
+// (RequirePublicTables) still runs, the posture holds, and the runtime role holds nothing on the table, here hidden
+// the way a dropped table is absent.
+func TestPublicReadsRunWithTheRetiredCredentialsTableAbsent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newPublicReadsFixture(t, ctx, "internal_service_credentials")
+
+	options := env.options(&bytes.Buffer{})
+	options.RequirePublicTables = true
+	if _, err := Apply(ctx, env.migration, options); err != nil {
+		t.Fatalf("Apply with RequirePublicTables and the credentials table absent: %v", err)
+	}
+	if found := env.violations(t, ctx); len(found) > 0 {
+		t.Fatalf("the posture fails with the credentials table absent:\n%s", describe(found))
+	}
+	for _, entry := range PublicReadColumns() {
+		if entry.Table == "internal_service_credentials" {
+			t.Fatalf("PublicReadColumns still names %s", entry.Table)
+		}
+	}
+	var held int
+	if err := env.migration.QueryRow(ctx, `SELECT count(*) FROM information_schema.role_table_grants
+WHERE table_schema = 'public' AND table_name = 'internal_service_credentials_hidden' AND grantee = $1`, env.runtimeRole).Scan(&held); err != nil {
+		t.Fatal(err)
+	}
+	if held != 0 {
+		t.Errorf("the runtime role holds %d privilege(s) on the credentials table", held)
 	}
 }

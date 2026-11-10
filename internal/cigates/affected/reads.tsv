@@ -2,6 +2,9 @@
 cmd/cigate	test	compose.yml
 cmd/cigate	test	docs
 cmd/cigate	test	docs-data
+cmd/credrefgen	code	contracts
+cmd/credrefgen	code	docs
+cmd/credrefgen	code	docs-data
 cmd/dev-health-migration-matrix	code	contracts
 cmd/dev-health-migration-matrix	code	docs
 cmd/dho	test	.env.example
@@ -44,6 +47,7 @@ internal/auth/pushreconcile/reconcilejob	test	alerts
 internal/auth/ratelimitvalkey	test	deploy
 internal/auth/ratelimitvalkey	test	docs
 internal/auth/repoidentityprojection	test	contracts
+internal/auth/restorefence	test	docs
 internal/auth/revisionfeed	test	contracts
 internal/auth/writerinventory	test	ci
 internal/bigboycompose	test	.env.example

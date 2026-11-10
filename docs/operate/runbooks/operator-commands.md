@@ -311,8 +311,8 @@ Without `FINAL`, ClickHouse returns an arbitrary version of rows with the same `
 - **Admin-authored team-attribution overrides**: `identities.team_ids` and `teams.manual_members` (ClickHouse,
   not Postgres) -- written only through `/org/admin/identities` and the admin Identities screen /
   drift-approval flow, never by any sync/import path.
-- **Minted service credentials** (`internal_service_credentials`) -- not sync-derived data. The operator CLI no
-  longer uses one, but other minted secrets there require re-minting after a wipe.
+- **Minted service credentials** (`internal_service_credentials`) -- not sync-derived data. Nothing mints a row
+  there any more (the `service-credentials` verbs are gone), and a later migration drops the table.
 - **Audit history / operator action log** (`joboperator.Service`'s Action/audit pipeline records) -- no
   provider re-sync recreates a record of past operator interventions.
 - **Historical ledger state** (`daily_metrics_partitions`/`daily_metrics_runs`/`metric_compatibility_executions`)

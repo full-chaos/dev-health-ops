@@ -10,6 +10,7 @@ lifecycle: active
 # Security operations
 
 - [Production hardening](hardening.md)
+- [Billing and worker boundaries](../../reference/auth/billing-and-worker-boundaries.md)
 - [Manage External Push credentials](external-push-credentials.md)
 - Use the approved credential-incident and security-incident processes for suspected compromise.
 

@@ -101,30 +101,11 @@ observe a credential before (or instead of) the route's intended one, with
 that is not its own (see
 [credential-classes.md](credential-classes.md#credentials-that-reach-a-validator-that-is-not-their-own)).
 
-## Addendum: `svc_worker_*` — mint-only scaffolding, unwired to any HTTP transport
+## Retired worker service credentials
 
-`svc_worker_*` could be
-minted/rotated/revoked via CLI (those verbs are gone), and it **did** have a real,
-DB-backed validator — `internal/joboperator/auth.go` (ops repo Go tree, not the versioned `dev-health-go` dependency): the token-shape regex at line 54
-(`^svc_worker_[A-Za-z0-9_-]{32,256}$`) and `Authenticator.Authenticate`
-(lines ~119-160) hash-match against `public.internal_service_credentials`
-with `revoked_at`/`expires_at` checks and a `last_used_at` touch.
+No endpoint profile accepts the retired `internal_svc_worker_token` class. The worker operator CLI uses a fixed operator principal and database role checks. It does not check service-token scopes. The `dho service-credentials` command group is absent.
 
-**But nothing calls it.** Searched `cmd/` (all 12 Go binaries) and every
-`internal/` package outside `internal/joboperator/` itself for
-`joboperator.`, `NewAuthenticator`, `ScopeWorkerRead`, `ScopeWorkerOperate`,
-`WorkerOperatorService` — zero hits except `internal/syncreconciler`'s test
-files, which reference an unrelated `joboperator` symbol
-(`NewDirectPostgresBackend`). `internal/joboperator/` itself contains no
-`http.`/`Handler`/`mux.`/`ServeHTTP` reference at all — no HTTP transport
-exists in this package. Also searched `dev-health-go` at both pinned tags
-(`ops/go.mod:8` → `v0.6.1`, `acr/go.mod:5` → `v0.5.5`) via
-`git grep -n svc_worker` against each tag directly (never the unpinned
-working tree) — zero hits in either. **Verdict: `svc_worker_*` is real,
-DB-live scaffolding with no HTTP consumer in ops, acr, or dev-health-go at
-either pinned version — exercised only by `internal/joboperator`'s own
-integration test suite.** Not part of any endpoint-profile file (no route
-uses it); recorded here because it is a Go-side fact, not a REST/GraphQL surface.
+Enforced by: `TestNoEndpointProfileRowAcceptsARetiredClass`, `internal/joboperator/auth_test.go`, and `cmd/dho/retired_verbs_test.go`. See [Billing and worker boundaries](billing-and-worker-boundaries.md) for the current controls and limits.
 
 ## GraphQL resolvers
 

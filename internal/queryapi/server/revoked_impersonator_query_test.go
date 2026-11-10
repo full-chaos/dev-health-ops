@@ -119,8 +119,9 @@ func TestQueryServesTheRevokedImpersonatorAsItself(t *testing.T) {
 	}
 }
 
-// TestQueryImpersonatesANonSuperuserHolderAsGoAPIDoes: the answer change. A non-superuser holding
-// admin.impersonate, beside a live row, is served on each /query mount as the row's target, as go-api serves it.
+// TestQueryImpersonatesANonSuperuserHolderAsGoAPIDoes: a platform set that is not the flag's set (no production
+// users read carries one today) pins the rule: a non-superuser holding admin.impersonate, beside a live row, is
+// served on each /query mount as the row's target, as go-api serves it.
 func TestQueryImpersonatesANonSuperuserHolderAsGoAPIDoes(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)

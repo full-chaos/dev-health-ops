@@ -123,10 +123,10 @@ var behaviourTests = map[string]string{
 	"internal/api/sso/provision.go|handlers.provisionOrGetUser":         "internal/api/sso/usersowned_signin_integration_test.go|TestUsersOwnedSignInOfAnExistingAccountWritesNoUsersRow",
 	"internal/api/sso/oauth.go|handlers.oauthProvisionUser":             "internal/api/sso/usersowned_signin_integration_test.go|TestUsersOwnedSignInOfAnExistingAccountWritesNoUsersRow",
 
-	"internal/apiservice/admin/users.go|handlers.createUser":      "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedAdminRoutesRefuseBeforeAnyDatabaseWork",
-	"internal/apiservice/admin/users.go|handlers.updateUser":      "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedAdminRoutesRefuseBeforeAnyDatabaseWork",
-	"internal/apiservice/admin/users.go|handlers.setUserPassword": "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedAdminRoutesRefuseBeforeAnyDatabaseWork",
-	"internal/apiservice/admin/users.go|handlers.deleteUser":      "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedAdminRoutesRefuseBeforeAnyDatabaseWork",
+	"internal/apiservice/admin/users.go|handlers.createUser":      "internal/apiservice/admin/users_owned_forward_test.go|TestUsersOwnedPlatformCreateForwardsToAuth",
+	"internal/apiservice/admin/users.go|handlers.updateUser":      "internal/apiservice/admin/users_owned_forward_test.go|TestUsersOwnedPatchVerifiedForwardsToAuth",
+	"internal/apiservice/admin/users.go|handlers.setUserPassword": "internal/apiservice/admin/users_owned_forward_test.go|TestUsersOwnedSetPasswordForwardsToAuth",
+	"internal/apiservice/admin/users.go|handlers.deleteUser":      "internal/apiservice/admin/users_owned_forward_test.go|TestUsersOwnedSoftDeleteForwardsAndRepeatIs404",
 	"internal/apiservice/admin/operator.go|Operator.CreateUser":   "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedOperatorVerbsRefuseBeforeAnyDatabaseWork",
 	"internal/apiservice/admin/operator.go|Operator.DeleteUser":   "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedOperatorVerbsRefuseBeforeAnyDatabaseWork",
 	"internal/apiservice/admin/operator.go|Operator.UpdateUser":   "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedOperatorVerbsRefuseBeforeAnyDatabaseWork",
@@ -179,6 +179,9 @@ func TestEveryUsersOwnedWriterHasABehaviourTest(t *testing.T) {
 		keys[key] = true
 	}
 	for _, key := range usersOwnedEntryPoints {
+		keys[key] = true
+	}
+	for key := range usersOwnedForwardedEntryPoints {
 		keys[key] = true
 	}
 	for key := range keys {

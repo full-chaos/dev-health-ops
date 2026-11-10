@@ -2,11 +2,8 @@ package contracts
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 	"testing"
 )
 
@@ -35,8 +32,8 @@ func TestPlatformActionsOnOrgScopedRowsAreTheAdminOrMounts(t *testing.T) {
 		}
 		id, _ := row["id"].(string)
 		got = append(got, id)
-		if mount, found := registeredAdminOr(row, root); !found || !mount {
-			t.Errorf("%s: a platform action on an org_scoped row whose registration is not admin-or (found %v)", id, found)
+		if mount, err := registeredAdminOr(row, root); err != nil || !mount {
+			t.Errorf("%s: a platform action on an org_scoped row whose registration is not admin-or (%v)", id, err)
 		}
 	}
 	sort.Strings(got)
@@ -46,7 +43,8 @@ func TestPlatformActionsOnOrgScopedRowsAreTheAdminOrMounts(t *testing.T) {
 }
 
 // The narrowed rule refuses a platform action on an org_scoped row whose mount is not admin-or: the planted row is an
-// admin-or users row whose source points at a plain Admin mount (the org members list).
+// admin-or users row whose method, route and source name a plain Admin mount (the org members list). Its source line
+// is arbitrary: the registration is found by symbol.
 func TestAPlatformActionOnAnOrgScopedRowWithAnotherMountFails(t *testing.T) {
 	root := testRoot(t)
 	scopes := catalogScopes(t)
@@ -60,28 +58,12 @@ func TestAPlatformActionOnAnOrgScopedRowWithAnotherMountFails(t *testing.T) {
 		raw, _ := json.Marshal(row)
 		var planted map[string]any
 		_ = json.Unmarshal(raw, &planted)
-		planted["source"] = map[string]any{"file": "internal/apiservice/admin/orgs.go", "line": float64(adminMembersListLine(t, root))}
+		planted["method"], planted["route"] = "GET", "/api/v1/admin/orgs/{org_id}/members"
+		planted["source"] = map[string]any{"file": "internal/apiservice/admin/orgs.go", "line": float64(1)}
 		if !violationsContain(adminFieldViolations(planted, scopes, root), "tenant_requirement") {
 			t.Fatal("a platform action on an org_scoped row mounted at plain Admin passed every check")
 		}
 		return
 	}
 	t.Fatal("the GET /api/v1/admin/users row is missing")
-}
-
-// adminMembersListLine is the line of the GET /orgs/{org_id}/members registration in the admin package: a plain
-// Admin mount.
-func adminMembersListLine(t *testing.T, root string) int {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(root, "internal/apiservice/admin/orgs.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, line := range strings.Split(string(raw), "\n") {
-		if strings.Contains(line, `MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.guard.Wrap(policy.Admin,`) {
-			return i + 1
-		}
-	}
-	t.Fatal("the GET /orgs/{org_id}/members registration is missing")
-	return 0
 }

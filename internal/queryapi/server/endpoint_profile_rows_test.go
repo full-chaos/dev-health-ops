@@ -2,16 +2,20 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/routescan"
 )
 
 // servedRoutes returns every "path@listener" the query-api binary registers,
@@ -213,60 +217,15 @@ func dedupSorted(in []string) []string {
 	return out
 }
 
-// TestEndpointProfileAnchorsStillPointAtTheirSymbols: every anchor of the
-// query-api rows and of the envelope credential class carries the text its
-// line must still hold, so a pinned file:line cannot drift silently. A row's
-// source line holds a registration of its route (the pattern, or the constant
-// it is written as).
+// TestEndpointProfileAnchorsStillPointAtTheirSymbols: a query-api row's source
+// file holds the one registration of its route (the pattern, or the constant it
+// is written as) and method, and every validator anchor's note resolves to one
+// place; the rows' lines are citations and are not compared. The anchors of the
+// envelope credential class still carry the text their line must hold.
 func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
-	lineOf := func(path string, line int) string {
-		raw, err := os.ReadFile(filepath.Join("../../..", path))
-		if err != nil {
-			t.Fatalf("anchor file %s: %v", path, err)
-		}
-		lines := strings.Split(string(raw), "\n")
-		if line < 1 || line > len(lines) {
-			t.Fatalf("anchor %s:%d is outside the file (%d lines)", path, line, len(lines))
-		}
-		return lines[line-1]
-	}
-	checked := 0
-	var walk func(node any, where string)
-	walk = func(node any, where string) {
-		switch value := node.(type) {
-		case map[string]any:
-			path, hasPath := value["path"].(string)
-			line, hasLine := value["line"].(float64)
-			if hasPath && hasLine && (value["repo"] == nil || value["repo"] == "ops") {
-				note, _ := value["note"].(string)
-				if note == "" {
-					t.Errorf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(line))
-				} else if !strings.Contains(lineOf(path, int(line)), note) {
-					t.Errorf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(lineOf(path, int(line))))
-				}
-				checked++
-			}
-			for key, child := range value {
-				walk(child, where+"/"+key)
-			}
-		case []any:
-			for index, child := range value {
-				walk(child, where+"["+strconv.Itoa(index)+"]")
-			}
-		}
-	}
-	for _, row := range loadQueryAPIRows(t) {
-		id, _ := row["id"].(string)
-		route, _ := row["route"].(string)
-		source := row["source"].(map[string]any)
-		file, line := source["file"].(string), int(source["line"].(float64))
-		text := lineOf(file, line)
-		if !strings.Contains(text, route) && !strings.Contains(text, "Handle") && !strings.Contains(text, "Pattern:") {
-			t.Errorf("row %q: %s:%d holds no registration of %s: %q", id, file, line, route, strings.TrimSpace(text))
-		}
-		walk(row["primary_validator"], id+"/primary_validator")
-		checked++
-	}
+	problems, checked, drift := queryRowAnchorProblems(t, "../../..", loadQueryAPIRows(t))
+	t.Logf("citation note: %d query-api row sources and validator anchors cite a line other than the one they resolve to", drift)
+	walk := anchorWalk(t, "../../..", &problems, &checked)
 	raw, err := os.ReadFile("../../../contracts/auth/v1/credential-classes.json")
 	if err != nil {
 		t.Fatal(err)
@@ -282,9 +241,140 @@ func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 			walk(class, "effective_principal_envelope")
 		}
 	}
+	for _, problem := range problems {
+		t.Error(problem)
+	}
 	if checked < 30 {
 		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
 	}
+}
+
+func anchorLineOf(t *testing.T, root, path string, line int) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, path))
+	if err != nil {
+		t.Fatalf("anchor file %s: %v", path, err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	if line < 1 || line > len(lines) {
+		t.Fatalf("anchor %s:%d is outside the file (%d lines)", path, line, len(lines))
+	}
+	return lines[line-1]
+}
+
+// anchorWalk checks every ops anchor under a node: it carries a note, and its line holds the note.
+func anchorWalk(t *testing.T, root string, problems *[]string, checked *int) func(node any, where string) {
+	var walk func(node any, where string)
+	walk = func(node any, where string) {
+		switch value := node.(type) {
+		case map[string]any:
+			path, hasPath := value["path"].(string)
+			line, hasLine := value["line"].(float64)
+			if hasPath && hasLine && (value["repo"] == nil || value["repo"] == "ops") {
+				note, _ := value["note"].(string)
+				if note == "" {
+					*problems = append(*problems, fmt.Sprintf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(line)))
+				} else if text := anchorLineOf(t, root, path, int(line)); !strings.Contains(text, note) {
+					*problems = append(*problems, fmt.Sprintf("%s: %s:%d no longer holds %q (it holds %q)", where, path, int(line), note, strings.TrimSpace(text)))
+				}
+				*checked++
+			}
+			for key, child := range value {
+				walk(child, where+"/"+key)
+			}
+		case []any:
+			for index, child := range value {
+				walk(child, where+"["+strconv.Itoa(index)+"]")
+			}
+		}
+	}
+	return walk
+}
+
+// muxListeners are the listeners each route mux of this package serves (servedRoutes reads the same mapping).
+var muxListeners = map[string][]string{"mux": {"query", "internal"}, "internalMux": {"internal"}, "mcpMux": {"mcp"}}
+
+// queryRowAnchorProblems resolves the query-api rows in the source under root, by symbol: a row's source file holds
+// the one registration of its method and route, and each validator anchor's note resolves to one place. drift counts
+// the cited lines that are not the resolved ones.
+func queryRowAnchorProblems(t *testing.T, root string, rows []map[string]any) (problems []string, checked, drift int) {
+	t.Helper()
+	scanned := map[string][]routescan.Registration{}
+	resolve := func(file, method, route string, listeners []string) (routescan.Registration, error) {
+		dir := filepath.Join(root, filepath.Dir(file))
+		if _, ok := scanned[dir]; !ok {
+			regs, err := routescan.ScanWithMux(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scanned[dir] = regs
+		}
+		path := filepath.ToSlash(filepath.Join(root, file))
+		reg, err := routescan.Resolve(scanned[dir], path, method, route)
+		if err != nil && strings.Contains(err.Error(), "source anchor ambiguous") {
+			// One path on two muxes (POST /query on mux and mcpMux) is two symbols: the row's listeners pick the mux.
+			reg, err = routescan.ResolveWhere(scanned[dir], path, method, route, func(reg routescan.Registration) bool {
+				for _, listener := range listeners {
+					if !slices.Contains(muxListeners[reg.Mux], listener) {
+						return false
+					}
+				}
+				return true
+			})
+		}
+		if err != nil {
+			return reg, fmt.Errorf("%s", strings.ReplaceAll(err.Error(), filepath.ToSlash(root)+"/", ""))
+		}
+		return reg, nil
+	}
+	for _, row := range rows {
+		id, _ := row["id"].(string)
+		method, _ := row["method"].(string)
+		route, _ := row["route"].(string)
+		source := row["source"].(map[string]any)
+		file, line := source["file"].(string), int(source["line"].(float64))
+		var listeners []string
+		if match := rowListeners.FindStringSubmatch(id); match != nil {
+			listeners = strings.Split(match[1], ",")
+		}
+		own := func() (routescan.Registration, error) { return resolve(file, method, route, listeners) }
+		if reg, err := own(); err != nil {
+			problems = append(problems, fmt.Sprintf("row %q: %v", id, err))
+		} else if reg.Line != line {
+			drift++
+		}
+		checked++
+		var walk func(node any, where string)
+		walk = func(node any, where string) {
+			switch value := node.(type) {
+			case map[string]any:
+				path, hasPath := value["path"].(string)
+				anchorLine, hasLine := value["line"].(float64)
+				if hasPath && hasLine && (value["repo"] == nil || value["repo"] == "ops") {
+					checked++
+					note, _ := value["note"].(string)
+					if note == "" {
+						problems = append(problems, fmt.Sprintf("%s: anchor %s:%d carries no note naming the symbol its line holds", where, path, int(anchorLine)))
+					} else if raw, err := os.ReadFile(filepath.Join(root, path)); err != nil {
+						t.Fatalf("anchor file %s: %v", path, err)
+					} else if problem, drifted := routescan.ResolveNote(raw, path, note, int(anchorLine), file, own); problem != "" {
+						problems = append(problems, where+": "+problem)
+					} else if drifted {
+						drift++
+					}
+				}
+				for key, child := range value {
+					walk(child, where+"/"+key)
+				}
+			case []any:
+				for index, child := range value {
+					walk(child, where+"["+strconv.Itoa(index)+"]")
+				}
+			}
+		}
+		walk(row["primary_validator"], id+"/primary_validator")
+	}
+	return problems, checked, drift
 }
 
 // TestClassConsumersNameEveryQueryAPIRouteThatAcceptsThem keeps the credential

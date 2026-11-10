@@ -246,6 +246,30 @@ ticket. It excuses the 4xx rule on the rows that it names, and nothing else.
 When a named row no longer diverges, the gate fails until the ledger row is
 removed.
 
+`TestWrongClassGateQueryAPI` (`internal/queryapi/server/wrong_class_gate_test.go`)
+applies the same rules to the query-api rows, public rows included, on every
+listener a row names. The REST rows run on their production route builders.
+The `/query` route set and two REST builders need a live ClickHouse at build
+time, so their rows run on the listener test stack instead. The census line
+names the stack of each row.
+
+`TestWrongClassGateAuthService` (`internal/auth/authruntime/wrong_class_gate_test.go`)
+does the same for every auth-service row, on the API, operator and internal
+listeners. The API and internal listeners are built with the route builders
+that `configureWithRoutes` calls, in its order, with in-memory rate-limit
+counters; `TestWrongClassGateAuthServiceRigMatchesConfigure` fails when the
+routes or the calls differ from the production build. The store is a listener
+that counts each connection. A wrong class must cause no store connection and
+no key-set read that a garbage credential does not cause, and none at all on a
+protected row. auth-service builds no shadow:
+`TestWrongClassGateAuthServiceHasNoShadow` fails when a package of the build
+other than `internal/api/policy` uses a policy shadow. Its ledger rows say
+which rule they excuse (the 4xx rule, or the 4xx rule and the protected-row
+read rule) on the rows that they name. A row whose accepted classes have no
+accept control (a provider token, an OIDC code, a SAML response) is named in
+the gate's pinned not-measured list; a row that joins or leaves it fails the
+gate until the list changes.
+
 ## `delegated_bearer`
 
 An auth-service row that `authenticateWith` gates has `delegated_bearer`:

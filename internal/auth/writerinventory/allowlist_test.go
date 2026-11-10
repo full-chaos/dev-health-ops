@@ -312,4 +312,78 @@ var Allowlist = []Entry{
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "writeSessions", Table: "auth.principals", Verb: "INSERT"}, // test support: venue seed for the api's real session check
 	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "writeSessions", Table: "auth.sessions", Verb: "INSERT"},   // test support: venue seed for the api's real session check
+	// CHAOS-13504: the writers of the 15 public security tables the watch list gained. go-api (internal/api, internal/apiservice;
+	// the admin Operator verbs run from the operator CLI):
+	{File: "internal/api/audit/audit.go", Func: "PGWriter.Write", Table: "public.audit_logs", Verb: "INSERT"},
+	{File: "internal/api/billing/audit.go", Func: "handlers.writeAudit", Table: "public.billing_audit_log", Verb: "INSERT"},
+	{File: "internal/api/billing/checkout.go", Func: "handlers.keepTrial", Table: "public.billing_audit_log", Verb: "INSERT"},
+	{File: "internal/api/credentials/connection.go", Func: "handlers.recordTestResult", Table: "public.integration_credentials", Verb: "UPDATE"},
+	{File: "internal/api/credentials/credentials.go", Func: "handlers.patchFlags", Table: "public.integration_credentials", Verb: "UPDATE"},
+	{File: "internal/api/credentials/credentials.go", Func: "handlers.setIn", Table: "public.integration_credentials", Verb: "INSERT"},
+	{File: "internal/api/credentials/credentials.go", Func: "handlers.setIn", Table: "public.integration_credentials", Verb: "UPDATE"},
+	{File: "internal/api/externalingest/auth.go", Func: "bumpLastUsed", Table: "public.external_ingest_tokens", Verb: "UPDATE"},
+	{File: "internal/api/githubapp/routes.go", Func: "handlers.insertInstallation", Table: "public.github_app_installations", Verb: "INSERT"},
+	{File: "internal/api/githubapp/routes.go", Func: "handlers.refusalWork", Table: "public.github_app_installations", Verb: "UPDATE"},
+	{File: "internal/api/githubapp/routes.go", Func: "handlers.upsertInstallation", Table: "public.github_app_installations", Verb: "UPDATE"},
+	{File: "internal/api/sso/saml.go", Func: "handlers.processSAMLResponse", Table: "public.saml_assertion_replays", Verb: "INSERT"},
+	{File: "internal/api/telemetry/report.go", Func: "handlers.recordHeartbeat", Table: "public.audit_logs", Verb: "INSERT"},
+	{File: "internal/api/webhookintake/pagerduty.go", Func: "markCandidateReadyFromVerifiedPing", Table: "public.pagerduty_webhook_bindings", Verb: "UPDATE"},
+	{File: "internal/apiservice/acr/credentials.go", Func: "PostgresCredentialStore.Audit", Table: "public.internal_service_credential_audits", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/credentialdelete.go", Func: "handlers.deleteCredentialRow", Table: "public.integration_credentials", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/ipallowlist.go", Func: "handlers.createIPAllowlistEntry", Table: "public.org_ip_allowlist", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/ipallowlist.go", Func: "handlers.deleteIPAllowlistEntry", Table: "public.org_ip_allowlist", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/ipallowlist.go", Func: "handlers.updateIPAllowlistEntry", Table: "public.org_ip_allowlist", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/orgdeletion.go", Func: "handlers.orgDeletionSendOneRevocation", Table: "public.provider_oauth_revocations", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/pagerduty_bindings.go", Func: "handlers.activatePagerDutyBinding", Table: "public.pagerduty_webhook_bindings", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/pagerduty_bindings.go", Func: "handlers.insertCandidate", Table: "public.pagerduty_webhook_bindings", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/pagerduty_bindings.go", Func: "handlers.revokePagerDutyBinding", Table: "public.pagerduty_webhook_bindings", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/pagerduty_callback.go", Func: "handlers.persistPagerDutyOAuthBinding", Table: "public.provider_oauth_credentials", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/pagerduty_callback.go", Func: "handlers.persistPagerDutyOAuthBinding", Table: "public.provider_oauth_credentials", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/pagerduty_callback.go", Func: "handlers.persistPagerDutyOAuthBinding", Table: "public.provider_oauth_revocations", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/pagerduty_callback.go", Func: "handlers.persistPagerDutyOAuthBinding", Table: "public.provider_oauth_revocations", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/pagerduty_disconnect.go", Func: "handlers.disconnectPagerDutyCredential", Table: "public.integration_credentials", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/pagerduty_disconnect.go", Func: "handlers.disconnectPagerDutyCredential", Table: "public.pagerduty_webhook_bindings", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/pagerduty_disconnect.go", Func: "handlers.disconnectPagerDutyCredential", Table: "public.provider_oauth_credentials", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/pagerduty_disconnect.go", Func: "handlers.disconnectPagerDutyCredential", Table: "public.provider_oauth_revocations", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/pagerduty_disconnect.go", Func: "handlers.retryPagerDutyRevocationRows", Table: "public.provider_oauth_revocations", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/pagerduty_disconnect.go", Func: "handlers.retryPagerDutyRevocationRows", Table: "public.provider_oauth_revocations", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/pagerduty_manual.go", Func: "handlers.storePagerDutyManualCredential", Table: "public.integration_credentials", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/pagerduty_manual.go", Func: "handlers.storePagerDutyManualCredential", Table: "public.provider_oauth_credentials", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/pagerduty_services.go", Func: "handlers.validPagerDutyAccessToken", Table: "public.provider_oauth_credentials", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/pagerduty_setup_revocation.go", Func: "handlers.enqueuePagerDutySetupRevocation", Table: "public.provider_oauth_revocations", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/pagerduty_setup_revocation.go", Func: "handlers.revokePagerDutySetupToken", Table: "public.provider_oauth_revocations", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/pagerduty_setup_revocation.go", Func: "handlers.revokePagerDutySetupToken", Table: "public.provider_oauth_revocations", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/retention.go", Func: "pgStore.applyRetention", Table: "public.audit_logs", Verb: "DELETE"},
+	{File: "internal/apiservice/admin/servicecredentials.go", Func: "Operator.RevokeServiceCredential", Table: "public.internal_service_credentials", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/servicecredentials.go", Func: "Operator.RotateServiceCredential", Table: "public.internal_service_credentials", Verb: "UPDATE"},
+	{File: "internal/apiservice/admin/servicecredentials.go", Func: "insertCredential", Table: "public.internal_service_credentials", Verb: "INSERT"},
+	{File: "internal/apiservice/customerpush/writes.go", Func: "handlers.insertToken", Table: "public.external_ingest_tokens", Verb: "INSERT"},
+	{File: "internal/apiservice/customerpush/writes.go", Func: "handlers.revokeToken", Table: "public.external_ingest_tokens", Verb: "UPDATE"},
+	{File: "internal/apiservice/customerpush/writes.go", Func: "handlers.rotateToken", Table: "public.external_ingest_tokens", Verb: "UPDATE"},
+	// The worker (internal/jobs, internal/syncdispatchruntime), the workersctl operator audit (internal/joboperator) and the
+	// PagerDuty token refresh both go-api and the worker run (internal/providerfoundation).
+	{File: "internal/joboperator/audit.go", Func: "PostgresAuditor.Begin", Table: "public.worker_operator_audits", Verb: "INSERT"},
+	{File: "internal/joboperator/audit.go", Func: "postgresAuditHandle.Complete", Table: "public.worker_operator_audits", Verb: "UPDATE"},
+	{File: "internal/jobs/operational/github_app_events.go", Func: "upsertGithubAppInstallation", Table: "public.github_app_installations", Verb: "INSERT"},
+	{File: "internal/jobs/operational/github_app_events.go", Func: "upsertGithubAppInstallation", Table: "public.github_app_installations", Verb: "UPDATE"},
+	{File: "internal/jobs/operational/github_app_events.go", Func: "upsertGithubAppInstallation", Table: "public.integration_credentials", Verb: "UPDATE"},
+	{File: "internal/jobs/providerrevocation/store.go", Func: "pgClaim.Failed", Table: "public.provider_oauth_revocations", Verb: "UPDATE"},
+	{File: "internal/jobs/providerrevocation/store.go", Func: "pgClaim.Sent", Table: "public.provider_oauth_revocations", Verb: "DELETE"},
+	{File: "internal/jobs/system/heartbeat_native.go", Func: "writeHeartbeatAuditLog", Table: "public.audit_logs", Verb: "INSERT"},
+	{File: "internal/providerfoundation/repository_postgres.go", Func: "PostgresPagerDutyOAuthTokenRepository.WithRefreshLock", Table: "public.provider_oauth_credentials", Verb: "UPDATE"},
+	{File: "internal/syncdispatchruntime/native_finalize_sync_run.go", Func: "stampCredentialConnected", Table: "public.integration_credentials", Verb: "UPDATE"},
+	// auth-service: go-api's audit_logs row of a route it took over, through its one writer package (D6509, the runtime role
+	// holds INSERT on authschema.PublicAuditWriteColumns only).
+	{File: "internal/auth/publicaudit/publicaudit.go", Func: "Insert", Table: "public.audit_logs", Verb: "INSERT"},
+	{File: "internal/auth/publicaudit/publicaudit.go", Func: "InsertInAuditTx", Table: "public.audit_logs", Verb: "INSERT"},
+	{File: "internal/auth/publicaudit/request.go", Func: "FirstMembershipUserRow", Table: "public.audit_logs", Verb: "INSERT"},
+	// finding (CHAOS-13504): a second auth-service writer of public.audit_logs outside publicaudit, whose package doc names it the
+	// one writer. acp did not accept it (D6509); CHAOS-13507 routes insertOrganizationCreatedLog through publicaudit.
+	{File: "internal/auth/identity/organizationbirth.go", Func: "insertOrganizationCreatedLog", Table: "public.audit_logs", Verb: "INSERT"},
+	// auth-migrate restore-fence (migration role): a provider credential the fence deletes has its stored token queued for the
+	// revocation worker, and the source's pending revocations are queued again.
+	{File: "internal/auth/restorefence/requeue.go", Func: "requeueRevocations", Table: "public.provider_oauth_revocations", Verb: "INSERT"},
+	{File: "internal/auth/restorefence/specs.go", Func: "section.applySQL", Table: "public.provider_oauth_revocations", Verb: "INSERT"},
+	{File: "internal/testsupport/ingestpg/ingestpg.go", Func: "isAudit", Table: "public.audit_logs", Verb: "INSERT"}, // test support: the fake server's statement matcher, not a writer
+	{File: "internal/testsupport/pgseed/pgseed.go", Func: "Credential", Table: "public.integration_credentials", Verb: "INSERT"},
 }

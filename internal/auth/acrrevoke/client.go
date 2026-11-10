@@ -91,6 +91,9 @@ type Config struct {
 	TokenEndpoint *url.URL
 	// SubjectTokenFile is the projected ServiceAccount token of the workload bound in acr with the role "revoke".
 	SubjectTokenFile string
+	// AllowClusterHTTP also accepts a plain-http BaseURL and TokenEndpoint on a cluster-local Service host
+	// (acrlisting.ValidClusterHTTPOrigin). Off, only ValidOrigin's forms are accepted.
+	AllowClusterHTTP bool
 	// HTTPClient is optional; a nil one is httpguard.NewClient. Whatever is given follows no redirect.
 	HTTPClient *http.Client
 	Timeout    time.Duration
@@ -98,22 +101,29 @@ type Config struct {
 
 // Client revokes credentials of any organization the workload is bound in. It is safe for concurrent use.
 type Client struct {
-	base, endpoint *url.URL
-	subjectFile    string
-	http           *http.Client
+	base, endpoint   *url.URL
+	subjectFile      string
+	allowClusterHTTP bool
+	http             *http.Client
+}
+
+// ValidOrigin reports whether u is an acr origin this client accepts: acrlisting.ValidOrigin, or, only when
+// allowClusterHTTP is set, acrlisting.ValidClusterHTTPOrigin.
+func ValidOrigin(u *url.URL, allowClusterHTTP bool) bool {
+	return acrlisting.ValidOrigin(u) || (allowClusterHTTP && acrlisting.ValidClusterHTTPOrigin(u))
 }
 
 // New returns a Client.
 func New(cfg Config) (*Client, error) {
 	switch {
-	case !acrlisting.ValidOrigin(cfg.BaseURL) || cfg.BaseURL.RawQuery != "":
+	case !ValidOrigin(cfg.BaseURL, cfg.AllowClusterHTTP) || cfg.BaseURL.RawQuery != "":
 		return nil, fmt.Errorf("%w: base url", ErrInvalidConfig)
-	case !acrlisting.ValidOrigin(cfg.TokenEndpoint):
+	case !ValidOrigin(cfg.TokenEndpoint, cfg.AllowClusterHTTP):
 		return nil, fmt.Errorf("%w: token endpoint", ErrInvalidConfig)
 	case strings.TrimSpace(cfg.SubjectTokenFile) == "":
 		return nil, fmt.Errorf("%w: subject token file", ErrInvalidConfig)
 	}
-	c := &Client{base: cfg.BaseURL, endpoint: cfg.TokenEndpoint, subjectFile: cfg.SubjectTokenFile}
+	c := &Client{base: cfg.BaseURL, endpoint: cfg.TokenEndpoint, subjectFile: cfg.SubjectTokenFile, allowClusterHTTP: cfg.AllowClusterHTTP}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultTimeout
@@ -136,7 +146,11 @@ func (c *Client) Revoke(ctx context.Context, orgID, credentialID, actorType, act
 	if !acrlisting.ValidOrgID(orgID) || !ValidCredentialID(credentialID) || (actorType != ActorUser && actorType != ActorAdmin) || !validActorID(actorID) {
 		return ErrInvalidRequest
 	}
-	token, _, err := acrlisting.Exchange(ctx, c.http, c.endpoint, c.subjectFile, orgID)
+	exchange := acrlisting.Exchange
+	if c.allowClusterHTTP {
+		exchange = acrlisting.ExchangeAllowingClusterHTTP
+	}
+	token, _, err := exchange(ctx, c.http, c.endpoint, c.subjectFile, orgID)
 	if err != nil {
 		var refusal *acrlisting.Error
 		if errors.As(err, &refusal) {

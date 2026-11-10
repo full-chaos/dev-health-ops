@@ -96,28 +96,22 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store, token string) (authctx.Claims, bool) {
 	r = r.WithContext(policy.WithRouteProfile(r.Context(), routeProfile(r)))
 	claims, outcome := checkEdgeCarrier(r, edgeAuth, token, liveScope(edgeStore))
-	switch outcome {
-	case edgeAccepted:
-		return claims, true
-	case edgeImpersonationRefused:
-		policy.WriteImpersonationRefused(w)
-	default:
+	if outcome != edgeAccepted {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return authctx.Claims{}, false
 	}
-	return authctx.Claims{}, false
+	return claims, true
 }
 
 // edgeOutcome is how checkEdgeCarrier decided a token. /query answers every
-// failure with the same bare 401 but the impersonation refusal (403);
-// /graphql answers a store it could not read as the Python app did (its
-// unhandled 500), never as a bad credential.
+// failure with the same bare 401; /graphql answers a store it could not read
+// as the Python app did (its unhandled 500), never as a bad credential.
 type edgeOutcome int
 
 const (
-	edgeAccepted             edgeOutcome = iota
-	edgeRefused                          // the credential is not good
-	edgeUnavailable                      // a live check could not be read: nothing was decided
-	edgeImpersonationRefused             // a write beside a live row the caller may not use (liveScope)
+	edgeAccepted    edgeOutcome = iota
+	edgeRefused                 // the credential is not good
+	edgeUnavailable             // a live check could not be read: nothing was decided
 )
 
 // edgeScope answers, for a caller Authenticate has just accepted, the org the
@@ -129,21 +123,11 @@ type edgeScope func(ctx context.Context, user *policy.User) (org string, session
 // liveScope is /query's scope: nothing in front of /query decided anything,
 // so the org is the token's own and the session is read here, once. As in
 // go-api's Scope.Impersonation, a session is applied only to a caller that
-// holds admin.impersonate now. A caller without the action acts as itself;
-// on the write door its row is read, and a live one refuses the write.
+// holds admin.impersonate now. A caller without the action acts as itself,
+// and its row is not read.
 func liveScope(store policy.Store) edgeScope {
 	return func(ctx context.Context, user *policy.User) (string, *policy.Impersonation, error) {
 		if !user.Holds(policy.ActionAdminImpersonate) {
-			if !onWriteDoor(ctx) {
-				return user.OrgID, nil, nil
-			}
-			session, err := store.ActiveImpersonation(ctx, user.ID)
-			switch {
-			case err != nil:
-				return "", nil, err
-			case session != nil:
-				return "", nil, errRevokedImpersonatorWrite
-			}
 			return user.OrgID, nil, nil
 		}
 		session, err := store.ActiveImpersonation(ctx, user.ID)
@@ -236,10 +220,6 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 	}
 
 	orgID, session, scopeErr := scope(ctx, user)
-	if errors.Is(scopeErr, errRevokedImpersonatorWrite) {
-		noteRefusal(r, "edge_revoked_impersonator_write", "edge")
-		return authctx.Claims{}, edgeImpersonationRefused
-	}
 	if scopeErr != nil {
 		// FAIL CLOSED: a superuser who IS impersonating must never be
 		// served as the plain, non-impersonated principal because the

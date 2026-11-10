@@ -6885,9 +6885,6 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			// before the unregistered-document 404 can answer (CHAOS-6757 r1).
 			// Python parity: the edge's GraphQLRouter resolves get_context (401
 			// "Authentication required") before it picks an operation.
-			if requireKind == digest.KindMutation {
-				r = r.WithContext(withWriteDoor(r.Context()))
-			}
 			authenticated, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
 			if !ok {
 				return

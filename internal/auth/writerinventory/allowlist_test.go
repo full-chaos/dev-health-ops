@@ -378,7 +378,7 @@ var Allowlist = []Entry{
 	{File: "internal/auth/publicaudit/publicaudit.go", Func: "InsertInAuditTx", Table: "public.audit_logs", Verb: "INSERT"},
 	{File: "internal/auth/publicaudit/request.go", Func: "FirstMembershipUserRow", Table: "public.audit_logs", Verb: "INSERT"},
 	// finding (CHAOS-13504): a second auth-service writer of public.audit_logs outside publicaudit, whose package doc names it the
-	// one writer. The columns are within PublicAuditWriteColumns. Needs an ACP ruling (keep, or route through publicaudit).
+	// one writer. acp did not accept it (D6509); CHAOS-13507 routes insertOrganizationCreatedLog through publicaudit.
 	{File: "internal/auth/identity/organizationbirth.go", Func: "insertOrganizationCreatedLog", Table: "public.audit_logs", Verb: "INSERT"},
 	// auth-migrate restore-fence (migration role): a provider credential the fence deletes has its stored token queued for the
 	// revocation worker, and the source's pending revocations are queued again.

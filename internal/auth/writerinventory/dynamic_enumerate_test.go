@@ -130,6 +130,55 @@ func restoreFenceSectionWrites(root string) (map[string]bool, error) {
 	return out, nil
 }
 
+// restoreFenceSectionTexts returns the source text, whitespace collapsed, of every section of schema.table (public when
+// legacy, else auth), whatever its kind.
+func restoreFenceSectionTexts(root, qualified string) ([]string, error) {
+	path := filepath.Join(root, restoreFenceSpecs)
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	fset := token.NewFileSet()
+	af, err := parser.ParseFile(fset, path, src, 0)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	var walkErr error
+	ast.Inspect(af, func(n ast.Node) bool {
+		vs, ok := n.(*ast.ValueSpec)
+		if !ok || len(vs.Names) != 1 || vs.Names[0].Name != restoreFenceSection || len(vs.Values) != 1 {
+			return true
+		}
+		lit, ok := vs.Values[0].(*ast.CompositeLit)
+		if !ok {
+			walkErr = fmt.Errorf("%s: %s is not a composite literal", restoreFenceSpecs, restoreFenceSection)
+			return false
+		}
+		for _, el := range lit.Elts {
+			c, ok := el.(*ast.CompositeLit)
+			if !ok {
+				walkErr = fmt.Errorf("%s: an element of %s is not a composite literal", restoreFenceSpecs, restoreFenceSection)
+				return false
+			}
+			table, err := stringField(c, "table")
+			if err != nil {
+				walkErr = err
+				return false
+			}
+			schema := "auth"
+			if l, ok := field(c, "legacy").(*ast.Ident); ok && l.Name == "true" {
+				schema = "public"
+			}
+			if schema+"."+table == qualified {
+				out = append(out, strings.Join(strings.Fields(string(src[fset.Position(c.Pos()).Offset:fset.Position(c.End()).Offset])), " "))
+			}
+		}
+		return false
+	})
+	return out, walkErr
+}
+
 // orgDeletionTargetWrites reads orgDeletionTargets: deleteSQL deletes from each public table.
 func orgDeletionTargetWrites(root string) (map[string]bool, error) {
 	elems, err := packageVarElems(root, orgDeletionTargets, "orgDeletionTargets")

@@ -3,10 +3,14 @@ package authruntime
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
+	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -63,83 +67,185 @@ func TestNoFixedCredentialLiteralInThePackage(t *testing.T) {
 	}
 }
 
-// aliasedPasswordFindings parses every source and reports, as "<line> <file>", each call whose format holds
-// PASSWORD '%s' and takes a string literal, or an identifier bound to a string literal anywhere in the package.
-// Residual: a password built by string concatenation is not seen.
+type emptyImporter struct{}
+
+func (emptyImporter) Import(importPath string) (*types.Package, error) {
+	pkg := types.NewPackage(importPath, path.Base(importPath))
+	pkg.MarkComplete()
+	return pkg, nil
+}
+
+type bindingState struct {
+	values []string
+	other  bool
+}
+
+// aliasedPasswordFindings type-checks every source (imports are empty stubs, errors are ignored) and reports, as
+// "<line> <file>", each call whose format operand holds PASSWORD '%s' when the argument that fills that verb is a
+// constant string or a variable that every assignment binds to a constant string. The format operand is the first
+// constant or literal-bound string argument of the call. Variables are keyed by types.Object, so scope and overwrite
+// follow object identity. Residuals: string concatenation in the password position, indexed verbs (%[2]s) and *
+// width or precision operands shift the verb count.
 func aliasedPasswordFindings(sources map[string][]byte) (findings []string, parsed int, err error) {
 	format := regexp.MustCompile(`(?i)password\s+'%s'`)
 	fset := token.NewFileSet()
-	files := map[string]*ast.File{}
-	for name, src := range sources {
-		file, err := parser.ParseFile(fset, name, src, 0)
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	groups := map[string][]*ast.File{}
+	fileName := map[*ast.File]string{}
+	for _, name := range names {
+		file, err := parser.ParseFile(fset, name, sources[name], 0)
 		if err != nil {
 			return nil, 0, err
 		}
-		files[name] = file
+		groups[file.Name.Name] = append(groups[file.Name.Name], file)
+		fileName[file] = name
 	}
-	bound := map[string]bool{}
-	isString := func(expr ast.Expr) bool {
-		lit, ok := expr.(*ast.BasicLit)
-		return ok && lit.Kind == token.STRING
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}}
+	for pkgName, files := range groups {
+		conf := types.Config{Importer: emptyImporter{}, Error: func(error) {}, FakeImportC: true}
+		_, _ = conf.Check(pkgName, fset, files, info)
 	}
-	for _, file := range files {
+	constString := func(expr ast.Expr) (string, bool) {
+		tv, ok := info.Types[expr]
+		if ok && tv.Value != nil && tv.Value.Kind() == constant.String {
+			return constant.StringVal(tv.Value), true
+		}
+		return "", false
+	}
+	states := map[types.Object]*bindingState{}
+	note := func(ident *ast.Ident, value ast.Expr) {
+		obj := info.Defs[ident]
+		if obj == nil {
+			obj = info.Uses[ident]
+		}
+		if obj == nil || ident.Name == "_" {
+			return
+		}
+		state := states[obj]
+		if state == nil {
+			state = &bindingState{}
+			states[obj] = state
+		}
+		if value != nil {
+			if text, ok := constString(value); ok {
+				state.values = append(state.values, text)
+				return
+			}
+		}
+		state.other = true
+	}
+	for _, file := range fileName2Files(groups) {
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.ValueSpec:
-				for i, name := range n.Names {
-					if i < len(n.Values) && isString(n.Values[i]) {
-						bound[name.Name] = true
+				for i, ident := range n.Names {
+					switch {
+					case len(n.Values) == 0:
+					case len(n.Values) == len(n.Names):
+						note(ident, n.Values[i])
+					default:
+						note(ident, nil)
 					}
 				}
 			case *ast.AssignStmt:
 				for i, lhs := range n.Lhs {
-					if ident, ok := lhs.(*ast.Ident); ok && i < len(n.Rhs) && isString(n.Rhs[i]) {
-						bound[ident.Name] = true
+					ident, ok := lhs.(*ast.Ident)
+					if !ok {
+						continue
+					}
+					if (n.Tok == token.ASSIGN || n.Tok == token.DEFINE) && len(n.Lhs) == len(n.Rhs) {
+						note(ident, n.Rhs[i])
+					} else {
+						note(ident, nil)
+					}
+				}
+			case *ast.RangeStmt:
+				for _, expr := range []ast.Expr{n.Key, n.Value} {
+					if ident, ok := expr.(*ast.Ident); ok {
+						note(ident, nil)
 					}
 				}
 			}
 			return true
 		})
 	}
-	for name, file := range files {
-		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
+	valuesOf := func(expr ast.Expr) []string {
+		if text, ok := constString(expr); ok {
+			return []string{text}
+		}
+		if ident, ok := expr.(*ast.Ident); ok {
+			if state := states[info.Uses[ident]]; state != nil && !state.other {
+				return state.values
+			}
+		}
+		return nil
+	}
+	for _, pkgName := range sortedKeys(groups) {
+		for _, file := range groups[pkgName] {
+			name := fileName[file]
+			ast.Inspect(file, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				for i, arg := range call.Args {
+					texts := valuesOf(arg)
+					if len(texts) == 0 {
+						continue
+					}
+					for _, text := range texts {
+						at := format.FindStringIndex(text)
+						if at == nil {
+							continue
+						}
+						verbs := 0
+						for j := 0; j < at[0]; j++ {
+							if text[j] != '%' {
+								continue
+							}
+							if text[j+1] == '%' {
+								j++
+								continue
+							}
+							verbs++
+						}
+						if i+1+verbs >= len(call.Args) {
+							continue
+						}
+						target := call.Args[i+1+verbs]
+						if len(valuesOf(target)) > 0 {
+							findings = append(findings, fmt.Sprintf("%d %s", fset.Position(target.Pos()).Line, name))
+							break
+						}
+					}
+					break
+				}
 				return true
-			}
-			for i, arg := range call.Args {
-				lit, ok := arg.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
-				}
-				at := format.FindStringIndex(lit.Value)
-				if at == nil {
-					continue
-				}
-				verbs := 0
-				for j := 0; j < at[0]; j++ {
-					if lit.Value[j] != '%' {
-						continue
-					}
-					if lit.Value[j+1] == '%' {
-						j++
-						continue
-					}
-					verbs++
-				}
-				if i+1+verbs >= len(call.Args) {
-					continue
-				}
-				target := call.Args[i+1+verbs]
-				ident, isIdent := target.(*ast.Ident)
-				if (isIdent && bound[ident.Name]) || isString(target) {
-					findings = append(findings, fmt.Sprintf("%d %s", fset.Position(target.Pos()).Line, name))
-				}
-			}
-			return true
-		})
+			})
+		}
 	}
-	return findings, len(files), nil
+	return findings, len(fileName), nil
+}
+
+func sortedKeys(groups map[string][]*ast.File) []string {
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func fileName2Files(groups map[string][]*ast.File) []*ast.File {
+	var out []*ast.File
+	for _, key := range sortedKeys(groups) {
+		out = append(out, groups[key]...)
+	}
+	return out
 }
 
 func TestAliasedPasswordConstIsFound(t *testing.T) {

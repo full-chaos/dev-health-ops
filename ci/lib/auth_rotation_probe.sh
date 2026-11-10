@@ -72,6 +72,31 @@ probe_all_refused() {
   [ "${n}" -gt 0 ] && [ "${n}" -eq "${ok}" ]
 }
 
+# forge_token TOKEN KID PEM WORKDIR -> a token with TOKEN's payload, its header kid set to KID, signed with the Ed25519
+# private key in the file PEM: what a holder of that key can mint for any session whose claims it has seen. The signing
+# input goes to openssl in a 0600 file under WORKDIR (removed after); no key and no token is on argv or printed.
+forge_token() {
+  local token="$1" kid="$2" pem="$3" work="$4" header h64 sig rc=0
+  [[ "${token}" =~ ^[A-Za-z0-9_-]+\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]*$ ]] || return 1
+  local payload="${BASH_REMATCH[1]}"
+  header="$(jwt_part "${token}" 0 | jq -c --arg k "${kid}" '.kid = $k')" || return 1
+  h64="$(printf '%s' "${header}" | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+  (umask 077 && printf '%s.%s' "${h64}" "${payload}" >"${work}/forge.in") || return 1
+  sig="$(openssl pkeyutl -sign -rawin -inkey "${pem}" -in "${work}/forge.in" 2>/dev/null | base64 -w0 | tr '+/' '-_' | tr -d '=')" || rc=1
+  rm -f "${work}/forge.in"
+  # An Ed25519 signature is 64 bytes: 86 base64url characters.
+  [ "${rc}" = 0 ] && [ "${#sig}" = 86 ] || return 1
+  printf '%s.%s.%s' "${h64}" "${payload}" "${sig}"
+}
+
+# A forge probe file holds "<s> <go-api forged> <go-api genuine> <query-api forged> <query-api genuine> <auth-service forged>
+# <auth-service genuine>" lines: s = seconds since the decision; each verdict A (accepted), R (refused) or X (any other
+# answer), "-" when not asked. The forged token carries the claims of a live session; the genuine one is that session's own.
+# kid_refused_at FILE FORGED_FIELD GENUINE_FIELD -> the seconds of the forged token's first refusal.
+kid_refused_at() {
+  awk -v f="$2" 'NF != 7 { bad = 1; next } $f == "R" && !seen { seen = 1; at = $1 } END { if (bad || !seen) exit 1; print at }' "$1"
+}
+
 # floor_remaining_seconds "refused: floor_not_reached (floor reached in 1h2m3s)" -> seconds
 floor_remaining_seconds() {
   local text="$1" d h=0 m=0 s=0

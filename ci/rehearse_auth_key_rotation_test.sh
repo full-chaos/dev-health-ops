@@ -212,5 +212,74 @@ sed -e 's/alg_is "${L_ACCESS}" EdDSA/alg_is "${L_ACCESS}" HS256/' -e 's/^  check
 planted="$(rollback_cells "${T}/planted.sh")"
 if grep -qxF s3-new-token-is-eddsa <<<"${planted}" && grep -qxF smoke-roll-token-is-eddsa <<<"${planted}" && grep -qxF s3-go-api-accepts-the-eddsa-token <<<"${planted}"; then ok planted-hs256-expectation-fails-the-cells; else bad planted-hs256-expectation-fails-the-cells; fi
 
+# Key-compromise drill. D1 judges a forged old-kid token for a LIVE session: the compromise revokes the sessions the old key
+# signed for, and go-api and query-api check the session on every request, so a refusal of such a token is the session
+# revoke, not the dropped kid. The judge the script runs (its d1/d2 check lines) must hold only for a kid refusal: the
+# genuine token of the same session still accepted on the tick of the first 401. Probe lines: s go_f go_g q_f q_g v_f v_g.
+judge="$(awk '$1 == "check" && $2 ~ /^"\$\{tag\}-\$\{name\}-refuses-the-forged-/ {print $3; exit}' "${SCRIPT}")"
+judge_fn="$(sed -n '/^kid_refused_within() {/,/^}/p' "${SCRIPT}")"
+judge_run() { # judge_run FIXTURE FORGED_FIELD GENUINE_FIELD BOUND -> the rc of the script's own D1/D2 check predicate
+  printf '%s\n' "source \"${ROOT}/ci/lib/auth_rotation_probe.sh\"" "${judge_fn}" "${judge} \"\$@\"" >"${T}/judge.sh"
+  bash "${T}/judge.sh" "$@" >/dev/null 2>&1
+}
+printf '%s\n' '0 A A A A A A' '9 A A A A R A' '12 A A A A R A' '120 A A A A - -' '301 R A A A - -' '304 R A R A - -' '307 R A R A - -' >"${T}/kid.probe"
+printf '%s\n' '0 A A A A A A' '7 R R R R R R' '10 R R R R R R' >"${T}/masked.probe"
+printf '%s\n' '0 A A A A A A' '7 A R A R A R' '310 R R R R R R' >"${T}/genuine-gone.probe"
+printf '%s\n' '0 A A A A A A' '30 R A R A R A' '33 A A A A A A' >"${T}/flap.probe"
+printf '%s\n' '0 A A A A A A' '340 A A A A A A' >"${T}/never.probe"
+printf '%s\n' '0 A A A A A A' '9 R A R A R' >"${T}/malformed.probe"
+if [ -n "${judge}" ] && [ -n "${judge_fn}" ]; then
+  if judge_run "${T}/kid.probe" 2 3 330 && judge_run "${T}/kid.probe" 4 5 330 && judge_run "${T}/kid.probe" 6 7 20; then ok d1-judge-passes-a-kid-refusal; else bad d1-judge-passes-a-kid-refusal; fi
+  if ! judge_run "${T}/kid.probe" 2 3 300 && ! judge_run "${T}/kid.probe" 6 7 8; then ok d1-judge-fails-past-the-bound; else bad d1-judge-fails-past-the-bound; fi
+  # The planted case: the token is refused only because its session is revoked (the genuine token of that session is refused
+  # on the same tick). Today's window a measures exactly that; a judge that passes it does not measure the kid.
+  for col in 2:3 4:5 6:7; do
+    if ! judge_run "${T}/masked.probe" "${col%:*}" "${col#*:}" 330; then ok "d1-judge-fails-a-session-masked-refusal-${col}"; else bad "d1-judge-fails-a-session-masked-refusal-${col}"; fi
+  done
+  if ! judge_run "${T}/genuine-gone.probe" 2 3 330; then ok d1-judge-fails-when-the-session-dies-first; else bad d1-judge-fails-when-the-session-dies-first; fi
+  if ! judge_run "${T}/flap.probe" 2 3 330; then ok d1-judge-fails-a-refusal-that-does-not-hold; else bad d1-judge-fails-a-refusal-that-does-not-hold; fi
+  if ! judge_run "${T}/never.probe" 2 3 330; then ok d1-judge-fails-when-never-refused; else bad d1-judge-fails-when-never-refused; fi
+  if ! judge_run "${T}/malformed.probe" 2 3 330; then ok d1-judge-fails-a-malformed-probe; else bad d1-judge-fails-a-malformed-probe; fi
+else
+  bad d1-judge-found-in-the-script
+fi
+
+# D0: t0 is the decision, taken before the dry run of the compromise (not after the apply).
+fn="$(sed -n '/^scenario_compromise() {/,/^}/p' "${SCRIPT}")"
+# shellcheck disable=SC2016
+t0_line="$( (grep -n 't0="$(date +%s)"' <<<"${fn}" || true) | head -n 1 | cut -d: -f1)"
+# shellcheck disable=SC2016
+dry_line="$( (grep -n 'keys_cmd compromise -kid "${old}" -successor "${new}"$' <<<"${fn}" || true) | head -n 1 | cut -d: -f1)"
+if [ -n "${t0_line}" ] && [ -n "${dry_line}" ] && [ "${t0_line}" -lt "${dry_line}" ]; then ok d0-t0-is-the-decision-before-the-dry-run; else bad d0-t0-is-the-decision-before-the-dry-run; fi
+if grep -q 'decision_to_apply_s=' <<<"${fn}" && grep -q 'from_apply_s=' "${SCRIPT}"; then ok d0-records-decision-to-apply-and-apply-to-refusal; else bad d0-records-decision-to-apply-and-apply-to-refusal; fi
+# D1 control before the apply: the forged token is accepted by all three, so a later refusal is the key drop.
+for cell in d1-control-go-api-accepts-the-forged-token-before-apply d1-control-query-api-serves-the-forged-token-before-apply \
+  d2-control-auth-service-accepts-the-forged-token-before-apply d1-forged-token-holds-the-live-session; do
+  n="$( (grep -n "check ${cell} " <<<"${fn}" || true) | head -n 1 | cut -d: -f1)"
+  if [ -n "${n}" ] && [ "${n}" -lt "${dry_line:-0}" ]; then ok "${cell}-before-the-dry-run"; else bad "${cell}-before-the-dry-run"; fi
+done
+# D3: auth-service alone is restarted on a manifest that names the compromised key active.
+# shellcheck disable=SC2016
+if awk '/write_manifest "\$\{old\}:active"/ {m=NR} m && /compose --profile auth restart auth-service/ {r=NR} END {exit !(m && r > m)}' <<<"${fn}" && grep -q 'check "d3-jwks-never-lists-${old}-after-the-restart"' <<<"${fn}"; then ok d3-restarts-auth-service-on-the-old-active-manifest; else bad d3-restarts-auth-service-on-the-old-active-manifest; fi
+# D4: window b is a hard check (no FINDING-only cell left).
+# shellcheck disable=SC2016
+if ! grep -qE 'soft_check "(s2-\$\{svc\}|d4-)' "${SCRIPT}" && grep -q 'check "d4-${svc}-refuses-the-forged-${old}-token-right-after-its-restart"' "${SCRIPT}"; then ok d4-window-b-is-a-hard-check; else bad d4-window-b-is-a-hard-check; fi
+
+# forge_token: a throwaway key signs the header and payload of a token with the header kid replaced; openssl verifies it with
+# the public key, the payload segment is unchanged, and no key or token reaches the output beyond the token itself.
+(umask 077 && openssl genpkey -algorithm ed25519 -out "${T}/old.pem" 2>/dev/null && openssl pkey -in "${T}/old.pem" -pubout -out "${T}/old.pub" 2>/dev/null)
+b64u() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
+src="$(printf '{"alg":"EdDSA","kid":"b","typ":"JWT"}' | b64u).$(printf '{"sid":"s-1","sub":"u-1"}' | b64u).$(printf 'x%.0s' $(seq 1 64) | b64u)"
+mkdir -p "${T}/forge"
+forged="$(bash -c 'source "$1"; forge_token "$2" a "$3" "$4"' _ "${ROOT}/ci/lib/auth_rotation_probe.sh" "${src}" "${T}/old.pem" "${T}/forge" 2>&1)" || forged=""
+IFS=. read -r fh fp fs <<<"${forged}"
+printf '%s' "${fh}.${fp}" >"${T}/forge.msg"
+printf '%s' "${fs}" | tr -- '-_' '+/' | awk '{ n = length($0) % 4; s = $0; if (n == 2) s = s "=="; if (n == 3) s = s "="; printf "%s", s }' | base64 -d >"${T}/forge.sig" 2>/dev/null || true
+if [ -n "${forged}" ] && [ "${fp}" = "$(cut -d. -f2 <<<"${src}")" ] && openssl pkeyutl -verify -rawin -pubin -inkey "${T}/old.pub" -sigfile "${T}/forge.sig" -in "${T}/forge.msg" >/dev/null 2>&1 &&
+  [ "$(bash -c 'source "$1"; jwt_header_kid "$2"' _ "${ROOT}/ci/lib/auth_rotation_probe.sh" "${forged}")" = a ] && [ -z "$(ls -A "${T}/forge")" ]; then
+  ok forge-token-signs-the-claims-under-the-old-kid; else bad forge-token-signs-the-claims-under-the-old-kid; fi
+# shellcheck disable=SC2016
+if ! grep -n 'openssl pkeyutl' "${ROOT}/ci/lib/auth_rotation_probe.sh" | grep -v -- '-inkey "${pem}" -in "${work}/forge.in"' | grep -q .; then ok forge-key-and-input-come-from-files; else bad forge-key-and-input-come-from-files; fi
+
 if [ ! -s "${FAKE_LOG}" ]; then ok no-docker-call-before-the-checks; else bad no-docker-call-before-the-checks; fi
 exit "${failed}"

@@ -98,6 +98,12 @@ succeed, a key that left the JWKS stops verifying at most `CacheTTL` plus `Timeo
 refreshes fail, the old keys stay usable until `CacheTTL` plus `OutageGrace` after the last good refresh (10 minutes
 5 seconds). A compromised key also needs the sessions that hold its tokens revoked.
 
+go-api and query-api count every discovery and JWKS GET in `devhealth_auth_jwks_fetch_total` (labels `service`,
+`document` = `discovery` or `jwks`, `result` = `ok` for a `200`, `fail` for any other status or a transport error or
+timeout). `devhealth_auth_jwks_grace_state` is `0` while the keys are fresh, `1` while they are served from the outage
+grace after a failed refresh, and `2` past the grace. Both read the HTTP answer only: a `200` with a document the
+client then refuses counts `ok` and leaves the state at `0`.
+
 ## Check the documents by hand
 
 ```sh

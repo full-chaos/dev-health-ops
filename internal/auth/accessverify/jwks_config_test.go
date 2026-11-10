@@ -347,8 +347,9 @@ func TestJWKSConfig_IgnoresMaxAge(t *testing.T) {
 	}
 }
 
-// jwksReadings are the fetch counter points (key "document/result") and the
-// grace-state gauge of one service on reader; grace is -1 with no point.
+// jwksReadings are the fetch counter points of one service (key
+// "document/result") and the grace-state gauge on reader; grace is -1 with no
+// point.
 func jwksReadings(t *testing.T, reader *sdkmetric.ManualReader, service string) (map[string]int64, int64) {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
@@ -376,9 +377,7 @@ func jwksReadings(t *testing.T, reader *sdkmetric.ManualReader, service string) 
 					continue
 				}
 				for _, dp := range data.DataPoints {
-					if s, _ := dp.Attributes.Value("service"); s.AsString() == service {
-						grace = dp.Value
-					}
+					grace = dp.Value
 				}
 			}
 		}

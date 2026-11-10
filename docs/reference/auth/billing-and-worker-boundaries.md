@@ -23,6 +23,10 @@ The method and raw escaped path must match exactly. PagerDuty uses the literal p
 
 Enforced by: `internal/apiservice/scopeexempt_providers_test.go`, `TestSignatureOnlyRouteSkipsScopeOnlyForExactRoute`, and `TestEveryAPIListenerRowNamesTheScopeMiddlewaresAsReachableValidators` in `internal/apiservice/endpoint_profile_rows_test.go`.
 
+Missing configuration never disables the signature check. When the Stripe signing secret or the GitHub webhook secret is unset, the handler checks against a random stand-in key, so no delivery verifies, including one signed with an empty key. An unset Stripe secret answers like a wrong secret (HTTP 400, `{"detail":"Invalid Stripe signature"}`). An unset GitHub secret answers HTTP 401. Startup logs one warning for an unset GitHub secret, never the secret itself.
+
+Enforced by: `TestUnverifiableWebhookAnswersLikeAWrongSecret` and `TestUnverifiableWebhookRefusesADeliverySignedWithTheEmptyKey` in `internal/api/billing/webhook_unverifiable_test.go`; `TestUnverifiableProviderRefusesDeliveriesSignedWithAnEmptyKey`, `TestStandInKeyIs32NonZeroRandomBytes`, and `TestLogUnconfiguredSecretsWritesOneLinePerMissingProvider` in `internal/api/webhookintake/unverifiable_intake_test.go`. Implementation: `internal/api/billing/webhooksig.go` and `internal/api/webhookintake/secrets.go`.
+
 GitLab and Jira intake routes are absent. They are not signature-only exemptions in this build.
 
 Enforced by: `TestRemovedSharedSecretIntakeRoutesAnswerNotFound` in `internal/apiservice/removed_intake_routes_test.go` and `TestRoutesAreExactlyGitHubPagerDutyAndHealth` in `internal/api/webhookintake/removed_providers_test.go`.

@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-go/authverify"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 const (
@@ -47,13 +48,13 @@ func NewJWKSKeys(cfg authverify.JWKSClientConfig, service string, meter metric.M
 	if err := registerGraceObserver(meter, service, observer); err != nil {
 		return nil, err
 	}
-	var client http.Client
+	client := http.Client{Transport: httpguard.SharedTransport()}
 	if cfg.HTTPClient != nil {
 		client = *cfg.HTTPClient
 	}
 	observer.base = client.Transport
 	if observer.base == nil {
-		observer.base = http.DefaultTransport
+		observer.base = httpguard.SharedTransport()
 	}
 	client.Transport = observer
 	cfg.HTTPClient = &client

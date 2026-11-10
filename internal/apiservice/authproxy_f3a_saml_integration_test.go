@@ -53,7 +53,7 @@ func TestAuthProxyF3aSAMLRoutesAnswerProviderNotFoundBeforeAnyParse(t *testing.T
 	}
 	stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
 	routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
-		SSOStateSecret: "f3a-sso-state-secret-f3a-sso-state", AuthProxy: mustProxyConfig(t, f3aProdFlags(stub.URL)),
+		SSOStateSecret: "f3a-sso-state-secret-f3a-sso-state", SessionIssuer: stubSessionIssuer{}, AuthProxy: mustProxyConfig(t, f3aProdFlags(stub.URL)),
 		Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
 	server, err := NewServer(config.Config{APIAddress: "127.0.0.1:0", CORSAllowedOrigins: []string{proxyOrigin}}, quietLogger(), routes)
 	if err != nil {

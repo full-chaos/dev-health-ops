@@ -65,6 +65,7 @@ internal/auth/authorization	golden_decision_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
 internal/auth/authruntime	authorize_corpus_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
+internal/auth/authruntime	endpoint_profile_shift_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
 internal/auth/authruntime	no_hs256_key_census_test.go
 internal/auth/authruntime	no_hs256_verify_census_test.go

@@ -6891,9 +6891,6 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			if refuseLegacy {
 				r = r.WithContext(withLegacyImpersonationRefused(r.Context()))
 			}
-			if requireKind == digest.KindMutation {
-				r = r.WithContext(withWriteDoor(r.Context()))
-			}
 			authenticated, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
 			if !ok {
 				return

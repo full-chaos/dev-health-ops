@@ -56,6 +56,7 @@ func authViolations(t *testing.T, root string) []string {
 		if requiredContexts[key] || requiredContexts[name] {
 			out = append(out, fmt.Sprintf("job %s reuses a required context name (CHAOS-4834 class: a second producer of a required check)", key))
 		}
+		// One exempt id, matched exactly: the ready-flip judge, whose shape TestReadyReuseWiring pins.
 		if !strings.HasPrefix(key, "auth-") && key != reuseJob {
 			out = append(out, fmt.Sprintf("job %s must carry the auth- prefix", key))
 		}
@@ -314,6 +315,7 @@ func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 		want []string
 	}{
 		{"job reuses required context lint", []mutation{{wf, "\n  auth-go-quality:", "\n  lint:"}}, []string{"required context", "auth- prefix"}},
+		{"a second job without the auth- prefix", []mutation{{wf, "\n  auth-go-quality:", "\n  ready-reuse-2:"}}, []string{"job ready-reuse-2 must carry the auth- prefix"}},
 		{"trigger gains a path filter", []mutation{{wf, "pull_request:", "pull_request:\n    paths: ['internal/auth/**']"}}, []string{"paths filter"}},
 		{"registry gains a target with no fuzz job", []mutation{{cg, "AUTH_FUZZ_TARGETS=(\n", "AUTH_FUZZ_TARGETS=(\n  \"./internal/auth/x FuzzPlanted\"\n"}}, []string{"differs from the AUTH_FUZZ_TARGETS registry", "FuzzPlanted"}},
 		{"gate stops failing on a skipped job", []mutation{{wf, `[ "${pair#*=}" = "success" ]`, `[ "${pair#*=}" != "failure" ]`}}, []string{"failed, cancelled OR skipped"}},

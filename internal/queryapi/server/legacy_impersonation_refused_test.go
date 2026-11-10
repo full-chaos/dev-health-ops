@@ -67,22 +67,19 @@ func legacySession() *policy.Impersonation {
 	return &policy.Impersonation{AdminUserID: ecUser, TargetUserID: ecTarget, TargetOrgID: irTargetOrg, TargetRole: "viewer"}
 }
 
-// legacyTokens is the admin's own bearer in each signing: the HS256 edge
-// token and the EdDSA user access token.
+// legacyTokens is the admin's own bearer: the EdDSA user access token (an
+// HS256 bearer is refused at the carrier before any scope).
 func legacyTokens(t *testing.T, minter *accessMinter) map[string]string {
 	t.Helper()
 	return map[string]string{
-		"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: true, tokenVersion: 5}),
 		"EdDSA": minter.mint(ecUser, nil, nil),
 	}
 }
 
-// delegatedTokens is the target's delegated bearer (ecUser, actor ecActor) in
-// each signing.
+// delegatedTokens is the target's delegated bearer (ecUser, actor ecActor).
 func delegatedTokens(t *testing.T, minter *accessMinter) map[string]string {
 	t.Helper()
 	return map[string]string{
-		"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5, impersonatingUserID: ecActor.String()}),
 		"EdDSA": minter.mint(ecUser, map[string]any{"act": map[string]any{"sub": wirePrincipal(ecActor)}}, nil),
 	}
 }
@@ -91,7 +88,7 @@ func delegatedTokens(t *testing.T, minter *accessMinter) map[string]string {
 // issuer set (so both signings are carriers) and the refusal set to refuse.
 func legacyStack(t *testing.T, minter *accessMinter, store *accessStore, refuse bool) *behaviourStack {
 	t.Helper()
-	return newAccessStackRefusing(t, newQueryAPIUserStoreFrom(store), testAccess(minter.keys, nil, accessTestNow), true, refuse)
+	return newAccessStackRefusing(t, newQueryAPIUserStoreFrom(store), testAccess(minter.keys, nil, accessTestNow), refuse)
 }
 
 // legacyGraphQL sends one /graphql request (POST body or GET query string) on
@@ -180,7 +177,6 @@ func TestGraphQLLegacyRefusalLeavesEveryOtherAnswer(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
 	member := map[string]string{
-		"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
 		"EdDSA": minter.mint(ecUser, nil, nil),
 	}
 	cases := map[string]struct {

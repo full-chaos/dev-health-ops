@@ -114,7 +114,6 @@ func TestQueryLegacyRefusalLeavesEveryOtherAnswer(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
 	member := map[string]string{
-		"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
 		"EdDSA": minter.mint(ecUser, nil, nil),
 	}
 	cases := map[string]struct {
@@ -158,7 +157,7 @@ func TestProofWriteDoorRefusesTheLegacyImpersonationCaller(t *testing.T) {
 		t.Helper()
 		store := newQueryAPIUserStoreFrom(legacyStore(legacySession(), nil))
 		auth := ecEdgeAuth(t, store)
-		if err := routeAuthenticator(auth, testAccess(minter.keys, nil, accessTestNow).opts, true); err != nil {
+		if err := routeAuthenticator(auth, testAccess(minter.keys, nil, accessTestNow).opts); err != nil {
 			t.Fatal(err)
 		}
 		seen := &[]authctx.Claims{}
@@ -216,7 +215,7 @@ func restAs(t *testing.T, store *accessStore, minter *accessMinter, bearer strin
 func restAsWith(t *testing.T, store *accessStore, setup *accessSetup, bearer string, org uuid.UUID) (answer, []authctx.Claims) {
 	t.Helper()
 	var seen []authctx.Claims
-	f := newRESTFixtureServing(t, store, setup, true, func(w http.ResponseWriter, r *http.Request) {
+	f := newRESTFixtureServing(t, store, setup, func(w http.ResponseWriter, r *http.Request) {
 		claims, _ := authctx.FromContext(r.Context())
 		seen = append(seen, claims)
 		w.WriteHeader(http.StatusOK)
@@ -235,9 +234,8 @@ func restAsWith(t *testing.T, store *accessStore, setup *accessSetup, bearer str
 // go-api row, so the admin's own bearer beside a live row acts as the admin:
 // (a) in the admin's own org, never the target's; (b) an X-Org-Id naming the
 // target org is not read: the same answer, the admin's org (resource_resolver
-// organization_from_credential: the org is the credential's, rest_access.go:31
-// (edge token) and rest_access.go:38 (user access token) with the access-token
-// issuer set, rest_error_response.go:293 (edge token) without it);
+// organization_from_credential: the org is the credential's, rest_access.go:42
+// (user access token));
 // (c) an admin who is a member of the target org and names it in the token acts
 // there with its own membership, never the target user's role or the impersonation.
 func TestRESTServesTheLegacyAdminBearerAsTheAdmin(t *testing.T) {
@@ -255,17 +253,10 @@ func TestRESTServesTheLegacyAdminBearerAsTheAdmin(t *testing.T) {
 			}
 		})
 	}
-	edge := legacyTokens(t, minter)["HS256"]
-	plain, seenPlain := restAsWith(t, legacyStore(legacySession(), nil), nil, edge, uuid.Nil)
-	withHeader, seenHeader := restAsWith(t, legacyStore(legacySession(), nil), nil, edge, irTargetOrg)
-	if plain.Status != http.StatusOK || len(seenPlain) != 1 || seenPlain[0].OrgID != ecOrg.String() || withHeader != plain || len(seenHeader) != 1 || seenHeader[0] != seenPlain[0] {
-		t.Fatalf("(a)(b) no access-token issuer: %+v %+v, with X-Org-Id %+v %+v; want the admin's own org both times", plain, seenPlain, withHeader, seenHeader)
-	}
 	member := legacyStore(legacySession(), nil)
 	member.members[[2]uuid.UUID{ecUser, irTargetOrg}] = true
 	member.roles = map[[2]uuid.UUID]string{{ecUser, irTargetOrg}: "owner"}
 	inTarget := map[string]string{
-		"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: irTargetOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5}),
 		"EdDSA": minter.mint(ecUser, map[string]any{"org_id": irTargetOrg.String()}, nil),
 	}
 	for signing, token := range inTarget {

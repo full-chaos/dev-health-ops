@@ -65,12 +65,12 @@ func newAccessStack(t *testing.T, base *accessStore, setup *accessSetup) *behavi
 // newAccessStackOn is newAccessStack over a users store the caller wraps.
 func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup) *behaviourStack {
 	t.Helper()
-	return newAccessStackRefusing(t, store, setup, legacyOn, false)
+	return newAccessStackRefusing(t, store, setup, false)
 }
 
 // newAccessStackRefusing is newAccessStackOn with /graphql's legacy
 // impersonation refusal set to refuseLegacy.
-func newAccessStackRefusing(t *testing.T, store queryAPIUserStore, setup *accessSetup, legacyOn, refuseLegacy bool) *behaviourStack {
+func newAccessStackRefusing(t *testing.T, store queryAPIUserStore, setup *accessSetup, refuseLegacy bool) *behaviourStack {
 	t.Helper()
 	getenv := getenvFunc(func(name string) string {
 		switch name {

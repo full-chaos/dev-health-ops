@@ -298,7 +298,7 @@ func edgeSession(t *testing.T, o *liveObs, q liveReq, rebindHeader bool, session
 	const legacy = "legacy impersonation caller, AUTH_PROXY_IMPERSONATION on"
 	stack = liveStackRefusing(t, func(s *accessStore) { asSuperuser(s); withSession(s) })
 	q2 := q
-	q2.bearer = token
+	q2.bearer = stack.user
 	a = stack.live(q2)
 	o.wantStatus(legacy, a, http.StatusForbidden)
 	o.wantNoRun(legacy, stack)
@@ -313,7 +313,7 @@ func liveStackRefusing(t *testing.T, shape func(*accessStore)) *behaviourStack {
 	minter := newAccessMinter(t)
 	store := newAccessStore()
 	shape(store)
-	stack := newAccessStackRefusing(t, newQueryAPIUserStoreFrom(store), testAccess(minter.keys, nil, accessTestNow), true, true)
+	stack := newAccessStackRefusing(t, newQueryAPIUserStoreFrom(store), testAccess(minter.keys, nil, accessTestNow), true)
 	stack.user = minter.mint(ecUser, nil, nil)
 	return stack
 }

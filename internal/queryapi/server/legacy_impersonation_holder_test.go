@@ -25,8 +25,8 @@ import (
 const legacyHolderSubscriptionDocument = "subscription LegacyHolderSub { probe }"
 
 // actionOnlyHolderStore is a live admin that is not a superuser and holds admin.impersonate by its platform set (a
-// member of ecOrg), with session as its go-api row and sessionErr as the row read's failure. /query serves it as
-// itself; with the switch on, its live row refuses its non-query documents.
+// member of ecOrg), with session as its go-api row and sessionErr as the row read's failure. /query applies its live
+// row to it as to any holder (liveScope); with the switch on, the live row refuses the request.
 func actionOnlyHolderStore(session *policy.Impersonation, sessionErr error) *accessStore {
 	store := legacyStore(session, sessionErr)
 	platform := rule.PlatformOf(rule.ActionAdminImpersonate)
@@ -37,7 +37,6 @@ func actionOnlyHolderStore(session *policy.Impersonation, sessionErr error) *acc
 func actionOnlyHolderTokens(t *testing.T, minter *accessMinter) map[string]string {
 	t.Helper()
 	return map[string]string{
-		"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
 		"EdDSA": minter.mint(ecUser, nil, nil),
 	}
 }
@@ -55,45 +54,38 @@ func postDocument(s *behaviourStack, listener, path, bearer, document string) le
 	return legacyAnswer{recorder.Code, strings.TrimSpace(recorder.Body.String()), header}
 }
 
-// TestQueryRefusesAnActionOnlyHoldersWriteBesideALiveRow: with the switch on, an admin.impersonate holder that is
-// not a superuser beside a live (or unreadable) go-api row has its mutation refused on each /query mount (403, no
-// resolver); its query keeps today's answer, byte-equal to the switch off (served as itself). The switch off changes
-// nothing.
+// TestQueryRefusesAnActionOnlyHoldersWriteBesideALiveRow: an admin.impersonate holder that is not a superuser is a
+// holder like any other. With the switch on, beside a live go-api row, each of its documents (query, mutation,
+// subscription) is refused on each /query mount (403, no resolver); a failed row read is the bare 401 (fail closed).
+// With the switch off, the live row makes it the target, as for a superuser holder.
 func TestQueryRefusesAnActionOnlyHoldersWriteBesideALiveRow(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
-	stores := map[string]func() *accessStore{
-		"live row":       func() *accessStore { return actionOnlyHolderStore(legacySession(), nil) },
-		"row read fails": func() *accessStore { return actionOnlyHolderStore(nil, errors.New("session store timeout")) },
-	}
-	for storeName, store := range stores {
-		for signing, token := range actionOnlyHolderTokens(t, minter) {
-			for _, route := range legacyQueryRoutes {
-				t.Run(storeName+" "+signing+" "+route.listener+" "+route.path, func(t *testing.T) {
-					for kind, document := range map[string]string{"mutation": legacyMutationDocument, "subscription": legacyHolderSubscriptionDocument} {
-						on := legacyStack(t, minter, store(), true)
-						if got := postDocument(on, route.listener, route.path, token, document); got.Status != http.StatusForbidden || got.Body != legacyRefusalBody || len(*on.seen) != 0 {
-							t.Fatalf("switch on, %s: got %d %s, ran %d; want 403 %s and no resolver", kind, got.Status, got.Body, len(*on.seen), legacyRefusalBody)
-						}
+	documents := map[string]string{"query": iaDocument, "mutation": legacyMutationDocument, "subscription": legacyHolderSubscriptionDocument}
+	for signing, token := range actionOnlyHolderTokens(t, minter) {
+		for _, route := range legacyQueryRoutes {
+			t.Run(signing+" "+route.listener+" "+route.path, func(t *testing.T) {
+				for kind, document := range documents {
+					on := legacyStack(t, minter, actionOnlyHolderStore(legacySession(), nil), true)
+					if got := postDocument(on, route.listener, route.path, token, document); got.Status != http.StatusForbidden || got.Body != legacyRefusalBody || len(*on.seen) != 0 {
+						t.Fatalf("switch on, live row, %s: got %d %s, ran %d; want 403 %s and no resolver", kind, got.Status, got.Body, len(*on.seen), legacyRefusalBody)
 					}
-					read := legacyStack(t, minter, store(), true)
-					got := postDocument(read, route.listener, route.path, token, iaDocument)
-					off := legacyStack(t, minter, store(), false)
-					if was := postDocument(off, route.listener, route.path, token, iaDocument); got.Status != http.StatusOK || !got.equal(was) || len(*read.seen) != 1 || (*read.seen)[0].ImpersonationActive || (*read.seen)[0].OrgID != ecOrg.String() {
-						t.Fatalf("switch on, query: %+v (claims %+v), off %+v; want 200 as itself, byte-equal", got, *read.seen, was)
+					fails := legacyStack(t, minter, actionOnlyHolderStore(nil, errors.New("session store timeout")), true)
+					if got := postDocument(fails, route.listener, route.path, token, document); got.Status != http.StatusUnauthorized || len(*fails.seen) != 0 {
+						t.Fatalf("switch on, row read fails, %s: got %d %s, ran %d; want 401 and no resolver", kind, got.Status, got.Body, len(*fails.seen))
 					}
-					offWrite := legacyStack(t, minter, store(), false)
-					if got := postDocument(offWrite, route.listener, route.path, token, legacyMutationDocument); got.Status != http.StatusOK || len(*offWrite.seen) != 1 {
-						t.Fatalf("switch off, mutation: got %d %s, ran %d; want today's 200", got.Status, got.Body, len(*offWrite.seen))
-					}
-				})
-			}
+				}
+				off := legacyStack(t, minter, actionOnlyHolderStore(legacySession(), nil), false)
+				if got := postDocument(off, route.listener, route.path, token, iaDocument); got.Status != http.StatusOK || len(*off.seen) != 1 || !(*off.seen)[0].ImpersonationActive || (*off.seen)[0].OrgID != irTargetOrg.String() {
+					t.Fatalf("switch off, query: %+v (claims %+v); want 200 as the target", got, *off.seen)
+				}
+			})
 		}
 	}
 }
 
 // TestWriteDoorRefusesAnActionOnlyHoldersWriteBesideALiveRow: the proof-write door (digest.KindMutation) refuses the
-// same caller's mutation with the switch on, and serves it with the switch off (today's answer).
+// same caller's mutation with the switch on, and with the switch off serves it as the row's target.
 func TestWriteDoorRefusesAnActionOnlyHoldersWriteBesideALiveRow(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
@@ -101,7 +93,7 @@ func TestWriteDoorRefusesAnActionOnlyHoldersWriteBesideALiveRow(t *testing.T) {
 		t.Helper()
 		store := newQueryAPIUserStoreFrom(actionOnlyHolderStore(legacySession(), nil))
 		auth := ecEdgeAuth(t, store)
-		if err := routeAuthenticator(auth, testAccess(minter.keys, nil, accessTestNow).opts, true); err != nil {
+		if err := routeAuthenticator(auth, testAccess(minter.keys, nil, accessTestNow).opts); err != nil {
 			t.Fatal(err)
 		}
 		seen := &[]authctx.Claims{}
@@ -136,8 +128,8 @@ func TestWriteDoorRefusesAnActionOnlyHoldersWriteBesideALiveRow(t *testing.T) {
 				t.Fatalf("switch on: %d %q, ran %d; want 403 %s and no resolver", got.Code, got.Body.String(), len(*seenOn), legacyRefusalBody)
 			}
 			off, seenOff := door(t, false)
-			if got := post(off, token); got.Code != http.StatusOK || len(*seenOff) != 1 || (*seenOff)[0].ImpersonationActive {
-				t.Fatalf("switch off: %d %q, claims %+v; want today's 200 as itself", got.Code, got.Body.String(), *seenOff)
+			if got := post(off, token); got.Code != http.StatusOK || len(*seenOff) != 1 || !(*seenOff)[0].ImpersonationActive || (*seenOff)[0].OrgID != irTargetOrg.String() {
+				t.Fatalf("switch off: %d %q, claims %+v; want 200 as the target", got.Code, got.Body.String(), *seenOff)
 			}
 		})
 	}

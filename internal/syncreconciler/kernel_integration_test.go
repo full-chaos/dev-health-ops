@@ -986,7 +986,7 @@ func createKernelIntegrationFixture(
 		"CREATE TABLE public.org_activity (org_id uuid PRIMARY KEY, has_data boolean NOT NULL, computed_at timestamptz, refreshed_at timestamptz NOT NULL)",
 		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.users (id bigint PRIMARY KEY, email text, full_name text, password_hash text)",
+		"CREATE TABLE public.users (id bigint PRIMARY KEY, email text, full_name text)",
 		"CREATE TABLE public.audit_logs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",

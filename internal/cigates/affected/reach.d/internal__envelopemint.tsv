@@ -17,6 +17,7 @@ internal/envelopemint	keygen.go	cmd/dev-health-migration-matrix
 internal/envelopemint	keygen.go	cmd/dho
 internal/envelopemint	keygen.go	deploy/helm/dev-health
 internal/envelopemint	keygen.go	internal/adminops
+internal/envelopemint	keygen.go	internal/api/authprovision
 internal/envelopemint	keygen.go	internal/api/billing
 internal/envelopemint	keygen.go	internal/api/externalingest
 internal/envelopemint	keygen.go	internal/api/githubapp

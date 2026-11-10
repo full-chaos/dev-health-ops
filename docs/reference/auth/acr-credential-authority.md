@@ -26,6 +26,8 @@ This page describes behavior built on the main branch. Enable the required setti
 | `acr-api` workload token, audience `auth-service` | `POST /internal/v1/acr/credential-events`, when enabled. Its live workload row must allow `credentials.project`. |
 | Service credential, such as `svc_acr_<redacted>` | Retired class. None of these routes accepts it, and no endpoint profile may list it. The `dho service-credentials` commands are removed, so no build issues, rotates or revokes it. |
 
+For the full class inventory, see [Credential reference](credential-reference.md). For the control plane as a whole, see [Auth control plane](../../operate/architecture/auth-control-plane.md).
+
 The four go-api routes use `GET`:
 
 - `/api/v1/internal/acr/health`

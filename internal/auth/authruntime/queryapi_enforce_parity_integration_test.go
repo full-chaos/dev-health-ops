@@ -5,7 +5,9 @@ package authruntime
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -20,6 +22,8 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -49,6 +53,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/mcpclass"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
@@ -68,6 +73,50 @@ import (
 // chain). The PDP is the auth-service stack configure builds (authorize routes, decision state, live catalog), served
 // by httptest: query-api reaches it through its production settings, AUTH_PROXY_URL and a workload bootstrap
 // credential it exchanges for its workload token. A pass-through wrapper counts the authorize calls of each build.
+
+var (
+	qpIssuerCert *x509.Certificate
+	qpIssuerTLS  tls.Certificate
+)
+
+func init() {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(fmt.Errorf("generate parity issuer key: %w", err))
+	}
+	notBefore := time.Now().Add(-time.Minute)
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    notBefore,
+		NotAfter:     notBefore.Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		panic(fmt.Errorf("create parity issuer certificate: %w", err))
+	}
+	qpIssuerCert, err = x509.ParseCertificate(der)
+	if err != nil {
+		panic(fmt.Errorf("parse parity issuer certificate: %w", err))
+	}
+	qpIssuerTLS = tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: qpIssuerCert}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	pool.AddCert(qpIssuerCert)
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		panic(fmt.Sprintf("http.DefaultTransport is a %T", http.DefaultTransport))
+	}
+	trusting := base.Clone()
+	trusting.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	// Trust must exist before the first httpguard.SharedTransport() call, which clones http.DefaultTransport once.
+	http.DefaultTransport = trusting
+}
 
 const (
 	qpEnforceCells     = "analytics,metrics,git,work_items,integrations,reports"
@@ -174,9 +223,10 @@ func newQPVenue(t *testing.T, ctx context.Context) *qpVenue {
 	az.caller = session.WirePrincipalID(workloadID)
 	api := az.front.Config.Handler
 	issuerFront.Config.Handler = api
+	issuerFront.TLS = &tls.Config{Certificates: []tls.Certificate{qpIssuerTLS}}
 	issuerFront.StartTLS()
 	t.Cleanup(issuerFront.Close)
-	qpTrust(t, issuerFront.Certificate())
+	qpTrustGuard(t)
 
 	v := &qpVenue{az: az, issuer: issuer, client: &http.Client{Timeout: 60 * time.Second}}
 	v.orgA = az.azOrg(t, ctx, true, true)
@@ -305,24 +355,17 @@ func (v *qpVenue) envelopeJWKS(t *testing.T) string {
 	return path
 }
 
-// qpTrust makes the test process trust the issuer listener's certificate: query-api's JWKS client uses the default
-// transport, and prod trusts the issuer's real certificate the same way (the system pool).
-func qpTrust(t *testing.T, cert *x509.Certificate) {
+// qpTrustGuard checks query-api's JWKS client trust: httpguard.SharedTransport() is a once-taken no-proxy clone of
+// the default transport, and prod trusts the issuer's real certificate through the system pool.
+func qpTrustGuard(t *testing.T) {
 	t.Helper()
-	original := http.DefaultTransport
-	base, ok := original.(*http.Transport)
-	if !ok {
-		t.Fatalf("http.DefaultTransport is a %T", original)
+	transport := httpguard.SharedTransport()
+	if transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
+		t.Fatal("issuer trust not seen by the shared transport")
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		pool = x509.NewCertPool()
+	if _, err := qpIssuerCert.Verify(x509.VerifyOptions{Roots: transport.TLSClientConfig.RootCAs, DNSName: "127.0.0.1"}); err != nil {
+		t.Fatal("issuer trust not seen by the shared transport")
 	}
-	pool.AddCert(cert)
-	trusting := base.Clone()
-	trusting.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
-	http.DefaultTransport = trusting
-	t.Cleanup(func() { http.DefaultTransport = original })
 }
 
 // qpQuietLogs sends query-api's per-request log lines to a bounded tail, printed only when the test fails.

@@ -64,7 +64,9 @@ it is retired, and it is never listed again after a compromise.
 
 ## What a verifier does
 
-The Go SDK client (`authverify.JWKSClient`) is the client that go-api and query-api use, with its defaults.
+The Go SDK client (`authverify.JWKSClient`) is the client that go-api and query-api use. The table gives the SDK defaults;
+go-api and query-api set their own values (`accessverify.JWKSConfig`): `CacheTTL` 5 seconds, `Timeout` 2 seconds,
+`RefreshFloor` 1 second and `OutageGrace` 10 minutes.
 
 | Setting | Default | Bounds | Meaning |
 | --- | --- | --- | --- |
@@ -90,9 +92,21 @@ The client works like this:
    memory still verifies inside the grace time.
 
 go-api and query-api keep no list of denied `kid` values. A successful refresh replaces the
-keys in memory, so a key that left the JWKS stops verifying at the first successful refresh after it left. While
-refreshes fail, the old keys stay usable until `CacheTTL` plus `OutageGrace` after the last good refresh (15 minutes
-with the defaults). A compromised key also needs the sessions that hold its tokens revoked.
+keys in memory, so a key that left the JWKS stops verifying at the first successful refresh after it left, and a
+later failed refresh does not bring it back: the grace serves only the last successful key set. While refreshes
+succeed, a key that left the JWKS stops verifying at most `CacheTTL` plus `Timeout` (7 seconds) after it left. While
+refreshes fail, the old keys stay usable until `CacheTTL` plus `OutageGrace` after the last good refresh (10 minutes
+5 seconds). A compromised key also needs the sessions that hold its tokens revoked.
+
+"Left the JWKS" means left the JWKS of every auth-service pod. Each pod reads the key states on its own 15 second
+timer, so the bound runs from D, the moment the LAST pod stops listing the key: until D, a successful refresh that a
+pod which still lists the key answers puts the key back in memory, so the key verifies again until a refresh after D.
+
+go-api and query-api count every discovery and JWKS GET in `devhealth_auth_jwks_fetch_total` (labels `service`,
+`document` = `discovery` or `jwks`, `result` = `ok` for a `200`, `fail` for any other status or a transport error or
+timeout). `devhealth_auth_jwks_grace_state` is `0` while the keys are fresh, `1` while they are served from the outage
+grace after a failed refresh, and `2` past the grace. Both read the HTTP answer only: a `200` with a document the
+client then refuses counts `ok` and leaves the state at `0`.
 
 ## Check the documents by hand
 

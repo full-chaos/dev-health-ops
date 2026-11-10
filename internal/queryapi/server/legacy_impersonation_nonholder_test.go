@@ -187,3 +187,44 @@ func TestWriteDoorRefusesANonHoldersWriteUnderTheSwitch(t *testing.T) {
 		})
 	}
 }
+
+// sessionReadCounter is a store that counts its impersonation row reads.
+type sessionReadCounter struct {
+	*accessStore
+	reads *int
+}
+
+func (s sessionReadCounter) ActiveImpersonation(ctx context.Context, id uuid.UUID) (*policy.Impersonation, error) {
+	*s.reads++
+	return s.accessStore.ActiveImpersonation(ctx, id)
+}
+
+// TestQueryReadsNoNonHolderRowForAQueryUnderTheSwitch: as go-api reads a non-holder's row on a write only, /query
+// reads it only for a non-query document. Switch on, the row store failing: a query is served as itself with no row
+// read; a mutation reads the row once and gets the failed-read 401.
+func TestQueryReadsNoNonHolderRowForAQueryUnderTheSwitch(t *testing.T) {
+	quietStdLog(t)
+	minter := newAccessMinter(t)
+	token := minter.mint(ecUser, nil, nil)
+	for caller := range nonHolderStores(nil, nil) {
+		for _, route := range legacyQueryRoutes {
+			t.Run(caller+" "+route.listener+" "+route.path, func(t *testing.T) {
+				run := func(document string) (legacyAnswer, *behaviourStack, int) {
+					reads := 0
+					store := sessionReadCounter{accessStore: nonHolderStores(nil, errors.New("session store timeout"))[caller], reads: &reads}
+					s := newAccessStackRefusing(t, queryAPIUserStore{queryAPIStoreBase: store}, testAccess(minter.keys, nil, accessTestNow), true)
+					got := postDocument(s, route.listener, route.path, token, document)
+					return got, s, reads
+				}
+				got, s, reads := run(iaDocument)
+				if got.Status != http.StatusOK || len(*s.seen) != 1 || (*s.seen)[0].ImpersonationActive || reads != 0 {
+					t.Fatalf("query: %+v, ran %d, row reads %d; want 200 as itself and no row read", got, len(*s.seen), reads)
+				}
+				got, s, reads = run(legacyMutationDocument)
+				if got.Status != http.StatusUnauthorized || len(*s.seen) != 0 || reads != 1 {
+					t.Fatalf("mutation: %+v, ran %d, row reads %d; want 401, no resolver and one row read", got, len(*s.seen), reads)
+				}
+			})
+		}
+	}
+}

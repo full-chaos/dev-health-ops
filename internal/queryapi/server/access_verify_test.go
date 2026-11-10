@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -544,9 +545,10 @@ func (w *wiringIssuer) requests() int {
 	return w.gets
 }
 
-// query-api's access-token key source is built from accessverify.JWKSConfig:
-// a kid the JWKS drops is refused 5 s after the last fetch, and the build
-// makes no request (product rule 3: it never holds a start).
+// query-api's access-token key source is built from accessverify.JWKSConfig
+// and counted under its service: a kid the JWKS drops is refused 5 s after the
+// last fetch, and the build makes no request (product rule 3: it never holds a
+// start).
 func TestAccessFromEnv_UsesTheBoundedJWKS(t *testing.T) {
 	issuer := newWiringIssuer(t, "kid-k", "kid-j")
 	var mu sync.Mutex
@@ -556,9 +558,11 @@ func TestAccessFromEnv_UsesTheBoundedJWKS(t *testing.T) {
 		defer mu.Unlock()
 		return at
 	}
-	jwksTestHook = func(cfg *authverify.JWKSClientConfig) {
+	reader := sdkmetric.NewManualReader()
+	jwksTestHook = func(cfg *authverify.JWKSClientConfig, meter *metric.Meter) {
 		cfg.HTTPClient = issuer.srv.Client()
 		cfg.Now = clock
+		*meter = sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")
 	}
 	t.Cleanup(func() { jwksTestHook = nil })
 	opts, ok, err := accessFromEnv(func(name string) string {
@@ -583,6 +587,9 @@ func TestAccessFromEnv_UsesTheBoundedJWKS(t *testing.T) {
 	if key, err := resolver.ResolveKey("kid-k"); key == nil || err != nil {
 		t.Fatalf("first fetch: key %v err %v", key != nil, err)
 	}
+	if n := jwksFetchCount(t, reader, queryAPIAccessService, "jwks", "ok"); n != 1 {
+		t.Fatalf("query-api JWKS fetch ok count %d, want 1", n)
+	}
 	issuer.publish("kid-j")
 	mu.Lock()
 	at = at.Add(5 * time.Second)
@@ -590,4 +597,31 @@ func TestAccessFromEnv_UsesTheBoundedJWKS(t *testing.T) {
 	if key, err := resolver.ResolveKey("kid-k"); key != nil || err != nil {
 		t.Fatalf("5 s after the fetch, the JWKS without the kid: key %v err %v, want an unknown kid", key != nil, err)
 	}
+}
+
+// jwksFetchCount is the JWKS fetch counter's value for service, document and
+// result on reader.
+func jwksFetchCount(t *testing.T, reader *sdkmetric.ManualReader, service, document, result string) int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if m.Name != accessverify.JWKSFetchMetric || !ok {
+				continue
+			}
+			for _, dp := range sum.DataPoints {
+				s, _ := dp.Attributes.Value("service")
+				d, _ := dp.Attributes.Value("document")
+				r, _ := dp.Attributes.Value("result")
+				if s.AsString() == service && d.AsString() == document && r.AsString() == result {
+					return dp.Value
+				}
+			}
+		}
+	}
+	return 0
 }

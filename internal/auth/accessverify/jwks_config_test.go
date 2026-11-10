@@ -1,6 +1,7 @@
 package accessverify
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -11,6 +12,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-go/authverify"
 )
@@ -49,6 +53,7 @@ type cfgIssuer struct {
 	all       map[string]ed25519.PublicKey
 	published []string
 	mode      string
+	jwksFails bool
 	header    map[string]string
 	gets      map[string]int
 }
@@ -66,6 +71,9 @@ func (i *cfgIssuer) serve(w http.ResponseWriter, r *http.Request) {
 	i.mu.Lock()
 	i.gets[r.URL.Path]++
 	mode := i.mode
+	if i.jwksFails && r.URL.Path == "/.well-known/jwks.json" {
+		mode = "status503"
+	}
 	header := map[string]string{}
 	for name, value := range i.header {
 		header[name] = value
@@ -127,6 +135,12 @@ func (i *cfgIssuer) publish(t *testing.T, kids ...string) {
 func (i *cfgIssuer) setMode(mode string) {
 	i.mu.Lock()
 	i.mode = mode
+	i.mu.Unlock()
+}
+
+func (i *cfgIssuer) failJWKS(fail bool) {
+	i.mu.Lock()
+	i.jwksFails = fail
 	i.mu.Unlock()
 }
 
@@ -331,4 +345,106 @@ func TestJWKSConfig_IgnoresMaxAge(t *testing.T) {
 			t.Fatalf("%s fetched %d times, want 2", path, n)
 		}
 	}
+}
+
+// jwksReadings are the fetch counter points (key "document/result") and the
+// grace-state gauge of one service on reader; grace is -1 with no point.
+func jwksReadings(t *testing.T, reader *sdkmetric.ManualReader, service string) (map[string]int64, int64) {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	fetches, grace := map[string]int64{}, int64(-1)
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			switch data := m.Data.(type) {
+			case metricdata.Sum[int64]:
+				if m.Name != JWKSFetchMetric {
+					continue
+				}
+				for _, dp := range data.DataPoints {
+					s, _ := dp.Attributes.Value("service")
+					d, _ := dp.Attributes.Value("document")
+					r, _ := dp.Attributes.Value("result")
+					if s.AsString() == service {
+						fetches[d.AsString()+"/"+r.AsString()] = dp.Value
+					}
+				}
+			case metricdata.Gauge[int64]:
+				if m.Name != JWKSGraceMetric {
+					continue
+				}
+				for _, dp := range data.DataPoints {
+					if s, _ := dp.Attributes.Value("service"); s.AsString() == service {
+						grace = dp.Value
+					}
+				}
+			}
+		}
+	}
+	return fetches, grace
+}
+
+func wantReadings(t *testing.T, step string, reader *sdkmetric.ManualReader, service string, fetches map[string]int64, grace int64) {
+	t.Helper()
+	got, gotGrace := jwksReadings(t, reader, service)
+	for key, want := range fetches {
+		if got[key] != want {
+			t.Fatalf("%s: fetch %s = %d, want %d (all %v)", step, key, got[key], want, got)
+		}
+	}
+	if gotGrace != grace {
+		t.Fatalf("%s: grace state %d, want %d", step, gotGrace, grace)
+	}
+}
+
+// A failed fetch moves the fail counter and the grace state; a good fetch
+// moves ok and sets the state back to fresh.
+func TestNewJWKSKeys_CountsFetchesAndReportsTheGraceState(t *testing.T) {
+	issuer := newCfgIssuer(t)
+	issuer.publish(t, "kid-k")
+	clock := &cfgClock{t: now}
+	reader := sdkmetric.NewManualReader()
+	cfg := JWKSConfig(issuer.srv.URL)
+	cfg.HTTPClient = issuer.srv.Client()
+	cfg.Now = clock.Now
+	client, err := NewJWKSKeys(cfg, "svc-a", sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReadings(t, "before any fetch", reader, "svc-a", map[string]int64{"discovery/ok": 0, "discovery/fail": 0}, -1)
+	wantAdmitted(t, "first fetch", client, "kid-k")
+	wantReadings(t, "after a good fetch", reader, "svc-a",
+		map[string]int64{"discovery/ok": 1, "jwks/ok": 1, "discovery/fail": 0, "jwks/fail": 0}, JWKSStateFresh)
+	issuer.setMode("status503")
+	clock.advance(5 * time.Second)
+	wantAdmitted(t, "past the TTL the refresh fails", client, "kid-k")
+	wantReadings(t, "after a failed fetch", reader, "svc-a",
+		map[string]int64{"discovery/ok": 1, "jwks/ok": 1, "discovery/fail": 1}, JWKSStateGrace)
+	clock.advance(10 * time.Minute)
+	wantNotAdmitted(t, "past the grace", client, "kid-k")
+	wantReadings(t, "past the grace", reader, "svc-a", map[string]int64{"discovery/fail": 2}, JWKSStateExpired)
+	issuer.setMode("")
+	clock.advance(time.Second)
+	wantAdmitted(t, "the issuer is back", client, "kid-k")
+	wantReadings(t, "after the recovery", reader, "svc-a",
+		map[string]int64{"discovery/ok": 2, "jwks/ok": 2, "discovery/fail": 2, "jwks/fail": 0}, JWKSStateFresh)
+}
+
+// A JWKS GET that fails after a good discovery GET counts under jwks/fail.
+func TestNewJWKSKeys_CountsAFailedJWKSGet(t *testing.T) {
+	issuer := newCfgIssuer(t)
+	issuer.publish(t, "kid-k")
+	reader := sdkmetric.NewManualReader()
+	cfg := JWKSConfig(issuer.srv.URL)
+	cfg.HTTPClient = issuer.srv.Client()
+	cfg.Now = (&cfgClock{t: now}).Now
+	client, err := NewJWKSKeys(cfg, "svc-b", sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer.failJWKS(true)
+	wantNotAdmitted(t, "the JWKS GET fails", client, "kid-k")
+	wantReadings(t, "the JWKS GET fails", reader, "svc-b", map[string]int64{"discovery/ok": 1, "jwks/fail": 1, "jwks/ok": 0}, JWKSStateExpired)
 }

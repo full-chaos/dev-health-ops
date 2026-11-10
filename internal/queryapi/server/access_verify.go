@@ -27,9 +27,9 @@ const (
 	accessVerifyMeterName  = "github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 )
 
-// jwksTestHook lets a test give the JWKS client its HTTP client and clock; nil
-// in production.
-var jwksTestHook func(*authverify.JWKSClientConfig)
+// jwksTestHook lets a test give the JWKS client its HTTP client and clock, and
+// the meter; nil in production.
+var jwksTestHook func(*authverify.JWKSClientConfig, *metric.Meter)
 
 // accessOptions builds one profile-routed validator.
 type accessOptions struct {
@@ -53,14 +53,15 @@ func accessFromEnv(getenv getenvFunc) (accessOptions, bool, error) {
 		return accessOptions{}, false, nil
 	}
 	jwks := accessverify.JWKSConfig(issuer)
+	meter := otel.Meter(accessVerifyMeterName)
 	if jwksTestHook != nil {
-		jwksTestHook(&jwks)
+		jwksTestHook(&jwks, &meter)
 	}
-	keys, err := authverify.NewJWKSClient(jwks)
+	keys, err := accessverify.NewJWKSKeys(jwks, queryAPIAccessService, meter)
 	if err != nil {
 		return accessOptions{}, false, err
 	}
-	return accessOptions{issuer: issuer, keys: keys, meter: otel.Meter(accessVerifyMeterName)}, true, nil
+	return accessOptions{issuer: issuer, keys: keys, meter: meter}, true, nil
 }
 
 // newQueryAccessValidator builds the validator over query-api's row table: an

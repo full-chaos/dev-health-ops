@@ -218,6 +218,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		tokens[s.Principal] = token
 	}
 	fmt.Fprintf(stdout, "drive: %d slots, gap %s, start %s\n", len(plan.Slots), *gap, time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(stdout, "drive: schedule sha12 %s\n", shadowvenue.ScheduleSHA12(plan.Slots))
 	if err := driver.Drive(ctx, plan, tokens, file); err != nil {
 		fmt.Fprintln(stderr, err)
 		return finish(file, exitFail, stderr)
@@ -544,6 +545,7 @@ func judge(args []string, stdout, stderr io.Writer) int {
 		verdicts[i] = fmt.Sprintf("%s %d", verdict, counts[verdict])
 	}
 	fmt.Fprintf(stdout, "judge: slots %s\n", strings.Join(verdicts, ", "))
+	fmt.Fprintf(stdout, "judge: schedule sha12 %s\n", shadowvenue.ScheduleSHA12(slots))
 	fmt.Fprintf(stdout, "judge: rows %d, rows passed %d, void %v, exit %d, table %s\n", len(report.Rows), passed, report.Void, report.Exit(), *out)
 	return finish(file, report.Exit(), stderr)
 }
@@ -583,6 +585,8 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 	egressAfter := fs.String("egress-after", "", "egress record read after this run")
 	seedLog := fs.String("seed-log", "", "the stub's seed-mode log (required when an external row was sent; an empty file is a log)")
 	logPath := fs.String("log", "", "go-api JSON log of this run: the proof that an equal 5xx cell is past the guard")
+	attributedPath := fs.String("attributed-requests", "", "file of the requests of the run that are no slot (method, route, source file:line, optional request id; tab-separated): the drive's own sign-in; any other request in the go-api log is unknown traffic")
+	processPath := fs.String("process-facts", "", "file naming the go-api process of each metrics scrape (before and after: scrape time, container id, container start), tab-separated with a header: the proof that the two scrapes are one process that started before the drive")
 	volatilePath := fs.String("volatile-keys", "", "owner-only frozen file of the volatile leaf paths per row (bodydiff -paths of legacy-vs-legacy pairs); with -keys-yardstick and -keys-enforced")
 	keysYard := fs.String("keys-yardstick", "", "side file of the yardstick drive (the leaves of its answers by slot seq)")
 	keysEnf := fs.String("keys-enforced", "", "side file of this run's drive")
@@ -685,7 +689,33 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 	if leafParity != nil {
 		fmt.Fprintf(stdout, "judge-enforced: volatile keys sha12 %s, paths per row: %s\n", leafParity.Volatile.SHA12, leafParity.Volatile.PathsPerRow())
 	}
-	report := shadowvenue.JudgeEnforced(shadowvenue.EnforcedInput{Strict: true, Membership: membership, Leaves: leafParity, Log: evidence, Slots: slots, Yard: yard, K: *k, Namespaces: namespaces,
+	var attributed []shadowvenue.AttributedRequest
+	if *attributedPath != "" {
+		raw, err := os.ReadFile(*attributedPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "-attributed-requests: %v\n", err)
+			return exitUsage
+		}
+		if attributed, err = shadowvenue.ParseAttributed(raw); err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+	}
+	var process *shadowvenue.ProcessFacts
+	if *processPath != "" {
+		raw, err := os.ReadFile(*processPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "-process-facts: %v\n", err)
+			return exitUsage
+		}
+		pf, err := shadowvenue.ParseProcessFacts(raw)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+		process = &pf
+	}
+	report := shadowvenue.JudgeEnforced(shadowvenue.EnforcedInput{J1: true, Attributed: attributed, Process: process, Strict: true, Membership: membership, Leaves: leafParity, Log: evidence, Slots: slots, Yard: yard, K: *k, Namespaces: namespaces,
 		Grace: *grace, Outbound: outbound, YardOutbound: yardOut, YardOutboundGiven: *yardOutbound != "",
 		YardDigest: strings.TrimSpace(string(files["yardstick-digest"])), YardDigestAfter: strings.TrimSpace(string(files["yardstick-digest-after"])), DigestBefore: strings.TrimSpace(string(files["digest-before"])),
 		DigestAfter: strings.TrimSpace(string(files["digest-after"])), MetricsBefore: files["metrics-before"], MetricsAfter: files["metrics-after"]})
@@ -701,6 +731,9 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 	for _, reason := range report.Reasons {
 		fmt.Fprintln(stdout, reason)
 	}
+	for _, note := range report.Notes {
+		fmt.Fprintln(stdout, note)
+	}
 	counts := report.VerdictCounts()
 	verdicts := make([]string, 0, len(counts))
 	for verdict := range counts {
@@ -711,6 +744,7 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 		verdicts[i] = fmt.Sprintf("%s %d", verdict, counts[verdict])
 	}
 	fmt.Fprintf(stdout, "judge-enforced: slots %s\n", strings.Join(verdicts, ", "))
+	fmt.Fprintf(stdout, "judge-enforced: schedule sha12 %s\n", shadowvenue.ScheduleSHA12(slots))
 	if noOrg, served, other, err := shadowvenue.UnjudgedTotals(files["metrics-before"], files["metrics-after"]); err == nil {
 		fmt.Fprintf(stdout, "judge-enforced: unjudged no_org %d, served_org %d, other %d\n", noOrg, served, other)
 	}

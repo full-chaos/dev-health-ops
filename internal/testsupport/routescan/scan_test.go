@@ -133,3 +133,74 @@ func TestResolveNoteNamesOnePlaceOrFails(t *testing.T) {
 		}
 	}
 }
+
+const symbolFixture = `package p
+
+type (
+	Plain int
+	Box[T any] struct{ v T }
+)
+
+// Routes is doc.
+func Routes() []Route {
+	return nil
+}
+
+func (g *Guard) Wrap(level string) Handler {
+	return g.wrap(level)
+}
+
+func (b Box[T]) Wrap() T { return b.v }
+
+func Wrap() {}
+
+func init() {}
+
+func init() {}
+`
+
+func TestResolveSymbolFindsOneDeclarationByName(t *testing.T) {
+	source := []byte(symbolFixture)
+	for _, tc := range []struct {
+		symbol, anchor string
+		line           int
+	}{
+		{"Routes", "", 9},
+		{"Routes", "return nil", 10},
+		{"Guard.Wrap", "g.wrap(level)", 14},
+		{"Box.Wrap", "", 17},
+		{"Wrap", "", 19},
+		{"Plain", "", 4},
+		{"Box", "", 5},
+	} {
+		line, err := ResolveSymbol(source, "p.go", tc.symbol, tc.anchor)
+		if err != nil || line != tc.line {
+			t.Errorf("%s %q: line %d, %v; want %d", tc.symbol, tc.anchor, line, err, tc.line)
+		}
+	}
+}
+
+func TestResolveSymbolFailsOnAStaleOrAmbiguousSymbolOrAnchor(t *testing.T) {
+	source := []byte(symbolFixture)
+	for _, tc := range []struct{ symbol, anchor, want string }{
+		{"Gone", "", "symbol stale: p.go declares no func, method or type Gone"},
+		{"Guard.Gone", "", "symbol stale: p.go declares no func, method or type Guard.Gone"},
+		{"Guard.Routes", "", "symbol stale: "},
+		{"Plain.Wrap", "", "symbol stale: "},
+		{"init", "", "symbol ambiguous: p.go declares init 2 times (lines 21, 23)"},
+		{"Routes", "g.wrap(level)", "anchor stale: p.go#Routes (lines 9-11) holds no line with"},
+		{"Guard.Wrap", "wrapAll", "anchor stale: "},
+	} {
+		_, err := ResolveSymbol(source, "p.go", tc.symbol, tc.anchor)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s %q: %v; want %q", tc.symbol, tc.anchor, err, tc.want)
+		}
+	}
+	twice := []byte("package p\n\nfunc a() {\n\tx()\n\tx()\n}\n")
+	if _, err := ResolveSymbol(twice, "p.go", "a", "x()"); err == nil || !strings.Contains(err.Error(), "anchor ambiguous: \"x()\" is on 2 lines of p.go#a") {
+		t.Errorf("an anchor on two lines of the symbol: %v", err)
+	}
+	if _, err := ResolveSymbol([]byte("package p\nfunc (\n"), "p.go", "a", ""); err == nil || !strings.Contains(err.Error(), "does not parse") {
+		t.Errorf("a file that does not parse: %v", err)
+	}
+}

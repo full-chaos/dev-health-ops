@@ -401,3 +401,93 @@ func ResolveNote(source []byte, path, note string, line int, rowFile string, own
 	}
 	return fmt.Sprintf("anchor stale: the row's registration (%s:%d) does not hold %q", path, reg.Line, note), false
 }
+
+// DeclLines spans each top-level func or type Name, or method Recv.Name, that symbol names: cites tie to it, not a line.
+func DeclLines(source []byte, path, symbol string) ([][2]int, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, source, 0)
+	if err != nil {
+		return nil, err
+	}
+	recv, name, isMethod := strings.Cut(symbol, ".")
+	if !isMethod {
+		recv, name = "", symbol
+	}
+	var out [][2]int
+	span := func(node ast.Node) {
+		out = append(out, [2]int{fset.Position(node.Pos()).Line, fset.Position(node.End()).Line})
+	}
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Name.Name == name && receiverName(d) == recv {
+				span(d)
+			}
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				if ts, ok := spec.(*ast.TypeSpec); ok && !isMethod && ts.Name.Name == name {
+					span(ts)
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+func receiverName(decl *ast.FuncDecl) string {
+	if decl.Recv == nil || len(decl.Recv.List) == 0 {
+		return ""
+	}
+	expr := decl.Recv.List[0].Type
+	for {
+		switch typed := expr.(type) {
+		case *ast.StarExpr:
+			expr = typed.X
+		case *ast.IndexExpr:
+			expr = typed.X
+		case *ast.IndexListExpr:
+			expr = typed.X
+		case *ast.ParenExpr:
+			expr = typed.X
+		case *ast.Ident:
+			return typed.Name
+		default:
+			return ""
+		}
+	}
+}
+
+// ResolveSymbol is the line of the one symbol (or its one anchor line); stale or ambiguous is an error naming it.
+func ResolveSymbol(source []byte, path, symbol, anchor string) (int, error) {
+	spans, err := DeclLines(source, path, symbol)
+	if err != nil {
+		return 0, fmt.Errorf("symbol %s: %s does not parse: %v", symbol, path, err)
+	}
+	switch len(spans) {
+	case 0:
+		return 0, fmt.Errorf("symbol stale: %s declares no func, method or type %s", path, symbol)
+	case 1:
+	default:
+		lines := make([]string, len(spans))
+		for i, span := range spans {
+			lines[i] = strconv.Itoa(span[0])
+		}
+		return 0, fmt.Errorf("symbol ambiguous: %s declares %s %d times (lines %s)", path, symbol, len(spans), strings.Join(lines, ", "))
+	}
+	if anchor == "" {
+		return spans[0][0], nil
+	}
+	var inside []int
+	for _, line := range NoteLines(source, anchor) {
+		if spans[0][0] <= line && line <= spans[0][1] {
+			inside = append(inside, line)
+		}
+	}
+	switch len(inside) {
+	case 1:
+		return inside[0], nil
+	case 0:
+		return 0, fmt.Errorf("anchor stale: %s#%s (lines %d-%d) holds no line with %q", path, symbol, spans[0][0], spans[0][1], anchor)
+	}
+	return 0, fmt.Errorf("anchor ambiguous: %q is on %d lines of %s#%s", anchor, len(inside), path, symbol)
+}

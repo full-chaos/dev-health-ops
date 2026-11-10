@@ -37,10 +37,11 @@ internal/api/teamsidentity	team_id_writer_census_test.go
 internal/apiservice	accessroute_probe_test.go
 internal/apiservice	accessroute_routed_test.go
 internal/apiservice	endpoint_profile_rows_test.go
-internal/apiservice	endpoint_profile_scan_test.go
+internal/apiservice	endpoint_profile_shift_test.go
 internal/apiservice	githubapp_config.go
 internal/apiservice	member_list_row_cells_test.go
 internal/apiservice/admin	routeguard_test.go
+internal/apiservice/admin	users_owned_forward_test.go
 internal/apiservice/authflowvenue	auth_flow_venue_oracle_integration_test.go
 internal/apiservice/billingvenue	billing_refund_webhook_integration_test.go
 internal/apiservice/billingvenue	billing_webhook_venue_oracle_integration_test.go
@@ -72,6 +73,7 @@ internal/auth/authruntime	no_hs256_verify_census_test.go
 internal/auth/authruntime	query_api_accepts_integration_test.go
 internal/auth/authruntime	queryapi_enforce_parity_integration_test.go
 internal/auth/authruntime	session_routes_integration_test.go
+internal/auth/authruntime	wrong_class_gate_test.go
 internal/auth/contracts	access_token_goldens_test.go
 internal/auth/contracts	audit_attribute_parity_test.go
 internal/auth/contracts	authorization_goldens_test.go
@@ -88,6 +90,7 @@ internal/auth/contracts	endpoint_auth_profile_goldens_test.go
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go
 internal/auth/contracts	endpoint_profile_source_commit_test.go
 internal/auth/contracts	endpoint_profiles_go_api_admin_fields_test.go
+internal/auth/contracts	endpoint_profiles_go_api_shift_test.go
 internal/auth/contracts	endpoint_profiles_provisioning_workload_test.go
 internal/auth/contracts	endpoint_profiles_users_admin_test.go
 internal/auth/contracts	error_envelope_goldens_test.go
@@ -639,6 +642,9 @@ internal/testsupport/ratchet	ratchet.go
 internal/testsupport/ratchet	ratchet_test.go
 internal/testsupport/recordedfiles	recordedfiles.go
 internal/testsupport/recordedfiles	recordedfiles_test.go
+internal/testsupport/routescan	scan.go
+internal/testsupport/routescan	shift.go
+internal/testsupport/routescan	shift_test.go
 internal/testsupport/venuechanged	changed_test.go
 internal/testsupport/venuechanged	trigger_coverage_test.go
 internal/testsupport/venueoracle	external.go

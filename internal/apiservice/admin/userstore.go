@@ -33,13 +33,14 @@ type fullUser struct {
 const fullUserColumns = `id, email, username, password_hash, full_name, avatar_url, auth_provider, auth_provider_id, is_active, is_verified, is_superuser, token_version, last_login_at, created_at, updated_at`
 
 // userColumns is fullUserColumns (prefixed with alias when it is set), with
-// is_superuser read by the platform roles switch (policy.PlatformRoleRead).
+// is_superuser read by the platform roles switch as the admin users view shows
+// it: the stored holding (policy.PlatformRoleRead.StoredSuperuser), never a decision.
 func (s pgStore) userColumns(alias string) (string, error) {
 	columns, superuser, id := fullUserColumns, "is_superuser", "users.id"
 	if alias != "" {
 		columns, superuser, id = prefixColumns(alias, fullUserColumns), alias+".is_superuser", alias+".id"
 	}
-	expr, err := s.platformRoles().Superuser(superuser, id)
+	expr, err := s.platformRoles().StoredSuperuser(superuser, id)
 	if err != nil {
 		return "", err
 	}
@@ -293,8 +294,9 @@ func (s pgStore) updateUser(ctx context.Context, id uuid.UUID, patch userUpdate)
 	if err != nil || existing == nil {
 		return existing, err
 	}
+	decided := decideUserUpdate(existing, patch)
 	email := existing.Email
-	if patch.Email != nil && *patch.Email != "" && pythonparity.Lower(*patch.Email) != existing.Email {
+	if decided.EmailCheck {
 		if other, err := s.userByEmail(ctx, *patch.Email); err != nil {
 			return nil, err
 		} else if other != nil {
@@ -305,11 +307,7 @@ func (s pgStore) updateUser(ctx context.Context, id uuid.UUID, patch userUpdate)
 	username := existing.Username
 	if patch.Username != nil {
 		if *patch.Username != "" {
-			currentLower := ""
-			if existing.Username != nil {
-				currentLower = pythonparity.Lower(*existing.Username)
-			}
-			if pythonparity.Lower(*patch.Username) != currentLower {
+			if decided.UsernameCheck {
 				if other, err := s.userByUsername(ctx, *patch.Username); err != nil {
 					return nil, err
 				} else if other != nil {

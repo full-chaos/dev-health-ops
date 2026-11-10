@@ -107,3 +107,28 @@ func TestUnknownOrMissingSubcommandExits2(t *testing.T) {
 		}
 	}
 }
+
+func TestScopeVerdictSubcommand(t *testing.T) {
+	dir := t.TempDir()
+	gated := write(t, dir, "gated", "m/internal/auth/keys\n")
+	sources := write(t, dir, "sources", "m/internal/auth/keys\tsegment\nm/internal/api/sso\ttestimport\n")
+	exempt := write(t, dir, "exempt", "m/internal/api/sso\ttest-only\tan integration test\n")
+	code, out, errOut := runCaptured(t, "scope-verdict", "--gated", gated, "--sources", sources, "--exempt", exempt)
+	if code != 0 || !strings.Contains(out, "auth scope: 2 candidate packages, all gated or exempt") {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+	for _, args := range [][]string{
+		{"scope-verdict"},
+		{"scope-verdict", "--gated", gated, "--sources", sources},
+		{"scope-verdict", "--gated", gated, "--gated", gated, "--exempt", exempt},
+		{"scope-verdict", "--gated", gated, "--sources", sources, "--other", exempt},
+		{"scope-candidates", "-x", "m"},
+	} {
+		if code, _, errOut := runCaptured(t, args...); code != 2 || !strings.Contains(errOut, "usage:") {
+			t.Fatalf("%v: code=%d err=%q", args, code, errOut)
+		}
+	}
+	if code, _, errOut := runCaptured(t, "scope-verdict", "--gated", filepath.Join(dir, "absent"), "--sources", sources, "--exempt", exempt); code != 2 || !strings.Contains(errOut, "auth scope:") {
+		t.Fatalf("absent file: code=%d err=%q", code, errOut)
+	}
+}

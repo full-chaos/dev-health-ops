@@ -5,6 +5,7 @@
 # handler or gate), carry (a middleware). TestEveryPlatformActionSiteIsListed holds this list; no deciding row may read the
 # superuser flag.
 # file	function	action	origin
+internal/api/acrcredentials/routes.go	handlers.actor	admin.orgs	handler
 internal/api/billing/audit.go	handlers.getAudit	admin.billing	handler
 internal/api/billing/audit.go	handlers.listAudit	admin.billing	handler
 internal/api/billing/audit.go	handlers.resolveAudit	admin.billing	handler

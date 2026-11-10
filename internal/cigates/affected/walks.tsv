@@ -32,7 +32,6 @@ internal/api/telemetry	platform_action_test.go	internal/api/telemetry	dir	*
 internal/api/webhookintake	pagerduty_refusal_test.go	internal/api/webhookintake	dir	*
 internal/api/webhookintake	removed_providers_test.go	.	tree	*.go
 internal/apiservice	api_posture_test.go	internal/apiservice	dir	*
-internal/apiservice	endpoint_profile_scan_test.go	unexpressed	-	*.go
 internal/apiservice	enforcer_test.go	internal/apiservice	dir	*
 internal/apiservice	member_list_row_cells_test.go	internal/apiservice/admin	dir	*
 internal/apiservice/admin	operator_password_test.go	internal/apiservice/admin	dir	*
@@ -82,6 +81,7 @@ internal/auth/contracts	endpoint_profiles_query_api_test.go	contracts/auth/v1	di
 internal/auth/contracts	error_envelope_goldens_test.go	contracts/auth/v1/examples/error	dir	*
 internal/auth/contracts	fixture_scanner_plain_base64_test.go	contracts/auth/v1/examples	tree	*
 internal/auth/contracts	fixture_secret_scanner_test.go	contracts/auth/v1/examples	tree	*
+internal/auth/contracts	go_api_users_conflict_vocabulary_test.go	internal/apiservice/admin	dir	*
 internal/auth/contracts	golden_token_secret_scan_test.go	unexpressed	-	-
 internal/auth/contracts	jwks_document_goldens_test.go	contracts/auth/v1/examples/jwks	dir	*
 internal/auth/contracts	openapi_refresh_versions_test.go	contracts/auth/v1/jsonschema	dir	*
@@ -130,6 +130,7 @@ internal/auth/platformrole	owned_parse_census_test.go	cmd	tree	*
 internal/auth/platformrole	owned_parse_census_test.go	internal	tree	*
 internal/auth/platformrole	platform_action_sites_census_test.go	cmd	tree	*
 internal/auth/platformrole	platform_action_sites_census_test.go	internal	tree	*
+internal/auth/platformrole	storedholds_callers_test.go	internal	tree	*
 internal/auth/platformrole	superuser_fills_census_test.go	cmd	tree	*
 internal/auth/platformrole	superuser_fills_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_literals_census_test.go	cmd	tree	*
@@ -537,6 +538,8 @@ internal/testsupport/idpstub	boundary_test.go	internal/testsupport/idpstub	tree	
 internal/testsupport/moduleroot	moduleroot_test.go	unexpressed	-	*.go
 internal/testsupport/providerstub	stub.go	unexpressed	-	-
 internal/testsupport/recordedfiles	recordedfiles.go	unexpressed	-	-
+internal/testsupport/routescan	scan.go	unexpressed	-	*.go
+internal/testsupport/routescan	shift.go	unexpressed	-	*.go
 internal/testsupport/venuechanged	closure_test.go	ci/venue_oracle_registry.d	dir	*
 internal/testsupport/venuechanged	trigger_coverage_test.go	ci/venue_oracle_registry.d	dir	*
 internal/testsupport/venuechanged	trigger_coverage_test.go	unexpressed	-	-

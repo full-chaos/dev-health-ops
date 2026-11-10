@@ -87,7 +87,7 @@ func qaiInternalOffByDefault(g *guard) {
 	}
 	c := qaiContainer(g, docs)
 	g.expect(!has(envMap(c), "QUERY_API_INTERNAL_ADDR"), "QUERY_API_INTERNAL_ADDR is set with the internal listener off")
-	g.expect(equal(portNames(c), []string{"http"}), "ports %v with the internal listener off, want [http]", portNames(c))
+	g.expect(equal(portNames(c), []string{"http", "operator"}), "ports %v with the internal listener off, want [http operator]", portNames(c))
 }
 
 func qaiEnabledSetsAddressAndNamedPort(g *guard) {
@@ -97,7 +97,7 @@ func qaiEnabledSetsAddressAndNamedPort(g *guard) {
 	for _, p := range list(c["ports"]) {
 		ports[str(at(p, "name"))] = at(p, "containerPort")
 	}
-	g.expect(equal(ports, map[string]any{"http": 8090, "internal": 8091}), "ports %v, want http 8090 and internal 8091", ports)
+	g.expect(equal(ports, map[string]any{"http": 8090, "operator": 8080, "internal": 8091}), "ports %v, want http 8090, operator 8080 and internal 8091", ports)
 }
 
 func qaiInternalServiceTargetsNamedPort(g *guard) {

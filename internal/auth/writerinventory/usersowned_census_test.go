@@ -55,10 +55,6 @@ var usersOwnedCensus = map[string]usersOwnedClass{
 // guarded store writers. Each refuses before any database work, so a database
 // failure cannot replace the refusal.
 var usersOwnedEntryPoints = []string{
-	"internal/apiservice/admin/users.go|handlers.createUser",
-	"internal/apiservice/admin/users.go|handlers.updateUser",
-	"internal/apiservice/admin/users.go|handlers.setUserPassword",
-	"internal/apiservice/admin/users.go|handlers.deleteUser",
 	"internal/apiservice/admin/operator.go|Operator.CreateUser",
 	"internal/apiservice/admin/operator.go|Operator.DeleteUser",
 	"internal/apiservice/admin/operator.go|Operator.UpdateUser",

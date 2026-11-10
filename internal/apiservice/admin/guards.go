@@ -118,9 +118,10 @@ func (h *handlers) refuseSuperuserWrite(ctx context.Context, w http.ResponseWrit
 }
 
 // targetsSuperuserSQL locks the targets' users rows in id order and reads
-// is_superuser of each, by the platform roles switch.
+// is_superuser of each, by the platform roles switch: the stored holding, so a
+// disabled superuser target keeps its protection (legacy's stored column).
 func (s pgStore) targetsSuperuserSQL() (string, error) {
-	superuser, err := s.platformRoles().Superuser("is_superuser", "users.id")
+	superuser, err := s.platformRoles().StoredSuperuser("is_superuser", "users.id")
 	if err != nil {
 		return "", err
 	}

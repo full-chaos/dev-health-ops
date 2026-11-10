@@ -7,6 +7,7 @@
 //	cigate scope-candidates [-sources] <module>  auth scope candidates (with their sources) from go list JSON on stdin
 //	cigate scope-verdict --gated F --sources F --exempt F  auth scope selftest decision
 //	cigate metrics-proof [flags]         metrics.daily executed-proof readback against ClickHouse
+//	cigate ch-posture compare [flags]    worker login system.grants rows vs the declared ClickHouse posture
 //	cigate bigboy <verb> [args]          bigboy cut helpers: render-ch-users, grants-compare, pg-posture, bump-swap-values
 //	cigate docs <verb> [args]            documentation, docs-delivery and commit-message gates
 //	cigate plane-split-router [args]     bigboy traefik plane-split router from deploy values
@@ -43,7 +44,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: cigate governance|plan-verdict|plan-reads|govulncheck|scope-candidates|scope-verdict|metrics-proof|bigboy|docs|docs-build|docs-prepare|plane-split-router|query-api-flags|route-coverage|web-env-parity|live-e2e|release [args]")
+		fmt.Fprintln(os.Stderr, "usage: cigate governance|plan-verdict|plan-reads|govulncheck|scope-candidates|scope-verdict|metrics-proof|ch-posture|bigboy|docs|docs-build|docs-prepare|plane-split-router|query-api-flags|route-coverage|web-env-parity|live-e2e|release [args]")
 		return 2
 	}
 	switch args[0] {
@@ -80,6 +81,8 @@ func run(args []string) int {
 		return livee2e.Run(args[1:], processEnv, os.Stdout, os.Stderr)
 	case "metrics-proof":
 		return metricsproof.Run(args[1:], processEnv, metricsproof.OpenClickHouse, os.Stdout, os.Stderr)
+	case "ch-posture":
+		return chPosture(args[1:], os.Stdout, os.Stderr)
 	case "bigboy":
 		return bigboyrender.Run(args[1:], os.Stdout, os.Stderr)
 	case "docs":

@@ -2242,22 +2242,33 @@ func TestOneShardDryRunIsItsPartOfTheAllShardsDryRun(t *testing.T) {
 		t.Errorf("the all-shards dry run prints shards %v, the matrix lists packages shards %v", order, matrix)
 	}
 	split := manifestSplitKeys(t, rootOf(t))
-	multi, splitShard := 0, 0
+	// Most packages shards hold a split-by-test part next to whole packages: the first shard of two or more whole packages,
+	// and the other shard holding the most split-by-test parts.
+	multi, splitShard, mostSplit := 0, 0, 0
 	for _, shard := range order {
-		runs := lineValues(parts[shard], "  SHARD-RUN ")
-		hasSplit := false
-		for _, k := range runs {
-			hasSplit = hasSplit || split[k]
+		whole := 0
+		for _, k := range lineValues(parts[shard], "  SHARD-RUN ") {
+			if !split[k] {
+				whole++
+			}
 		}
-		if multi == 0 && !hasSplit && len(runs) >= 2 {
+		if multi == 0 && whole >= 2 {
 			multi = shard
 		}
-		if splitShard == 0 && hasSplit {
-			splitShard = shard
+	}
+	for _, shard := range order {
+		n := 0
+		for _, k := range lineValues(parts[shard], "  SHARD-RUN ") {
+			if split[k] {
+				n++
+			}
+		}
+		if shard != multi && n > mostSplit {
+			splitShard, mostSplit = shard, n
 		}
 	}
 	if multi == 0 || splitShard == 0 {
-		t.Fatalf("no shard of two or more whole packages (%d) or no shard with a split-by-test part (%d): the equality check measures nothing", multi, splitShard)
+		t.Fatalf("no shard of two or more whole packages (%d) or no other shard with a split-by-test part (%d): the equality check measures nothing", multi, splitShard)
 	}
 	single := dryRuns(t, "packages", []int{multi, splitShard})
 	for _, shard := range []int{multi, splitShard} {

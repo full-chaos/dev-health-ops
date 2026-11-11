@@ -29,6 +29,8 @@ func valkeyArgs(deployment map[string]any) []string {
 }
 
 func TestValkeyHasNoAclFileUnlessTheValueIsSet(t *testing.T) {
+	t.Parallel()
+
 	deployment, out := valkeyDeployment(t)
 	want := []string{"--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"}
 	got := valkeyArgs(deployment)
@@ -43,6 +45,8 @@ func TestValkeyHasNoAclFileUnlessTheValueIsSet(t *testing.T) {
 }
 
 func TestValkeyLoadsTheAclFileFromTheNamedSecret(t *testing.T) {
+	t.Parallel()
+
 	deployment, out := valkeyDeployment(t, "--set", "valkey.acl.enabled=true", "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set", "valkey.acl.secretName=valkey-users")
 	got := valkeyArgs(deployment)
 	want := []string{"--aclfile", "/etc/valkey-acl/users.acl"}
@@ -82,6 +86,8 @@ func TestValkeyLoadsTheAclFileFromTheNamedSecret(t *testing.T) {
 }
 
 func TestValkeyAclKeyIsHonouredAndNoPasswordIsRendered(t *testing.T) {
+	t.Parallel()
+
 	deployment, out := valkeyDeployment(t, "--set", "valkey.acl.enabled=true", "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set", "valkey.acl.secretName=valkey-users", "--set", "valkey.acl.secretKey=acl.txt")
 	got := valkeyArgs(deployment)
 	if got[len(got)-1] != "/etc/valkey-acl/acl.txt" {
@@ -97,6 +103,8 @@ func TestValkeyAclKeyIsHonouredAndNoPasswordIsRendered(t *testing.T) {
 }
 
 func TestValkeyAclFileOffWithoutTheInClusterValkey(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, "--set", "valkey.enabled=false", "--set", "valkey.acl.enabled=true", "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set", "valkey.acl.secretName=valkey-users")
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)
@@ -118,11 +126,15 @@ func valkeySection(out string) string {
 }
 
 func TestValkeyAclIsRefusedWithoutTheSecretItReads(t *testing.T) {
+	t.Parallel()
+
 	for name, args := range map[string][]string{
 		"no secret name": {"--set", "valkey.acl.enabled=true", "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"},
 		"no secret key":  {"--set", "valkey.acl.enabled=true", "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set", "valkey.acl.secretName=valkey-users", "--set", "valkey.acl.secretKey="},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, args...)
 			if err == nil {
 				t.Fatal("the render succeeded; it must refuse")
@@ -143,6 +155,8 @@ func TestValkeyAclIsRefusedWithoutTheSecretItReads(t *testing.T) {
 // users.acl, auth-service reads only AUTH_VALKEY_URI through one secretKeyRef,
 // and nothing takes the whole Secret (no envFrom, no volume without items).
 func TestEachPodSeesOnlyItsKeyOfTheSharedSecret(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, append(append([]string{}, authBase...),
 		"--set", "valkey.acl.enabled=true", "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set", "valkey.acl.secretName=auth-valkey",
 		"--set", "authService.valkey.secretName=auth-valkey",
@@ -198,6 +212,8 @@ func yamlText(v any) string {
 }
 
 func TestValkeyAclIsRefusedWithoutTheNetworkPolicyThatBoundsTheDefaultUser(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, "--set", "valkey.acl.enabled=true", "--set", "valkey.acl.secretName=valkey-users")
 	if err == nil {
 		t.Fatal("the render succeeded with the ACL file on and networkPolicy.enabled=false; it must refuse")
@@ -212,6 +228,8 @@ func TestValkeyAclIsRefusedWithoutTheNetworkPolicyThatBoundsTheDefaultUser(t *te
 }
 
 func TestValkeyAclSecretFileModeIsPinned(t *testing.T) {
+	t.Parallel()
+
 	deployment, _ := valkeyDeployment(t, "--set", "valkey.acl.enabled=true", "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set", "valkey.acl.secretName=valkey-users")
 	for _, v := range at(deployment, "spec", "template", "spec", "volumes").([]any) {
 		if at(v, "name") == "valkey-acl" {

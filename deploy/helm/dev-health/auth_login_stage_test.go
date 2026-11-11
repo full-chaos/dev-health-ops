@@ -36,6 +36,8 @@ func authServiceServesLogin(t *testing.T, docs []map[string]any) (login, social 
 }
 
 func TestLoginStageAuthServiceRendersOnlyTheAuthServiceHalf(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, loginStageArgs("3", "authService")...)
 	if err != nil {
 		t.Fatalf("stage authService: render: %v\n%.400s", err, out)
@@ -56,6 +58,8 @@ func TestLoginStageAuthServiceRendersOnlyTheAuthServiceHalf(t *testing.T) {
 }
 
 func TestLoginStageGoAPIForwardsLoginAndSocial(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, loginStageArgs("3", "goApi")...)
 	if err != nil {
 		t.Fatalf("stage goApi: render: %v\n%.400s", err, out)
@@ -74,6 +78,8 @@ func TestLoginStageGoAPIForwardsLoginAndSocial(t *testing.T) {
 
 // Phase 3 without a stage is refused, naming both values and their order (a silent default would let the race back in).
 func TestPhase3NeedsALoginStage(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuthRaw(t, loginStageArgs("3", "")...)
 	if err == nil {
 		t.Fatalf("phase 3 without a stage rendered: %.300s", out)
@@ -86,6 +92,8 @@ func TestPhase3NeedsALoginStage(t *testing.T) {
 }
 
 func TestLoginStageIsRefusedOutsidePhase3(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []string{"0", "1", "2", "4"} {
 		for _, stage := range []string{"authService", "goApi"} {
 			extra := []string{}
@@ -101,6 +109,8 @@ func TestLoginStageIsRefusedOutsidePhase3(t *testing.T) {
 }
 
 func TestLoginStageValueIsClosed(t *testing.T) {
+	t.Parallel()
+
 	for _, bad := range []string{"GoApi", "auth-service", "both", "true"} {
 		_, out, err := renderAuthRaw(t, loginStageArgs("3", bad)...)
 		if err == nil || !strings.Contains(out, "loginStage") {
@@ -111,6 +121,8 @@ func TestLoginStageValueIsClosed(t *testing.T) {
 
 // go-api never forwards login to an auth-service that does not mount it, in any phase or stage.
 func TestNoRenderForwardsLoginToAnAuthServiceWithoutTheLoginRoute(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		phase, stage string
 		extra        []string
@@ -137,6 +149,8 @@ func TestNoRenderForwardsLoginToAnAuthServiceWithoutTheLoginRoute(t *testing.T) 
 
 // The stage is the only difference between the two stage renders: Secret references and every other document are shared.
 func TestLoginStagesDifferOnlyInTheGoAPIFlags(t *testing.T) {
+	t.Parallel()
+
 	docsA, _, err := renderAuth(t, loginStageArgs("3", "authService")...)
 	if err != nil {
 		t.Fatalf("stage authService: render: %v", err)
@@ -164,6 +178,8 @@ func TestLoginStagesDifferOnlyInTheGoAPIFlags(t *testing.T) {
 }
 
 func TestLoginStageIsInTheSchemaAndTheValues(t *testing.T) {
+	t.Parallel()
+
 	schema, err := os.ReadFile("values.schema.json")
 	if err != nil {
 		t.Fatal(err)
@@ -181,6 +197,8 @@ func TestLoginStageIsInTheSchemaAndTheValues(t *testing.T) {
 }
 
 func TestLoginStageRunbookNamesBothRollsAndTheReverseRollback(t *testing.T) {
+	t.Parallel()
+
 	doc, err := os.ReadFile("../../../docs/contribute/architecture/auth-control-plane-deployment.md")
 	if err != nil {
 		t.Fatal(err)

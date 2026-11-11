@@ -76,6 +76,8 @@ func wkNetpol(t *testing.T, docs []map[string]any) netpolDoc {
 }
 
 func TestWellKnownRouteRendersTheTwoExactPathsOnly(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, wkArgs(2, []string{wkHostValue(wkBothPaths...)}, "--set", "authService.accessToken.issuerURL="+wkIssuer)...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.600s", err, out)
@@ -110,6 +112,8 @@ func TestWellKnownRouteRendersTheTwoExactPathsOnly(t *testing.T) {
 }
 
 func TestWellKnownRouteIsOffUnlessAHostNamesIt(t *testing.T) {
+	t.Parallel()
+
 	docs := renderOK(t, wkArgs(2, nil, "--set", "authService.accessToken.issuerURL="+wkIssuer))
 	for _, r := range wkIngressRules(docs) {
 		if r.service == wkAuthSvc {
@@ -137,6 +141,8 @@ func renderOK(t *testing.T, args []string) []map[string]any {
 }
 
 func TestWellKnownRouteAdmitsTheIngressControllerOnTheAPIPortOnly(t *testing.T) {
+	t.Parallel()
+
 	docs := renderOK(t, wkArgs(2, []string{wkHostValue(wkBothPaths...)}, "--set", "authService.accessToken.issuerURL="+wkIssuer))
 	policy := wkNetpol(t, docs)
 	pod := authPodLabels()
@@ -159,6 +165,8 @@ func TestWellKnownRouteAdmitsTheIngressControllerOnTheAPIPortOnly(t *testing.T) 
 }
 
 func TestWellKnownRouteControllerNamespaceFollowsNetworkPolicyValue(t *testing.T) {
+	t.Parallel()
+
 	docs := renderOK(t, wkArgs(2, []string{wkHostValue(wkBothPaths...)}, "--set", "authService.accessToken.issuerURL="+wkIssuer, "--set", "networkPolicy.ingressControllerNamespace=edge"))
 	policy := wkNetpol(t, docs)
 	if got, _ := admittedFrom([]netpolDoc{policy}, authPodLabels(), []int{8095}, wkController("edge")); len(got) != 1 {
@@ -170,6 +178,8 @@ func TestWellKnownRouteControllerNamespaceFollowsNetworkPolicyValue(t *testing.T
 }
 
 func TestWellKnownRouteRefusals(t *testing.T) {
+	t.Parallel()
+
 	issuer := []string{"--set", "authService.accessToken.issuerURL=" + wkIssuer}
 	cases := []struct {
 		name  string
@@ -206,6 +216,8 @@ func TestWellKnownRouteRefusals(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, wkArgs(c.phase, c.hosts, c.extra...)...)
 			if err == nil || !strings.Contains(out, c.want) {
 				t.Errorf("want a render failure containing %q, got err=%v\n%.800s", c.want, err, out)
@@ -222,6 +234,8 @@ func wkController(namespace string) netpolSource {
 
 // One API-port rule carries every peer: the egress proof plan of the deploy repo reads at most one rule on the API port.
 func TestWellKnownRouteSharesTheOneAPIPortRule(t *testing.T) {
+	t.Parallel()
+
 	for _, routed := range []bool{false, true} {
 		var hosts []string
 		if routed {
@@ -244,8 +258,12 @@ func TestWellKnownRouteSharesTheOneAPIPortRule(t *testing.T) {
 
 // The auth host alone (no go-api host, whose own guard would fire first): an annotation that changes how paths match refuses.
 func TestWellKnownRouteRefusesPathMatchingAnnotations(t *testing.T) {
+	t.Parallel()
+
 	for _, ann := range []string{"use-regex", "rewrite-target", "app-root", "configuration-snippet", "server-snippet", "permanent-redirect", "temporal-redirect"} {
 		t.Run(ann, func(t *testing.T) {
+			t.Parallel()
+
 			args := phaseArgs(2, "--set", "ingress.enabled=true", "--set-json", `ingress.hosts=[`+wkHostValue(wkBothPaths...)+`]`,
 				"--set", "authService.accessToken.issuerURL="+wkIssuer, "--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/`+ann+`=x`)
 			_, out, err := renderAuth(t, args...)

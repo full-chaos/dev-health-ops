@@ -14,7 +14,7 @@ func renderClickHouseSts(t *testing.T, args ...string) map[string]interface{} {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	out, err := helmCommand(append([]string{"template", "t", ".", "--show-only", "templates/clickhouse.yaml"}, args...)...).CombinedOutput()
+	out, err := helmOutput(append([]string{"template", "t", ".", "--show-only", "templates/clickhouse.yaml"}, args...)...)
 	if err != nil {
 		t.Fatalf("helm template: %v: %.500s", err, out)
 	}
@@ -33,6 +33,8 @@ func renderClickHouseSts(t *testing.T, args ...string) map[string]interface{} {
 // The in-cluster ClickHouse replica count is a value. 0 must render as 0 (not fall back to 1) and the claim
 // template, hence the PVC claim, must be identical for 0 and 1: scaling to 0 keeps the data volume.
 func TestClickHouseReplicasIsAValueAndLeavesTheClaimTemplateAlone(t *testing.T) {
+	t.Parallel()
+
 	def := renderClickHouseSts(t)
 	zero := renderClickHouseSts(t, "--set", "clickhouse.replicas=0")
 	three := renderClickHouseSts(t, "--set", "clickhouse.replicas=3")
@@ -73,6 +75,8 @@ func TestClickHouseReplicasIsAValueAndLeavesTheClaimTemplateAlone(t *testing.T) 
 // A replica count that is not a nonnegative whole number must fail the render: `int` alone turned null and
 // "oops" into 0 and silently stopped ClickHouse.
 func TestClickHouseReplicasRefusesAnythingButANonnegativeWholeNumber(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
@@ -84,7 +88,7 @@ func TestClickHouseReplicasRefusesAnythingButANonnegativeWholeNumber(t *testing.
 		{"--set-json", "clickhouse.replicas=1.5"},
 		{"--set-json", "clickhouse.replicas=true"},
 	} {
-		out, err := helmCommand(append([]string{"template", "t", ".", "--show-only", "templates/clickhouse.yaml"}, c...)...).CombinedOutput()
+		out, err := helmOutput(append([]string{"template", "t", ".", "--show-only", "templates/clickhouse.yaml"}, c...)...)
 		if err == nil || !strings.Contains(string(out), "clickhouse.replicas") {
 			t.Fatalf("%v: want a render refusal naming clickhouse.replicas, got err=%v out=%.300s", c, err, out)
 		}

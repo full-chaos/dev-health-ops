@@ -10,6 +10,8 @@ func authWith(extra ...string) []string {
 }
 
 func TestAuthServiceCapacityDefaults(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -54,6 +56,8 @@ func TestAuthServiceCapacityDefaults(t *testing.T) {
 // (maxSurge 1), so the ceiling is (replicas + 1) x maxConns. The budget check
 // is in auth_service_connection_budget_test.go; this test fixes the chart figures.
 func TestAuthServiceConnectionCeiling(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -72,6 +76,8 @@ func TestAuthServiceConnectionCeiling(t *testing.T) {
 }
 
 func TestAuthServiceMaxConnsStrict(t *testing.T) {
+	t.Parallel()
+
 	for name, set := range map[string][]string{
 		"zero":       {"--set", "authService.database.maxConns=0"},
 		"too large":  {"--set", "authService.database.maxConns=33"},
@@ -105,6 +111,8 @@ func TestAuthServiceMaxConnsStrict(t *testing.T) {
 }
 
 func TestAuthServiceMaxConnsCannotBeSetThroughExtraEnv(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range []string{"AUTH_DATABASE_MAX_CONNS", " auth_database_max_conns "} {
 		_, out, err := renderAuth(t, authWith("--set-json",
 			`authService.extraEnv=[{"name":"`+name+`","value":"4"}]`)...)
@@ -115,6 +123,8 @@ func TestAuthServiceMaxConnsCannotBeSetThroughExtraEnv(t *testing.T) {
 }
 
 func TestAuthServiceDisruptionBudgetFollowsReplicas(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -185,6 +195,8 @@ func maxConnsArg(t *testing.T, deployment map[string]any) string {
 }
 
 func TestAuthServiceMaxConnsCannotBeSetThroughExtraArgs(t *testing.T) {
+	t.Parallel()
+
 	for _, arg := range []string{"--database-max-conns=4", "database-max-conns=4", "-database-max-conns=4", "--database-max-conns =4", " --database-max-conns\\t=4", "--database-max-conns 4", "--database-max-conns\\t4"} {
 		_, out, err := renderAuth(t, authWith("--set-json", `authService.extraArgs=["`+arg+`"]`)...)
 		if err == nil || !strings.Contains(out, "authService.extraArgs must not set") || !strings.Contains(out, "authService.database.maxConns") {
@@ -194,6 +206,8 @@ func TestAuthServiceMaxConnsCannotBeSetThroughExtraArgs(t *testing.T) {
 }
 
 func TestAuthServiceSigningKeyFlagsCannotBeSetAsOneSpaceSeparatedArg(t *testing.T) {
+	t.Parallel()
+
 	for _, arg := range []string{"--signing-key-file /x", "--signing-key-id\\tx", "--signing-keyset-file /x"} {
 		_, out, err := renderAuth(t, authWith("--set-json", `authService.extraArgs=["`+arg+`"]`)...)
 		if err == nil || !strings.Contains(out, "authService.extraArgs must not set") {

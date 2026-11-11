@@ -20,6 +20,8 @@ func poolerContainer(docs []map[string]any, name string) any {
 }
 
 func TestPgbouncerExtraUserPoolSizeRendersUsersFragment(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -62,6 +64,8 @@ func TestPgbouncerExtraUserPoolSizeRendersUsersFragment(t *testing.T) {
 }
 
 func TestPgbouncerExtraUsersWithoutPoolSizeRenderNothingNew(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authWith(extraUsersJSON(`{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD"}`)...)...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -84,6 +88,8 @@ func TestPgbouncerExtraUsersWithoutPoolSizeRenderNothingNew(t *testing.T) {
 }
 
 func TestPgbouncerExtraUserPoolSizeChangesTheChecksum(t *testing.T) {
+	t.Parallel()
+
 	sum := func(size string) string {
 		docs, out, err := renderAuth(t, authWith(extraUsersJSON(`{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD","poolSize":`+size+`}`)...)...)
 		if err != nil {
@@ -98,6 +104,8 @@ func TestPgbouncerExtraUserPoolSizeChangesTheChecksum(t *testing.T) {
 }
 
 func TestPgbouncerExtraUserPoolSizeIsValidated(t *testing.T) {
+	t.Parallel()
+
 	for name, entry := range map[string]string{
 		"zero":     `{"role":"r1","passwordKey":"K1","poolSize":0}`,
 		"negative": `{"role":"r1","passwordKey":"K1","poolSize":-1}`,
@@ -133,6 +141,8 @@ func poolSizeArgs(name, size string) []string {
 // A pool size above 1000 is refused by the schema, and by the budget helper
 // itself when the schema did not run, so the budget sum cannot wrap.
 func TestPoolSizeIsBoundedBySchemaAndByTheBudgetHelper(t *testing.T) {
+	t.Parallel()
+
 	for name := range poolSizeKeys {
 		for _, size := range []string{"1001", "9223372036854775807"} {
 			_, out, err := renderAuth(t, authWith(poolSizeArgs(name, size)...)...)
@@ -149,6 +159,8 @@ func TestPoolSizeIsBoundedBySchemaAndByTheBudgetHelper(t *testing.T) {
 }
 
 func TestAuthServiceReplicasAreBoundedForTheBudget(t *testing.T) {
+	t.Parallel()
+
 	for _, size := range []string{"101", "9223372036854775807"} {
 		_, out, err := renderAuth(t, authWith("--set-json", "authService.replicas="+size)...)
 		if err == nil || !strings.Contains(out, "replicas") {
@@ -163,6 +175,8 @@ func TestAuthServiceReplicasAreBoundedForTheBudget(t *testing.T) {
 
 // 1000 is the largest accepted size; it still fails a 97 budget with the sum shown.
 func TestPoolSizeAtTheBoundStillFailsASmallBudget(t *testing.T) {
+	t.Parallel()
+
 	if _, out, err := renderAuth(t, authWith(poolSizeArgs("extra user", "1000")...)...); err != nil {
 		t.Fatalf("1000 renders with the budget off: %v\n%.300s", err, out)
 	}

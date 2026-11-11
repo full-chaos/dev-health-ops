@@ -100,7 +100,7 @@ func drillMigrate(t *testing.T, ctx context.Context, admin *pgxpool.Pool, role s
 	if !regexp.MustCompile(`^[a-z_][a-z0-9_]{0,30}$`).MatchString(role) {
 		t.Fatalf("bad runtime role name %q", role)
 	}
-	// The restore fence carries the legacy public tables as well (refresh tokens, service credentials, ingest tokens,
+	// The restore fence carries the legacy public tables as well (refresh tokens, ingest tokens,
 	// ...), and the drill revokes one row of each after T: both modes run on the full migrated schema, as production
 	// does, or apply refuses on the missing tables. UsersOwned gives the runtime role the public.users write grant the
 	// users-owned deployment has: the password drill writes both user tables through the real identity store.
@@ -257,7 +257,7 @@ func drillLegacyID(name string) uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("drill-11232-legacy-"+name))
 }
 
-var drillLegacyTables = []string{"refresh_tokens", "internal_service_credentials", "external_ingest_tokens"}
+var drillLegacyTables = []string{"refresh_tokens", "external_ingest_tokens"}
 
 // drillSeedLegacy creates (before T, label B) one live row in each legacy public credential table the fence carries.
 func drillSeedLegacy(t *testing.T, ctx context.Context, admin *pgxpool.Pool) {
@@ -272,9 +272,6 @@ VALUES ($1, 'drill-11232-legacy@example.com', true, false, false, 0, now(), now(
 		{`INSERT INTO public.refresh_tokens (id, user_id, family_id, token_hash, expires_at, created_at)
 VALUES ($1, $2, $3, 'drill-11232-legacy-refresh', now() + interval '30 days', now()) ON CONFLICT (id) DO NOTHING`,
 			[]any{drillLegacyID("refresh_tokens"), user, drillLegacyID("family")}},
-		{`INSERT INTO public.internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-VALUES ($1, 'drill-11232', 'drill-11232-legacy-service', 'svc_drill', '["entitlements:read"]', now()) ON CONFLICT (id) DO NOTHING`,
-			[]any{drillLegacyID("internal_service_credentials")}},
 		{`INSERT INTO public.external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, created_at)
 VALUES ($1, 'drill-11232-org', NULL, 'drill 11232', 'drill-11232-legacy-ingest', 'fcpush_drill', '["ingest:status"]'::jsonb, now()) ON CONFLICT (id) DO NOTHING`,
 			[]any{drillLegacyID("external_ingest_tokens")}},
@@ -286,7 +283,7 @@ VALUES ($1, 'drill-11232-org', NULL, 'drill 11232', 'drill-11232-legacy-ingest',
 	}
 }
 
-// drillRevokeLegacy revokes (after T, label C) the three rows drillSeedLegacy created.
+// drillRevokeLegacy revokes (after T, label C) the two rows drillSeedLegacy created.
 func drillRevokeLegacy(t *testing.T, ctx context.Context, admin *pgxpool.Pool) {
 	t.Helper()
 	for _, table := range drillLegacyTables {
@@ -324,7 +321,6 @@ func drillRead(ctx context.Context, admin *pgxpool.Pool, label string) (drillSna
 		{&s.Disabled, `SELECT id::text FROM auth.principals WHERE disabled_at IS NOT NULL ORDER BY id`},
 		{&s.Keys, `SELECT idempotency_key FROM auth.auth_outbox_events ORDER BY idempotency_key`},
 		{&s.LegacyRevoked, `SELECT 'refresh_tokens/' || id::text FROM public.refresh_tokens WHERE revoked_at IS NOT NULL ORDER BY 1`},
-		{&s.LegacyRevoked, `SELECT 'internal_service_credentials/' || id::text FROM public.internal_service_credentials WHERE revoked_at IS NOT NULL ORDER BY 1`},
 		{&s.LegacyRevoked, `SELECT 'external_ingest_tokens/' || id::text FROM public.external_ingest_tokens WHERE revoked_at IS NOT NULL ORDER BY 1`},
 	} {
 		rs, err := tx.Query(ctx, q.sql)
@@ -507,7 +503,7 @@ type drillPostResult struct {
 	// RevokesAfterTComeBack, as it always did.
 	AbsentAfterRestore int `json:"absent_after_restore"`
 	// LegacyRevokesBack is the part of RevokesAfterTComeBack that is a legacy public table row (refresh token,
-	// internal service credential, external ingest token); it must be 3 unfenced and 0 fenced.
+	// external ingest token); it must be 2 unfenced and 0 fenced.
 	LegacyRevokesBack        int    `json:"legacy_revokes_after_target_that_came_back"`
 	Fenced                   bool   `json:"fenced"`
 	FenceRowsForLiveTimeline *int64 `json:"fence_rows_for_live_timeline,omitempty"`

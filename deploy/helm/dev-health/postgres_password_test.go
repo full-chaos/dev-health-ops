@@ -48,6 +48,8 @@ func pgEnv(t *testing.T, sts map[string]any) []any {
 // Knob off (the default): the env is the plain list the chart rendered before, hba on or off, and the Secret is there
 // with the same value.
 func TestPostgresPasswordKnobOffKeepsThePlainEnvAndRendersTheSecret(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	wantEnv := []any{
 		map[string]any{"name": "POSTGRES_USER", "value": "devhealth"},
@@ -58,6 +60,8 @@ func TestPostgresPasswordKnobOffKeepsThePlainEnvAndRendersTheSecret(t *testing.T
 	explicitOff := append(append([]string{}, pgCredsOff...), "--set", "postgresql.credentialsSecret.enabled=false")
 	for name, args := range map[string][]string{"unset": pgCredsOff, "explicit false": explicitOff, "hba on": pgCredsHbaOn} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			sts, secret := pgPasswordRender(t, args...)
 			if got := pgEnv(t, sts); !reflect.DeepEqual(got, wantEnv) {
 				t.Errorf("env = %v, want the plain list %v", got, wantEnv)
@@ -78,9 +82,13 @@ func TestPostgresPasswordKnobOffKeepsThePlainEnvAndRendersTheSecret(t *testing.T
 // Knob on: exactly the POSTGRES_PASSWORD entry changes (value removed, secretKeyRef name and key added); the rest of
 // the StatefulSet is the knob-off one, and the spec holds no copy of the value.
 func TestPostgresPasswordKnobOnIsASecretKeyRefAndChangesOnlyThatEntry(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	for name, pair := range map[string][2][]string{"hba off": {pgCredsOff, pgCredsOn}, "hba on": {pgCredsHbaOn, pgCredsOnHba}} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			off, _ := pgPasswordRender(t, pair[0]...)
 			on, secret := pgPasswordRender(t, pair[1]...)
 			entry := namedEntry(pgEnv(t, on), "POSTGRES_PASSWORD")
@@ -116,6 +124,8 @@ func TestPostgresPasswordKnobOnIsASecretKeyRefAndChangesOnlyThatEntry(t *testing
 
 // The Secret renders with the store only, and also when the shared Secret is external.
 func TestPostgresCredentialsSecretRendersOnlyWithTheStore(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	if _, secret := pgPasswordRender(t, authBase...); secret != nil {
 		t.Errorf("Secret %s renders while postgresql is disabled", pgCredentialsSecret)
@@ -133,6 +143,8 @@ func TestPostgresCredentialsSecretRendersOnlyWithTheStore(t *testing.T) {
 
 // The knob is a data-store step of its own: it changes the postgresql StatefulSet and no other document.
 func TestPostgresCredentialsKnobChangesOnlyThePostgresStatefulSet(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	got := changedDocs(t, pgCredsOff, pgCredsOn)
 	if want := []string{"StatefulSet/a-dev-health-postgresql"}; !reflect.DeepEqual(got, want) {

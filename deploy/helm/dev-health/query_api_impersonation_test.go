@@ -19,6 +19,8 @@ func queryAPIEnvValue(t *testing.T, docs []map[string]any, name string) (string,
 }
 
 func TestQueryAPIImpersonationSwitchFollowsTheGoAPIValue(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []string{"2", "3", "4"} {
 		docs, out, err := renderAuth(t, queryAPIImpersonationArgs(phase)...)
 		if err != nil {
@@ -50,6 +52,8 @@ func TestQueryAPIImpersonationSwitchFollowsTheGoAPIValue(t *testing.T) {
 // Below phase 2 the switch never renders for query-api (on, the render is refused); from phase 2 query-api's entry is
 // go-api's, for every value: absent, false and true.
 func TestQueryAPIImpersonationEqualsGoAPIByPhase(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []string{"0", "1"} {
 		below := func(sets ...string) []string {
 			head := append(append([]string{}, authBase...), "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "authService.phase="+phase)
@@ -82,8 +86,12 @@ func TestQueryAPIImpersonationEqualsGoAPIByPhase(t *testing.T) {
 }
 
 func TestQueryAPIExtraEnvRefusesTheImpersonationSwitch(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range []string{impersonationEnv, strings.ToLower(impersonationEnv), " " + impersonationEnv + " "} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, "--set", "queryApi.enabled=true", "--set-json", `queryApi.extraEnv=[{"name":"`+name+`","value":"true"}]`)
 			if err == nil {
 				t.Fatal("the render succeeded; it must refuse")

@@ -9,6 +9,8 @@ import (
 // runs it automatically (an explicit one-shot); no Job, initContainer or container of the chart may run it, in the
 // auth-service render and in the default render, so a restored database is never marked fenced by a rollout.
 func TestNoWorkloadOfTheChartRunsRestoreFenceInit(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -17,6 +19,8 @@ func TestNoWorkloadOfTheChartRunsRestoreFenceInit(t *testing.T) {
 		{"auth service off", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			docs, out, err := renderAuth(t, tc.args...)
 			if err != nil {
 				t.Fatalf("render failed: %v\n%.600s", err, out)

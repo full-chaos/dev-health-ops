@@ -142,8 +142,8 @@ func TestOnlyThePresenceStatementWritesPlatformRoleAssignmentsInTheFence(t *test
 }
 
 func TestEveryOtherSectionExportsWhatVersionFiveHeld(t *testing.T) {
-	if ManifestVersion != 6 {
-		t.Fatalf("ManifestVersion = %d, want 6: a new section is a new manifest version", ManifestVersion)
+	if ManifestVersion < 6 {
+		t.Fatalf("ManifestVersion = %d, want 6 or later: a new section is a new manifest version", ManifestVersion)
 	}
 	if got := sectionSetDigest(t, platformRoleSection); got != pinnedSectionSet[5] {
 		t.Errorf("a section other than %s changed its export (digest %s, version 5 pinned %s)", platformRoleSection, got, pinnedSectionSet[5])

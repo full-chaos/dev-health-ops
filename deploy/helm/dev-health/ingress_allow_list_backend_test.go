@@ -110,6 +110,8 @@ const (
 // query-api Service, the host's own default rule stays on go-api, the web host stays in the plain object, and no rule
 // of the render names a `-api` (Python) Service.
 func TestAllowListEntryBackendIsQueryAPI(t *testing.T) {
+	t.Parallel()
+
 	rendered := backendRender(t, graphqlQuery, graphqlQuery)
 	objects, _ := backendIngresses(t, rendered)
 	if len(objects) != 2 || objects["b-dev-health"].Rules == nil || objects["b-dev-health-anchored"].Rules == nil {
@@ -142,6 +144,8 @@ func TestAllowListEntryBackendIsQueryAPI(t *testing.T) {
 // TestAllowListEntryBackendPerList: each list decides for its own hosts: the shared list serves api.test, the host's
 // own list serves in-cluster.test, and neither leaks into the other.
 func TestAllowListEntryBackendPerList(t *testing.T) {
+	t.Parallel()
+
 	objects, _ := backendIngresses(t, backendRender(t, graphqlQuery, otherQuery))
 	got := map[string][]string{}
 	for _, rule := range objects["b-dev-health-anchored"].Rules {
@@ -160,6 +164,8 @@ func TestAllowListEntryBackendPerList(t *testing.T) {
 
 // TestAllowListEntryBackendNeedsItsService: an entry that names query-api needs query-api enabled.
 func TestAllowListEntryBackendNeedsItsService(t *testing.T) {
+	t.Parallel()
+
 	host := `[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
 	out, err := renderIngress("--set", "goApi.enabled=true", "--set", "queryApi.enabled=false", "--set-json", "ingress.hosts="+host, "--set-json", "ingress.pythonAllowList=["+graphqlQuery+"]")
 	if err == nil || !strings.Contains(out, "routes to query-api but queryApi.enabled is false") {
@@ -175,6 +181,8 @@ func TestAllowListEntryBackendNeedsItsService(t *testing.T) {
 // api (`api`, and the old no-key default) is refused, so is every other backend (the Go api has its own rules and
 // refusals; the internal listeners are never public), and a value that is not a string.
 func TestAllowListEntryServiceMustBeQueryAPI(t *testing.T) {
+	t.Parallel()
+
 	host := `[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`
 	for _, value := range []string{`"api"`, `"go-api"`, `"web"`, `"query-api-mcp"`, `"go-api-internal"`, `"Query-Api"`, `""`, `null`, `0`, `true`, `["query-api"]`} {
 		entry := `{"path":"/graphql$","pathType":"ImplementationSpecific","service":` + value + `}`
@@ -192,6 +200,8 @@ func TestAllowListEntryServiceMustBeQueryAPI(t *testing.T) {
 
 // TestHostPathToPythonAPIIsRefused: a host path that still says `service: api` has no backend any more.
 func TestHostPathToPythonAPIIsRefused(t *testing.T) {
+	t.Parallel()
+
 	host := `[{"host":"h","paths":[{"path":"/api","pathType":"Prefix","service":"api"}]}]`
 	out, err := renderIngress("--set-json", "ingress.hosts="+host)
 	if err == nil || !strings.Contains(out, `routes to service "api": the Python api is gone (CHAOS-7520)`) {
@@ -203,6 +213,8 @@ func TestHostPathToPythonAPIIsRefused(t *testing.T) {
 // and web.backendFromRelease. The chart ignores those keys (no schema or guard refuses them): the render succeeds and
 // holds no Python api object.
 func TestRemovedPythonAPIValuesAreIgnored(t *testing.T) {
+	t.Parallel()
+
 	out, err := renderIngress("--set", "api.enabled=true", "--set", "metricsApi.enabled=true", "--set", "api.autoscaling.enabled=true",
 		"--set", "image.repository=ghcr.io/full-chaos/dev-hops-api", "--set", "web.backendFromRelease=true")
 	if err != nil {

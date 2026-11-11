@@ -8,6 +8,8 @@ import (
 // query-api verifies the EdDSA access token with the same issuer value go-api
 // does: rendered with class eddsa only, from authService.accessToken.issuerURL.
 func TestQueryAPIAccessTokenIssuerRendersWithGoAPIs(t *testing.T) {
+	t.Parallel()
+
 	envOf := func(docs []map[string]any, name, env string) (string, bool) {
 		return containerEnvValue(t, authDoc(docs, "Deployment", name), env)
 	}
@@ -28,8 +30,12 @@ func TestQueryAPIAccessTokenIssuerRendersWithGoAPIs(t *testing.T) {
 }
 
 func TestQueryAPIExtraEnvRefusesTheAccessTokenIssuer(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range []string{"AUTH_ACCESS_TOKEN_ISSUER", "auth_access_token_issuer", " AUTH_ACCESS_TOKEN_ISSUER "} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, "--set", "queryApi.enabled=true", "--set-json", `queryApi.extraEnv=[{"name":"`+name+`","value":"https://x.example"}]`)
 			if err == nil {
 				t.Fatal("the render succeeded; it must refuse")

@@ -31,6 +31,8 @@ func wbOn(extra ...string) []string {
 }
 
 func TestWorkloadBootstrapOffRendersNothing(t *testing.T) {
+	t.Parallel()
+
 	docs, def, err := renderAuth(t, goAPIWithAuth(wbSessions()...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, def)
@@ -61,6 +63,8 @@ func TestWorkloadBootstrapOffRendersNothing(t *testing.T) {
 }
 
 func TestWorkloadBootstrapOnRendersTheCredentialFileAndTheWorkloadSelector(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(wbOn("--set", "goApi.sessionIssue.workloadBootstrap.secretKey=bootstrap.cred")...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -105,6 +109,8 @@ func TestWorkloadBootstrapOnRendersTheCredentialFileAndTheWorkloadSelector(t *te
 }
 
 func TestWorkloadBootstrapOnChangesOnlyTheGoAPIDeployment(t *testing.T) {
+	t.Parallel()
+
 	base, out, err := renderAuth(t, goAPIWithAuth(append(wbSessions(), "--set", "authService.accessToken.issuerURL="+wbIssuer)...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -129,6 +135,8 @@ func TestWorkloadBootstrapOnChangesOnlyTheGoAPIDeployment(t *testing.T) {
 }
 
 func TestWorkloadBootstrapKeepsTheExtraVolumes(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(append(wbOn(), goAPIExtraVolumeSets()[2:]...)...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -145,6 +153,8 @@ func TestWorkloadBootstrapKeepsTheExtraVolumes(t *testing.T) {
 }
 
 func TestWorkloadBootstrapRefusals(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		sets []string
 		want string
@@ -167,6 +177,8 @@ func TestWorkloadBootstrapRefusals(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, goAPIWithAuth(c.sets...)...)
 			if err == nil {
 				t.Fatalf("the render succeeded, want a refusal naming %q", c.want)
@@ -179,6 +191,8 @@ func TestWorkloadBootstrapRefusals(t *testing.T) {
 }
 
 func TestWorkloadBootstrapOffLeavesExtraEnvAlone(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range wbOwnEnv {
 		docs, out, err := renderAuth(t, goAPIWithAuth(append(wbSessions(), "--set-json", `goApi.extraEnv=[{"name":"`+name+`","value":"x"}]`)...)...)
 		if err != nil {
@@ -191,6 +205,8 @@ func TestWorkloadBootstrapOffLeavesExtraEnvAlone(t *testing.T) {
 }
 
 func TestWorkloadBootstrapAuthServiceTakesItsEnvThroughExtraEnv(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(append(wbSessions(), "--set", "authService.accessToken.issuerURL="+wbIssuer, "--set-json",
 		`authService.extraEnv=[{"name":"AUTH_WORKLOAD_BOOTSTRAP","value":"true"},{"name":"AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT","value":"`+wbSubject+`"}]`)...)...)
 	if err != nil {
@@ -206,6 +222,8 @@ func TestWorkloadBootstrapAuthServiceTakesItsEnvThroughExtraEnv(t *testing.T) {
 }
 
 func TestWorkloadBootstrapExtraEnvOtherCaseSpellingsAreAccepted(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range []string{"auth_session_issue_credential", "Auth_Workload_Bootstrap_File", "auth_workload_issuer", " AUTH_WORKLOAD_ISSUER"} {
 		_, out, err := renderAuth(t, goAPIWithAuth(wbOn("--set-json", `goApi.extraEnv=[{"name":"`+name+`","value":"x"}]`)...)...)
 		if err != nil {

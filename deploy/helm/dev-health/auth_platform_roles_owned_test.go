@@ -22,6 +22,8 @@ const platformRolesEnv = "AUTH_PLATFORM_ROLES_OWNED"
 
 // Default and false render the switch nowhere, at phase 4 stage owned too.
 func TestPlatformRolesOwnedFalseRendersNothing(t *testing.T) {
+	t.Parallel()
+
 	for _, extra := range [][]string{nil, {"--set", "authService.platformRolesOwned=false"}} {
 		docs, out, err := renderAuth(t, phaseArgs(4, extra...)...)
 		if err != nil {
@@ -41,6 +43,8 @@ func TestPlatformRolesOwnedFalseRendersNothing(t *testing.T) {
 
 // True renders AUTH_PLATFORM_ROLES_OWNED=true on every reader and the auth-backfill Job.
 func TestPlatformRolesOwnedTrueRendersOnEverySite(t *testing.T) {
+	t.Parallel()
+
 	args := phaseArgs(4, "--set", "authService.platformRolesOwned=true")
 	docs, out, err := renderAuth(t, args...)
 	if err != nil {
@@ -63,6 +67,8 @@ func TestPlatformRolesOwnedTrueRendersOnEverySite(t *testing.T) {
 
 // True needs users owned: below phase 4 and at stage goApi the render fails.
 func TestPlatformRolesOwnedTrueNeedsUsersOwned(t *testing.T) {
+	t.Parallel()
+
 	for name, args := range map[string][]string{
 		"phase 3":       phaseArgs(3, "--set", "authService.platformRolesOwned=true"),
 		"phase 4 goApi": phaseArgs(4, "--set", "authService.usersOwnedStage=goApi", "--set", "authService.platformRolesOwned=true"),
@@ -78,6 +84,8 @@ func TestPlatformRolesOwnedTrueNeedsUsersOwned(t *testing.T) {
 
 // The switch has one source: no extraEnv can set it.
 func TestPlatformRolesOwnedCannotBeSetThroughExtraEnv(t *testing.T) {
+	t.Parallel()
+
 	for _, key := range []string{"authService.extraEnv", "goApi.extraEnv", "queryApi.extraEnv", "authService.backfill.extraEnv"} {
 		entries := `[{"name":"AUTH_PLATFORM_ROLES_OWNED","value":"true"}]`
 		if key == "queryApi.extraEnv" {
@@ -102,6 +110,8 @@ func platformRolesBackfillArgs(sets ...string) []string {
 
 // The check runs on every render, so it holds when no consumer renders: phase 0, go-api, query-api and the backfill Job off.
 func TestPlatformRolesOwnedIsCheckedWithNoConsumerRendered(t *testing.T) {
+	t.Parallel()
+
 	base := []string{"--set", "web.enabled=false", "--set", "authService.phase=0", "--set", "goApi.enabled=false", "--set", "queryApi.enabled=false"}
 	for name, set := range map[string][]string{
 		"true":     {"--set", "authService.platformRolesOwned=true"},
@@ -121,6 +131,8 @@ func TestPlatformRolesOwnedIsCheckedWithNoConsumerRendered(t *testing.T) {
 // With the River hook off the migrate Job runs the River step (--river), so it carries the switch; with the hook on the
 // hook does. Either way the River step that grants the api role sees it.
 func TestPlatformRolesOwnedReachesTheRiverStepWithTheHookOff(t *testing.T) {
+	t.Parallel()
+
 	for _, owned := range []bool{true, false} {
 		args := phaseArgs(4, "--set", "migrations.hook.riverMigrate.enabled=false", "--set", fmt.Sprintf("authService.platformRolesOwned=%v", owned))
 		docs, out, err := renderAuth(t, args...)

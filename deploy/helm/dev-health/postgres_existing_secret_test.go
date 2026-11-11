@@ -38,6 +38,8 @@ func pgPasswordEntry(t *testing.T, sts map[string]any) map[string]any {
 // A name set: the env is a secretKeyRef on the external Secret and key, with no plain value, no chart credentials
 // Secret, and no copy of the password anywhere in the render (hba off and on, knob off and on).
 func TestPostgresExistingSecretIsReadByTheStatefulSetAndRendersNoChartSecret(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	cases := map[string][]string{
 		"knob unset": pgExistingOff, "knob on": pgExistingOn, "hba on": pgExistingHba,
@@ -45,6 +47,8 @@ func TestPostgresExistingSecretIsReadByTheStatefulSetAndRendersNoChartSecret(t *
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			docs, out, err := renderAuth(t, args...)
 			if err != nil {
 				t.Fatalf("render failed: %v\n%.600s", err, out)
@@ -72,6 +76,8 @@ func TestPostgresExistingSecretIsReadByTheStatefulSetAndRendersNoChartSecret(t *
 // The winner when existingSecret AND postgresql.credentialsSecret.enabled are both set is existingSecret: the env reads
 // the external Secret, never the chart Secret, and the chart Secret is not rendered.
 func TestPostgresExistingSecretWinsOverTheKnob(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	sts, secret := pgPasswordRender(t, pgExistingOn...)
 	if secret != nil {
@@ -89,12 +95,16 @@ func TestPostgresExistingSecretWinsOverTheKnob(t *testing.T) {
 
 // Empty name (the default, explicit or unset): the renders are the ones the knob alone gives.
 func TestPostgresExistingSecretEmptyChangesNothing(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	for name, pair := range map[string][2][]string{
 		"knob off": {pgCredsOff, append(append([]string{}, pgCredsOff...), "--set", "postgresql.credentialsSecret.existingSecret.name=")},
 		"knob on":  {pgCredsOn, append(append([]string{}, pgCredsOn...), "--set", "postgresql.credentialsSecret.existingSecret.name=", "--set", "postgresql.credentialsSecret.existingSecret.key=OTHER")},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			if got := changedDocs(t, pair[0], pair[1]); len(got) != 0 {
 				t.Errorf("an empty existingSecret.name changes %v", got)
 			}
@@ -115,6 +125,8 @@ func TestPostgresExistingSecretEmptyChangesNothing(t *testing.T) {
 
 // Setting the name changes the postgresql StatefulSet and drops the chart Secret; nothing else.
 func TestPostgresExistingSecretChangesOnlyTheStatefulSetAndTheChartSecret(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	before := append(append([]string{}, pgCredsOff...), pgExternalShared...)
 	got := changedDocs(t, before, pgExistingOff)
@@ -127,6 +139,8 @@ func TestPostgresExistingSecretChangesOnlyTheStatefulSetAndTheChartSecret(t *tes
 // The guard: with the chart-owned shared Secret (secrets.create=true) the URI Secrets would embed the unused
 // password, so the render fails and says why; with secrets.create=false it renders.
 func TestPostgresExistingSecretIsRefusedWithTheChartOwnedSharedSecret(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	args := append(append([]string{}, pgCredsOff...), "--set", "postgresql.credentialsSecret.existingSecret.name="+pgExistingName)
 	for _, create := range []string{"true", ""} {

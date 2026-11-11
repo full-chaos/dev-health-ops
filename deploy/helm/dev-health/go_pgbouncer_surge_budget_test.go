@@ -53,6 +53,8 @@ func itoa(n int) string {
 }
 
 func TestTransactionSurgeIsCountedT16FailsNamingTheSurge(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, prodShapeAt(16)...)
 	// 2 x (16 + 4) + 36 + 10 + 24 = 110
 	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "110") ||
@@ -62,6 +64,8 @@ func TestTransactionSurgeIsCountedT16FailsNamingTheSurge(t *testing.T) {
 }
 
 func TestTransactionSurgeIsCountedT9PassesAndT10Fails(t *testing.T) {
+	t.Parallel()
+
 	// 2 x (9 + 4) + 70 = 96 of 97.
 	if _, out, err := renderAuth(t, prodShapeAt(9)...); err != nil {
 		t.Fatalf("T 9 (96 of 97) must render: %v\n%.500s", err, out)
@@ -74,6 +78,8 @@ func TestTransactionSurgeIsCountedT9PassesAndT10Fails(t *testing.T) {
 }
 
 func TestTransactionSurgeMaxSurgeZeroOverrideDropsTheCount(t *testing.T) {
+	t.Parallel()
+
 	zero := []string{"--set-json", txnSurgeKey + `={"maxSurge":0,"maxUnavailable":1}`}
 	// T 16, no surge pod: 20 + 36 + 10 + 24 = 90.
 	docs, out, err := renderAuth(t, prodShapeAt(16, zero...)...)
@@ -95,6 +101,8 @@ func TestTransactionSurgeMaxSurgeZeroOverrideDropsTheCount(t *testing.T) {
 }
 
 func TestTransactionSurgeTwoPodsCountThreeTimes(t *testing.T) {
+	t.Parallel()
+
 	two := []string{"--set-json", txnSurgeKey + `={"maxSurge":2}`}
 	// 3 x (9 + 4) + 70 = 109.
 	_, out, err := renderAuth(t, prodShapeAt(9, two...)...)
@@ -104,6 +112,8 @@ func TestTransactionSurgeTwoPodsCountThreeTimes(t *testing.T) {
 }
 
 func TestTransactionDefaultRendersNoStrategyAndCountsOneSurgePod(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.300s", err, out)
@@ -119,6 +129,8 @@ func TestTransactionDefaultRendersNoStrategyAndCountsOneSurgePod(t *testing.T) {
 }
 
 func TestTransactionRollingUpdateWithBudgetOffRendersAnything(t *testing.T) {
+	t.Parallel()
+
 	zero := []string{"--set-json", txnSurgeKey + `={"maxSurge":0,"maxUnavailable":1}`}
 	if _, out, err := renderAuth(t, authWith(append(zero, "--set", "authService.database.connectionBudget=0")...)...); err != nil {
 		t.Fatalf("budget 0 leaves the render unchanged: %v\n%.300s", err, out)
@@ -126,6 +138,8 @@ func TestTransactionRollingUpdateWithBudgetOffRendersAnything(t *testing.T) {
 }
 
 func TestTransactionRollingUpdateIsValidated(t *testing.T) {
+	t.Parallel()
+
 	bad := map[string]string{
 		"percentage":            `{"maxSurge":"25%"}`,
 		"negative":              `{"maxSurge":-1}`,

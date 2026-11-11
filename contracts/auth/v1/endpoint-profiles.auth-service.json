@@ -1930,8 +1930,8 @@
       "route": "/v1/authorize:repositories",
       "service": "dev-health-auth-service",
       "source": {
-        "file": "internal/auth/authapi/authorize_repositories.go",
-        "line": 8
+        "file": "internal/auth/authapi/authorize.go",
+        "line": 214
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"

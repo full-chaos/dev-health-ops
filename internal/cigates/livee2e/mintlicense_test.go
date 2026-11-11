@@ -158,3 +158,32 @@ func TestMintLicenseOnlyLinkedByCigate(t *testing.T) {
 		}
 	}
 }
+
+// The built binary, not Run with captured writers: a print to the process's own stdout or stderr must show.
+func TestMintLicenseBinaryIsSilentAndMakesTwoFiles(t *testing.T) {
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "cigate")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/cigate")
+	build.Dir = root
+	build.Env = append(os.Environ(), "GOFLAGS=-mod=readonly", "GOPROXY=off", "GOSUMDB=off")
+	if raw, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build cigate: %v\n%s", err, raw)
+	}
+	out := filepath.Join(dir, "out")
+	if err := os.Mkdir(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command(bin, "live-e2e", "mint-license", filepath.Join(out, "public.b64"), filepath.Join(out, "licence.txt"))
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil || stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatal("the cigate binary must mint silently")
+	}
+	if files, err := os.ReadDir(out); err != nil || len(files) != 2 {
+		t.Fatal("the cigate binary must create exactly two files")
+	}
+}

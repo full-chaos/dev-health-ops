@@ -112,10 +112,11 @@ func (l *lockedLog) text() string {
 
 func (l *lockedLog) count(part string) int { return strings.Count(l.text(), part) }
 
-// passClock is the pacer's clock in these cells: a wait moves it at once (real time still runs under it). waits holds
-// every wait asked; onWait runs at each one.
+// passClock is the pacer's clock in these cells: it stands still, and a wait moves it at once. waits holds every wait
+// asked; onWait runs at each one.
 type passClock struct {
 	mu     sync.Mutex
+	base   time.Time
 	offset time.Duration
 	waits  []time.Duration
 	onWait func(d time.Duration)
@@ -124,7 +125,7 @@ type passClock struct {
 func (c *passClock) now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return time.Now().Add(c.offset)
+	return c.base.Add(c.offset)
 }
 
 func (c *passClock) wait(ctx context.Context, d time.Duration) error {
@@ -155,7 +156,7 @@ func reconcilerFor(pool *pgxpool.Pool, state orgreactivate.StateReader) (*OrgSta
 
 func reconcilerWithClock(pool *pgxpool.Pool, state orgreactivate.StateReader) (*OrgStateReconciler, *lockedLog, *passClock) {
 	log := &lockedLog{}
-	clock := &passClock{}
+	clock := &passClock{base: time.Now()}
 	r := NewOrgStateReconciler(pool, state, slog.New(slog.NewTextHandler(log, nil)))
 	r.now, r.wait = clock.now, clock.wait
 	return r, log, clock

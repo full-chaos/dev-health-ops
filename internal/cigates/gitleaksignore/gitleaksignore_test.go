@@ -20,6 +20,7 @@ const (
 
 // jwtFinding is the repo's port of gitleaks' jwt rule: a three-part token whose
 // first two parts start "ey" (base64url JSON).
+// It is the capture group of the gitleaks v8.24.3 jwt rule without its end-of-token group: slightly wider, so it can only keep a stale row, never ignore more.
 var jwtFinding = regexp.MustCompile(`\bey[a-zA-Z0-9]{17,}\.ey[a-zA-Z0-9/\\_-]{17,}\.(?:[a-zA-Z0-9/\\_-]{10,}={0,2})?`)
 
 // holdsFinding reports whether line still holds a finding of rule; ok is false

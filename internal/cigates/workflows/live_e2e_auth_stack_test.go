@@ -1288,6 +1288,7 @@ func readinessDied(out, name string) bool {
 		return false
 	}
 	elapsed, err := strconv.Atoi(m[1])
+	//abstime:allow lower bound only: the script dies after its own wall-clock bound, so load can only lengthen the elapsed time; this fails only a run that died before the bound
 	return err == nil && elapsed >= 5
 }
 

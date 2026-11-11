@@ -3,6 +3,7 @@ package membership
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -277,5 +278,47 @@ func TestRefusedPlansAreWellFormed(t *testing.T) {
 				t.Fatalf("%s from %+v: ValidateAttributes: %v", v, prev, err)
 			}
 		}
+	}
+}
+
+// A verb that changed nothing answers the effective state its locked read saw:
+// go-api's row only answers go-api's id at revision 0; a stale auth row keeps
+// its id, joined_at and revision but names the effective state.
+func TestNoopAnswerNamesTheEffectiveState(t *testing.T) {
+	org, principal, id := uuid.New(), uuid.New(), uuid.New()
+	joined := time.Date(2026, 11, 11, 21, 0, 0, 0, time.UTC)
+	stale := func() *Membership {
+		return &Membership{ID: id, OrgID: org, PrincipalID: principal, Role: ptr("admin"), Status: StatusRemoved, JoinedAt: &joined, Revision: 7}
+	}
+	store := errors.New("read failure")
+	cases := []struct {
+		name string
+		seen state
+		m    *Membership
+		err  error
+		want *Membership
+	}{
+		{"no auth row", state{status: StatusActive, role: "member"}, nil, ErrNotMember,
+			&Membership{ID: id, OrgID: org, PrincipalID: principal, Role: ptr("member"), Status: StatusActive}},
+		{"stale auth row", state{status: StatusActive, role: "member"}, stale(), nil,
+			&Membership{ID: id, OrgID: org, PrincipalID: principal, Role: ptr("member"), Status: StatusActive, JoinedAt: &joined, Revision: 7}},
+		{"no role", state{status: StatusSuspended}, stale(), nil,
+			&Membership{ID: id, OrgID: org, PrincipalID: principal, Status: StatusSuspended, JoinedAt: &joined, Revision: 7}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := noopAnswer(org, principal, id, tc.seen, tc.m, tc.err)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ID != tc.want.ID || got.OrgID != tc.want.OrgID || got.PrincipalID != tc.want.PrincipalID || got.Status != tc.want.Status ||
+				got.Revision != tc.want.Revision || got.JoinedAt != tc.want.JoinedAt || (got.Role == nil) != (tc.want.Role == nil) ||
+				(got.Role != nil && *got.Role != *tc.want.Role) {
+				t.Fatalf("noopAnswer = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+	if got, err := noopAnswer(org, principal, id, state{status: StatusActive, role: "member"}, nil, store); got != nil || !errors.Is(err, store) {
+		t.Fatalf("store failure = %v, %v; want nil and the error", got, err)
 	}
 }

@@ -611,6 +611,8 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 	ids := []uuid.UUID{c.PrincipalID}
 	var err error
 	var ended session.Ended
+	var noop *state
+	var answerID uuid.UUID
 	for attempt := range planAttempts {
 		if attempt > 0 && errors.Is(err, errSessionsBusy) {
 			if werr := sleepCtx(ctx, busyBackoff[attempt-1]); werr != nil {
@@ -626,6 +628,7 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 			read = &locked{pairs: map[uuid.UUID]*pairRows{c.PrincipalID: {principal: c.PrincipalID}}}
 		}
 		plan := planOf(read.pairs[c.PrincipalID])
+		answerID = plan.id
 		plan.next = refusedNext(plan.prev)
 		if d, derr := decide(v, plan.prev, c.Role, read.activeOwners); derr == nil {
 			plan.next = d.next
@@ -668,6 +671,8 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 					return errStateMoved
 				}
 				if d.noop {
+					seen := p.state()
+					noop = &seen
 					return nil
 				}
 				if err := s.write(ctx, tx, c.OrgID, p, plan.id, d.next, v == verbAdd, c.InvitedBy); err != nil {
@@ -717,7 +722,30 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 				"principal_id", c.PrincipalID.String(), "sessions", ended.Sessions)
 		}
 	}
-	return s.Get(ctx, c.OrgID, c.PrincipalID)
+	m, err := s.Get(ctx, c.OrgID, c.PrincipalID)
+	if noop == nil {
+		return m, err
+	}
+	return noopAnswer(c.OrgID, c.PrincipalID, answerID, *noop, m, err)
+}
+
+// noopAnswer is the answer of a verb that changed nothing: the effective state
+// the locked read saw, as the legacy path answers go-api's row. The auth row,
+// when there is one, gives the id, joined_at and revision; a pair with no
+// auth row (go-api's row only) answers go-api's id at revision 0.
+func noopAnswer(orgID, principalID, id uuid.UUID, seen state, m *Membership, err error) (*Membership, error) {
+	if errors.Is(err, ErrNotMember) {
+		m, err = &Membership{ID: id, OrgID: orgID, PrincipalID: principalID}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	m.Status, m.Role = seen.status, nil
+	if seen.role != "" {
+		role := seen.role
+		m.Role = &role
+	}
+	return m, nil
 }
 
 func (s *Store) Add(ctx context.Context, c Change) (*Membership, error) {

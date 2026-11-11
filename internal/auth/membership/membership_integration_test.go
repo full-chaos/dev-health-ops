@@ -798,3 +798,129 @@ func TestAddOnASuspendedOrgIsRefused(t *testing.T) {
 		t.Fatalf("%d membership rows, want none", n)
 	}
 }
+
+// seedPublicOnly is a membership go-api wrote before the switch: a
+// public.memberships row and no auth.memberships row.
+func (e *env) seedPublicOnly(t *testing.T, ctx context.Context, org, user uuid.UUID, role string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, now(), now(), now())`, id, user, org, role); err != nil {
+		t.Fatalf("seed public.memberships: %v", err)
+	}
+	return id
+}
+
+// written is what a verb wrote: the pair's auth rows, the organization's
+// audit rows, the membership's outbox events and go-api's updated_at.
+type written struct {
+	authRows, auditRows, outboxRows int
+	publicUpdatedAt                 time.Time
+}
+
+func (e *env) written(t *testing.T, ctx context.Context, org, user, membershipID uuid.UUID) written {
+	t.Helper()
+	var w written
+	if err := e.admin.QueryRow(ctx, `SELECT
+  (SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2),
+  (SELECT count(*) FROM auth.security_audit_events WHERE organization_id = $3),
+  (SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_id = $4),
+  COALESCE((SELECT updated_at FROM public.memberships WHERE org_id = $1 AND user_id = $2), 'epoch')`,
+		org, user, org.String(), "mbr_"+membershipID.String()).Scan(&w.authRows, &w.auditRows, &w.outboxRows, &w.publicUpdatedAt); err != nil {
+		t.Fatalf("read written: %v", err)
+	}
+	return w
+}
+
+// requireNoopAnswer checks a no-op's answer names the effective state and
+// that the verb wrote nothing (the legacy path writes nothing either).
+func (e *env) requireNoopAnswer(t *testing.T, ctx context.Context, m *Membership, err error, org, user, id uuid.UUID,
+	status Status, role string, before written) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("no-op = %v, want the membership", err)
+	}
+	if m.ID != id || m.OrgID != org || m.PrincipalID != user || m.Status != status || m.Role == nil || *m.Role != role {
+		t.Fatalf("no-op answer = %+v (role %v), want id %s %s/%s", m, m.Role, id, status, role)
+	}
+	if after := e.written(t, ctx, org, user, id); after != before {
+		t.Fatalf("no-op wrote: before %+v, after %+v", before, after)
+	}
+}
+
+// A same-role change on a membership with no auth row answers go-api's row
+// (the legacy answer), not ErrNotMember, and writes nothing.
+func TestSameRoleChangeOnAPublicOnlyMemberAnswersItsRow(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, user, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	id := e.seedPublicOnly(t, ctx, org, user, "member")
+	before := e.written(t, ctx, org, user, id)
+	m, err := e.store.ChangeRole(ctx, Change{OrgID: org, PrincipalID: user, Role: "member", Authorize: allowAll})
+	e.requireNoopAnswer(t, ctx, m, err, org, user, id, StatusActive, "member", before)
+	if m.Revision != 0 || m.JoinedAt != nil {
+		t.Fatalf("no-op answer revision %d joined_at %v, want 0 and none (no auth row)", m.Revision, m.JoinedAt)
+	}
+	if got := e.rows(t, ctx, org, user); got != (rows{"member", "", ""}) {
+		t.Fatalf("rows after the no-op = %+v", got)
+	}
+}
+
+// Reactivate on an active membership with no auth row is the same no-op.
+func TestReactivateOnAPublicOnlyMemberAnswersItsRow(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, user, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	id := e.seedPublicOnly(t, ctx, org, user, "viewer")
+	before := e.written(t, ctx, org, user, id)
+	m, err := e.store.Reactivate(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll})
+	e.requireNoopAnswer(t, ctx, m, err, org, user, id, StatusActive, "viewer", before)
+	if got := e.rows(t, ctx, org, user); got != (rows{"viewer", "", ""}) {
+		t.Fatalf("rows after the no-op = %+v", got)
+	}
+}
+
+// Suspend on a suspended membership (an auth row only) answers that row, as
+// before: the guard cell of the no-op answer.
+func TestSuspendOnASuspendedMemberAnswersItsAuthRow(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, user, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	added := e.add(t, ctx, org, user, "member")
+	if _, err := e.store.Suspend(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); err != nil {
+		t.Fatal(err)
+	}
+	before := e.written(t, ctx, org, user, added.ID)
+	revision := e.revision(t, ctx, added.ID)
+	m, err := e.store.Suspend(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll})
+	e.requireNoopAnswer(t, ctx, m, err, org, user, added.ID, StatusSuspended, "member", before)
+	if m.Revision != revision || m.JoinedAt == nil {
+		t.Fatalf("no-op answer revision %d joined_at %v, want %d and the auth row's", m.Revision, m.JoinedAt, revision)
+	}
+}
+
+// A same-role change on a pair whose auth row is stale (go-api changed the
+// role before the switch) answers the effective state, not the stale row.
+func TestSameRoleChangeOnAStaleAuthRowAnswersTheEffectiveState(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, user, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	added := e.add(t, ctx, org, user, "admin")
+	if _, err := e.admin.Exec(ctx, `UPDATE public.memberships SET role = 'member' WHERE org_id = $1 AND user_id = $2`, org, user); err != nil {
+		t.Fatal(err)
+	}
+	before := e.written(t, ctx, org, user, added.ID)
+	revision := e.revision(t, ctx, added.ID)
+	m, err := e.store.ChangeRole(ctx, Change{OrgID: org, PrincipalID: user, Role: "member", Authorize: allowAll})
+	e.requireNoopAnswer(t, ctx, m, err, org, user, added.ID, StatusActive, "member", before)
+	if m.Revision != revision {
+		t.Fatalf("no-op answer revision %d, want the auth row's %d", m.Revision, revision)
+	}
+	if got := e.rows(t, ctx, org, user); got != (rows{"member", "active", "admin"}) {
+		t.Fatalf("rows after the no-op = %+v", got)
+	}
+}

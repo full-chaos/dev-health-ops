@@ -12,6 +12,7 @@
 #   bash ci/live_e2e_auth_stack.sh enable-social STATE_DIR                  enable the throwaway GitHub provider (needs sudo)
 #   bash ci/live_e2e_auth_stack.sh enable-sso STATE_DIR                     enable OIDC/SAML before go-api starts
 #   bash ci/live_e2e_auth_stack.sh start-idp STATE_DIR [ARG...]              start the IdP with extra idpstub serve arguments
+#   bash ci/live_e2e_auth_stack.sh enable-mail STATE_DIR                    capture auth mail on loopback SMTP
 #   bash ci/live_e2e_auth_stack.sh down STATE_DIR                           stop the stack and remove the social hosts entry
 #   bash ci/live_e2e_auth_stack.sh stop-auth STATE_DIR      stop auth-service by pid (the outage cell); start-auth starts it again with the same environment
 #   bash ci/live_e2e_auth_stack.sh start-auth STATE_DIR
@@ -22,7 +23,7 @@
 # SIDE is go-api, query-api, auth-service or web. The flags are ci/live_e2e_auth_flags.tsv (the prod flag set).
 # CHAOS-13356: users are owned by auth-service, as prod (phase 4, usersOwnedStage owned): `up` copies the users the
 # caller already seeded into the auth schema with the seed tool (`dho auth users-backfill -insert-only`) before
-# auth-service starts, and auth-service sends the credentials mail through the console provider (no mail is delivered).
+# auth-service starts; enable-mail switches credentials mail from console to a loopback capture sink.
 # The https front (localhost:8443 to 127.0.0.1:8095) with STATE_DIR/tls is the caller's: the Go and web verifiers read
 # the issuer over https and nothing here serves TLS.
 set -euo pipefail
@@ -355,6 +356,10 @@ down() {
   stop_pid "${STATE}/auth-service.pid"
   stop_pid "${STATE}/tokenreview.pid"
   stop_pid "${STATE}/idpstub.pid"
+  stop_pid "${STATE}/smtpsink.pid"
+  if [ ! -L "${STATE}/mail" ] && [ -d "${STATE}/mail" ] && [ "$(cd "${STATE}/mail" && pwd -P)" = "${STATE}/mail" ]; then
+    rm -rf -- "${STATE}/mail/tokens"
+  fi
   if [ -f "${STATE}/providerstub.pid" ]; then
     local pid
     pid="$(cat "${STATE}/providerstub.pid")"
@@ -425,6 +430,55 @@ refuse_second_start() {
   [ -f "$1" ] || return 0
   pid="$(cat "$1")"
   if [[ "${pid}" =~ ^[0-9]+$ ]] && [ -d "/proc/${pid}" ]; then die "$2 already runs (pid ${pid}): run down first"; fi
+}
+
+smtp_ready() (
+  local banner
+  exec 3<>"/dev/tcp/127.0.0.1/$1" || exit 1
+  IFS= read -r -t 1 banner <&3 || exit 1
+  [[ "${banner}" == '220 '* ]]
+)
+
+enable_mail() {
+  STATE="$(cd "$1" && pwd)"
+  [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
+  refuse_second_start "${STATE}/smtpsink.pid" smtpsink
+  umask 077
+  mkdir -p "${STATE}/logs"
+  if [ ! -d "${STATE}/mail" ]; then mkdir -m 700 "${STATE}/mail"; fi
+  chmod 700 "${STATE}/mail"
+  rm -f "${STATE}/mail/port"
+  (
+    cd "${STATE}"
+    nohup "${STATE}/bin/cigate" live-e2e smtp-sink 127.0.0.1:0 "${STATE}/mail/tokens" "${STATE}/mail/port" \
+      >"${STATE}/logs/smtpsink.log" 2>&1 &
+    echo "$!" >"${STATE}/smtpsink.pid"
+  )
+  local port='' attempt=0 deadline=$((SECONDS + 30)) ready=false
+  while [ "${attempt}" -lt 30 ] && [ "${SECONDS}" -lt "${deadline}" ]; do
+    if [ -f "${STATE}/mail/port" ]; then
+      port="$(cat "${STATE}/mail/port")"
+      if [[ "${port}" =~ ^[0-9]+$ ]] && smtp_ready "${port}" 2>/dev/null; then ready=true; break; fi
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  if [ "${ready}" != true ]; then
+    tail -n 40 "${STATE}/logs/smtpsink.log" >&2 || true
+    die "smtpsink did not become ready"
+  fi
+  chmod 600 "${STATE}/auth-service.env"
+  printf '%s\n' 'EMAIL_PROVIDER=smtp' 'SMTP_HOST=127.0.0.1' "SMTP_PORT=${port}" 'SMTP_USE_TLS=false' >>"${STATE}/auth-service.env"
+  stop_auth "${STATE}"
+  start_auth "${STATE}"
+}
+
+mail_token() {
+  STATE="$(cd "$1" && pwd)"
+  local email="$2" kind="$3"
+  [[ "${email}" =~ ^[^\'[:space:]]+@[^\'[:space:]]+$ ]] || die "mail-token: not an e-mail address"
+  [[ "${kind}" = reset || "${kind}" = verify ]] || die "mail-token: kind must be reset or verify"
+  "${STATE}/bin/cigate" live-e2e mail-token "${STATE}/mail/tokens" "${email}" "${kind}"
 }
 
 enable_social() {
@@ -564,6 +618,14 @@ case "${verb}" in
     [ "$#" -eq 2 ] || die "usage: start-auth STATE_DIR"
     start_auth "$2"
     ;;
+  enable-mail)
+    [ "$#" -eq 2 ] || die "usage: enable-mail STATE_DIR"
+    enable_mail "$2"
+    ;;
+  mail-token)
+    [ "$#" -eq 4 ] || die "usage: mail-token STATE_DIR EMAIL KIND (reset|verify)"
+    mail_token "$2" "$3" "$4"
+    ;;
   enable-social)
     [ "$#" -eq 2 ] || die "usage: enable-social STATE_DIR"
     enable_social "$2"
@@ -584,5 +646,5 @@ case "${verb}" in
     [ "$#" -eq 3 ] || die "usage: grant-platform-admin STATE_DIR EMAIL"
     grant_platform_admin "$2" "$3"
     ;;
-  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | enable-social | enable-sso | start-idp | verify-user | grant-platform-admin" ;;
+  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | enable-mail | mail-token | enable-social | enable-sso | start-idp | verify-user | grant-platform-admin" ;;
 esac

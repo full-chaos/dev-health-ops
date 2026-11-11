@@ -90,6 +90,8 @@ nav:
           - Create an account and sign in: use/sign-in/create-account-and-sign-in.md
           - Recover access: use/sign-in/recover-access.md
           - Social sign-in and SSO: use/sign-in/social-login-and-sso.md
+          - Set up your workspace: use/sign-in/onboarding.md
+          - Switch organization: use/sign-in/switch-organization.md
       - Troubleshooting:
           - use/troubleshooting/index.md
           - No or incomplete data: use/troubleshooting/no-or-incomplete-data.md
@@ -126,6 +128,7 @@ nav:
           - Service accounts: admin/security-and-audit/service-accounts.md
           - External Push credentials: admin/security-and-audit/external-push-credentials.md
           - Workload administration: admin/security-and-audit/workload-administration.md
+          - View as another user: admin/security-and-audit/impersonation.md
           - Privacy and telemetry: admin/security-and-audit/privacy.md
       - Ask Dev:
           - admin/ask-dev/index.md

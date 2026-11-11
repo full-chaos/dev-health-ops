@@ -23,7 +23,7 @@ Find the message you see, then follow the next step. If none helps, ask your org
 | No reset or verification message arrives | The address is mistyped or the message is in spam. | Check spelling and spam, then request again once. |
 | A provider button is missing | The deployment has not configured that provider. | Ask your administrator. See [Social sign-in and single sign-on](../sign-in/social-login-and-sso.md). |
 | "Social login failed", "Access was denied" | The provider refused or the exchange failed. | Try again. If it repeats, use another method on the same account or ask your administrator. |
-| SSO sign-in does not work | SSO is not available yet through the Dev Health sign-in page. | Ask your organization admin. |
+| SSO sign-in does not work, or the SSO form is missing | The deployment has SSO off, or the provider is refused. | Match the message to [the SSO table](../sign-in/social-login-and-sso.md#single-sign-on). Ask your organization admin for the provider ID. |
 | "Password is managed by your sign-in provider" | The account uses a provider or SSO, so it has no Dev Health password. | Change the password at the provider. |
 | "Invalid or expired invite" or an invite refused for your account | The invite was used, expired, or issued for a different email address. | Ask the sender for a new invite to the address you sign in with. |
 | Sign-up refused with a 403 from a custom front end | The request did not come from an allowed site. | Use the standard sign-up page, or ask the platform operator to allow the site. |

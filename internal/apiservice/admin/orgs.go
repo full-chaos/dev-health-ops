@@ -389,6 +389,14 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 	if authActive != nil && updated.IsActive != *patch.IsActive {
 		h.logger.InfoContext(ctx, "admin: auth state moved after the call")
 	}
+	// A stored disable revokes the organization's acr credentials (a repeat on a disabled organization revokes what
+	// is left). Reactivation restores none.
+	if patch.IsActive != nil && !*patch.IsActive && !updated.IsActive {
+		if err := h.revokeACRAfterDisable(ctx, orgID); err != nil {
+			policy.WriteDetail(w, http.StatusServiceUnavailable, orgDisableACRRevokeAnswer(err), nil)
+			return
+		}
+	}
 	obj, err := organizationResponseObject(updated)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: encode organization failed", "error", err)

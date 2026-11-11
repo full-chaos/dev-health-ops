@@ -11,6 +11,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
+	"github.com/full-chaos/dev-health-ops/internal/auth/acrrevoke"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -120,6 +121,13 @@ func deleteConfigFrom(env cli.Env, analyticsDB string) (admin.DeleteOrgConfig, f
 		if value.Configured() {
 			secretValues = append(secretValues, value.Reveal())
 		}
+	}
+	// The acr revoke client is read the way go-api reads it (ACR_REVOKE_*); unset is the no_client case, a partial
+	// or unusable set is a configuration error, as for the other clients here.
+	if revoker, configured, refused := acrrevoke.FromEnv(env.Lookup); refused != "" {
+		return fail(fmt.Errorf("%s is not usable", refused))
+	} else if configured {
+		deleteConfig.ACROrgRevoker = revoker
 	}
 	deleteConfig.Decryptor = decryptor
 	deleteConfig.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: clientID.Reveal(), ClientSecret: clientSecret.Reveal(), RedirectURI: redirect}

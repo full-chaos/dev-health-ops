@@ -15,7 +15,7 @@ import (
 // read, and no token is echoed in the body.
 func TestAuthorizeRefusesUserTokens(t *testing.T) {
 	tokens := userTokensWithIssuer(t)
-	for _, pattern := range []string{PatternAuthorize, PatternAuthorizeBatch} {
+	for _, pattern := range []string{PatternAuthorize, PatternAuthorizeBatch, PatternAuthorizeRepositories} {
 		a := newAdmitFixture(t)
 		for _, tok := range tokens {
 			rec, body := a.do(a.server, pattern, tok.Value, a.payload(pattern), true)

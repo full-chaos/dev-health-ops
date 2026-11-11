@@ -52,8 +52,16 @@ func TestAPackagesShardStartsItsLongestPackageFirstAndTheOrderIsStable(t *testin
 		}
 	}
 	sort.Ints(shards)
-	// Two dry runs of every shard, each round in parallel (dryRuns; at 50 shards one after another took the 45 min timeout).
-	first, second := dryRuns(t, "packages", shards), dryRuns(t, "packages", shards)
+	// Two dry runs of every shard: two all-shards runs, one plan each (one plan per shard took the 20 min timeout at 50 shards).
+	var again cmdResult
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		again = runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", "all", "--dry-run")
+	}()
+	first := packagesDryRuns(t, allShardsDryRun(t), shards)
+	<-done
+	second := packagesDryRuns(t, again, shards)
 	checked := 0
 	for _, shard := range shards {
 		pkgs, weights := byShard[shard], planned[shard]
@@ -132,9 +140,9 @@ func TestTheSortDoesNotChangeTheLocaleOfTheGoTestChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	shard := 0
-	for s := 1; s <= localeFixtureShards && shard == 0; s++ {
-		d := runCheckGoSharding(t, shardEnv{manifest: manifest}, "integration-shard", "packages", strconv.Itoa(s), "--dry-run")
-		if d.code == 0 && len(lineValues(d.stdout, "  SHARD-RUN ")) >= 2 {
+	_, order, parts := splitAllShardsDryRun(t, runCheckGoSharding(t, shardEnv{manifest: manifest}, "integration-shard", "packages", "all", "--dry-run"))
+	for _, s := range order {
+		if shard == 0 && len(lineValues(parts[s], "  SHARD-RUN ")) >= 2 {
 			shard = s
 		}
 	}
@@ -171,11 +179,17 @@ func TestTheSortDoesNotChangeTheLocaleOfTheGoTestChild(t *testing.T) {
 func TestTheGoTestGroupsOfAShardKeepTheLongestFirstOrder(t *testing.T) {
 	t.Parallel()
 	byShard, planned := packagesShardsOfThePlan(t)
-	checked := 0
+	var shards []int
 	for shard, pkgs := range byShard {
-		if len(pkgs) < 2 {
-			continue
+		if len(pkgs) >= 2 {
+			shards = append(shards, shard)
 		}
+	}
+	sort.Ints(shards)
+	dry := packagesDryRuns(t, allShardsDryRun(t), shards)
+	checked := 0
+	for _, shard := range shards {
+		pkgs := byShard[shard]
 		weights := planned[shard]
 		byWeight := func(a, b string) bool {
 			if weights[a] != weights[b] {
@@ -183,7 +197,7 @@ func TestTheGoTestGroupsOfAShardKeepTheLongestFirstOrder(t *testing.T) {
 			}
 			return a < b
 		}
-		r := runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", strconv.Itoa(shard), "--dry-run")
+		r := dry[shard]
 		if r.code != 0 {
 			t.Fatalf("shard %d dry run: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
 		}

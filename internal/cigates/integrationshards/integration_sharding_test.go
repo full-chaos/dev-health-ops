@@ -2163,6 +2163,129 @@ func TestMirroredImageMatchesTestcontainersPrefixSemantics(t *testing.T) {
 	}
 }
 
+// allShardsHeader opens the part of one packages shard in `integration-shard packages all --dry-run`.
+var allShardsHeader = regexp.MustCompile(`(?m)^==> integration-shard packages ([0-9]+) --dry-run\n`)
+
+// splitAllShardsDryRun cuts the output of `integration-shard packages all --dry-run` into the plan (what precedes the first
+// shard) and, per shard, the lines after its header. A shard's own --dry-run prints the plan, then that part.
+func splitAllShardsDryRun(t *testing.T, r cmdResult) (string, []int, map[int]string) {
+	t.Helper()
+	if r.code != 0 {
+		t.Fatalf("integration-shard packages all --dry-run: exit %d: %s%s", r.code, r.stdout, r.stderr)
+	}
+	loc := allShardsHeader.FindAllStringSubmatchIndex(r.stdout, -1)
+	if len(loc) == 0 {
+		t.Fatalf("integration-shard packages all --dry-run prints no shard header: %s", r.stdout)
+	}
+	var order []int
+	parts := map[int]string{}
+	for i, m := range loc {
+		n, _ := strconv.Atoi(r.stdout[m[2]:m[3]])
+		end := len(r.stdout)
+		if i+1 < len(loc) {
+			end = loc[i+1][0]
+		}
+		if _, dup := parts[n]; dup {
+			t.Fatalf("integration-shard packages all --dry-run prints shard %d twice", n)
+		}
+		order = append(order, n)
+		parts[n] = r.stdout[m[1]:end]
+	}
+	return r.stdout[:loc[0][0]], order, parts
+}
+
+var (
+	allShardsOnce   sync.Once
+	allShardsResult cmdResult
+)
+
+// allShardsDryRun runs `integration-shard packages all --dry-run` (one plan for every packages shard) once per test binary.
+func allShardsDryRun(t *testing.T) cmdResult {
+	t.Helper()
+	allShardsOnce.Do(func() {
+		allShardsResult = runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", "all", "--dry-run")
+	})
+	return allShardsResult
+}
+
+// packagesDryRuns gives, per shard, what `integration-shard packages SHARD --dry-run` prints, cut from the one all-shards
+// run r (TestOneShardDryRunIsItsPartOfTheAllShardsDryRun holds the two equal byte for byte).
+func packagesDryRuns(t *testing.T, r cmdResult, shards []int) map[int]cmdResult {
+	t.Helper()
+	plan, _, parts := splitAllShardsDryRun(t, r)
+	out := map[int]cmdResult{}
+	for _, shard := range shards {
+		part, ok := parts[shard]
+		if !ok {
+			t.Fatalf("integration-shard packages all --dry-run prints no part for packages shard %d", shard)
+		}
+		out[shard] = cmdResult{stdout: plan + part, stderr: r.stderr}
+	}
+	return out
+}
+
+// TestOneShardDryRunIsItsPartOfTheAllShardsDryRun: the shard guards read `integration-shard packages all --dry-run`, so
+// it must print exactly what each shard's own --dry-run prints (the plan once, then per shard its part), for every shard
+// the matrix lists, in order. Two real single-shard dry runs check the bytes: a shard of several whole packages and a
+// shard holding a part of a split-by-test package.
+func TestOneShardDryRunIsItsPartOfTheAllShardsDryRun(t *testing.T) {
+	t.Parallel()
+	_, gho := realPlan(t)
+	var matrix []int
+	for _, m := range regexp.MustCompile(`\{"target":"packages","shard":([0-9]+)\}`).FindAllStringSubmatch(gho, -1) {
+		n, _ := strconv.Atoi(m[1])
+		matrix = append(matrix, n)
+	}
+	all := allShardsDryRun(t)
+	plan, order, parts := splitAllShardsDryRun(t, all)
+	if fmt.Sprint(order) != fmt.Sprint(matrix) {
+		t.Errorf("the all-shards dry run prints shards %v, the matrix lists packages shards %v", order, matrix)
+	}
+	split := manifestSplitKeys(t, rootOf(t))
+	multi, splitShard := 0, 0
+	for _, shard := range order {
+		runs := lineValues(parts[shard], "  SHARD-RUN ")
+		hasSplit := false
+		for _, k := range runs {
+			hasSplit = hasSplit || split[k]
+		}
+		if multi == 0 && !hasSplit && len(runs) >= 2 {
+			multi = shard
+		}
+		if splitShard == 0 && hasSplit {
+			splitShard = shard
+		}
+	}
+	if multi == 0 || splitShard == 0 {
+		t.Fatalf("no shard of two or more whole packages (%d) or no shard with a split-by-test part (%d): the equality check measures nothing", multi, splitShard)
+	}
+	single := dryRuns(t, "packages", []int{multi, splitShard})
+	for _, shard := range []int{multi, splitShard} {
+		r := single[shard]
+		if r.code != 0 {
+			t.Fatalf("shard %d dry run: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
+		}
+		if want := plan + parts[shard]; r.stdout != want {
+			got, exp := strings.Split(r.stdout, "\n"), strings.Split(want, "\n")
+			i := 0
+			for i < len(got) && i < len(exp) && got[i] == exp[i] {
+				i++
+			}
+			g, e := "<end>", "<end>"
+			if i < len(got) {
+				g = got[i]
+			}
+			if i < len(exp) {
+				e = exp[i]
+			}
+			t.Errorf("shard %d: its own --dry-run differs from its part of the all-shards dry run at line %d: %q, all-shards form %q", shard, i+1, g, e)
+		}
+		if r.stderr != all.stderr {
+			t.Errorf("shard %d: stderr %q, the all-shards dry run %q", shard, r.stderr, all.stderr)
+		}
+	}
+}
+
 // dryRuns runs `integration-shard TARGET SHARD --dry-run` for every shard at once (the cap in freeSpec bounds the
 // concurrency) and returns the results by shard.
 func dryRuns(t *testing.T, target string, shards []int) map[int]cmdResult {
@@ -2210,12 +2333,14 @@ func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.
 	for s := 1; s <= facts.providerShards; s++ {
 		provider = append(provider, s)
 	}
-	var pkgResults, providerResults map[int]cmdResult
+	var all cmdResult
+	var providerResults map[int]cmdResult
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); pkgResults = dryRuns(t, "packages", shards) }()
+	go func() { defer wg.Done(); all = allShardsDryRun(t) }()
 	go func() { defer wg.Done(); providerResults = dryRuns(t, "providersync", provider) }()
 	wg.Wait()
+	pkgResults := packagesDryRuns(t, all, shards)
 
 	var selected []string
 	for _, shard := range shards {
@@ -2654,7 +2779,7 @@ func TestEachPackagesShardPlansOneGoTestGroup(t *testing.T) {
 		t.Fatal("fewer than two packages shards: the guard measures nothing")
 	}
 	split := map[string]bool{}
-	results := dryRuns(t, "packages", shards)
+	results := packagesDryRuns(t, allShardsDryRun(t), shards)
 	for _, shard := range shards {
 		r := results[shard]
 		if r.code != 0 {

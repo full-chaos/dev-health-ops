@@ -534,7 +534,9 @@ usage() {
          test shard of internal/queryapi/server, or `remaining` for a top-level
          test shard of internal/jobs/metrics/remaining. `--dry-run` prints the
          exact selection without starting Docker-backed tests; CI never passes
-         that option.
+         that option. `packages all --dry-run` prints, from one plan, the
+         dry run of every packages shard, each after a
+         `==> integration-shard packages N --dry-run` line.
          Every target runs only the integration-tagged top-level tests (the
          untagged ones run in the go-quality test and race legs); a package
          whose tag-only test file declares func init or func TestMain runs whole.
@@ -5124,6 +5126,19 @@ check_integration_package_shard() {
   fi
 }
 
+# check_integration_package_shards_dry_run (CHAOS-13520): the --dry-run of every packages shard the matrix lists (a shard
+# holding a package), from one plan: per shard one "==> integration-shard packages N --dry-run" line, then exactly what
+# `integration-shard packages N --dry-run` prints after the plan. The shard guards read this one output instead of one
+# plan per shard.
+check_integration_package_shards_dry_run() {
+  local shard
+  for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
+    [ "${INTEGRATION_SHARD_NON_PROVIDER_COUNTS[${shard}]}" -gt 0 ] || continue
+    printf '==> integration-shard packages %d --dry-run\n' "${shard}"
+    check_integration_package_shard "${shard}" --dry-run
+  done
+}
+
 check_providersync_test_shard() {
   local shard="$1" mode="$2"
   local test_name separator="" test_regex='^('
@@ -5171,6 +5186,8 @@ check_integration_shard() {
     *) die "integration-shard TARGET must be 'packages', 'providersync', 'daily', 'workerservice', 'queryapiserver' or 'remaining'" ;;
   esac
   case "${shard}" in
+    all) [ "${target}" = packages ] && [ "${mode}" = --dry-run ] \
+      || die "integration-shard SHARD 'all' needs TARGET 'packages' and --dry-run" ;;
     ""|*[!0-9]*) die "integration-shard requires a numeric shard id" ;;
   esac
   case "${mode}" in
@@ -5185,7 +5202,13 @@ check_integration_shard() {
   plan_queryapiserver_test_shards
   plan_remaining_test_shards
   case "${target}" in
-    packages) check_integration_package_shard "${shard}" "${mode}" ;;
+    packages)
+      if [ "${shard}" = all ]; then
+        check_integration_package_shards_dry_run
+      else
+        check_integration_package_shard "${shard}" "${mode}"
+      fi
+      ;;
     providersync) check_providersync_test_shard "${shard}" "${mode}" ;;
     daily) check_daily_test_shard "${shard}" "${mode}" ;;
     workerservice) check_workerservice_test_shard "${shard}" "${mode}" ;;

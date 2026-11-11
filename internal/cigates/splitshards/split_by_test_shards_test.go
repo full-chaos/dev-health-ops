@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -19,6 +18,9 @@ import (
 // emitted matrix, and the package must sit in at most N shards.
 
 var packagesShardRE = regexp.MustCompile(`\{"target":"packages","shard":([0-9]+)\}`)
+
+// allShardsHeader opens the part of one packages shard in `integration-shard packages all --dry-run`.
+var allShardsHeader = regexp.MustCompile(`(?m)^==> integration-shard packages ([0-9]+) --dry-run\n`)
 
 type splitPackage struct {
 	key   string
@@ -82,37 +84,47 @@ func TestEverySplitByTestNameRunsInExactlyOnePackagesShard(t *testing.T) {
 		t.Skip("no package of ci/go_integration_shards.d declares split-by-test")
 	}
 	shards := packagesShards(t, root)
-	var mu sync.Mutex
+	// One plan for every packages shard: `integration-shard packages all --dry-run` prints each shard's own --dry-run after
+	// a header line (internal/cigates/integrationshards holds the two equal byte for byte).
+	all := planCmd(root).run("bash", "ci/check_go.sh", "integration-shard", "packages", "all", "--dry-run")
+	if all.code != 0 {
+		t.Fatalf("integration-shard packages all --dry-run: exit %d: %s%s", all.code, all.stdout, all.stderr)
+	}
+	parts := map[int]string{}
+	loc := allShardsHeader.FindAllStringSubmatchIndex(all.stdout, -1)
+	for i, m := range loc {
+		n, _ := strconv.Atoi(all.stdout[m[2]:m[3]])
+		end := len(all.stdout)
+		if i+1 < len(loc) {
+			end = loc[i+1][0]
+		}
+		parts[n] = all.stdout[m[1]:end]
+	}
 	runs := map[string][]string{}  // key -> every name a shard's dry run selected (with repeats)
 	inShards := map[string][]int{} // key -> the shards that ran it
-	var wg sync.WaitGroup
 	for _, shard := range shards {
-		wg.Add(1)
-		go func(shard int) {
-			defer wg.Done()
-			r := dryRun(t, root, "packages", shard)
-			if r.code != 0 {
-				t.Errorf("packages shard %d dry run: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
-				return
+		part, ok := parts[shard]
+		if !ok {
+			t.Errorf("the all-shards dry run prints no part for packages shard %d", shard)
+			continue
+		}
+		seen := map[string]bool{}
+		for _, l := range runLines(part, "  SHARD-TEST ") {
+			key, name, ok := strings.Cut(l, " ")
+			if !ok {
+				t.Errorf("shard %d: malformed SHARD-TEST line %q", shard, l)
+				continue
 			}
-			mu.Lock()
-			defer mu.Unlock()
-			seen := map[string]bool{}
-			for _, l := range runLines(r.stdout, "  SHARD-TEST ") {
-				key, name, ok := strings.Cut(l, " ")
-				if !ok {
-					t.Errorf("shard %d: malformed SHARD-TEST line %q", shard, l)
-					continue
-				}
-				runs[key] = append(runs[key], name)
-				if !seen[key] {
-					seen[key] = true
-					inShards[key] = append(inShards[key], shard)
-				}
+			runs[key] = append(runs[key], name)
+			if !seen[key] {
+				seen[key] = true
+				inShards[key] = append(inShards[key], shard)
 			}
-		}(shard)
+		}
 	}
-	wg.Wait()
+	if len(parts) != len(shards) {
+		t.Errorf("the all-shards dry run prints %d shard part(s), the matrix lists %d packages shard(s)", len(parts), len(shards))
+	}
 	if t.Failed() {
 		return
 	}

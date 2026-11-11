@@ -1,6 +1,8 @@
 package workflows_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path"
@@ -8,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -185,10 +188,12 @@ func functionBody(script, name string) string {
 }
 
 func TestLiveE2EInstallsNoPython(t *testing.T) {
+	t.Parallel()
 	expectNoViolations(t, liveE2ENoPythonViolations(t, repoRoot(t)))
 }
 
 func TestLiveE2ENoPythonPlantedDefects(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	const wf = ".github/workflows/live-e2e.yml"
 	const live = "ci/run_live_backend_e2e.sh"
@@ -240,9 +245,36 @@ func sortedKeysBool(m map[string]bool) []string {
 
 var goEmbedLine = regexp.MustCompile(`(?m)^//go:embed[ \t]+(.+)$`)
 
+// embeddedCache memoizes embeddedTrackedFiles per (root, exact tracked list) for the test binary: every live-e2e case
+// scans the same real tree, and the scan reads every non-test Go file under cmd, internal and contracts. The key is the
+// root plus a digest of the whole tracked list, so a case that adds a planted path gets its own entry. Callers get a
+// fresh copy of the slice.
+var embeddedCache sync.Map // key -> embeddedResult
+
+type embeddedResult struct {
+	files []string
+	err   error
+}
+
 // embeddedTrackedFiles resolves every //go:embed pattern of the non-test Go files under cmd, internal and contracts
 // against the tracked files (a pattern names a file, a glob or a directory, whose files all count).
 func embeddedTrackedFiles(root string, tracked []string) ([]string, error) {
+	h := sha256.New()
+	for _, f := range tracked {
+		h.Write([]byte(f))
+		h.Write([]byte{0})
+	}
+	key := root + "\x00" + hex.EncodeToString(h.Sum(nil))
+	v, ok := embeddedCache.Load(key)
+	if !ok {
+		files, err := scanEmbeddedTrackedFiles(root, tracked)
+		v, _ = embeddedCache.LoadOrStore(key, embeddedResult{files: files, err: err})
+	}
+	r := v.(embeddedResult)
+	return append([]string(nil), r.files...), r.err
+}
+
+func scanEmbeddedTrackedFiles(root string, tracked []string) ([]string, error) {
 	found := map[string]bool{}
 	for _, src := range tracked {
 		if !strings.HasSuffix(src, ".go") || strings.HasSuffix(src, "_test.go") {

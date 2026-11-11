@@ -158,7 +158,7 @@ func TestPublicPrivilegeSetIsClosed(t *testing.T) {
 			t.Errorf("table %q: %v", entry.Table, err)
 		}
 	}
-	for _, table := range []string{"memberships", "email_verification_tokens", "password_reset_tokens"} {
+	for _, table := range []string{"memberships"} {
 		if !seen[table+"|DELETE"] {
 			t.Errorf("%s: the table-level DELETE the grants pass gives is not in the set", table)
 		}

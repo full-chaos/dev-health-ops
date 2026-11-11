@@ -421,29 +421,15 @@ func ownedUsersLedger(t *testing.T, owned bool) *Ledger {
 	return l
 }
 
-// The reset tokens table has no projection of its own: it is open to the one owned-leg quirk of the row the switch purges
-// and to nothing else, so the table does not widen any other check.
-func TestCheckTableOpensTheResetTokensTableOnlyToTheOwnedExactOneRowPurgeQuirk(t *testing.T) {
-	entry := func(mutate func(q *Quirk)) []Quirk {
-		q := Quirk{ID: "purged", Kind: Deliberate, Reason: "r", Table: TablePasswordResetTokens, Needs: []Aggregate{Credentials},
+// The link-token tables have no projection of their own and no quirk may name them: the purge verb whose one missing
+// row a quirk once covered is gone.
+func TestCheckTableClosesTheLinkTokenTablesToEveryQuirk(t *testing.T) {
+	for _, table := range []string{TablePasswordResetTokens, TableEmailVerificationTokens} {
+		q := Quirk{ID: "purged", Kind: Deliberate, Reason: "r", Table: table, Needs: []Aggregate{Credentials},
 			Owned: OwnedOnly, Max: 1, Exact: true, Missing: func(string) bool { return true }}
-		mutate(&q)
-		return []Quirk{q}
-	}
-	if problems := CheckTable(entry(func(*Quirk) {})); len(problems) != 0 {
-		t.Fatalf("the owned, exact, one-row missing quirk: %v", problems)
-	}
-	for name, mutate := range map[string]func(q *Quirk){
-		"every leg":              func(q *Quirk) { q.Owned = "" },
-		"max 2":                  func(q *Quirk) { q.Max = 2 },
-		"not exact":              func(q *Quirk) { q.Exact = false },
-		"an extra row":           func(q *Quirk) { q.Missing, q.Extra = nil, func(string) bool { return true } },
-		"the verification table": func(q *Quirk) { q.Table = TableEmailVerificationTokens },
-		"the memberships table":  func(q *Quirk) { q.Table = TableMemberships },
-	} {
-		problems := CheckTable(entry(mutate))
+		problems := CheckTable([]Quirk{q})
 		if len(problems) == 0 || !strings.Contains(strings.Join(problems, ";"), "has no projection") {
-			t.Errorf("%s: problems %v, want the no-projection problem", name, problems)
+			t.Errorf("%s: problems %v, want the no-projection problem", table, problems)
 		}
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -97,6 +99,7 @@ jq -r "$filter" "$file"
 
 // Runs the real ci/queue_tested_sha.sh against a stub gh that applies the real jq filters to canned replies.
 func TestQueueTestedShaAnswersOnlyForAGreenMergeGroupRunWithGreenShards(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Fatalf("jq is required by this test and is not on PATH: %v", err)
 	}
@@ -174,6 +177,7 @@ func TestQueueTestedShaAnswersOnlyForAGreenMergeGroupRunWithGreenShards(t *testi
 // A failing shard first, then more output than a pipe holds: a script that feeds a pipeline into grep -q dies of
 // SIGPIPE, and under pipefail with a leading "!" that read as a green answer.
 func TestQueueTestedShaStaysRedWhenAFailedShardComesFirstInALongAnswer(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Fatalf("jq is required by this test and is not on PATH: %v", err)
 	}
@@ -195,11 +199,27 @@ func TestQueueTestedShaStaysRedWhenAFailedShardComesFirstInALongAnswer(t *testin
 			t.Fatal(err)
 		}
 	}
+	// The attempts are independent runs of the script over the same read-only stub replies (the stub only appends to
+	// its calls log, which this test does not read), so up to GOMAXPROCS of them run at once; each must still exit
+	// non-zero, and every failed attempt is reported from the test goroutine.
 	const attempts = 10
+	green := make([]bool, attempts+1)
+	slots := make(chan struct{}, max(1, runtime.GOMAXPROCS(0)))
+	var wg sync.WaitGroup
 	for attempt := 1; attempt <= attempts; attempt++ {
-		command := exec.Command("bash", script, "full-chaos/dev-health-ops", sha)
-		command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "STUB_DIR="+dir)
-		if err := command.Run(); err == nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			command := exec.Command("bash", script, "full-chaos/dev-health-ops", sha)
+			command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "STUB_DIR="+dir)
+			green[attempt] = command.Run() == nil
+		}()
+	}
+	wg.Wait()
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if green[attempt] {
 			t.Fatalf("attempt %d of %d: exit 0 (a green answer) although the first shard failed", attempt, attempts)
 		}
 	}
@@ -211,6 +231,7 @@ func TestQueueTestedShaStaysRedWhenAFailedShardComesFirstInALongAnswer(t *testin
 // ci/queue_tested_sha.sh accepts only a run in which at least one shard ran and all succeeded (a docs-only push, for
 // its part, matches no go.yml push path: ci/codeql_docs_only.sh refuses every Go input).
 func TestMergeGroupPlansTheSameIntegrationShardsAsAMainPush(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	raw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "go.yml"))
 	if err != nil {
@@ -255,8 +276,9 @@ func TestMergeGroupPlansTheSameIntegrationShardsAsAMainPush(t *testing.T) {
 		t.Errorf("the shard job if %q must not depend on the event", shard["if"])
 	}
 
-	plan := func(event string) string {
-		out := filepath.Join(t.TempDir(), "output")
+	// The two plans are independent runs (each writes only its own GITHUB_OUTPUT file), so they run at once; every
+	// failure is reported from the test goroutine.
+	plan := func(event, out string) (string, error) {
 		command := exec.Command("bash", "ci/check_go.sh", "integration-shard-plan")
 		command.Dir = root
 		var env []string
@@ -267,15 +289,32 @@ func TestMergeGroupPlansTheSameIntegrationShardsAsAMainPush(t *testing.T) {
 		}
 		command.Env = append(env, "GITHUB_EVENT_NAME="+event, "GITHUB_OUTPUT="+out)
 		if output, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("integration-shard-plan for %s: %v\n%s", event, err, output)
+			return "", fmt.Errorf("integration-shard-plan for %s: %v\n%s", event, err, output)
 		}
 		written, err := os.ReadFile(out)
 		if err != nil {
+			return "", err
+		}
+		return string(written), nil
+	}
+	events := []string{"push", "merge_group"}
+	plans, errs := make([]string, len(events)), make([]error, len(events))
+	var wg sync.WaitGroup
+	for i, event := range events {
+		out := filepath.Join(t.TempDir(), "output")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			plans[i], errs[i] = plan(event, out)
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
 			t.Fatal(err)
 		}
-		return string(written)
 	}
-	push, queue := plan("push"), plan("merge_group")
+	push, queue := plans[0], plans[1]
 	if push != queue {
 		t.Errorf("the plan differs between a main push and a merge_group run:\npush: %s\nmerge_group: %s", push, queue)
 	}

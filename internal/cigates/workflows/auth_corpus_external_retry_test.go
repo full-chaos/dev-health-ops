@@ -91,6 +91,7 @@ func runCorpusWithFailingUp(t *testing.T, leg string, fails int, text, match str
 func itoa(n int) string { return string(rune('0' + n)) }
 
 func TestAuthCorpusExternalUpRetriesOnceOnEachInfraClass(t *testing.T) {
+	t.Parallel()
 	for class, text := range corpusInfraTexts {
 		t.Run("class"+class, func(t *testing.T) {
 			r := runCorpusWithFailingUp(t, "go-api", 1, text, " go-api")
@@ -132,6 +133,7 @@ func TestAuthCorpusExternalUpRetriesAtMostOnce(t *testing.T) {
 
 // compose output with CRLF line ends is still a class line.
 func TestAuthCorpusExternalUpRetriesWhenTheOutputHasCRLFLineEnds(t *testing.T) {
+	t.Parallel()
 	r := runCorpusWithFailingUp(t, "go-api", 1, corpusInfraTexts["1"]+"\r", " go-api")
 	if r.err != nil || len(r.ups) != 2 || r.retryMarker != "AUTH-CORPUS-INFRA-RETRY class=1 step=go-api" {
 		t.Errorf("a CRLF class line must be retried once: err=%v ups=%q line=%q\n%s", r.err, r.ups, r.retryMarker, r.out)
@@ -141,6 +143,7 @@ func TestAuthCorpusExternalUpRetriesWhenTheOutputHasCRLFLineEnds(t *testing.T) {
 // CHAOS-13356: leg acp starts auth-service first and go-api only in step 1e, so a retry of the auth-service step starts
 // auth-service again (with its dependencies) and no go-api: go-api would refuse users owned before its flags are set.
 func TestAuthCorpusExternalAuthServiceStepRetryStartsNoGoAPI(t *testing.T) {
+	t.Parallel()
 	r := runCorpusWithFailingUp(t, "acp", 1, corpusInfraTexts["2"], " auth-service", "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if want := "AUTH-CORPUS-INFRA-RETRY class=2 step=auth-service"; r.retryMarker != want {
 		t.Fatalf("retry line = %q, want %q\n%s", r.retryMarker, want, r.out)
@@ -161,6 +164,7 @@ func TestAuthCorpusExternalAuthServiceStepRetryStartsNoGoAPI(t *testing.T) {
 
 // A class line next to a product line is a product failure: no retry.
 func TestAuthCorpusExternalUpDoesNotRetryAClassLineBesideAProductLine(t *testing.T) {
+	t.Parallel()
 	for class, text := range corpusInfraTexts {
 		t.Run("class"+class, func(t *testing.T) {
 			r := runCorpusWithFailingUp(t, "go-api", 1, text+"\n"+corpusProductText, " go-api")
@@ -176,6 +180,7 @@ func TestAuthCorpusExternalUpDoesNotRetryAClassLineBesideAProductLine(t *testing
 
 // The class texts are matched as whole lines: the same words inside another line, or a changed host, are not a class.
 func TestAuthCorpusExternalUpClassPatternsAreAnchored(t *testing.T) {
+	t.Parallel()
 	near := map[string]string{
 		"prefix":       "log: " + corpusInfraTexts["1"],
 		"suffix":       corpusInfraTexts["2"] + " (see the build log)",
@@ -195,6 +200,7 @@ func TestAuthCorpusExternalUpClassPatternsAreAnchored(t *testing.T) {
 
 // The first attempt's whole output stays in the job log.
 func TestAuthCorpusExternalUpKeepsTheFirstAttemptOutput(t *testing.T) {
+	t.Parallel()
 	r := runCorpusWithFailingUp(t, "go-api", 1, corpusInfraTexts["2"], " go-api")
 	if r.err != nil || strings.Count(r.out, corpusInfraTexts["2"]) != 1 {
 		t.Errorf("want the first attempt's text once in the output, err=%v:\n%s", r.err, r.out)

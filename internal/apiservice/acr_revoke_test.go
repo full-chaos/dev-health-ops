@@ -3,6 +3,8 @@ package apiservice
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -213,5 +215,68 @@ func TestTheClusterHTTPOptInNeedsBothClauses(t *testing.T) {
 				t.Fatalf("logs %q do not name %s", logs, tc.variable)
 			}
 		})
+	}
+}
+
+// F3: a set but unusable ACR_REVOKE_* configuration gives the admin org disable and delete a revoker that always
+// fails, never the nil of "not configured"; all unset stays nil for both.
+func TestAnUnusableACRRevokeConfigGivesTheAdminRoutesAFailingRevoker(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	partial := map[string]string{EnvACRRevokeURL: "https://acr.internal.test"}
+	route, org := acrRevokers(func(name string) (string, bool) { value, ok := partial[name]; return value, ok }, logger)
+	if route != nil {
+		t.Fatalf("route revoker = %v, want nil (the revoke route answers 503)", route)
+	}
+	if org == nil {
+		t.Fatal("org revoker = nil: an unusable config would take the no_client path")
+	}
+	if _, err := org.RevokeOrganization(context.Background(), "0b6f3a52-8c1e-4d7a-9a4e-3f2d1c0b9e87", "actor", acrrevoke.ReasonOrganizationDisabled); !errors.Is(err, acrrevoke.ErrClientConfigInvalid) {
+		t.Fatalf("org revoke = %v, want ErrClientConfigInvalid", err)
+	}
+	if route, org := acrRevokers(func(string) (string, bool) { return "", false }, logger); route != nil || org != nil {
+		t.Fatalf("unset = %v, %v; want nil, nil", route, org)
+	}
+}
+
+// The class of a present but blank ACR_REVOKE_* value: each of the 7 non-empty subsets of the 3 required variables,
+// present and blank (empty, or white space), is an unusable configuration for the admin routes (a failing revoker),
+// never "not configured"; all unset stays nil for both; a usable set gives the client to both.
+func TestABlankPresentACRRevokeSetIsUnusableNeverUnset(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	required := []string{EnvACRRevokeURL, EnvACRRevokeTokenURL, EnvACRRevokeSubjectFile}
+	for _, blank := range []string{"", "   "} {
+		for mask := 1; mask < 1<<len(required); mask++ {
+			env := map[string]string{}
+			var present []string
+			for i, name := range required {
+				if mask&(1<<i) != 0 {
+					env[name] = blank
+					present = append(present, name)
+				}
+			}
+			route, org := acrRevokers(func(name string) (string, bool) { v, ok := env[name]; return v, ok }, logger)
+			if route != nil || org == nil {
+				t.Errorf("present %q %v: route %v org %v, want nil and a failing revoker", blank, present, route, org)
+				continue
+			}
+			if _, err := org.RevokeOrganization(context.Background(), "0b6f3a52-8c1e-4d7a-9a4e-3f2d1c0b9e87", "actor", acrrevoke.ReasonOrganizationDisabled); !errors.Is(err, acrrevoke.ErrClientConfigInvalid) {
+				t.Errorf("present %q %v: %v, want ErrClientConfigInvalid", blank, present, err)
+			}
+		}
+	}
+	if route, org := acrRevokers(func(string) (string, bool) { return "", false }, logger); route != nil || org != nil {
+		t.Fatalf("all unset: %v %v, want nil nil", route, org)
+	}
+	// The cluster-http opt-in alone is present too: an unusable set, as before.
+	for _, allow := range []string{"false", "true"} {
+		only := map[string]string{EnvACRRevokeAllowClusterHTTP: allow}
+		if route, org := acrRevokers(func(name string) (string, bool) { v, ok := only[name]; return v, ok }, logger); route != nil || org == nil {
+			t.Errorf("only the opt-in %q: route %v org %v, want nil and a failing revoker", allow, route, org)
+		}
+	}
+	usable := map[string]string{EnvACRRevokeURL: "https://acr.internal.test", EnvACRRevokeTokenURL: "https://acr.internal.test/api/v1/oauth/token", EnvACRRevokeSubjectFile: "/var/run/dev-health/acr-revoke/token"}
+	route, org := acrRevokers(func(name string) (string, bool) { v, ok := usable[name]; return v, ok }, logger)
+	if _, isClient := org.(*acrrevoke.Client); route == nil || !isClient {
+		t.Fatalf("all set: route %v org %T, want the client for both", route, org)
 	}
 }

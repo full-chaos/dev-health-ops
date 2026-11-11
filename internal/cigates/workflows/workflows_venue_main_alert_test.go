@@ -169,6 +169,7 @@ func TestVenueMainAlertWorkflowShape(t *testing.T) {
 }
 
 func TestVenueMainAlertWorkflowPlantedDefects(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	const f = mainAlertFile
 	const tsv = "ci/main-red-workflows.tsv"

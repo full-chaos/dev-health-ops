@@ -1,9 +1,6 @@
 package authrows
 
 import (
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -75,30 +72,6 @@ func TestCredentialAuditEventMapping(t *testing.T) {
 		if !ok || m.Action != w[0] || m.ResourceType != w[1] || m.Description != w[2] {
 			t.Errorf("%s: got %+v ok %v, want %v", eventType, m, ok, w)
 		}
-	}
-}
-
-// go-api deletes every link token of a user once it redeems one (verify.go, reset); it never marks a row
-// consumed, so the auth arm's consumed_at IS NULL filter matches the golden's rows.
-func TestGoAPIRedeemDeletesLinkTokensAndNeverMarksThemConsumed(t *testing.T) {
-	read := func(name string) string {
-		b, err := os.ReadFile(filepath.Join("..", "..", "api", "session", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b)
-	}
-	verify, tokens := read("verify.go"), read("linktokens.go")
-	if strings.Contains(tokens, "consumed") || strings.Contains(verify, "consumed_at") {
-		t.Fatal("go-api marks a redeemed link token consumed; the auth arm must keep consumed rows")
-	}
-	for _, call := range []string{"deleteLinkTokens(ctx, tx, verificationTokens, user.ID)", "deleteLinkTokens(ctx, tx, resetTokens, user.ID)"} {
-		if strings.Count(verify, call) != 1 {
-			t.Errorf("verify.go: %q appears %d times, want once", call, strings.Count(verify, call))
-		}
-	}
-	if !regexp.MustCompile(`deleteByUser: +` + "`" + `DELETE FROM email_verification_tokens WHERE user_id`).MatchString(tokens) {
-		t.Error("linktokens.go: the replace-all delete is gone")
 	}
 }
 

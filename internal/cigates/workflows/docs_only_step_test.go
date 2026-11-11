@@ -202,6 +202,7 @@ func runDocsStep(t *testing.T, g *docsGit, env map[string]string) string {
 }
 
 func TestDocsOnlyStepBehaviour(t *testing.T) {
+	t.Parallel()
 	classifier := readFile(t, filepath.Join(repoRoot(t), "ci", "codeql_docs_only.sh"))
 	const goYml = "on:\n  push:\n    paths:\n      - '**/*.go'\n"
 	g := newDocsGit(t)

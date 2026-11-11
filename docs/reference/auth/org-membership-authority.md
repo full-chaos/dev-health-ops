@@ -91,8 +91,8 @@ names, counts and organization ids, never a value (`internal/auth/usersbackfill/
   ([configuration](configuration.md#provisioning-routes)).
 - `dho auth users-reconcile` does the same for users. With `-platform-roles-gate` it also gates `no_active_platform_admin`
   (`command.go:46-48`).
-- Gap: the chart's `authService.backfill.verb` accepts `users-backfill`, `users-reconcile`, `orgs-backfill` and `legacy-link-purge`
-  only (`deploy/helm/dev-health/templates/auth-backfill-job.yaml:66`). `orgs-reconcile` has no Job form. Run it with `dho`.
+- Gap: the chart's `authService.backfill.verb` accepts `users-backfill`, `users-reconcile` and `orgs-backfill`
+  only (`deploy/helm/dev-health/templates/auth-backfill-job.yaml:63`). `orgs-reconcile` has no Job form. Run it with `dho`.
 
 ## Roll back and restore
 

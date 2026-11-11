@@ -14,7 +14,7 @@
 // CHAOS-3695, store.go Lookup) is ported in full via internal/api/licensing.
 //
 // Entitlement route answers (acr's client depends on these):
-//   - 200 grants body: the org exists.
+//   - 200 grants body: the org exists and is active (is_active false: 404 acr_organization_disabled, not "gone").
 //   - 404 {"detail":"Not found","code":"acr_organization_unknown"}: the id is
 //     a well-formed UUID and no organizations row exists (deleted or never
 //     created). The only answer a caller may read as "organization gone".
@@ -181,6 +181,13 @@ func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Log
 				body.Set("platform_model_fallback", entitlement.PlatformModelFallback)
 				writeModel(w, http.StatusOK, body)
 			}, slog.String("acr_entitlement_basis", entitlement.ACRBasis))
+		case errors.Is(err, ErrOrgDisabled):
+			finish(outcomeOrgDisabled, func() {
+				body := pyjson.NewObject()
+				body.Set("detail", "Not found")
+				body.Set("code", DisabledOrganizationCode)
+				writeModel(w, http.StatusNotFound, body)
+			})
 		case errors.Is(err, ErrOrgUnknown):
 			finish(outcomeOrgNotFound, func() {
 				body := pyjson.NewObject()
@@ -201,6 +208,15 @@ func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Log
 		}
 	})
 }
+
+// DisabledOrganizationCode is the stable machine code on the entitlement
+// route's 404 for an organization whose row has is_active false. acr reads it
+// as "disabled": it refuses the organization's credentials and new issuance,
+// and never treats the organization as deleted.
+const DisabledOrganizationCode = "acr_organization_disabled"
+
+// outcomeOrgDisabled is the audit outcome of that 404.
+const outcomeOrgDisabled = "organization_disabled"
 
 // writeModel writes a success body as FastAPI writes the route's
 // response_model (policy.WriteModel), keeping this route family's nosniff

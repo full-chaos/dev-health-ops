@@ -28,6 +28,8 @@ func hookAnnotations(t *testing.T, docs []map[string]any, kind, suffix string) m
 // (and the hook Secret it reads on a chart-created-secret release) must run on a rollback, and only
 // it: the weight-0 migrate Job runs forward-only schema steps. Weight and delete policy do not move.
 func TestRiverMigrateHookRunsOnPreRollback(t *testing.T) {
+	t.Parallel()
+
 	docs := renderDocs(t, riverRollbackSets...)
 	for _, want := range []struct {
 		kind, suffix string
@@ -51,6 +53,8 @@ func TestRiverMigrateHookRunsOnPreRollback(t *testing.T) {
 // Every other hook keeps its events: a rollback must not run provisioning, the forward-only schema
 // migrate Job, or the auth hooks.
 func TestOtherHooksDoNotRunOnPreRollback(t *testing.T) {
+	t.Parallel()
+
 	sets := append(append([]string{}, riverRollbackSets...),
 		"--set", "authService.phase=1",
 		"--set", "authService.database.secretName=auth-db", "--set", "authService.migrate.secretName=auth-migrate-db",
@@ -74,6 +78,8 @@ func TestOtherHooksDoNotRunOnPreRollback(t *testing.T) {
 
 // The local bundled-PostgreSQL variant (post-install) keeps its events and adds pre-rollback too.
 func TestRiverMigrateHookPostInstallVariantRunsOnPreRollback(t *testing.T) {
+	t.Parallel()
+
 	sets := append(append([]string{}, riverRollbackSets...),
 		"--set", "migrations.hook.localBundledPostgres=true",
 		"--set-json", `migrations.hook.events=["post-install","pre-upgrade"]`)
@@ -87,6 +93,8 @@ func TestRiverMigrateHookPostInstallVariantRunsOnPreRollback(t *testing.T) {
 // nothing (the weight-0 migrate Job applies River itself and stays forward-only). Prod has the
 // river hook on; the PR body names this case.
 func TestNoRiverHookMeansNoRollbackRegrant(t *testing.T) {
+	t.Parallel()
+
 	sets := []string{"--set", "web.enabled=false", "--set", "goWorkers.enabled=false", "--set", "postgresql.enabled=true",
 		"--set", "migrations.hook.routeActivate.enabled=false"}
 	docs := renderDocs(t, sets...)

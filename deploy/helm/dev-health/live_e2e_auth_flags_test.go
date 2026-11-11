@@ -33,6 +33,8 @@ func liveE2EFlagRows(t *testing.T) [][]string {
 // deploy values.prod.yaml; CHAOS-13356: every venue runs users owned). The table must equal the chart's rendering of
 // those flags; a flag moved in the chart and not in the table fails here.
 func TestLiveE2EAuthFlagsEqualPhase4Chart(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 4)
 	rows := liveE2EFlagRows(t)
 	for _, target := range []struct{ scope, deployment, container string }{
@@ -88,6 +90,8 @@ func TestLiveE2EAuthFlagsEqualPhase4Chart(t *testing.T) {
 // it on in that render: one row per Deployment that carries it, same value. The Jobs that also carry it (auth-migrate,
 // auth-grants, auth-backfill, the River step) are no flag table scope: the venue runs their steps itself.
 func TestLiveE2EPlatformRolesOwnedRowsEqualProdRender(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 4, "--set", "authService.platformRolesOwned=true")
 	want := map[string]string{}
 	for _, doc := range docs {

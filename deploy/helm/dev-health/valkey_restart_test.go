@@ -21,6 +21,8 @@ func requireHelmUnderCI(t *testing.T) {
 // starts on the same ReadWriteOnce volume and append-only file while the old
 // one still writes it.
 func TestValkeyDeploymentRecreatesBeforeItsVolumeIsReused(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	cases := map[string][]string{
 		"persistence on":  nil,
@@ -34,6 +36,8 @@ func TestValkeyDeploymentRecreatesBeforeItsVolumeIsReused(t *testing.T) {
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			deployment, _ := valkeyDeployment(t, args...)
 			strategy, ok := at(deployment, "spec", "strategy").(map[string]any)
 			if !ok {
@@ -107,6 +111,8 @@ func changedDocs(t *testing.T, before, after []string) []string {
 // The ACL file is a data-store step of its own: turning it on restarts Valkey
 // and changes no other workload.
 func TestValkeyAclStepChangesOnlyTheValkeyDeployment(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	base := valkeyStepBase()
 	got := changedDocs(t, base, append(append([]string{}, base...), valkeyAclStep...))
@@ -118,6 +124,8 @@ func TestValkeyAclStepChangesOnlyTheValkeyDeployment(t *testing.T) {
 // Moving auth-service to the ACL login is an app step of its own: it changes the
 // auth-service Deployment and not Valkey.
 func TestAuthValkeySecretSwitchChangesOnlyAuthService(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	step1 := append(valkeyStepBase(), valkeyAclStep...)
 	got := changedDocs(t, step1, append(append([]string{}, step1...), authValkeySwitch...))

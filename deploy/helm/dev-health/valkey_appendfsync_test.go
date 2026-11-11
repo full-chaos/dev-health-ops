@@ -6,6 +6,8 @@ import (
 )
 
 func TestValkeyAppendfsyncIsPinnedAfterAppendonly(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	deployment, _ := valkeyDeployment(t)
 	want := "--appendonly yes --appendfsync everysec --maxmemory 256mb --maxmemory-policy allkeys-lru"
@@ -15,6 +17,8 @@ func TestValkeyAppendfsyncIsPinnedAfterAppendonly(t *testing.T) {
 }
 
 func TestValkeyAppendfsyncFollowsTheValue(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	deployment, _ := valkeyDeployment(t, "--set", "valkey.appendfsync=always")
 	if got := valkeyArg(t, deployment, "--appendfsync"); got != "always" {
@@ -23,6 +27,8 @@ func TestValkeyAppendfsyncFollowsTheValue(t *testing.T) {
 }
 
 func TestValkeyAppendfsyncRefusesOtherValues(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	for name, value := range map[string]string{
 		"no":             "no",
@@ -32,6 +38,8 @@ func TestValkeyAppendfsyncRefusesOtherValues(t *testing.T) {
 		"number":         "1",
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, "--set-string", "valkey.appendfsync="+value)
 			if err == nil {
 				t.Fatalf("the render accepted appendfsync %q; it must refuse", value)
@@ -44,6 +52,8 @@ func TestValkeyAppendfsyncRefusesOtherValues(t *testing.T) {
 }
 
 func TestValkeyAppendfsyncStaysWithTheAclFile(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	deployment, _ := valkeyDeployment(t, append([]string{
 		"--set", "valkey.acl.enabled=true", "--set", "valkey.acl.secretName=valkey-acl-secret",
@@ -55,6 +65,8 @@ func TestValkeyAppendfsyncStaysWithTheAclFile(t *testing.T) {
 }
 
 func TestValkeyAppendfsyncIsCheckedWhenValkeyIsDisabled(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	for name, args := range map[string][]string{
 		"no":             {"--set-string", "valkey.appendfsync=no"},
@@ -70,6 +82,8 @@ func TestValkeyAppendfsyncIsCheckedWhenValkeyIsDisabled(t *testing.T) {
 		"numeric string": {"--set-string", "valkey.appendfsync=1"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, append([]string{"--set", "valkey.enabled=false"}, args...)...)
 			if err == nil {
 				t.Fatalf("the render accepted %v with valkey.enabled=false; it must refuse", args)
@@ -82,6 +96,8 @@ func TestValkeyAppendfsyncIsCheckedWhenValkeyIsDisabled(t *testing.T) {
 }
 
 func TestValkeyAppendfsyncValidValuesRenderWhenValkeyIsDisabled(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	for _, value := range []string{"everysec", "always"} {
 		if _, out, err := renderAuth(t, "--set", "valkey.enabled=false", "--set", "valkey.appendfsync="+value); err != nil {
@@ -91,6 +107,8 @@ func TestValkeyAppendfsyncValidValuesRenderWhenValkeyIsDisabled(t *testing.T) {
 }
 
 func TestValkeyAppendfsyncNullIsRefused(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	for name, args := range map[string][]string{
 		"set-json null":           {"--set-json", "valkey.appendfsync=null"},
@@ -101,6 +119,8 @@ func TestValkeyAppendfsyncNullIsRefused(t *testing.T) {
 		"set empty, disabled":     {"--set", "valkey.enabled=false", "--set", "valkey.appendfsync="},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, args...)
 			if err == nil {
 				t.Fatalf("the render accepted %v; it must refuse", args)

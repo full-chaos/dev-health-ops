@@ -11,6 +11,8 @@ import (
 // acknowledgement (dev-health.authDeferGrantNarrowing needs $ack). Without it no Job passes -defer-narrowing, so
 // auth-migrate would narrow while old owned pods may still serve, and the release is refused.
 func TestPhase3WithoutTheAcknowledgementRendersNoDefer(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 3)
 	for _, job := range []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"} {
 		for _, arg := range jobArgs(t, authDoc(docs, "Job", job)) {
@@ -38,6 +40,8 @@ func runbookStep(t *testing.T, prefix string) string {
 
 // The rollback steps D1, D2 and D3 are named in one form, and D2 and D3 say what the acknowledgement does.
 func TestRollbackRunbookStepsD1D2D3(t *testing.T) {
+	t.Parallel()
+
 	for step, wants := range map[string][]string{
 		"**D1.**": {"usersOwnedStage: goApi", "acknowledgeGrantNarrowing"},
 		"**D2.**": {"authService.phase: 3", "keep the acknowledgement", "-defer-narrowing", "refused"},
@@ -59,6 +63,8 @@ func TestRollbackRunbookStepsD1D2D3(t *testing.T) {
 // No credential on argv: a database readback never puts a DSN or password in a command line (ps, shell history). The
 // runbook reads the grants with the one named read-only exec, SQL on stdin inside BEGIN READ ONLY ... ROLLBACK.
 func TestUsersOwnedDocsPutNoDSNOnArgv(t *testing.T) {
+	t.Parallel()
+
 	for _, path := range []string{
 		"../../../docs/operate/runbooks/auth-users-owned-flip-and-rollback.md",
 		"../../../docs/contribute/architecture/auth-control-plane-deployment.md",
@@ -123,6 +129,8 @@ func sixStubRoutes(t *testing.T) []string {
 // auth-service serves the stub). The runbook names the six routes, says login and refresh are not affected, and bounds the
 // stage with a time budget, a low-traffic window and a rollback when over budget.
 func TestStageOutageIsNamedAndBounded(t *testing.T) {
+	t.Parallel()
+
 	raw, err := os.ReadFile("../../../docs/operate/runbooks/auth-users-owned-flip-and-rollback.md")
 	if err != nil {
 		t.Fatal(err)
@@ -169,6 +177,8 @@ func TestStageOutageIsNamedAndBounded(t *testing.T) {
 // The roll windows overlap old and new pods; the runbook says so, cites where the local handler is chosen, and names what the
 // barrier cannot see.
 func TestOverlapWindowsAreNamed(t *testing.T) {
+	t.Parallel()
+
 	raw, err := os.ReadFile("../../../docs/operate/runbooks/auth-users-owned-flip-and-rollback.md")
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,8 @@ import (
 const schemaRefusal = "values don't meet the specifications of the schema"
 
 func TestTransactionRollingUpdateSchemaRefusesSurgeZeroWithoutUnavailable(t *testing.T) {
+	t.Parallel()
+
 	bad := map[string]string{
 		"surge 0 alone":  `{"maxSurge":0}`,
 		"both zero":      `{"maxSurge":0,"maxUnavailable":0}`,
@@ -24,6 +26,8 @@ func TestTransactionRollingUpdateSchemaRefusesSurgeZeroWithoutUnavailable(t *tes
 }
 
 func TestTransactionRollingUpdateSchemaAcceptsSurgeZeroWithUnavailable(t *testing.T) {
+	t.Parallel()
+
 	ok := map[string]string{
 		"surge 0 unavailable 1": `{"maxSurge":0,"maxUnavailable":1}`,
 		"surge 1 unavailable 0": `{"maxSurge":1,"maxUnavailable":0}`,

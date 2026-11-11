@@ -509,8 +509,10 @@ func writerSpecs() map[string]map[string]any {
 }
 
 func TestBarrierStopsOnEveryWriterShapeInAPod(t *testing.T) {
+
 	for name, spec := range writerSpecs() {
 		t.Run(name, func(t *testing.T) {
+
 			w := bwNewWorld()
 			w.otherPods = append(w.otherPods, bwPodAt("x1", "operator", "", spec))
 			r := runBarrier(t, w.files(), nil, "up-go-api")
@@ -525,11 +527,13 @@ func TestBarrierStopsOnEveryWriterShapeInAPod(t *testing.T) {
 }
 
 func TestBarrierStopsOnEveryWriterShapeInAJobAndACronJob(t *testing.T) {
+
 	for name, spec := range writerSpecs() {
 		if spec["ephemeralContainers"] != nil {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
+
 			for _, kind := range []string{"job", "cronjob"} {
 				w := bwNewWorld()
 				if kind == "job" {

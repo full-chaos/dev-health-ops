@@ -25,6 +25,8 @@ func budgetWith(budget string, extra ...string) []string {
 
 // 72 pooler + (2 replicas + 1 surge) x 8 = 96.
 func TestAuthServiceConnectionBudgetBoundary(t *testing.T) {
+	t.Parallel()
+
 	if _, out, err := renderAuth(t, budgetWith("96")...); err != nil {
 		t.Fatalf("used == budget must render: %v\n%.400s", err, out)
 	}
@@ -39,6 +41,8 @@ func TestAuthServiceConnectionBudgetBoundary(t *testing.T) {
 // 128, over the 97 usable connections of a default PostgreSQL. The default
 // budget is 0, so the default render passes; opting in at 97 names the excess.
 func TestAuthServiceConnectionBudgetDefaultPostgres(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, authWith(append([]string{"--set", "authService.database.connectionBudget=97"}, sessionNoSurge...)...)...)
 	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "128") || !strings.Contains(out, "97") {
 		t.Fatalf("the chart default pools over 97 must fail with the named message: err=%v out=%.500s", err, out)
@@ -47,6 +51,8 @@ func TestAuthServiceConnectionBudgetDefaultPostgres(t *testing.T) {
 
 // The production values after CHAOS-11542 (9 / 36 / 10 and KEDA at 4) fit the 97.
 func TestAuthServiceConnectionBudgetProdShapeFits97(t *testing.T) {
+	t.Parallel()
+
 	if _, out, err := renderAuth(t, budgetWith("97")...); err != nil {
 		t.Fatalf("72 pooler + 24 auth-service = 96 must fit 97: %v\n%.500s", err, out)
 	}
@@ -55,6 +61,8 @@ func TestAuthServiceConnectionBudgetProdShapeFits97(t *testing.T) {
 // The default KEDA extra user without its own size inherits the transaction
 // size: (9 + 9) x 2 + 36 + 10 + 24 = 106, over 97.
 func TestAuthServiceConnectionBudgetKedaPairAtTheDefaultSizeIsOver(t *testing.T) {
+	t.Parallel()
+
 	keda := []string{"--set-json", `goWorkers.pgbouncer.transaction.extraUsers=[{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD"}]`}
 	_, out, err := renderAuth(t, budgetWith("97", keda...)...)
 	if err == nil || !strings.Contains(out, budgetRefusal) || !strings.Contains(out, "106") || !strings.Contains(out, "97") {
@@ -67,6 +75,8 @@ func TestAuthServiceConnectionBudgetKedaPairAtTheDefaultSizeIsOver(t *testing.T)
 }
 
 func TestAuthServiceConnectionBudgetOffByDefault(t *testing.T) {
+	t.Parallel()
+
 	if _, out, err := renderAuth(t, authBase...); err != nil {
 		t.Fatalf("default render must not check the budget: %v\n%.400s", err, out)
 	}
@@ -76,6 +86,8 @@ func TestAuthServiceConnectionBudgetOffByDefault(t *testing.T) {
 }
 
 func TestAuthServiceConnectionBudgetCountsEachClause(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string][]string{
 		"pool size":   {"--set", "authService.database.maxConns=9"},
 		"replicas":    {"--set", "authService.replicas=3"},
@@ -92,6 +104,8 @@ func TestAuthServiceConnectionBudgetCountsEachClause(t *testing.T) {
 }
 
 func TestAuthServiceConnectionBudgetCountsEveryTransactionUser(t *testing.T) {
+	t.Parallel()
+
 	users := []string{"--set-json", `goWorkers.pgbouncer.transaction.extraUsers=[{"role":"devhealth_keda_readonly","passwordKey":"RIVER_KEDA_READONLY_PASSWORD","poolSize":4},{"role":"r1","passwordKey":"K1"}]`,
 		"--set", "goWorkers.pgbouncer.secret.data.K1=x"}
 	// Three transaction pairs: own role 9, keda 4, r1 at the inherited 9, all
@@ -115,6 +129,8 @@ func TestAuthServiceConnectionBudgetCountsEveryTransactionUser(t *testing.T) {
 }
 
 func TestAuthServiceConnectionBudgetIgnoresAbsentPoolers(t *testing.T) {
+	t.Parallel()
+
 	args := budgetWith("24", "--set", "goWorkers.enabled=false")
 	if _, out, err := renderAuth(t, args...); err != nil {
 		t.Fatalf("no pooler renders: only the auth-service term counts (24): %v\n%.300s", err, out)
@@ -122,6 +138,8 @@ func TestAuthServiceConnectionBudgetIgnoresAbsentPoolers(t *testing.T) {
 }
 
 func TestAuthServiceConnectionBudgetStrict(t *testing.T) {
+	t.Parallel()
+
 	for name, set := range map[string][]string{
 		"negative": {"--set", "authService.database.connectionBudget=-1"},
 		"fraction": {"--set-json", "authService.database.connectionBudget=97.5"},
@@ -137,6 +155,8 @@ func TestAuthServiceConnectionBudgetStrict(t *testing.T) {
 }
 
 func TestAuthServiceSurgeFigureMatchesTheDeployment(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.300s", err, out)

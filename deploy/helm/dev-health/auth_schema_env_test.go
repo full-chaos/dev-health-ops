@@ -8,8 +8,12 @@ import "testing"
 // check, so a non-default schema that only one of them knows turns a fresh
 // install into a refusal.
 func TestBothMigrationJobsCarryTheSameAuthSchema(t *testing.T) {
+	t.Parallel()
+
 	for _, schema := range []string{"auth", "identity_plane"} {
 		t.Run(schema, func(t *testing.T) {
+			t.Parallel()
+
 			args := append([]string{"--set", "authService.database.schema=" + schema}, authBase...)
 			docs, out, err := renderAuth(t, args...)
 			if err != nil {

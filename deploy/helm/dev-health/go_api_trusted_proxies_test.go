@@ -28,11 +28,13 @@ func renderGoAPITrusted(t *testing.T, value string, extra ...string) (string, er
 	}
 	args := append([]string{"template", "trusted", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
 		"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "goApi.extraEnv=" + string(env)}, extra...)
-	out, err := helmCommand(args...).CombinedOutput()
+	out, err := helmOutput(args...)
 	return string(out), err
 }
 
 func TestGoAPITrustedProxiesNeedTheNodeExclusions(t *testing.T) {
+	t.Parallel()
+
 	for _, value := range []string{
 		"10.42.0.0/24", "10.42.0.0/24,!10.42.0.0", "10.42.0.0/24,!10.42.0.1", "10.42.0.0/27,!10.42.0.1,!10.42.0.2",
 		"10.42.0.6,10.42.0.0/25,!10.42.0.5",
@@ -58,6 +60,8 @@ func TestGoAPITrustedProxiesNeedTheNodeExclusions(t *testing.T) {
 }
 
 func TestGoAPITrustedProxiesRefuseWhatGoAPIRefuses(t *testing.T) {
+	t.Parallel()
+
 	for _, value := range []string{
 		"bogus", "*", "10.42.0.0/24,", ",10.42.0.6", "0.0.0.0/0", "::/0", "::ffff:10.0.0.9", "::ffff:10.42.0.0/120", "10.0.0.1/8",
 		"10.0.0.0/33", "fe80::1%eth0", "!10.42.0.1", "10.42.0.0/28,!10.43.0.1", "10.42.0.0/28,!10.42.0.1/32", "10.42.0.1,!10.42.0.1",
@@ -99,6 +103,8 @@ func TestGoAPITrustedProxyValuesRenderOnlyWhatGoAPIParses(t *testing.T) {
 // A value the chart cannot read (valueFrom) is the deploy chart's "unreadable" rule, not a render refusal here: it
 // renders, and the go-api env keeps the reference whole (its kind, name and key), with no value beside it.
 func TestGoAPITrustedProxiesFromAReferenceRender(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
@@ -107,13 +113,15 @@ func TestGoAPITrustedProxiesFromAReferenceRender(t *testing.T) {
 		{"secretKeyRef", "s", "k"},
 	} {
 		t.Run(ref.kind, func(t *testing.T) {
+			t.Parallel()
+
 			extra, err := json.Marshal([]map[string]any{{"name": "TRUSTED_PROXIES",
 				"valueFrom": map[string]any{ref.kind: map[string]string{"name": ref.name, "key": ref.key}}}})
 			if err != nil {
 				t.Fatal(err)
 			}
-			out, err := helmCommand("template", "trusted", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
-				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "goApi.extraEnv="+string(extra)).CombinedOutput()
+			out, err := helmOutput("template", "trusted", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
+				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "goApi.extraEnv="+string(extra))
 			if err != nil {
 				t.Fatalf("render: %v\n%.400s", err, out)
 			}

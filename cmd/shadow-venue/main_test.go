@@ -278,8 +278,8 @@ func TestPlanRefusesARowTableThatReclassifiesARow(t *testing.T) {
 	if code := run(context.Background(), []string{"plan", "-principals", principalsFile(t), "-rows", path}, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "class") {
 		t.Fatalf("plan with the external rows made internal: code %d, stderr %q", code, errOut.String())
 	}
-	if len(external) != 17 {
-		t.Fatalf("%d external rows changed, want 17", len(external))
+	if len(external) != 18 {
+		t.Fatalf("%d external rows changed, want 18", len(external))
 	}
 	for _, id := range external {
 		if !strings.Contains(errOut.String(), "row "+id+":") {

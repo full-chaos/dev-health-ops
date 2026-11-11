@@ -330,7 +330,22 @@ finish() {
  rmdir "$state/lock"
 }
 trap finish EXIT
-sleep 0.04
+if [ -f "$state/barrier" ]; then
+ read -r bn bg bt < "$state/barrier"
+ if [ ! -f "$state/released" ]; then
+  waited=0
+  until [ -f "$state/released" ]; do
+   lock; cur=0; [ ! -f "$state/active" ] || read -r cur < "$state/active"; rmdir "$state/lock"
+   if [ "$cur" -ge "$bn" ]; then : > "$state/released"; break; fi
+   waited=$((waited+1))
+   if [ "$waited" -gt $((bt*100)) ]; then : > "$state/barrier-timeout"; break; fi
+   sleep 0.01
+  done
+  sleep "$bg"
+ fi
+else
+ sleep 0.04
+fi
 printf '%s\n' "$@"
 chart=''
 fail=0
@@ -589,6 +604,9 @@ func TestRenderMemoCachesFailuresAsFailures(t *testing.T) {
 func TestRenderMemoSemaphoreBoundsLiveProcesses(t *testing.T) {
 	chart, state := fakeRenderMemo(t)
 	t.Setenv("HELM_RENDER_PARALLEL", "2")
+	// The fake helm holds the first renders at a barrier until two are live at once (the bound), then keeps them
+	// for a grace window so a missing bound shows as more than two. A bound below two never reaches the barrier.
+	memoWrite(t, filepath.Join(state, "barrier"), "2 0.3 20\n")
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for i := range 20 {
@@ -606,6 +624,9 @@ func TestRenderMemoSemaphoreBoundsLiveProcesses(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
+	if _, err := os.Stat(filepath.Join(state, "barrier-timeout")); err == nil {
+		t.Fatal("barrier timed out: the semaphore never let two renders overlap")
+	}
 	b, err := os.ReadFile(filepath.Join(state, "max"))
 	if err != nil {
 		t.Fatal(err)

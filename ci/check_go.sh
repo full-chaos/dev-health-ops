@@ -1319,10 +1319,12 @@ module_go() {
   (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go "$@")
 }
 
-# test_legs_all FUNCTION VERB COUNT (CHAOS-13520): `VERB all COUNT`: for each SHARD of 1..COUNT one "==> VERB SHARD COUNT" line,
-# then exactly what `VERB SHARD COUNT` prints, from one listing of each module and split package (test_leg_listed).
+# test_legs_all VERB COUNT COMMAND... (CHAOS-13520): `VERB all COUNT`: for each SHARD of 1..COUNT one "==> VERB SHARD COUNT"
+# line, then exactly what `VERB SHARD COUNT` prints (COMMAND... SHARD COUNT), from one listing of each module and split package
+# (test_leg_listed).
 test_legs_all() {
-  local fn="$1" verb="$2" count="$3" shard rc=0
+  local verb="$1" count="$2" shard rc=0
+  shift 2
   case "${count}" in ""|*[!0-9]*) die "test COUNT must be a positive integer, got '${count}'" ;; esac
   [ "${count}" -ge 1 ] || die "test COUNT must be a positive integer, got '${count}'"
   local TEST_LEG_LIST_CACHE
@@ -1330,7 +1332,7 @@ test_legs_all() {
   (
     for ((shard = 1; shard <= count; shard++)); do
       printf '==> %s %d %d\n' "${verb}" "${shard}" "${count}"
-      "${fn}" "${shard}" "${count}" || exit 2
+      "$@" "${shard}" "${count}" || exit 2
     done
   ) || rc=$?
   rm -rf -- "${TEST_LEG_LIST_CACHE}"
@@ -5582,21 +5584,21 @@ auth_leg_args() {
 auth_leg_plan() {
   local kind="$1" leg="$2" count="$3" modpath pkgs weights splits="" out tmp=""
   auth_leg_args "${leg}" "${count}"
-  modpath="$(auth_go list -m)" || die "go list -m failed"
+  modpath="$(test_leg_listed "go-list-m|." auth_go list -m)" || die "go list -m failed"
   case "${kind}" in
     test)
-      pkgs="$(auth_go list -mod=readonly "${AUTH_PACKAGES[@]}")" || die "go list of the auth packages failed"
+      pkgs="$(test_leg_listed "auth-packages" auth_go list -mod=readonly "${AUTH_PACKAGES[@]}")" || die "go list of the auth packages failed"
       weights="${GO_TEST_WEIGHTS}"
       ;;
     race)
-      pkgs="$(auth_go list -mod=readonly "${AUTH_PACKAGES[@]}")" || die "go list of the auth packages failed"
+      pkgs="$(test_leg_listed "auth-packages" auth_go list -mod=readonly "${AUTH_PACKAGES[@]}")" || die "go list of the auth packages failed"
       tmp="$(mktemp "${TMPDIR:-/tmp}/dev-health-auth-race-weights.XXXXXX")"
-      race_weights_rows >"${tmp}" || { rm -f -- "${tmp}"; die "the race weights rows failed"; }
+      test_leg_listed "race-weights-rows" race_weights_rows >"${tmp}" || { rm -f -- "${tmp}"; die "the race weights rows failed"; }
       weights="${tmp}"
       splits="${AUTH_RACE_SPLITS}"
       ;;
     race-integration)
-      pkgs="$(auth_go list -mod=readonly "${AUTH_RACE_PACKAGES[@]}")" || die "go list of the auth race-integration packages failed"
+      pkgs="$(test_leg_listed "auth-race-packages" auth_go list -mod=readonly "${AUTH_RACE_PACKAGES[@]}")" || die "go list of the auth race-integration packages failed"
       weights="${AUTH_RACE_INTEGRATION_WEIGHTS}"
       splits="${AUTH_RACE_INTEGRATION_SPLITS}"
       ;;
@@ -5635,7 +5637,7 @@ auth_leg_units() {
   local -a flags=()
   plan="$(auth_leg_plan "${kind}" "${leg}" "${count}")" || exit 2
   mapfile -t flags < <(auth_leg_flags "${kind}" | grep -v -- '-timeout=\|^-v$')
-  modpath="$(auth_go list -m)" || die "go list -m failed"
+  modpath="$(test_leg_listed "go-list-m|." auth_go list -m)" || die "go list -m failed"
   while IFS=$'\t' read -r pkg part parts; do
     [ -n "${pkg}" ] || continue
     if [ -z "${part}" ]; then
@@ -5961,9 +5963,15 @@ check_auth() {
     test) check_auth_test ;;
     race) check_auth_race ;;
     race-integration) check_auth_race_integration ;;
-    test-leg) check_auth_leg test "${2:-}" "${3:-}" ;;
-    race-leg) check_auth_leg race "${2:-}" "${3:-}" ;;
-    race-integration-leg) check_auth_leg race-integration "${2:-}" "${3:-}" ;;
+    test-leg|race-leg|race-integration-leg)
+      if [ "${2:-}" = all ]; then
+        # The all-legs form only lists (the leg guards read it); it never runs a test.
+        [ "${AUTH_LEG_LIST:-}" = "1" ] || die "auth ${1} all needs AUTH_LEG_LIST=1: it lists every leg and runs no test"
+        test_legs_all "auth ${1}" "${3:-}" check_auth_leg "${1%-leg}"
+      else
+        check_auth_leg "${1%-leg}" "${2:-}" "${3:-}"
+      fi
+      ;;
     history) check_auth_history ;;
     fuzz) check_auth_fuzz "${2:-}" ;;
     fuzz-registry) check_auth_fuzz_registry ;;
@@ -6034,15 +6042,15 @@ case "${1:-all}" in
     ;;
   race-excluded-shard-plan)
     [ "$#" -eq 3 ] || die "race-excluded-shard-plan accepts SHARD COUNT"
-    if [ "$2" = all ]; then test_legs_all race_excluded_rows race-excluded-shard-plan "$3"; else race_excluded_rows "$2" "$3"; fi
+    if [ "$2" = all ]; then test_legs_all race-excluded-shard-plan "$3" race_excluded_rows; else race_excluded_rows "$2" "$3"; fi
     ;;
   test-shard-plan)
     [ "$#" -eq 3 ] || die "test-shard-plan accepts SHARD COUNT"
-    if [ "$2" = all ]; then test_legs_all check_test_shard_plan test-shard-plan "$3"; else check_test_shard_plan "$2" "$3"; fi
+    if [ "$2" = all ]; then test_legs_all test-shard-plan "$3" check_test_shard_plan; else check_test_shard_plan "$2" "$3"; fi
     ;;
   test-shard-split-list)
     [ "$#" -eq 3 ] || die "test-shard-split-list accepts SHARD COUNT"
-    if [ "$2" = all ]; then test_legs_all check_test_shard_split_list test-shard-split-list "$3"; else check_test_shard_split_list "$2" "$3"; fi
+    if [ "$2" = all ]; then test_legs_all test-shard-split-list "$3" check_test_shard_split_list; else check_test_shard_split_list "$2" "$3"; fi
     ;;
   race-shard-plan)
     [ "$#" -eq 3 ] || die "race-shard-plan accepts SHARD COUNT"

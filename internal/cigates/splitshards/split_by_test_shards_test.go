@@ -98,6 +98,9 @@ func TestEverySplitByTestNameRunsInExactlyOnePackagesShard(t *testing.T) {
 		if i+1 < len(loc) {
 			end = loc[i+1][0]
 		}
+		if _, dup := parts[n]; dup {
+			t.Errorf("the all-shards dry run prints packages shard %d twice", n)
+		}
 		parts[n] = all.stdout[m[1]:end]
 	}
 	runs := map[string][]string{}  // key -> every name a shard's dry run selected (with repeats)

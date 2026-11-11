@@ -2297,6 +2297,19 @@ func TestOneShardDryRunIsItsPartOfTheAllShardsDryRun(t *testing.T) {
 	}
 }
 
+// TestTheAllShardsFormIsADryRunOfThePackagesShardsOnly: `integration-shard ... all` never runs tests and names no other
+// target, so a run without --dry-run and a test-shard target are refused before any plan.
+func TestTheAllShardsFormIsADryRunOfThePackagesShardsOnly(t *testing.T) {
+	t.Parallel()
+	const want = "integration-shard SHARD 'all' needs TARGET 'packages' and --dry-run"
+	for _, args := range [][]string{{"packages", "all"}, {"providersync", "all", "--dry-run"}} {
+		r := runCheckGoSharding(t, shardEnv{}, append([]string{"integration-shard"}, args...)...)
+		if r.code != 2 || !strings.Contains(r.stderr, want) {
+			t.Errorf("%v: exit %d, want 2 with %q: %s%s", args, r.code, want, r.stdout, r.stderr)
+		}
+	}
+}
+
 // dryRuns runs `integration-shard TARGET SHARD --dry-run` for every shard at once (the cap in freeSpec bounds the
 // concurrency) and returns the results by shard.
 func dryRuns(t *testing.T, target string, shards []int) map[int]cmdResult {

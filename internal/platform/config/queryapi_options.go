@@ -256,7 +256,6 @@ var queryAPIOptions = func() []Option {
 			Usage: "enable the work units route (default off; it also needs its dependencies configured, or it stays unmounted)",
 		},
 		{Env: "GO_API_REGISTRY_POSTGRES_URI", Secret: true, Services: q, Group: GroupCredentials, Usage: "registry PostgreSQL DSN the /query route reads its operation registry from (the query-api role's own login)"},
-		{Env: "GO_API_EDGE_JWT_SECRET", Secret: true, Services: q, Group: GroupCredentials, Usage: "retired HS256 edge secret: nothing verifies with it; a set value only logs one WARN that it is unused"},
 	}
 	// Read from the process environment by the code below the routes (identity
 	// mapping, the LLM model choice, two work-graph switches): declared so the service's whole contract is here, environment

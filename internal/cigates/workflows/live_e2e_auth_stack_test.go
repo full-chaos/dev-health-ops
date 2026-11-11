@@ -953,6 +953,7 @@ func TestLiveE2EEnableSocialAndSSO(t *testing.T) {
 func TestLiveE2EStubReadinessFailure(t *testing.T) {
 	for _, verb := range []string{"enable-social", "start-idp"} {
 		t.Run(verb, func(t *testing.T) {
+			t.Parallel()
 			state, _, run := liveE2EStubFakes(t)
 			if out, err := run("enable-sso", state); err != nil {
 				t.Fatalf("enable-sso: %v %s", err, out)
@@ -1034,6 +1035,7 @@ func TestLiveE2EStartIdpNeedsNoGitHubRunner(t *testing.T) {
 func TestLiveE2EStubAnsweringNon200IsNotReady(t *testing.T) {
 	for _, verb := range []string{"enable-social", "start-idp"} {
 		t.Run(verb, func(t *testing.T) {
+			t.Parallel()
 			state, _, run := liveE2EStubFakes(t)
 			if out, err := run("enable-sso", state); err != nil {
 				t.Fatalf("enable-sso: %v %s", err, out)
@@ -1449,6 +1451,7 @@ func TestLiveE2EEnableMailNeedsSavedEnvironment(t *testing.T) {
 func TestLiveE2EMailReadinessRequiresPortAndBanner(t *testing.T) {
 	for _, failure := range []string{"smtp-no-port", "smtp-bad-port", "smtp-bad-banner"} {
 		t.Run(failure, func(t *testing.T) {
+			t.Parallel()
 			state, _, run := liveE2EStubFakes(t)
 			before := liveE2ERead(t, filepath.Join(state, "auth-service.env"))
 			writeExec(t, filepath.Join(state, failure), "", 0o600)

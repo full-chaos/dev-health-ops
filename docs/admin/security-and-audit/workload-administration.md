@@ -55,12 +55,12 @@ administrative record. The runbooks give the operator steps and refusal reasons.
 ## Check before credential lifecycle publishing
 
 The shipped seed gives `acr-api` the audiences `auth-service` and `dev-health-api`,
-and **no allowed action**.
+and the allowed action `credentials.project`.
 
-`acr-api` needs audience `auth-service` and action `credentials.project`. The action comes from the registry seed through `auth-migrate workloads seed -apply`, shipped with the change that turns publishing on. Do not add it by hand: the next seed apply removes it.
+`acr-api` needs audience `auth-service` and action `credentials.project`. The action comes from the registry seed through `auth-migrate workloads seed -apply`. Run `seed` as a dry run first, then with `-apply`, and read the row back before any step sets `ACR_AUTH_PROJECTION_URL` for acr. Do not add the action by hand: the next seed apply removes it.
 
-The credential-events route, `POST /internal/v1/acr/credential-events`, needs an enabled
-live workload row that lists both. After caller authentication, the route returns `403`
+The credential-events route, `POST /internal/v1/acr/credential-events`, is served on the
+auth-service internal listener only, and needs an enabled live workload row that lists both. After caller authentication, the route returns `403`
 if that row is absent, disabled or lacks either value. See
 [ACR credential authority](../../reference/auth/acr-credential-authority.md) for the route
 requirements.

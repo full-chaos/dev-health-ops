@@ -135,16 +135,35 @@ func TestMintLicenseOnlyLinkedByCigate(t *testing.T) {
 		t.Fatal(err)
 	}
 	const pkg = "github.com/full-chaos/dev-health-ops/internal/cigates/livee2e"
+	env := append(os.Environ(), "GOFLAGS=-mod=readonly", "GOPROXY=off", "GOSUMDB=off")
+	list := exec.Command("go", "list", "-f", "{{.ImportPath}}", "./cmd/...")
+	list.Dir, list.Env = root, env
+	raw, err := list.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list ./cmd/...: %v\n%s", err, raw)
+	}
+	const cigate = "github.com/full-chaos/dev-health-ops/cmd/cigate"
+	var prod []string
+	sawCigate := false
+	for _, line := range strings.Fields(string(raw)) {
+		if line == cigate {
+			sawCigate = true
+			continue
+		}
+		prod = append(prod, line)
+	}
+	if !sawCigate || len(prod) < 5 {
+		t.Fatalf("command list incomplete: cigate=%v others=%v", sawCigate, prod)
+	}
 	for _, cell := range []struct {
 		commands []string
 		want     bool
 	}{
-		{[]string{"./cmd/dho", "./cmd/auth-service", "./cmd/auth-migrate", "./cmd/dev-health-worker-migrate", "./cmd/dev-health-migration-matrix", "./cmd/credrefgen"}, false},
-		{[]string{"./cmd/cigate"}, true},
+		{prod, false},
+		{[]string{cigate}, true},
 	} {
 		cmd := exec.Command("go", append([]string{"list", "-deps"}, cell.commands...)...)
-		cmd.Dir = root
-		cmd.Env = append(os.Environ(), "GOFLAGS=-mod=readonly", "GOPROXY=off", "GOSUMDB=off")
+		cmd.Dir, cmd.Env = root, env
 		raw, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("go list -deps: %v\n%s", err, raw)

@@ -2573,6 +2573,12 @@ is_assoc() {
 # warn_integration_weight_drift reads an empty associative array, never an undeclared name bash would index arithmetically.
 declare -A INTEGRATION_RUN_FILTER=()
 declare -A INTEGRATION_DRIFT_WEIGHT=()
+# The discovery rows of check_integration_package_shards_dry_run (CHAOS-13520), keyed "module|./dir": read by
+# discover_integration_tagged_tests only while INTEGRATION_DISCOVERY_CACHE is set, so every other caller lists and parses.
+declare -A INTEGRATION_DISCOVERY_DONE=()
+declare -A INTEGRATION_DISCOVERY_TAGGED=()
+declare -A INTEGRATION_DISCOVERY_UNTAGGED=()
+declare -A INTEGRATION_DISCOVERY_HOOK=()
 # The wall of one packages shard's go test runs (CHAOS-13520): a warning above WARN, a failure above FAIL.
 INTEGRATION_SHARD_WALL_WARN_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_WARN_SECONDS:-300}"
 INTEGRATION_SHARD_WALL_FAIL_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_FAIL_SECONDS:-600}"
@@ -2847,13 +2853,30 @@ split_plan_scope() {
 # and INTEGRATION_HOOK ("<key>/<file> <func>" of the first `func init` or `func TestMain` in an integration-only file:
 # that hook changes the process the untagged tests run in under the tag, so the package selects every name it has).
 discover_integration_tagged_tests() {
-  local module_dir="$1" pkg key base dir go_file path name rel
+  local module_dir="$1" pkg key base dir go_file path name rel row
   shift
   declare -gA INTEGRATION_TAGGED_TESTS=() INTEGRATION_UNTAGGED_TESTS=() INTEGRATION_HOOK=()
   local -A path_pkg=()
   local -a paths=()
 
   [ "$#" -gt 0 ] || return 0
+  # Every row of a package comes from its own files only, so a call for packages an earlier call of the same run already
+  # discovered reads those rows (the all-shards dry run discovers each module once, then every shard reads).
+  if [ -n "${INTEGRATION_DISCOVERY_CACHE:-}" ]; then
+    local cached=1
+    for pkg in "$@"; do
+      [ -n "${INTEGRATION_DISCOVERY_DONE[${module_dir}|${pkg}]+set}" ] || { cached=0; break; }
+    done
+    if [ "${cached}" -eq 1 ]; then
+      for pkg in "$@"; do
+        row="${module_dir}|${pkg}"
+        [ -z "${INTEGRATION_DISCOVERY_TAGGED[${row}]+set}" ] || INTEGRATION_TAGGED_TESTS["${pkg}"]="${INTEGRATION_DISCOVERY_TAGGED[${row}]}"
+        [ -z "${INTEGRATION_DISCOVERY_UNTAGGED[${row}]+set}" ] || INTEGRATION_UNTAGGED_TESTS["${pkg}"]="${INTEGRATION_DISCOVERY_UNTAGGED[${row}]}"
+        [ -z "${INTEGRATION_DISCOVERY_HOOK[${row}]+set}" ] || INTEGRATION_HOOK["${pkg}"]="${INTEGRATION_DISCOVERY_HOOK[${row}]}"
+      done
+      return 0
+    fi
+  fi
   integration_test_files "${module_dir}" "$@"
   base="${ROOT}"
   [ "${module_dir}" = "." ] || base="${ROOT}/${module_dir}"
@@ -2886,6 +2909,15 @@ discover_integration_tagged_tests() {
       fi
     done <<<"${SCAN_TESTS[${path}]-}${SCAN_RUNS[${path}]-}"
   done
+  if [ -n "${INTEGRATION_DISCOVERY_CACHE:-}" ]; then
+    for pkg in "$@"; do
+      row="${module_dir}|${pkg}"
+      INTEGRATION_DISCOVERY_DONE["${row}"]=1
+      [ -z "${INTEGRATION_TAGGED_TESTS[${pkg}]+set}" ] || INTEGRATION_DISCOVERY_TAGGED["${row}"]="${INTEGRATION_TAGGED_TESTS[${pkg}]}"
+      [ -z "${INTEGRATION_UNTAGGED_TESTS[${pkg}]+set}" ] || INTEGRATION_DISCOVERY_UNTAGGED["${row}"]="${INTEGRATION_UNTAGGED_TESTS[${pkg}]}"
+      [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ] || INTEGRATION_DISCOVERY_HOOK["${row}"]="${INTEGRATION_HOOK[${pkg}]}"
+    done
+  fi
 }
 
 # run_integration_split_filter LABEL KEY SELECT FILTER: fails unless FILTER (a newline list) is a non-empty subset of SELECT
@@ -5131,7 +5163,24 @@ check_integration_package_shard() {
 # `integration-shard packages N --dry-run` prints after the plan. The shard guards read this one output instead of one
 # plan per shard.
 check_integration_package_shards_dry_run() {
-  local shard
+  local shard module_dir index pkg key
+  local -a pkgs=()
+  # One discovery per module for every package a packages shard runs; each shard then reads its rows.
+  local INTEGRATION_DISCOVERY_CACHE=1
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    pkgs=()
+    for index in "${!INTEGRATION_PACKAGES[@]}"; do
+      [ "${INTEGRATION_PACKAGE_MODULES[${index}]}" = "${module_dir}" ] || continue
+      pkg="${INTEGRATION_PACKAGES[${index}]}"
+      key="${module_dir}/${pkg#./}"
+      key="${key#./}"
+      case " ${PROVIDER_INTEGRATION_PACKAGE_KEY} ${DAILY_INTEGRATION_PACKAGE_KEY} ${WORKERSERVICE_INTEGRATION_PACKAGE_KEY} ${QAPISERVER_INTEGRATION_PACKAGE_KEY} ${REMAINING_INTEGRATION_PACKAGE_KEY} " in
+        *" ${key} "*) continue ;;
+      esac
+      pkgs+=("${pkg}")
+    done
+    [ "${#pkgs[@]}" -eq 0 ] || discover_integration_tagged_tests "${module_dir}" "${pkgs[@]}"
+  done
   for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
     [ "${INTEGRATION_SHARD_NON_PROVIDER_COUNTS[${shard}]}" -gt 0 ] || continue
     printf '==> integration-shard packages %d --dry-run\n' "${shard}"

@@ -451,7 +451,7 @@ enable_social() {
       -cert "${STATE}/social/server.pem" -key "${STATE}/social/server.key" \
       -listen 127.0.0.1:443 -admin 127.0.0.1:9091 >"${STATE}/logs/providerstub.log" 2>&1 &
   )
-  wait_stub providerstub https://api.github.com/user "${STATE}/social/ca.pem" -H 'Authorization: Bearer gh-live'
+  wait_stub providerstub https://api.github.com/__ready "${STATE}/social/ca.pem"
   chmod 600 "${STATE}/auth-service.env"
   printf '%s\n' 'SOCIAL_GITHUB_CLIENT_ID=gh-client' 'SOCIAL_GITHUB_CLIENT_SECRET=gh-secret' \
     "SSL_CERT_FILE=${STATE}/ca-bundle.pem" >>"${STATE}/auth-service.env"

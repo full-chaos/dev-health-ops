@@ -22,5 +22,12 @@
     "body_contains": "\"access_token\":\"gh-live\"",
     "status": 200,
     "body": {"app": {"client_id": "gh-client"}, "user": {"id": 920001}}
+  },
+  {
+    "provider": "github",
+    "method": "GET",
+    "path": "/__ready",
+    "status": 200,
+    "body": {"ready": true}
   }
 ]

@@ -893,7 +893,7 @@ func TestLiveE2EEnableSocialAndSSO(t *testing.T) {
 					t.Errorf("missing build %q", want)
 				}
 				curl := liveE2ERead(t, filepath.Join(state, "curl.calls"))
-				readyCurl := "-sS --max-time 1 -o /dev/null -w %{http_code} --cacert " + state + "/social/ca.pem -H Authorization: Bearer gh-live https://api.github.com/user"
+				readyCurl := "-sS --max-time 1 -o /dev/null -w %{http_code} --cacert " + state + "/social/ca.pem https://api.github.com/__ready"
 				if name == "idpstub" {
 					readyCurl = "-sS --max-time 1 -o /dev/null -w %{http_code} --cacert " + state + "/idp/ca.pem https://localhost:9443/.well-known/openid-configuration"
 				}
@@ -1122,6 +1122,7 @@ func TestLiveE2ESocialFixtures(t *testing.T) {
 		{"POST", "github.com", "/login/oauth/access_token", "", "code=test&client_id=gh-client&client_secret=gh-secret", `{"access_token":"gh-live","token_type":"bearer","scope":"read:user,user:email"}`, 200},
 		{"GET", "api.github.com", "/user", "Bearer gh-live", "", `{"id":920001,"login":"live-social","name":"Live Social","email":"live-social@example.test"}`, 200},
 		{"POST", "api.github.com", "/applications/gh-client/token", "Basic Z2gtY2xpZW50OmdoLXNlY3JldA==", `{"access_token":"gh-live"}`, `{"app":{"client_id":"gh-client"},"user":{"id":920001}}`, 200},
+		{"GET", "api.github.com", "/__ready", "", "", `{"ready":true}`, 200},
 		{"GET", "api.github.com", "/unknown", "", "", "", 599},
 		{"GET", "api.github.com", "/user/emails", "Bearer gh-live", "", "", 599},
 		{"GET", "api.github.com", "/user", "Bearer wrong", "", "", 599},

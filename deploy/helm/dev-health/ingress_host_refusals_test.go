@@ -23,6 +23,8 @@ func renderIngress(args ...string) (string, error) {
 // TestEveryHostRefusalFires renders each refusal family once and requires the render to fail with the message this table
 // expects.
 func TestEveryHostRefusalFires(t *testing.T) {
+	t.Parallel()
+
 	const goDefault = `"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]`
 	goOn := []string{"--set", "goApi.enabled=true", "--set", "queryApi.enabled=true"}
 	cases := []struct {
@@ -52,6 +54,8 @@ func TestEveryHostRefusalFires(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			out, err := renderIngress(append([]string{"--set-json", "ingress.hosts=" + hostEntry(c.host)}, c.args...)...)
 			if err == nil || !strings.Contains(out, c.want) {
 				t.Errorf("want a render failure containing %q, got err=%v\n%s", c.want, err, out)

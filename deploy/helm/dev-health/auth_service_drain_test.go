@@ -34,6 +34,8 @@ func authRefused(t *testing.T, sets ...string) string {
 }
 
 func TestAuthServiceDrainsBeforeSigterm(t *testing.T) {
+	t.Parallel()
+
 	pod := authPod(t)
 	container := at(pod, "containers", 0)
 	if pod["terminationGracePeriodSeconds"] != 35 {
@@ -56,6 +58,8 @@ func TestAuthServiceDrainsBeforeSigterm(t *testing.T) {
 
 // Each edge of grace >= preStop + shutdown + 5: the minimum renders, one second less is refused.
 func TestAuthServiceGraceBoundAtEachEdge(t *testing.T) {
+	t.Parallel()
+
 	for _, c := range []struct {
 		name      string
 		preStop   int
@@ -71,6 +75,8 @@ func TestAuthServiceGraceBoundAtEachEdge(t *testing.T) {
 		{"longer shutdown", 10, true, 90, 105, "authService.drain.preStopSeconds (10) + authService.shutdownTimeout (90) + 5 = 105"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
 			sets := func(grace int) []string {
 				return []string{
 					"--set", "authService.drain.preStopSeconds=" + strconv.Itoa(c.preStop),
@@ -90,6 +96,8 @@ func TestAuthServiceGraceBoundAtEachEdge(t *testing.T) {
 }
 
 func TestAuthServiceDrainRefusals(t *testing.T) {
+	t.Parallel()
+
 	for name, c := range map[string]struct {
 		sets []string
 		want string
@@ -108,6 +116,8 @@ func TestAuthServiceDrainRefusals(t *testing.T) {
 		"extraEnv shutdown":  {[]string{"--set", "authService.extraEnv[0].name=AUTH_SERVICE_SHUTDOWN_TIMEOUT", "--set", "authService.extraEnv[0].value=5s"}, "AUTH_SERVICE_SHUTDOWN_TIMEOUT"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			if out := authRefused(t, c.sets...); !strings.Contains(out, c.want) {
 				t.Errorf("the refusal does not say %q: %.400s", c.want, out)
 			}

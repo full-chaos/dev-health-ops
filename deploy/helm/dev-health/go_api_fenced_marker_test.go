@@ -64,6 +64,8 @@ func markerValues(env []envEntry) []string {
 }
 
 func TestFenceMarkerIsTrueOnlyWhereTheFenceRenders(t *testing.T) {
+	t.Parallel()
+
 	if got := markerValues(goAPIEnv(t)); len(got) != 1 || got[0] != "false" {
 		t.Errorf("with the fence off the marker renders %v, want exactly one \"false\" (an env entry beats the same name from envFrom)", got)
 	}
@@ -76,6 +78,8 @@ func TestFenceMarkerIsTrueOnlyWhereTheFenceRenders(t *testing.T) {
 // The marker and the policy come from one condition: for each setting, the marker is "true" exactly when
 // the request port is closed to a stranger by the rendered policy.
 func TestFenceMarkerAndThePolicyShareOneCondition(t *testing.T) {
+	t.Parallel()
+
 	for name, c := range map[string]struct {
 		args  []string
 		fence bool
@@ -86,6 +90,8 @@ func TestFenceMarkerAndThePolicyShareOneCondition(t *testing.T) {
 		"fence off, extra port set": {[]string{"--set-json", "goApi.networkPolicy.extraFencedPorts=[8010]"}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			marker := markerValues(goAPIEnv(t, c.args...))
 			full := append([]string{"template", "fence", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
 				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, c.args...)
@@ -124,12 +130,16 @@ func TestFenceMarkerAndThePolicyShareOneCondition(t *testing.T) {
 }
 
 func TestFenceMarkerCannotBeSetFromExtraEnv(t *testing.T) {
+	t.Parallel()
+
 	for name, extra := range map[string][]string{
 		"fence off":             nil,
 		"fence on":              {"--set", "goApi.networkPolicy.enabled=true"},
 		"internal listener off": {"--set", "goApi.internal.enabled=false"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			args := append([]string{"template", "marker", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
 				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24",
 				"--set-json", `goApi.extraEnv=[{"name":"TRUSTED_PROXIES_NETWORK_FENCED","value":"true"}]`}, extra...)

@@ -40,6 +40,8 @@ func otlpRules(policy map[string]any) []any {
 }
 
 func TestAuthServiceTracingIsOffByDefault(t *testing.T) {
+	t.Parallel()
+
 	deployment, policy := tracingDocs(t)
 	if got, set := containerEnvValue(t, deployment, "OTEL_ENABLED"); !set || got != "false" {
 		t.Errorf("OTEL_ENABLED = %q (set %v), want \"false\" always rendered", got, set)
@@ -55,6 +57,8 @@ func TestAuthServiceTracingIsOffByDefault(t *testing.T) {
 }
 
 func TestAuthServiceTracingOnRendersTheExportAndItsEgress(t *testing.T) {
+	t.Parallel()
+
 	for name, peer := range map[string]string{
 		"node ipBlock":        `[{"ipBlock":{"cidr":"10.0.0.151/32"}}]`,
 		"v6 host ipBlock":     `[{"ipBlock":{"cidr":"2001:db8::7/128"}}]`,
@@ -66,6 +70,8 @@ func TestAuthServiceTracingOnRendersTheExportAndItsEgress(t *testing.T) {
 		"namespace and pods":  `[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"observability"}},"podSelector":{"matchLabels":{"app":"collector"}}}]`,
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			deployment, policy := tracingDocs(t, append(append([]string{}, tracingOn...), "--set-json", "authService.networkPolicy.egress.otlp.to="+peer)...)
 			for env, want := range map[string]string{
 				"OTEL_ENABLED": "true", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://10.0.0.151:4317",
@@ -95,6 +101,8 @@ func TestAuthServiceTracingOnRendersTheExportAndItsEgress(t *testing.T) {
 }
 
 func TestAuthServiceTracingSampleRateIsRendered(t *testing.T) {
+	t.Parallel()
+
 	deployment, _ := tracingDocs(t, append(append([]string{}, tracingOn...), "--set-string", "authService.tracing.sampleRate=0.25")...)
 	if got, _ := containerEnvValue(t, deployment, "OTEL_SAMPLE_RATE"); got != "0.25" {
 		t.Errorf("OTEL_SAMPLE_RATE = %q, want 0.25", got)
@@ -157,6 +165,8 @@ func TestAuthServiceTracingRefusals(t *testing.T) {
 
 // With tracing off a listed peer opens nothing.
 func TestAuthServiceOTLPPeerWithTracingOffOpensNothing(t *testing.T) {
+	t.Parallel()
+
 	_, policy := tracingDocs(t, "--set-json", `authService.networkPolicy.egress.otlp.to=[{"ipBlock":{"cidr":"10.0.0.151/32"}}]`)
 	if rules := otlpRules(policy); len(rules) != 0 {
 		t.Errorf("the policy opens 4317 while tracing is off: %v", rules)

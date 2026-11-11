@@ -185,6 +185,8 @@ func goAPIPodLabels() map[string]string {
 }
 
 func TestNetworkPolicyLetsTheIngressControllerReachGoAPI(t *testing.T) {
+	t.Parallel()
+
 	probes := []int{3000, 8000, 8010, 8090, 8091, 8092, 9000, 9001}
 	for name, c := range map[string]struct {
 		args []string
@@ -199,6 +201,8 @@ func TestNetworkPolicyLetsTheIngressControllerReachGoAPI(t *testing.T) {
 		"internal on, another api port": {[]string{"--set", "goApi.internal.enabled=true", "--set", "goApi.port=9000"}, 9000, []int{3000, 8000, 8010, 8090, 8092, 9000, 9001}},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			policies := renderNetpols(t, c.args...)
 			admitted, selected := admittedFromIngressController(policies, goAPIPodLabels(), probes)
 			if !selected {
@@ -222,6 +226,8 @@ func TestNetworkPolicyLetsTheIngressControllerReachGoAPI(t *testing.T) {
 // of that component's Service, and no other pod of the release on any port. The check runs on the UNION of every rendered
 // policy (NetworkPolicies are additive), per pod, so a broad rule on one policy cannot hide behind a narrow one on another.
 func TestIngressControllerReachesOnlyGoAPIAndWebOnTheirOwnPorts(t *testing.T) {
+	t.Parallel()
+
 	probes := []int{3000, 5432, 6379, 6432, 6433, 6434, 8000, 8010, 8080, 8090, 8091, 8092, 8123, 9000, 9001}
 	pods := []string{"go-api", "web", "query-api", "go-worker", "valkey", "clickhouse", "postgresql",
 		"go-pgbouncer-transaction", "go-pgbouncer-queue-session", "go-pgbouncer-coordinator-session",
@@ -244,6 +250,8 @@ func TestIngressControllerReachesOnlyGoAPIAndWebOnTheirOwnPorts(t *testing.T) {
 		"go workers with pgbouncer, bundled postgresql": {[]string{"--set", "goApi.internal.enabled=false", "--set", "postgresql.enabled=true"}, 8000, 3000, false, false},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			policies := renderNetpols(t, c.args...)
 			for _, component := range pods {
 				labels := map[string]string{"app.kubernetes.io/name": "dev-health", "app.kubernetes.io/instance": "np", "app.kubernetes.io/component": component}
@@ -296,6 +304,8 @@ func TestIngressControllerReachesOnlyGoAPIAndWebOnTheirOwnPorts(t *testing.T) {
 // with another namespace configured, that namespace is admitted to go-api, web and query-api on their ports and the
 // default one is admitted nowhere.
 func TestIngressControllerNamespaceIsConfigurable(t *testing.T) {
+	t.Parallel()
+
 	policies := renderNetpols(t, "--set", "goApi.internal.enabled=false", "--set", "queryApi.enabled=true",
 		"--set", "networkPolicy.ingressControllerNamespace=edge-proxy")
 	probes := []int{3000, 8000, 8090, 9000}
@@ -315,6 +325,8 @@ func TestIngressControllerNamespaceIsConfigurable(t *testing.T) {
 // names, on the union of every policy (CHAOS-7181; the query-api pods leave the release-wide policy while the internal
 // listener is on).
 func TestInternalPortsAreClosedOnTheUnion(t *testing.T) {
+	t.Parallel()
+
 	policies := renderNetpols(t, "--set", "goApi.internal.enabled=true", "--set", "queryApi.enabled=true",
 		"--set", "queryApi.internal.enabled=true", "--set", "queryApi.internal.allowedFrom[0].matchLabels.app=tools")
 	for component, port := range map[string]int{"go-api": 8091} {
@@ -341,6 +353,8 @@ func TestInternalPortsAreClosedOnTheUnion(t *testing.T) {
 // The query-api internal policy admits the internal port only from queryApi.internal.allowedFrom. A release-local `api`
 // peer selects nothing since the Python api is gone, and an empty `from` would admit every source.
 func TestQueryAPIInternalPolicyAdmitsOnlyAllowedFrom(t *testing.T) {
+	t.Parallel()
+
 	internalPeers := func(t *testing.T, args ...string) (rules []netpolRule, found bool) {
 		t.Helper()
 		for _, policy := range renderNetpols(t, append([]string{"--set", "queryApi.enabled=true", "--set", "queryApi.internal.enabled=true"}, args...)...) {
@@ -386,6 +400,8 @@ func TestQueryAPIInternalPolicyAdmitsOnlyAllowedFrom(t *testing.T) {
 // rule admits the controller on every port), so the render refuses it when the policy is on, for the release namespace and
 // for global.namespaceOverride, and renders as before when the policy is off.
 func TestControllerNamespaceEqualToReleaseNamespaceFailsTheRender(t *testing.T) {
+	t.Parallel()
+
 	render := func(args ...string) (string, error) {
 		out, err := helmOutput(append([]string{"template", "np", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
 			"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, args...)...)

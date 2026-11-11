@@ -74,8 +74,12 @@ func TestAuthWorkloadClientsDefaultIsTheEmptyList(t *testing.T) {
 // One entry adds exactly its lines to the internal policy's one `from`, after the peers and before the port: the rest
 // of the render, the API port's policy included, is byte-equal.
 func TestAuthWorkloadClientsAddOneFromEntryOnTheInternalPortOnly(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []int{2, 3, 4} {
 		t.Run(fmt.Sprintf("phase %d", phase), func(t *testing.T) {
+			t.Parallel()
+
 			without := renderAuthText(t, phaseArgs(phase, internalOn(`["web"]`)...))
 			with := renderAuthText(t, phaseArgs(phase, internalOn(`["web"]`, workloadClients("["+acrClient+"]")...)...))
 			want := insertInternalFrom(t, without, acrClientLines)
@@ -91,6 +95,8 @@ func TestAuthWorkloadClientsAddOneFromEntryOnTheInternalPortOnly(t *testing.T) {
 // A podSelector alone stays in the release's namespace (no namespaceSelector line), matchExpressions render as given,
 // and the entries keep their listed order.
 func TestAuthWorkloadClientsRenderInOrderWithoutANamespaceSelector(t *testing.T) {
+	t.Parallel()
+
 	without := renderAuthText(t, phaseArgs(3, internalOn(`["web"]`)...))
 	clients := `[{"podSelector":{"matchExpressions":[{"key":"app","operator":"In","values":["tools"]}]}},` + acrClient + `]`
 	with := renderAuthText(t, phaseArgs(3, internalOn(`["web"]`, workloadClients(clients)...)...))
@@ -137,8 +143,12 @@ func toAnySlice(v any) []any {
 // internal port, with no peer entry and never an empty `from` (which would admit every source); the API port is as
 // it is with the internal listener off.
 func TestAuthWorkloadClientsAloneOnTheInternalPort(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []int{2, 3, 4} {
 		t.Run(fmt.Sprintf("phase %d", phase), func(t *testing.T) {
+			t.Parallel()
+
 			docs := renderPhase(t, phase, internalOn(`[]`, workloadClients("["+acrClient+"]")...)...)
 			policy := authDoc(docs, "NetworkPolicy", internalListenerDoc)
 			if policy == nil {
@@ -212,6 +222,8 @@ func lineDiff(want, got string) string {
 }
 
 func TestAuthWorkloadClientsRefusals(t *testing.T) {
+	t.Parallel()
+
 	const pods = `"podSelector":{"matchLabels":{"app":"acr"}}`
 	on := func(value string) []string { return phaseArgs(3, internalOn(`["web"]`, workloadClients(value)...)...) }
 	on2 := func(peers, value string) []string {
@@ -245,6 +257,8 @@ func TestAuthWorkloadClientsRefusals(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, c.args...)
 			if err == nil || !strings.Contains(out, c.want) {
 				t.Fatalf("not refused with %q (err %v): %.400s", c.want, err, out)

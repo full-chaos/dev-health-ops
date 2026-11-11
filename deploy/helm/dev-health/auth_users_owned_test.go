@@ -8,6 +8,8 @@ import (
 // AUTH_USERS_OWNED is rendered from authService.phase only, from phase 4 up (D6358), so below phase 4 (the phase 3
 // rollback render included) it reaches no consumer.
 func TestUsersOwnedSwitchIsUnsetBelowPhase4(t *testing.T) {
+	t.Parallel()
+
 	targets := []struct{ kind, name string }{
 		{"Deployment", "a-dev-health-auth-service"},
 		{"Job", "a-dev-health-auth-migrate"},
@@ -33,6 +35,8 @@ func TestUsersOwnedSwitchIsUnsetBelowPhase4(t *testing.T) {
 // The switch has one source: extraEnv cannot set it, or the Jobs and the
 // service could disagree.
 func TestUsersOwnedCannotBeSetThroughExtraEnv(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, append(append([]string{}, authBase...),
 		"--set-json", `authService.extraEnv=[{"name":"AUTH_USERS_OWNED","value":"true"}]`)...)
 	if err == nil || !strings.Contains(out, "authService.extraEnv must not set AUTH_USERS_OWNED") {
@@ -43,6 +47,8 @@ func TestUsersOwnedCannotBeSetThroughExtraEnv(t *testing.T) {
 // Phase 4 (users owned): auth-service, the auth-migrate and auth-grants hooks and the auth-backfill Job all carry
 // AUTH_USERS_OWNED=true, and none carries AUTH_ORGS_OWNED.
 func TestUsersOwnedRendersAtPhase4(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=4", "--set", "authService.usersOwnedStage=owned"}, phase3Secrets...)...)...)
 	if err != nil {
 		t.Fatalf("phase 4: render: %v\n%.400s", err, out)
@@ -67,6 +73,8 @@ func TestUsersOwnedRendersAtPhase4(t *testing.T) {
 }
 
 func TestUsersOwnedRendersOnBackfillJobAtPhase4(t *testing.T) {
+	t.Parallel()
+
 	args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...), "authService.backfill.verb=users-backfill", "authService.phase=4", "authService.usersOwnedStage=owned", "goApi.enabled=true")
 	args = append(append(append(args, sessionReaders...), sessionSuccessor...), authTrusted...)
 	_, job := renderBackfill(t, args)

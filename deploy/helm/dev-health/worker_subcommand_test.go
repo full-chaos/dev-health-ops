@@ -23,6 +23,8 @@ func deploymentOf(t *testing.T, rendered, name string) string {
 // chart's own default renders the dho image with the verb first and the
 // queue flags after it, for all four worker groups.
 func TestDefaultWorkerGroupsRunTheDhoVerbFromTheOneImage(t *testing.T) {
+	t.Parallel()
+
 	output, err := helmOutput("template", "worker-test", ".", "--set", "goWorkers.enabled=true")
 	if err != nil {
 		t.Fatalf("default render failed: %v\n%s", err, output)

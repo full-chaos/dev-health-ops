@@ -13,12 +13,16 @@ var orderingContractValue = regexp.MustCompile(`(?m)- name: OPERATIONAL_ORDERING
 // contract 2 (contract 1 is unsupported and every Go reader refuses a value other
 // than 2). The migrate Job carries it too (CHAOS-7421).
 func TestEveryGoWorkerAndTheMigrateJobCarryOrderingContract2(t *testing.T) {
+	t.Parallel()
+
 	for name, sets := range map[string][]string{
 		"chart default":      {"--set", "goWorkers.enabled=true"},
 		"value left empty":   {"--set", "goWorkers.enabled=true", "--set", "goWorkers.operationalOrderingContract="},
 		"value explicitly 2": {"--set", "goWorkers.enabled=true", "--set", "goWorkers.operationalOrderingContract=2"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			output, err := helmOutput(append([]string{"template", "ordering-test", "."}, sets...)...)
 			if err != nil {
 				t.Fatalf("render failed: %v\n%s", err, output)
@@ -68,8 +72,12 @@ func TestEveryGoWorkerAndTheMigrateJobCarryOrderingContract2(t *testing.T) {
 // reason, so it never reaches a workload (r2 of CHAOS-7421 rendered "1" into all nine workers,
 // the migrate Job and both Python APIs, since deleted; Python still reads "1" as legacy).
 func TestChartRefusesAnOrderingContractOtherThan2(t *testing.T) {
+	t.Parallel()
+
 	for _, value := range []string{"1", "3", " 2", "x"} {
 		t.Run("value "+value, func(t *testing.T) {
+			t.Parallel()
+
 			output, err := helmOutput("template", "refuse-test", ".", "--set-string", "goWorkers.operationalOrderingContract="+value)
 			if err == nil {
 				t.Fatalf("the render accepted %q", value)

@@ -18,6 +18,8 @@ func pushLifecycleRender(t *testing.T, extra ...string) ([]map[string]any, strin
 }
 
 func TestPushLifecycleTwoCallersRenderIntoBothAuthJobs(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := pushLifecycleRender(t,
 		"--set", "authService.migrate.pushLifecycle.writerRole=devhealth_auth_push_writer",
 		"--set-json", `authService.migrate.pushLifecycle.callerRoles=["devhealth_api","devhealth_domain"]`)
@@ -39,6 +41,8 @@ func TestPushLifecycleTwoCallersRenderIntoBothAuthJobs(t *testing.T) {
 }
 
 func TestPushLifecycleDefaultRendersNeitherSetting(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := pushLifecycleRender(t)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -55,6 +59,8 @@ func TestPushLifecycleDefaultRendersNeitherSetting(t *testing.T) {
 // A half-set pair used to render silently: callers without a writer role were
 // dropped, so the grant never happened. Each refusal names the key.
 func TestPushLifecycleRefusals(t *testing.T) {
+	t.Parallel()
+
 	const writer = "devhealth_auth_push_writer"
 	cases := map[string][]string{
 		"callers without a writer": {"--set-json", `authService.migrate.pushLifecycle.callerRoles=["devhealth_api"]`},
@@ -70,6 +76,8 @@ func TestPushLifecycleRefusals(t *testing.T) {
 	}
 	for name, extra := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := pushLifecycleRender(t, extra...)
 			if err == nil {
 				t.Fatal("the render succeeded; it must refuse")
@@ -85,6 +93,8 @@ func TestPushLifecycleRefusals(t *testing.T) {
 // default authService.phase (0) neither Job renders, and a values file that
 // sets the pair wrong must still fail.
 func TestPushLifecycleRefusalsAtEveryPhase(t *testing.T) {
+	t.Parallel()
+
 	const writer = "devhealth_auth_push_writer"
 	set := func(callers string) []string {
 		return []string{"--set", "authService.migrate.pushLifecycle.writerRole=" + writer,
@@ -107,6 +117,8 @@ func TestPushLifecycleRefusalsAtEveryPhase(t *testing.T) {
 	for name, extra := range cases {
 		for phase, base := range map[string][]string{"phase 0": nil, "phase 1": authBase} {
 			t.Run(name+" at "+phase, func(t *testing.T) {
+				t.Parallel()
+
 				args := append(append([]string{}, base...), extra...)
 				_, out, err := renderAuthRaw(t, args...)
 				if err == nil {
@@ -121,6 +133,8 @@ func TestPushLifecycleRefusalsAtEveryPhase(t *testing.T) {
 }
 
 func TestPushLifecycleValidPairRendersAtPhaseZero(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuthRaw(t,
 		"--set", "authService.migrate.pushLifecycle.writerRole=devhealth_auth_push_writer",
 		"--set-json", `authService.migrate.pushLifecycle.callerRoles=["devhealth_api","devhealth_domain"]`)

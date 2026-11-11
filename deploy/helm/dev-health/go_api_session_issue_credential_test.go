@@ -20,6 +20,8 @@ func siGoAPIEnv(t *testing.T, docs []map[string]any) map[string]any {
 }
 
 func TestSessionIssueCredentialWorkloadRendersNoToken(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(issueSets(issueWorkload...)...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -37,6 +39,8 @@ func TestSessionIssueCredentialWorkloadRendersNoToken(t *testing.T) {
 }
 
 func TestSessionIssueCredentialWorkloadIgnoresSecretName(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(issueSets(append([]string{"--set", "goApi.sessionIssue.secretName=" + dedicatedIssueSecret}, issueWorkload...)...)...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -50,6 +54,8 @@ func TestSessionIssueCredentialWorkloadIgnoresSecretName(t *testing.T) {
 }
 
 func TestSessionIssueCredentialWorkloadIgnoresSecretKey(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(issueSets(append([]string{"--set", "goApi.sessionIssue.secretKey=custom"}, issueWorkload...)...)...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -60,6 +66,8 @@ func TestSessionIssueCredentialWorkloadIgnoresSecretKey(t *testing.T) {
 }
 
 func TestSessionIssueCredentialWorkloadRefusesExtraEnvName(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, goAPIWithAuth(issueSets(append([]string{"--set-json", `goApi.extraEnv=[{"name":"AUTH_SESSION_ISSUE_CREDENTIAL","value":"workload"}]`}, issueWorkload...)...)...)...)
 	if err == nil {
 		t.Fatal("the render succeeded, want a refusal")
@@ -70,6 +78,8 @@ func TestSessionIssueCredentialWorkloadRefusesExtraEnvName(t *testing.T) {
 }
 
 func TestSessionIssueCredentialWorkloadChangesOnlyGoAPI(t *testing.T) {
+	t.Parallel()
+
 	_, token, err := renderAuth(t, goAPIWithAuth(issueSets()...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, token)
@@ -99,6 +109,8 @@ func TestSessionIssueCredentialWorkloadChangesOnlyGoAPI(t *testing.T) {
 func splitDocs(out string) []string { return strings.Split(out, "\n---\n") }
 
 func TestSessionIssueCredentialWorkloadWithBootstrapRendersOneCredential(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(wbOn(issueWorkload...)...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -113,6 +125,8 @@ func TestSessionIssueCredentialWorkloadWithBootstrapRendersOneCredential(t *test
 }
 
 func TestSessionIssueCredentialSchemaRefusesOtherValues(t *testing.T) {
+	t.Parallel()
+
 	for _, set := range []string{"goApi.sessionIssue.credential=session_compat", "goApi.sessionIssue.credential=token", "goApi.sessionIssue.credential=Workload"} {
 		_, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", set}, issueSessionsOn...)...)...)
 		if err == nil {
@@ -126,6 +140,8 @@ func TestSessionIssueCredentialSchemaRefusesOtherValues(t *testing.T) {
 }
 
 func TestSessionIssueCredentialWorkloadSessionsOffRendersNothing(t *testing.T) {
+	t.Parallel()
+
 	off := append([]string{}, riverHook...)
 	_, def, err := renderAuth(t, goAPIWithAuth(off...)...)
 	if err != nil {
@@ -143,7 +159,7 @@ func TestSessionIssueCredentialWorkloadSessionsOffRendersNothing(t *testing.T) {
 // credential "" is the key absent (CHAOS-13467: a venue that layers values.prod.yaml unsets it this way): the unset render is compared
 // with the explicit-default block and with every way to write "", byte for byte, and checked structurally.
 func TestSessionIssueCredentialUnsetRendersTokenMode(t *testing.T) {
-	t.Parallel()
+
 	explicit := []string{"--set", "goApi.sessionIssue.secretName=", "--set", "goApi.sessionIssue.secretKey=AUTH_SESSION_ISSUE_TOKEN"}
 	cases := []struct {
 		name  string
@@ -192,6 +208,8 @@ func TestSessionIssueCredentialUnsetRendersTokenMode(t *testing.T) {
 }
 
 func TestSessionIssueCredentialWorkloadAcceptsOtherCaseSpellings(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range []string{"auth_session_issue_credential", "Auth_Session_Issue_Credential", " AUTH_SESSION_ISSUE_CREDENTIAL"} {
 		_, out, err := renderAuth(t, goAPIWithAuth(issueSets(append([]string{"--set-json", `goApi.extraEnv=[{"name":"` + name + `","value":"x"}]`}, issueWorkload...)...)...)...)
 		if err != nil {
@@ -212,6 +230,8 @@ func emptyCredentialValues(t *testing.T) string {
 
 // The workload render is unchanged by the "" admission: the same env as before, one AUTH_SESSION_ISSUE_CREDENTIAL, no token reference.
 func TestSessionIssueCredentialWorkloadRenderUnchangedByEmptyAdmission(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(issueSets(issueWorkload...)...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)

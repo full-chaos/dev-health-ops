@@ -11,6 +11,8 @@ import (
 // own default renders the verb as the first argument, after which the
 // coordinator settings follow.
 func TestDefaultReconcilerGroupRunsTheDhoVerb(t *testing.T) {
+	t.Parallel()
+
 	output, err := helmOutput("template", "reconciler-test", ".", "--set", "goWorkers.enabled=true")
 	if err != nil {
 		t.Fatalf("default render failed: %v\n%s", err, output)

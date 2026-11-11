@@ -64,6 +64,8 @@ var goAPIRouteSettings = []string{"HIDE_MIGRATED_CHILD_CONFIGS", "SYNC_WATERMARK
 // Go api takes it from the same key of the same ConfigMap the Python api
 // envFroms, optional, so the two planes see one value (or both none).
 func TestGoAPIReadsTheRouteSettingsThePythonAPIReads(t *testing.T) {
+	t.Parallel()
+
 	env := containerEnv(t, goAPIDeployment(t), "go-api")
 	for _, key := range goAPIRouteSettings {
 		found := 0

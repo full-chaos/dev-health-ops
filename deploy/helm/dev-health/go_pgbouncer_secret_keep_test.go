@@ -132,6 +132,8 @@ func keepStr(v any) string {
 func keepSecret(r keepRender) map[string]any { return authDoc(r.docs, "Secret", keepSecretName) }
 
 func TestPgbouncerSecretCarriesTheKeepPolicy(t *testing.T) {
+	t.Parallel()
+
 	r := keepMustRender(t, "create (chart-owned Secret)", keepDummyPasswords...)
 	s := keepSecret(r)
 	if s == nil {

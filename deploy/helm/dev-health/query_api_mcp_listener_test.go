@@ -14,6 +14,8 @@ import (
 // Ingress backend never name it, and each configuration that would bypass that
 // boundary fails the render.
 func TestQueryAPIMCPListenerChart(t *testing.T) {
+	t.Parallel()
+
 	const acr = `{"matchLabels":{"app.kubernetes.io/name":"acr","app.kubernetes.io/instance":"dev-health-acr","app.kubernetes.io/component":"api"}}`
 	base := []string{"template", "b", ".", "--set", "queryApi.enabled=true", "--set", "queryApi.mcp.enabled=true"}
 	render := func(args ...string) []map[string]any {
@@ -192,6 +194,8 @@ func TestQueryAPIMCPListenerChart(t *testing.T) {
 // is no MCP Service and no MCP NetworkPolicy, so the env var would start the
 // listener with no boundary at all (the release-wide policy admits every pod).
 func TestQueryAPIMCPAddrInExtraEnvFailsTheRenderEvenWhenMCPIsDisabled(t *testing.T) {
+	t.Parallel()
+
 	envs := `queryApi.extraEnv=[{"name":"QUERY_API_MCP_ADDR","value":":8092"}]`
 	marker := `queryApi.extraEnv=[{"name":"QUERY_API_MCP_BOUNDARY","value":"networkpolicy"}]`
 	for _, args := range [][]string{
@@ -219,6 +223,8 @@ func TestQueryAPIMCPAddrInExtraEnvFailsTheRenderEvenWhenMCPIsDisabled(t *testing
 // is the one place that sets the marker: only inside queryApi.mcp.enabled, next
 // to the MCP Service and NetworkPolicy. Disabled renders carry neither.
 func TestQueryAPIMCPBoundaryMarkerRendersOnlyWithTheMCPBoundary(t *testing.T) {
+	t.Parallel()
+
 	render := func(args ...string) string {
 		out, err := helmOutput(append([]string{"template", "b", ".", "--set", "queryApi.enabled=true"}, args...)...)
 		if err != nil {

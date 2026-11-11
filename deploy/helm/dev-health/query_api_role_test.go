@@ -46,6 +46,8 @@ func TestQueryAPIReaderMustBeTheRoleQueryAPILogsInAs(t *testing.T) {
 // flag off river-migrate's manifest holds no auth read, so a reader then would be
 // granted by auth-migrate and revoked by river-migrate on every roll.
 func TestQueryAPIReaderIsSetOnlyWithTheSessionsFlag(t *testing.T) {
+	t.Parallel()
+
 	reader := []string{"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query_api"}
 	_, out, err := renderAuth(t, queryAPIRoleArgs(reader, roleEnv("devhealth_query_api"))...)
 	if err == nil || !strings.Contains(out, "authService.phase is below 2") {
@@ -85,6 +87,8 @@ var riverHookSets = []string{
 // The river step grants query-api its auth.sessions read, so the auth schema
 // must exist first: auth-migrate runs strictly before river-migrate.
 func TestAuthMigrateRunsBeforeRiverMigrate(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, queryAPIRoleArgs(riverHookSets, roleEnv("devhealth_query_api"))...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.500s", err, out)
@@ -109,6 +113,8 @@ func TestAuthMigrateRunsBeforeRiverMigrate(t *testing.T) {
 }
 
 func TestRiverMigrateGetsTheQueryAPIRoleAndTheAuthSchema(t *testing.T) {
+	t.Parallel()
+
 	sets := queryAPIRoleArgs(riverHookSets, roleEnv("devhealth_query_api"),
 		[]string{"--set", "authService.database.schema=acp"})
 	docs, out, err := renderAuth(t, sets...)

@@ -98,6 +98,8 @@ func renderedImages(t *testing.T, rendered []byte) []string {
 // ever reached by local/dev evaluation, but it still must resolve to a real,
 // pullable image there.
 func TestDefaultRenderUsesOnlyPublishedImageRepositories(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}

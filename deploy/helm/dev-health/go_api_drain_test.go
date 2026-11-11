@@ -51,6 +51,8 @@ func renderGoAPIFails(t *testing.T, sets ...string) string {
 // (the dho image has no shell, so the native sleep action), and the grace period covers
 // sleep + the shutdown timeout the chart passes + 5 s.
 func TestGoAPIDrainsBeforeSigterm(t *testing.T) {
+	t.Parallel()
+
 	spec := goAPIPodSpec(t)
 	if spec["terminationGracePeriodSeconds"] != 45 {
 		t.Errorf("terminationGracePeriodSeconds = %v, want 45", spec["terminationGracePeriodSeconds"])
@@ -73,6 +75,8 @@ func TestGoAPIDrainsBeforeSigterm(t *testing.T) {
 }
 
 func TestGoAPIDrainOffRendersNoHook(t *testing.T) {
+	t.Parallel()
+
 	spec := goAPIPodSpec(t, "--set", "goApi.drain.preStopSeconds=0")
 	if lifecycle := goAPIContainer(t, spec)["lifecycle"]; lifecycle != nil {
 		t.Errorf("preStopSeconds=0 rendered lifecycle %v", lifecycle)
@@ -80,6 +84,8 @@ func TestGoAPIDrainOffRendersNoHook(t *testing.T) {
 }
 
 func TestGoAPIGraceMustCoverSleepShutdownAndFiveSeconds(t *testing.T) {
+	t.Parallel()
+
 	ok := goAPIPodSpec(t, "--set", "goApi.drain.preStopSeconds=15", "--set", "goApi.shutdownTimeout=40s", "--set", "goApi.terminationGracePeriodSeconds=60")
 	if ok["terminationGracePeriodSeconds"] != 60 {
 		t.Errorf("grace = %v, want 60", ok["terminationGracePeriodSeconds"])
@@ -100,6 +106,8 @@ func TestGoAPIGraceMustCoverSleepShutdownAndFiveSeconds(t *testing.T) {
 }
 
 func TestGoAPIDrainValuesAreWholeNonNegativeSeconds(t *testing.T) {
+	t.Parallel()
+
 	for _, sets := range [][]string{
 		{"--set", "goApi.drain.preStopSeconds=-1"},
 		{"--set", "goApi.drain.preStopSeconds=1.5"},
@@ -113,12 +121,16 @@ func TestGoAPIDrainValuesAreWholeNonNegativeSeconds(t *testing.T) {
 }
 
 func TestGoAPIShutdownTimeoutHasOneOwner(t *testing.T) {
+	t.Parallel()
+
 	renderGoAPIFails(t, "--set-json", `goApi.extraArgs=["--shutdown-timeout=5m"]`)
 	renderGoAPIFails(t, "--set-json", `goApi.extraEnv=[{"name":"DEV_HEALTH_SHUTDOWN_TIMEOUT","value":"5m"}]`)
 }
 
 // Only the go-api pod drains: no other workload of the chart gets a preStop hook from this value.
 func TestGoAPIDrainDoesNotTouchOtherWorkloads(t *testing.T) {
+	t.Parallel()
+
 	out, err := helmOutput("template", "drain-others", ".", "--set", "goApi.enabled=true", "--set", "authService.phase=0")
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
@@ -141,6 +153,8 @@ func TestGoAPIDrainDoesNotTouchOtherWorkloads(t *testing.T) {
 // grace period far below the sleep (review of CHAOS-10718), and dho api refuses a shutdown timeout
 // above 3 hours (internal/platform/config maximumShutdownTimeout).
 func TestGoAPIDrainValuesAreBounded(t *testing.T) {
+	t.Parallel()
+
 	for _, sets := range [][]string{
 		{"--set", "goApi.drain.preStopSeconds=9223372036854775806"},
 		{"--set", "goApi.drain.preStopSeconds=601"},

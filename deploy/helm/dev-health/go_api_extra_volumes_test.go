@@ -16,6 +16,8 @@ func goAPIExtraVolumeSets() []string {
 }
 
 func TestGoAPIExtraVolumesDefaultRendersNoVolumes(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, "--set", "goApi.enabled=true")
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -33,6 +35,8 @@ func TestGoAPIExtraVolumesDefaultRendersNoVolumes(t *testing.T) {
 }
 
 func TestGoAPIExtraVolumesRenderInPodSpecAndContainer(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIExtraVolumeSets()...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -63,6 +67,8 @@ func TestGoAPIExtraVolumesRenderInPodSpecAndContainer(t *testing.T) {
 }
 
 func TestGoAPIExtraVolumesLeaveOtherWorkloadsUnchanged(t *testing.T) {
+	t.Parallel()
+
 	base, out, err := renderAuth(t, "--set", "goApi.enabled=true")
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -87,6 +93,8 @@ func TestGoAPIExtraVolumesLeaveOtherWorkloadsUnchanged(t *testing.T) {
 }
 
 func TestGoAPIExtraVolumesSchemaRefusesNonLists(t *testing.T) {
+	t.Parallel()
+
 	for _, key := range []string{"goApi.extraVolumes", "goApi.extraVolumeMounts"} {
 		_, out, err := renderAuth(t, "--set", "goApi.enabled=true", "--set", key+"=oops")
 		if err == nil {
@@ -98,6 +106,8 @@ func TestGoAPIExtraVolumesSchemaRefusesNonLists(t *testing.T) {
 }
 
 func TestGoAPIExtraVolumesSchemaRefusesEveryNonListShape(t *testing.T) {
+	t.Parallel()
+
 	shapes := map[string]string{"string": `"oops"`, "object": `{"name":"x"}`, "number": `17`, "boolean": `true`, "null": `null`}
 	for _, key := range []string{"extraVolumes", "extraVolumeMounts"} {
 		for shape, value := range shapes {

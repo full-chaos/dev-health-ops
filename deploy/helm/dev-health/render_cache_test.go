@@ -43,7 +43,7 @@ func newRenderMemo() *renderMemo {
 
 func (m *renderMemo) live(cmd *exec.Cmd) ([]byte, error) {
 	m.limitOnce.Do(func() {
-		n := min(8, runtime.NumCPU())
+		n := min(runtime.GOMAXPROCS(0), runtime.NumCPU())
 		if override, err := strconv.Atoi(os.Getenv("HELM_RENDER_PARALLEL")); err == nil && override > 0 {
 			n = override
 		}
@@ -676,5 +676,33 @@ func TestRenderMemoCountsLine(t *testing.T) {
 	line := "render-memo: hits=0 misses=0 uncached=0 distinct=0"
 	if strings.Count(string(b), "render-memo:") != 1 || !strings.Contains(string(b), line) {
 		t.Fatalf("empty package counts: %s", b)
+	}
+}
+
+// A one-P runtime must permit only one live render even on a many-core host.
+// The existing override cell independently proves HELM_RENDER_PARALLEL wins.
+func TestRenderMemoDefaultSemaphoreHonorsGOMAXPROCS(t *testing.T) {
+	previous := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previous)
+	chart, state := fakeRenderMemo(t)
+	t.Setenv("HELM_RENDER_PARALLEL", "")
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range 6 {
+		wg.Go(func() {
+			<-start
+			if out, err := helmOutput("template", "memo", chart, "--unknown", fmt.Sprintf("value=%d", i)); err != nil {
+				t.Errorf("%v: %s", err, out)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	b, err := os.ReadFile(filepath.Join(state, "max"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(b)) != "1" || memoCalls(t, state) != 6 {
+		t.Fatalf("max=%s renders=%d, want max=1 and renders=6", b, memoCalls(t, state))
 	}
 }

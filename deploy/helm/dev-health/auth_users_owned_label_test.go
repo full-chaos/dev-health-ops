@@ -24,6 +24,8 @@ func authServicePodLabels(t *testing.T, phase string, sets ...string) map[string
 // The auth-service pods say whether users are owned, so an operator or a probe can tell the owned pods from the
 // not-owned pods in a mixed window. The label follows real ownership: stage owned only, never stage goApi.
 func TestAuthServicePodCarriesTheUsersOwnedLabelAtStageOwnedOnly(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []string{"1", "2", "3"} {
 		if value, set := authServicePodLabels(t, phase)[usersOwnedLabel]; set {
 			t.Errorf("phase %s: pod label %s=%v; want it absent", phase, usersOwnedLabel, value)
@@ -40,6 +42,8 @@ func TestAuthServicePodCarriesTheUsersOwnedLabelAtStageOwnedOnly(t *testing.T) {
 // A flip-back narrowing is not a phase 4 setting at any stage: main's guard (dev-health.authNarrowAfterFlipBackGuard)
 // refuses it and names the value, with or without the acknowledgement.
 func TestNarrowAfterFlipBackIsRefusedFromPhase4AtEveryStage(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		extra []string
 		want  string

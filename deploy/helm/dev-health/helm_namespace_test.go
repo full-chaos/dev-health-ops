@@ -86,6 +86,8 @@ var helmCallFiles = map[string]bool{
 }
 
 func TestEveryHelmTemplateCallPinsTheNamespace(t *testing.T) {
+	t.Parallel()
+
 	files, err := filepath.Glob("*_test.go")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no test sources found: %v", err)
@@ -144,6 +146,8 @@ func TestEveryHelmTemplateCallPinsTheNamespace(t *testing.T) {
 }
 
 func TestHelmCommandPinsNamespace(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		in   []string
@@ -164,6 +168,8 @@ func TestHelmCommandPinsNamespace(t *testing.T) {
 }
 
 func TestUnpinnedHelmCallGuardFires(t *testing.T) {
+	t.Parallel()
+
 	planted := map[string]string{
 		"plain":   "\tout, err := exec.Command(\"helm\", \"template\", \"t\", \".\").CombinedOutput()\n",
 		"context": "\tcmd := exec.CommandContext(ctx, \"helm\", args...)\n",

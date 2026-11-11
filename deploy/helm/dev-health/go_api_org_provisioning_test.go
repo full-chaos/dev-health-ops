@@ -28,6 +28,8 @@ func orgProvisioningArgs(phase string, sets ...string) []string {
 }
 
 func TestOrgProvisioningOffRendersByteEqualToNoValueAtAllPhases(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []string{"0", "1", "2", "3", "4"} {
 		base, baseOut, err := renderAuth(t, orgProvisioningArgs(phase)...)
 		if err != nil {
@@ -50,6 +52,8 @@ func TestOrgProvisioningOffRendersByteEqualToNoValueAtAllPhases(t *testing.T) {
 }
 
 func TestOrgProvisioningOnRendersTheSwitchTrueAndNothingElse(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []string{"4"} {
 		_, offOut, err := renderAuth(t, orgProvisioningArgs(phase, membershipRoutesOn...)...)
 		if err != nil {
@@ -91,6 +95,8 @@ func TestOrgProvisioningOnRendersTheSwitchTrueAndNothingElse(t *testing.T) {
 }
 
 func TestOrgProvisioningRefusals(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		args []string
 		want string
@@ -113,6 +119,8 @@ func TestOrgProvisioningRefusals(t *testing.T) {
 			"goApi.extraEnv must not set AUTH_PROXY_*"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, tc.args...)
 			if err == nil {
 				t.Fatal("the render succeeded; it must refuse")
@@ -128,6 +136,8 @@ func TestOrgProvisioningRefusals(t *testing.T) {
 // true on auth-service. The chart refuses the switch on without that setting (authService.extraEnv is the only way
 // to set it), and renders it with it.
 func TestOrgProvisioningNeedsTheAuthMembershipRoutes(t *testing.T) {
+	t.Parallel()
+
 	const want = "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true"
 	on := []string{"--set", "goApi.authProxy.orgProvisioning=true"}
 	for name, sets := range map[string][]string{
@@ -142,6 +152,8 @@ func TestOrgProvisioningNeedsTheAuthMembershipRoutes(t *testing.T) {
 		"upper-case value": append(append([]string{}, on...), "--set", "authService.extraEnv[0].name=AUTH_MEMBERSHIP_ROUTES", "--set-string", "authService.extraEnv[0].value=TRUE"),
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, orgProvisioningArgs("4", sets...)...)
 			if err == nil {
 				t.Fatal("rendered; the switch on without the provisioning routes must be refused")

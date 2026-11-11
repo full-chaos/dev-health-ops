@@ -53,6 +53,8 @@ func authServiceContainerEnv(docs []map[string]any) map[string]string {
 }
 
 func TestAuthServiceMailEnvAtPhase4(t *testing.T) {
+	t.Parallel()
+
 	env := authServiceContainerEnv(renderPhase(t, 4, mailSets()...))
 	want := map[string]string{
 		"EMAIL_PROVIDER":     "secret:a-mail/EMAIL_PROVIDER",
@@ -69,6 +71,8 @@ func TestAuthServiceMailEnvAtPhase4(t *testing.T) {
 }
 
 func TestAuthServiceMailKeyNamesAreSettable(t *testing.T) {
+	t.Parallel()
+
 	env := authServiceContainerEnv(renderPhase(t, 4, mailSets("--set", "authService.mail.keys.apiKey=RESEND_KEY", "--set", "authService.mail.keys.appBaseURL=WEB_ORIGIN")...))
 	if env["EMAIL_API_KEY"] != "secret:a-mail/RESEND_KEY?" || env["APP_BASE_URL"] != "secret:a-mail/WEB_ORIGIN" {
 		t.Fatalf("key names not honoured: %q %q", env["EMAIL_API_KEY"], env["APP_BASE_URL"])
@@ -76,6 +80,8 @@ func TestAuthServiceMailKeyNamesAreSettable(t *testing.T) {
 }
 
 func TestAuthServiceNoMailEnvBelowPhase4(t *testing.T) {
+	t.Parallel()
+
 	for phase := 0; phase <= 3; phase++ {
 		env := authServiceContainerEnv(renderPhase(t, phase, mailSets()...))
 		for _, name := range authServiceMailNames {
@@ -87,6 +93,8 @@ func TestAuthServiceNoMailEnvBelowPhase4(t *testing.T) {
 }
 
 func TestAuthServiceNeverRendersTheConsoleOverride(t *testing.T) {
+	t.Parallel()
+
 	for phase := 0; phase <= 4; phase++ {
 		if _, found := authServiceContainerEnv(renderPhase(t, phase, mailSets()...))["AUTH_MAIL_ALLOW_CONSOLE"]; found {
 			t.Fatalf("phase %d: the chart renders AUTH_MAIL_ALLOW_CONSOLE", phase)
@@ -95,9 +103,13 @@ func TestAuthServiceNeverRendersTheConsoleOverride(t *testing.T) {
 }
 
 func TestAuthServiceExtraEnvRefusesTheMailNames(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range authServiceMailNames {
 		for _, spelled := range []string{name, strings.ToLower(name)} {
 			t.Run(spelled, func(t *testing.T) {
+				t.Parallel()
+
 				extra := fmt.Sprintf(`authService.extraEnv=[{"name":%q,"value":"x"}]`, spelled)
 				_, out, err := renderAuth(t, phaseArgs(4, append(mailSets(), "--set-json", extra)...)...)
 				if err == nil || !strings.Contains(out, "authService.extraEnv must not set") {
@@ -109,6 +121,8 @@ func TestAuthServiceExtraEnvRefusesTheMailNames(t *testing.T) {
 }
 
 func TestAuthServicePhase4NeedsTheMailSecret(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, withoutMailSets(phaseArgs(4))...)
 	if err == nil || !strings.Contains(out, "authService.mail.secretName") {
 		t.Fatalf("phase 4 without authService.mail.secretName rendered: %v\n%.300s", err, out)
@@ -119,6 +133,8 @@ func TestAuthServicePhase4NeedsTheMailSecret(t *testing.T) {
 }
 
 func TestAuthServiceMailKeyNamesAreValidated(t *testing.T) {
+	t.Parallel()
+
 	for _, bad := range []string{"..x", "a b", "a/b"} {
 		_, out, err := renderAuth(t, phaseArgs(4, mailSets("--set", "authService.mail.keys.provider="+bad)...)...)
 		if err == nil {
@@ -134,6 +150,8 @@ func authServiceEgressTargets(docs []map[string]any) []any {
 }
 
 func TestAuthServiceMailEgressNeedsPeers(t *testing.T) {
+	t.Parallel()
+
 	noPeers := []string{"--set", "authService.mail.secretName=a-mail"}
 	bare := func(phase int, extra ...string) []string { return append(withoutMailSets(phaseArgs(phase)), extra...) }
 	_, out, err := renderAuth(t, bare(4, noPeers...)...)
@@ -146,6 +164,8 @@ func TestAuthServiceMailEgressNeedsPeers(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressRuleRendersOnlyWithMailPeers(t *testing.T) {
+	t.Parallel()
+
 	with := authServiceEgressTargets(renderPhase(t, 4, mailSets()...))
 	var found bool
 	for _, rule := range with {
@@ -169,6 +189,8 @@ func TestAuthServiceMailEgressRuleRendersOnlyWithMailPeers(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressRefusesAWholeInternetPeer(t *testing.T) {
+	t.Parallel()
+
 	for _, cidr := range []string{"0.0.0.0/0", "::/0", "0.0.0.0/1", "128.0.0.0/1", "0.0.0.0/7", "::/31", "::ffff:0:0/96", "::ffff:10.0.0.0/104", "64:ff9b::/96", "10.0.0.0", "10.0.0.0/a", "10.0.0.0/8/8"} {
 		peers := fmt.Sprintf(`authService.networkPolicy.egress.mail.to=[{"ipBlock":{"cidr":%q}}]`, cidr)
 		_, out, err := renderAuth(t, phaseArgs(4, "--set", "authService.mail.secretName=a-mail", "--set-json", peers)...)
@@ -185,6 +207,8 @@ func TestAuthServiceMailEgressRefusesAWholeInternetPeer(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressRefusesAnEmptyPeer(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, phaseArgs(4, "--set", "authService.mail.secretName=a-mail", "--set-json", `authService.networkPolicy.egress.mail.to=[{}]`)...)
 	if err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail.to") {
 		t.Fatalf("an empty peer was accepted: %v\n%.200s", err, out)
@@ -222,6 +246,8 @@ func without(list []string, drop string) []string {
 }
 
 func TestAuthServiceMailEgressAcceptsTheWholeInternetOnlyInTheExactShape(t *testing.T) {
+	t.Parallel()
+
 	v4, v6 := mailPeer("0.0.0.0/0", mailV4Except), mailPeer("::/0", mailV6Except)
 	for name, peers := range map[string][]string{"v4": {v4}, "v6": {v6}, "both": {v4, v6}} {
 		if out, err := mailRender(t, peers); err != nil {
@@ -235,6 +261,8 @@ func TestAuthServiceMailEgressAcceptsTheWholeInternetOnlyInTheExactShape(t *test
 }
 
 func TestAuthServiceMailEgressRefusesAWholeInternetPeerMissingAnExceptEntry(t *testing.T) {
+	t.Parallel()
+
 	for _, drop := range mailV4Except {
 		if out, err := mailRender(t, []string{mailPeer("0.0.0.0/0", without(mailV4Except, drop))}); err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail.to") {
 			t.Fatalf("v4 /0 without except %s accepted: %v\n%.200s", drop, err, out)
@@ -251,6 +279,8 @@ func TestAuthServiceMailEgressRefusesAWholeInternetPeerMissingAnExceptEntry(t *t
 }
 
 func TestAuthServiceMailEgressRefusesAWholeInternetPeerOnAnyOtherPort(t *testing.T) {
+	t.Parallel()
+
 	v4 := mailPeer("0.0.0.0/0", mailV4Except)
 	for name, ports := range map[string]string{
 		"port 80":    `[{"protocol":"TCP","port":80}]`,
@@ -271,6 +301,8 @@ func TestAuthServiceMailEgressRefusesAWholeInternetPeerOnAnyOtherPort(t *testing
 }
 
 func TestAuthServiceMailEgressRefusesAnotherSlashZeroForm(t *testing.T) {
+	t.Parallel()
+
 	for _, cidr := range []string{"1.2.3.4/0", "0:0:0:0:0:0:0:0/0", "::1/0"} {
 		except := mailV4Except
 		if strings.Contains(cidr, ":") {
@@ -311,6 +343,8 @@ func mailWith(base map[string]string, set map[string]string, drop ...string) map
 }
 
 func TestAuthServiceChartSecretMailRendersWithAUsableSetting(t *testing.T) {
+	t.Parallel()
+
 	for name, data := range map[string]map[string]string{
 		"email key":  resendMail,
 		"resend key": mailWith(resendMail, map[string]string{"RESEND_API_KEY": "k"}, "EMAIL_API_KEY"),
@@ -322,6 +356,8 @@ func TestAuthServiceChartSecretMailRendersWithAUsableSetting(t *testing.T) {
 }
 
 func TestAuthServiceChartSecretMailRefusesAnUnusableSetting(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		data map[string]string
 		want string
@@ -338,6 +374,8 @@ func TestAuthServiceChartSecretMailRefusesAnUnusableSetting(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(strings.ReplaceAll(name, " ", "_"), func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, phaseArgs(4, chartSecretMail(tc.data)...)...)
 			if err == nil || !strings.Contains(out, tc.want) || !strings.Contains(out, "secrets.data") {
 				t.Fatalf("%s: err=%v want %q\n%.300s", name, err, tc.want, out)
@@ -347,6 +385,8 @@ func TestAuthServiceChartSecretMailRefusesAnUnusableSetting(t *testing.T) {
 }
 
 func TestAuthServiceChartSecretMailCheckIsScoped(t *testing.T) {
+	t.Parallel()
+
 	bad := mailWith(resendMail, map[string]string{"EMAIL_PROVIDER": "console"})
 	if _, out, err := renderAuth(t, phaseArgs(3, chartSecretMail(bad)...)...); err != nil {
 		t.Fatalf("phase 3 is not checked: %v\n%.300s", err, out)
@@ -362,6 +402,8 @@ func TestAuthServiceChartSecretMailCheckIsScoped(t *testing.T) {
 // A literal under a *_KEY name is refused by the secret-like rule whatever the name list says; a secretKeyRef is
 // refused only by the list, so this is the test of the list.
 func TestAuthServiceExtraEnvRefusesTheMailNamesAsSecretReferences(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range authServiceMailNames {
 		extra := fmt.Sprintf(`authService.extraEnv=[{"name":%q,"valueFrom":{"secretKeyRef":{"name":"x","key":"y"}}}]`, name)
 		_, out, err := renderAuth(t, phaseArgs(4, "--set-json", extra)...)
@@ -372,6 +414,8 @@ func TestAuthServiceExtraEnvRefusesTheMailNamesAsSecretReferences(t *testing.T) 
 }
 
 func TestAuthServiceMailEgressRefusesAWholeInternetPeerBesideAnyOtherPeer(t *testing.T) {
+	t.Parallel()
+
 	v4, v6 := mailPeer("0.0.0.0/0", mailV4Except), mailPeer("::/0", mailV6Except)
 	for name, peers := range map[string][]string{
 		"narrow cidr":  {v4, mailPeer("10.1.2.0/24", nil)},
@@ -390,6 +434,8 @@ func TestAuthServiceMailEgressRefusesAWholeInternetPeerBesideAnyOtherPeer(t *tes
 }
 
 func TestAuthServiceMailEgressRefusesAPrefixThatContainsTheMappedOrNAT64Range(t *testing.T) {
+	t.Parallel()
+
 	for _, cidr := range []string{"::/32", "0:0::/64", "64:ff9b::/32", "::/33", "0::/48", "::ffff:0:0/80", "64:ff9b::/40", "0:0:0:0:0:ffff::/96", "64:ff9b:1::/48", "::ffff:10.0.0.0/104"} {
 		peers := fmt.Sprintf(`authService.networkPolicy.egress.mail.to=[{"ipBlock":{"cidr":%q}}]`, cidr)
 		_, out, err := renderAuth(t, phaseArgs(4, "--set", "authService.mail.secretName=a-mail", "--set-json", peers)...)
@@ -412,6 +458,8 @@ func wantMailPeerRefusal(t *testing.T, label string, peers []string, extra ...st
 }
 
 func TestAuthServiceMailEgressRefusesAnEmptySelector(t *testing.T) {
+	t.Parallel()
+
 	good := `{"matchLabels":{"app":"x"}}`
 	empties := map[string]string{
 		"empty object":             `{}`,
@@ -423,14 +471,20 @@ func TestAuthServiceMailEgressRefusesAnEmptySelector(t *testing.T) {
 	for _, kind := range []string{"podSelector", "namespaceSelector"} {
 		for name, sel := range empties {
 			t.Run(kind+"/"+strings.ReplaceAll(name, " ", "_"), func(t *testing.T) {
+				t.Parallel()
+
 				wantMailPeerRefusal(t, name, []string{fmt.Sprintf(`{%q:%s}`, kind, sel)})
 			})
 		}
 	}
 	t.Run("one present selector empty", func(t *testing.T) {
+		t.Parallel()
+
 		wantMailPeerRefusal(t, "pod ok, namespace empty", []string{fmt.Sprintf(`{"podSelector":%s,"namespaceSelector":{"matchLabels":{}}}`, good)})
 	})
 	t.Run("two peer kinds in one entry", func(t *testing.T) {
+		t.Parallel()
+
 		wantMailPeerRefusal(t, "ipBlock and selector", []string{fmt.Sprintf(`{"ipBlock":{"cidr":"10.1.2.0/24"},"podSelector":%s}`, good)})
 	})
 	for name, peer := range map[string]string{
@@ -468,6 +522,8 @@ func TestAuthServiceMailEgressRefusesANonCanonicalPrefix(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressRefusesAMalformedAddress(t *testing.T) {
+	t.Parallel()
+
 	for _, cidr := range []string{"10.ab.0.0/8", "10.0.0.a/32", "0a.0.0.0/8", "1e1.0.0.0/8", "256.0.0.0/8", "10.0.0/8", "10.0.0.0.0/8", "010.0.0.0/8", "10.00.0.0/16", "10..0.0/8", ".10.0.0.0/8", "::g/32", "2001:db8::1::2/32", "2001:db8:0:0:0:0:0:0:1/64"} {
 		wantMailPeerRefusal(t, cidr, []string{mailBlock(cidr)})
 	}
@@ -479,12 +535,16 @@ func TestAuthServiceMailEgressRefusesAMalformedAddress(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressRefusesAPrefixOutOfRange(t *testing.T) {
+	t.Parallel()
+
 	for _, cidr := range []string{"10.0.0.0/33", "10.0.0.0/999", "2001:db8::/129", "10.0.0.0/256"} {
 		wantMailPeerRefusal(t, cidr, []string{mailBlock(cidr)})
 	}
 }
 
 func TestAuthServiceMailEgressRefusesAnExceptThatIsNotACIDR(t *testing.T) {
+	t.Parallel()
+
 	for _, bad := range []string{"not-a-cidr", "10.ab.0.0/8", "10.0.0.0/08", "10.0.0.0/33"} {
 		wantMailPeerRefusal(t, bad, []string{mailPeer("0.0.0.0/0", append(append([]string{}, mailV4Except...), bad))})
 	}
@@ -492,6 +552,8 @@ func TestAuthServiceMailEgressRefusesAnExceptThatIsNotACIDR(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressNeedsTheExactTCPProtocol(t *testing.T) {
+	t.Parallel()
+
 	v4 := mailPeer("0.0.0.0/0", mailV4Except)
 	for _, proto := range []string{"tcp", "Tcp", "TCP "} {
 		out, err := mailRender(t, []string{v4}, "--set-json", fmt.Sprintf(`authService.networkPolicy.egress.mail.ports=[{"protocol":%q,"port":443}]`, proto))
@@ -505,6 +567,8 @@ func TestAuthServiceMailEgressNeedsTheExactTCPProtocol(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressRefusesABadExceptOnANarrowPeer(t *testing.T) {
+	t.Parallel()
+
 	for _, bad := range []string{`"not-a-cidr"`, `"10.ab.0.0/8"`, `"10.0.0.0/08"`, `"10.0.0.0/33"`, `"zz::/8"`, `""`} {
 		peer := fmt.Sprintf(`{"ipBlock":{"cidr":"8.8.8.0/24","except":[%s]}}`, bad)
 		wantMailPeerRefusal(t, "except "+bad, []string{peer})
@@ -518,6 +582,8 @@ func TestAuthServiceMailEgressRefusesABadExceptOnANarrowPeer(t *testing.T) {
 // The apiserver (k3s v1.36.4, the prod minor) refuses an IPv4-mapped ipBlock.except ("must not have an IPv4-mapped IPv6 address"). A
 // connect to ::ffff:a.b.c.d leaves the pod as an IPv4 packet, so the v4 peer's except list already decides; the v6 list names none.
 func TestAuthServiceMailEgressRenderedExceptHasNoIPv4MappedForm(t *testing.T) {
+	t.Parallel()
+
 	out, err := mailRender(t, []string{mailPeer("0.0.0.0/0", mailV4Except), mailPeer("::/0", mailV6Except)})
 	if err != nil {
 		t.Fatalf("the exact shape was refused: %v\n%.300s", err, out)
@@ -579,6 +645,8 @@ func TestAuthServiceMailEgressRefusesAMappedExceptEntry(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressRefusesAnEmptyProtocolOnAWidePeer(t *testing.T) {
+	t.Parallel()
+
 	for label, peer := range map[string]string{"v4": mailPeer("0.0.0.0/0", mailV4Except), "v6": mailPeer("::/0", mailV6Except)} {
 		out, err := mailRender(t, []string{peer}, "--set-json", `authService.networkPolicy.egress.mail.ports=[{"protocol":"","port":443}]`)
 		if err == nil || !strings.Contains(out, "ports[0].protocol is empty") {
@@ -588,6 +656,8 @@ func TestAuthServiceMailEgressRefusesAnEmptyProtocolOnAWidePeer(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressWidePeerAcceptsExplicitTCP(t *testing.T) {
+	t.Parallel()
+
 	v4 := mailPeer("0.0.0.0/0", mailV4Except)
 	if out, err := mailRender(t, []string{v4}, "--set-json", `authService.networkPolicy.egress.mail.ports=[{"protocol":"TCP","port":443}]`); err != nil {
 		t.Fatalf("explicit TCP was refused: %v\n%.200s", err, out)
@@ -595,12 +665,16 @@ func TestAuthServiceMailEgressWidePeerAcceptsExplicitTCP(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressNarrowPeerKeepsAnEmptyProtocol(t *testing.T) {
+	t.Parallel()
+
 	if out, err := mailRender(t, []string{mailBlock("10.1.2.0/24")}, "--set-json", `authService.networkPolicy.egress.mail.ports=[{"protocol":"","port":587}]`); err != nil {
 		t.Fatalf("a narrow peer with protocol \"\" was refused: %v\n%.200s", err, out)
 	}
 }
 
 func TestAuthServiceMailEgressRefusesANonStringProtocolOnAWidePeer(t *testing.T) {
+	t.Parallel()
+
 	peers := map[string]string{"v4": mailPeer("0.0.0.0/0", mailV4Except), "v6": mailPeer("::/0", mailV6Except)}
 	for label, peer := range peers {
 		for _, proto := range []string{`false`, `0`, `[]`, `null`, `" "`} {

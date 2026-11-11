@@ -15,6 +15,8 @@ import (
 // selects the go-api pods stays ClusterIP without nodePort/externalIPs, and the pods expose no hostPort. (The former
 // allow-list cover of /api/v1/internal, which existed because the public listener used to serve those routes, is retired.)
 func TestInternalACRRoutesStayOffThePublicIngress(t *testing.T) {
+	t.Parallel()
+
 	output, err := helmOutput("template", "b", ".",
 		"--set", "goApi.enabled=true", "--set", "queryApi.enabled=true",
 		"--set", "ingress.enabled=true",
@@ -175,6 +177,8 @@ func winningBackend(document, url string) string {
 // needs the allow-list opt-in, and
 // no go-api path may cover /api/v1/internal.
 func TestGoCatchAllRenderGuards(t *testing.T) {
+	t.Parallel()
+
 	render := func(hosts, allow string) (string, error) {
 		args := []string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts=" + hosts}
 		if allow != "" {
@@ -227,6 +231,8 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 // own allow-list, e.g. the in-cluster host keeps /metrics on Python) while `true` keeps using the
 // shared ingress.pythonAllowList; every guard runs on the EFFECTIVE list.
 func TestPerHostPythonAllowList(t *testing.T) {
+	t.Parallel()
+
 	render := func(hosts string) (string, error) {
 		out, err := helmOutput("template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 			"--set-json", "ingress.hosts="+hosts)
@@ -331,6 +337,8 @@ func TestPerHostPythonAllowList(t *testing.T) {
 // renders verbatim (ingress-nginx then emits `location ~* "^/docs$"`, proven live on v1.14.5), the chart adds
 // use-regex to its Ingress exactly when an anchored entry is in use, and malformed anchored entries are refused.
 func TestAnchoredAllowListEntries(t *testing.T) {
+	t.Parallel()
+
 	render := func(hosts string, extra ...string) (string, error) {
 		args := append([]string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts=" + hosts}, extra...)
 		out, err := helmOutput(args...)
@@ -419,6 +427,8 @@ func TestAnchoredAllowListEntries(t *testing.T) {
 // that carries it, so a host with an anchored entry lives in its own Ingress (suffix -anchored, annotated) and every
 // other host stays in the unannotated main Ingress, rendered exactly as before.
 func TestAnchoredHostsGetTheirOwnIngress(t *testing.T) {
+	t.Parallel()
+
 	anchoredHost := `{"host":"anchored.test","pythonAllowList":[{"path":"/docs$","pathType":"ImplementationSpecific","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}],"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}`
 	literalHost := `{"host":"literal.test","pythonAllowList":[{"path":"/graphql","pathType":"Exact","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}],"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}`
 	plainHost := `{"host":"plain.test","paths":[{"path":"/","pathType":"Prefix","service":"web"}]}`
@@ -470,6 +480,8 @@ func TestAnchoredHostsGetTheirOwnIngress(t *testing.T) {
 // (internal/apiservice TestPublicListenerNeverServesInternalRoutes), so an allow-list no longer has to carry it, while
 // routing anything to the go-api INTERNAL Service stays refused.
 func TestAllowListNeedsNoInternalCover(t *testing.T) {
+	t.Parallel()
+
 	render := func(hosts string) (string, error) {
 		out, err := helmOutput("template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 			"--set-json", "ingress.hosts="+hosts)
@@ -500,6 +512,8 @@ func TestAllowListNeedsNoInternalCover(t *testing.T) {
 // /graphql), so a host that opts in routes NOTHING to the Python api and renders with the Python api disabled; the
 // moment a values file lists a path, the Python api Service is required again.
 func TestDefaultAllowListNeedsNoPythonAPI(t *testing.T) {
+	t.Parallel()
+
 	render := func(extra ...string) (string, error) {
 		args := append([]string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 			"--set-json", `ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`}, extra...)

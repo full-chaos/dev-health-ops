@@ -32,6 +32,8 @@ const cleanIni = "################## Auto generated ##################\n[databas
 // The container log carries pgbouncer's own stderr records beside the printed ini; a record that lands inside the
 // block must not reach the captured text, and two runs' captures must compare equal whatever time each record bears.
 func TestGeneratedPgbouncerIniDropsInterleavedLogRecords(t *testing.T) {
+	t.Parallel()
+
 	const record = "2026-10-30 15:09:33.995 UTC [1] LOG kernel file descriptor limit: 1048576 (hard: 1048576); max_client_conn: 1000, max expected fd use: 1012\n"
 	clean := cleanIni + "################## end file ##################\n"
 	withRecord := strings.Replace(cleanIni, "admin_users = devhealth_domain\n\n", "admin_users = devhealth_domain\n\n"+record+"\n", 1) + "################## end file ##################\n"
@@ -57,6 +59,8 @@ func TestGeneratedPgbouncerIniDropsInterleavedLogRecords(t *testing.T) {
 }
 
 func TestGeneratedPgbouncerIniNeedsItsMarkers(t *testing.T) {
+	t.Parallel()
+
 	for name, stream := range map[string]string{"empty": "", "no end marker": "################## Auto generated ###\n[x]\n",
 		"end before start": "################## end file ###\n################## Auto generated ###\n"} {
 		if got, ok := generatedPgbouncerIni(stream); ok {

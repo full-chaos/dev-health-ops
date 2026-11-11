@@ -13,6 +13,8 @@ import (
 // and the NetworkPolicy admits only the listed pod selectors to it (an empty
 // list denies the port; it never renders a `from` that admits every source).
 func TestGoAPIInternalListenerChart(t *testing.T) {
+	t.Parallel()
+
 	acr := `{"matchLabels":{"app.kubernetes.io/name":"acr","app.kubernetes.io/instance":"dev-health-acr","app.kubernetes.io/component":"api"}}`
 	render := func(args ...string) []map[string]any {
 		t.Helper()
@@ -259,6 +261,8 @@ func TestGoAPIInternalListenerChart(t *testing.T) {
 // TestGoAPIInternalListenerNeverRoutedPublicly: no Ingress path may name the
 // internal Service, and its port may not collide with a public listener.
 func TestGoAPIInternalListenerNeverRoutedPublicly(t *testing.T) {
+	t.Parallel()
+
 	out, err := helmOutput("template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
 		"--set-json", `ingress.hosts=[{"host":"h","paths":[{"path":"/x","pathType":"Prefix","service":"go-api-internal"}]}]`)
 	if err == nil || !strings.Contains(string(out), "routes to go-api-internal") {

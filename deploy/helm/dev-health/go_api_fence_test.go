@@ -110,6 +110,8 @@ func closedPorts(t *testing.T, policies []netpolDoc, source netpolSource) []int 
 }
 
 func TestGoAPIFenceClosesRequestPortsToEveryoneButTheController(t *testing.T) {
+	t.Parallel()
+
 	for name, c := range map[string]struct {
 		args            []string
 		closedToOthers  []int
@@ -124,6 +126,8 @@ func TestGoAPIFenceClosesRequestPortsToEveryoneButTheController(t *testing.T) {
 	} {
 		for _, topLevel := range []string{"false", "true"} {
 			t.Run(name+" topLevel="+topLevel, func(t *testing.T) {
+				t.Parallel()
+
 				policies := renderFencePolicies(t, append([]string{"--set", "networkPolicy.enabled=" + topLevel}, c.args...)...)
 				for _, source := range []netpolSource{sourceStranger, sourceOtherNamespace, fenceControllerNamespaceOtherPod, fenceLookalikeNamespace, fenceToolPod} {
 					if got := closedPorts(t, policies, source); !sameInts(got, c.closedToOthers) {
@@ -140,6 +144,8 @@ func TestGoAPIFenceClosesRequestPortsToEveryoneButTheController(t *testing.T) {
 
 // Probes and scrapes use the operator port (8080) and must stay open to every source, as before the fence.
 func TestGoAPIFenceKeepsTheOperatorPortOpen(t *testing.T) {
+	t.Parallel()
+
 	policies := renderFencePolicies(t, "--set-json", "goApi.networkPolicy.extraFencedPorts=[8010]")
 	for _, source := range []netpolSource{sourceStranger, sourceOtherNamespace, fenceControllerSource} {
 		admitted, _ := admittedFrom(policies, fenceGoAPILabels(), []int{8080}, source)
@@ -150,6 +156,8 @@ func TestGoAPIFenceKeepsTheOperatorPortOpen(t *testing.T) {
 }
 
 func TestGoAPIFenceAdmitsTheNamedPeersToTheRequestPorts(t *testing.T) {
+	t.Parallel()
+
 	policies := renderFencePolicies(t, "--set-json", "goApi.networkPolicy.extraFencedPorts=[8010]",
 		"--set-json", `goApi.networkPolicy.allowedFrom=[{"podSelector":{"matchLabels":{"role":"tools"}}}]`)
 	if admitted, _ := admittedFrom(policies, fenceGoAPILabels(), []int{8000, 8010, 8091}, fenceToolPod); !sameInts(admitted, []int{8000, 8010}) {
@@ -161,6 +169,8 @@ func TestGoAPIFenceAdmitsTheNamedPeersToTheRequestPorts(t *testing.T) {
 }
 
 func TestGoAPIFenceControllerPodLabelsAndNamespaceAreValues(t *testing.T) {
+	t.Parallel()
+
 	policies := renderFencePolicies(t, "--set", "networkPolicy.ingressControllerNamespace=edge-proxy",
 		"--set", "goApi.networkPolicy.ingressControllerPodLabels.app\\.kubernetes\\.io/component=ctl")
 	moved := netpolSource{"the moved controller", map[string]string{namespaceNameLabel: "edge-proxy"},
@@ -175,6 +185,8 @@ func TestGoAPIFenceControllerPodLabelsAndNamespaceAreValues(t *testing.T) {
 
 // The fence off renders exactly what it rendered before: every port but the internal one open to every source.
 func TestGoAPIFenceOffChangesNothing(t *testing.T) {
+	t.Parallel()
+
 	out, err := helmOutput("template", "fence", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true")
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
@@ -200,6 +212,8 @@ func TestGoAPIFenceOffChangesNothing(t *testing.T) {
 }
 
 func TestGoAPIFenceRefusals(t *testing.T) {
+	t.Parallel()
+
 	for name, c := range map[string]struct {
 		args []string
 		want string
@@ -221,6 +235,8 @@ func TestGoAPIFenceRefusals(t *testing.T) {
 		"controller namespace empty":      {[]string{"--set", "networkPolicy.ingressControllerNamespace="}, "ingressControllerNamespace"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			full := append([]string{"template", "fence", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true", "--set", "goApi.networkPolicy.enabled=true"}, c.args...)
 			out, err := helmOutput(full...)
 			if err == nil {

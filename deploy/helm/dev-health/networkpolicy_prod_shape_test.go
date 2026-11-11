@@ -193,6 +193,8 @@ var (
 )
 
 func TestQueryAPIOwnPolicyAdmitsOnlyItsCallers(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		args []string
 		want map[string][]int // source name -> admitted probe ports
@@ -217,6 +219,8 @@ func TestQueryAPIOwnPolicyAdmitsOnlyItsCallers(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			policies, _, _ := renderPolicySet(t, c.args...)
 			for _, source := range []netpolSource{sourceStranger, sourceACR, sourceController, sourceOtherNamespace} {
 				got, selected := admittedFrom(policies, npComponent("query-api"), queryAPIProbes, source)
@@ -232,6 +236,8 @@ func TestQueryAPIOwnPolicyAdmitsOnlyItsCallers(t *testing.T) {
 }
 
 func TestQueryAPIWithoutTrustedListenersStaysInTheReleaseWidePolicy(t *testing.T) {
+	t.Parallel()
+
 	policies, egress, out := renderPolicySet(t)
 	got, _ := admittedFrom(policies, npComponent("query-api"), queryAPIProbes, sourceStranger)
 	if fmt.Sprint(got) != fmt.Sprint(queryAPIProbes) {
@@ -246,6 +252,8 @@ func TestQueryAPIWithoutTrustedListenersStaysInTheReleaseWidePolicy(t *testing.T
 }
 
 func TestQueryAPIPublicPortStaysOpenWithTheReleasePolicyOff(t *testing.T) {
+	t.Parallel()
+
 	out, err := helmOutput("template", "np", ".", "--namespace", releaseNamespace, "--set", "queryApi.enabled=true",
 		"--set", "queryApi.mcp.enabled=true", "--set", "queryApi.internal.enabled=true")
 	if err != nil {
@@ -268,6 +276,8 @@ func TestQueryAPIPublicPortStaysOpenWithTheReleasePolicyOff(t *testing.T) {
 }
 
 func TestQueryAPIInternalPortsClosedToTheReleaseNamespace(t *testing.T) {
+	t.Parallel()
+
 	policies, _, _ := renderPolicySet(t, "--set", "queryApi.mcp.enabled=true", "--set-json", "queryApi.mcp.allowedFrom="+acrSelectorJSON,
 		"--set", "queryApi.internal.enabled=true", "--set-json", "queryApi.internal.allowedFrom="+acrSelectorJSON)
 	for _, component := range []string{"web", "go-api", "go-worker", "go-pgbouncer-transaction", "clickhouse"} {
@@ -286,6 +296,8 @@ const prodExtraEgressJSON = `[` +
 	`{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress-nginx"}},"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ingress-nginx","app.kubernetes.io/component":"controller"}}}],"ports":[{"protocol":"TCP","port":80}]}]`
 
 func TestExtraEgressReachesEveryEntryFromEverySharedEgressPod(t *testing.T) {
+	t.Parallel()
+
 	_, egress, _ := renderPolicySet(t, append([]string{"--set", "queryApi.mcp.enabled=true", "--set", "queryApi.internal.enabled=true",
 		"--set-json", "networkPolicy.extraEgress=" + prodExtraEgressJSON}, authBase...)...)
 	controller := map[string]string{"app.kubernetes.io/name": "ingress-nginx", "app.kubernetes.io/component": "controller"}
@@ -329,6 +341,8 @@ func TestExtraEgressReachesEveryEntryFromEverySharedEgressPod(t *testing.T) {
 }
 
 func TestExtraEgressLeavesTheAuthPoliciesUnchanged(t *testing.T) {
+	t.Parallel()
+
 	authPolicies := func(out string) string {
 		var kept []string
 		for _, document := range strings.Split(out, "\n---") {
@@ -426,6 +440,8 @@ func TestExtraEgressRefusals(t *testing.T) {
 }
 
 func TestDNSEgressAllowsUDPAndTCP(t *testing.T) {
+	t.Parallel()
+
 	_, egress, _ := renderPolicySet(t, "--set", "queryApi.mcp.enabled=true")
 	for _, component := range []string{"query-api", "go-api", "web", "go-pgbouncer-transaction"} {
 		for _, protocol := range []string{"UDP", "TCP"} {
@@ -440,6 +456,8 @@ func TestDNSEgressAllowsUDPAndTCP(t *testing.T) {
 // The internal listener trusts identity headers, so an empty selector in queryApi.internal.allowedFrom (every pod of the
 // namespace) is refused, as it is for the MCP listener, whether or not networkPolicy is enabled.
 func TestQueryAPIInternalAllowedFromRefusesEmptySelectors(t *testing.T) {
+	t.Parallel()
+
 	for _, np := range []string{"true", "false"} {
 		for _, value := range []string{`[{}]`, `[{"matchLabels":{}}]`, `[{"matchExpressions":[]}]`, `[{"matchLabels":{"app":"tools"}},{}]`, `["tools"]`} {
 			out, err := helmOutput("template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled="+np,

@@ -51,6 +51,8 @@ func TestAuthSwitchesRefuseNonBooleans(t *testing.T) {
 
 // With the Job off, a bad authService.backfill.enabled string still fails: the check does not hide behind the gate.
 func TestAuthBackfillEnabledStringFailsWhileOff(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, append(append([]string{}, authBase...), "--set-string", "authService.backfill.enabled=false")...)
 	if err == nil || !strings.Contains(out, "authService.backfill.enabled") {
 		t.Fatalf("string false rendered: err=%v out=%.300s", err, out)
@@ -58,6 +60,8 @@ func TestAuthBackfillEnabledStringFailsWhileOff(t *testing.T) {
 }
 
 func TestAuthBackfillRunIdMustBeANonEmptyString(t *testing.T) {
+	t.Parallel()
+
 	for name, flag := range map[string][]string{
 		"null":   {"--set-json", "authService.backfill.runId=null"},
 		"number": {"--set-json", "authService.backfill.runId=7"},
@@ -65,6 +69,8 @@ func TestAuthBackfillRunIdMustBeANonEmptyString(t *testing.T) {
 		"empty":  {"--set-string", "authService.backfill.runId="},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, append(backfillOnWithout("authService.backfill.runId"), flag...)...)
 			if err == nil || !strings.Contains(out, "authService.backfill.runId") {
 				t.Fatalf("runId %s rendered: err=%v out=%.300s", name, err, out)
@@ -74,6 +80,8 @@ func TestAuthBackfillRunIdMustBeANonEmptyString(t *testing.T) {
 }
 
 func TestAuthBackfillBatchMustBeAWholeNumberInRange(t *testing.T) {
+	t.Parallel()
+
 	for name, flag := range map[string][]string{
 		"string":   {"--set-string", "authService.backfill.batch=100"},
 		"null":     {"--set-json", "authService.backfill.batch=null"},
@@ -83,6 +91,8 @@ func TestAuthBackfillBatchMustBeAWholeNumberInRange(t *testing.T) {
 		"bool":     {"--set-json", "authService.backfill.batch=true"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, append(append([]string{}, backfillOn...), flag...)...)
 			if err == nil || !strings.Contains(out, "authService.backfill.batch") {
 				t.Fatalf("batch %s rendered: err=%v out=%.300s", name, err, out)
@@ -102,6 +112,8 @@ func TestAuthBackfillBatchMustBeAWholeNumberInRange(t *testing.T) {
 // Each template that reads a switch reads it through dev-health.authBool: a bare `if .Values.authService.socialLinkRoutes`
 // would let a string pass in that one consumer. The owned switches have no key at all (authService.phase renders them).
 func TestAuthSwitchesAreOnlyReadThroughTheStrictHelper(t *testing.T) {
+	t.Parallel()
+
 	read := regexp.MustCompile(`(\.socialLinkRoutes|\$b\.enabled|\$b\.dryRun|backfill\.(enabled|dryRun))\b`)
 	files, err := filepath.Glob("templates/*.yaml")
 	if err != nil || len(files) == 0 {

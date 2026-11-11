@@ -111,6 +111,8 @@ func envNames(container any) map[string]bool {
 }
 
 func TestAuthServiceIsOffByDefault(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t)
 	if err != nil {
 		t.Fatalf("default render failed: %v\n%.400s", err, out)
@@ -124,6 +126,8 @@ func TestAuthServiceIsOffByDefault(t *testing.T) {
 }
 
 func TestAuthServiceDeployment(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)
@@ -214,6 +218,8 @@ func TestAuthServiceDeployment(t *testing.T) {
 // The roll readback reads the migrate Job's pod log after the roll (CHAOS-10812): the Job is kept
 // after success, reaped by its TTL, and still replaced by the next hook run.
 func TestAuthMigrateJobIsKeptForTheReadbackAndReplacedOnTheNextHook(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)
@@ -231,6 +237,8 @@ func TestAuthMigrateJobIsKeptForTheReadbackAndReplacedOnTheNextHook(t *testing.T
 }
 
 func TestAuthMigrateIsASeparateHookJob(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)
@@ -264,6 +272,8 @@ func TestAuthMigrateIsASeparateHookJob(t *testing.T) {
 }
 
 func TestAuthNetworkPolicyIsTheWholeBoundary(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, append(append([]string{}, authBase...), authNetworkPolicy...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)
@@ -339,6 +349,8 @@ func TestAuthNetworkPolicyIsTheWholeBoundary(t *testing.T) {
 // Enabling the service alone (the release-wide networkPolicy.enabled left at its
 // default false) must still deploy it WITH its boundary; opting out is explicit.
 func TestAuthNetworkPolicyRendersWithoutTheReleaseWidePolicy(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)
@@ -356,6 +368,8 @@ func TestAuthNetworkPolicyRendersWithoutTheReleaseWidePolicy(t *testing.T) {
 }
 
 func TestAuthServiceRefusals(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		args []string
 		want string
@@ -374,6 +388,8 @@ func TestAuthServiceRefusals(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, tc.args...)
 			if err == nil {
 				t.Fatalf("the render succeeded; it must refuse")
@@ -410,6 +426,8 @@ func contains(list []string, want string) bool {
 // NetworkPolicy before the Job it protects starts (found by the cluster proof). So only the
 // migration Job may be a hook; everything else the auth section renders is a release resource.
 func TestOnlyTheMigrationJobIsAHook(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)
@@ -437,11 +455,15 @@ func TestOnlyTheMigrationJobIsAHook(t *testing.T) {
 // CHAOS-10581: the grants pass runs after ops migrate on the same events, with
 // a strictly greater weight, and the schema hook is not reordered.
 func TestAuthGrantsJobRunsAfterOpsMigrate(t *testing.T) {
+	t.Parallel()
+
 	for name, events := range map[string]string{
 		"default": "pre-install,pre-upgrade",
 		"prod":    "post-install,pre-upgrade",
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			args := append([]string{}, authBase...)
 			if name == "prod" {
 				args = append(args, "--set-json", `migrations.hook.events=["post-install","pre-upgrade"]`,
@@ -491,11 +513,15 @@ func TestAuthGrantsJobRunsAfterOpsMigrate(t *testing.T) {
 }
 
 func TestAuthGrantsJobIsGated(t *testing.T) {
+	t.Parallel()
+
 	for name, extra := range map[string][]string{
 		"no ops migrate hook": {"--set", "migrations.hook.enabled=false"},
 		"escape hatch":        {"--set", "authService.migrate.grantsHook.enabled=false"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			docs, out, err := renderAuth(t, append(append([]string{}, authBase...), extra...)...)
 			if err != nil {
 				t.Fatalf("render failed: %v\n%.600s", err, out)

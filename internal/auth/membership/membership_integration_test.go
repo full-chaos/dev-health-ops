@@ -941,7 +941,7 @@ func TestVerbsOnANonMemberKeepErrNotMember(t *testing.T) {
 	}
 	verbs := []struct {
 		name string
-		run  func(Change) (*Membership, error)
+		run  func(context.Context, Change) (*Membership, error)
 	}{
 		{"change_role", e.store.ChangeRole}, {"suspend", e.store.Suspend}, {"reactivate", e.store.Reactivate}, {"remove", e.store.Remove},
 	}
@@ -956,7 +956,7 @@ func TestVerbsOnANonMemberKeepErrNotMember(t *testing.T) {
 		for _, v := range verbs {
 			t.Run(pair.name+"/"+v.name, func(t *testing.T) {
 				before := e.written(t, ctx, org, pair.user, pair.rowID)
-				m, err := v.run(Change{OrgID: org, PrincipalID: pair.user, Role: "member", Authorize: allowAll})
+				m, err := v.run(ctx, Change{OrgID: org, PrincipalID: pair.user, Role: "member", Authorize: allowAll})
 				if m != nil || !errors.Is(err, ErrNotMember) {
 					t.Fatalf("%s on %s = %+v, %v; want ErrNotMember", v.name, pair.name, m, err)
 				}

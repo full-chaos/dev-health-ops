@@ -753,6 +753,7 @@ case "$1" in
     ;;
   serve)
     echo "$name serve started"
+    [ ! -f "$FAKE_STATE/stub-slow-start" ] || sleep 1.5
     echo $$ > "$FAKE_STATE/$name.ready"
     sleep 60 & child=$!
     trap 'kill "$child"; exit 0' TERM
@@ -1228,12 +1229,15 @@ func TestLiveE2ESMTPFakeProcess(t *testing.T) {
 		if err := os.MkdirAll(args[3], 0o700); err != nil {
 			os.Exit(1)
 		}
+		state := os.Getenv("FAKE_STATE")
+		if _, err := os.Stat(filepath.Join(state, "smtp-slow-start")); err == nil {
+			time.Sleep(1500 * time.Millisecond)
+		}
 		listener, err := net.Listen("tcp", args[2])
 		if err != nil {
 			os.Exit(1)
 		}
 		port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
-		state := os.Getenv("FAKE_STATE")
 		if _, err := os.Stat(filepath.Join(state, "smtp-no-port")); err == nil {
 			fmt.Println("fake sink startup failed")
 		} else {
@@ -1271,6 +1275,30 @@ func TestLiveE2ESMTPFakeProcess(t *testing.T) {
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+// A slow start must not be read as a failed start: the wait is wall clock, whatever the fake sleep does (CHAOS-13590:
+// the -race test binary behind the fake sink needs ~1.5 s to start, the old wait gave it ~0.45 s).
+func TestLiveE2EEnableMailWaitsOnWallClockForASlowSink(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	writeExec(t, filepath.Join(state, "smtp-slow-start"), "", 0o600)
+	if out, err := run("enable-mail", state); err != nil {
+		t.Fatalf("enable-mail with a slow sink start: %v %s", err, out)
+	}
+	if port := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "mail/port"))); port == "" {
+		t.Fatal("the slow sink never published its port")
+	}
+}
+
+func TestLiveE2EStartIdpWaitsOnWallClockForASlowStub(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	if out, err := run("enable-sso", state); err != nil {
+		t.Fatalf("enable-sso: %v %s", err, out)
+	}
+	writeExec(t, filepath.Join(state, "stub-slow-start"), "", 0o600)
+	if out, err := run("start-idp", state, "-redirect-uri", "http://127.0.0.1:3002/callback"); err != nil {
+		t.Fatalf("start-idp with a slow stub start: %v %s", err, out)
+	}
 }
 
 func TestLiveE2EEnableMail(t *testing.T) {

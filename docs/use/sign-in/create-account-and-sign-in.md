@@ -49,7 +49,7 @@ Things to know:
 ## Sign in
 
 1. Open the sign-in page, enter your email address and password, then select **Sign in**.
-2. If you have no organization yet, you continue to onboarding. Choose to create an organization or to join one with an invite code.
+2. If you have no organization yet, you continue to [onboarding](onboarding.md), where you create your organization.
 
 Expected result: you land in the product, or in onboarding on your first sign-in.
 
@@ -67,7 +67,7 @@ Select the invite link, or enter the invite code during onboarding. The invite i
 
 ## Switch organization
 
-If you belong to more than one organization, switch between them from the product. You can only switch to an organization you are a member of.
+If you belong to more than one organization, see [Switch organization](switch-organization.md).
 
 ## Sign out
 

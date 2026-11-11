@@ -2270,8 +2270,24 @@ func TestOneShardDryRunIsItsPartOfTheAllShardsDryRun(t *testing.T) {
 	if multi == 0 || splitShard == 0 {
 		t.Fatalf("no shard of two or more whole packages (%d) or no other shard with a split-by-test part (%d): the equality check measures nothing", multi, splitShard)
 	}
-	single := dryRuns(t, "packages", []int{multi, splitShard})
-	for _, shard := range []int{multi, splitShard} {
+	// A hook package's rows (its SHARD-UNFILTERED line) come from the discovery cache in the all-shards run and from a fresh
+	// discovery in the one-shard run, so one shard holding a hook package is compared too.
+	shards := []int{multi, splitShard}
+	hookShard := 0
+	for _, shard := range order {
+		if len(lineValues(parts[shard], "  SHARD-UNFILTERED ")) > 0 {
+			hookShard = shard
+			break
+		}
+	}
+	if hookShard == 0 {
+		t.Fatalf("no packages shard of the all-shards dry run holds a hook package (SHARD-UNFILTERED): the cached hook rows are not compared")
+	}
+	if hookShard != multi && hookShard != splitShard {
+		shards = append(shards, hookShard)
+	}
+	single := dryRuns(t, "packages", shards)
+	for _, shard := range shards {
 		r := single[shard]
 		if r.code != 0 {
 			t.Fatalf("shard %d dry run: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)

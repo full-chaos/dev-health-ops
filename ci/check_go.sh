@@ -1329,12 +1329,20 @@ test_legs_all() {
   [ "${count}" -ge 1 ] || die "test COUNT must be a positive integer, got '${count}'"
   local TEST_LEG_LIST_CACHE
   TEST_LEG_LIST_CACHE="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-test-legs.XXXXXX")" || die "no temp directory for ${verb} all"
-  (
-    for ((shard = 1; shard <= count; shard++)); do
-      printf '==> %s %d %d\n' "${verb}" "${shard}" "${count}"
-      "$@" "${shard}" "${count}" || exit 2
-    done
-  ) || rc=$?
+  # Each leg runs in its own subshell with errexit on, as a plain command (never inside an || / && list or an if): bash
+  # ignores set -e in every command of such a list, functions included, so a failure only errexit catches would pass here
+  # while `VERB K COUNT` fails. Its rc is taken right after it, with errexit off for that one command.
+  for ((shard = 1; shard <= count; shard++)); do
+    printf '==> %s %d %d\n' "${verb}" "${shard}" "${count}"
+    set +e
+    (
+      set -e
+      "$@" "${shard}" "${count}"
+    )
+    rc=$?
+    set -e
+    [ "${rc}" -eq 0 ] || { rc=2; break; }
+  done
   rm -rf -- "${TEST_LEG_LIST_CACHE}"
   [ "${rc}" -eq 0 ] || exit "${rc}"
 }

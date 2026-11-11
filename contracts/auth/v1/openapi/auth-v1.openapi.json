@@ -796,6 +796,97 @@
         }
       }
     },
+    "/v1/authorize:repositories": {
+      "post": {
+        "operationId": "authorizeRepositories",
+        "summary": "List the repositories a user principal may read in one organization",
+        "description": "A policy-enforcement point asks which repositories the principal named by principal_reference may read in one organization through acr.context.read or acr.evidence.read. The request is one authorization_request.v1 whose resource is {type repository, key *, organization_id}. The answer is one authorization_decision.v1: an allow carries obligations.repository_scope organization (every repository) or obligations.repository_allowlist, the principal's own canonical repository keys (at most 256, [] for none); more than 256 keys is the deny repository_allowlist_too_large, never a truncated list. No repository catalog is read and no decision cache is used. Every state read of the call runs in one read-only transaction.",
+        "security": [
+          {
+            "workloadToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One authorization_decision.v1.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationDecision"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1; or a body that is not exactly one request whose resource is {type repository, key *, organization_id}, the route's own error.v1 refusal with status 400 and reason malformed (D6643). The body is one of the two, never both.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TransportError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "error.v1: invalid_credentials when the caller's workload token is refused (answered before any body byte is read), principal_reference_invalid when the principal_reference token names no live session of its principal; the two codes differ so a policy-enforcement point can tell its own token failing from the user's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the route's limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "error.v1: a store, clock or key set failure (retry_after_seconds); the whole call fails, never a per-item deny and never an allow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/.well-known/jwks.json": {
       "get": {
         "operationId": "getJwks",

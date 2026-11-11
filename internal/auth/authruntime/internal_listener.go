@@ -17,9 +17,10 @@ import (
 // internalRoutes are the only routes the internal listener serves: the service-to-service calls of the policy
 // enforcement points, each made with the caller's own token (the workload-token exchange and the authorize routes).
 var internalRoutes = map[string]bool{
-	http.MethodPost + " " + workloadexchange.Pattern:      true,
-	http.MethodPost + " " + authapi.PatternAuthorize:      true,
-	http.MethodPost + " " + authapi.PatternAuthorizeBatch: true,
+	http.MethodPost + " " + workloadexchange.Pattern:             true,
+	http.MethodPost + " " + authapi.PatternAuthorize:             true,
+	http.MethodPost + " " + authapi.PatternAuthorizeBatch:        true,
+	http.MethodPost + " " + authapi.PatternAuthorizeRepositories: true,
 }
 
 // internalOnlyRoute is one internalOnlyRoutes entry. An optional route mounts only when its configuration is set, so

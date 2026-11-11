@@ -3,6 +3,8 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 )
 
 func TestSelectActiveMembership(t *testing.T) {
@@ -109,27 +112,80 @@ func TestDummyHashCostsWhatPythonsDoes(t *testing.T) {
 }
 
 // CHAOS-13585: GET /api/v1/auth/me carries the caller's identity and no permission list: no consumer reads one (CENSUS-10872-perm-1),
-// and a complete mutable permission set does not belong in an answer a client caches.
+// and a complete mutable permission set does not belong in an answer a client caches. Each expected body is main's answer for that caller
+// (cfeabc7f4cd1) with the permissions member removed and every other byte unchanged; under a live impersonation session the permission
+// list used to be the target role's, and the identity fields still come from the caller alone.
 func TestMeCarriesNoPermissionsField(t *testing.T) {
+	const identity = `{"id":"u","email":"u@example.com","username":null,"full_name":null,"org_id":"o","role":"%s","is_superuser":%t}`
+	session := &policy.Impersonation{AdminUserID: uuid.New(), TargetUserID: uuid.New(), TargetOrgID: uuid.New(), TargetRole: "viewer"}
 	cases := []struct {
 		name string
 		user *policy.User
+		imp  *policy.Impersonation
+		want string
 	}{
-		{"viewer", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "viewer"}},
-		{"owner", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "owner"}},
-		{"platform admin", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "member", IsSuperuser: true}},
+		{"viewer", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "viewer"}, nil, fmt.Sprintf(identity, "viewer", false)},
+		{"owner", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "owner"}, nil, fmt.Sprintf(identity, "owner", false)},
+		{"platform admin", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "member", IsSuperuser: true}, nil, fmt.Sprintf(identity, "member", true)},
+		{"platform admin under a live impersonation session, target role viewer", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "member", IsSuperuser: true}, session, fmt.Sprintf(identity, "member", true)},
+		{"owner under a live impersonation session, target role viewer", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "owner"}, session, fmt.Sprintf(identity, "owner", false)},
 	}
 	for _, c := range cases {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
-		request = request.WithContext(policy.WithUser(request.Context(), c.user))
+		ctx := policy.WithUser(request.Context(), c.user)
+		if c.imp != nil {
+			ctx = policy.WithImpersonation(ctx, c.imp)
+		}
 		recorder := httptest.NewRecorder()
-		handlers{}.me(recorder, request)
-		body := recorder.Body.String()
-		if recorder.Code != http.StatusOK || !strings.Contains(body, `"role"`) {
-			t.Fatalf("%s: %d %s, want the 200 identity answer", c.name, recorder.Code, body)
+		handlers{}.me(recorder, request.WithContext(ctx))
+		body := strings.TrimSpace(recorder.Body.String())
+		if recorder.Code != http.StatusOK || body != c.want {
+			t.Errorf("%s: %d %s, want the 200 identity answer %s with no permissions", c.name, recorder.Code, body, c.want)
 		}
-		if strings.Contains(body, "permissions") {
-			t.Errorf("%s: /auth/me still carries permissions: %s", c.name, body)
+	}
+}
+
+// The recorded Python /auth/me answers of the differential scenario (python_golden.json, pinned by sha256, its recorder retired) carry the
+// retired permissions member. Once that member is dropped, each recorded answer is byte-equal to what this handler answers for the same
+// identity: so the scenario's replay of /auth/me cannot differ because of the field.
+func TestRecordedMeAnswersEqualTheHandlerOnceThePermissionsMemberIsDropped(t *testing.T) {
+	golden := sessionscenario.LoadGolden(t)
+	checked := 0
+	for _, answer := range golden.Answers {
+		if answer.Status != http.StatusOK || !strings.Contains(answer.Body, `"is_superuser"`) || !strings.Contains(answer.Body, `"full_name"`) ||
+			strings.Contains(answer.Body, `"access_token"`) || strings.Contains(answer.Body, `"user":`) || strings.Contains(answer.Body, `"memberships"`) {
+			continue
 		}
+		var me struct {
+			ID, Email, OrgID, Role string
+			Username, FullName     *string
+			IsSuperuser            bool
+		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(answer.Body), &raw); err != nil || raw["id"] == nil || raw["role"] == nil {
+			continue
+		}
+		str := func(k string) string { v, _ := raw[k].(string); return v }
+		opt := func(k string) *string {
+			if v, ok := raw[k].(string); ok {
+				return &v
+			}
+			return nil
+		}
+		me.ID, me.Email, me.OrgID, me.Role = str("id"), str("email"), str("org_id"), str("role")
+		me.Username, me.FullName = opt("username"), opt("full_name")
+		me.IsSuperuser, _ = raw["is_superuser"].(bool)
+		user := &policy.User{UserID: me.ID, Email: me.Email, OrgID: me.OrgID, Role: me.Role, IsSuperuser: me.IsSuperuser, Username: me.Username, FullName: me.FullName}
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+		recorder := httptest.NewRecorder()
+		handlers{}.me(recorder, request.WithContext(policy.WithUser(request.Context(), user)))
+		if got := strings.TrimSpace(recorder.Body.String()); got != answer.Body {
+			t.Errorf("%s: handler %s, recorded (permissions dropped) %s", answer.Name, got, answer.Body)
+		}
+		checked++
+	}
+	t.Logf("checked %d recorded /auth/me answers", checked)
+	if checked < 3 {
+		t.Fatalf("only %d recorded /auth/me answers checked", checked)
 	}
 }

@@ -327,8 +327,19 @@ var retryAfterPattern = regexp.MustCompile(`"retry_after_seconds":(\d+)`)
 // created, whose id each plane draws at random.
 var randomUUIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
+// mePermissionsMember is the permissions member the recorded Python /auth/me answers carry (a sorted-set rendering) and the live
+// ones carried (a list). GET /auth/me no longer answers it (CHAOS-13585): both sides drop it before they are compared, and the
+// pinned golden file stays unedited.
+var mePermissionsMember = regexp.MustCompile(`,"permissions":(?:\[[^\]]*\]|<set [^>]*>)`)
+
+// DropRetiredMePermissions removes the retired permissions member from a /auth/me body.
+func DropRetiredMePermissions(body string) string {
+	return mePermissionsMember.ReplaceAllString(body, "")
+}
+
 // Normalize is the body normalization every comparison applies.
 func Normalize(body string) string {
+	body = DropRetiredMePermissions(body)
 	body = jwtPattern.ReplaceAllStringFunc(body, describeJWT)
 	body = randomUUIDPattern.ReplaceAllStringFunc(body, func(id string) string {
 		if strings.Contains(id, "-0000-4000-8000-") {
@@ -423,6 +434,9 @@ func LoadGolden(t *testing.T) *Recording {
 	}
 	if len(golden.Answers) < 150 || len(golden.Rows) != 4 {
 		t.Fatalf("golden holds %d answers and %d row sets; it was cut short", len(golden.Answers), len(golden.Rows))
+	}
+	for i := range golden.Answers {
+		golden.Answers[i].Body = DropRetiredMePermissions(golden.Answers[i].Body)
 	}
 	return &golden
 }

@@ -22,7 +22,7 @@
 # `kubectl exec` or to read the baked-in documents dump / operation
 # catalog off disk with a plain path. Both image digests stay pinned so
 # an update is an explicit, reviewed dependency change.
-ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd"
+ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf"
 ARG TOOLS_RUNTIME_IMAGE="mirror.gcr.io/library/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171"
 
 FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS build

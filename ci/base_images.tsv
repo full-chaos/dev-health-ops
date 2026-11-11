@@ -9,5 +9,5 @@
 # digest back WITHOUT credentials and fails unless they serve the pin (a private or missing package fails there). The Dockerfile ARGs
 # (GO_BUILD_IMAGE, TOOLS_RUNTIME_IMAGE) carry these same refs; internal/cigates/workflows/workflows_base_images_test.go holds them equal.
 # To bump an image: put the new index digest here and in the Dockerfile ARGs, and let mirror-test-images.yml publish it.
-go-build	library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd
+go-build	library/golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf
 tools-runtime	library/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171

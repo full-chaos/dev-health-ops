@@ -19,7 +19,7 @@ DEB_D="sha256:$(printf 'b%.0s' $(seq 64))"
 mkdir -p "${T}/bin"
 cat > "${T}/tsv" <<TSV
 # fixture
-go-build	library/golang:1.27.3-alpine@${GO_D}
+go-build	library/golang:1.27.4-alpine@${GO_D}
 tools-runtime	library/debian:bookworm-slim@${DEB_D}
 TSV
 
@@ -48,16 +48,16 @@ run() { # tsv ; env passes through; sets RC, OUT
 }
 
 run "${T}/tsv"
-if [ "${RC}" = 0 ] && [ "$(printf '%s\n' "${OUT}" | grep -c '^OK ')" = 2 ] && printf '%s\n' "${OUT}" | grep -q "^OK   go-build library/golang:1.27.3-alpine ${GO_D} (source)"; then ok "s1 both pinned digests are served at the source"; else bad "s1 (rc=${RC}): ${OUT}"; fi
+if [ "${RC}" = 0 ] && [ "$(printf '%s\n' "${OUT}" | grep -c '^OK ')" = 2 ] && printf '%s\n' "${OUT}" | grep -q "^OK   go-build library/golang:1.27.4-alpine ${GO_D} (source)"; then ok "s1 both pinned digests are served at the source"; else bad "s1 (rc=${RC}): ${OUT}"; fi
 if ! grep -qE 'imagetools create|push|login|buildx build' "${T}/docker.log" && [ "$(wc -l < "${T}/docker.log" | tr -d ' ')" = 2 ]; then ok "s2 only two read-only inspect calls; nothing is created, pushed or logged in"; else bad "s2 docker log: $(cat "${T}/docker.log")"; fi
 FAKE_DIG_GO="sha256:$(printf 'c%.0s' $(seq 64))" run "${T}/tsv"
-if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q "^FAIL go-build: library/golang:1.27.3-alpine serves sha256:c.*, want ${GO_D}" && printf '%s\n' "${OUT}" | grep -q '^OK   tools-runtime'; then ok "s3 a moved digest at the source = named FAIL, the other image still checked"; else bad "s3 (rc=${RC}): ${OUT}"; fi
+if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q "^FAIL go-build: library/golang:1.27.4-alpine serves sha256:c.*, want ${GO_D}" && printf '%s\n' "${OUT}" | grep -q '^OK   tools-runtime'; then ok "s3 a moved digest at the source = named FAIL, the other image still checked"; else bad "s3 (rc=${RC}): ${OUT}"; fi
 FAKE_FAIL=debian run "${T}/tsv"
 if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL tools-runtime: library/debian:bookworm-slim cannot be read at its source'; then ok "s4 an unreadable source = named FAIL"; else bad "s4 (rc=${RC}): ${OUT}"; fi
 printf 'go-build\tlibrary/golang:1.27@sha1:abc\n' > "${T}/tsv.bad"
 run "${T}/tsv.bad"
 if [ "${RC}" != 0 ] && [ ! -s "${T}/docker.log" ]; then ok "s5 a malformed tsv fails with no registry call"; else bad "s5 (rc=${RC})"; fi
-printf 'go-build\tlibrary/golang:1.27.3-alpine\n' > "${T}/tsv.nodigest"
+printf 'go-build\tlibrary/golang:1.27.4-alpine\n' > "${T}/tsv.nodigest"
 run "${T}/tsv.nodigest"
 if [ "${RC}" != 0 ] && [ ! -s "${T}/docker.log" ]; then ok "s6 a ref with no digest is rejected before any registry call"; else bad "s6 (rc=${RC})"; fi
 printf '# nothing\n' > "${T}/tsv.empty"

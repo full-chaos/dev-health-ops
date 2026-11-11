@@ -354,20 +354,6 @@ out-of-cluster origin instead.
 {{- end }}
 
 {{/*
-Envelope JWKS Secret for query-api. This chart does NOT create it: the keypair
-is minted out of band (scripts/mint-envelope-keys.sh) and only the public half
-belongs in the cluster. Empty derives the conventional name, which is what an
-existing deployment already uses.
-*/}}
-{{- define "dev-health.queryApiJwksSecretName" -}}
-{{- if .Values.queryApi.envelope.jwksSecretName }}
-{{- .Values.queryApi.envelope.jwksSecretName }}
-{{- else }}
-{{- printf "%s-query-api-jwks" (include "dev-health.fullname" .) }}
-{{- end }}
-{{- end }}
-
-{{/*
 Image pull secrets
 */}}
 {{- define "dev-health.imagePullSecrets" -}}

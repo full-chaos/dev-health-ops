@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/cigates/affected"
 )
 
 // always.tsv holds no package: the tests that read or run other packages' files (a DDL scan of every _test.go, `go run` of
@@ -116,7 +118,7 @@ func realPlanEvent(t *testing.T, event, changed string) []string {
 	if err := os.WriteFile(list, []byte(changed+"\x00"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res := runRealPlanVerdict(root, inheritedEnv([]string{"GOFLAGS"}, "GOFLAGS="), cigate(t), "plan-verdict", "--event", event,
+	res := inProcessRealPlanVerdict(t, "--event", event,
 		"--changed", list, "--golist", in.golist, "--keys", in.keys, "--root", root)
 	if res.code != 0 {
 		t.Fatalf("plan-verdict exited %d: %s", res.code, res.stderr)
@@ -173,4 +175,13 @@ func TestPlannerInputsPlanFull(t *testing.T) {
 			}
 		})
 	}
+}
+
+// inProcessRealPlanVerdict shares only the unchanged real checkout's scan. Fixture,
+// planted and overlay verdicts continue to scan their own roots.
+func inProcessRealPlanVerdict(t *testing.T, args ...string) cmdResult {
+	t.Helper()
+	var out, errb bytes.Buffer
+	code := affected.PlanVerdictFrom(realTreeScan(t), args, &out, &errb)
+	return cmdResult{code: code, stdout: out.String(), stderr: errb.String()}
 }

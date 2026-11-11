@@ -229,7 +229,7 @@ func realSelection(t *testing.T, root string, changed []byte) (lines []string, t
 		}
 	}
 	var selOut, selErr bytes.Buffer
-	if code := affected.PlanVerdict([]string{"--event", "pull_request", "--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
+	if code := affected.PlanVerdictFrom(realTreeScan(t), []string{"--event", "pull_request", "--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
 		"--keys", filepath.Join(work, "keys.txt"), "--root", root}, &selOut, &selErr); code != 0 {
 		t.Fatalf("selector: %s", selErr.String())
 	}

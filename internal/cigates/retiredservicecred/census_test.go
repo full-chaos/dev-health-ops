@@ -204,21 +204,22 @@ func TestNoReferenceToTheRetiredServiceCredentials(t *testing.T) {
 	t.Errorf("the service credentials are retired; %d reference(s) outside the allowlist:\n%s", len(hits), strings.Join(lines, "\n"))
 }
 
-// Every allowlist entry is a tracked file that still holds each name it may hold: an entry outlives its reason only
-// by failing here, so the list shrinks with the code.
-func TestEveryAllowlistEntryIsStillNeeded(t *testing.T) {
-	root := repoRoot(t)
+// staleEntries lists every allowlist entry that is not a tracked file, has no known stage, names an unknown name, or no
+// longer holds a name it may hold: an entry outlives its reason only by failing here, so the list shrinks with the code.
+func staleEntries(t *testing.T, root string, allow map[string]allowance) []string {
+	t.Helper()
 	tracked := map[string]bool{}
 	for _, rel := range trackedFiles(t, root) {
 		tracked[rel] = true
 	}
-	for rel, a := range allowed {
+	var stale []string
+	for rel, a := range allow {
 		if !tracked[rel] {
-			t.Errorf("allowlist entry %s is not a tracked file", rel)
+			stale = append(stale, rel+": not a tracked file")
 			continue
 		}
 		if a.stage != history && a.stage != untilDrop {
-			t.Errorf("allowlist entry %s has stage %q", rel, a.stage)
+			stale = append(stale, rel+": stage "+strconv.Quote(a.stage))
 		}
 		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil {
@@ -227,12 +228,20 @@ func TestEveryAllowlistEntryIsStillNeeded(t *testing.T) {
 		for _, name := range a.names {
 			re, ok := retiredNames[name]
 			if !ok {
-				t.Errorf("allowlist entry %s names an unknown name %q", rel, name)
+				stale = append(stale, rel+": unknown name "+strconv.Quote(name))
 				continue
 			}
 			if !re.Match(body) && !re.MatchString(rel) {
-				t.Errorf("allowlist entry %s no longer holds the %s name: drop it from the entry", rel, name)
+				stale = append(stale, rel+": no longer holds the "+name+" name")
 			}
 		}
+	}
+	sort.Strings(stale)
+	return stale
+}
+
+func TestEveryAllowlistEntryIsStillNeeded(t *testing.T) {
+	for _, s := range staleEntries(t, repoRoot(t), allowed) {
+		t.Errorf("allowlist entry %s: drop it from the entry", s)
 	}
 }

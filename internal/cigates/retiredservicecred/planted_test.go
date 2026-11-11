@@ -98,3 +98,30 @@ func TestAllowlistIsExactPathNotPrefix(t *testing.T) {
 		t.Errorf("census = %q, want both non-exact paths, %q", got, want)
 	}
 }
+
+func TestStaleAllowlistEntriesAreNamed(t *testing.T) {
+	files := map[string]string{
+		"docs/kept.md":  "internal_service_credentials\n",
+		"docs/gone.md":  "the table is dropped\n",
+		"docs/stage.md": "internal_service_credentials\n",
+		"docs/loose.md": "internal_service_credentials\n",
+	}
+	dir := plantedRepo(t, files, "docs/kept.md", "docs/gone.md", "docs/stage.md")
+	allow := map[string]allowance{
+		"docs/kept.md":    {[]string{nameTable}, history},
+		"docs/gone.md":    {[]string{nameTable}, untilDrop},
+		"docs/stage.md":   {[]string{nameTable, "tables"}, "later"},
+		"docs/loose.md":   {[]string{nameTable}, history},
+		"docs/missing.md": {[]string{nameTable}, history},
+	}
+	want := strings.Join([]string{
+		"docs/gone.md: no longer holds the table name",
+		"docs/loose.md: not a tracked file",
+		"docs/missing.md: not a tracked file",
+		`docs/stage.md: stage "later"`,
+		`docs/stage.md: unknown name "tables"`,
+	}, "\n")
+	if got := strings.Join(staleEntries(t, dir, allow), "\n"); got != want {
+		t.Errorf("staleEntries =\n%s\nwant\n%s", got, want)
+	}
+}

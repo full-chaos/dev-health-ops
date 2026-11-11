@@ -52,7 +52,7 @@ and `/readyz` fails closed, naming the check. See the
 | `--public-max-in-flight` | `AUTH_SERVICE_PUBLIC_MAX_IN_FLIGHT` | `256` | 1 to 100000. In-flight cap of the key and discovery routes, apart from the shared cap of 64. |
 | `--public-rate-limit` | `AUTH_SERVICE_PUBLIC_RATE_LIMIT_PER_SECOND` | `500` | 0.01 to 100000, per key or discovery route bucket. |
 | `--public-rate-limit-burst` | `AUTH_SERVICE_PUBLIC_RATE_LIMIT_BURST` | `1000` | 1 to 100000, per key or discovery route bucket. |
-| `--pdp-caller-rate-limit` | `AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_PER_SECOND` | `150` | 0.01 to 100000. Token bucket of one caller workload on one PDP route (`/v1/authorize`, `/v1/authorize:batch`), per pod: the effective per-caller limit is this times the pod count. A batch costs its decision count. |
+| `--pdp-caller-rate-limit` | `AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_PER_SECOND` | `150` | 0.01 to 100000. Token bucket of one caller workload on one PDP route (`/v1/authorize`, `/v1/authorize:batch`, `/v1/authorize:repositories`), per pod: the effective per-caller limit is this times the pod count. A batch costs its decision count. |
 | `--pdp-caller-rate-limit-burst` | `AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_BURST` | `300` | 1 to 100000, per caller and route, per pod. Must be at least 100, the largest batch: the chart refuses a smaller value at render. |
 | `--pdp-route-rate-limit` | `AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_PER_SECOND` | `2000` | 0.01 to 100000. Ceiling of all callers together on one PDP route, per pod. From the 5.19 load test; to be revisited. |
 | `--pdp-route-rate-limit-burst` | `AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_BURST` | `4000` | 1 to 100000, per route, per pod. |
@@ -268,7 +268,7 @@ exchange reads is in the [workload registry](workload-registry.md). The reasons 
 
 With `AUTH_SERVICE_INTERNAL_HTTP_ADDR` set, auth-service opens a third listener for the policy enforcement points (PEPs). Unset, there is no such listener.
 
-- It serves `POST /internal/v1/token/exchange`, `POST /v1/authorize`, `POST /v1/authorize:batch` and `POST /internal/v1/acr/credential-events` alone, each only while it is mounted (see [workload token exchange](#workload-token-exchange) and [authorize routes](#authorize-routes)). Every other path is 404 there, the operator paths too.
+- It serves `POST /internal/v1/token/exchange`, `POST /v1/authorize`, `POST /v1/authorize:batch`, `POST /v1/authorize:repositories` and `POST /internal/v1/acr/credential-events` alone, each only while it is mounted (see [workload token exchange](#workload-token-exchange) and [authorize routes](#authorize-routes)). Every other path is 404 there, the operator paths too.
 - `POST /internal/v1/acr/credential-events` is internal-only: the API listener answers 404 for it. It mounts only with `AUTH_ACR_EVENTS_WORKLOAD_SUBJECT` and its endpoint-profile row. With the subject unset, auth-service starts and the route is not mounted on either listener. With the subject set and the internal listener off, auth-service starts, the route is served on no listener, and one WARN line says so (`auth internal-only route served on no listener`).
 - It trusts no proxy. `AUTH_SERVICE_TRUSTED_PROXIES` is the API listener's alone: here the client address is always the TCP peer, `X-Forwarded-For` is not read, and a caller's `X-Request-ID` is logged as `untrusted`.
 - A caller is identified by its own token: the exchange by its ServiceAccount token, the authorize routes by its workload token and `AUTH_AUTHORIZE_CALLER_SUBJECTS`. The refusals are the same as on the API listener.

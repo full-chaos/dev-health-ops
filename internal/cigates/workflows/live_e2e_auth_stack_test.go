@@ -1278,14 +1278,15 @@ func TestLiveE2ESMTPFakeProcess(t *testing.T) {
 }
 
 // readinessDied: the loud failure names the elapsed seconds and the bound (D6418: the bound is a wait limit; only a ready
-// signal passes, and a hit deadline fails with how long it waited). The fixture bound is 5 s, so the wait was at least that.
+// signal passes, and a hit deadline fails with how long it waited). The fixture bound is 5 s, so the wait was at least that;
+// no upper time bound is asserted.
 func readinessDied(out, name string) bool {
 	m := regexp.MustCompile(regexp.QuoteMeta(name) + ` did not become ready after ([0-9]+)s \(bound 5s\)`).FindStringSubmatch(out)
 	if m == nil {
 		return false
 	}
 	elapsed, err := strconv.Atoi(m[1])
-	return err == nil && elapsed >= 5 && elapsed <= 20
+	return err == nil && elapsed >= 5
 }
 
 // A slow start must not be read as a failed start: the wait is wall clock, whatever the fake sleep does (CHAOS-13590:

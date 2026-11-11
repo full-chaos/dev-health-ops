@@ -32,7 +32,7 @@ var perRequestFields = regexp.MustCompile(`"(request_id|occurred_at)":"[^"]*"`)
 // bootstrap credential is accepted only as the exchange's subject_token. As an
 // Authorization bearer it is not a credential anywhere: every route
 // auth-service serves (the endpoint-profile probe's set, both exchange
-// subjects on, on the API and the operator listener) answers a request
+// subjects on, on the API, operator and internal listeners) answers a request
 // carrying it exactly as the same request with no credential (on a route that
 // speaks go-api's guard wire, exactly as an invalid bearer), so a route that
 // needs a bearer answers it with its 401. /metrics changes between two
@@ -49,8 +49,9 @@ func TestABootstrapCredentialOpensNoAuthRoute(t *testing.T) {
 		authconfig.EnvSocialLinkRoutes:   "true",
 		authconfig.EnvUsersOwned:         "true",
 		authconfig.EnvTokenIssuerURL:     wellKnownIssuer,
+		internalAddressEnv:               "127.0.0.1:0",
 	}
-	exchangeEnvironment(t, env)
+	exchangeEnvironment(t, acrEventsEnvironment(env))
 	handlers := censusHandlers(t, ssoEnvironment(compatEnvironment(env)))
 	value := workload.BootstrapPrefix + "CENSUSb00tstrapVALUE" + strings.Repeat("Q", 43-len("CENSUSb00tstrapVALUE"))
 	if !workload.ValidBootstrapShape(value) {
@@ -113,8 +114,8 @@ func TestABootstrapCredentialOpensNoAuthRoute(t *testing.T) {
 	t.Logf("BOOTSTRAP_BEARER_CENSUS routes=%d operator=%d 401=%d", checked, operator, unauthorized)
 }
 
-// censusHandlers configures auth-service from env and returns its API and
-// operator listeners' handlers, keyed as servedAuthRoutes names them.
+// censusHandlers configures auth-service from env and returns its API, operator
+// and (when on) internal listeners' handlers, keyed as servedAuthRoutes names them.
 func censusHandlers(t *testing.T, env map[string]string) map[string]http.Handler {
 	t.Helper()
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
@@ -138,7 +139,11 @@ func censusHandlers(t *testing.T, env map[string]string) map[string]http.Handler
 		}
 		switch server := announced.listener.(type) {
 		case *httpapi.Server:
-			handlers["api"] = server.Handler()
+			if server.Name() == internalHTTPName {
+				handlers["internal"] = server.Handler()
+			} else {
+				handlers["api"] = server.Handler()
+			}
 		case *health.Server:
 			handlers["operator"] = server.Handler()
 		}

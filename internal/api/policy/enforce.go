@@ -203,14 +203,21 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 		return enforceImpersonationRefused
 	}
-	// A request that serves another organization than the token's, or a token with none, keeps the legacy answer: the
-	// legacy guard judges the token organization at the route's level and the handler the served one. The decision point
-	// judges one organization, and neither alone is that answer (product rule 1, D6773).
+	// A request that serves another organization than the token's is judged as the legacy guard judges it: the decision
+	// point answers for the TOKEN organization, the route level's check, and the org scope and the handler keep admitting
+	// the served one. Neither verdict widens the other: an allow for the token organization never widens what the scope or the
+	// handler admit (product rule 1, D6773; CHAOS-10872 S2-parity). A token with no organization has none to judge: that
+	// class keeps the legacy answer (S1).
 	if o.served.against(o.orgID) == servedOrgOther {
-		countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedServedOrg)
-		e.logger.DebugContext(ctx, "api enforcement: the request serves another organization than the token's, the legacy answer stands",
-			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
-		return enforceLegacy
+		if o.orgID == "" {
+			countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedServedOrg)
+			e.logger.DebugContext(ctx, "api enforcement: the token has no organization and the request names one, the legacy answer stands",
+				slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+			return enforceLegacy
+		}
+		e.logger.DebugContext(ctx, "api enforcement: the request serves another organization than the token's, the decision point judges the token organization",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace),
+			slog.String("decided_org", strings.ToLower(o.orgID)), slog.String("served_org", o.served.raw))
 	}
 	org := strings.ToLower(o.orgID)
 	if reason := unjudgedReason(o, row, org); reason != "" {

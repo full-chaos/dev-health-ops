@@ -15,9 +15,9 @@ func TestClickHouseConfigdRendersOneSubPathMountPerFile(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	out, err := helmCommand("template", "t", ".", "--show-only", "templates/clickhouse.yaml",
+	out, err := helmOutput("template", "t", ".", "--show-only", "templates/clickhouse.yaml",
 		"--set-string", `clickhouse.configd.b\.xml=<clickhouse/>`,
-		"--set-string", `clickhouse.configd.a\.xml=<clickhouse/>`).CombinedOutput()
+		"--set-string", `clickhouse.configd.a\.xml=<clickhouse/>`)
 	if err != nil {
 		t.Fatalf("helm template: %v: %.500s", err, out)
 	}
@@ -79,8 +79,8 @@ func TestClickHouseConfigdRefusesTheImageFileName(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	out, err := helmCommand("template", "t", ".", "--show-only", "templates/clickhouse.yaml",
-		"--set-string", `clickhouse.configd.docker_related_config\.xml=<clickhouse/>`).CombinedOutput()
+	out, err := helmOutput("template", "t", ".", "--show-only", "templates/clickhouse.yaml",
+		"--set-string", `clickhouse.configd.docker_related_config\.xml=<clickhouse/>`)
 	if err == nil {
 		t.Fatalf("a configd file named docker_related_config.xml rendered")
 	}

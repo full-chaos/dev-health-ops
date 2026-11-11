@@ -12,6 +12,7 @@ import (
 // Helm reads the non-empty string "false" as true. Every authService switch this chart reads is refused unless it is a
 // YAML boolean, and the refusal names the key.
 func TestAuthSwitchesRefuseNonBooleans(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{"authService.backfill.enabled", "authService.backfill.dryRun", "authService.socialLinkRoutes", "authService.sso.oidc", "authService.sso.saml"} {
 		for name, flag := range map[string][]string{
 			"string false": {"--set-string", key + "=false"},
@@ -23,6 +24,7 @@ func TestAuthSwitchesRefuseNonBooleans(t *testing.T) {
 			"map":          {"--set-json", key + "={}"},
 		} {
 			t.Run(key+"/"+name, func(t *testing.T) {
+				t.Parallel()
 				_, out, err := renderAuth(t, append(backfillOnWithout(key), flag...)...)
 				if err == nil || !strings.Contains(out, key) {
 					t.Fatalf("%s %s rendered or the refusal does not name the key: err=%v out=%.300s", key, name, err, out)
@@ -30,6 +32,7 @@ func TestAuthSwitchesRefuseNonBooleans(t *testing.T) {
 			})
 		}
 		t.Run(key+"/bool passes", func(t *testing.T) {
+			t.Parallel()
 			for _, value := range []string{"true", "false"} {
 				if key == "authService.backfill.enabled" && value == "false" {
 					continue

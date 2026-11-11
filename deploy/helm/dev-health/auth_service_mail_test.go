@@ -445,9 +445,11 @@ func TestAuthServiceMailEgressRefusesAnEmptySelector(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressRefusesANonCanonicalPrefix(t *testing.T) {
+	t.Parallel()
 	v4, v6 := mailV4Except, mailV6Except
 	for _, cidr := range []string{"0.0.0.0/00", "0.0.0.0/000", "::/00", "::/000", "0.0.0.0/+0", "0.0.0.0/ 0", "10.0.0.0/08", "10.0.0.0/008", "2001:db8::/032", " 10.0.0.0/8", "10.0.0.0/8 ", "10.0.0.0/8\n", "\t10.0.0.0/8"} {
 		t.Run(strings.NewReplacer("/", "_", " ", "_", "\n", "n", "\t", "t").Replace(cidr), func(t *testing.T) {
+			t.Parallel()
 			wantMailPeerRefusal(t, cidr, []string{mailBlock(cidr)})
 			except := v4
 			if strings.Contains(cidr, ":") {
@@ -554,6 +556,7 @@ func TestAuthServiceMailEgressRenderedExceptHasNoIPv4MappedForm(t *testing.T) {
 }
 
 func TestAuthServiceMailEgressRefusesAMappedExceptEntry(t *testing.T) {
+	t.Parallel()
 	for _, mapped := range []string{"::ffff:0:0/96", "::FFFF:0:0/96", "0:0:0:0:0:ffff:0:0/96", "0000:0:0::ffff:0:0/96", "::ffff:a00:0/104", "::ffff:0:0/80", "::ffff:808:808/128"} {
 		for _, wide := range []struct {
 			cidr   string

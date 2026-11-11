@@ -102,6 +102,7 @@ func TestAuthServiceTracingSampleRateIsRendered(t *testing.T) {
 }
 
 func TestAuthServiceTracingRefusals(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		args []string
 		want string
@@ -142,6 +143,7 @@ func TestAuthServiceTracingRefusals(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			_, out, err := renderAuth(t, authWith(tc.args...)...)
 			if err == nil {
 				t.Fatalf("render passed; want a refusal naming %s", tc.want)

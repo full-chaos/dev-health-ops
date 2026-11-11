@@ -44,6 +44,7 @@ func renderAuthText(t *testing.T, args []string) string {
 // The default is the empty list: at every phase 0-4, and at phases 2-4 with the internal listener on (its test base,
 // internalOn, needs phase >= 2), the render with the key unset, set to [] and set to null are byte-equal.
 func TestAuthWorkloadClientsDefaultIsTheEmptyList(t *testing.T) {
+	t.Parallel()
 	type form struct {
 		name string
 		args func(extra ...string) []string
@@ -59,6 +60,7 @@ func TestAuthWorkloadClientsDefaultIsTheEmptyList(t *testing.T) {
 	}
 	for _, f := range forms {
 		t.Run(f.name, func(t *testing.T) {
+			t.Parallel()
 			plain := renderAuthText(t, f.args())
 			for _, value := range []string{`[]`, `null`} {
 				if got := renderAuthText(t, f.args(workloadClients(value)...)); got != plain {

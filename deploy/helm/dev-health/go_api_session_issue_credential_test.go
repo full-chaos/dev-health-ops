@@ -143,6 +143,7 @@ func TestSessionIssueCredentialWorkloadSessionsOffRendersNothing(t *testing.T) {
 // credential "" is the key absent (CHAOS-13467: a venue that layers values.prod.yaml unsets it this way): the unset render is compared
 // with the explicit-default block and with every way to write "", byte for byte, and checked structurally.
 func TestSessionIssueCredentialUnsetRendersTokenMode(t *testing.T) {
+	t.Parallel()
 	explicit := []string{"--set", "goApi.sessionIssue.secretName=", "--set", "goApi.sessionIssue.secretKey=AUTH_SESSION_ISSUE_TOKEN"}
 	cases := []struct {
 		name  string

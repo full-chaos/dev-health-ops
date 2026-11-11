@@ -47,7 +47,7 @@ func TestHelmShowsTheAclLineAndRendersValkeyWithTheAofOnAndTheAclFile(t *testing
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	out, err := helmCommand("show", "values", ".").CombinedOutput()
+	out, err := helmOutput("show", "values", ".")
 	if err != nil {
 		t.Fatalf("helm show values: %v\n%.300s", err, out)
 	}

@@ -34,7 +34,7 @@ func renderDocs(t *testing.T, args ...string) []map[string]any {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	out, err := helmCommand(append([]string{"template", "h", chartDir()}, args...)...).CombinedOutput()
+	out, err := helmOutput(append([]string{"template", "h", chartDir()}, args...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)
 	}

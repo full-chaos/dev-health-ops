@@ -158,7 +158,7 @@ func renderPolicySet(t *testing.T, args ...string) ([]netpolDoc, []egressDoc, st
 	full := append([]string{"template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled=true",
 		"--set", "goApi.enabled=true", "--set", "goApi.internal.enabled=true", "--set", "queryApi.enabled=true",
 		"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, args...)
-	out, err := helmCommand(full...).CombinedOutput()
+	out, err := helmOutput(full...)
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}
@@ -246,8 +246,8 @@ func TestQueryAPIWithoutTrustedListenersStaysInTheReleaseWidePolicy(t *testing.T
 }
 
 func TestQueryAPIPublicPortStaysOpenWithTheReleasePolicyOff(t *testing.T) {
-	out, err := helmCommand("template", "np", ".", "--namespace", releaseNamespace, "--set", "queryApi.enabled=true",
-		"--set", "queryApi.mcp.enabled=true", "--set", "queryApi.internal.enabled=true").CombinedOutput()
+	out, err := helmOutput("template", "np", ".", "--namespace", releaseNamespace, "--set", "queryApi.enabled=true",
+		"--set", "queryApi.mcp.enabled=true", "--set", "queryApi.internal.enabled=true")
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}
@@ -349,6 +349,7 @@ func TestExtraEgressLeavesTheAuthPoliciesUnchanged(t *testing.T) {
 }
 
 func TestExtraEgressRefusals(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		value string
 		want  string
@@ -395,8 +396,9 @@ func TestExtraEgressRefusals(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			out, err := helmCommand("template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled=true",
-				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "networkPolicy.extraEgress="+c.value).CombinedOutput()
+			t.Parallel()
+			out, err := helmOutput("template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled=true",
+				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "networkPolicy.extraEgress="+c.value)
 			if err == nil || !strings.Contains(string(out), c.want) {
 				t.Errorf("extraEgress %s must fail the render with %q: err=%v\n%.600s", c.value, c.want, err, out)
 			}
@@ -414,6 +416,7 @@ func TestExtraEgressRefusals(t *testing.T) {
 		"empty namespaceSelector with ports": `[{"to":[{"namespaceSelector":{}}],"ports":[{"port":80}]}]`,
 	} {
 		t.Run("renders: "+name, func(t *testing.T) {
+			t.Parallel()
 			_, egress, _ := renderPolicySet(t, "--set-json", "networkPolicy.extraEgress="+value)
 			if allowed, _ := egressAllowed(egress, npComponent("web"), egressTarget{name: "DNS", namespaceLabels: map[string]string{namespaceNameLabel: "kube-system"}, protocol: "TCP", port: 53}); !allowed {
 				t.Error("the shared egress lost DNS over TCP")
@@ -439,9 +442,9 @@ func TestDNSEgressAllowsUDPAndTCP(t *testing.T) {
 func TestQueryAPIInternalAllowedFromRefusesEmptySelectors(t *testing.T) {
 	for _, np := range []string{"true", "false"} {
 		for _, value := range []string{`[{}]`, `[{"matchLabels":{}}]`, `[{"matchExpressions":[]}]`, `[{"matchLabels":{"app":"tools"}},{}]`, `["tools"]`} {
-			out, err := helmCommand("template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled="+np,
+			out, err := helmOutput("template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled="+np,
 				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set", "queryApi.enabled=true",
-				"--set", "queryApi.internal.enabled=true", "--set-json", "queryApi.internal.allowedFrom="+value).CombinedOutput()
+				"--set", "queryApi.internal.enabled=true", "--set-json", "queryApi.internal.allowedFrom="+value)
 			if err == nil || !strings.Contains(string(out), "queryApi.internal.allowedFrom entries must select pods by non-empty matchLabels or matchExpressions") {
 				t.Errorf("networkPolicy.enabled=%s allowedFrom %s must fail the render: err=%v\n%.400s", np, value, err, out)
 			}

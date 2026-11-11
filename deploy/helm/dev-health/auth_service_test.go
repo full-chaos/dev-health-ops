@@ -54,7 +54,7 @@ func renderAuthRaw(t *testing.T, args ...string) ([]map[string]any, string, erro
 		t.Skip("helm is not installed")
 	}
 	argv := append([]string{"template", "a", "."}, args...)
-	out, err := helmCommand(argv...).CombinedOutput()
+	out, err := helmOutput(argv...)
 	if err != nil {
 		return nil, string(out), err
 	}

@@ -39,7 +39,7 @@ func renderFencePolicies(t *testing.T, args ...string) []netpolDoc {
 	t.Helper()
 	full := append([]string{"template", "fence", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
 		"--set", "goApi.networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, args...)
-	out, err := helmCommand(full...).CombinedOutput()
+	out, err := helmOutput(full...)
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}
@@ -175,7 +175,7 @@ func TestGoAPIFenceControllerPodLabelsAndNamespaceAreValues(t *testing.T) {
 
 // The fence off renders exactly what it rendered before: every port but the internal one open to every source.
 func TestGoAPIFenceOffChangesNothing(t *testing.T) {
-	out, err := helmCommand("template", "fence", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true").CombinedOutput()
+	out, err := helmOutput("template", "fence", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true")
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}
@@ -222,7 +222,7 @@ func TestGoAPIFenceRefusals(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			full := append([]string{"template", "fence", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true", "--set", "goApi.networkPolicy.enabled=true"}, c.args...)
-			out, err := helmCommand(full...).CombinedOutput()
+			out, err := helmOutput(full...)
 			if err == nil {
 				t.Fatalf("the render succeeded, want a refusal naming %q", c.want)
 			}

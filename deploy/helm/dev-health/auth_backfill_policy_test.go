@@ -178,7 +178,7 @@ func hasString(list []string, want string) bool {
 
 func renderRelease(t *testing.T, release string, args ...string) []map[string]any {
 	t.Helper()
-	out, err := helmCommand(append([]string{"template", release, "."}, args...)...).CombinedOutput()
+	out, err := helmOutput(append([]string{"template", release, "."}, args...)...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.300s", err, out)
 	}

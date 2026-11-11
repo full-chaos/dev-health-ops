@@ -534,6 +534,7 @@ func TestGoAPIAuthProxyFlagsAreExplicitFromPhase2(t *testing.T) {
 // authService.extraEnv, in any case: a later entry with the same name would shadow the rendered one, a Secret
 // reference included, and put a literal in the manifest.
 func TestAuthServiceExtraEnvRefusesEveryRenderedName(t *testing.T) {
+	t.Parallel()
 	configs := map[string][]string{
 		"phase 3 with link routes":  phaseArgs(3, "--set", "authService.socialLinkRoutes=true"),
 		"phase 2 with eddsa tokens": phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"),
@@ -633,6 +634,7 @@ func TestAuthPhaseEmptyTokenClassIsTheDefault(t *testing.T) {
 // go-api: every env name the chart renders for go-api is refused in goApi.extraEnv, in any case (a later entry would
 // shadow the rendered one, a Secret reference included).
 func TestGoAPIExtraEnvRefusesEveryRenderedName(t *testing.T) {
+	t.Parallel()
 	configs := map[string][]string{
 		"phase 3":                   phaseArgs(3),
 		"phase 2 with eddsa tokens": phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"),
@@ -829,12 +831,14 @@ func TestAuthPhase2PreconditionsHoldWithEachServiceFlagOff(t *testing.T) {
 
 // Class rule: every Secret key the auth values read is a valid Kubernetes Secret key, in every render.
 func TestAuthSecretKeysAreValidSecretKeys(t *testing.T) {
+	t.Parallel()
 	keys := []string{"authService.database.secretKey", "authService.migrate.secretKey", "authService.signingKey.secretKey",
 		"authService.valkey.secretKey", "authService.sessionKeys.successor.secretKey",
 		"authService.sessionKeys.loginLockout.secretKey", "goApi.sessionIssue.secretKey"}
 	for _, key := range keys {
 		for _, bad := range []string{"", "a b", "a/b"} {
 			t.Run(fmt.Sprintf("%s=%q", key, bad), func(t *testing.T) {
+				t.Parallel()
 				_, out, err := renderAuth(t, phaseArgs(3, "--set-string", key+"="+bad)...)
 				if err == nil {
 					t.Fatalf("%s=%q rendered", key, bad)
@@ -846,6 +850,7 @@ func TestAuthSecretKeysAreValidSecretKeys(t *testing.T) {
 			})
 		}
 		t.Run(key+" valid", func(t *testing.T) {
+			t.Parallel()
 			if _, out, err := renderAuth(t, phaseArgs(3, "--set-string", key+"=Key-1.x_y")...); err != nil {
 				t.Fatalf("%s=Key-1.x_y refused: %v\n%.400s", key, err, out)
 			}

@@ -28,7 +28,7 @@ func renderJobs(t *testing.T, sets ...string) (jobs, secrets map[string]map[stri
 	for _, set := range sets {
 		args = append(args, "--set", set)
 	}
-	out, err := helmCommand(args...).CombinedOutput()
+	out, err := helmOutput(args...)
 	if err != nil {
 		return nil, nil, string(out)
 	}

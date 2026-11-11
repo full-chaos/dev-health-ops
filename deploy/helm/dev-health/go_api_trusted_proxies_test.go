@@ -28,7 +28,7 @@ func renderGoAPITrusted(t *testing.T, value string, extra ...string) (string, er
 	}
 	args := append([]string{"template", "trusted", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
 		"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "goApi.extraEnv=" + string(env)}, extra...)
-	out, err := helmCommand(args...).CombinedOutput()
+	out, err := helmOutput(args...)
 	return string(out), err
 }
 
@@ -112,8 +112,8 @@ func TestGoAPITrustedProxiesFromAReferenceRender(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			out, err := helmCommand("template", "trusted", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
-				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "goApi.extraEnv="+string(extra)).CombinedOutput()
+			out, err := helmOutput("template", "trusted", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
+				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "goApi.extraEnv="+string(extra))
 			if err != nil {
 				t.Fatalf("render: %v\n%.400s", err, out)
 			}

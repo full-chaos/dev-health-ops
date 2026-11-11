@@ -109,6 +109,7 @@ func TestAuthServiceStoreIsRequiredExactlyWhenTheSessionRoutesAreOn(t *testing.T
 // A value that renders but the service refuses would stop auth-service at start: that is the failure. The chart may be
 // stricter only where it says so on purpose (a /0 network, an IPv4-mapped form, a padded entry).
 func TestAuthServiceTrustedProxiesRenderIffTheServiceParses(t *testing.T) {
+	t.Parallel()
 	render := func(entry string) bool {
 		args := append(goAPIWithAuth("--set", "authService.phase=2"), "--set-json", `authService.trustedProxies=["`+entry+`"]`)
 		_, _, err := renderAuth(t, args...)
@@ -474,13 +475,20 @@ func TestAuthServiceWideTrustedProxiesAckIsAPermissionNotARequirement(t *testing
 
 // Every prefix length of both families lands in exactly one band, whole-internet and IPv4-mapped forms stay refused.
 func TestAuthServiceTrustedProxiesWidthBands(t *testing.T) {
+	t.Parallel()
 	for bits := 0; bits <= 32; bits++ {
 		entry := fmt.Sprintf("10.0.0.0/%d", bits)
-		checkBand(t, entry, wideTier(entry))
+		t.Run(entry, func(t *testing.T) {
+			t.Parallel()
+			checkBand(t, entry, wideTier(entry))
+		})
 	}
 	for bits := 0; bits <= 128; bits++ {
 		entry := fmt.Sprintf("fd00::/%d", bits)
-		checkBand(t, entry, wideTier(entry))
+		t.Run(entry, func(t *testing.T) {
+			t.Parallel()
+			checkBand(t, entry, wideTier(entry))
+		})
 	}
 }
 

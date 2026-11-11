@@ -19,7 +19,7 @@ func TestEveryGoWorkerAndTheMigrateJobCarryOrderingContract2(t *testing.T) {
 		"value explicitly 2": {"--set", "goWorkers.enabled=true", "--set", "goWorkers.operationalOrderingContract=2"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			output, err := helmCommand(append([]string{"template", "ordering-test", "."}, sets...)...).CombinedOutput()
+			output, err := helmOutput(append([]string{"template", "ordering-test", "."}, sets...)...)
 			if err != nil {
 				t.Fatalf("render failed: %v\n%s", err, output)
 			}
@@ -70,7 +70,7 @@ func TestEveryGoWorkerAndTheMigrateJobCarryOrderingContract2(t *testing.T) {
 func TestChartRefusesAnOrderingContractOtherThan2(t *testing.T) {
 	for _, value := range []string{"1", "3", " 2", "x"} {
 		t.Run("value "+value, func(t *testing.T) {
-			output, err := helmCommand("template", "refuse-test", ".", "--set-string", "goWorkers.operationalOrderingContract="+value).CombinedOutput()
+			output, err := helmOutput("template", "refuse-test", ".", "--set-string", "goWorkers.operationalOrderingContract="+value)
 			if err == nil {
 				t.Fatalf("the render accepted %q", value)
 			}

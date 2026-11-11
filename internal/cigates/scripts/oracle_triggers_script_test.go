@@ -13,7 +13,7 @@ import (
 
 // The pull request venue-oracle selection also follows declared paths. `ci/check_go.sh venue-oracles --changed FILE`
 // selects a venue test by the paths of its own package, by ci/venue_oracle_triggers.d/ rows (a venue test compares what code
-// in other packages does) and by the dependency closure in ci/venue_oracle_closure.d/. A trigger row that could go stale
+// in other packages does) and by the dependency closure of its test binary. A trigger row that could go stale
 // without a sign fails the static check, and a broken file stops the selection instead of reading as "nothing selected".
 
 type selectedRow = [2]string

@@ -34,7 +34,7 @@ Each service has its own profile file. The row counts are:
 
 | Service | Protected | Public | Rows |
 | --- | --- | --- | --- |
-| auth-service | 53 | 28 | 81 |
+| auth-service | 57 | 28 | 85 |
 | go-api | 211 | 33 | 244 |
 | query-api | 37 | 8 | 45 |
 
@@ -101,30 +101,11 @@ observe a credential before (or instead of) the route's intended one, with
 that is not its own (see
 [credential-classes.md](credential-classes.md#credentials-that-reach-a-validator-that-is-not-their-own)).
 
-## Addendum: `svc_worker_*` — mint-only scaffolding, unwired to any HTTP transport
+## Retired worker service credentials
 
-`svc_worker_*` can be
-minted/rotated/revoked via CLI, and it **does** have a real,
-DB-backed validator — `internal/joboperator/auth.go` (ops repo Go tree, not the versioned `dev-health-go` dependency): the token-shape regex at line 54
-(`^svc_worker_[A-Za-z0-9_-]{32,256}$`) and `Authenticator.Authenticate`
-(lines ~119-160) hash-match against `public.internal_service_credentials`
-with `revoked_at`/`expires_at` checks and a `last_used_at` touch.
+No endpoint profile accepts the retired `internal_svc_worker_token` class. The worker operator CLI uses a fixed operator principal and database role checks. It does not check service-token scopes. The `dho service-credentials` command group is absent.
 
-**But nothing calls it.** Searched `cmd/` (all 12 Go binaries) and every
-`internal/` package outside `internal/joboperator/` itself for
-`joboperator.`, `NewAuthenticator`, `ScopeWorkerRead`, `ScopeWorkerOperate`,
-`WorkerOperatorService` — zero hits except `internal/syncreconciler`'s test
-files, which reference an unrelated `joboperator` symbol
-(`NewDirectPostgresBackend`). `internal/joboperator/` itself contains no
-`http.`/`Handler`/`mux.`/`ServeHTTP` reference at all — no HTTP transport
-exists in this package. Also searched `dev-health-go` at both pinned tags
-(`ops/go.mod:8` → `v0.6.1`, `acr/go.mod:5` → `v0.5.5`) via
-`git grep -n svc_worker` against each tag directly (never the unpinned
-working tree) — zero hits in either. **Verdict: `svc_worker_*` is real,
-DB-live scaffolding with no HTTP consumer in ops, acr, or dev-health-go at
-either pinned version — exercised only by `internal/joboperator`'s own
-integration test suite.** Not part of any endpoint-profile file (no route
-uses it); recorded here because it is a Go-side fact, not a REST/GraphQL surface.
+Enforced by: `TestNoEndpointProfileRowAcceptsARetiredClass`, `internal/joboperator/auth_test.go`, and `cmd/dho/retired_verbs_test.go`. See [Billing and worker boundaries](billing-and-worker-boundaries.md) for the current controls and limits.
 
 ## GraphQL resolvers
 
@@ -228,6 +209,47 @@ row that opts in, so it refuses an HS256 bearer on every row with reason
 `alg_not_allowed`. The contracts gate
 `TestNoEndpointProfileRowAcceptsARetiredClass` refuses a row that lists a
 retired class or sets `legacy_hs256: true`.
+
+## Wrong-class gate
+
+`TestWrongClassGateGoAPI` (`internal/apiservice/wrong_class_gate_test.go`)
+sends every go-api row, on the listener that its row names, every credential
+class of `credential-classes.json` that the row does not accept. The requests
+go through the production listeners. The rows come from the embedded profile
+file. Each class's carrier (header or body field) comes from its markers. A
+row that is not mounted fails, and a marker kind with no carrier rule fails.
+A wrong class must give the same answer as a garbage credential in the same
+carrier (or no credential, when the carrier is not `Authorization`). It must
+cause no signing-key read and no store read. It must not make the shadow ask
+the PDP. On a protected row the answer must be a 4xx. A known divergence is
+one row of `ci/auth_exception_ledger.tsv`, anchored on the gate, with an open
+ticket. It excuses the 4xx rule on the rows that it names, and nothing else.
+When a named row no longer diverges, the gate fails until the ledger row is
+removed.
+
+`TestWrongClassGateQueryAPI` (`internal/queryapi/server/wrong_class_gate_test.go`)
+applies the same rules to the query-api rows, public rows included, on every
+listener a row names. The REST rows run on their production route builders.
+The `/query` route set and two REST builders need a live ClickHouse at build
+time, so their rows run on the listener test stack instead. The census line
+names the stack of each row.
+
+`TestWrongClassGateAuthService` (`internal/auth/authruntime/wrong_class_gate_test.go`)
+does the same for every auth-service row, on the API, operator and internal
+listeners. The API and internal listeners are built with the route builders
+that `configureWithRoutes` calls, in its order, with in-memory rate-limit
+counters; `TestWrongClassGateAuthServiceRigMatchesConfigure` fails when the
+routes or the calls differ from the production build. The store is a listener
+that counts each connection. A wrong class must cause no store connection and
+no key-set read that a garbage credential does not cause, and none at all on a
+protected row. auth-service builds no shadow:
+`TestWrongClassGateAuthServiceHasNoShadow` fails when a package of the build
+other than `internal/api/policy` uses a policy shadow. Its ledger rows say
+which rule they excuse (the 4xx rule, or the 4xx rule and the protected-row
+read rule) on the rows that they name. A row whose accepted classes have no
+accept control (a provider token, an OIDC code, a SAML response) is named in
+the gate's pinned not-measured list; a row that joins or leaves it fails the
+gate until the list changes.
 
 ## `delegated_bearer`
 

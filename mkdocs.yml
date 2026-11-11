@@ -124,6 +124,8 @@ nav:
           - admin/security-and-audit/index.md
           - Credentials: admin/security-and-audit/credentials.md
           - Service accounts: admin/security-and-audit/service-accounts.md
+          - External Push credentials: admin/security-and-audit/external-push-credentials.md
+          - Workload administration: admin/security-and-audit/workload-administration.md
           - Privacy and telemetry: admin/security-and-audit/privacy.md
       - Ask Dev:
           - admin/ask-dev/index.md
@@ -134,6 +136,7 @@ nav:
           - Sync and coverage: admin/troubleshooting/sync-and-coverage.md
   - Install and operate:
       - operate/index.md
+      - Auth control plane architecture: operate/architecture/auth-control-plane.md
       - Plan:
           - operate/plan/index.md
           - Prerequisites: operate/plan/prerequisites.md
@@ -174,6 +177,7 @@ nav:
           - operate/security/index.md
           - Production hardening: operate/security/hardening.md
           - External Push credentials: operate/security/external-push-credentials.md
+          - Migrate ACR service credentials: operate/security/acr-service-credential-migration.md
       - Runbooks:
           - operate/runbooks/index.md
           - Ingestion failure: operate/runbooks/ingestion-failure.md
@@ -247,6 +251,7 @@ nav:
           - Authentication and authorization: reference/api/authentication.md
           - Errors, pagination, and limits: reference/api/errors-pagination-rate-limits.md
       - Auth: reference/auth/credential-classes.md
+      - Auth credential reference: reference/auth/credential-reference.md
       - Auth authentication and authorization: reference/auth/authn-authz.md
       - Auth policy catalog: reference/auth/policy-catalog.md
       - Auth action map: reference/auth/action-map.md
@@ -254,6 +259,8 @@ nav:
       - Auth endpoint profiles: reference/auth/endpoint-profiles.md
       - Auth service configuration: reference/auth/configuration.md
       - Auth External Push authority: reference/auth/external-push-authority.md
+      - Auth ACR credential authority: reference/auth/acr-credential-authority.md
+      - Auth billing and worker boundaries: reference/auth/billing-and-worker-boundaries.md
       - Auth organization roles and members: reference/auth/org-member-roles.md
       - Auth platform administrator: reference/auth/platform-admin.md
       - Auth resource grants: reference/auth/resource-grants.md

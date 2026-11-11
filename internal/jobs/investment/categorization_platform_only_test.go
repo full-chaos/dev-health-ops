@@ -7,10 +7,11 @@ import (
 	"testing"
 )
 
-// Categorization is served by the platform provider only. No non-test file of
-// this package may name an organization config client or the worker llm-config
-// route, so an org's BYO config cannot reach the categorization call.
-func TestCategorizationHasNoOrgConfigClient(t *testing.T) {
+// Categorization has no URL/token organization config client: no non-test file
+// of this package may name the retired org config client or the worker
+// llm-config route. An org's own model reaches categorization only through the
+// settings path (categorize_byo_enabled, D6279; see nativeexecutor.go).
+func TestCategorizationHasNoURLOrTokenOrgConfigClient(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no source files found: %v", err)
@@ -27,7 +28,7 @@ func TestCategorizationHasNoOrgConfigClient(t *testing.T) {
 		checked++
 		for _, banned := range []string{"orgllmconfig", "llm-config", "ORG_LLM_CONFIG", "SetOrgLLMConfig"} {
 			if strings.Contains(string(body), banned) {
-				t.Errorf("%s names %q: categorization must not read an organization's BYO config", file, banned)
+				t.Errorf("%s names %q: categorization has no URL/token org config client (BYO goes through the settings path)", file, banned)
 			}
 		}
 	}

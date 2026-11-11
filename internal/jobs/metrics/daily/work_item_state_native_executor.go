@@ -141,13 +141,15 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 	if executor.missingAttributionObserver != nil {
 		_ = executor.missingAttributionObserver.ObserveWorkItemStateMissingAttribution(missingAttribution)
 	}
-	if len(rows) == 0 {
+	if len(rows) == 0 && len(computed.scopeRows) == 0 {
 		return 0, nil
 	}
 
 	// Each writer reports its true row count on an ambiguous Send error, so
-	// the count is added before the error check.
-	total, err := WriteWorkItemStateDurationsDaily(ctx, executor.conn, run.OrganizationID, day, rows, computedAt)
+	// the count is added before the error check. Each view's rows are
+	// written under that view; blocked durations are per item, from the org
+	// set.
+	total, err := WriteWorkItemStateDurationsDaily(ctx, executor.conn, run.OrganizationID, day, rows, computed.scopeRows, computedAt)
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)
 	}
@@ -163,9 +165,12 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 type workItemStateComputed struct {
 	// ran is false when the read has no item or no transition: nothing was
 	// computed and the blocked spans were not read.
-	ran                bool
-	read               workItemScopeRead
+	ran  bool
+	read workItemScopeRead
+	// rows, itemRows and missingAttribution are of the org set; scopeRows
+	// are the rows of the scope set (the scope view).
 	rows               []workItemStateDailyRow
+	scopeRows          []workItemStateDailyRow
 	itemRows           []workItemBlockedDurationDailyRow
 	missingAttribution int
 	ended              workitemmetrics.EndedRelationStats
@@ -188,7 +193,7 @@ func computeWorkItemStateRows(
 		return workItemStateComputed{}, err
 	}
 	computed := workItemStateComputed{read: read}
-	if len(read.Items) == 0 || len(read.Transitions) == 0 {
+	if read.empty() || len(read.Transitions) == 0 {
 		return computed, nil
 	}
 	blocked, ended, err := workitemblockers.LoadBlockedIntervals(ctx, conn, run.OrganizationID)
@@ -196,10 +201,27 @@ func computeWorkItemStateRows(
 		return workItemStateComputed{}, err
 	}
 	computed.ran, computed.ended = true, ended
-	computed.rows, computed.itemRows, computed.missingAttribution = computeWorkItemStateDurationRowsForRepo(
-		scope.day, scope.start, scope.end, read.stateItems(), read.Transitions, read.Attributions, computedAt, blocked,
+	computed.rows, computed.itemRows, computed.missingAttribution, computed.scopeRows = computeWorkItemStateViews(
+		scope, read, computedAt, blocked,
 	)
 	return computed, nil
+}
+
+// computeWorkItemStateViews computes the state-duration rows of each view: the
+// org rows, the per-item blocked rows and the count of items with no
+// attribution from the org set, and the scope rows from the scope set. A
+// transition belongs to its item, so both sets read the same transitions.
+func computeWorkItemStateViews(
+	scope workItemPartitionScope, read workItemScopeRead, computedAt time.Time,
+	blocked map[string][]workitemmetrics.BlockedInterval,
+) (rows []workItemStateDailyRow, itemRows []workItemBlockedDurationDailyRow, missingAttribution int, scopeRows []workItemStateDailyRow) {
+	rows, itemRows, missingAttribution = computeWorkItemStateDurationRowsForRepo(
+		scope.day, scope.start, scope.end, read.stateItems(), read.Transitions, read.Attributions, computedAt, blocked,
+	)
+	scopeRows, _, _ = computeWorkItemStateDurationRowsForRepo(
+		scope.day, scope.start, scope.end, read.scopeStateItems(), read.Transitions, read.ScopeAttributions, computedAt, blocked,
+	)
+	return rows, itemRows, missingAttribution, scopeRows
 }
 
 // workItemStateSegment is one (status, start, end) span in a work item's
@@ -329,7 +351,8 @@ func computeWorkItemStateDurationsForRepo(
 // computeWorkItemStateDurationRowsForRepo produces the established aggregate
 // rows plus one blocked-duration snapshot for each item that contributed to the
 // target day. A zero is deliberate: it supersedes an earlier positive snapshot
-// when a recompute finds that the item no longer has blocked time.
+// when a recompute finds that the item no longer has blocked time. attributions
+// are keyed by workitemmetrics.AttributionKey of the item's attributionScope.
 func computeWorkItemStateDurationRowsForRepo(
 	day, start, end time.Time,
 	items []workItemStateWorkItem,
@@ -364,7 +387,7 @@ func computeWorkItemStateDurationRowsForRepo(
 			continue
 		}
 
-		attribution, hasAttribution := attributions[item.WorkItemID]
+		attribution, hasAttribution := attributions[workitemmetrics.AttributionKey(item.attributionScope, item.WorkItemID)]
 		if !hasAttribution {
 			missingAttribution++
 		}

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/acrcredentials"
-	"github.com/full-chaos/dev-health-ops/internal/auth/acrlisting"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrrevoke"
 )
 
@@ -17,9 +16,13 @@ const (
 	EnvACRRevokeURL         = "ACR_REVOKE_URL"
 	EnvACRRevokeTokenURL    = "ACR_REVOKE_TOKEN_URL"
 	EnvACRRevokeSubjectFile = "ACR_REVOKE_SUBJECT_FILE"
+	// EnvACRRevokeAllowClusterHTTP "true" also accepts plain-http origins on a cluster-local Service host
+	// (<name>.svc.cluster.local); unset or "false" accepts https (and loopback http) only. Any other set value, blank
+	// included, is refused.
+	EnvACRRevokeAllowClusterHTTP = "ACR_REVOKE_ALLOW_CLUSTER_HTTP"
 )
 
-// newACRRevoker builds the revoke route's acr client from the three variables. All unset is "not configured": the
+// newACRRevoker builds the revoke route's acr client from the four variables. All unset is "not configured": the
 // route answers 503. A partial or unusable set never stops start-up: it logs which variable is wrong (never a value)
 // and the route answers 503, the same as not configured.
 func newACRRevoker(lookup func(string) (string, bool), logger *slog.Logger) acrcredentials.Revoker {
@@ -28,7 +31,8 @@ func newACRRevoker(lookup func(string) (string, bool), logger *slog.Logger) acrc
 		return strings.TrimSpace(value)
 	}
 	base, token, subject := read(EnvACRRevokeURL), read(EnvACRRevokeTokenURL), read(EnvACRRevokeSubjectFile)
-	if base == "" && token == "" && subject == "" {
+	allowValue, allowSet := lookup(EnvACRRevokeAllowClusterHTTP)
+	if base == "" && token == "" && subject == "" && !allowSet {
 		logger.Info("api: acr credential revoke not configured; the revoke route answers 503")
 		return nil
 	}
@@ -36,16 +40,25 @@ func newACRRevoker(lookup func(string) (string, bool), logger *slog.Logger) acrc
 		logger.Error("api: acr credential revoke configuration refused; the revoke route answers 503", slog.String("variable", variable))
 		return nil
 	}
-	// A value that does not parse is a nil URL, which ValidOrigin refuses.
+	var allow bool
+	switch {
+	case !allowSet:
+	case strings.TrimSpace(allowValue) == "true":
+		allow = true
+	case strings.TrimSpace(allowValue) != "false":
+		return refuse(EnvACRRevokeAllowClusterHTTP)
+	}
+	// A value that does not parse is a nil URL, which ValidOrigin refuses. The raw checks also catch an empty "?" or "#",
+	// which the parsed URL no longer shows.
 	baseURL, _ := url.Parse(base)
-	if !acrlisting.ValidOrigin(baseURL) || baseURL.RawQuery != "" {
+	if strings.ContainsAny(base, "?#") || !acrrevoke.ValidOrigin(baseURL, allow) {
 		return refuse(EnvACRRevokeURL)
 	}
 	tokenURL, _ := url.Parse(token)
-	if !acrlisting.ValidOrigin(tokenURL) {
+	if strings.Contains(token, "#") || !acrrevoke.ValidOrigin(tokenURL, allow) {
 		return refuse(EnvACRRevokeTokenURL)
 	}
-	client, err := acrrevoke.New(acrrevoke.Config{BaseURL: baseURL, TokenEndpoint: tokenURL, SubjectTokenFile: subject})
+	client, err := acrrevoke.New(acrrevoke.Config{BaseURL: baseURL, TokenEndpoint: tokenURL, SubjectTokenFile: subject, AllowClusterHTTP: allow})
 	if err != nil {
 		return refuse(EnvACRRevokeSubjectFile)
 	}

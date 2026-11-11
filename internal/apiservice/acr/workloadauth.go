@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
 
 const (
@@ -109,12 +111,17 @@ var classedPrefixes = []string{"svc_", "fcacr_", "fcpush_"}
 // isWorkloadToken reads the unverified JOSE header alone, whatever the
 // segment count, and reports typ workload+jwt. It only picks the
 // verification path; the verifier re-checks everything, so a missing or extra
-// segment is a contract refusal there.
+// segment is a contract refusal there. A bearer over
+// contracts.WorkloadTokenMaxBytes takes the workload path undecoded, and
+// decide refuses it before the verifier reads it.
 func isWorkloadToken(token string) bool {
 	for _, prefix := range classedPrefixes {
 		if strings.HasPrefix(token, prefix) {
 			return false
 		}
+	}
+	if len(token) > contracts.WorkloadTokenMaxBytes {
+		return true
 	}
 	head, _, _ := strings.Cut(token, ".")
 	raw, err := base64.RawURLEncoding.DecodeString(head)
@@ -136,6 +143,9 @@ func (w *WorkloadAuth) decide(ctx context.Context, token string) (subject, reaso
 	now := time.Now
 	if w.Now != nil {
 		now = w.Now
+	}
+	if len(token) > contracts.WorkloadTokenMaxBytes {
+		return "", ReasonContract
 	}
 	claims, err := w.Verifier.Verify(token, now())
 	if errors.Is(err, authverify.ErrKeySourceUnavailable) {

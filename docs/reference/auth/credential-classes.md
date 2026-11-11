@@ -51,8 +51,8 @@ shows where that happens today.
 | `sso_oidc_exchange` | optional_feature | human | |
 | `org_context_header` | active | human | |
 | `impersonation_session` | active | human | |
-| `internal_svc_acr_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |
-| `internal_svc_worker_token` | **unconsumed** | service_account | mint retired; stored rows list/revoke only |
+| `internal_svc_acr_token` | **retired** | service_account | no route accepts it; the service-credentials verbs are gone |
+| `internal_svc_worker_token` | **retired** | service_account | no route accepts it; the service-credentials verbs are gone |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
 | `acr_browser_refresh_token` | optional_feature | human | |
@@ -75,7 +75,7 @@ shows where that happens today.
 | `effective_principal_envelope` | retired | human | no endpoint-profile row accepts it; query-api refuses it on every route |
 | `refresh_credential` | active | human | |
 | `user_access_token` | **unconsumed** | human | |
-| `internal_svc_authsess_token` | **unconsumed** | service_account | no route accepts it; stored rows list/rotate/revoke only |
+| `internal_svc_authsess_token` | **retired** | service_account | no route accepts it; the service-credentials verbs are gone |
 | `link_credential` | active | human | |
 | `pagerduty_webhook_signature` | active | external_source | |
 | `workload_token` | optional_feature | workload | |
@@ -117,9 +117,9 @@ only the go-api workload token and refuse this credential from the bearer text,
 counted in `auth.session.retired_credential_refusals{operation}`. It shares the
 `internal_service_credentials` table with `svc_acr_` and `svc_worker_`, which
 carry other prefixes, services and scopes. No route takes it, so no validator
-accepts it; the verbs of `dev-hops service-credentials` still mint, rotate,
-list and revoke stored rows. Its second scope, `memberships:write`, is retired: no service
-may hold it, the mint refuses it, and the internal provisioning routes
+accepts it, and the `service-credentials` verbs that minted, rotated, listed and
+revoked its rows are gone. Its second scope, `memberships:write`, is retired: no service
+may hold it, nothing mints it, and the internal provisioning routes
 (`/internal/v1/memberships/*`, `/internal/v1/invites/*`, `/internal/v1/organizations/*`,
 `/internal/v1/service-accounts/*`, `/internal/v1/grants/*`) refuse this credential
 and take the go-api workload token only. The route and
@@ -175,9 +175,8 @@ lifetime is at most 60 min, the ceiling of the retired HS256 token. The class is
 `unconsumed`: nothing mints or verifies it yet.
 The audiences `acr-api` and `acr-mcp` (scopes `acr:api` and `acr:mcp`) are ACR's: acr-api accepts `acr-api` only and acr-mcp `acr-mcp`
 only. go-api, query-api and auth-service refuse both. No ops platform token
-carries one: the session token settings (`AUTH_JWT_AUDIENCE`,
-`AUTH_LEGACY_JWT_AUDIENCE`, go-api's `JWT_AUDIENCE`), the HS256 edge-token
-verifier and signer, the envelope verifier and both minters refuse them. The
+carries one: the session token settings (`AUTH_JWT_AUDIENCE`, go-api's
+`JWT_AUDIENCE`), the envelope verifier and both minters refuse them. The
 mint that will issue them is a separate one not built yet.
 
 **`workload_token`.** The EdDSA workload token of TRD section 11
@@ -344,29 +343,17 @@ cross-tenant write path. Its two credential classes (the deployment-wide API
 key and the HMAC body signature) are deleted from the registry, the wire
 schemas and the stored-class CHECK (auth migration 0036).
 
-The engineering guardrails say: "missing config must never mean auth
-disabled in production." The webhook validators in
-`internal/api/webhookintake/` (`github.go` HMAC, `gitlab.go` token compare,
-`jira.go` HMAC) and the Stripe webhook
-(`internal/api/billing/webhook.go:60-84`, signature check in
-`internal/api/billing/webhooksig.go`) fail closed: each answers 500
-when its secret is unset.
+The current signature-only routes accept Stripe, GitHub, and PagerDuty signatures. GitLab and Jira intake routes are absent. See [Billing and worker boundaries](billing-and-worker-boundaries.md) for matching rules, refusal behavior, and enforcing tests.
 
-## Unconsumed credential: `svc_worker_*`
+## Retired credential: `svc_worker_*`
 
-**Mint retired.** `dho service-credentials create` and `rotate` refuse
-`--service worker-operator` before a database is opened (exit 1, one JSON error line on
-stderr); no `svc_worker_*` token is issued any more. `list` and `revoke` keep working on
-the rows already stored, active and revoked. No row was migrated or deleted.
+The class is retired. The entire `dho service-credentials` command group is absent, including create, rotate, list, and revoke. Each verb returns an unknown-command error with exit 2. Stored rows do not grant operator authority.
 
-`WORKER_OPERATOR_TOKEN_PREFIX = "svc_worker_"` was minted through
-the same code path as `svc_acr_*`
-(`internal/apiservice/admin/servicecredentials.go`), with
-its own scope set (`workers:read`, `workers:operate`,
-`internal/apiservice/admin/servicecredentials.go:36-44`). No HTTP route in ops, web, or acr was found
-that validates a `svc_worker_`-prefixed bearer token — the internal acr routes (`internal/apiservice/acr/internalauth.go`)
-accept only the acr-api workload token. A consumer, if any, lives in the Go
-worker binaries or `dev-health-go`, outside this repository's HTTP routes.
+Enforced by: `TestRetiredVerbGroupsAreUnknownCommands` and `TestRetiredVerbGroupsAreNotInTheTree` in `cmd/dho/retired_verbs_test.go`.
+
+The worker operator CLI uses its fixed operator principal and database role checks. It does not validate `svc_worker_` bearers or check `workers:read` or `workers:operate` scopes. See [Worker and queue authorization](billing-and-worker-boundaries.md#worker-and-queue-authorization).
+
+Enforced by: `internal/joboperator/auth_test.go` and `internal/workersctl/operator_authority_inventory_test.go`.
 
 ## Infrastructure and exchange classes
 

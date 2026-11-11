@@ -16,12 +16,11 @@ func TestPublicReadColumnsMatchTheReviewedList(t *testing.T) {
 		"memberships": {"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id", "id", "updated_at"},
 		"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users", "default_role",
 			"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at"},
-		"organizations":                {"id", "slug", "name", "is_active", "tier", "created_at", "updated_at"},
-		"saml_assertion_replays":       {"provider_id", "assertion_id", "expires_at"},
-		"org_licenses":                 {"org_id", "tier", "features_override"},
-		"org_activity":                 {"org_id", "has_data", "computed_at"},
-		"internal_service_credentials": {"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"},
-		"impersonation_sessions":       {"id", "admin_user_id", "ended_at", "expires_at"},
+		"organizations":          {"id", "slug", "name", "is_active", "tier", "created_at", "updated_at"},
+		"saml_assertion_replays": {"provider_id", "assertion_id", "expires_at"},
+		"org_licenses":           {"org_id", "tier", "features_override"},
+		"org_activity":           {"org_id", "has_data", "computed_at"},
+		"impersonation_sessions": {"id", "admin_user_id", "ended_at", "expires_at"},
 	}
 	got := map[string][]string{}
 	for _, entry := range PublicReadColumns() {
@@ -71,7 +70,10 @@ func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 	insert, update := UsersWriteGrant()
 	wantInsert := []string{"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
 		"is_active", "is_verified", "token_version", "created_at", "updated_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier"}
-	wantUpdate := []string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
+	// email, is_active, username, full_name, avatar_url: the admin email and profile changes and the soft delete go-api
+	// makes through auth-service (pm D6872, acp attest of PLAN-13376 v2, S1 ticket 13377).
+	wantUpdate := []string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at", "email", "is_active",
+		"username", "full_name", "avatar_url"}
 	if !reflect.DeepEqual(insert, wantInsert) || !reflect.DeepEqual(update, wantUpdate) {
 		t.Fatalf("UsersWriteGrant = %v / %v, want %v / %v", insert, update, wantInsert, wantUpdate)
 	}
@@ -83,7 +85,7 @@ func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 	have := map[string]bool{}
 	for _, column := range update {
 		have[column] = true
-		if column == "email" || column == "is_active" || column == "sso_provider_id" {
+		if column == "sso_provider_id" {
 			t.Errorf("UPDATE must not include %s", column)
 		}
 	}

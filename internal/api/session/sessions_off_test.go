@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/legacyjwt"
 )
 
 // With no session issuer (AUTH_PROXY_SESSIONS off) the routes that hand out a token pair answer 503 naming
@@ -72,22 +72,19 @@ func TestWithASessionIssuerNoRouteAnswersTheSessionsOffRefusal(t *testing.T) {
 }
 
 // The go-api plane of the retired HS256 refresh: with AUTH_PROXY_SESSIONS off, go-api's own /refresh answers a
-// valid go-api refresh JWT (signed with go-api's key) with the sessions-off 503 through the full route (guard,
+// refresh JWT signed with the retired HS256 key with the sessions-off 503 through the full route (guard,
 // body validation, limiter); it verifies nothing and mints nothing.
 func TestSessionsOffRefreshAnswersAValidGoAPIRefreshJWTWith503(t *testing.T) {
 	deps := completeDeps(t)
 	deps.Issuer = nil
-	signer, err := edgetoken.NewSigner("wiring-test-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
+	signer, err := legacyjwt.NewSigner("wiring-test-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := signer.Refresh(edgetoken.RefreshClaims{UserID: uuid.NewString(), OrgID: uuid.NewString(), FamilyID: uuid.NewString()},
+	token, err := signer.Refresh(legacyjwt.RefreshClaims{UserID: uuid.NewString(), OrgID: uuid.NewString(), FamilyID: uuid.NewString()},
 		time.Now(), uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, err := deps.Verifier.VerifyRefresh(token); err != nil {
-		t.Fatalf("the planted token is not a valid go-api refresh JWT: %v", err)
 	}
 	var refresh http.Handler
 	for _, route := range Routes(deps) {

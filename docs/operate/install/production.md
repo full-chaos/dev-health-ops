@@ -61,9 +61,9 @@ For the Go runtime, `POSTGRES_URI` may use transaction-mode PgBouncer when `PGBO
 When the Go coexistence foundation is deployed, keep these responsibilities distinct:
 
 ```dotenv
-POSTGRES_URI=postgresql+asyncpg://devhealth_domain:<secret>@pgbouncer:6432/devhealth
-WORKER_DATABASE_URI=postgres://devhealth_queue:<secret>@postgres:5432/devhealth
-MIGRATION_DATABASE_URI=postgres://devhealth_migrate:<secret>@postgres:5432/devhealth
+POSTGRES_URI=postgresql+asyncpg://devhealth_domain:<redacted>@pgbouncer:6432/devhealth
+WORKER_DATABASE_URI=postgres://devhealth_queue:<redacted>@postgres:5432/devhealth
+MIGRATION_DATABASE_URI=postgres://devhealth_migrate:<redacted>@postgres:5432/devhealth
 ```
 
 Long-running workers must not receive `MIGRATION_DATABASE_URI`. Provision the domain and queue roles before the one-shot migration applies River grants.
@@ -105,9 +105,48 @@ This is a required values change; an existing values file that renders today sto
 - **Order:** create both Secrets first, then ship the values change together with the chart revision in one roll. A chart revision without the values change fails to render; a values change without the Secrets leaves the new web and go-api pods unable to start while the old pods keep serving.
 - **Existing Secret changes need a restart:** the chart cannot hash an external Secret, so after you change `secrets.externalSecretName` or `hs256Secret.externalSecretName` content, restart every Deployment that reads it. Removing `JWT_SECRET_KEY` from the shared Secret rolls nothing by itself.
 
+## Authentication services and secrets
+
+Deploy auth-service with go-api and query-api. auth-service is the user access-token issuer.
+The APIs verify its EdDSA tokens with its public JWKS. The former HS256 edge secret and
+`JWT_SECRET_KEY` paths are retired. Do not provision them for user authentication.
+The `AUTH_ACCESS_TOKEN_CLASS` value `hs256_compat` is refused; the default value is `eddsa`.
+
+- Give web its own session secret through `web.authSecret.secretName` and `web.authSecret.key`
+  (default `AUTH_SECRET`). It is independent of the backend signing key. Replacing it signs web users out.
+- Configure `authService.signingKey.secretName` and `authService.signingKey.keyId`, or a signing key set.
+  auth-service alone receives the private Ed25519 key. The chart stages it at mode `0400`.
+- Set `AUTH_TOKEN_ISSUER_URL` for auth-service and the identical `AUTH_ACCESS_TOKEN_ISSUER` for go-api and
+  query-api. The issuer uses HTTPS. Both APIs need to reach its discovery and JWKS endpoints.
+- Enable `AUTH_PROXY_SESSIONS=true` in go-api and query-api. Configure go-api's `AUTH_PROXY_URL` and
+  workload identity for its auth-service calls. With session issuance disabled, go-api's token-issuing routes
+  return `503 config_missing`; they do not fall back to local token signing.
+- Supply auth-service's session successor key and, for local password login, `AUTH_LOGIN_LOCKOUT_KEY`.
+  Both are 32-byte values encoded as base64url without padding. `AUTH_RATE_LIMIT_KEY` is a separate optional
+  secret of at least 32 characters. When it is absent, rate limiting derives its key from the successor key.
+- Give go-api separate `SSO_STATE_SECRET` and `GITHUB_APP_STATE_SECRET` values of at least 32 characters.
+  Missing state keys make the corresponding SSO or GitHub App installation routes return `503 config_missing`.
+  go-api's signed verification, reset and invitation links use `LINK_TOKEN_SECRET`; they do not use
+  `JWT_SECRET_KEY`. auth-service's local verification and reset links are opaque credentials stored by digest.
+
+Provision auth-service's runtime and migration logins separately. Apply auth schema migrations and the
+required application reader grants before enabling sessions. Only the migration job receives
+`AUTH_MIGRATION_DATABASE_URI` or its `_FILE` form. auth-service receives `AUTH_DATABASE_URI` or its `_FILE` form.
+Application readers need the declared session and, when enabled, platform-role grants.
+
+Create the referenced Secrets before rolling the services. Changes to staged signing-key files require a
+rollout. After replacing an external Secret, restart its consumers so they read the replacement.
+See [auth architecture](../architecture/auth-control-plane.md),
+[signing-key custody](../configure/auth-signing-key-custody.md) and
+[auth configuration](../../reference/auth/configuration.md) for the settings and key rotation rules.
+
 ## Session successor key Secret (auth-service session routes)
 
-The session routes need a 32-byte successor key (`AUTH_SESSION_SUCCESSOR_KEY`, base64url without padding) next to the HS256 key above. Create its Secret once, before the values change that sets `authService.sessionKeys.successor.secretName`: `deploy/scripts/create-auth-session-secret.sh --plan` shows the names, and the script without `--plan` generates the key on the host and runs one `kubectl create secret`. It refuses when the Secret exists, reads no Secret, and puts the value in no argument or output.
+The session routes require `AUTH_SESSION_SUCCESSOR_KEY`, a 32-byte value encoded as base64url without padding.
+Create its Secret before setting `authService.sessionKeys.successor.secretName`.
+`deploy/scripts/create-auth-session-secret.sh --plan` shows the names. Without `--plan`, the script generates
+the key locally and creates the Secret. It refuses an existing Secret and puts no value in arguments or output.
+Keep this key stable across replicas so concurrent refresh requests can recover the same successor.
 
 ## Verify the deployed revision
 

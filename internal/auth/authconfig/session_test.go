@@ -8,17 +8,19 @@ import (
 	"testing"
 )
 
-const testAccessSecret = "session-config-test-key-0123456789abcdef"
+// testRateKey is the rate-limit key of the session test environment.
+const testRateKey = "session-config-test-key-0123456789abcdef"
 
 var testSuccessorKey = base64.RawURLEncoding.EncodeToString([]byte("session-config-successor-key-032"))
 
 const testValkeyURI = "redis://auth-ratelimit:test-only-password@valkey:6379/1"
 
-func sessionEnv(access, successor string) map[string]string {
+// sessionEnv is baseEnv with the rate-limit key and the successor key, each when not empty.
+func sessionEnv(rateKey, successor string) map[string]string {
 	env := baseEnv()
 	env[EnvValkeyURI] = testValkeyURI
-	if access != "" {
-		env[EnvAccessTokenSecret] = access
+	if rateKey != "" {
+		env[EnvRateLimitKey] = rateKey
 	}
 	if successor != "" {
 		env[EnvSessionSuccessorKey] = successor
@@ -34,23 +36,22 @@ func TestSessionRoutesAreOffWithoutTheirSecrets(t *testing.T) {
 	if cfg.Session.Enabled {
 		t.Fatal("session routes enabled with no secret set")
 	}
-	if cfg.Session.AccessIssuer != "dev-health-ops" || cfg.Session.AccessAudience != "dev-health-api" {
-		t.Fatalf("iss/aud defaults = %q/%q, want go-api's dev-health-ops/dev-health-api",
-			cfg.Session.AccessIssuer, cfg.Session.AccessAudience)
+	if cfg.Session.AccessAudience != "dev-health-api" {
+		t.Fatalf("aud default = %q, want go-api's dev-health-api", cfg.Session.AccessAudience)
 	}
 }
 
 func TestSessionSecretsLoadTogetherAndNeverReachTheStartupLine(t *testing.T) {
-	cfg, err := Load(Spec{LookupEnv: lookupFrom(sessionEnv(testAccessSecret, testSuccessorKey))})
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(sessionEnv(testRateKey, testSuccessorKey))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Session.Enabled || cfg.Session.AccessSecret.Reveal() != testAccessSecret ||
+	if !cfg.Session.Enabled || cfg.Session.RateLimitKey.Reveal() != testRateKey ||
 		cfg.Session.SuccessorKey.Reveal() != testSuccessorKey {
 		t.Fatal("session secrets did not resolve")
 	}
 	rendered := fmt.Sprint(cfg) + fmt.Sprint(slog.GroupValue(cfg.SafeAttrs()...))
-	for _, secret := range []string{testAccessSecret, testSuccessorKey} {
+	for _, secret := range []string{testRateKey, testSuccessorKey} {
 		if strings.Contains(rendered, secret) {
 			t.Fatal("a session secret reached a printed form of the configuration")
 		}
@@ -60,12 +61,11 @@ func TestSessionSecretsLoadTogetherAndNeverReachTheStartupLine(t *testing.T) {
 func TestSessionSecretsAreRefusedAloneOrMalformed(t *testing.T) {
 	short := strings.Repeat("k", 31)
 	cases := map[string]map[string]string{
-		"access secret alone":      sessionEnv(testAccessSecret, ""),
-		"successor key alone":      sessionEnv("", testSuccessorKey),
-		"access secret too short":  sessionEnv(short, testSuccessorKey),
-		"successor key not base64": sessionEnv(testAccessSecret, "!!not-base64url!!"),
-		"successor key 31 bytes":   sessionEnv(testAccessSecret, base64.RawURLEncoding.EncodeToString(make([]byte, 31))),
-		"successor key padded":     sessionEnv(testAccessSecret, base64.URLEncoding.EncodeToString(make([]byte, 32))),
+		"rate-limit key alone":     sessionEnv(testRateKey, ""),
+		"rate-limit key too short": sessionEnv(short, testSuccessorKey),
+		"successor key not base64": sessionEnv(testRateKey, "!!not-base64url!!"),
+		"successor key 31 bytes":   sessionEnv(testRateKey, base64.RawURLEncoding.EncodeToString(make([]byte, 31))),
+		"successor key padded":     sessionEnv(testRateKey, base64.URLEncoding.EncodeToString(make([]byte, 32))),
 	}
 	for name, env := range cases {
 		_, err := Load(Spec{LookupEnv: lookupFrom(env)})
@@ -73,7 +73,7 @@ func TestSessionSecretsAreRefusedAloneOrMalformed(t *testing.T) {
 			t.Errorf("%s: Load accepted it", name)
 			continue
 		}
-		for _, secret := range []string{testAccessSecret, testSuccessorKey, short} {
+		for _, secret := range []string{testRateKey, testSuccessorKey, short} {
 			if strings.Contains(err.Error(), secret) {
 				t.Errorf("%s: the error quotes a secret", name)
 			}
@@ -82,17 +82,17 @@ func TestSessionSecretsAreRefusedAloneOrMalformed(t *testing.T) {
 }
 
 func TestSessionSecretsAndTheirFilesAreMutuallyExclusive(t *testing.T) {
-	env := sessionEnv(testAccessSecret, testSuccessorKey)
-	env[EnvAccessTokenSecret+"_FILE"] = "/run/secrets/jwt"
+	env := sessionEnv(testRateKey, testSuccessorKey)
+	env[EnvRateLimitKey+"_FILE"] = "/run/secrets/rate-limit"
 	if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil {
-		t.Fatal("both AUTH_JWT_SECRET_KEY and its _FILE were accepted")
+		t.Fatal("both AUTH_RATE_LIMIT_KEY and its _FILE were accepted")
 	}
 }
 
 var testLockoutKey = base64.RawURLEncoding.EncodeToString([]byte("login-config-lockout-key-0032-ab"))
 
 func compatEnv() map[string]string {
-	return sessionEnv(testAccessSecret, testSuccessorKey)
+	return sessionEnv(testRateKey, testSuccessorKey)
 }
 
 func TestTheLoginRouteNeedsTheLockoutKeyAndTheSessionSecrets(t *testing.T) {
@@ -209,18 +209,9 @@ func withLink(env map[string]string, value string) map[string]string {
 	return env
 }
 
-func TestRateLimitKeyIsOptionalFileCapableAndNeverPrinted(t *testing.T) {
+func TestRateLimitKeyResolvesAndIsNeverPrinted(t *testing.T) {
 	rateKey := strings.Repeat("r", 40)
-	none, err := Load(Spec{LookupEnv: lookupFrom(sessionEnv(testAccessSecret, testSuccessorKey))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if none.Session.RateLimitKey.Configured() {
-		t.Fatal("rate-limit key configured with the variable unset")
-	}
-	env := sessionEnv(testAccessSecret, testSuccessorKey)
-	env[EnvRateLimitKey] = rateKey
-	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(sessionEnv(rateKey, testSuccessorKey))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +224,7 @@ func TestRateLimitKeyIsOptionalFileCapableAndNeverPrinted(t *testing.T) {
 }
 
 func TestRateLimitKeyIsRefusedShortOrWithoutTheSessionSecrets(t *testing.T) {
-	short := sessionEnv(testAccessSecret, testSuccessorKey)
+	short := sessionEnv(testRateKey, testSuccessorKey)
 	short[EnvRateLimitKey] = strings.Repeat("r", 31)
 	alone := baseEnv()
 	alone[EnvValkeyURI] = testValkeyURI
@@ -243,14 +234,5 @@ func TestRateLimitKeyIsRefusedShortOrWithoutTheSessionSecrets(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), EnvRateLimitKey) || strings.Contains(err.Error(), strings.Repeat("r", 31)) {
 			t.Fatalf("%s: got %v, want an error naming %s and not its value", name, err, EnvRateLimitKey)
 		}
-	}
-}
-
-func TestRateLimitKeyEqualToAnotherPurposesKeyIsRefused(t *testing.T) {
-	env := sessionEnv(testAccessSecret, testSuccessorKey)
-	env[EnvRateLimitKey] = testAccessSecret
-	_, err := Load(Spec{LookupEnv: lookupFrom(env)})
-	if err == nil || !strings.Contains(err.Error(), EnvRateLimitKey) || strings.Contains(err.Error(), testAccessSecret) {
-		t.Fatalf("got %v, want an error naming %s, not its value", err, EnvRateLimitKey)
 	}
 }

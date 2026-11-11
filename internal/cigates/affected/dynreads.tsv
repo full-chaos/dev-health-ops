@@ -2,9 +2,11 @@
 ci/tools/gotestfuncs	main.go
 cmd/auth-migrate	bootstrap.go
 cmd/auth-migrate	restorefence.go
+cmd/cigate	chposture.go
 cmd/cigate	docs_prepare_refusals_test.go
 cmd/cigate	main.go
 cmd/cigate	main_test.go
+cmd/credrefgen	main.go
 cmd/dev-health-migration-matrix	main.go
 cmd/dev-health-provider-fixture	main.go
 cmd/dev-health-provider-normalized-fixture	main.go
@@ -37,10 +39,11 @@ internal/api/teamsidentity	team_id_writer_census_test.go
 internal/apiservice	accessroute_probe_test.go
 internal/apiservice	accessroute_routed_test.go
 internal/apiservice	endpoint_profile_rows_test.go
-internal/apiservice	endpoint_profile_scan_test.go
+internal/apiservice	endpoint_profile_shift_test.go
 internal/apiservice	githubapp_config.go
 internal/apiservice	member_list_row_cells_test.go
 internal/apiservice/admin	routeguard_test.go
+internal/apiservice/admin	users_owned_forward_test.go
 internal/apiservice/authflowvenue	auth_flow_venue_oracle_integration_test.go
 internal/apiservice/billingvenue	billing_refund_webhook_integration_test.go
 internal/apiservice/billingvenue	billing_webhook_venue_oracle_integration_test.go
@@ -65,10 +68,15 @@ internal/auth/authorization	golden_decision_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
 internal/auth/authruntime	authorize_corpus_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
+internal/auth/authruntime	endpoint_profile_shift_test.go
+internal/auth/authruntime	fixed_credential_scan_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
+internal/auth/authruntime	no_hs256_key_census_test.go
+internal/auth/authruntime	no_hs256_verify_census_test.go
 internal/auth/authruntime	query_api_accepts_integration_test.go
 internal/auth/authruntime	queryapi_enforce_parity_integration_test.go
 internal/auth/authruntime	session_routes_integration_test.go
+internal/auth/authruntime	wrong_class_gate_test.go
 internal/auth/contracts	access_token_goldens_test.go
 internal/auth/contracts	audit_attribute_parity_test.go
 internal/auth/contracts	authorization_goldens_test.go
@@ -85,7 +93,9 @@ internal/auth/contracts	endpoint_auth_profile_goldens_test.go
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go
 internal/auth/contracts	endpoint_profile_source_commit_test.go
 internal/auth/contracts	endpoint_profiles_go_api_admin_fields_test.go
+internal/auth/contracts	endpoint_profiles_go_api_shift_test.go
 internal/auth/contracts	endpoint_profiles_provisioning_workload_test.go
+internal/auth/contracts	endpoint_profiles_users_admin_test.go
 internal/auth/contracts	error_envelope_goldens_test.go
 internal/auth/contracts	external_push_lifecycle_event_test.go
 internal/auth/contracts	fuzz_test.go
@@ -116,7 +126,6 @@ internal/auth/contracts	workload_token_goldens_test.go
 internal/auth/contracts/provisioning	vocabulary_test.go
 internal/auth/contracts/tokencorpus	corpus.go
 internal/auth/contracts/tokencorpus	service_account_test.go
-internal/auth/edgetoken	no_hs256_access_verify_census_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity	placeholder_copies_test.go
@@ -125,6 +134,7 @@ internal/auth/identity/oidc	oauth_denial_stages_test.go
 internal/auth/keyrotation	rotation_integration_test.go
 internal/auth/keystore	keystore_test.go
 internal/auth/keystore	open_unix.go
+internal/auth/passwordpolicy	callers_test.go
 internal/auth/platformrole	owned_parse_census_test.go
 internal/auth/platformrole	platform_action_sites_census_test.go
 internal/auth/platformrole	superuser_fills_census_test.go
@@ -141,6 +151,8 @@ internal/auth/session	credential_test.go
 internal/auth/session	liveness_census_test.go
 internal/auth/workloadexchange	tokenreview.go
 internal/auth/workloadinput	workloadinput.go
+internal/auth/writerinventory	dynamic_census_test.go
+internal/auth/writerinventory	dynamic_enumerate_test.go
 internal/auth/writerinventory	link_tokens_dropped_test.go
 internal/auth/writerinventory	membership_census_test.go
 internal/auth/writerinventory	scan_test.go
@@ -335,8 +347,10 @@ internal/cigates/workflows	providerstub_not_release_test.go
 internal/cigates/workflows	providersync_shard_budget_test.go
 internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go
+internal/cigates/workflows	ready_reuse_test.go
 internal/cigates/workflows	registry_retry_test.go
 internal/cigates/workflows	ttl_registry_test.go
+internal/cigates/workflows	venue_users_owned_test.go
 internal/cigates/workflows	workflows_common_test.go
 internal/cigates/workflows	workflows_go_integration_pr_scope_test.go
 internal/cigates/workflows	workflows_go_quality_queue_skip_test.go
@@ -344,6 +358,7 @@ internal/cigates/workflows	workflows_go_queue_cancel_children_test.go
 internal/cigates/workflows	workflows_go_queue_skip_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
+internal/cigates/workflows	workflows_venue_always_runs_test.go
 internal/cigates/workflows	workflows_venue_main_alert_test.go
 internal/clicredentials	opensites_test.go
 internal/deploymentcontract	manifest.go
@@ -592,8 +607,10 @@ internal/shadowvenue	claims.go
 internal/shadowvenue	drive.go
 internal/shadowvenue	mint.go
 internal/shadowvenue	requestsites_test.go
+internal/storage/clickhouse	worker_posture_test.go
 internal/storage/clickhouse/liverow	census_test.go
 internal/storage/postgres	api_authorization_platform_roles_test.go
+internal/storage/postgres	domain_users_read_test.go
 internal/storage/postgres	openers_test.go
 internal/storage/postgres	posture_identity_sites_test.go
 internal/storage/postgres	venue_posture_coverage_test.go
@@ -633,8 +650,10 @@ internal/testsupport/ratchet	ratchet.go
 internal/testsupport/ratchet	ratchet_test.go
 internal/testsupport/recordedfiles	recordedfiles.go
 internal/testsupport/recordedfiles	recordedfiles_test.go
+internal/testsupport/routescan	scan.go
+internal/testsupport/routescan	shift.go
+internal/testsupport/routescan	shift_test.go
 internal/testsupport/venuechanged	changed_test.go
-internal/testsupport/venuechanged	closure_test.go
 internal/testsupport/venuechanged	trigger_coverage_test.go
 internal/testsupport/venueoracle	external.go
 internal/testsupport/venueoracle	external_test.go

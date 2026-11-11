@@ -159,7 +159,7 @@ func TestAuthorizeCallerRefusesEveryOtherCredentialClassFromItsText(t *testing.T
 		"bootstrap":       "fcwlb_" + strings.Repeat("a", 40),
 		"refresh":         "dhr1_" + strings.Repeat("a", 40),
 		"empty":           "",
-		"oversized":       strings.Repeat("a", maxIssueBearerBytes+1),
+		"oversized":       strings.Repeat("a", contracts.WorkloadTokenMaxBytes+1),
 		"user token":      userBearer,
 		"hs256":           hs256,
 		"no typ":          untyped,

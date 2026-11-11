@@ -348,9 +348,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvSigningKeyID:                "other-kid",
 		EnvSigningKeySetFile:           "/tmp/other-keyset.json",
 		EnvTokenIssuerURL:              "https://other-issuer.example.test",
-		EnvAccessTokenIssuer:           "other-issuer",
 		EnvAccessTokenAudience:         "auth-service",
-		EnvLegacyJWTAudience:           "other-legacy-audience",
 		EnvSocialLinkRoutes:            "true",
 		EnvSSOJIT:                      "true",
 		EnvMembershipRoutes:            "true",
@@ -393,9 +391,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvSigningKeyID:                func(c Config) string { return c.SigningKeyID },
 		EnvSigningKeySetFile:           func(c Config) string { return c.SigningKeySetPath },
 		EnvTokenIssuerURL:              func(c Config) string { return c.TokenIssuerURL },
-		EnvAccessTokenIssuer:           func(c Config) string { return c.Session.AccessIssuer },
 		EnvAccessTokenAudience:         func(c Config) string { return c.Session.AccessAudience },
-		EnvLegacyJWTAudience:           func(c Config) string { return c.Session.LegacyAudience },
 		EnvSocialLinkRoutes:            func(c Config) string { return strconv.FormatBool(c.Session.SocialLinkRoutes) },
 		EnvSSOJIT:                      func(c Config) string { return strconv.FormatBool(c.SSO.JIT) },
 		EnvMembershipRoutes:            func(c Config) string { return strconv.FormatBool(c.Provisioning.Routes) },
@@ -435,12 +431,12 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 				delete(env, EnvSigningKeyID)
 			}
 			if option.Env == EnvMembershipRoutes {
-				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
+				env[EnvRateLimitKey], env[EnvSessionSuccessorKey] = testRateKey, testSuccessorKey
 				env[EnvValkeyURI] = testValkeyURI
 				env[EnvInviteTokenSecret], env[EnvInviteTokenSecretPrevious] = "invite-signing-key", "invite-previous-key"
 			}
 			if option.Env == EnvSocialLinkRoutes {
-				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
+				env[EnvRateLimitKey], env[EnvSessionSuccessorKey] = testRateKey, testSuccessorKey
 				env[EnvValkeyURI] = testValkeyURI
 			}
 			if option.Env == EnvRevisionFeed {

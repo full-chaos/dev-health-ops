@@ -5,13 +5,14 @@ package acr
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	adminapi "github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -88,7 +89,7 @@ func TestEntitlementRouteUnderTheAPIRolePosture(t *testing.T) {
 	if _, err := admin.Exec(ctx, `INSERT INTO internal_service_credentials
 		(id, service_name, token_hash, token_prefix, scopes, created_at)
 		VALUES (gen_random_uuid(), 'acr', $1, $2, '["entitlements:read"]'::json, now())`,
-		adminapi.HashServiceToken(token), token[:16]); err != nil {
+		storedTokenHash(token), token[:16]); err != nil {
 		t.Fatal(err)
 	}
 	var credentialID string
@@ -137,4 +138,11 @@ func TestEntitlementRouteUnderTheAPIRolePosture(t *testing.T) {
 		credentialID).Scan(&stamped); err != nil || stamped {
 		t.Fatalf("last_used_at stamped = %v err = %v, want false: a refused svc_acr_ credential is never read", stamped, err)
 	}
+}
+
+// storedTokenHash is the token_hash a row of internal_service_credentials
+// holds: the hex SHA-256 of the token.
+func storedTokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/valkey-io/valkey-go"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/valkeyreply"
@@ -68,10 +67,6 @@ func TestLimiterRoutesAnswerTheStoreFailureByItsKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	// The admin role and the email come from the probe store's membership and users rows.
 	tokens := edtokens.New(t)
 	auth := tokens.AuthenticatorOver(t, newProbeStore(), quietLogger())
@@ -90,7 +85,7 @@ func TestLimiterRoutesAnswerTheStoreFailureByItsKind(t *testing.T) {
 			{"Valkey availability reply", fmt.Errorf("rate limit script: %w", valkeyreply.Error(t, "LOADING Valkey is loading the dataset in memory")), http.StatusServiceUnavailable, `{"detail":{"message":"Authentication service unavailable"}}`},
 		} {
 			t.Run(route.name+"/"+c.kind, func(t *testing.T) {
-				deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
+				deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()),
 					Limits: failingLimitStore{failID: route.limitID, err: c.err}}
 				cfg := apiTestConfig()
 				cfg.CORSAllowedOrigins = []string{"https://app.example"}

@@ -54,10 +54,6 @@ func PublicReadColumns() []ColumnGrant {
 		// impersonation. Its reader arrives in O3b (CHAOS-12399), the grant first.
 		// id: a delegated session's end finds its row by id (ImpersonationEndColumns).
 		{Table: "impersonation_sessions", Columns: []string{"id", "admin_user_id", "ended_at", "expires_at"}},
-		// The session issue route checks go-api's auth-session-issuer
-		// service credential by its hash (last_used_at is not read or
-		// stamped).
-		{Table: "internal_service_credentials", Columns: []string{"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"}},
 	}
 }
 
@@ -144,6 +140,14 @@ func SessionReaderReadsWith(platformRolesOwned, workloadReader bool) []ColumnGra
 // GRANT OPTION on the table, so a REVOKE there would fail with 42501.
 const retiredRefreshTokensTable = "refresh_tokens"
 
+// retiredPublicReadTables are public tables the auth runtime role once read by a
+// grant and reads no more. A grants pass that finds the role still holding a
+// direct privilege on one revokes it (a narrowing, acknowledged once); one where
+// the role holds nothing, or the table is gone, sends no statement on it.
+// internal_service_credentials left PublicReadColumns when its last auth-service
+// reader went.
+var retiredPublicReadTables = []string{retiredRefreshTokensTable, "internal_service_credentials"}
+
 // runtimeHoldsPublicGrant reports whether role holds a direct table or column
 // privilege on public.<table>, read from the ACLs (the set REVOKE removes).
 func runtimeHoldsPublicGrant(ctx context.Context, conn rowQuerier1, table, role string) (bool, error) {
@@ -176,6 +180,9 @@ func runtimeHoldsPublicGrant(ctx context.Context, conn rowQuerier1, table, role 
 // SAML account belongs to, never rewritten. Before 0155 its grant is DEFERRED.
 // is_superuser is never written (CHAOS-10993): the column defaults to false and the
 // platform roles live in auth.platform_role_assignments.
+// email, is_active, username, full_name and avatar_url are updated only by the admin user writes go-api makes through
+// auth-service (identity adminusers.go: an admin email or profile change, an admin soft delete), in the commit that
+// writes the auth rows (audit.Commit, or audit.CommitPublicProjection for a profile-only change).
 // saml_nameid_format and saml_sp_name_qualifier (ops revision 0160) are inserted only, with a SAML
 // account's NameID attributes as go-api stores them; before 0160 their grant is DEFERRED.
 func UsersWriteGrant() (insert, update []string) {
@@ -184,7 +191,8 @@ func UsersWriteGrant() (insert, update []string) {
 			"is_active", "is_verified", "token_version", "created_at", "updated_at", "sso_provider_id",
 			"saml_nameid_format", "saml_sp_name_qualifier",
 		},
-		[]string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
+		[]string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at", "email", "is_active", "username",
+			"full_name", "avatar_url"}
 }
 
 // InsertGrant is a column-level INSERT grant on one ops-schema table.
@@ -489,24 +497,26 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 		logger.InfoContext(ctx, "applying public read grants",
 			"schema", publicSchema, "table", entry.Table, "columns", len(columns), "deferred", len(entry.Columns)-len(columns))
 	}
-	exists, err := publicTableState(ctx, conn, retiredRefreshTokensTable)
-	if err != nil {
-		return nil, err
-	}
-	held := false
-	if exists {
-		held, err = runtimeHoldsPublicGrant(ctx, conn, retiredRefreshTokensTable, options.RuntimeRole)
+	for _, retired := range retiredPublicReadTables {
+		exists, err := publicTableState(ctx, conn, retired)
 		if err != nil {
 			return nil, err
 		}
-	}
-	if held {
-		tableID, err := NewValidatedIdentifier(retiredRefreshTokensTable)
-		if err != nil {
-			return nil, err
+		held := false
+		if exists {
+			held, err = runtimeHoldsPublicGrant(ctx, conn, retired, options.RuntimeRole)
+			if err != nil {
+				return nil, err
+			}
 		}
-		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
-		statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+		if held {
+			tableID, err := NewValidatedIdentifier(retired)
+			if err != nil {
+				return nil, err
+			}
+			table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
+			statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+		}
 	}
 	return statements, nil
 }

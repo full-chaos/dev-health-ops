@@ -88,7 +88,8 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "invites", Select: true, Insert: true, Update: true},
 		{Table: "platform_role_assignments", Select: true, Insert: true, Delete: true},
 		{Table: "service_accounts", Select: true, Insert: true, Update: true},
-		{Table: "workloads", Select: true, Insert: true, Update: true},
+		// The workload registry is written by the migration role only (auth-migrate workloads, restore-fence).
+		{Table: "workloads", Select: true},
 		{Table: "workload_bindings", Select: true},
 
 		// Session lifecycle.

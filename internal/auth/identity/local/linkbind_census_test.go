@@ -1,31 +1,26 @@
 package local
 
 import (
-	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/passwordwriters"
 )
 
 // The reset-link binding holds only while every write of public.users.password_hash
-// also raises token_version. This census reads every SQL string literal of the
-// module's non-test Go files: each UPDATE of the go-api users table that sets
-// password_hash must set token_version in the same statement, and the set of
-// such writers, and of the INSERTs that create a row with a password, is pinned
-// so a new writer is reviewed here first.
-var (
-	passwordUpdate = regexp.MustCompile(`(?is)^\s*UPDATE\s+(public\.)?users\s+SET\b.*\bpassword_hash\s*=`)
-	passwordInsert = regexp.MustCompile(`(?is)^\s*INSERT\s+INTO\s+(public\.)?users\s*\(.*\bpassword_hash\b`)
-	setsToken      = regexp.MustCompile(`(?i)\btoken_version\s*=`)
-)
+// also raises token_version. This census reads the public.users sites of the shared
+// password-writer census (internal/testsupport/passwordwriters): each UPDATE of the
+// go-api users table that sets password_hash must set token_version in the same
+// statement, and the set of such writers, and of the INSERTs that create a row with
+// a password, is pinned so a new writer is reviewed here first.
+var setsToken = regexp.MustCompile(`(?i)\btoken_version\s*=`)
 
 // passwordUpdaters are the writers that change an existing user's password; each
 // raises token_version in the same statement.
@@ -40,6 +35,7 @@ var passwordUpdaters = []string{
 var passwordInserters = []string{
 	"internal/api/session/social.go",
 	"internal/apiservice/admin/userstore.go",
+	"internal/auth/identity/adminusers.go",
 	"internal/auth/identity/publicusers.go",
 	"internal/testsupport/sessionscenario/sessionscenario.go",
 }
@@ -49,7 +45,7 @@ func TestEveryPasswordWriteOfPublicUsersRaisesTokenVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updaters, inserters := map[string]bool{}, map[string]bool{}
+	var sites []passwordwriters.Site
 	scanned := 0
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -64,37 +60,33 @@ func TestEveryPasswordWriteOfPublicUsersRaisesTokenVersion(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if err != nil {
 			return err
 		}
 		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
 		scanned++
-		ast.Inspect(file, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			sql, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				return true
-			}
-			switch {
-			case passwordUpdate.MatchString(sql):
-				updaters[rel] = true
-				if !setsToken.MatchString(sql) {
-					t.Errorf("%s: a password_hash UPDATE of users does not set token_version in the same statement: %q", rel, sql)
-				}
-			case passwordInsert.MatchString(sql):
-				inserters[rel] = true
-			}
-			return true
-		})
+		sites = append(sites, passwordwriters.FileSites(fset, file, filepath.ToSlash(rel))...)
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	updaters, inserters := map[string]bool{}, map[string]bool{}
+	for _, site := range sites {
+		if site.Table != passwordwriters.Public {
+			continue
+		}
+		switch site.Kind {
+		case passwordwriters.Update:
+			updaters[site.File] = true
+			if !setsToken.MatchString(site.SQL) {
+				t.Errorf("%s:%d: a password_hash UPDATE of users does not set token_version in the same statement: %q", site.File, site.Line, site.SQL)
+			}
+		case passwordwriters.Insert:
+			inserters[site.File] = true
+		}
 	}
 	if scanned < 100 {
 		t.Fatalf("scanned %d Go files; the census walked too little of the module", scanned)

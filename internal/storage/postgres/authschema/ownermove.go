@@ -30,6 +30,12 @@ type PublicPrivilege struct {
 // the one list the migrator's own authority there is cut from. A unit test holds it equal to what the grant builders
 // emit, both ways.
 func PublicPrivilegeSet() []PublicPrivilege {
+	return publicPrivilegeSetFor(true)
+}
+
+// publicPrivilegeSetFor is the part of PublicPrivilegeSet the grants pass gives under the users-owned switch: with it
+// off, only the grants no switch gates remain.
+func publicPrivilegeSetFor(usersOwned bool) []PublicPrivilege {
 	type key struct{ table, privilege string }
 	columns := map[key][]string{}
 	tableLevel := map[key]bool{}
@@ -44,29 +50,33 @@ func PublicPrivilegeSet() []PublicPrivilege {
 	for _, entry := range PublicReadColumns() {
 		add(entry.Table, "SELECT", entry.Columns)
 	}
-	usersInsert, usersUpdate := UsersWriteGrant()
-	add("users", "INSERT", usersInsert)
-	add("users", "UPDATE", usersUpdate)
-	for _, grant := range RegisterOrganizationGrants() {
-		add(grant.Table, "INSERT", grant.Columns)
-	}
-	member := MembershipWriteGrants()
-	if member.Delete {
-		tableLevel[key{member.Table, "DELETE"}] = true
-	}
-	add(member.Table, "SELECT", member.Select)
-	add(member.Table, "UPDATE", member.Update)
-	add(member.Table, "INSERT", member.Insert)
-	for _, grant := range InviteWriteGrants() {
-		add(grant.Table, "SELECT", grant.Select)
-		add(grant.Table, "INSERT", grant.Insert)
-		add(grant.Table, "UPDATE", grant.Update)
+	if usersOwned {
+		usersInsert, usersUpdate := UsersWriteGrant()
+		add("users", "INSERT", usersInsert)
+		add("users", "UPDATE", usersUpdate)
+		for _, grant := range RegisterOrganizationGrants() {
+			add(grant.Table, "INSERT", grant.Columns)
+		}
+		member := MembershipWriteGrants()
+		if member.Delete {
+			tableLevel[key{member.Table, "DELETE"}] = true
+		}
+		add(member.Table, "SELECT", member.Select)
+		add(member.Table, "UPDATE", member.Update)
+		add(member.Table, "INSERT", member.Insert)
+		for _, grant := range InviteWriteGrants() {
+			add(grant.Table, "SELECT", grant.Select)
+			add(grant.Table, "INSERT", grant.Insert)
+			add(grant.Table, "UPDATE", grant.Update)
+		}
 	}
 	add(publicAuditTable, "INSERT", PublicAuditWriteColumns())
 	add(ssoProvidersTable, "UPDATE", SSOProviderWriteColumns())
 	add(impersonationTable, "UPDATE", ImpersonationEndColumns())
-	add(impersonationTable, "INSERT", ImpersonationStartColumns())
-	add(impersonationTable, "SELECT", ImpersonationLegacyReadColumns())
+	if usersOwned {
+		add(impersonationTable, "INSERT", ImpersonationStartColumns())
+		add(impersonationTable, "SELECT", ImpersonationLegacyReadColumns())
+	}
 
 	var set []PublicPrivilege
 	for k, names := range columns {

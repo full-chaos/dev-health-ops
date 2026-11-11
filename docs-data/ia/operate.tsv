@@ -1,5 +1,6 @@
 id	parent_id	url	label	kind	nav	public_state	lifecycle	provisional	summary
 operate	home	/operate/	Install and operate	landing	true	public	planned	false	Deployment, lifecycle maintenance, observability, and recovery.
+op-architecture-auth-control-plane	operate	/operate/architecture/auth-control-plane/	Auth control plane architecture	explanation	true	public	active	false	Authentication services, credentials, sessions, authorization enforcement, signing keys and database privileges.
 op-plan	operate	/operate/plan/	Plan a deployment	landing	true	public	planned	false	
 op-models	op-plan	/operate/plan/deployment-models/	Supported deployment models	concept	true	public	planned	false	
 op-arch	op-plan	/operate/plan/architecture/	Architecture and service dependencies	concept	true	public	planned	false	
@@ -39,6 +40,7 @@ op-alerts	op-observe	/operate/observe/dashboards-and-alerts/	Dashboards and aler
 op-security	operate	/operate/security/	Security operations	landing	true	public	planned	false	
 op-hardening	op-security	/operate/security/hardening/	Production hardening	task-guide	true	public	planned	false	
 op-external-push-credentials	op-security	/operate/security/external-push-credentials/	Manage External Push credentials	task-guide	true	public	active	false	
+op-acr-service-credential-migration	op-security	/operate/security/acr-service-credential-migration/	Migrate ACR service credentials	task-guide	true	public	active	false	Move acr-api calls to the workload token, verify the change, and retire old service credentials with a bounded rollback path.
 op-credential-inc	op-security	/operate/security/credential-incidents/	Credential and access incidents	runbook	true	public	planned	false	
 op-security-inc	op-security	/operate/security/incident-response/	Security incident response	runbook	true	public	planned	false	
 op-runbooks	operate	/operate/runbooks/	Runbooks	troubleshooting-index	true	public	planned	false	

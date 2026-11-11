@@ -32,6 +32,9 @@ var selectorKinds = []string{
 	"signature_header", "content_type", "subject_token_type", "grant_type", "body_field",
 }
 
+// SelectorKinds is a copy of the closed class_disambiguator kind vocabulary.
+func SelectorKinds() []string { return slices.Clone(selectorKinds) }
+
 const bodyFieldKind = "body_field"
 
 // RegistryClass is the part of a credential-classes.json entry the profile

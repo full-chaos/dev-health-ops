@@ -9,10 +9,21 @@ on:
   merge_group:
   schedule:
     - cron: "30 1 * * 0"
+  # With `pr`, the run analyses that open same-repo pull request's CURRENT merge commit and uploads it for
+  # refs/pull/<pr>/merge: when main moves, the code_scanning rule wants CodeQL on the new merge commit, and a rerun of the
+  # old pull_request run only re-analyses the old one. The analysis key stays codeql-analysis.yml:analyze.
   workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request number whose current merge commit to analyse (empty: analyse the dispatched ref)"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  # A ready_for_review run gets its own group keyed by the head sha and is never cancelled: a synchronize run of the
+  # same sha (a push right before the flip) cannot cancel it, and its ready-reuse job waits for that run instead.
+  group: ${{ github.workflow }}-${{ github.event.inputs.pr && 'pr-' || '' }}${{ github.event.inputs.pr || github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
   # CHAOS-4906 fleet audit (09-03): `cancel-in-progress: false` meant a PR
   # re-push never cancelled its own prior run -- the two share this same
   # PR-numbered group, so the OLD run just sat queued/running behind the
@@ -25,7 +36,7 @@ concurrency:
   # branch push, but a push to main or a merge_group entry is never
   # cancelled (each gets its own sha-keyed group, so no two commits'
   # security scans can ever collide or displace one another).
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read
@@ -69,6 +80,53 @@ jobs:
           [ "$docs_only" = "true" ] || docs_only=false
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
 
+  # Dispatch with `pr` only. Refuses (no analysis, no upload) unless the pull request is open, from this repository (a
+  # fork's code must not run under security-events: write), targets the default branch and is mergeable, and the merge
+  # ref's commit has exactly the parents (base branch tip, pull request head). No pull request code runs here; `analyze`
+  # then builds that same-repo code with security-events: write, as its pull_request run already does.
+  refresh-target:
+    name: refresh target
+    if: github.event_name == 'workflow_dispatch' && inputs.pr != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve the pull request's current merge commit
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          refuse() { echo "::error::refresh refused for pull request ${PR}: $*"; exit 1; }
+          [[ "${PR}" =~ ^[1-9][0-9]{0,6}$ ]] || refuse "pr must be a pull request number"
+          pr_json=$(gh api "repos/${REPO}/pulls/${PR}")
+          state=$(jq -r '.state' <<<"${pr_json}")
+          head_repo=$(jq -r '.head.repo.full_name // ""' <<<"${pr_json}")
+          base_ref=$(jq -r '.base.ref' <<<"${pr_json}")
+          head_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+          mergeable=$(jq -r '.mergeable' <<<"${pr_json}")
+          [ "${state}" = "open" ] || refuse "state is ${state}, want open"
+          [ "${head_repo}" = "${REPO}" ] || refuse "head repository is '${head_repo}', want ${REPO} (fork pull requests are not refreshed)"
+          [ "${base_ref}" = "${DEFAULT_BRANCH}" ] || refuse "base is ${base_ref}, want ${DEFAULT_BRANCH}"
+          [ "${mergeable}" = "true" ] || refuse "mergeable is ${mergeable}, want true (null: GitHub has not computed the merge commit yet; dispatch again)"
+          merge_sha=$(gh api "repos/${REPO}/git/ref/pull/${PR}/merge" --jq '.object.sha')
+          base_sha=$(gh api "repos/${REPO}/git/ref/heads/${base_ref}" --jq '.object.sha')
+          read -r -a parents <<<"$(gh api "repos/${REPO}/git/commits/${merge_sha}" --jq '[.parents[].sha] | join(" ")')"
+          [ "${#parents[@]}" = "2" ] || refuse "merge commit ${merge_sha} has ${#parents[@]} parents, want 2"
+          [ "${parents[0]}" = "${base_sha}" ] || refuse "merge commit ${merge_sha} parent1 is ${parents[0]}, not the ${base_ref} tip ${base_sha}; dispatch again"
+          [ "${parents[1]}" = "${head_sha}" ] || refuse "merge commit ${merge_sha} parent2 is ${parents[1]}, not the pull request head ${head_sha}; dispatch again"
+          echo "ref=refs/pull/${PR}/merge" >> "$GITHUB_OUTPUT"
+          echo "sha=${merge_sha}" >> "$GITHUB_OUTPUT"
+          echo "pull request ${PR}: analysing merge commit ${merge_sha} (base ${base_sha}, head ${head_sha})"
+
   # Docs-only pull request: no analysis, but the same tool and category as the Go leg below get an empty result.
   analyze-docs-only:
     name: Analyze (docs only, no code changed)
@@ -84,15 +142,15 @@ jobs:
         run: |
           printf '%s' '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"CodeQL","semanticVersion":"0.0.0","rules":[]}},"results":[]}]}' > empty.sarif
       - name: Upload the empty CodeQL result (no code changed)
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: empty.sarif
           category: "/language:go"
 
   analyze:
     name: Analyze
-    needs: changes
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (!cancelled() && needs.changes.outputs.docs_only != 'true')
+    needs: [changes, refresh-target, ready-reuse]
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (!cancelled() && needs.changes.outputs.docs_only != 'true' && (needs.refresh-target.result == 'success' || !(github.event_name == 'workflow_dispatch' && inputs.pr != ''))) && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'analyze')
     runs-on: ubuntu-latest
     # CodeQL needs SARIF upload and audit access for security results.
     permissions:
@@ -106,31 +164,53 @@ jobs:
         language: ["go"]
 
     steps:
+      # Empty outside a `pr` dispatch: the event's own commit, as before.
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.refresh-target.outputs.sha }}
           persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: ${{ matrix.language }}
           queries: security-extended,security-and-quality
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/autobuild@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: "/language:${{matrix.language}}"
+          ref: ${{ needs.refresh-target.outputs.ref }}
+          sha: ${{ needs.refresh-target.outputs.sha }}
+
+      # The upload is for the merge commit resolved at the start; if main or the head moved since, it is no longer the
+      # pull request's merge commit, so the run must not end green.
+      - name: Check the merge commit did not move
+        if: needs.refresh-target.outputs.sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          ANALYSED_SHA: ${{ needs.refresh-target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          now=$(gh api "repos/${REPO}/git/ref/pull/${PR}/merge" --jq '.object.sha')
+          if [ "${now}" != "${ANALYSED_SHA}" ]; then
+            echo "::error::stale merge sha, re-dispatch: analysed ${ANALYSED_SHA}, refs/pull/${PR}/merge is now ${now}"
+            exit 1
+          fi
+          echo "refs/pull/${PR}/merge is still ${ANALYSED_SHA}"
 
   # CHAOS-11733: a merge queue entry can fail first in any workflow, not only go.yml. When any job of this workflow fails on a
   # merge_group run, cancel the runs stacked on this red entry (same job and script as go.yml). Not a required context
   # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
   cancel-stacked-queue-children:
     name: cancel-stacked-queue-children
-    needs: [changes, analyze-docs-only, analyze]
+    needs: [changes, refresh-target, analyze-docs-only, analyze, ready-reuse]
     if: failure() && github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -152,3 +232,50 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
         run: bash ci/cancel_stacked_queue_runs.sh
+
+  # Ready flip: names the legs that already passed on this exact head sha (ci/ready_reuse.sh, read from the BASE commit
+  # so a change cannot rewrite its own judge); each leg below skips when its unit is in `passed`, and its gate prints
+  # REUSED for it. Every other event, and a base without the script, passes [] and every leg runs.
+  ready-reuse:
+    name: ready-reuse
+    runs-on: ubuntu-latest
+    # The judge waits up to 20 minutes for a run of the same sha still in flight.
+    timeout-minutes: 24
+    permissions:
+      actions: read
+      contents: read
+      security-events: read
+    outputs:
+      passed: ${{ steps.reuse.outputs.passed || '[]' }}
+      reused: ${{ steps.reuse.outputs.reused }}
+    steps:
+      - name: Check out the reuse judge from the base commit
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: ci/ready_reuse.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Name the legs that already passed on this head sha
+        id: reuse
+        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          READY_REUSE_UNITS: |
+            analyze exact 1 codeql-merge Analyze (go)
+        run: |
+          if [ ! -f ci/ready_reuse.sh ]; then
+            echo "READY REUSE OFF: the base commit has no ci/ready_reuse.sh; every leg runs"
+            echo 'passed=[]' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          bash ci/ready_reuse.sh

@@ -9,20 +9,24 @@ import (
 	"time"
 )
 
-// The legacy link-token purge verb is gone with go-api's link-token code: no owned hand-off runs it, and the corpus
-// compares the seeded legacy rows that stay as they are.
-func TestAuthCorpusOwnedHandOffsRunNoLegacyLinkPurge(t *testing.T) {
-	metrics := metric("sessions") + "\n" + metric("local_login") + "\n" + metric("credentials") + "\n" + metric("social")
-	fake, out, err := runAcpOwnedLeg(t, "FAKE_SERVED="+requiredServed, "FAKE_SERVED_OWNED="+requiredServed+","+credentialsRoutes, "FAKE_METRICS="+metrics)
+const legacyLinkPurgeCall = "run --rm --no-deps migrate auth legacy-link-purge"
+
+// Both owned hand-offs run the switch's purge of go-api's legacy link-token rows (dho auth legacy-link-purge), as a real
+// users-owned switch does: after the seeded users' copy (CHAOS-13356: every leg is owned from bring-up, so the owned grants,
+// the auth role's DELETE on the two tables, are in place from the start), before the corpus is handed the forwarded set.
+// Never with the flag set off.
+func TestAuthCorpusOwnedHandOffsPurgeTheLegacyLinkRows(t *testing.T) {
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
 	}
 	calls := fake.calls(t)
-	if !strings.Contains(calls, "auth-grants") || !strings.Contains(calls, "FLIPPED") {
-		t.Fatalf("leg acp: the owned hand-off did not run:\n%s", calls)
+	backfill, purge, flipped := strings.Index(calls, "run --rm --no-deps auth-users-backfill"), strings.Index(calls, legacyLinkPurgeCall), strings.Index(calls, "FLIPPED")
+	if backfill < 0 || purge < backfill || flipped < purge || strings.Count(calls, legacyLinkPurgeCall) != 1 {
+		t.Fatalf("leg acp: want the users' copy, then one legacy-link-purge, then the hand-off; got positions %d %d %d:\n%s", backfill, purge, flipped, calls)
 	}
-	if strings.Contains(calls, "legacy-link-purge") {
-		t.Errorf("leg acp runs the retired purge verb:\n%s", calls)
+	if strings.Contains(calls, "AUTH_USERS_OWNED=false") {
+		t.Errorf("leg acp: a call runs with the flag off:\n%s", calls)
 	}
 
 	const owned = `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_PROXY_SOCIAL":"true","AUTH_USERS_OWNED":"true"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}`
@@ -36,10 +40,8 @@ func TestAuthCorpusOwnedHandOffsRunNoLegacyLinkPurge(t *testing.T) {
 		t.Fatalf("leg go-api failed: %v\n%s", err, raw)
 	}
 	calls = fake.calls(t)
-	if !strings.Contains(calls, "run --rm --no-deps auth-users-backfill") || !strings.Contains(calls, "FLIPPED") {
-		t.Fatalf("leg go-api: the owned hand-off did not run:\n%s", calls)
-	}
-	if strings.Contains(calls, "legacy-link-purge") {
-		t.Errorf("leg go-api runs the retired purge verb:\n%s", calls)
+	backfill, purge, flipped = strings.Index(calls, "run --rm --no-deps auth-users-backfill"), strings.Index(calls, legacyLinkPurgeCall), strings.Index(calls, "FLIPPED")
+	if backfill < 0 || purge < backfill || flipped < purge || strings.Count(calls, legacyLinkPurgeCall) != 1 {
+		t.Fatalf("leg go-api: want the users' copy, then one legacy-link-purge, then the hand-off; got positions %d %d %d:\n%s", backfill, purge, flipped, calls)
 	}
 }

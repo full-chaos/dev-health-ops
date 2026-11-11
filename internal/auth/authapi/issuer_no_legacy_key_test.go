@@ -8,28 +8,18 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
-func TestNewEdDSAIssuerWithoutLegacyKeyHoldsNoLegacyVerifier(t *testing.T) {
+// The issuer takes no HS256 key and mints the EdDSA token.
+func TestNewEdDSAIssuerMintsWithNoHS256Key(t *testing.T) {
 	signer, _, _ := fileSigner(t)
-	issuer, err := NewEdDSAIssuer("", testIssuer, contracts.PlatformAPIAudience, signer, goldenIssuer)
+	issuer, err := NewEdDSAIssuer(contracts.PlatformAPIAudience, signer, goldenIssuer)
 	if err != nil {
-		t.Fatalf("an empty legacy key is refused: %v", err)
-	}
-	if issuer.verifier != nil {
-		t.Fatal("an empty legacy key built a legacy verifier")
+		t.Fatal(err)
 	}
 	compact, err := issuer.Access(Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
 	if err != nil || compact == "" {
-		t.Fatalf("the issuer without a legacy key mints no EdDSA token: %v", err)
-	}
-}
-
-func TestNewEdDSAIssuerStillRefusesAShortLegacyKey(t *testing.T) {
-	signer, _, _ := fileSigner(t)
-	if _, err := NewEdDSAIssuer(strings.Repeat("k", edgetoken.MinSecretLength-1), testIssuer, contracts.PlatformAPIAudience, signer, goldenIssuer); err == nil {
-		t.Fatal("a legacy key below the minimum length is accepted")
+		t.Fatalf("the issuer mints no EdDSA token: %v", err)
 	}
 }
 
@@ -38,7 +28,6 @@ func TestNewEdDSAIssuerStillRefusesAShortLegacyKey(t *testing.T) {
 func TestValidateRouteMountsWithoutLegacyKeyUnderEdDSA(t *testing.T) {
 	for _, eddsa := range []bool{false, true} {
 		f := newValidateFixture(t, eddsa)
-		f.issuer.verifier = nil
 		f.logs.Reset()
 		routes, err := CompatRoutes(f.deps())
 		if err != nil {
@@ -63,16 +52,9 @@ func TestValidateRouteMountsWithoutLegacyKeyUnderEdDSA(t *testing.T) {
 	}
 }
 
-// Product rule 1: with no legacy key the validate route answers an EdDSA user token exactly as with the key set.
-func TestValidateAnswersAnEdDSATokenWithoutTheLegacyKeyAsWithIt(t *testing.T) {
+// Product rule 1: with no HS256 key the validate route answers an EdDSA user token.
+func TestValidateAnswersAnEdDSATokenWithNoHS256Key(t *testing.T) {
 	f := newValidateFixture(t, true)
 	token := f.eddsaToken(contracts.PlatformAPIAudience)
-	withKey := f.post(f.server, tokenBody(token), nil)
-	f.issuer.verifier = nil
-	f.build()
-	without := f.post(f.server, tokenBody(token), nil)
-	expectAnswer(t, "with the legacy key", withKey, http.StatusOK, f.validAnswer("ada@example.com", f.org.String(), "admin"))
-	if without.Code != withKey.Code || without.Body.String() != withKey.Body.String() {
-		t.Errorf("without the legacy key %d %s, with it %d %s; want the same answer", without.Code, without.Body, withKey.Code, withKey.Body)
-	}
+	expectAnswer(t, "EdDSA token", f.post(f.server, tokenBody(token), nil), http.StatusOK, f.validAnswer("ada@example.com", f.org.String(), "admin"))
 }

@@ -543,7 +543,7 @@ var coreOptions = []Option{
 	{Env: "DEV_HEALTH_PG_API_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "api Service PostgreSQL password (component form)"},
 	{Env: "DEV_HEALTH_CH_API_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "api Service ClickHouse password (component form)"},
 	{Env: "VALKEY_URI", Secret: true, Group: GroupCredentials, Usage: "Valkey/Redis DSN"},
-	{Env: "JWT_SECRET_KEY", Secret: true, Group: GroupCredentials, Usage: "access-token signing key the api verifies with (the Python api's JWT_SECRET_KEY); required by the api binary"},
+	{Env: "JWT_SECRET_KEY", Secret: true, Group: GroupCredentials, Usage: "retired HS256 access-token key: nothing reads it; a set value only logs one WARN that it is unused"},
 	{Env: "SSO_STATE_SECRET", Secret: true, Group: GroupCredentials, Usage: "key of the SSO login state (OIDC, OAuth, SAML), at least 32 characters; unset, the SSO sign-in routes answer 503 config_missing; SSO_STATE_SECRET_FILE reads it from a mounted file"},
 	{Env: "GITHUB_APP_STATE_SECRET", Secret: true, Group: GroupCredentials, Usage: "key of the GitHub App install state, at least 32 characters; unset, the install routes answer 503 config_missing; GITHUB_APP_STATE_SECRET_FILE reads it from a mounted file"},
 	{Env: "LINK_TOKEN_SECRET", Secret: true, Group: GroupCredentials, Usage: "signing key of invite, e-mail verification and password reset links; unset, those routes answer 503 config_missing and the process still starts (JWT_SECRET_KEY and SETTINGS_ENCRYPTION_KEY never sign or verify a link); LINK_TOKEN_SECRET_FILE reads it from a mounted file"},

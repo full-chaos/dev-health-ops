@@ -19,7 +19,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 // movedRuling retires, on the in-process run only, the steps of the go-api credential routes whose local body is gone
@@ -32,14 +31,10 @@ const movedRuling = "acp 2026-11-09T00:07Z Q9 (a2), CHAOS-13362: go-api serves n
 func movedRoutes(t *testing.T) map[string]bool {
 	t.Helper()
 	t.Setenv(usersowned.Env, "false")
-	verifier, err := edgetoken.New("moved-routes-census-signing-key-0123456789", "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth := &policy.Authenticator{}
 	locals := map[string]http.Handler{}
 	routes := session.Routes(session.Deps{Pool: &pgxpool.Pool{}, Guard: policy.NewGuard(auth, slog.New(slog.DiscardHandler)), Auth: auth,
-		Verifier: verifier, Inner: func(pattern string, local http.Handler) http.Handler {
+		Inner: func(pattern string, local http.Handler) http.Handler {
 			locals[pattern] = local
 			return local
 		}})

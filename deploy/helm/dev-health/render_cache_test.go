@@ -338,7 +338,7 @@ if [ -f "$state/barrier" ]; then
    lock; cur=0; [ ! -f "$state/active" ] || read -r cur < "$state/active"; rmdir "$state/lock"
    if [ "$cur" -ge "$bn" ]; then : > "$state/released"; break; fi
    waited=$((waited+1))
-   if [ "$waited" -gt $((bt*100)) ]; then : > "$state/barrier-timeout"; break; fi
+   if [ "$waited" -gt $((bt*100)) ]; then : > "$state/barrier-timeout"; : > "$state/released"; break; fi
    sleep 0.01
   done
   sleep "$bg"

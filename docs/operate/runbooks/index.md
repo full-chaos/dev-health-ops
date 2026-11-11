@@ -30,6 +30,7 @@ lifecycle: active
 - [Kubernetes workload federation](auth-workload-kubernetes-federation.md)
 - [Auth client-address proof](auth-client-address-proof.md)
 - [Auth legacy compatibility and rollback](auth-legacy-compat-and-rollback.md)
+- [Auth drills and their runbooks](auth-drills.md)
 - [External Push lifecycle events](external-push-lifecycle.md)
 - [Legacy ingest retirement](legacy-ingest-retirement.md)
 

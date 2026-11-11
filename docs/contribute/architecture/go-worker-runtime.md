@@ -1601,12 +1601,14 @@ network; a lookup that works from one stack can fail from another.
 
 ## Operator surface
 
-`dho workers` is a coordinator binary: its first database action —
-authenticating the operator token against `internal_service_credentials` — is a
-coordinator-exclusive read. It needs `COORDINATOR_DATABASE_URI`, and **not every
-worker image carries it**; `go-worker-heavy` does not, while `go-reconciler`
-does. Reaching for the nearest worker container returns `configuration_error`
-with no indication that a different container would work.
+`dho workers` requires domain, queue-control, and coordinator database connections.
+Startup checks each role's posture with its own pool. The command uses a fixed
+operator principal and no bearer token. Access to execute it with these database
+credentials is the operator boundary.
+
+Enforced by: `TestStartupPairsEachRolePostureWithItsOwnPool` in
+`internal/workersctl/operator_authority_inventory_test.go` and
+`internal/joboperator/auth_test.go`.
 
 `jobs retry` and `jobs cancel` are advertised and **cannot succeed in Phase 1**.
 `PostgresDomainGuard.Check`
@@ -1620,15 +1622,13 @@ The refusal is deliberate and correct: the frozen contracts name
 `schedule_occurrence` and `maintenance_run` domain links, neither has an
 authoritative semantic table yet, and treating the envelope UUID as domain truth
 would make retry unsafe. What is not correct is that an operator learns it only
-after configuring a DSN, minting a credential, and getting the flag order right
-.
+after configuring database connections and getting the flag order right.
 
 **There is currently no supported path to re-drive a stranded job**, which is
 why a repair loop cannot delegate to the operator retry path and has to own its
 re-arm.
 
-The invocation details — minting a credential, the required environment, and
-the flags-before-positional rule — are in the
+The required environment and the flags-before-positional rule are in the
 [CLI reference](../../reference/cli/index.md#worker-operator-cli).
 
 ## Contract and registry

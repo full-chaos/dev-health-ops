@@ -24,11 +24,11 @@ var rrTransient = map[string]string{
 	"layer":          rrLayer,
 	"config":         rrConfig,
 	"docker media":   strings.Replace(rrConfig, "application/vnd.oci.image.config.v1+json", "application/vnd.docker.container.image.v1+json", 1),
-	"429":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd: unexpected status from GET request to https://mirror.gcr.io/v2/library/golang/manifests/sha256:f2c872bc: 429 Too Many Requests`,
-	"503":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.3-alpine: unexpected status from HEAD request to https://mirror.gcr.io/v2/library/golang/manifests/1.27.3-alpine: 503 Service Unavailable`,
-	"500":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.3-alpine: unexpected status from HEAD request to https://mirror.gcr.io/v2/library/golang/manifests/1.27.3-alpine: 500 Internal Server Error`,
-	"520":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.3-alpine: unexpected status from GET request to https://mirror.gcr.io/v2/library/golang/manifests/1.27.3-alpine: 520 Unknown Error`,
-	"tls handshake":  `#4 ERROR: failed to do request: Head "https://mirror.gcr.io/v2/library/golang/manifests/1.27.3-alpine": net/http: TLS handshake timeout`,
+	"429":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf: unexpected status from GET request to https://mirror.gcr.io/v2/library/golang/manifests/sha256:f2c872bc: 429 Too Many Requests`,
+	"503":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.4-alpine: unexpected status from HEAD request to https://mirror.gcr.io/v2/library/golang/manifests/1.27.4-alpine: 503 Service Unavailable`,
+	"500":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.4-alpine: unexpected status from HEAD request to https://mirror.gcr.io/v2/library/golang/manifests/1.27.4-alpine: 500 Internal Server Error`,
+	"520":            `#4 ERROR: failed to resolve source metadata for mirror.gcr.io/library/golang:1.27.4-alpine: unexpected status from GET request to https://mirror.gcr.io/v2/library/golang/manifests/1.27.4-alpine: 520 Unknown Error`,
+	"tls handshake":  `#4 ERROR: failed to do request: Head "https://mirror.gcr.io/v2/library/golang/manifests/1.27.4-alpine": net/http: TLS handshake timeout`,
 	"connection rst": `#4 ERROR: failed to copy: read tcp 10.0.0.1:1234->74.125.1.1:443: read: connection reset by peer`,
 }
 

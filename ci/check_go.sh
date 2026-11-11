@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
-GO_TOOLCHAIN="go1.27.3"
+GO_TOOLCHAIN="go1.27.4"
 export GOTOOLCHAIN="${GO_TOOLCHAIN}"
 
 # CHAOS-11794: the job deadline. A go test -timeout that is only a constant can sit past the end of the job: a call that starts

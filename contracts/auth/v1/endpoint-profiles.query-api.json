@@ -14,7 +14,7 @@
       "service": "dev-health-query-api",
       "source": {
         "file": "internal/queryapi/server/server.go",
-        "line": 475
+        "line": 474
       },
       "surface_kind": "rest"
     },

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,35 +14,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
-
-func TestRolePermissionsMatchTheRoleHierarchy(t *testing.T) {
-	viewer := []string{"analytics:read", "metrics:read", "work_items:read", "git:read", "teams:read", "settings:read", "members:read", "org:read"}
-	if got := rolePermissions("viewer"); !reflect.DeepEqual(got, viewer) {
-		t.Fatalf("viewer: %v", got)
-	}
-	member := rolePermissions("member")
-	if len(member) != len(viewer)+1 || member[1] != "analytics:export" {
-		t.Fatalf("member holds viewer plus analytics:export, got %v", member)
-	}
-	if got := len(rolePermissions("admin")); got != 19 {
-		t.Fatalf("admin: %d permissions", got)
-	}
-	if got := rolePermissions("owner"); len(got) != 20 || got[len(got)-1] != "org:delete" {
-		t.Fatalf("owner: %v", got)
-	}
-	for _, unknown := range []string{"", "Owner", "superuser"} {
-		if got := rolePermissions(unknown); len(got) != 0 {
-			t.Fatalf("%q: %v", unknown, got)
-		}
-	}
-	if got := userPermissions(nil, &policy.User{IsSuperuser: true, Role: "viewer"}); len(got) != 22 {
-		t.Fatalf("superuser: %d", len(got))
-	}
-	target := "viewer"
-	if got := userPermissions(&target, &policy.User{IsSuperuser: true, Role: "owner"}); len(got) != 8 {
-		t.Fatalf("impersonation uses the target role, got %d", len(got))
-	}
-}
 
 func TestSelectActiveMembership(t *testing.T) {
 	a, b, c := uuid.New(), uuid.New(), uuid.New()

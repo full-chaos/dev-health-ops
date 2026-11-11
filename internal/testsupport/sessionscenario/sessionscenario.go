@@ -41,7 +41,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -328,11 +327,6 @@ var retryAfterPattern = regexp.MustCompile(`"retry_after_seconds":(\d+)`)
 // created, whose id each plane draws at random.
 var randomUUIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
-// permissionsPattern is /me's permissions list: Python returns list(set),
-// whose order follows the process's string hash seed (named limit), so the
-// list is compared as a set.
-var permissionsPattern = regexp.MustCompile(`"permissions":\[([^\]]*)\]`)
-
 // Normalize is the body normalization every comparison applies.
 func Normalize(body string) string {
 	body = jwtPattern.ReplaceAllStringFunc(body, describeJWT)
@@ -341,12 +335,6 @@ func Normalize(body string) string {
 			return id
 		}
 		return "<random-uuid>"
-	})
-	body = permissionsPattern.ReplaceAllStringFunc(body, func(match string) string {
-		inner := permissionsPattern.FindStringSubmatch(match)[1]
-		items := strings.Split(inner, ",")
-		sort.Strings(items)
-		return `"permissions":<set ` + strings.Join(items, ",") + `>`
 	})
 	return retryAfterPattern.ReplaceAllStringFunc(body, func(match string) string {
 		var seconds int

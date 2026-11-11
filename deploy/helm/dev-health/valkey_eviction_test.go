@@ -18,6 +18,8 @@ func valkeyArg(t *testing.T, deployment map[string]any, flag string) string {
 }
 
 func TestValkeyMaxmemoryPolicyFollowsTheValue(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	deployment, _ := valkeyDeployment(t)
 	if got := valkeyArg(t, deployment, "--maxmemory-policy"); got != "allkeys-lru" {
@@ -38,6 +40,8 @@ func TestValkeyMaxmemoryPolicyFollowsTheValue(t *testing.T) {
 }
 
 func TestValkeyMaxmemoryPolicyRefusesUnknownValues(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	for name, value := range map[string]string{
 		"unknown":       "bogus",
@@ -47,6 +51,8 @@ func TestValkeyMaxmemoryPolicyRefusesUnknownValues(t *testing.T) {
 		"trailing line": "volatile-ttl\n",
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, "--set-string", "valkey.maxmemoryPolicy="+value)
 			if err == nil {
 				t.Fatalf("the render accepted maxmemoryPolicy %q; it must refuse", value)

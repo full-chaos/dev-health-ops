@@ -14,11 +14,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/outboxprojection"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
@@ -153,12 +155,46 @@ func TestAcrEventsMountsWithItsRow(t *testing.T) {
 	}
 }
 
-// The embedded document holds no row yet, so a configured route stays dark.
-func TestAcrEventsRouteHasNoRowInTheEmbeddedDocument(t *testing.T) {
-	a := newAcrEventsFixture(t, acrEventRows(workloadTokenClass))
+// The embedded document holds the route's row: a configured route mounts from it and admits the acr-api workload.
+func TestAcrEventsRouteMountsFromTheEmbeddedDocument(t *testing.T) {
+	a := newAcrEventsFixture(t, authv1.AuthServiceEndpointProfiles)
 	routes, err := AcrEventRoutes(acrEventDepsOf(a.workloadIssueFixture, a.workloads, a.projector))
-	if err != nil || len(routes) != 0 {
-		t.Fatalf("routes = %d, %v, want 0", len(routes), err)
+	if err != nil || len(routes) != 1 || routes[0].Method != http.MethodPost || routes[0].Pattern != PatternAcrCredentialEvents {
+		t.Fatalf("routes = %v, %v, want the one POST %s", routes, err, PatternAcrCredentialEvents)
+	}
+	if r, _ := a.post(a.token(), acrEventBody("cred_exampleaaaaaaaaaa", 1, "active")); r.Code != http.StatusNoContent {
+		t.Fatalf("%d: %s", r.Code, r.Body)
+	}
+}
+
+// The acr-api row of the shipped registry seed is what admits the caller: with it the route projects, and without
+// its credentials.project action the same row is refused before the body is read.
+func TestAcrEventsTheSeededAcrAPIRowAdmitsAndItsActionIsTheGate(t *testing.T) {
+	specs, err := workload.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seeded *workload.Spec
+	for i := range specs {
+		if specs[i].Name == "acr-api" {
+			seeded = &specs[i]
+		}
+	}
+	if seeded == nil {
+		t.Fatal("the registry seed has no acr-api row")
+	}
+	a := newAcrEventsFixture(t, authv1.AuthServiceEndpointProfiles)
+	a.workloads.info = &workload.Info{Audiences: seeded.Audiences, AllowedActions: seeded.AllowedActions}
+	if r, _ := a.post(a.token(), acrEventBody("cred_exampleaaaaaaaaaa", 1, "active")); r.Code != http.StatusNoContent {
+		t.Fatalf("seeded row: %d: %s", r.Code, r.Body)
+	}
+	b := newAcrEventsFixture(t, authv1.AuthServiceEndpointProfiles)
+	b.workloads.info = &workload.Info{Audiences: seeded.Audiences, AllowedActions: slices.DeleteFunc(slices.Clone(seeded.AllowedActions),
+		func(action string) bool { return action == acrEventsAction })}
+	response, body := b.post(b.token(), acrEventBody("cred_exampleaaaaaaaaaa", 1, "active"))
+	expectError(t, response, http.StatusForbidden, reasonNotEntitled)
+	if body.reads != 0 || len(b.projector.inputs) != 0 {
+		t.Fatalf("seeded row without the action: body reads %d, projections %d", body.reads, len(b.projector.inputs))
 	}
 }
 

@@ -9,7 +9,9 @@ import (
 // dho image with the verb as the only argument, and keeps the listener port
 // and probes it had before the fold.
 func TestQueryAPIRunsTheDhoVerb(t *testing.T) {
-	output, err := helmCommand("template", "qa-test", ".", "--set", "queryApi.enabled=true").CombinedOutput()
+	t.Parallel()
+
+	output, err := helmOutput("template", "qa-test", ".", "--set", "queryApi.enabled=true")
 	if err != nil {
 		t.Fatalf("render failed: %v\n%s", err, output)
 	}
@@ -33,6 +35,8 @@ func TestQueryAPIRunsTheDhoVerb(t *testing.T) {
 // chart refuses it: the retired query-api image by name, any other non-dho
 // image by the allowlist. An operator-image digest is a dho image and renders.
 func TestQueryAPIRefusesImagesThatCannotRunTheVerb(t *testing.T) {
+	t.Parallel()
+
 	digest := strings.Repeat("a", 64)
 	for name, testCase := range map[string]struct {
 		repository string
@@ -43,8 +47,10 @@ func TestQueryAPIRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 		"another project image": {"ghcr.io/full-chaos/dev-hops-api", "is not a dho image"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			output, err := helmCommand("template", "qa-test", ".",
-				"--set", "queryApi.enabled=true", "--set", "queryApi.image.repository="+testCase.repository).CombinedOutput()
+			t.Parallel()
+
+			output, err := helmOutput("template", "qa-test", ".",
+				"--set", "queryApi.enabled=true", "--set", "queryApi.image.repository="+testCase.repository)
 			if err == nil {
 				t.Fatalf("rendered:\n%s", output)
 			}
@@ -53,8 +59,8 @@ func TestQueryAPIRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 			}
 		})
 	}
-	output, err := helmCommand("template", "qa-test", ".", "--set", "queryApi.enabled=true",
-		"--set", "queryApi.image.repository=ghcr.io/full-chaos/dev-health-go-operator@sha256:"+digest).CombinedOutput()
+	output, err := helmOutput("template", "qa-test", ".", "--set", "queryApi.enabled=true",
+		"--set", "queryApi.image.repository=ghcr.io/full-chaos/dev-health-go-operator@sha256:"+digest)
 	if err != nil {
 		t.Fatalf("an operator-image digest did not render: %v\n%s", err, output)
 	}
@@ -67,9 +73,11 @@ func TestQueryAPIRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 // CORS_ALLOWED_ORIGINS: the chart value renders that variable, an empty value
 // renders none (the binary's default), and one variable never gets two values.
 func TestQueryAPICORSAllowedOrigins(t *testing.T) {
+	t.Parallel()
+
 	render := func(extra ...string) (string, error) {
 		args := append([]string{"template", "qa-test", ".", "--set", "queryApi.enabled=true"}, extra...)
-		out, err := helmCommand(args...).CombinedOutput()
+		out, err := helmOutput(args...)
 		return string(out), err
 	}
 	out, err := render()

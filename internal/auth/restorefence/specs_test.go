@@ -44,11 +44,21 @@ func TestEverySectionNamesItsTableAndKeepsAuthAndLegacySeparate(t *testing.T) {
 			t.Errorf("section %s qualifies as %s", s.name, got)
 		}
 	}
-	for _, want := range []string{"public.refresh_tokens", "public.internal_service_credentials", "public.external_ingest_tokens", "public.pagerduty_webhook_bindings", "auth.sessions", "auth.refresh_credentials", "auth.credential_registry", "auth.signing_keys",
+	for _, want := range []string{"public.refresh_tokens", "public.external_ingest_tokens", "public.pagerduty_webhook_bindings", "auth.sessions", "auth.refresh_credentials", "auth.credential_registry", "auth.signing_keys",
 		"auth.principals", "auth.workload_bindings", "auth.organizations", "public.saml_assertion_replays",
 		"auth.memberships", "auth.service_accounts", "auth.workloads", "auth.link_credentials", "auth.saml_assertion_uses", "auth.users", "public.provider_oauth_revocations"} {
 		if !seen[want] {
 			t.Errorf("section %s is missing", want)
+		}
+	}
+}
+
+// The retired service-credential table is not carried: no code reads it, every row is revoked, and a migration drops
+// it. A section on it would make export and preflight refuse a database where it is gone.
+func TestNoSectionCarriesTheRetiredServiceCredentialTable(t *testing.T) {
+	for _, s := range sections {
+		if s.table == "internal_service_credentials" || s.name == "public.internal_service_credentials" {
+			t.Errorf("section %s carries the retired table public.internal_service_credentials", s.name)
 		}
 	}
 }

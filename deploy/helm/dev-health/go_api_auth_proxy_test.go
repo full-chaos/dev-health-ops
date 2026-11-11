@@ -59,6 +59,8 @@ func authServiceAPIFrom(t *testing.T, docs []map[string]any) []any {
 }
 
 func TestGoAPIAuthProxyIsOffByDefault(t *testing.T) {
+	t.Parallel()
+
 	for name, args := range map[string][]string{
 		"go-api alone":               {"--set", "goApi.enabled=true"},
 		"go-api beside auth-service": goAPIWithAuth(),
@@ -79,6 +81,8 @@ func TestGoAPIAuthProxyIsOffByDefault(t *testing.T) {
 }
 
 func TestGoAPIAuthProxyRendersEveryFlagExplicitlyFromPhase2(t *testing.T) {
+	t.Parallel()
+
 	for phase, want := range map[string]map[string]string{
 		"2": {"AUTH_PROXY_URL": "http://a-dev-health-auth-service:8095", "AUTH_PROXY_SESSIONS": "true",
 			"AUTH_PROXY_LOCAL_LOGIN": "false", "AUTH_PROXY_CREDENTIALS": "false", "AUTH_PROXY_SOCIAL": "false",
@@ -108,6 +112,8 @@ func TestGoAPIAuthProxyRendersEveryFlagExplicitlyFromPhase2(t *testing.T) {
 }
 
 func TestGoAPIAuthProxyRefusals(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		args []string
 		want string
@@ -120,6 +126,8 @@ func TestGoAPIAuthProxyRefusals(t *testing.T) {
 			"goApi.extraEnv must not set AUTH_ACCESS_TOKEN_ISSUER"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, tc.args...)
 			if err == nil {
 				t.Fatal("the render succeeded; it must refuse")
@@ -133,6 +141,8 @@ func TestGoAPIAuthProxyRefusals(t *testing.T) {
 
 // A hand-set goApi.authProxy flag is refused whatever its value or type: authService.phase owns every flag.
 func TestGoAPIAuthProxyRefusesEveryHandSetFlag(t *testing.T) {
+	t.Parallel()
+
 	for flag := range authProxyFlags {
 		for _, set := range [][]string{
 			{"--set", "goApi.authProxy." + flag + "=true"}, {"--set", "goApi.authProxy." + flag + "=false"},

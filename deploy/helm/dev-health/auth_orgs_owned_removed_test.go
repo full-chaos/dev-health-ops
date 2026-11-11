@@ -19,9 +19,13 @@ const (
 
 // The chart refuses AUTH_ORGS_OWNED with any value in every extraEnv list, not only auth-service's.
 func TestOrgsOwnedEnvIsRefusedInEveryExtraEnv(t *testing.T) {
+	t.Parallel()
+
 	for _, path := range []string{"goApi", "authService", "authService.backfill", "queryApi", "web", "migrations.hook"} {
 		for _, value := range []string{"true", "false", ""} {
 			t.Run(fmt.Sprintf("%s value %q", path, value), func(t *testing.T) {
+				t.Parallel()
+
 				entry := fmt.Sprintf(`[{"name":"AUTH_ORGS_OWNED","value":%q}]`, value)
 				_, out, err := renderAuth(t, phaseArgs(1, "--set-json", path+".extraEnv="+entry)...)
 				if err == nil || !strings.Contains(out, orgsOwnedRemoved) {
@@ -39,6 +43,8 @@ func TestOrgsOwnedEnvIsRefusedInEveryExtraEnv(t *testing.T) {
 
 // Every default goWorkers group refuses AUTH_ORGS_OWNED in its own extraEnv: groups is a list of maps, not a map.
 func TestOrgsOwnedEnvIsRefusedInEveryWorkerGroup(t *testing.T) {
+	t.Parallel()
+
 	raw, err := os.ReadFile("values.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +71,8 @@ func TestOrgsOwnedEnvIsRefusedInEveryWorkerGroup(t *testing.T) {
 	for i, group := range groups {
 		for form, entry := range entries {
 			t.Run(fmt.Sprintf("group %v %s", group["name"], form), func(t *testing.T) {
+				t.Parallel()
+
 				var list []any
 				if err := json.Unmarshal([]byte(entry), &list); err != nil {
 					t.Fatal(err)
@@ -94,6 +102,8 @@ func TestOrgsOwnedEnvIsRefusedInEveryWorkerGroup(t *testing.T) {
 
 // Phase 5 is cancelled, not waiting: the refusal says so and names the decision.
 func TestOrgsOwnedPhase5IsCancelled(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, phaseArgs(3, "--set", "authService.phase=5")...)
 	if err == nil || !strings.Contains(out, orgsOwnedPhase5Msg) || strings.Contains(out, "writer leaf") {
 		t.Fatalf("phase 5: err=%v out=%.400s", err, out)
@@ -106,6 +116,8 @@ func TestOrgsOwnedPhase5IsCancelled(t *testing.T) {
 
 // No render at a phase the chart accepts carries AUTH_ORGS_OWNED, and no template still writes the env line or reads the ladder flag.
 func TestOrgsOwnedHasNoRenderedOrTemplatedConsumer(t *testing.T) {
+	t.Parallel()
+
 	for phase := 0; phase <= 4; phase++ {
 		_, out, err := renderAuth(t, phaseArgs(phase)...)
 		if err != nil {

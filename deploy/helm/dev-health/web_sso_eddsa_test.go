@@ -60,6 +60,8 @@ func wantSSORefusal(t *testing.T, label string, args []string) {
 }
 
 func TestWebSSOOnNeedsEddsaClass(t *testing.T) {
+	t.Parallel()
+
 	for _, on := range []any{"true", "TRUE", " 1 ", true} {
 		for _, class := range []*map[string]any{nil, ptr(ssoVal("AUTH_ACCESS_TOKEN_CLASS", "")), ptr(ssoVal("AUTH_ACCESS_TOKEN_CLASS", "hs256_compat")), ptr(ssoVal("AUTH_ACCESS_TOKEN_CLASS", "rs256")), ptr(ssoRef("AUTH_ACCESS_TOKEN_CLASS"))} { // gitleaks:allow
 			env := []map[string]any{ssoVal("AUTH_SSO_ENABLED", on)}
@@ -72,6 +74,8 @@ func TestWebSSOOnNeedsEddsaClass(t *testing.T) {
 }
 
 func TestWebSSOByValueFromFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	wantSSORefusal(t, "sso ref, no class", ssoEnvArgs(t, ssoRef("AUTH_SSO_ENABLED")))
 	wantSSORefusal(t, "sso ref, hs256", ssoEnvArgs(t, ssoRef("AUTH_SSO_ENABLED"), ssoVal("AUTH_ACCESS_TOKEN_CLASS", "hs256_compat"))) // gitleaks:allow
 	wantSSORefusal(t, "sso ref, class ref", ssoEnvArgs(t, ssoRef("AUTH_SSO_ENABLED"), ssoRef("AUTH_ACCESS_TOKEN_CLASS")))
@@ -83,6 +87,8 @@ func TestWebSSOByValueFromFailsClosed(t *testing.T) {
 }
 
 func TestWebSSOOnWithEddsaRenders(t *testing.T) {
+	t.Parallel()
+
 	got := webEnvDump(t, ssoEnvArgs(t, ssoVal("AUTH_SSO_ENABLED", "true"), ssoVal("AUTH_ACCESS_TOKEN_CLASS", "eddsa")))
 	for _, s := range []string{`"AUTH_SSO_ENABLED"`, `"AUTH_ACCESS_TOKEN_CLASS"`} {
 		if !strings.Contains(got, s) {
@@ -93,6 +99,8 @@ func TestWebSSOOnWithEddsaRenders(t *testing.T) {
 
 // web reads the class with an exact match (resolveTokenClass), so the chart does not trim or fold case.
 func TestWebSSOClassIsTheExactLiteral(t *testing.T) {
+	t.Parallel()
+
 	for _, class := range []string{"EdDSA", "EDDSA", " eddsa ", " EdDSA ", "eddsa\n"} {
 		wantSSORefusal(t, fmt.Sprintf("sso on, class %q", class), ssoEnvArgs(t, ssoVal("AUTH_SSO_ENABLED", "true"), ssoVal("AUTH_ACCESS_TOKEN_CLASS", class)))
 		wantSSORefusal(t, fmt.Sprintf("sso ref, class %q", class), ssoEnvArgs(t, ssoRef("AUTH_SSO_ENABLED"), ssoVal("AUTH_ACCESS_TOKEN_CLASS", class)))
@@ -100,6 +108,8 @@ func TestWebSSOClassIsTheExactLiteral(t *testing.T) {
 }
 
 func TestWebSSOOffRendersAsToday(t *testing.T) {
+	t.Parallel()
+
 	base := webEnvDump(t, append([]string{}, authBase...))
 	for _, off := range []any{"false", "0", "", "FALSE"} {
 		for _, class := range [][]map[string]any{nil, {ssoVal("AUTH_ACCESS_TOKEN_CLASS", "hs256_compat")}, {ssoVal("AUTH_ACCESS_TOKEN_CLASS", "eddsa")}, {ssoRef("AUTH_ACCESS_TOKEN_CLASS")}} { // gitleaks:allow
@@ -127,6 +137,8 @@ func ssoEmptyRef(name string) map[string]any {
 }
 
 func TestWebSSOEmptyValueWithValueFromFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	sso := ssoEmptyRef("AUTH_SSO_ENABLED")
 	wantSSORefusal(t, "sso empty+ref, no class", ssoEnvArgs(t, sso))
 	wantSSORefusal(t, "sso empty+ref, hs256", ssoEnvArgs(t, sso, ssoVal("AUTH_ACCESS_TOKEN_CLASS", "hs256_compat"))) // gitleaks:allow

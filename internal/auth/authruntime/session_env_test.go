@@ -49,6 +49,13 @@ func workloadIssueEnvironment(env map[string]string) map[string]string {
 	return env
 }
 
+// acrEventsEnvironment names testIssueSubject as the acr-api workload subject in env, which must set the token
+// issuer: the acr credential events route mounts with it and its endpoint-profile row.
+func acrEventsEnvironment(env map[string]string) map[string]string {
+	env[authconfig.EnvAcrEventsWorkloadSubject] = testIssueSubject
+	return env
+}
+
 // probeSigner is the token signer configure builds for cfg, never read here:
 // the session issue routes' workload path takes its published key set.
 func probeSigner(cfg authconfig.Config) *token.Signer {

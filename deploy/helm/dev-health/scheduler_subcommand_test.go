@@ -11,7 +11,9 @@ import (
 // own default renders the verb as the first argument, after which the
 // coordinator settings follow.
 func TestDefaultSchedulerGroupRunsTheDhoVerb(t *testing.T) {
-	output, err := helmCommand("template", "scheduler-test", ".", "--set", "goWorkers.enabled=true").CombinedOutput()
+	t.Parallel()
+
+	output, err := helmOutput("template", "scheduler-test", ".", "--set", "goWorkers.enabled=true")
 	if err != nil {
 		t.Fatalf("default render failed: %v\n%s", err, output)
 	}
@@ -90,6 +92,6 @@ func renderSchedulerGroups(t *testing.T, group string) (string, error) {
 	if err := os.WriteFile(values, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := helmCommand("template", "scheduler-test", ".", "-f", values).CombinedOutput()
+	output, err := helmOutput("template", "scheduler-test", ".", "-f", values)
 	return string(output), err
 }

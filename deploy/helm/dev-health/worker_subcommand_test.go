@@ -23,7 +23,9 @@ func deploymentOf(t *testing.T, rendered, name string) string {
 // chart's own default renders the dho image with the verb first and the
 // queue flags after it, for all four worker groups.
 func TestDefaultWorkerGroupsRunTheDhoVerbFromTheOneImage(t *testing.T) {
-	output, err := helmCommand("template", "worker-test", ".", "--set", "goWorkers.enabled=true").CombinedOutput()
+	t.Parallel()
+
+	output, err := helmOutput("template", "worker-test", ".", "--set", "goWorkers.enabled=true")
 	if err != nil {
 		t.Fatalf("default render failed: %v\n%s", err, output)
 	}
@@ -48,7 +50,7 @@ func TestGroupImageOverridesTheOneImage(t *testing.T) {
 	if err := os.WriteFile(values, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := helmCommand("template", "image-test", ".", "-f", values).CombinedOutput()
+	output, err := helmOutput("template", "image-test", ".", "-f", values)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%s", err, output)
 	}
@@ -104,6 +106,6 @@ func renderWorkerGroups(t *testing.T, group string) (string, error) {
 	if err := os.WriteFile(values, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := helmCommand("template", "worker-test", ".", "-f", values).CombinedOutput()
+	output, err := helmOutput("template", "worker-test", ".", "-f", values)
 	return string(output), err
 }

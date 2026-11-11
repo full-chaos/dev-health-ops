@@ -62,10 +62,19 @@ func newAcrLive(t *testing.T, fenced bool) *acrLive {
 	if err != nil {
 		t.Fatal(err)
 	}
-	principal, err := seed.Register(ctx, workload.Spec{Name: "acr-api", Audiences: []string{"auth-service"}, AllowedActions: []string{acrEventsAction}}, workload.Actor{})
+	// The acr-api row comes from the shipped registry seed (auth-migrate workloads seed -apply), never by hand.
+	specs, err := workload.DefaultRegistry()
 	if err != nil {
-		t.Fatalf("Register: %v", err)
+		t.Fatal(err)
 	}
+	if _, err := seed.Seed(ctx, specs, workload.Actor{}); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	seeded, err := seed.Lookup(ctx, "acr-api")
+	if err != nil {
+		t.Fatalf("Lookup acr-api: %v", err)
+	}
+	principal := seeded.PrincipalID
 	reads, err := workload.New(workload.Config{Pool: p.runtime, Schema: p.schema, Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
 		t.Fatal(err)
@@ -232,6 +241,35 @@ func TestAcrEventsLiveRowRefuses(t *testing.T) {
 	}
 	if got := l.count(t, `SELECT count(*) FROM auth.credential_projection`); got != 0 {
 		t.Fatalf("projection rows = %d", got)
+	}
+	l.want(t, l.issued(acrID()), http.StatusNoContent, "")
+}
+
+// The seed is the action's only writer: a seed whose acr-api row lists no action refuses the route before the body is
+// read, and the shipped seed admits it again.
+func TestAcrEventsTheSeedIsTheActionGate(t *testing.T) {
+	l := newAcrLive(t, true)
+	l.want(t, l.issued(acrID()), http.StatusNoContent, "")
+	specs, err := workload.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare := make([]workload.Spec, len(specs))
+	copy(bare, specs)
+	for i := range bare {
+		if bare[i].Name == "acr-api" {
+			bare[i].AllowedActions = []string{}
+		}
+	}
+	if report, err := l.workloads.Seed(l.ctx, bare, workload.Actor{}); err != nil || report.Updated != 1 {
+		t.Fatalf("seed without the action: %+v, %v, want one row updated", report, err)
+	}
+	response, body := l.post(t, l.issued(acrID()))
+	if response.Code != http.StatusForbidden || jsonBody(t, response)["reason_code"] != reasonNotEntitled || body.reads != 0 {
+		t.Fatalf("seeded row without the action: %d, body reads %d: %s", response.Code, body.reads, response.Body)
+	}
+	if report, err := l.workloads.Seed(l.ctx, specs, workload.Actor{}); err != nil || report.Updated != 1 {
+		t.Fatalf("shipped seed: %+v, %v, want one row updated", report, err)
 	}
 	l.want(t, l.issued(acrID()), http.StatusNoContent, "")
 }

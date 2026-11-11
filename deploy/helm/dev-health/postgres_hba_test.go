@@ -56,6 +56,8 @@ func namedEntry(list any, name string) any {
 }
 
 func TestPostgresHbaConfigMapRendersWithTheStoreAndIsInertByDefault(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	if _, cm := postgresRender(t, authBase...); cm != nil {
 		t.Errorf("ConfigMap %s renders while postgresql is disabled", pgHbaConfigMap)
@@ -81,6 +83,8 @@ func TestPostgresHbaConfigMapRendersWithTheStoreAndIsInertByDefault(t *testing.T
 }
 
 func TestPostgresHbaOnPointsTheServerAtTheChartFile(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	cases := map[string][]string{
 		"persistence on":  pgHbaOn,
@@ -88,6 +92,8 @@ func TestPostgresHbaOnPointsTheServerAtTheChartFile(t *testing.T) {
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			sts, cm := postgresRender(t, args...)
 			if cm == nil {
 				t.Fatalf("ConfigMap %s does not render", pgHbaConfigMap)
@@ -119,6 +125,8 @@ func TestPostgresHbaOnPointsTheServerAtTheChartFile(t *testing.T) {
 // probe or script in the pod is held to the same password as the pod network.
 // No replication line: the store has no replica.
 func TestPostgresHbaRulesAreScramOnly(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	_, cm := postgresRender(t, pgHbaOn...)
 	hba, _ := at(cm, "data", "pg_hba.conf").(string)
@@ -152,6 +160,8 @@ func TestPostgresHbaRulesAreScramOnly(t *testing.T) {
 // The flip is a data-store step of its own: it changes the postgresql
 // StatefulSet and no other document.
 func TestPostgresHbaSwitchChangesOnlyThePostgresStatefulSet(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	got := changedDocs(t, pgStoreOn, pgHbaOn)
 	if want := []string{"StatefulSet/a-dev-health-postgresql"}; !reflect.DeepEqual(got, want) {

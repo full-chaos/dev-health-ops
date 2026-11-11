@@ -34,7 +34,7 @@ func renderDocs(t *testing.T, args ...string) []map[string]any {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	out, err := helmCommand(append([]string{"template", "h", chartDir()}, args...)...).CombinedOutput()
+	out, err := helmOutput(append([]string{"template", "h", chartDir()}, args...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.600s", err, out)
 	}
@@ -115,6 +115,8 @@ func references(spec map[string]any) []hookKey {
 }
 
 func TestHookResourcesReferenceOnlyObjectsThatExistWhenTheHookRuns(t *testing.T) {
+	t.Parallel()
+
 	renders := map[string][]string{
 		"defaults":           {"--set", "web.env.BACKEND_URL=http://x", "--set", "web.authSecret.secretName=web-auth-placeholder"},
 		"auth enabled":       authBase,

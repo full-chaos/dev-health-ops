@@ -616,6 +616,7 @@ func configureWithRoutes(
 		closeStore()
 		return nil, err
 	}
+	warnUnservedInternalOnly(ctx, logger, cfg, routes)
 	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, publicRoutes(routes)))
 	if err != nil {
 		closeStore()

@@ -1,6 +1,7 @@
 package devhealth_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +22,9 @@ const helmShimBackendURL = "http://backend.test:8000"
 const helmShimAuthSecret = "web-auth-placeholder"
 
 func TestMain(m *testing.M) {
-	os.Exit(runWithHelmShim(m))
+	code := runWithHelmShim(m)
+	fmt.Println(renderMemoCountsLine())
+	os.Exit(code)
 }
 
 func runWithHelmShim(m *testing.M) int {

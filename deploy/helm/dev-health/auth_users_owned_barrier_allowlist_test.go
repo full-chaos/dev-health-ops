@@ -367,6 +367,7 @@ func TestBarrierAllowlistClearsEachClass(t *testing.T) {
 
 // Each change of a fact STOPs with the full example file; want names the line that must stay.
 func TestBarrierAllowlistStillStops(t *testing.T) {
+
 	grantPodAt := func(w *bworld, job string) map[string]any {
 		for _, p := range w.otherPods {
 			pod := p.(map[string]any)

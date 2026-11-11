@@ -302,6 +302,8 @@ func TestNoopAnswerNamesTheEffectiveState(t *testing.T) {
 			&Membership{ID: id, OrgID: org, PrincipalID: principal, Role: ptr("member"), Status: StatusActive}},
 		{"stale auth row", state{status: StatusActive, role: "member"}, stale(), nil,
 			&Membership{ID: id, OrgID: org, PrincipalID: principal, Role: ptr("member"), Status: StatusActive, JoinedAt: &joined, Revision: 7}},
+		{"suspended, auth row gone after the commit", state{status: StatusSuspended, role: "member"}, nil, ErrNotMember,
+			&Membership{ID: id, OrgID: org, PrincipalID: principal, Role: ptr("member"), Status: StatusSuspended}},
 		{"no role", state{status: StatusSuspended}, stale(), nil,
 			&Membership{ID: id, OrgID: org, PrincipalID: principal, Status: StatusSuspended, JoinedAt: &joined, Revision: 7}},
 	}

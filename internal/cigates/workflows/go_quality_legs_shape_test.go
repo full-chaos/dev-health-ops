@@ -81,6 +81,7 @@ func shapeCells(t *testing.T) []struct {
 }
 
 func TestTheLegSelectorValidatesTheWholeLegFileBeforeFiltering(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	for _, c := range shapeCells(t) {
 		f := filepath.Join(t.TempDir(), "legs.json")

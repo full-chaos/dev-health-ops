@@ -277,6 +277,7 @@ func TestWorkflowPermissionsGateHoldsOnTheRealTree(t *testing.T) {
 }
 
 func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	files := allWorkflowFiles(t, root)
 	const (

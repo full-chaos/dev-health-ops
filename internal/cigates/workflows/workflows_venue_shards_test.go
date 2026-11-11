@@ -382,6 +382,7 @@ func firstWeightsFile(t *testing.T, root string, minRows int) string {
 }
 
 func TestVenueShardsPlantedDefects(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	const f, c = venueWorkflow, venueChangedWorkflow
 	files := venueShardFiles(t, root)

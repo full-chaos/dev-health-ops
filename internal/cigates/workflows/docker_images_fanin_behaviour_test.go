@@ -104,6 +104,7 @@ func faninWant(t *testing.T, ok bool, format string, a ...any) {
 const faninNoOp = "0 of 7 families had a moving tag applied this run"
 
 func TestFanInLatestCheckBootstrapsOnlyOnConfirmedAbsence(t *testing.T) {
+	t.Parallel()
 	absent := runFaninStep(t, "absent", faninOpts{})
 	faninWant(t, absent.code == 0 && strings.Contains(absent.record, "imagetools create") && strings.Contains(absent.record, ":latest"),
 		"CONFIRMED ABSENT must record a bootstrap `imagetools create ... :latest` (exit %d): %q", absent.code, absent.record)
@@ -126,6 +127,7 @@ func TestFanInLatestCheckBootstrapsOnlyOnConfirmedAbsence(t *testing.T) {
 }
 
 func TestFanInLatestCheckTagsOnlyTrueDescendants(t *testing.T) {
+	t.Parallel()
 	d := runFaninStep(t, "labelled", faninOpts{ancestor: true})
 	faninWant(t, d.code == 0 && d.mergeBase && !d.gitLog, "the descendant case must reach the ancestry check, not the digest walk (exit %d)", d.code)
 	faninWant(t, strings.Contains(d.record, "imagetools create") && strings.Contains(d.record, ":latest"), "a true descendant must be tagged: %q", d.record)
@@ -135,6 +137,7 @@ func TestFanInLatestCheckTagsOnlyTrueDescendants(t *testing.T) {
 }
 
 func TestFanInDigestWalkFindsAMatchPartwayThroughHistory(t *testing.T) {
+	t.Parallel()
 	r := runFaninStep(t, "unlabelled", faninOpts{
 		candidates: []string{"1111111111111111111111111111111111111a", "2222222222222222222222222222222222222b", "3333333333333333333333333333333333333c"},
 		matchShort: "2222222",
@@ -145,6 +148,7 @@ func TestFanInDigestWalkFindsAMatchPartwayThroughHistory(t *testing.T) {
 }
 
 func TestFanInSourceTagDistinguishesConfirmedAbsentFromUnknown(t *testing.T) {
+	t.Parallel()
 	a := runFaninStep(t, "labelled", faninOpts{sourceTag: "absent"})
 	faninWant(t, a.record == "" && !a.gitLog && !a.mergeBase, "a confirmed-absent source tag must tag nothing and skip git: %q", a.record)
 	faninWant(t, strings.Contains(a.stdout, "SKIP") && strings.Contains(a.stdout, "confirmed absent") && !strings.Contains(a.stdout, "::error::"),
@@ -155,6 +159,7 @@ func TestFanInSourceTagDistinguishesConfirmedAbsentFromUnknown(t *testing.T) {
 }
 
 func TestFanInNoOpRunsFailTheJob(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name     string
 		scenario string
@@ -182,6 +187,7 @@ func TestFanInNoOpRunsFailTheJob(t *testing.T) {
 }
 
 func TestFanInLatestResolvesAPromotedPRHeadLabelByDigestWalk(t *testing.T) {
+	t.Parallel()
 	r := runFaninStep(t, "labelled", faninOpts{baseMissing: true, ancestor: false,
 		candidates: []string{"1111111111111111111111111111111111111a", "2222222222222222222222222222222222222b"}, matchShort: "2222222"})
 	faninWant(t, r.code == 0 && r.gitLog && !r.mergeBase, "a :latest label commit absent from the clone must use the digest walk, never decline on ancestry (exit %d)\n%s", r.code, r.stdout)

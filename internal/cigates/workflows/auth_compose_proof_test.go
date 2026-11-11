@@ -54,6 +54,7 @@ func authProofComposeFiles(t *testing.T, root string) []string {
 // A throwaway project name does not isolate a fixed container_name or a published host port, so
 // the proof must not depend on either (CHAOS-10182).
 func TestAuthComposeProofPostgresHasNoFixedNameOrPublishedPort(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker is not installed")
 	}

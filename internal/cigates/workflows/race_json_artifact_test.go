@@ -135,6 +135,7 @@ func raceLegWithoutOwnJSONDir(files map[string]string) []string {
 }
 
 func TestNoTestRunsARaceLegIntoTheRepoGoTestJSONDir(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	files := map[string]string{}
 	err := filepath.WalkDir(filepath.Join(root, "internal"), func(p string, d fs.DirEntry, err error) error {

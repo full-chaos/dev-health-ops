@@ -171,6 +171,7 @@ func nameOneFailedLeg(t *testing.T, log string) string {
 }
 
 func TestNamingStepPrintsTheWholeRunningTestsBlock(t *testing.T) {
+	t.Parallel()
 	out := nameOneFailedLeg(t, panicLog(1, false))
 	if !strings.Contains(out, "    2026-10-25T10:21:30Z \t\tTestHang001 (21m0s)") {
 		t.Errorf("one running test must be printed, indented; out=%q", out)
@@ -198,6 +199,7 @@ func TestNamingStepPrintsTheWholeRunningTestsBlock(t *testing.T) {
 }
 
 func TestNamingStepReadsTheJobLogWhateverFormItComesIn(t *testing.T) {
+	t.Parallel()
 	out := nameOneFailedLeg(t, zipOf(t, "1_Run.txt", panicLog(2, true)))
 	if !strings.Contains(out, "\n- go-storage-integration-shard-packages-7: JOB TIMEOUT") || !strings.Contains(out, "\ntimed_out=go-storage-integration-shard-packages-7\n") || !strings.Contains(out, "TestHang002") {
 		t.Errorf("a ZIP log with a deadline panic must read as a JOB TIMEOUT with its running tests; out=%q", out)

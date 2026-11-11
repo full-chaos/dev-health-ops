@@ -50,9 +50,29 @@ func hasDataSuffix(s string) bool {
 	return false
 }
 
+// globCache holds one compiled translation per glob for the whole test binary: the real-tree oracles match thousands
+// of paths against the same few hundred globs, and recompiling each glob per path was most of their wall time. A
+// *regexp.Regexp is safe for concurrent use, and the translation is a pure function of the pattern text.
+var globCache sync.Map // pattern -> globResult
+
+type globResult struct {
+	re  *regexp.Regexp
+	err error
+}
+
 // githubGlobToRegexp mirrors GitHub's path-filter globs: `**/` is zero or more directories at any
 // position, `**` spans separators, `*` does not, and `?[]!` are refused rather than read as literal text.
 func githubGlobToRegexp(pattern string) (*regexp.Regexp, error) {
+	if v, ok := globCache.Load(pattern); ok {
+		r := v.(globResult)
+		return r.re, r.err
+	}
+	re, err := translateGithubGlob(pattern)
+	globCache.Store(pattern, globResult{re: re, err: err})
+	return re, err
+}
+
+func translateGithubGlob(pattern string) (*regexp.Regexp, error) {
 	if i := strings.IndexAny(pattern, "?[]!"); i >= 0 {
 		return nil, fmt.Errorf("go.yml path filter %q uses %q, which this translator does not implement: a filter that matches nothing silently marks real changes irrelevant", pattern, pattern[i])
 	}

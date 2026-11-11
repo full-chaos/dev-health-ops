@@ -84,6 +84,7 @@ func TestIntegrationShardsSkipOnPullRequestWiring(t *testing.T) {
 // path that reaches the planner shows as FULL and a skip shows as NONE. With planner set, stub go and git binaries
 // build a planner that prints that verdict, so the planner's own NONE shows its reason.
 func TestIntegrationShardsSelectionStepBehaviour(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	doc := loadWf(t, root, "go.yml")
 	step, count := stepNamed(pinJob(doc, "go-storage-integration-plan"), "Select the integration packages the change can affect")

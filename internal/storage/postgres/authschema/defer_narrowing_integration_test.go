@@ -59,13 +59,6 @@ func (e *publicReadsEnv) usersOwnedHeld(t *testing.T, ctx context.Context) (all,
 			note(slices.Contains(held, column))
 		}
 	}
-	for _, grant := range LegacyLinkPurgeGrants() {
-		note(e.tablePrivilege(t, ctx, grant.Table, "DELETE"))
-		held := e.heldColumns(t, ctx, grant.Table, "SELECT")
-		for _, column := range grant.Select {
-			note(slices.Contains(held, column))
-		}
-	}
 	return all, none
 }
 

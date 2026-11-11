@@ -66,13 +66,6 @@ type Quirk struct {
 	Owned Ownership
 }
 
-// legacyResetPurgeQuirk is the one quirk allowed on a table that has no projection of its own: the owned leg's single
-// golden row of public.password_reset_tokens that the users-owned switch purges (dho auth legacy-link-purge). Nothing
-// else widens the tables a quirk may name.
-func legacyResetPurgeQuirk(q Quirk) bool {
-	return q.Table == TablePasswordResetTokens && q.Owned == OwnedOnly && q.Missing != nil && q.Max == 1 && q.Exact
-}
-
 // CheckTable is every way table is malformed, in the order of the table.
 func CheckTable(table []Quirk) []string {
 	var problems []string
@@ -95,7 +88,7 @@ func CheckTable(table []Quirk) []string {
 		if q.Kind == Gap && strings.TrimSpace(q.Tracked) == "" {
 			problems = append(problems, q.ID+": a gap names the ticket that closes it")
 		}
-		if !projected[q.Table] && q.Table != TableLinkMails && !legacyResetPurgeQuirk(q) {
+		if !projected[q.Table] && q.Table != TableLinkMails {
 			problems = append(problems, fmt.Sprintf("%s: table %q has no projection", q.ID, q.Table))
 		}
 		if len(q.Needs) == 0 {

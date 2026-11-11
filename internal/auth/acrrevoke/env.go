@@ -17,16 +17,19 @@ const (
 	EnvAllowClusterHTTP = "ACR_REVOKE_ALLOW_CLUSTER_HTTP"
 )
 
-// FromEnv builds a Client from the four variables. All unset is (nil, false, ""): not configured. A partial or
-// unusable set is (nil, true, the first refused variable's name); it never names a value.
+// FromEnv builds a Client from the four variables. Only all four unset is (nil, false, ""): not configured. Any
+// variable present, blank included, makes the set configured: a partial, blank or unusable set is (nil, true, the
+// first refused variable's name); it never names a value.
 func FromEnv(lookup func(string) (string, bool)) (client *Client, configured bool, refused string) {
+	present := false
 	read := func(name string) string {
-		value, _ := lookup(name)
+		value, ok := lookup(name)
+		present = present || ok
 		return strings.TrimSpace(value)
 	}
 	base, token, subject := read(EnvURL), read(EnvTokenURL), read(EnvSubjectFile)
 	allowValue, allowSet := lookup(EnvAllowClusterHTTP)
-	if base == "" && token == "" && subject == "" && !allowSet {
+	if !present && !allowSet {
 		return nil, false, ""
 	}
 	var allow bool

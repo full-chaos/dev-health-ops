@@ -107,6 +107,11 @@ func TestPatchDisableRevokesTheOrgACRCredentialsAfterTheCommit(t *testing.T) {
 		if commit, call := log.index("tx:commit"), log.index("acr-revoke"); commit < 0 || call < commit {
 			t.Fatalf("order %v, want the commit before the acr revoke", log.steps)
 		}
+		for _, want := range []string{`"msg":"admin: org acr credentials revoked"`, `"actor_id":"` + validUUID + `"`, `"reason":"organization_disabled"`} {
+			if !strings.Contains(logs.String(), want) {
+				t.Fatalf("log %q lacks %s: the Info line names the actor and the reason", logs.String(), want)
+			}
+		}
 	}
 }
 

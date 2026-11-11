@@ -86,9 +86,10 @@ func (h *handlers) revokeOrgACRCredentials(ctx context.Context, orgID uuid.UUID,
 			"org_id", orgID.String(), "event", event, "reason", "no_client")
 		return nil
 	}
-	got, err := h.acrOrgRevoker.RevokeOrganization(ctx, orgID.String(), acrActor(ctx), reason)
+	actor := acrActor(ctx)
+	got, err := h.acrOrgRevoker.RevokeOrganization(ctx, orgID.String(), actor, reason)
 	if err != nil {
-		attrs := []any{"org_id", orgID.String(), "event", event, "calls", got.Calls, "revoked", got.Revoked}
+		attrs := []any{"org_id", orgID.String(), "event", event, "actor_id", actor, "reason", reason, "calls", got.Calls, "revoked", got.Revoked}
 		var failure *acrrevoke.Error
 		switch {
 		case errors.Is(err, acrrevoke.ErrOrganizationLive):
@@ -106,6 +107,7 @@ func (h *handlers) revokeOrgACRCredentials(ctx context.Context, orgID uuid.UUID,
 		return err
 	}
 	h.logger.InfoContext(ctx, "admin: org acr credentials revoked", slog.String("org_id", orgID.String()), slog.String("event", event),
+		slog.String("actor_id", actor), slog.String("reason", reason),
 		slog.Int("revoked", got.Revoked), slog.Int("caller_revoked", got.CallerRevoked), slog.Int("calls", got.Calls))
 	return nil
 }

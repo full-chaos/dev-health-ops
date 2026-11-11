@@ -2561,6 +2561,11 @@ declare -A INTEGRATION_SPLIT_UNIT_SHARD=()
 declare -A INTEGRATION_SPLIT_PART=()
 declare -A INTEGRATION_SPLIT_SHARDS=()
 declare -A INTEGRATION_SPLIT_SHARD_WEIGHT=()
+# is_assoc NAME: true when NAME is an associative array here. A harness that loads only some functions of this script has no
+# global declarations; indexing an undeclared name with a key like "./pkg" would evaluate the key arithmetically.
+is_assoc() {
+  [[ "$(declare -p "$1" 2>/dev/null)" == "declare -A"* ]]
+}
 # Per packages shard (check_integration_package_shard shadows both with locals): the names a split-by-test package runs in the
 # shard, keyed by its "./dir", and its planned weight there. Declared here so every other caller of run_integration_packages and
 # warn_integration_weight_drift reads an empty associative array, never an undeclared name bash would index arithmetically.
@@ -2928,7 +2933,7 @@ warn_integration_weight_drift() {
     key="${module_dir}/${pkg#./}"
     key="${key#./}"
     weight="${INTEGRATION_SHARD_WEIGHTS[${key}]:-}"
-    [ -z "${INTEGRATION_DRIFT_WEIGHT[${key}]+set}" ] || weight="${INTEGRATION_DRIFT_WEIGHT[${key}]}"
+    if is_assoc INTEGRATION_DRIFT_WEIGHT && [ -n "${INTEGRATION_DRIFT_WEIGHT[${key}]+set}" ]; then weight="${INTEGRATION_DRIFT_WEIGHT[${key}]}"; fi
     [ -n "${weight}" ] || continue
     while IFS=$'\t' read -r import_path seconds; do
       [[ "${import_path}" == */"${pkg#./}" ]] || continue
@@ -2978,7 +2983,7 @@ run_integration_packages() {
       || die "${label}: ${key} runs in an integration shard, but no test file that only the integration build lists declares a top-level Test"
     # A split-by-test package (CHAOS-13520) selects only this shard's names; its other names count as skipped, so no
     # package of the same group can run them again through a shared -run.
-    if [ -n "${INTEGRATION_RUN_FILTER[${pkg}]+set}" ]; then
+    if is_assoc INTEGRATION_RUN_FILTER && [ -n "${INTEGRATION_RUN_FILTER[${pkg}]+set}" ]; then
       run_integration_split_filter "${label}" "${key}" "${select_names[${pkg}]}" "${INTEGRATION_RUN_FILTER[${pkg}]}"
       select_names["${pkg}"]="${INTEGRATION_RUN_FILTER[${pkg}]}"
       skip_names["${pkg}"]+="${SPLIT_FILTER_OTHERS}"
@@ -5010,7 +5015,11 @@ check_integration_prepull() {
 # integration_run_weight KEY: the weight a packages shard orders KEY by: a split-by-test package's planned weight in this shard
 # (INTEGRATION_DRIFT_WEIGHT of check_integration_package_shard), else the manifest weight.
 integration_run_weight() {
-  printf '%s\n' "${INTEGRATION_DRIFT_WEIGHT[$1]:-${INTEGRATION_SHARD_WEIGHTS[$1]}}"
+  if is_assoc INTEGRATION_DRIFT_WEIGHT && [ -n "${INTEGRATION_DRIFT_WEIGHT[$1]+set}" ]; then
+    printf '%s\n' "${INTEGRATION_DRIFT_WEIGHT[$1]}"
+  else
+    printf '%s\n' "${INTEGRATION_SHARD_WEIGHTS[$1]}"
+  fi
 }
 
 sort_integration_shard_packages() {

@@ -827,6 +827,7 @@ var discoveryFunctions = []string{
 	"die", "check_listed_test_file", "scan_listed_go_tests", "scan_go_test_paths", "gotestfuncs_bin", "go_run_name_ok", "byte_len", "go_test_name_ok",
 	"integration_test_files", "split_plain_test_files", "split_package_hook", "discover_integration_tagged_tests",
 	"run_integration_packages", "warn_integration_weight_drift", "discover_daily_tests",
+	"is_assoc", "run_integration_split_filter",
 }
 
 // discoveryHarness runs body in bash with the discovery functions of ci/check_go.sh. With files, ROOT is a temporary
@@ -1697,6 +1698,18 @@ func TestIntegrationShardPlanCheckerFailsEachPlantedDefect(t *testing.T) {
 			byShard[s][m[2]] = w
 		}
 	}
+	// the parts of split-by-test packages (CHAOS-13520) stay as they are; a shard's total counts them too
+	splitIn := map[int]map[string]int{}
+	for _, l := range lines {
+		if m := splitRow.FindStringSubmatch(l); m != nil {
+			s, _ := strconv.Atoi(m[1])
+			w, _ := strconv.Atoi(m[3])
+			if splitIn[s] == nil {
+				splitIn[s] = map[string]int{}
+			}
+			splitIn[s][m[2]] = w
+		}
+	}
 	// the plan with some shards' rows replaced and their total lines made consistent
 	withRows := func(changes map[int]map[string]int) string {
 		assigned := map[int]map[string]int{}
@@ -1723,7 +1736,10 @@ func TestIntegrationShardPlanCheckerFailsEachPlantedDefect(t *testing.T) {
 					names = append(names, n)
 				}
 				sort.Strings(names)
-				out = append(out, fmt.Sprintf("integration shard %d: estimated %ds, %d package(s)", s, sum, len(assigned[s])))
+				for _, w := range splitIn[s] {
+					sum += w
+				}
+				out = append(out, fmt.Sprintf("integration shard %d: estimated %ds, %d package(s)", s, sum, len(assigned[s])+len(splitIn[s])))
 				for _, n := range names {
 					out = append(out, fmt.Sprintf("  SHARD %d %s weight=%ds", s, n, assigned[s][n]))
 				}
@@ -2486,8 +2502,9 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 		if groups == 1 && len(calls) == 1 {
 			for _, p := range calls[0].pkgs {
 				k := path.Join(calls[0].dir, strings.TrimPrefix(p, "./"))
-				hasHook = hasHook || tf.hookOf(k) != ""
-				hasFiltered = hasFiltered || (tf.hookOf(k) == "" && len(tf.untagged[k]) > 0)
+				// A split-by-test package runs only its part of a shard (tf.partial): no plant is made on it.
+				hasHook = hasHook || (tf.hookOf(k) != "" && !tf.partial[k])
+				hasFiltered = hasFiltered || (tf.hookOf(k) == "" && len(tf.untagged[k]) > 0 && !tf.partial[k])
 			}
 		}
 		if hasHook && hasFiltered && hookShard == 0 {
@@ -2502,10 +2519,10 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 	hookKey, filteredPkg := "", ""
 	for _, p := range c.pkgs {
 		k := path.Join(c.dir, strings.TrimPrefix(p, "./"))
-		if tf.hookOf(k) != "" && hookKey == "" {
+		if tf.hookOf(k) != "" && hookKey == "" && !tf.partial[k] {
 			hookKey = k
 		}
-		if tf.hookOf(k) == "" && filteredPkg == "" && len(tf.untagged[k]) > 0 {
+		if tf.hookOf(k) == "" && filteredPkg == "" && len(tf.untagged[k]) > 0 && !tf.partial[k] {
 			filteredPkg = p
 		}
 	}

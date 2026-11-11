@@ -412,7 +412,8 @@ refresh_ca_bundle() {
 
 # wait_stub NAME URL CA [CURL_ARG...]: ready only when the readiness path answers HTTP 200 (a stub's 599 is not ready).
 wait_stub() {
-  local name="$1" url="$2" ca="$3" deadline=$((SECONDS + ${LIVE_E2E_STUB_WAIT_SECONDS:-30})) code
+  local name="$1" url="$2" ca="$3" start="${SECONDS}" bound="${LIVE_E2E_STUB_WAIT_SECONDS:-30}" code
+  local deadline=$((start + bound))
   shift 3
   while [ "${SECONDS}" -lt "${deadline}" ]; do
     code="$(curl -sS --max-time 1 -o /dev/null -w '%{http_code}' --cacert "${ca}" "$@" "${url}" 2>/dev/null || true)"
@@ -420,7 +421,7 @@ wait_stub() {
     sleep 1
   done
   tail -n 40 "${STATE}/logs/${name}.log" >&2 || true
-  die "${name} did not become ready"
+  die "${name} did not become ready after $((SECONDS - start))s (bound ${bound}s)"
 }
 
 # refuse_second_start PIDFILE NAME: a start verb never overwrites the pid file of a stub that still runs (down knows one pid).
@@ -453,7 +454,8 @@ enable_mail() {
       >"${STATE}/logs/smtpsink.log" 2>&1 &
     echo "$!" >"${STATE}/smtpsink.pid"
   )
-  local port='' deadline=$((SECONDS + ${LIVE_E2E_MAIL_WAIT_SECONDS:-30})) ready=false
+  local port='' start="${SECONDS}" bound="${LIVE_E2E_MAIL_WAIT_SECONDS:-30}" ready=false
+  local deadline=$((start + bound))
   while [ "${SECONDS}" -lt "${deadline}" ]; do
     if [ -f "${STATE}/mail/port" ]; then
       port="$(cat "${STATE}/mail/port")"
@@ -463,7 +465,7 @@ enable_mail() {
   done
   if [ "${ready}" != true ]; then
     tail -n 40 "${STATE}/logs/smtpsink.log" >&2 || true
-    die "smtpsink did not become ready"
+    die "smtpsink did not become ready after $((SECONDS - start))s (bound ${bound}s)"
   fi
   chmod 600 "${STATE}/auth-service.env"
   printf '%s\n' 'EMAIL_PROVIDER=smtp' 'SMTP_HOST=127.0.0.1' "SMTP_PORT=${port}" 'SMTP_USE_TLS=false' >>"${STATE}/auth-service.env"

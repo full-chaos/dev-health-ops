@@ -963,7 +963,7 @@ func TestLiveE2EStubReadinessFailure(t *testing.T) {
 			if verb == "start-idp" {
 				name = "idpstub"
 			}
-			if err == nil || !strings.Contains(out, name+" did not become ready") || !strings.Contains(out, name+" serve") {
+			if err == nil || !readinessDied(out, name) || !strings.Contains(out, name+" serve") {
 				t.Fatalf("readiness failure did not report the stub and its log: %v %s", err, out)
 			}
 		})
@@ -1041,7 +1041,7 @@ func TestLiveE2EStubAnsweringNon200IsNotReady(t *testing.T) {
 			writeExec(t, filepath.Join(state, "stub-599"), "", 0o600)
 			name := map[string]string{"enable-social": "providerstub", "start-idp": "idpstub"}[verb]
 			out, err := run(verb, state)
-			if err == nil || !strings.Contains(out, name+" did not become ready") {
+			if err == nil || !readinessDied(out, name) {
 				t.Fatalf("a stub answering 599 read as ready: %v %s", err, out)
 			}
 		})
@@ -1277,6 +1277,17 @@ func TestLiveE2ESMTPFakeProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+// readinessDied: the loud failure names the elapsed seconds and the bound (D6418: the bound is a wait limit; only a ready
+// signal passes, and a hit deadline fails with how long it waited). The fixture bound is 5 s, so the wait was at least that.
+func readinessDied(out, name string) bool {
+	m := regexp.MustCompile(regexp.QuoteMeta(name) + ` did not become ready after ([0-9]+)s \(bound 5s\)`).FindStringSubmatch(out)
+	if m == nil {
+		return false
+	}
+	elapsed, err := strconv.Atoi(m[1])
+	return err == nil && elapsed >= 5 && elapsed <= 20
+}
+
 // A slow start must not be read as a failed start: the wait is wall clock, whatever the fake sleep does (CHAOS-13590:
 // the -race test binary behind the fake sink needs ~1.5 s to start, the old wait gave it ~0.45 s).
 func TestLiveE2EEnableMailWaitsOnWallClockForASlowSink(t *testing.T) {
@@ -1441,7 +1452,7 @@ func TestLiveE2EMailReadinessRequiresPortAndBanner(t *testing.T) {
 			before := liveE2ERead(t, filepath.Join(state, "auth-service.env"))
 			writeExec(t, filepath.Join(state, failure), "", 0o600)
 			out, err := run("enable-mail", state)
-			if err == nil || !strings.Contains(out, "smtpsink did not become ready") {
+			if err == nil || !readinessDied(out, "smtpsink") {
 				t.Fatal("unready mail sink accepted")
 			}
 			if failure == "smtp-no-port" && !strings.Contains(out, "fake sink startup failed") {

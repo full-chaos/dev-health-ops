@@ -3,6 +3,7 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -134,5 +135,31 @@ func TestDummyHashCostsWhatPythonsDoes(t *testing.T) {
 	}
 	if again := dummyHash(); again != first {
 		t.Fatal("the dummy hash changed between calls")
+	}
+}
+
+// CHAOS-13585: GET /api/v1/auth/me carries the caller's identity and no permission list: no consumer reads one (CENSUS-10872-perm-1),
+// and a complete mutable permission set does not belong in an answer a client caches.
+func TestMeCarriesNoPermissionsField(t *testing.T) {
+	cases := []struct {
+		name string
+		user *policy.User
+	}{
+		{"viewer", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "viewer"}},
+		{"owner", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "owner"}},
+		{"platform admin", &policy.User{UserID: "u", Email: "u@example.com", OrgID: "o", Role: "member", IsSuperuser: true}},
+	}
+	for _, c := range cases {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+		request = request.WithContext(policy.WithUser(request.Context(), c.user))
+		recorder := httptest.NewRecorder()
+		handlers{}.me(recorder, request)
+		body := recorder.Body.String()
+		if recorder.Code != http.StatusOK || !strings.Contains(body, `"role"`) {
+			t.Fatalf("%s: %d %s, want the 200 identity answer", c.name, recorder.Code, body)
+		}
+		if strings.Contains(body, "permissions") {
+			t.Errorf("%s: /auth/me still carries permissions: %s", c.name, body)
+		}
 	}
 }

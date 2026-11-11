@@ -55,7 +55,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// Key is JWT_SECRET_KEY on every plane.
+// Key signs the venue's link tokens (go-api LINK_TOKEN_SECRET). ci/auth_corpus_external.sh reads the line below.
 const Key = "session-venue-signing-key-0123456789abcdef"
 
 // Fixed ids, so audit rows name the same subjects on every plane.

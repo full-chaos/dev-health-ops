@@ -41,6 +41,7 @@ const (
 	orgDisableACRRevokeDetail            = "Organization disabled; its acr credentials were not revoked; repeat the request."
 	orgDisableACRRevokeIncompleteDetail  = "Organization disabled; its acr credentials were not all revoked: more remains; repeat the request."
 	orgDeletionACRRevokeDetail           = "The acr credentials of this organization were not revoked; the organization is now disabled; run the delete again. Nothing was deleted."
+	orgDeletionDisableFailedDetail       = "The organization could not be disabled; it is unchanged and its acr credentials were not revoked; run the delete again. Nothing was deleted."
 	orgDeletionACRRevokeIncompleteDetail = "The acr credentials of this organization were not all revoked: more remains; the organization is now disabled; run the delete again. Nothing was deleted."
 )
 
@@ -48,8 +49,11 @@ const (
 const acrOperatorActor = "operator"
 
 // errOrgDeletionACRRevoke is a delete stopped before any purge because acr did not revoke the organization's
-// credentials (or the disable before it failed).
-var errOrgDeletionACRRevoke = errors.New("acr credential revoke of the organization failed")
+// credentials (or the disable before it failed: errOrgDeletionDisable).
+var (
+	errOrgDeletionACRRevoke = errors.New("acr credential revoke of the organization failed")
+	errOrgDeletionDisable   = errors.New("the organization delete could not disable the organization")
+)
 
 const (
 	orgACREventDisable = "disable"
@@ -91,6 +95,8 @@ func (h *handlers) revokeOrgACRCredentials(ctx context.Context, orgID uuid.UUID,
 			attrs = append(attrs, "decision", "organization_live")
 		case errors.Is(err, acrrevoke.ErrOrganizationIncomplete):
 			attrs = append(attrs, "decision", "more_remains")
+		case errors.Is(err, acrrevoke.ErrClientConfigInvalid):
+			attrs = append(attrs, "decision", "client_config_invalid")
 		case errors.As(err, &failure):
 			attrs = append(attrs, "decision", "failed", "failure_kind", string(failure.Kind), "status", failure.Status)
 		default:
@@ -116,7 +122,7 @@ func (h *handlers) revokeACRBeforeDelete(ctx context.Context, orgID uuid.UUID) e
 	tag, err := h.store.Pool.Exec(ctx, `UPDATE organizations SET is_active = false, updated_at = $2 WHERE id = $1`, orgID, h.now().UTC())
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: org deletion could not disable the organization", "org_id", orgID.String(), "error", err)
-		return fmt.Errorf("%w: %w", errOrgDeletionACRRevoke, err)
+		return fmt.Errorf("%w: %w: %w", errOrgDeletionACRRevoke, errOrgDeletionDisable, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return nil
@@ -129,6 +135,9 @@ func (h *handlers) revokeACRBeforeDelete(ctx context.Context, orgID uuid.UUID) e
 
 // orgDeletionACRRevokeAnswer is the operator-facing text of a delete stopped by errOrgDeletionACRRevoke.
 func orgDeletionACRRevokeAnswer(err error) string {
+	if errors.Is(err, errOrgDeletionDisable) {
+		return orgDeletionDisableFailedDetail
+	}
 	if errors.Is(err, acrrevoke.ErrOrganizationIncomplete) {
 		return orgDeletionACRRevokeIncompleteDetail
 	}

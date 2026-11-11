@@ -39,7 +39,7 @@ func acrRevokers(lookup func(string) (string, bool), logger *slog.Logger) (acrcr
 		return nil, nil
 	case refused != "":
 		logger.Error("api: acr credential revoke configuration refused; the revoke route answers 503", slog.String("variable", refused))
-		return nil, nil
+		return nil, admin.UnusableOrgCredentialRevoker(refused)
 	}
 	return client, client
 }

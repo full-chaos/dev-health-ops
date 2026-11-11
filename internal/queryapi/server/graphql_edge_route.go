@@ -158,12 +158,12 @@ func markGraphQLDocumentNotResolved(next http.Handler) http.Handler {
 }
 
 // mountGraphQLRoute registers /graphql. It stays unmounted -- a 404, and a
-// log line saying why -- when the pod has neither the edge secret nor the
-// access-token issuer: a user's access token is the path's only credential,
-// so without either the path could only ever refuse.
+// log line saying why -- when the pod has no access-token issuer: a user's
+// access token is the path's only credential, so without it the path could
+// only ever refuse.
 func mountGraphQLRoute(mux *http.ServeMux, query http.HandlerFunc, deps graphQLEdgeDeps) {
 	if deps.auth == nil {
-		log.Printf("query-api: %s NOT mounted: %s and %s are unset, so the product path would have no credential to accept", graphQLEdgePath, edgeJWTSecretEnvVar, accessTokenIssuerEnvVar)
+		log.Printf("query-api: %s NOT mounted: %s is unset, so the product path would have no credential to accept", graphQLEdgePath, accessTokenIssuerEnvVar)
 		return
 	}
 	mux.Handle(graphQLEdgePath, graphQLEdgeChain(query, deps))

@@ -1,7 +1,7 @@
 # Test-only identity-provider stub (internal/testsupport/idpstub): the flip-back kit runs it. Not a release image: no
 # workflow builds or pushes it, docker/go-worker.Dockerfile never copies this binary, and it holds no key or
 # certificate (idpstub generates its signing keys at start; `idpstub certs` writes the TLS files outside the image).
-ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd"
+ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf"
 ARG GO_RUNTIME_IMAGE="gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35"
 
 FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS build

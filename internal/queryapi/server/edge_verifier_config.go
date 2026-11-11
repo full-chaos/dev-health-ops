@@ -2,18 +2,12 @@ package server
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
-
-// edgeJWTSecretEnvVar named the shared secret of the retired HS256 edge access
-// token. Nothing verifies with it now; a pod that still sets it gets one WARN
-// (warnUnusedEdgeSecret).
-const edgeJWTSecretEnvVar = "GO_API_EDGE_JWT_SECRET"
 
 // buildEdgeVerifierFromEnv builds the access-token verifier every REST route
 // in this binary shares, or (nil, nil) when AUTH_ACCESS_TOKEN_ISSUER is unset:
@@ -72,15 +66,6 @@ func newEdgeUserStore(getenv getenvFunc, registryPool *pgxpool.Pool) (edgeUserSt
 		return nil, fmt.Errorf("build edge users store: %w", err)
 	}
 	return newQueryAPIUserStore(policy.PGStore{Pool: registryPool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}), nil
-}
-
-// warnUnusedEdgeSecret logs one WARN when GO_API_EDGE_JWT_SECRET is still set:
-// it verified the retired HS256 edge token and nothing reads it now. A
-// leftover value is config hygiene, never a refused start (D6465).
-func warnUnusedEdgeSecret(getenv getenvFunc, logger *slog.Logger) {
-	if getenv(edgeJWTSecretEnvVar) != "" {
-		logger.Warn(edgeJWTSecretEnvVar + " is set but unused (HS256 retired)")
-	}
 }
 
 // buildQueryEdgeAuthenticatorFromEnv builds /query's edge-carrier

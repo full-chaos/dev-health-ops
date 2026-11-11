@@ -449,7 +449,7 @@
       "tenant_requirement": "none",
       "token_shape": {
         "algorithm": "EdDSA (user_access_token)",
-        "audience": "dev-health-api or auth-service",
+        "audience": "auth-service",
         "issuer": "AUTH_TOKEN_ISSUER_URL",
         "token_type": "the access-token.v1 JWS with sid"
       }
@@ -2086,7 +2086,7 @@
       "tenant_requirement": "none",
       "token_shape": {
         "algorithm": "EdDSA (user_access_token)",
-        "audience": "dev-health-api or auth-service",
+        "audience": "auth-service",
         "issuer": "AUTH_TOKEN_ISSUER_URL",
         "token_type": "the access-token.v1 JWS with sid"
       }

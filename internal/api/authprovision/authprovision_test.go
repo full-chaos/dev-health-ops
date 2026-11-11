@@ -390,3 +390,42 @@ func TestTheClientNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 		t.Fatalf("the redirect target saw %d request(s)", len(reached))
 	}
 }
+
+// CHAOS-13575: a 429 carries its Retry-After as delta-seconds (bounded); any other form or status carries none.
+func TestA429CarriesItsRetryAfter(t *testing.T) {
+	org, principal, actor := uuid.New(), uuid.New(), uuid.New()
+	for name, tc := range map[string]struct {
+		status int
+		header string
+		want   time.Duration
+	}{
+		"429 1":           {429, "1", time.Second},
+		"429 7":           {429, "7", 7 * time.Second},
+		"429 none":        {429, "", 0},
+		"429 http-date":   {429, "Wed, 11 Nov 2026 15:00:00 GMT", 0},
+		"429 signed":      {429, "+5", 0},
+		"429 negative":    {429, "-5", 0},
+		"429 fraction":    {429, "1.5", 0},
+		"429 huge":        {429, "99999999999999999999999", maxRetryAfter},
+		"429 at bound":    {429, "3600", time.Hour},
+		"429 above bound": {429, "3601", maxRetryAfter},
+		"403 with header": {403, "5", 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, _ := newClient(t, func(w http.ResponseWriter, _ seen) {
+				if tc.header != "" {
+					w.Header().Set("Retry-After", tc.header)
+				}
+				writeJSON(w, tc.status, `{}`)
+			})
+			_, err := client.AddMember(context.Background(), org, principal, actor, "admin", nil)
+			var refused *Refused
+			if !errors.As(err, &refused) || refused.Status != tc.status {
+				t.Fatalf("AddMember = %v, want a %d Refused", err, tc.status)
+			}
+			if refused.RetryAfter != tc.want {
+				t.Fatalf("RetryAfter = %v, want %v", refused.RetryAfter, tc.want)
+			}
+		})
+	}
+}

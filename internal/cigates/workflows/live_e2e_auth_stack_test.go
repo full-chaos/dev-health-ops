@@ -1003,7 +1003,15 @@ func TestLiveE2ESocialRefusesOutsideAGitHubRunnerBeforeAnyWrite(t *testing.T) {
 
 func TestLiveE2EProviderStopRefusesUnrelatedOrInvalidPID(t *testing.T) {
 	state, _, run := liveE2EStubFakes(t)
-	for _, pid := range []string{strconv.Itoa(os.Getpid()), "not-a-pid", "0"} {
+	unrelated := exec.Command("sleep", "60")
+	if err := unrelated.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = unrelated.Process.Kill()
+		_ = unrelated.Wait()
+	})
+	for _, pid := range []string{strconv.Itoa(unrelated.Process.Pid), "not-a-pid", "0"} {
 		writeExec(t, filepath.Join(state, "providerstub.pid"), pid+"\n", 0o600)
 		out, err := run("down", state)
 		if (pid == "not-a-pid") != (err != nil) {

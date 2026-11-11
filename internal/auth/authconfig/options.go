@@ -248,6 +248,19 @@ var optionRegistry = []Option{
 			EnvTokenIssuerURL,
 	},
 	{
+		Env: EnvAuthorizeWebApproverIssuer, Kind: KindString, Group: GroupSession,
+		Usage: "iss of the web approver reference POST /v1/authorize accepts from " + EnvAuthorizeWebApproverCaller + " (the ACR web assertion issuer); with " +
+			EnvAuthorizeWebApproverJWKSFile + " and " + EnvAuthorizeWebApproverCaller + " it turns the kind on, else it stays off with one ERROR line",
+	},
+	{
+		Env: EnvAuthorizeWebApproverJWKSFile, Kind: KindString, Group: GroupSession,
+		Usage: "path of the public JWKS (the ACR web assertion keys, Secret acr-web-assertion-jwks) the web approver reference is verified with; read on every reference",
+	},
+	{
+		Env: EnvAuthorizeWebApproverCaller, Kind: KindString, Group: GroupSession,
+		Usage: "workload principal id (prn_) of acr-api, the only caller that may present a web approver reference; it must also be in " + EnvAuthorizeCallerSubjects,
+	},
+	{
 		Env: EnvSessionIssueWorkloadSubject, Kind: KindString, Group: GroupSession,
 		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. " +
 			EnvSessionIssueWorkloadSubject + "_FILE reads it from a mounted file instead (the two are mutually exclusive). Needs " +

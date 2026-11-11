@@ -26,11 +26,9 @@ func TestMemberListServesUserNamesVenueOracle(t *testing.T) {
 	orgID, otherOrgID := id("org"), id("other-org")
 	superID, namedID, blankID, otherID := id("super"), id("named"), id("blank"), id("other-user")
 
-	const jwtKey = "venue-oracle-member-names-key-32-bytes-long!!"
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   repoRoot(t),
 		GoOnly: true,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(query string, args ...any) {
@@ -66,7 +64,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), org, userID)
 			}
 		},
 	})
-	base, _ := startGoServer(t, ctx, venue, jwtKey)
+	base, _ := startGoServer(t, ctx, venue)
 	response := venueoracle.Do(t, base, venueoracle.Request{
 		Name: "superadmin member list names", Method: http.MethodGet,
 		Path:    "/api/v1/admin/orgs/" + orgID.String() + "/members",

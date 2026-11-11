@@ -2,14 +2,18 @@ package workflows_test
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -724,6 +728,11 @@ env > "$FAKE_STATE/auth-service.loaded"
 echo $$ > "$FAKE_STATE/auth-service.ready"
 exec sleep 60
 `, 0o755)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeExec(t, filepath.Join(state, "bin", "cigate"), "#!/bin/sh\nLIVE_E2E_SMTP_FAKE=1 exec '"+strings.ReplaceAll(executable, "'", "'\"'\"'")+"' -test.run=^TestLiveE2ESMTPFakeProcess$ -- \"$@\"\n", 0o755)
 	writeExec(t, filepath.Join(fake, "go"), `#!/bin/sh
 printf '%s %s\n' "$PWD" "$*" >> "$FAKE_STATE/builds"
 while [ "$1" != -o ]; do shift; done
@@ -1184,4 +1193,294 @@ func TestLiveE2ESSOUsesCallerSettings(t *testing.T) {
 			t.Errorf("auth-service did not load the caller's %s", strings.Split(want, "=")[0])
 		}
 	}
+}
+
+func TestLiveE2ESMTPFakeProcess(t *testing.T) {
+	if os.Getenv("LIVE_E2E_SMTP_FAKE") != "1" {
+		return
+	}
+	var args []string
+	for i, arg := range os.Args {
+		if arg == "--" {
+			args = os.Args[i+1:]
+			break
+		}
+	}
+	if len(args) < 2 || args[0] != "live-e2e" {
+		os.Exit(2)
+	}
+	switch args[1] {
+	case "smtp-sink":
+		if len(args) != 5 || args[2] != "127.0.0.1:0" {
+			os.Exit(2)
+		}
+		record, err := os.OpenFile(filepath.Join(os.Getenv("FAKE_STATE"), "smtp.argv"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			os.Exit(1)
+		}
+		_, err = fmt.Fprintln(record, strings.Join(args, " "))
+		if err != nil {
+			os.Exit(1)
+		}
+		_ = record.Close()
+		if err := os.MkdirAll(args[3], 0o700); err != nil {
+			os.Exit(1)
+		}
+		listener, err := net.Listen("tcp", args[2])
+		if err != nil {
+			os.Exit(1)
+		}
+		port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+		state := os.Getenv("FAKE_STATE")
+		if _, err := os.Stat(filepath.Join(state, "smtp-no-port")); err == nil {
+			fmt.Println("fake sink startup failed")
+		} else {
+			if _, err := os.Stat(filepath.Join(state, "smtp-bad-port")); err == nil {
+				port = "invalid"
+			}
+			if err := os.WriteFile(args[4], []byte(port), 0o644); err != nil {
+				os.Exit(1)
+			}
+		}
+		banner := "220 fake SMTP\r\n"
+		if _, err := os.Stat(filepath.Join(state, "smtp-bad-banner")); err == nil {
+			banner = "500 unready\r\n"
+		}
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				os.Exit(1)
+			}
+			_, _ = io.WriteString(conn, banner)
+			_ = conn.Close()
+		}
+	case "mail-token":
+		if len(args) != 5 {
+			os.Exit(2)
+		}
+		key := args[4] + "." + hex.EncodeToString([]byte(strings.ToLower(args[3])))
+		raw, err := os.ReadFile(filepath.Join(args[2], key))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "mail token is unavailable")
+			os.Exit(1)
+		}
+		fmt.Println(string(raw))
+	default:
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
+func TestLiveE2EEnableMail(t *testing.T) {
+	state, fake, run := liveE2EStubFakes(t)
+	runWithoutRunner := func(args ...string) (string, error) {
+		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci/live_e2e_auth_stack.sh")}, args...)...)
+		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+		raw, err := cmd.CombinedOutput()
+		return string(raw), err
+	}
+	if out, err := run("start-auth", state); err != nil {
+		t.Fatalf("start-auth: %v %s", err, out)
+	}
+	before := liveE2ERead(t, filepath.Join(state, "auth-service.env"))
+	if out, err := runWithoutRunner("enable-mail", state); err != nil {
+		t.Fatalf("enable-mail without runner: %v %s", err, out)
+	}
+	port := liveE2ERead(t, filepath.Join(state, "mail/port"))
+	want := before + "EMAIL_PROVIDER=smtp\nSMTP_HOST=127.0.0.1\nSMTP_PORT=" + port + "\nSMTP_USE_TLS=false\n"
+	if liveE2ERead(t, filepath.Join(state, "auth-service.env")) != want {
+		t.Fatal("mail overlay did not append exactly four lines")
+	}
+	if n, _ := startCount(t, state); n != 2 {
+		t.Fatal("enable-mail did not restart auth exactly once")
+	}
+	loaded := liveE2ERead(t, filepath.Join(state, "auth-service.loaded"))
+	for _, line := range []string{"EMAIL_PROVIDER=smtp\n", "SMTP_HOST=127.0.0.1\n", "SMTP_PORT=" + port + "\n", "SMTP_USE_TLS=false\n"} {
+		if !strings.Contains(loaded, line) {
+			t.Fatal("auth did not load the SMTP overlay")
+		}
+	}
+	for path, mode := range map[string]os.FileMode{"auth-service.env": 0o600, "mail": 0o700, "mail/tokens": 0o700} {
+		info, err := os.Stat(filepath.Join(state, path))
+		if err != nil || info.Mode().Perm() != mode {
+			t.Fatalf("incorrect permissions for %s", path)
+		}
+	}
+	wantArgs := "live-e2e smtp-sink 127.0.0.1:0 " + state + "/mail/tokens " + state + "/mail/port\n"
+	if liveE2ERead(t, filepath.Join(state, "smtp.argv")) != wantArgs {
+		t.Fatal("incorrect SMTP sink argv")
+	}
+	pid := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "smtpsink.pid")))
+	if out, err := run("enable-mail", state); err == nil || !strings.Contains(out, "already runs (pid "+pid+")") {
+		t.Fatal("second enable-mail was not refused")
+	}
+	if liveE2ERead(t, filepath.Join(state, "auth-service.env")) != want {
+		t.Fatal("second enable-mail changed the overlay")
+	}
+	if n, _ := startCount(t, state); n != 2 {
+		t.Fatal("second enable-mail restarted auth")
+	}
+	if liveE2ERead(t, filepath.Join(state, "smtp.argv")) != wantArgs {
+		t.Fatal("second enable-mail started another sink")
+	}
+	token := "canned-mail-token-no-log"
+	for _, kind := range []string{"reset", "verify"} {
+		key := kind + "." + hex.EncodeToString([]byte("reader@example.test"))
+		writeExec(t, filepath.Join(state, "mail/tokens", key), token, 0o600)
+		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci/live_e2e_auth_stack.sh"), "mail-token", state, "Reader@example.test", kind)
+		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+		var out, errb bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &errb
+		if err := cmd.Run(); err != nil || out.String() != token+"\n" || errb.Len() != 0 {
+			t.Fatal("mail-token did not print only its value on stdout")
+		}
+	}
+	for _, args := range [][]string{{"reader@example.test", "bad"}, {"invalid", "reset"}, {"bad address@example.test", "reset"}, {"x'@example.test", "reset"}, {"absent@example.test", "reset"}} {
+		out, err := run("mail-token", state, args[0], args[1])
+		if err == nil || strings.Contains(out, token) {
+			t.Fatal("invalid mail-token request accepted or leaked a token")
+		}
+	}
+	err := filepath.WalkDir(state, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == filepath.Join(state, "mail/tokens") {
+			return filepath.SkipDir
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(raw, []byte(token)) {
+			t.Error("token persisted outside its capture directory")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("down", state); err != nil {
+		t.Fatalf("down: %v %s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(state, "mail/tokens")); !os.IsNotExist(err) {
+		t.Fatal("down left the token directory")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		raw, _ := os.ReadFile(filepath.Join("/proc", pid, "cmdline"))
+		if len(raw) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("down left the sink running")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestLiveE2EEnableMailNeedsSavedEnvironment(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	if err := os.Remove(filepath.Join(state, "auth-service.env")); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run("enable-mail", state)
+	if err == nil || !strings.Contains(out, "no saved auth-service environment") {
+		t.Fatal("enable-mail accepted absent environment")
+	}
+	for _, path := range []string{"mail", "smtpsink.pid", "smtp.argv"} {
+		if _, err := os.Stat(filepath.Join(state, path)); !os.IsNotExist(err) {
+			t.Fatal("enable-mail wrote before refusing absent environment")
+		}
+	}
+}
+
+func TestLiveE2EMailReadinessRequiresPortAndBanner(t *testing.T) {
+	for _, failure := range []string{"smtp-no-port", "smtp-bad-port", "smtp-bad-banner"} {
+		t.Run(failure, func(t *testing.T) {
+			state, _, run := liveE2EStubFakes(t)
+			before := liveE2ERead(t, filepath.Join(state, "auth-service.env"))
+			writeExec(t, filepath.Join(state, failure), "", 0o600)
+			out, err := run("enable-mail", state)
+			if err == nil || !strings.Contains(out, "smtpsink did not become ready") {
+				t.Fatal("unready mail sink accepted")
+			}
+			if failure == "smtp-no-port" && !strings.Contains(out, "fake sink startup failed") {
+				t.Fatal("readiness error omitted log tail")
+			}
+			if liveE2ERead(t, filepath.Join(state, "auth-service.env")) != before {
+				t.Fatal("unready sink changed auth environment")
+			}
+		})
+	}
+}
+
+var mailTokenCaller = regexp.MustCompile(`live_e2e_auth_stack\.sh["']?\s+mail-token\b`)
+var mailTokenTrace = regexp.MustCompile(`\b(set|bash)\s+-[a-zA-Z]*x|\bxtrace\b`)
+
+func unsafeMailTokenCaller(raw string) bool {
+	caller := false
+	for _, line := range strings.Split(raw, "\n") {
+		if mailTokenCaller.MatchString(line) {
+			caller = true
+			if !strings.Contains(line, "=$(") {
+				return true
+			}
+		}
+	}
+	return caller && mailTokenTrace.MatchString(raw)
+}
+
+func TestLiveE2EMailTokenCallersCaptureWithoutTracing(t *testing.T) {
+	root := repoRoot(t)
+	var paths []string
+	for _, pattern := range []string{".github/workflows/*.yml", "ci/*.sh", "*.md"} {
+		matches, err := filepath.Glob(filepath.Join(root, pattern))
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, matches...)
+	}
+	for _, dir := range []string{"docs", ".github/docs-legacy"} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !entry.IsDir() && (strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".mdx") || strings.HasSuffix(path, ".rst")) {
+				paths = append(paths, path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range paths {
+		if unsafeMailTokenCaller(liveE2ERead(t, path)) {
+			t.Errorf("mail-token caller must capture stdout and disable tracing: %s", path)
+		}
+	}
+	for name, fixture := range map[string]string{
+		"bare":   "bash ci/live_e2e_auth_stack.sh mail-token STATE a@example.test reset\n",
+		"set-x":  "set -x\ntoken=$(bash ci/live_e2e_auth_stack.sh mail-token STATE a@example.test reset)\n",
+		"bash-x": "token=$(bash -x ci/live_e2e_auth_stack.sh mail-token STATE a@example.test reset)\n",
+		"xtrace": "set -o xtrace\ntoken=$(bash ci/live_e2e_auth_stack.sh mail-token STATE a@example.test reset)\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "caller.sh")
+			writeExec(t, path, fixture, 0o600)
+			if !unsafeMailTokenCaller(liveE2ERead(t, path)) {
+				t.Fatal("planted unsafe caller was accepted")
+			}
+		})
+	}
+	t.Run("captured", func(t *testing.T) {
+		if unsafeMailTokenCaller("token=$(bash ci/live_e2e_auth_stack.sh mail-token STATE a@example.test reset)\n") {
+			t.Fatal("safe capture rejected")
+		}
+	})
 }

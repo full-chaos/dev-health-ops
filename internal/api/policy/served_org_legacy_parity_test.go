@@ -130,3 +130,24 @@ func TestServedOrgAnAllowForTheTokenOrganizationNeverWidensTheScope(t *testing.T
 		})
 	}
 }
+
+// The outage row of S2 (F-9): a request that serves another organization than the token's is now asked about the token
+// organization, so with the decision point dead it is the 503 of every enforced request, where before S2 it kept the
+// legacy answer. A token with no organization still keeps the legacy answer in an outage (S1's class).
+func TestServedOrgAnOutageIsTheEnforced503ForAnotherOrgAndTheLegacyAnswerForNoTokenOrg(t *testing.T) {
+	row := servedOrgCensusRow{"GET /api/v1/admin/orgs/{org_id}/members", Admin, false}
+	namespace := servedOrgNamespace(t, row.pattern)
+	pdp := newTestPDP(t, allowAll)
+	enforcer := servedOrgEnforcer(t, pdp, namespace)
+	pdp.srv.Close()
+	got := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin, adminOf: []string{memberOrg}, enforcer: enforcer}, memberOrg)
+	if got.status != http.StatusServiceUnavailable {
+		t.Errorf("another org, PDP dead: %d %q, want the enforced 503", got.status, got.body)
+	}
+	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
+	legacy := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg}, ownOrg)
+	got = servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: enforcer}, ownOrg)
+	if got.status != legacy.status || got.body != legacy.body {
+		t.Errorf("no token org, PDP dead: %d %q, want the legacy %d %q", got.status, got.body, legacy.status, legacy.body)
+	}
+}

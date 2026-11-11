@@ -179,7 +179,32 @@ func (e *Enforcer) decides(pattern string) (namespace string, ok bool) {
 	return row.Namespace, true
 }
 
+// decide is decideOnce plus one production-level (Info) log line for a request that serves another organization than the
+// token's, after the verdict: the route, the namespace, the organization the decision point was asked about, the organization
+// the request names and the outcome. The named organization is request input and is logged quoted, never used.
 func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerdict {
+	verdict := e.decideOnce(ctx, o)
+	if e == nil || o.orgID == "" || o.served.against(o.orgID) != servedOrgOther {
+		return verdict
+	}
+	outcome := ""
+	switch verdict {
+	case enforceAllow:
+		outcome = enforceOutcomeAllow
+	case enforceDeny, enforceDenyNoOrg:
+		outcome = enforceOutcomeDeny
+	case enforceUnavailable, enforceNoDecisionPoint:
+		outcome = enforceOutcomeErrorDeny
+	default:
+		return verdict
+	}
+	e.logger.InfoContext(ctx, "api enforcement: a request that serves another organization than the token's was decided on the token organization",
+		slog.String("route", o.pattern), slog.String("namespace", e.rows[o.pattern].Namespace),
+		slog.String("decided_org", strings.ToLower(o.orgID)), slog.String("served_org", o.served.raw), slog.String("outcome", outcome))
+	return verdict
+}
+
+func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforceVerdict {
 	if e == nil {
 		return enforceNotCovered
 	}
@@ -215,9 +240,6 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 				slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 			return enforceLegacy
 		}
-		e.logger.DebugContext(ctx, "api enforcement: the request serves another organization than the token's, the decision point judges the token organization",
-			slog.String("route", o.pattern), slog.String("namespace", row.Namespace),
-			slog.String("decided_org", strings.ToLower(o.orgID)), slog.String("served_org", o.served.raw))
 	}
 	org := strings.ToLower(o.orgID)
 	if reason := unjudgedReason(o, row, org); reason != "" {

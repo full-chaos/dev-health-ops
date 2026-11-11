@@ -228,3 +228,51 @@ func TestPostgresEntitlementStoreLookupMapsADecisionReadFailureToUnavailable(t *
 		t.Fatalf("GET entitlement with the decision unreadable = %d %q, want 503 {\"detail\":\"Service unavailable\"}", response.StatusCode, raw)
 	}
 }
+
+// E2: an organization whose row has is_active false is not found and not gone: Lookup answers the disabled
+// refusal, never a decision, whichever writer set the column; set back to true, it answers its decision again.
+func TestPostgresEntitlementStoreLookupRefusesADisabledOrganization(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	schemaFor(ctx, t, pool)
+	store := PostgresEntitlementStore{Pool: pool, Now: func() time.Time { return time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC) }}
+	orgID := uuid.NewString()
+	pgseed.Org(ctx, t, pool, orgID, "community")
+	if _, err := store.Lookup(ctx, orgID); err != nil {
+		t.Fatalf("active org: %v, want its decision", err)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE organizations SET is_active = false WHERE id = $1::uuid`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Lookup(ctx, orgID)
+	if !errors.Is(err, ErrOrgNotFound) || errors.Is(err, ErrOrgUnknown) {
+		t.Fatalf("disabled org: %+v, %v; want the not-found refusal that is not the gone one", got, err)
+	}
+	if got != (Entitlement{}) {
+		t.Fatalf("disabled org answered a decision: %+v", got)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE organizations SET is_active = true WHERE id = $1::uuid`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Lookup(ctx, orgID); err != nil {
+		t.Fatalf("reactivated org: %v, want its decision", err)
+	}
+}

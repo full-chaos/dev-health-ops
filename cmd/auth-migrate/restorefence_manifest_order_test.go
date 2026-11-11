@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/keyrotation"
 	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -69,4 +70,57 @@ func runExecNoOpener(t *testing.T, args ...string) (int, string, string) {
 	var out, errb bytes.Buffer
 	rc := executeRestoreFence(context.Background(), args, lookup, &out, &errb)
 	return rc, out.String(), errb.String()
+}
+
+func writeCurrentManifest(t *testing.T) (string, restorefence.Manifest) {
+	t.Helper()
+	m := restorefence.Manifest{Version: restorefence.ManifestVersion, SourceTimeline: 2, Floors: []restorefence.Floor{}, Sections: []restorefence.Section{}}
+	if err := m.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := m.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "m.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path, m
+}
+
+// A current manifest still reaches the store: it is opened once, the role is checked, and Apply gets the parsed
+// manifest.
+func TestApplyOfACurrentManifestOpensTheStoreOnceAndPassesIt(t *testing.T) {
+	path, m := writeCurrentManifest(t)
+	store := &stubStore{timeline: 2}
+	opened := 0
+	prev := openRestoreFenceStore
+	t.Cleanup(func() { openRestoreFenceStore = prev })
+	openRestoreFenceStore = func(context.Context, string, io.Writer) (restoreFenceStore, error) {
+		opened++
+		return store, nil
+	}
+	rc, out, errOut := runExecNoOpener(t, "apply", "-manifest", path)
+	if rc != 0 || opened != 1 || store.applied == nil || store.applied.SHA256 != m.SHA256 {
+		t.Fatalf("rc %d, opened %d, applied %+v, stdout %q, stderr %q", rc, opened, store.applied, out, errOut)
+	}
+	if strings.Join(store.calls, ",") != "role,apply" {
+		t.Errorf("store calls %v: want the role check first, then apply", store.calls)
+	}
+}
+
+// Parsing the manifest first does not skip the runtime-role guard: a good manifest run as the runtime role is
+// refused, and Apply is never called.
+func TestApplyOfAGoodManifestAsTheRuntimeRoleIsStillRefused(t *testing.T) {
+	path, _ := writeCurrentManifest(t)
+	store := &stubStore{roleErr: keyrotation.ErrRuntimeRole}
+	rc, out, errOut := runExec(t, store, nil, "apply", "-manifest", path, "-apply")
+	if rc != 1 || !strings.Contains(errOut, "connects as the runtime role") || store.applied != nil {
+		t.Fatalf("rc %d, applied %+v, stderr %q", rc, store.applied, errOut)
+	}
+	if strings.Join(store.calls, ",") != "role" {
+		t.Errorf("store calls %v: want only the role check", store.calls)
+	}
+	noSecret(t, out, errOut)
 }

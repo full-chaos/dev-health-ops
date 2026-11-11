@@ -256,10 +256,11 @@ func TestABlankPresentACRRevokeSetIsUnusableNeverUnset(t *testing.T) {
 			}
 			route, org := acrRevokers(func(name string) (string, bool) { v, ok := env[name]; return v, ok }, logger)
 			if route != nil || org == nil {
-				t.Fatalf("present %q %v: route %v org %v, want nil and a failing revoker", blank, present, route, org)
+				t.Errorf("present %q %v: route %v org %v, want nil and a failing revoker", blank, present, route, org)
+				continue
 			}
 			if _, err := org.RevokeOrganization(context.Background(), "0b6f3a52-8c1e-4d7a-9a4e-3f2d1c0b9e87", "actor", acrrevoke.ReasonOrganizationDisabled); !errors.Is(err, acrrevoke.ErrClientConfigInvalid) {
-				t.Fatalf("present %q %v: %v, want ErrClientConfigInvalid", blank, present, err)
+				t.Errorf("present %q %v: %v, want ErrClientConfigInvalid", blank, present, err)
 			}
 		}
 	}

@@ -26,10 +26,11 @@ func TestOrgsDeleteReadsABlankPresentACRRevokeSetAsAConfigurationError(t *testin
 		var stderr bytes.Buffer
 		config, _, ok := deleteConfigFrom(cli.Env{Lookup: func(name string) (string, bool) { v, set := env[name]; return v, set }, Stderr: &stderr}, "")
 		if ok || config.ACROrgRevoker != nil {
-			t.Fatalf("present blank %v: config accepted (revoker %v), want a configuration error", present, config.ACROrgRevoker)
+			t.Errorf("present blank %v: config accepted (revoker %v), want a configuration error", present, config.ACROrgRevoker)
+			continue
 		}
 		if !strings.Contains(stderr.String(), "configuration error") || !strings.Contains(stderr.String(), "ACR_REVOKE_") {
-			t.Fatalf("present blank %v: stderr %q, want a configuration error naming the variable", present, stderr.String())
+			t.Errorf("present blank %v: stderr %q, want a configuration error naming the variable", present, stderr.String())
 		}
 	}
 	var stderr bytes.Buffer

@@ -6,8 +6,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -138,3 +140,42 @@ var (
 	_ Suspender   = (*Client)(nil)
 	_ StateReader = (*Client)(nil)
 )
+
+// CHAOS-13575: a 429 on the state read is ErrRateLimited with its Retry-After, and still ErrRefused (so the PATCH
+// callers keep their answer); no other 4xx is ErrRateLimited.
+func TestStateA429IsRateLimitedAndStillRefused(t *testing.T) {
+	org := uuid.New()
+	for name, tc := range map[string]struct {
+		status     int
+		retryAfter string
+		limited    bool
+		wait       time.Duration
+	}{
+		"429 with Retry-After": {429, "3", true, 3 * time.Second},
+		"429 without":          {429, "", true, 0},
+		"429 http-date":        {429, "Wed, 11 Nov 2026 15:00:00 GMT", true, 0},
+		"403 with Retry-After": {403, "3", false, 0},
+		"404":                  {404, "", false, 0},
+	} {
+		client, _ := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			if tc.retryAfter != "" {
+				w.Header().Set("Retry-After", tc.retryAfter)
+			}
+			w.WriteHeader(tc.status)
+		})
+		_, err := client.State(context.Background(), org)
+		if !errors.Is(err, ErrRefused) || errors.Is(err, ErrUnavailable) {
+			t.Fatalf("%s: err = %v, want ErrRefused", name, err)
+		}
+		var limited *RateLimited
+		if got := errors.As(err, &limited); got != tc.limited || errors.Is(err, ErrRateLimited) != tc.limited {
+			t.Fatalf("%s: err = %v, rate limited = %v, want %v", name, err, got, tc.limited)
+		}
+		if tc.limited && limited.RetryAfter != tc.wait {
+			t.Fatalf("%s: RetryAfter = %v, want %v", name, limited.RetryAfter, tc.wait)
+		}
+		if want := "status " + strconv.Itoa(tc.status); !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: err = %v, want it to name %q", name, err, want)
+		}
+	}
+}

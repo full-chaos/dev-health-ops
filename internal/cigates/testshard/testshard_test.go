@@ -472,18 +472,14 @@ func assertCensusSplitOverTheShards(t *testing.T, census string) {
 		}
 	}
 	var got []string
+	// One all-legs run gives every leg's rows (TestTheAllLegsFormsPrintEachLegsOwnOutput holds it equal to each leg's own run).
+	_, parts := allLegs(t, []string{"GO_RACE_EXCLUDED_TESTS=" + census}, "race-excluded-shard-plan", shardCount)
 	for k := 1; k <= shardCount; k++ {
-		out, errs, err := checkGo(t, []string{"GO_RACE_EXCLUDED_TESTS=" + census}, "race-excluded-shard-plan", fmt.Sprint(k), fmt.Sprint(shardCount))
-		if err != nil {
-			t.Fatalf("race-excluded-shard-plan %d %d: %v\n%s", k, shardCount, err, errs)
-		}
-		var rows []string
-		for _, l := range strings.Split(out, "\n") {
+		for _, l := range strings.Split(parts[k], "\n") {
 			if strings.Count(l, "\t") == 1 {
-				rows = append(rows, l)
+				got = append(got, l)
 			}
 		}
-		got = append(got, rows...)
 	}
 	sort.Strings(got)
 	sort.Strings(want)

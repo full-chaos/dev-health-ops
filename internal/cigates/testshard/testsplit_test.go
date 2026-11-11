@@ -1,10 +1,8 @@
 package testshard_test
 
 import (
-	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -38,41 +36,29 @@ func TestEverySplitTestNameRunsInExactlyOneTestLeg(t *testing.T) {
 	if len(splits) == 0 {
 		t.Skip("ci/go_test_splits.tsv splits no package")
 	}
-	var mu sync.Mutex
 	runs := map[string][]string{}
 	legs := map[string][]int{}
-	var wg sync.WaitGroup
+	// One all-legs run gives every leg's names (TestTheAllLegsFormsPrintEachLegsOwnOutput holds it equal to each leg's own run).
+	_, parts := allLegs(t, nil, "test-shard-split-list", shardCount)
 	for k := 1; k <= shardCount; k++ {
-		wg.Add(1)
-		go func(k int) {
-			defer wg.Done()
-			out, errs, err := checkGo(t, nil, "test-shard-split-list", fmt.Sprint(k), fmt.Sprint(shardCount))
-			if err != nil {
-				t.Errorf("test-shard-split-list %d %d: %v\n%s", k, shardCount, err, errs)
-				return
+		seen := map[string]bool{}
+		for _, l := range strings.Split(parts[k], "\n") {
+			rest, ok := strings.CutPrefix(l, "TEST-SPLIT-RUN ")
+			if !ok {
+				continue
 			}
-			mu.Lock()
-			defer mu.Unlock()
-			seen := map[string]bool{}
-			for _, l := range strings.Split(out, "\n") {
-				rest, ok := strings.CutPrefix(l, "TEST-SPLIT-RUN ")
-				if !ok {
-					continue
-				}
-				key, name, ok := strings.Cut(rest, " ")
-				if !ok {
-					t.Errorf("leg %d: malformed line %q", k, l)
-					continue
-				}
-				runs[key] = append(runs[key], name)
-				if !seen[key] {
-					seen[key] = true
-					legs[key] = append(legs[key], k)
-				}
+			key, name, ok := strings.Cut(rest, " ")
+			if !ok {
+				t.Errorf("leg %d: malformed line %q", k, l)
+				continue
 			}
-		}(k)
+			runs[key] = append(runs[key], name)
+			if !seen[key] {
+				seen[key] = true
+				legs[key] = append(legs[key], k)
+			}
+		}
 	}
-	wg.Wait()
 	if t.Failed() {
 		return
 	}

@@ -79,8 +79,26 @@ func partitionDefects(t *testing.T, verb string, count int) []string {
 		t.Fatalf("%s 1 1: only %d rows", verb, len(whole))
 	}
 	seen := map[string]int{}
+	// The test legs come from one all-legs plan (every leg still checked); race-shard-plan has no all form.
+	var legs map[int][]string
+	if verb == "test-shard-plan" {
+		legs = map[int][]string{}
+		_, parts := allLegs(t, nil, verb, count)
+		for k, part := range parts {
+			for _, l := range strings.Split(part, "\n") {
+				if strings.Count(l, "\t") == 2 {
+					legs[k] = append(legs[k], l)
+				}
+			}
+		}
+	}
 	for k := 1; k <= count; k++ {
-		rows := planKeys(t, verb, k, count)
+		var rows []string
+		if legs != nil {
+			rows = legs[k]
+		} else {
+			rows = planKeys(t, verb, k, count)
+		}
 		if len(rows) == 0 {
 			return []string{fmt.Sprintf("%s %d %d is empty", verb, k, count)}
 		}

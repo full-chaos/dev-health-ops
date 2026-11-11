@@ -442,6 +442,10 @@ usage() {
          Print the rows of ci/race_excluded_tests.tsv that the SHARD-th of COUNT
          test legs checks without -race: the rows whose package is in the plan of that
          shard (every row is checked in exactly one leg).
+         SHARD `all` (test-shard-plan, test-shard-split-list and
+         race-excluded-shard-plan) prints, for each SHARD of 1..COUNT, a
+         `==> VERB SHARD COUNT` line and the output of that shard, listing each
+         module and split package once.
   race-excluded-receipts JSON...
          Read the receipt of every row of ci/race_excluded_tests.tsv from go test
          -json files: exactly one pass event per row, and a missing, skipped,
@@ -743,7 +747,7 @@ race_excluded_rows() {
   [ "${#rows[@]}" -gt 0 ] || die "ci/race_excluded_tests.tsv lists no test: nothing would be measured"
   if [ -n "${shard}" ]; then
     check_test_shard_args "${shard}" "${shard_count}"
-    census_assert_listed "$(printf '%s\n' "${rows[@]}")"
+    test_leg_listed "census-listed|${list}" census_assert_listed "$(printf '%s\n' "${rows[@]}")"
     plan="$(check_test_shard_plan "${shard}" "${shard_count}")" || exit 2
     plan_keys="$(printf '%s\n' "${plan}" | awk -F'\t' '$1 == "." && NF == 3 { print $3 }')"
     # A split package (CHAOS-13520) is in several shards: its row belongs to the shard whose part runs the row's test.
@@ -759,8 +763,8 @@ race_excluded_rows() {
 # stale row, or a directory `go list` omits (testdata, no buildable file), is in no shard plan, so no shard would ever check it.
 census_assert_listed() {
   local census_rows="$1" modpath all row package
-  modpath="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed"
-  all="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./...)" || die "go list failed"
+  modpath="$(test_leg_listed "go-list-m|." module_go . list -m)" || die "go list -m failed"
+  all="$(test_leg_listed "go-list-all|." module_go . list -mod=readonly -f '{{.ImportPath}}' ./...)" || die "go list failed"
   while IFS= read -r row; do
     [ -n "${row}" ] || continue
     package="${row%%$'\t'*}"
@@ -1104,8 +1108,8 @@ check_test_shard_plan() {
   check_test_shard_args "${shard}" "${count}"
   load_quality_selection
   for module_dir in "${MODULE_DIRS[@]}"; do
-    modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed in ${module_dir}"
-    listing="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./... \
+    modpath="$(test_leg_listed "go-list-m|${module_dir}" module_go "${module_dir}" list -m)" || die "go list -m failed in ${module_dir}"
+    listing="$(test_leg_listed "go-list-all|${module_dir}" module_go "${module_dir}" list -mod=readonly -f '{{.ImportPath}}' ./... \
       | quality_filter "${module_dir}" "${modpath}" \
       | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" \
           -v splits="${GO_TEST_SPLITS}" \
@@ -1290,6 +1294,49 @@ leg_events_file() {
   trap remove_leg_events_tmp EXIT
 }
 
+# test_leg_listed KEY COMMAND... (CHAOS-13520): the output of COMMAND. While TEST_LEG_LIST_CACHE names a directory (the
+# all-legs forms of test_legs_all), the output of the first call with KEY is kept there and every later call with KEY reads
+# it, so one all-legs run lists each module and each split package once instead of once per leg.
+test_leg_listed() {
+  local key="$1" file
+  shift
+  if [ -z "${TEST_LEG_LIST_CACHE:-}" ]; then
+    "$@"
+    return
+  fi
+  file="${TEST_LEG_LIST_CACHE}/$(printf '%s' "${key}" | sha256sum | cut -c1-32)"
+  if [ ! -f "${file}" ]; then
+    "$@" > "${file}.$$" || { rm -f -- "${file}.$$"; return 1; }
+    mv -f -- "${file}.$$" "${file}"
+  fi
+  cat -- "${file}"
+}
+
+# module_go MODULE ARG...: `go ARG...` in MODULE (a directory below the root), with the GO_ENV_OFF environment and no workspace.
+module_go() {
+  local module_dir="$1"
+  shift
+  (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go "$@")
+}
+
+# test_legs_all FUNCTION VERB COUNT (CHAOS-13520): `VERB all COUNT`: for each SHARD of 1..COUNT one "==> VERB SHARD COUNT" line,
+# then exactly what `VERB SHARD COUNT` prints, from one listing of each module and split package (test_leg_listed).
+test_legs_all() {
+  local fn="$1" verb="$2" count="$3" shard rc=0
+  case "${count}" in ""|*[!0-9]*) die "test COUNT must be a positive integer, got '${count}'" ;; esac
+  [ "${count}" -ge 1 ] || die "test COUNT must be a positive integer, got '${count}'"
+  local TEST_LEG_LIST_CACHE
+  TEST_LEG_LIST_CACHE="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-test-legs.XXXXXX")" || die "no temp directory for ${verb} all"
+  (
+    for ((shard = 1; shard <= count; shard++)); do
+      printf '==> %s %d %d\n' "${verb}" "${shard}" "${count}"
+      "${fn}" "${shard}" "${count}" || exit 2
+    done
+  ) || rc=$?
+  rm -rf -- "${TEST_LEG_LIST_CACHE}"
+  [ "${rc}" -eq 0 ] || exit "${rc}"
+}
+
 # test_split_part_names MODULE PKG PART PARTS [GO FLAG...] (CHAOS-13520): the test names of part PART of PARTS of the split package
 # PKG: every name `go test -list` reports for the package (the leg's own build: -mod=readonly -trimpath plus the GO FLAGs) that go test can run
 # (Test*, Example*, Fuzz*), sorted (C locale), name i (1-based) in part ((i - 1) mod PARTS) + 1. A new test joins a part with
@@ -1297,7 +1344,8 @@ leg_events_file() {
 test_split_part_names() {
   local module_dir="$1" pkg="$2" part="$3" parts="$4" listing names count
   shift 4
-  listing="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} "$@" -list '.*' "${pkg}")" \
+  listing="$(test_leg_listed "go-test-list|${module_dir}|${pkg}|${MERGE_GROUP_FRESH:+fresh}|$*" \
+    module_go "${module_dir}" test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} "$@" -list '.*' "${pkg}")" \
     || die "go test -list failed for split package ${pkg}"
   names="$(printf '%s\n' "${listing}" | grep -E '^(Test|Example|Fuzz)[^[:space:]]*$' | LC_ALL=C sort -u || true)"
   [ -n "${names}" ] || die "go test -list reported no test of split package ${pkg}"
@@ -5986,15 +6034,15 @@ case "${1:-all}" in
     ;;
   race-excluded-shard-plan)
     [ "$#" -eq 3 ] || die "race-excluded-shard-plan accepts SHARD COUNT"
-    race_excluded_rows "$2" "$3"
+    if [ "$2" = all ]; then test_legs_all race_excluded_rows race-excluded-shard-plan "$3"; else race_excluded_rows "$2" "$3"; fi
     ;;
   test-shard-plan)
     [ "$#" -eq 3 ] || die "test-shard-plan accepts SHARD COUNT"
-    check_test_shard_plan "$2" "$3"
+    if [ "$2" = all ]; then test_legs_all check_test_shard_plan test-shard-plan "$3"; else check_test_shard_plan "$2" "$3"; fi
     ;;
   test-shard-split-list)
     [ "$#" -eq 3 ] || die "test-shard-split-list accepts SHARD COUNT"
-    check_test_shard_split_list "$2" "$3"
+    if [ "$2" = all ]; then test_legs_all check_test_shard_split_list test-shard-split-list "$3"; else check_test_shard_split_list "$2" "$3"; fi
     ;;
   race-shard-plan)
     [ "$#" -eq 3 ] || die "race-shard-plan accepts SHARD COUNT"

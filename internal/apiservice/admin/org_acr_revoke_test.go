@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrlisting"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrrevoke"
@@ -390,5 +391,36 @@ func TestOperatorDeleteOrgRevokesAsTheOperatorAndRefusesWithTheRuledText(t *test
 	var detail struct{ Detail string }
 	if json.Unmarshal([]byte(wantDeleteACRRevokeBody), &detail) != nil || detail.Detail != orgDeletionACRRevokeDetail {
 		t.Fatal("the pinned body is not the detail")
+	}
+}
+
+// D5/D6: with the org-provisioning switch on, the stored state is auth-service's. A PATCH true that auth keeps
+// suspended stores is_active false, and a PATCH false that auth keeps active stores true: neither is a stored
+// disable, so neither calls acr.
+func TestPatchWithTheSwitchOnRevokesOnlyAStoredDisable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body   string
+		active bool
+		state  []orgreactivate.State
+		stored bool
+	}{
+		"reactivation auth keeps suspended": {`{"is_active": true, "name": "Renamed"}`, false,
+			[]orgreactivate.State{{Status: "suspended", Revision: 1}, {Status: "suspended", Revision: 3}}, false},
+		"disable auth keeps active": {`{"is_active": false, "name": "Renamed"}`, true,
+			[]orgreactivate.State{{Status: "active", Revision: 1}, {Status: "active", Revision: 3}}, true},
+	} {
+		log := &orderLog{}
+		db := &lockDB{log: log, active: tc.active}
+		var logs bytes.Buffer
+		h := lockHandlers(db, &fakeLifecycle{log: log}, &fakeAuthState{log: log, seq: tc.state}, &logs)
+		revoker := &recordingOrgRevoker{log: log}
+		h.acrOrgRevoker = revoker
+		code, body := patchOrg(h, tc.body)
+		if got := answeredIsActive(t, code, body); got != tc.stored {
+			t.Fatalf("%s: answer is_active %v, want %v", name, got, tc.stored)
+		}
+		if len(revoker.calls) != 0 {
+			t.Fatalf("%s: acr calls %+v, want none: no disable was stored", name, revoker.calls)
+		}
 	}
 }

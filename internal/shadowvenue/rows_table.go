@@ -150,12 +150,12 @@ C2	GET	/api/v1/admin/integrations	A	no	-	drift-S	mismatch	/api/v1/admin/integrat
 136	GET	/api/v1/admin/llm-settings	A	no	-	-	match	/api/v1/admin/llm-settings	-
 137	PUT	/api/v1/admin/llm-settings	A	no	-	-	match	/api/v1/admin/llm-settings	{}
 138	GET	/api/v1/admin/llm-settings/budget	A	no	-	-	match	/api/v1/admin/llm-settings/budget	-
-139	GET	/api/v1/admin/llm-settings/models	A	no	-	-	match	/api/v1/admin/llm-settings/models	-
+139	GET	/api/v1/admin/llm-settings/models	E	no	llm	-	match	/api/v1/admin/llm-settings/models	-
 140	GET	/api/v1/admin/llm-settings/own-model	A	no	-	-	match	/api/v1/admin/llm-settings/own-model	-
 141	PUT	/api/v1/admin/llm-settings/own-model	A	no	-	-	match	/api/v1/admin/llm-settings/own-model	{}
 142	GET	/api/v1/admin/llm-settings/prompt-cache	A	no	-	-	match	/api/v1/admin/llm-settings/prompt-cache	-
 143	PUT	/api/v1/admin/llm-settings/prompt-cache	A	no	-	-	match	/api/v1/admin/llm-settings/prompt-cache	{}
-144	POST	/api/v1/admin/llm-settings/readiness	A	no	-	-	match	/api/v1/admin/llm-settings/readiness	{}
+144	POST	/api/v1/admin/llm-settings/readiness	E	no	llm	-	match	/api/v1/admin/llm-settings/readiness	{}
 145	GET	/api/v1/admin/llm-settings/service-model	A	no	-	-	match	/api/v1/admin/llm-settings/service-model	-
 146	PUT	/api/v1/admin/llm-settings/service-model	A	no	-	-	match	/api/v1/admin/llm-settings/service-model	{}
 147	GET	/api/v1/admin/llm-settings/spend	A	no	-	-	match	/api/v1/admin/llm-settings/spend	-

@@ -137,7 +137,7 @@ func TestDefaultRowsExternalRowsActInOrgE(t *testing.T) {
 			state = append(state, row.ID)
 		}
 	}
-	if len(external) != 18 || strings.Join(state, ",") != "34,37" {
+	if len(external) != 20 || strings.Join(state, ",") != "34,37" {
 		t.Fatalf("external rows %v, state rows %v", external, state)
 	}
 	for key := range NoOutboundRows {

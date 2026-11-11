@@ -36,11 +36,11 @@ func classed(t *testing.T) []Row {
 }
 
 // The reviewer's form: C1 or C2 moved onto an external or destructive route is refused at plan (CheckRows and the
-// library MakePlan) and voids both judges, for all 48 combinations; a control stays on a plain route.
+// library MakePlan) and voids both judges, for all 52 combinations; a control stays on a plain route.
 func TestControlRowsStayOnPlainRoutes(t *testing.T) {
 	targets := classed(t)
-	if len(targets) != 24 {
-		t.Fatalf("%d external or destructive rows, want 24", len(targets))
+	if len(targets) != 26 {
+		t.Fatalf("%d external or destructive rows, want 26", len(targets))
 	}
 	venue, frozen, _, _ := testPoolVenue(t)
 	combos := 0
@@ -67,8 +67,8 @@ func TestControlRowsStayOnPlainRoutes(t *testing.T) {
 			}
 		}
 	}
-	if combos != 48 {
-		t.Fatalf("%d combinations, want 48", combos)
+	if combos != 52 {
+		t.Fatalf("%d combinations, want 52", combos)
 	}
 }
 
@@ -108,8 +108,8 @@ func TestAControlCarryingAnExternalClassIsRefused(t *testing.T) {
 			}
 		}
 	}
-	if n != 36 {
-		t.Fatalf("%d combinations, want 36 (18 external routes x 2 controls)", n)
+	if n != 40 {
+		t.Fatalf("%d combinations, want 40 (20 external routes x 2 controls)", n)
 	}
 }
 

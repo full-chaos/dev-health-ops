@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
@@ -781,6 +783,12 @@ esac
 	writeExec(t, filepath.Join(fake, "curl"), `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_STATE/curl.calls"
 case "$*" in
+  *https://localhost:9443/saml/cert*)
+    [ ! -f "$FAKE_STATE/saml-empty" ] || exit 0
+    if [ -f "$FAKE_STATE/saml-non-pem" ]; then printf 'not a certificate\n'; else cat "$FAKE_BIN/saml-cert.pem"; fi
+    exit 0 ;;
+esac
+case "$*" in
   *https://api.github.com/*) name=providerstub ;;
   *https://localhost:9443/*) name=idpstub ;;
   *) name=auth-service ;;
@@ -797,7 +805,15 @@ case "$*" in *%{http_code}*) printf '%s' "$code" ;; esac
 		t.Fatal(err)
 	}
 	writeExec(t, filepath.Join(fake, "sleep"), "#!/bin/sh\n[ \"$1\" != 1 ] || set -- 0.01\nexec '"+sleep+"' \"$@\"\n", 0o755)
-	writeExec(t, filepath.Join(fake, "openssl"), "#!/bin/sh\n[ \"$*\" = 'rand -base64 32' ] || exit 2\nprintf 'new-state-key+test/==\\n'\n", 0o755)
+	openssl, err := exec.LookPath("openssl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := exec.Command(openssl, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", filepath.Join(fake, "saml.key"), "-out", filepath.Join(fake, "saml-cert.pem"), "-subj", "/CN=fake-saml", "-days", "1")
+	if err := cert.Run(); err != nil {
+		t.Fatal("cannot generate fake SAML certificate")
+	}
+	writeExec(t, filepath.Join(fake, "openssl"), "#!/bin/sh\nif [ \"$1\" = x509 ]; then exec '"+openssl+"' \"$@\"; fi\n[ \"$*\" = 'rand -base64 32' ] || exit 2\nprintf 'new-state-key+test/==\\n'\n", 0o755)
 	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "GITHUB_ACTIONS=true"}
 	run := func(args ...string) (string, error) {
 		t.Helper()
@@ -1212,6 +1228,15 @@ func TestLiveE2ESMTPFakeProcess(t *testing.T) {
 		os.Exit(2)
 	}
 	switch args[1] {
+	case "mint-license":
+		if len(args) != 4 {
+			os.Exit(2)
+		}
+		for path, value := range map[string]string{args[2]: "fake-license-public", args[3]: "fake-license-value"} {
+			if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+				os.Exit(1)
+			}
+		}
 	case "smtp-sink":
 		if len(args) != 5 || args[2] != "127.0.0.1:0" {
 			os.Exit(2)
@@ -1488,6 +1513,296 @@ func TestLiveE2EMailTokenCallersCaptureWithoutTracing(t *testing.T) {
 	t.Run("captured", func(t *testing.T) {
 		if unsafeMailTokenCaller("token=$(bash ci/live_e2e_auth_stack.sh mail-token STATE a@example.test reset)\n") {
 			t.Fatal("safe capture rejected")
+		}
+	})
+}
+
+func TestLiveE2ESSOLicenseAndJITAreJobLocal(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	if out, err := run("start-auth", state); err != nil {
+		t.Fatalf("start-auth: %v %s", err, out)
+	}
+	out, err := run("enable-sso", state)
+	if err != nil {
+		t.Fatalf("enable-sso: %v %s", err, out)
+	}
+	if strings.Contains(out, "fake-license-public") || strings.Contains(out, "fake-license-value") {
+		t.Fatal("enable-sso printed a licence or verification key")
+	}
+	if n, _ := startCount(t, state); n != 2 {
+		t.Fatal("enable-sso must restart auth-service once")
+	}
+	goEnv := liveE2ERead(t, filepath.Join(state, "extra/go-api.env"))
+	for _, want := range []string{"LICENSE_PUBLIC_KEY=fake-license-public\n", "LICENSE_KEY=fake-license-value\n"} {
+		if strings.Count(goEnv, want) != 1 {
+			t.Fatal("go-api overlay lacks the licence inputs")
+		}
+	}
+	for _, path := range []string{"auth-service.env", "auth-service.loaded"} {
+		if !strings.Contains(liveE2ERead(t, filepath.Join(state, path)), "AUTH_SSO_JIT=true\n") {
+			t.Fatal("auth-service did not save and load SSO JIT")
+		}
+	}
+	for path, mode := range map[string]os.FileMode{"license": 0o700, "license/public.b64": 0o600, "license/licence.txt": 0o600, "extra/go-api.env": 0o600, "auth-service.env": 0o600} {
+		info, err := os.Stat(filepath.Join(state, path))
+		if err != nil || info.Mode().Perm() != mode {
+			t.Fatalf("incorrect permissions for %s", path)
+		}
+	}
+	out, err = run("with-env", "go-api", state, "--", "bash", "-c", `[ "$LICENSE_PUBLIC_KEY" = fake-license-public ] && [ "$LICENSE_KEY" = fake-license-value ]`)
+	if err != nil || out != "" {
+		t.Fatal("go-api did not receive the licence inputs silently")
+	}
+	out, err = run("print-env", "go-api", state)
+	if err != nil || !strings.Contains(out, "LICENSE_KEY=<redacted>\n") || strings.Contains(out, "fake-license-value") {
+		t.Fatal("print-env exposed the licence")
+	}
+	err = filepath.WalkDir(state, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == filepath.Join(state, "license") {
+			return filepath.SkipDir
+		}
+		if entry.IsDir() || path == filepath.Join(state, "extra/go-api.env") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(raw, []byte("fake-license-public")) || bytes.Contains(raw, []byte("fake-license-value")) {
+			t.Error("licence input persisted outside its job-local files")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("down", state); err != nil {
+		t.Fatalf("down: %v %s", err, out)
+	}
+	if _, err := os.Lstat(filepath.Join(state, "license")); !os.IsNotExist(err) {
+		t.Fatal("down left the licence directory")
+	}
+}
+
+func TestLiveE2EStopIdpThenStartWithNewArguments(t *testing.T) {
+	state, fake, run := liveE2EStubFakes(t)
+	mustRun := func(args ...string) {
+		t.Helper()
+		if out, err := run(args...); err != nil {
+			t.Fatalf("%s: %v %s", args[0], err, out)
+		}
+	}
+	mustRun("enable-sso", state)
+	mustRun("start-idp", state, "-redirect-uri", "http://localhost:3002/first")
+	certPath := filepath.Join(state, "idp/saml-cert.pem")
+	if liveE2ERead(t, certPath) != liveE2ERead(t, filepath.Join(fake, "saml-cert.pem")) {
+		t.Fatal("start-idp did not save the SAML signing certificate")
+	}
+	if info, err := os.Stat(certPath); err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatal("SAML signing certificate must have mode 0644")
+	}
+	if calls := liveE2ERead(t, filepath.Join(state, "curl.calls")); !strings.Contains(calls, "--cacert "+state+"/idp/ca.pem https://localhost:9443/saml/cert") {
+		t.Fatal("SAML cert fetch did not trust the job-local CA")
+	}
+	firstPID := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "idpstub.pid")))
+	mustRun("stop-idp", state)
+	if _, err := os.Stat("/proc/" + firstPID); !os.IsNotExist(err) {
+		t.Fatal("stop-idp returned while the old process still exists")
+	}
+	if _, err := os.Lstat(filepath.Join(state, "idpstub.pid")); !os.IsNotExist(err) {
+		t.Fatal("stop-idp left its pid file")
+	}
+	mustRun("stop-idp", state)
+	mustRun("start-idp", state, "-redirect-uri", "http://localhost:3002/second")
+	secondPID := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "idpstub.pid")))
+	if firstPID == secondPID {
+		t.Fatal("start-idp reused the old process")
+	}
+	calls := liveE2ERead(t, filepath.Join(state, "stub.calls"))
+	for _, uri := range []string{"first", "second"} {
+		if !strings.Contains(calls, "-redirect-uri http://localhost:3002/"+uri+"\n") {
+			t.Fatal("start-idp did not use the new redirect URI")
+		}
+	}
+}
+
+func TestLiveE2EStartIdpRefusesInvalidSAMLCert(t *testing.T) {
+	for _, failure := range []string{"saml-non-pem", "saml-empty"} {
+		t.Run(failure, func(t *testing.T) {
+			state, _, run := liveE2EStubFakes(t)
+			if out, err := run("enable-sso", state); err != nil {
+				t.Fatalf("enable-sso: %v %s", err, out)
+			}
+			writeExec(t, filepath.Join(state, failure), "", 0o600)
+			out, err := run("start-idp", state)
+			if err == nil || out != "live_e2e_auth_stack: idpstub returned no valid SAML PEM certificate\n" {
+				t.Fatal("invalid SAML certificate did not fail with a fixed message")
+			}
+		})
+	}
+}
+
+func TestLiveE2EDownDoesNotFollowLicenseSymlink(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	outside := t.TempDir()
+	writeExec(t, filepath.Join(outside, "keep"), "keep", 0o600)
+	if err := os.Symlink(outside, filepath.Join(state, "license")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("down", state); err != nil {
+		t.Fatalf("down: %v %s", err, out)
+	}
+	if liveE2ERead(t, filepath.Join(outside, "keep")) != "keep" {
+		t.Fatal("down removed a file outside STATE/license")
+	}
+}
+
+var liveSSOAssignment = regexp.MustCompile(`\b(AUTH_SSO_JIT|LICENSE_PUBLIC_KEY|LICENSE_KEY)=("[^"\n]*"|'[^'\n]*'|[^\s;|&]*)`)
+var liveSSOReference = regexp.MustCompile(`^\$\{[^{}]+\}$|^\$\{\{[^{}]+\}\}$`)
+
+func unsafeLiveSSOConfig(raw string) ([]string, error) {
+	var violations []string
+	check := func(name string, value any) {
+		if name != "AUTH_SSO_JIT" && name != "LICENSE_KEY" && name != "LICENSE_PUBLIC_KEY" {
+			return
+		}
+		if ref, ok := value.(map[string]any); ok && name != "AUTH_SSO_JIT" {
+			if _, ok := ref["secretKeyRef"]; ok {
+				return
+			}
+			if from, ok := ref["valueFrom"].(map[string]any); ok {
+				if _, ok := from["secretKeyRef"]; ok {
+					return
+				}
+			}
+		}
+		text := strings.Trim(strings.TrimSpace(fmt.Sprint(value)), `"'`)
+		if name == "AUTH_SSO_JIT" {
+			if strings.EqualFold(text, "true") {
+				violations = append(violations, name)
+			}
+		} else if name == "LICENSE_KEY" || name == "LICENSE_PUBLIC_KEY" {
+			if value != nil && text != "" && !liveSSOReference.MatchString(text) {
+				violations = append(violations, name)
+			}
+		}
+	}
+	var walk func(any)
+	walk = func(value any) {
+		switch node := value.(type) {
+		case map[string]any:
+			for key, child := range node {
+				check(key, child)
+				walk(child)
+			}
+			if name, ok := node["name"].(string); ok {
+				if literal, ok := node["value"]; ok {
+					check(name, literal)
+				}
+			}
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		case string:
+			for _, match := range liveSSOAssignment.FindAllStringSubmatch(node, -1) {
+				check(match[1], match[2])
+			}
+		}
+	}
+	decoder := yaml.NewDecoder(strings.NewReader(raw))
+	for {
+		var document any
+		if err := decoder.Decode(&document); err != nil {
+			if err == io.EOF {
+				return violations, nil
+			}
+			return nil, err
+		}
+		walk(document)
+	}
+}
+
+func TestLiveE2ESSOLicenseAndJITNotInDeploymentConfig(t *testing.T) {
+	root := repoRoot(t)
+	var paths []string
+	for _, pattern := range []string{".github/workflows/*.yml", "ci/bigboy/*.yml", "compose.yml"} {
+		matches, err := filepath.Glob(filepath.Join(root, pattern))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) == 0 {
+			t.Fatalf("configuration scope matched no files: %s", pattern)
+		}
+		paths = append(paths, matches...)
+	}
+	valuesCount := 0
+	err := filepath.WalkDir(filepath.Join(root, "deploy"), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "values") && strings.HasSuffix(entry.Name(), ".yaml") {
+			paths = append(paths, path)
+			valuesCount++
+		}
+		return nil
+	})
+	if err != nil || valuesCount == 0 {
+		t.Fatalf("deploy values scope: files=%d error=%v", valuesCount, err)
+	}
+	for _, path := range paths {
+		violations, err := unsafeLiveSSOConfig(liveE2ERead(t, path))
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		if len(violations) != 0 {
+			t.Errorf("job-local SSO settings in %s: %v", path, violations)
+		}
+	}
+	for name, fixture := range map[string]string{
+		"jit":       "env:\n  AUTH_SSO_JIT: \"true\"\n",
+		"licence":   "env:\n  LICENSE_KEY: inline-test-value\n",
+		"public":    "env:\n  LICENSE_PUBLIC_KEY: inline-test-key\n",
+		"shell":     "run: |\n  LICENSE_KEY=inline-test-value command\n",
+		"named-env": "env:\n  - name: LICENSE_KEY\n    value: inline-test-value\n",
+		"shell-jit": "run: |\n  AUTH_SSO_JIT=true command\n",
+		"boolean":   "env:\n  AUTH_SSO_JIT: true\n",
+	} {
+		t.Run("planted-"+name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fixture.yml")
+			writeExec(t, path, fixture, 0o600)
+			violations, err := unsafeLiveSSOConfig(liveE2ERead(t, path))
+			if err != nil || len(violations) != 1 {
+				t.Fatalf("planted unsafe setting accepted: violations=%v error=%v", violations, err)
+			}
+		})
+	}
+	t.Run("references-and-empty", func(t *testing.T) {
+		fixture := `env:
+  AUTH_SSO_JIT: "false"
+  LICENSE_KEY: ${LICENSE_KEY}
+  LICENSE_PUBLIC_KEY: ""
+secretEnv:
+  - name: LICENSE_KEY
+    valueFrom:
+      secretKeyRef:
+        name: licensing
+        key: licence
+other:
+  LICENSE_PUBLIC_KEY:
+    secretKeyRef:
+      name: licensing
+      key: public
+run: |
+  LICENSE_KEY="${LICENSE_KEY}" command
+  LICENSE_PUBLIC_KEY='${{ secrets.LICENSE_PUBLIC_KEY }}' command
+`
+		violations, err := unsafeLiveSSOConfig(fixture)
+		if err != nil || len(violations) != 0 {
+			t.Fatalf("safe config refused: violations=%v error=%v", violations, err)
 		}
 	})
 }

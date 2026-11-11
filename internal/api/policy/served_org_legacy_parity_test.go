@@ -1,10 +1,13 @@
 package policy
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Product rule 1 (D6773) and CHAOS-10872 S2-parity: with a census row's namespace switched on, a request that serves
@@ -149,5 +152,56 @@ func TestServedOrgAnOutageIsTheEnforced503ForAnotherOrgAndTheLegacyAnswerForNoTo
 	got = servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: enforcer}, ownOrg)
 	if got.status != legacy.status || got.body != legacy.body {
 		t.Errorf("no token org, PDP dead: %d %q, want the legacy %d %q", got.status, got.body, legacy.status, legacy.body)
+	}
+}
+
+// S2-2 (acp condition 3): every decision of a request that serves another organization than the token's writes ONE line at the
+// production level (Info) carrying the organization the decision point was asked about, the organization the request names and
+// the outcome, on allow, deny and an outage alike; a request that names the token organization writes none.
+func TestServedOrgEveryDecisionLogsBothOrganizationsAtInfo(t *testing.T) {
+	row := servedOrgCensusRow{"GET /api/v1/admin/orgs/{org_id}/members", Admin, false}
+	namespace := servedOrgNamespace(t, row.pattern)
+	for _, tc := range []struct {
+		mode, outcome string
+		served        string
+		lines         int
+	}{
+		{"allow", "allow", memberOrg, 1},
+		{"deny", "deny", memberOrg, 1},
+		{"dead", "error_deny", memberOrg, 1},
+		{"allow", "", ownOrg, 0},
+	} {
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		pdp := newTestPDP(t, allowAll)
+		if tc.mode == "deny" {
+			pdp = newTestPDP(t, denyWith("role_lacks_action"))
+		}
+		enforcer, err := NewEnforcer(EnforceConfig{Decider: pdp.client(t), Rows: servedOrgRows(t), Switch: onFor(namespace), Timeout: time.Second, Logger: logger})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.mode == "dead" {
+			pdp.srv.Close()
+		}
+		servedOrgServe(t, row, servedOrgSetup{who: personaAdmin, adminOf: []string{memberOrg}, enforcer: enforcer}, tc.served)
+		var got []string
+		for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			if strings.Contains(line, "decided on the token organization") {
+				got = append(got, line)
+			}
+		}
+		if len(got) != tc.lines {
+			t.Errorf("%s serving %s: %d decision lines %v, want %d", tc.mode, tc.served, len(got), got, tc.lines)
+			continue
+		}
+		if tc.lines == 1 {
+			for _, want := range []string{"level=INFO", "route=\"" + row.pattern + "\"", "namespace=" + namespace, "decided_org=" + ownOrg,
+				"served_org=" + tc.served, "outcome=" + tc.outcome} {
+				if !strings.Contains(got[0], want) {
+					t.Errorf("%s: the line %q lacks %s", tc.mode, got[0], want)
+				}
+			}
+		}
 	}
 }

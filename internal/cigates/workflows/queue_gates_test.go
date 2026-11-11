@@ -163,7 +163,7 @@ func queueGateViolations(t *testing.T, root string) []string {
 		if got := asString(j["if"]); got != g.condition {
 			add("%s:%s: the if must be exactly %q (always(), so a cancelled run reports; pull_request and merge_group only), got %q", g.file, g.job, g.condition, got)
 		}
-		if got := dropReuse(needsList(j)); !reflect.DeepEqual(got, g.needs) {
+		if got := needsList(j); !reflect.DeepEqual(got, g.needs) {
 			add("%s:%s: needs %v, want %v", g.file, g.job, got, g.needs)
 		}
 		var env yamlMap
@@ -290,7 +290,7 @@ func TestQueueGatesPlantedDefects(t *testing.T) {
 		{"go-queue-gate drops a heavy row", []mutation{{goYml, "          GATED_JOB_3: go-container-security|queue-heavy|${{ needs.go-container-security.result }}\n", ""}}, []string{"go-container-security"}},
 		{"go-queue-gate judges a heavy job unconditional", []mutation{{goYml, "go-auth-compose-proof|queue-heavy|", "go-auth-compose-proof|unconditional|"}}, []string{"GATED_JOB rows"}},
 		{"go-queue-gate loses its docs selector", []mutation{{goYml, "CHANGES_CODE: ${{ needs.go-storage-integration-plan.outputs.docs_only == 'true' && 'false' || 'true' }}", "CHANGES_CODE: 'true'"}}, []string{"CHANGES_CODE"}},
-		{"image-queue-gate stops needing go-build", []mutation{{dock, "needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64, ready-reuse]", "needs: [changes, resolve, go-api-tools-build, go-build-dho-arm64, ready-reuse]"}}, []string{"image-queue-gate", "needs"}},
+		{"image-queue-gate stops needing go-build", []mutation{{dock, "needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64]", "needs: [changes, resolve, go-api-tools-build, go-build-dho-arm64]"}}, []string{"image-queue-gate", "needs"}},
 		{"image-queue-gate treats a hotfix label as ci:full on a draft", []mutation{{dock, "(!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'hotfix-image'))", "contains(github.event.pull_request.labels.*.name, 'hotfix-image')"}}, []string{"HEAVY_ON_PR"}},
 		{"image-queue-gate is renamed", []mutation{{dock, "    name: image-queue-gate\n", "    name: images\n"}}, []string{"required context"}},
 		{"live-e2e fan-in loses always()", []mutation{{live, "    name: live-e2e\n    if: always() && ", "    name: live-e2e\n    if: "}}, []string{"live-e2e.yml:live-e2e", "the if must be exactly"}},

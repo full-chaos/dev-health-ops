@@ -48,7 +48,6 @@ const imageHeavyGatePrefix = "(!(github.event_name == 'pull_request' && !contain
 	"(github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) && ("
 
 func withoutDraftGate(v string) string {
-	v = withoutReuse(v)
 	for _, prefix := range []string{draftGatePrefix, goHeavyGatePrefix, imageHeavyGatePrefix} {
 		if strings.HasPrefix(v, prefix) && strings.HasSuffix(v, ")") {
 			return v[len(prefix) : len(v)-1]
@@ -410,7 +409,7 @@ func pilotDefects(doc yamlMap) []string {
 	}
 	ss := pinJob(doc, shard)
 	wantIf := "needs.go-storage-integration-plan.result == 'success' && needs.go-storage-integration-plan.outputs.legs != '0'"
-	if got, has := ss["if"]; has && withoutReuse(asString(got)) != wantIf || strings.Contains(asString(ss["if"]), "SELF_HOSTED_RUNNERS") {
+	if got, has := ss["if"]; has && got != wantIf || strings.Contains(asString(ss["if"]), "SELF_HOSTED_RUNNERS") {
 		add("%s carries an unexpected if %v", shard, ss["if"])
 	}
 	if ss["runs-on"] != "ubuntu-latest" {
@@ -419,7 +418,7 @@ func pilotDefects(doc yamlMap) []string {
 	if _, has := jobsOf(doc)[shardRemoved]; has {
 		add("%s still exists", shardRemoved)
 	}
-	needs := dropReuse(pinNeeds(pinJob(doc, agg)))
+	needs := pinNeeds(pinJob(doc, agg))
 	if len(needs) != 2 || !contains(needs, plan) || !contains(needs, shard) {
 		add("%s must need exactly %s and %s, got %v", agg, plan, shard, needs)
 	}

@@ -216,7 +216,7 @@ func dockerMatrixViolations(t *testing.T, root string) []string {
 		}
 	}
 	for _, job := range []string{"go-build", "go-build-dho-arm64", "go-api-tools-build"} {
-		cond := withoutReuse(asString(pinJob(dock, job)["if"]))
+		cond := strings.TrimSpace(asString(pinJob(dock, job)["if"]))
 		ctx := queueContext("merge_group", "refs/heads/gh-readonly-queue/main/pr-1-abc")
 		if v, err := queueEval(cond, ctx); err != nil || !v.truthy() {
 			add("%s does not run on a merge_group entry (err %v)", job, err)
@@ -232,10 +232,10 @@ func dockerMatrixViolations(t *testing.T, root string) []string {
 	for _, docs := range []string{"false", "true"} {
 		dctx := queueContext("merge_group", "refs/heads/gh-readonly-queue/main/pr-1-abc")
 		dctx["needs.changes.outputs.docs_only"] = docs
-		dv, derr := queueEval(withoutReuse(asString(build["if"])), dctx)
+		dv, derr := queueEval(strings.TrimSpace(asString(build["if"])), dctx)
 		gctx := queueContext("merge_group", "refs/heads/gh-readonly-queue/main/pr-1-abc")
 		gctx["needs.go-storage-integration-plan.outputs.docs_only"] = docs
-		gv, gerr := queueEval(withoutReuse(asString(cb["if"])), gctx)
+		gv, gerr := queueEval(strings.TrimSpace(asString(cb["if"])), gctx)
 		if derr != nil || gerr != nil {
 			add("coverage docs_only=%s: eval errors docker %v go %v", docs, derr, gerr)
 			continue
@@ -282,10 +282,10 @@ func TestDockerImagesGoBuildQueueMatrixPlantedDefects(t *testing.T) {
 			[]mutation{{dockerMatrixDock, "github.event_name == 'merge_group' && '[\"linux/amd64\"]'", "github.event_name != 'release' && '[\"linux/amd64\"]'"}},
 			[]string{"11 publish legs"}},
 		{"image-queue-gate stops needing go-build",
-			[]mutation{{dockerMatrixDock, "needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64, ready-reuse]", "needs: [changes, resolve, go-api-tools-build, go-build-dho-arm64, ready-reuse]"}},
+			[]mutation{{dockerMatrixDock, "needs: [changes, resolve, go-build, go-api-tools-build, go-build-dho-arm64]", "needs: [changes, resolve, go-api-tools-build, go-build-dho-arm64]"}},
 			[]string{"no longer needs go-build"}},
 		{"go.yml go-container-build stops running on a queue entry",
-			[]mutation{{dockerMatrixGo, "    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true'" + reuseClause("go-container") + "\n    name: go-container-build", "    if: github.event_name == 'push'\n    name: go-container-build"}},
+			[]mutation{{dockerMatrixGo, "    if: (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && needs.go-storage-integration-plan.outputs.docs_only != 'true'\n    name: go-container-build", "    if: github.event_name == 'push'\n    name: go-container-build"}},
 			[]string{"go-container-build does not"}},
 		{"go-queue-gate stops judging go-container-build",
 			[]mutation{{dockerMatrixGo, "GATED_JOB_8: go-container-build|queue-heavy|", "GATED_JOB_8: go-container-build|unconditional|"}},

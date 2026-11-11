@@ -29,6 +29,7 @@ Their source is in the `dev-health-go` and `dev-health-web` repositories, not in
 | --- | --- | --- |
 | `POST /v1/authorize` | `authorization_request.v1` | `authorization_decision.v1` |
 | `POST /v1/authorize:batch` | `authorization_batch_request.v1` (1 to 100 requests) | `authorization_batch_response.v1` (one decision per request, each with its zero-based `index`) |
+| `POST /v1/authorize:repositories` | `authorization_request.v1` with `resource` `{type: repository, key: "*", organization_id}` and `acr.context.read` or `acr.evidence.read` | `authorization_decision.v1`: the `acr.credential.issue` decision of the organization, unchanged: an allow carries `repository_scope` `organization` (every repository) or `repository_allowlist` (the principal's own keys, at most 256); more keys is the deny `repository_allowlist_too_large`. Not mounted until its endpoint-profile row lands. |
 
 The caller sends the workload token of its service for the auth-service audience. The request fields, the closed resource types and the decision members are in [authorization decisions and obligations](obligations.md). The OpenAPI document lists the failure statuses 400, 401, 413, 429 and 503. A 503 is also the answer when the decision point could not read the state it needs ([reason codes](reason-codes.md#state-failures-are-not-decisions)). A failure is never a decision document.
 

@@ -58,7 +58,7 @@ func newAdmitFixture(t *testing.T) *admitFixture {
 	callers.verifier = counting
 	routes, err := AuthorizeRoutes(AuthorizeDeps{
 		Callers: callers, References: h.references(), State: h.state, Evaluator: authorization.NewEvaluator(), Audit: h.audit.write,
-		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch),
+		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch, PatternAuthorizeRepositories),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +90,9 @@ func (a *admitFixture) do(handler http.Handler, pattern, bearer string, payload 
 
 func (a *admitFixture) payload(pattern string) []byte {
 	q := a.question("settings.write", "organization", "acme", a.org)
+	if pattern == PatternAuthorizeRepositories {
+		return mustJSON(a.t, a.question("acr.context.read", "repository", "*", a.org))
+	}
 	if pattern == PatternAuthorizeBatch {
 		return mustJSON(a.t, map[string]any{"schema_version": "authorization_batch_request.v1", "requests": []map[string]any{q}})
 	}
@@ -98,7 +101,7 @@ func (a *admitFixture) payload(pattern string) []byte {
 
 // The caller gate runs before the body is read, whatever the framing.
 func TestAuthorizeRefusedCallerReadsNoBodyByte(t *testing.T) {
-	for _, pattern := range []string{PatternAuthorize, PatternAuthorizeBatch} {
+	for _, pattern := range []string{PatternAuthorize, PatternAuthorizeBatch, PatternAuthorizeRepositories} {
 		for _, chunked := range []bool{true, false} {
 			for name, token := range map[string]func(*admitFixture) string{
 				"no bearer": func(*admitFixture) string { return "" },

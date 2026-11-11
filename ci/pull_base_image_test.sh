@@ -12,7 +12,7 @@ mkdir -p "${T}/bin"
 DIGEST="sha256:$(printf 'a%.0s' {1..64})"
 OTHER="sha256:$(printf 'b%.0s' {1..64})"
 cat > "${T}/Dockerfile" <<DF
-ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.3-alpine@${DIGEST}"
+ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.4-alpine@${DIGEST}"
 ARG GO_RUNTIME_IMAGE="gcr.io/distroless/static-debian12:nonroot@${OTHER}"
 FROM \${GO_BUILD_IMAGE} AS build
 DF
@@ -136,7 +136,7 @@ if { [ -n "${TAG1}" ] && [ "${TAG1}" != "${TAG2}" ]; }; then ok "t8 local tag di
 run t9 GITHUB_RUN_ID=777 "${SEEN}"
 if printf '%s\n' "${OUT}" | grep -q '^TAG=.*777'; then ok "t9 tag carries the run id"; else bad "t9 run id"; fi
 
-sed 's/golang:1.27.3-alpine@sha256:a*/golang:9.9@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/' "${T}/Dockerfile" > "${T}/Dockerfile2"
+sed 's/golang:1.27.4-alpine@sha256:a*/golang:9.9@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/' "${T}/Dockerfile" > "${T}/Dockerfile2"
 cp "${T}/Dockerfile2" "${T}/Dockerfile.keep"
 FAKE_DIR="${T}/d.t10"; mkdir -p "${FAKE_DIR}"; FAKE_LOG="${FAKE_DIR}/log"; : > "${FAKE_LOG}"
 C="sha256:$(printf 'c%.0s' {1..64})"

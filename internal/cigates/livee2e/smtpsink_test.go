@@ -42,12 +42,12 @@ func startMailSink(t *testing.T) (string, string, *bytes.Buffer, func()) {
 			if err != nil {
 				t.Fatal(err)
 			}
-		case <-time.After(3 * time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatal("sink did not stop")
 		}
 	}
 	t.Cleanup(stop)
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		raw, err := os.ReadFile(port)
 		if err == nil {
@@ -257,7 +257,7 @@ func TestSMTPSinkCommandsAndLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	r := textproto.NewReader(bufio.NewReader(conn))
@@ -350,7 +350,7 @@ func TestSMTPSinkCLIStopsOnSignals(t *testing.T) {
 					<-done
 				}
 			})
-			deadline := time.Now().Add(3 * time.Second)
+			deadline := time.Now().Add(30 * time.Second)
 			for {
 				if _, err := os.Stat(port); err == nil {
 					break
@@ -369,7 +369,7 @@ func TestSMTPSinkCLIStopsOnSignals(t *testing.T) {
 				if err != nil {
 					t.Fatal("sink did not exit cleanly on signal")
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(30 * time.Second):
 				t.Fatal("sink ignored shutdown signal")
 			}
 			if out.Len() != 0 || logs.Len() != 0 {

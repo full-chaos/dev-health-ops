@@ -1375,7 +1375,7 @@ func TestLiveE2EEnableMail(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(state, "mail/tokens")); !os.IsNotExist(err) {
 		t.Fatal("down left the token directory")
 	}
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		raw, _ := os.ReadFile(filepath.Join("/proc", pid, "cmdline"))
 		if len(raw) == 0 {

@@ -1,6 +1,7 @@
 package authruntime
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -61,6 +62,21 @@ func checkInternalOnlyRoutes(routes []httpapi.Route) error {
 		}
 	}
 	return nil
+}
+
+// warnUnservedInternalOnly logs one WARN per mounted internal-only route when the internal listener is off: the
+// route is then served on no listener. auth-service still starts and readiness does not change (no start refusal for
+// config hygiene).
+func warnUnservedInternalOnly(ctx context.Context, logger *slog.Logger, cfg authconfig.Config, routes []httpapi.Route) {
+	if cfg.InternalAddress != "" {
+		return
+	}
+	for _, route := range routes {
+		if isInternalOnly(route.Method + " " + route.Pattern) {
+			logger.WarnContext(ctx, "auth internal-only route served on no listener: AUTH_SERVICE_INTERNAL_HTTP_ADDR is unset",
+				"route", route.Pattern)
+		}
+	}
 }
 
 // internalServerOptions is the internal listener: the API listener's options over internalRoutes and internalOnlyRoutes, on

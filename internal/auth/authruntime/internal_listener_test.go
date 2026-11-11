@@ -405,3 +405,48 @@ func TestAnOptionalInternalOnlyKeyWithNoRouteStarts(t *testing.T) {
 		t.Fatal("an unregistered required key did not stop startup")
 	}
 }
+
+const unservedInternalOnlyMsg = "auth internal-only route served on no listener: AUTH_SERVICE_INTERNAL_HTTP_ADDR is unset"
+
+// unservedWarnings returns the unserved-route log entries of a JSON log.
+func unservedWarnings(logs string) []map[string]any {
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		var entry map[string]any
+		if json.Unmarshal([]byte(line), &entry) == nil && entry["msg"] == unservedInternalOnlyMsg {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// With AUTH_ACR_EVENTS_WORKLOAD_SUBJECT set and the internal listener off, auth-service starts, logs one WARN that the
+// route is served on no listener, and the API listener answers 404 for it. With the internal listener on, no such line.
+func TestTheAcrEventsRouteWithNoInternalListenerStartsAndWarns(t *testing.T) {
+	var on bytes.Buffer
+	listenerHandlers(t, loadInternalConfig(t, fullInternalEnv(t, "")), slog.New(slog.NewJSONHandler(&on, nil)), nil)
+	if got := unservedWarnings(on.String()); len(got) != 0 {
+		t.Errorf("with the internal listener on, %d unserved-route lines, want 0: %v", len(got), got)
+	}
+	env := fullInternalEnv(t, "")
+	delete(env, internalAddressEnv)
+	cfg := loadInternalConfig(t, env)
+	var logs bytes.Buffer
+	handlers := listenerHandlers(t, cfg, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
+	if _, ok := handlers[internalListenerName]; ok {
+		t.Fatal("configure built an internal listener with AUTH_SERVICE_INTERNAL_HTTP_ADDR unset")
+	}
+	api := mustListener(t, handlers, apiListenerName)
+	for _, method := range probeMethods {
+		if code := probe(api, method, authapi.PatternAcrCredentialEvents); code != http.StatusNotFound {
+			t.Errorf("API listener answered %d for %s %s, want 404", code, method, authapi.PatternAcrCredentialEvents)
+		}
+	}
+	warned := unservedWarnings(logs.String())
+	if len(warned) != 1 {
+		t.Fatalf("%d unserved-route WARN lines, want 1; logs:\n%s", len(warned), logs.String())
+	}
+	if warned[0]["level"] != "WARN" || warned[0]["route"] != authapi.PatternAcrCredentialEvents {
+		t.Errorf("the unserved-route line is %v, want level WARN and route %s", warned[0], authapi.PatternAcrCredentialEvents)
+	}
+}

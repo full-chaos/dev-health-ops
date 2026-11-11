@@ -757,7 +757,7 @@ case "$1" in
   sed) [ "$2" = -i ] && [ "$3" = '/# live-e2e-social/d' ] && [ "$4" = /etc/hosts ] || exit 2
     exec sed -i "$3" "$FAKE_STATE/hosts" ;;
   kill) exec /bin/kill "$2" ;;
-  "$FAKE_STATE/bin/providerstub") exec "$@" ;;
+  bash) exec "$@" ;;
   *) exit 2 ;;
 esac
 `, 0o755)
@@ -784,7 +784,7 @@ pid=$(cat "$FAKE_STATE/$name.pid" 2>/dev/null)
 	}
 	writeExec(t, filepath.Join(fake, "sleep"), "#!/bin/sh\n[ \"$1\" != 1 ] || set -- 0.01\nexec '"+sleep+"' \"$@\"\n", 0o755)
 	writeExec(t, filepath.Join(fake, "openssl"), "#!/bin/sh\n[ \"$*\" = 'rand -base64 32' ] || exit 2\nprintf 'new-state-key+test/==\\n'\n", 0o755)
-	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "GITHUB_ACTIONS=true"}
 	run := func(args ...string) (string, error) {
 		t.Helper()
 		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh")}, args...)...)
@@ -903,6 +903,9 @@ func TestLiveE2EEnableSocialAndSSO(t *testing.T) {
 				t.Fatalf("social hosts entry was not idempotent: %q", hosts)
 			}
 			providerPID := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "providerstub.pid")))
+			if ready := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "providerstub.ready"))); ready != providerPID {
+				t.Fatalf("the pid file holds %q, not the stub's own pid %q", providerPID, ready)
+			}
 			pids := []string{providerPID}
 			for _, name := range []string{"auth-service", "idpstub"} {
 				pids = append(pids, strings.TrimSpace(liveE2ERead(t, filepath.Join(state, name+".pid"))))
@@ -964,10 +967,37 @@ func TestLiveE2ESocialRequiresSudo(t *testing.T) {
 		}
 	}
 	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "enable-social", t.TempDir())
-	cmd.Env = []string{"PATH=" + bin}
+	cmd.Env = []string{"PATH=" + bin, "GITHUB_ACTIONS=true"}
 	out, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "enable-social requires sudo") {
 		t.Fatalf("missing sudo was not explained: %v %s", err, out)
+	}
+}
+
+func TestLiveE2ESocialRefusesOutsideAGitHubRunnerBeforeAnyWrite(t *testing.T) {
+	for _, value := range []string{"", "1", "True", "false", "true "} {
+		t.Run("GITHUB_ACTIONS="+value, func(t *testing.T) {
+			state, fake, _ := liveE2EStubFakes(t)
+			env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+			if value != "" {
+				env = append(env, "GITHUB_ACTIONS="+value)
+			}
+			hostsBefore := liveE2ERead(t, filepath.Join(state, "hosts"))
+			cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "enable-social", state)
+			cmd.Env = env
+			out, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "runs only on a GitHub Actions runner") {
+				t.Fatalf("enable-social was not refused: %v %s", err, out)
+			}
+			if got := liveE2ERead(t, filepath.Join(state, "hosts")); got != hostsBefore {
+				t.Errorf("the hosts file changed: %q", got)
+			}
+			for _, name := range []string{"sudo.calls", "builds", "stub.calls", "providerstub.pid", "extra", "ca-bundle.pem", "bin/providerstub", "social"} {
+				if _, statErr := os.Stat(filepath.Join(state, name)); statErr == nil {
+					t.Errorf("%s exists: the refusal came after a write", name)
+				}
+			}
+		})
 	}
 }
 

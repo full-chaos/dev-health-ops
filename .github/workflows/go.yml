@@ -31,6 +31,7 @@ on:
       - 'ci/**/*.md'
       - 'ci/**/*.sh'
       - 'ci/**/*.py'
+      - 'ci/live_e2e_stub/**'
       - 'cmd/**/*.md'
       - 'cmd/**/*.sh'
       - 'cmd/**/*.py'

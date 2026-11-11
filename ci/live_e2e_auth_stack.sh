@@ -417,6 +417,8 @@ wait_stub() {
 }
 
 enable_social() {
+  # Hard guard, before any write: the verb edits the host /etc/hosts and binds :443 as root, which redirects GitHub for every process on the host.
+  [ "${GITHUB_ACTIONS:-}" = true ] || die "enable-social edits /etc/hosts and binds :443: it runs only on a GitHub Actions runner (GITHUB_ACTIONS=true)"
   command -v sudo >/dev/null 2>&1 || die "enable-social requires sudo for /etc/hosts and port 443"
   STATE="$(cd "$1" && pwd)"
   [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
@@ -430,10 +432,12 @@ enable_social() {
   fi
   (
     cd "${STATE}"
-    nohup sudo "${STATE}/bin/providerstub" serve -fixtures "${ROOT}/ci/live_e2e_stub" \
+    # The root shell writes its own pid and execs the stub, so the pid file holds the stub's pid, not sudo's.
+    # shellcheck disable=SC2016 # the script is the root shell's: $1 and $$ are its own
+    nohup sudo bash -c 'umask 022; echo "$$" >"$1"; shift; exec "$@"' _ "${STATE}/providerstub.pid" \
+      "${STATE}/bin/providerstub" serve -fixtures "${ROOT}/ci/live_e2e_stub" \
       -cert "${STATE}/social/server.pem" -key "${STATE}/social/server.key" \
       -listen 127.0.0.1:443 -admin 127.0.0.1:9091 >"${STATE}/logs/providerstub.log" 2>&1 &
-    echo "$!" >"${STATE}/providerstub.pid"
   )
   wait_stub providerstub https://api.github.com/ "${STATE}/social/ca.pem"
   chmod 600 "${STATE}/auth-service.env"

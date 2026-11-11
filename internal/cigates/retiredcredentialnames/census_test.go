@@ -58,7 +58,7 @@ var waiting = map[string]string{
 const (
 	// history: migration history, retired evidence, refusal and ban cells, and decision records; kept.
 	history = "history"
-	// untilDrop: names a live svc_ row of the internal_service_credentials table; the table drop removes the name.
+	// untilDrop: names a live svc_ credential row; the drop of the service credential table removes the name.
 	untilDrop = "until the drop"
 	// sweep: stale configuration, code or text the sweep removes (go-api's session issuer token mode and its tests).
 	sweep = "sweep"

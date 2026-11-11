@@ -29,7 +29,7 @@ The table below is written by hand. A docs test compares it with the JSON, row b
 | --- | --- | --- | --- |
 | `api` | `platform-operations` | `auth-service` | none |
 | `auth-service` | `platform-operations` | none | none |
-| `acr-api` | `platform-operations` | `auth-service`, `dev-health-api` | none |
+| `acr-api` | `platform-operations` | `auth-service`, `dev-health-api` | `credentials.project` |
 | `web` | `platform-operations` | `auth-service` | none |
 | `query-api` | `platform-operations` | `auth-service` | none |
 
@@ -39,7 +39,8 @@ The table below is written by hand. A docs test compares it with the JSON, row b
   The component that runs each row is in the [workload audit](workload-audit.md).
 - A row with no audience is a registry identity only. The exchange never resolves it: it refuses a request for any audience, and the log line
   and the counter carry the reason `no_audience`.
-- No row has an allowed action today. A token for such a row carries no action.
+- Only `acr-api` has an allowed action: `credentials.project`, for the acr credential events route (`POST /internal/v1/acr/credential-events`).
+  A workload token carries no action claim: the route reads the action from the live row. The action comes from `auth-migrate workloads seed -apply`.
 - The registry has no worker row and no billing row. A row is added when that workload makes a credentialed call.
 - Deployment bindings (trust domain, issuer, namespace, ServiceAccount) differ per environment. They are not in
   the JSON. See [bind a workload](#bind-a-workload).

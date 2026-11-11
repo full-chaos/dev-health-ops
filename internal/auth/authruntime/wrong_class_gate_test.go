@@ -2,6 +2,7 @@ package authruntime
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"go/ast"
@@ -44,9 +45,13 @@ import (
 	tokenpkg "github.com/full-chaos/dev-health-ops/internal/token"
 )
 
-// dialCounter is the auth store's Postgres: a TCP listener that counts every connection and closes it, so each store
-// read is one counted dial that then fails. A dial while no cell runs is late: it is kept, with the cell it followed,
-// and fails the gate; so does a cell whose dials never settle.
+// dialCounter is the auth store's Postgres: a TCP listener that counts every connection a request makes and closes
+// it, so each store read is one counted dial that then fails. A pgx cancel request is not a dial of a request: pgx
+// sends it from a goroutine of its own after a failed connect, at a time the request does not wait for, so it can land
+// after any settle window. It is told by its first packet (cancelRequestCode) and counted apart, never as a dial and
+// never as a late one. Every other connection is counted before it is closed, so the request cannot answer before its
+// dial is counted. A dial while no cell runs is late: it is kept, with the cell it followed, and fails the gate; so
+// does a cell whose dials never settle.
 type dialCounter struct {
 	listener net.Listener
 	mu       sync.Mutex
@@ -55,6 +60,18 @@ type dialCounter struct {
 	dials    int
 	late     []string
 	unsettle []string
+}
+
+// cancelRequestCode is the protocol code of a Postgres CancelRequest startup packet.
+const cancelRequestCode = 80877102
+
+func isCancelRequest(conn net.Conn) bool {
+	var packet [8]byte
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.ReadFull(conn, packet[:]); err != nil {
+		return false
+	}
+	return binary.BigEndian.Uint32(packet[4:]) == cancelRequestCode
 }
 
 func newDialCounter(t *testing.T) *dialCounter {
@@ -70,10 +87,13 @@ func newDialCounter(t *testing.T) *dialCounter {
 			if err != nil {
 				return
 			}
+			cancel := isCancelRequest(conn)
 			counter.mu.Lock()
-			if counter.cell == "" {
+			switch {
+			case cancel:
+			case counter.cell == "":
 				counter.late = append(counter.late, "after "+counter.last)
-			} else {
+			default:
 				counter.dials++
 			}
 			counter.mu.Unlock()

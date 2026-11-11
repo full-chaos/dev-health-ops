@@ -9,12 +9,16 @@ import (
 // migration Jobs carry as AUTH_DATABASE_SCHEMA, and "auth" when the value is
 // empty.
 func TestAuthServiceDatabaseSchemaArgMatchesTheMigrationJobs(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct{ name, set, want string }{
 		{"default", "", "auth"},
 		{"empty value", "authService.database.schema=", "auth"},
 		{"named schema", "authService.database.schema=identity_plane", "identity_plane"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			args := append([]string{}, authBase...)
 			if tc.set != "" {
 				args = append(args, "--set", tc.set)

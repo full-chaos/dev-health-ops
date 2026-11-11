@@ -22,8 +22,12 @@ func TestDefaultRegistryIsTheFiveSeededWorkloads(t *testing.T) {
 		if strings.Contains(s.Name, "worker") || strings.Contains(s.Name, "billing") {
 			t.Errorf("registry row %q: no worker or billing workload until it makes a credentialed call", s.Name)
 		}
-		if len(s.AllowedActions) != 0 {
-			t.Errorf("registry row %q holds actions %v; the catalog has no workload action yet", s.Name, s.AllowedActions)
+		wantActions := []string{}
+		if s.Name == "acr-api" {
+			wantActions = []string{"credentials.project"}
+		}
+		if !reflect.DeepEqual(append([]string{}, s.AllowedActions...), wantActions) {
+			t.Errorf("registry row %q holds actions %v, want %v: only acr-api holds an action, credentials.project for the acr credential events route", s.Name, s.AllowedActions, wantActions)
 		}
 	}
 	want := []string{"api", "auth-service", "acr-api", "web", "query-api"}
@@ -35,6 +39,10 @@ func TestDefaultRegistryIsTheFiveSeededWorkloads(t *testing.T) {
 		case "auth-service":
 			if len(s.Audiences) != 0 {
 				t.Errorf("%q is a registry identity and holds no workload audience, got %v", s.Name, s.Audiences)
+			}
+		case "acr-api":
+			if !reflect.DeepEqual(s.Audiences, []string{"auth-service", "dev-health-api"}) {
+				t.Errorf("acr-api audiences %v, want [auth-service dev-health-api]", s.Audiences)
 			}
 		}
 	}

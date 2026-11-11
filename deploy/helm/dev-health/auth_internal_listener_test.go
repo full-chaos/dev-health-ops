@@ -49,6 +49,8 @@ func selectorOf(t *testing.T, docs []map[string]any, deployment string) any {
 // Off (the default, and enabled=false with peers listed), nothing of the internal listener renders: no Service, no
 // NetworkPolicy, no arg, no container port, and the render is byte-equal to the default one.
 func TestAuthInternalListenerOffRendersNothing(t *testing.T) {
+	t.Parallel()
+
 	_, plain, err := renderAuth(t, phaseArgs(3, internalBase()...)...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.600s", err, plain)
@@ -191,6 +193,8 @@ func stripInternal(t *testing.T, doc map[string]any) {
 
 // Each listed peer is admitted by its own pod selector, in the listed order, and no other source.
 func TestAuthInternalListenerAdmitsOnlyTheListedPeers(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 3, internalOn(`["web","query-api","go-api"]`, "--set", "authService.internal.port=9443")...)
 	var want []any
 	for _, name := range []string{"a-dev-health-web", "a-dev-health-query-api", "a-dev-health-go-api"} {
@@ -210,6 +214,8 @@ func TestAuthInternalListenerAdmitsOnlyTheListedPeers(t *testing.T) {
 }
 
 func TestAuthInternalListenerRefusals(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		args []string
 		want string
@@ -233,6 +239,8 @@ func TestAuthInternalListenerRefusals(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, c.args...)
 			if err == nil || !strings.Contains(out, c.want) {
 				t.Fatalf("not refused with %q (err %v): %.300s", c.want, err, out)

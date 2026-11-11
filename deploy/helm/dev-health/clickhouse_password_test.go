@@ -67,6 +67,8 @@ func chPasswordEntry(t *testing.T, sts map[string]any) map[string]any {
 
 // Off (the default): the plain env list and no chart Secret.
 func TestClickHousePasswordKnobOffKeepsThePlainEnvAndRendersNoSecret(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	wantEnv := []any{
 		map[string]any{"name": "CLICKHOUSE_USER", "value": "ch"},
@@ -77,6 +79,8 @@ func TestClickHousePasswordKnobOffKeepsThePlainEnvAndRendersNoSecret(t *testing.
 	explicitOff := append(append([]string{}, chOff...), "--set", "clickhouse.credentialsSecret.enabled=false")
 	for name, args := range map[string][]string{"unset": chOff, "explicit false": explicitOff} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			sts, secret, _ := chRender(t, args...)
 			if got := chEnv(t, sts); !reflect.DeepEqual(got, wantEnv) {
 				t.Errorf("env = %v, want the plain list %v", got, wantEnv)
@@ -91,6 +95,8 @@ func TestClickHousePasswordKnobOffKeepsThePlainEnvAndRendersNoSecret(t *testing.
 // On: the chart Secret carries the same value, the env is a secretKeyRef on it (exactly the three leaves), and the
 // rest of the StatefulSet is the switch-off one. The spec holds no copy of the value.
 func TestClickHousePasswordKnobOnIsASecretKeyRefAndChangesOnlyThatEntry(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	off, _, _ := chRender(t, chOff...)
 	on, secret, _ := chRender(t, chOn...)
@@ -128,9 +134,13 @@ func TestClickHousePasswordKnobOnIsASecretKeyRefAndChangesOnlyThatEntry(t *testi
 // existingSecret set: the env is a secretKeyRef on it (the default key or a given one), no chart Secret, and no copy
 // of the value in the render, with the switch off and on.
 func TestClickHouseExistingSecretIsReadByTheStatefulSetAndRendersNoChartSecret(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	for name, args := range map[string][]string{"switch off": chExistingOff, "switch on": chExistingOn, "custom key": chExistingKeyd} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			sts, secret, out := chRender(t, args...)
 			if secret != nil {
 				t.Errorf("Secret %s renders with existingSecret set", chCredentialsSecret)
@@ -153,6 +163,8 @@ func TestClickHouseExistingSecretIsReadByTheStatefulSetAndRendersNoChartSecret(t
 
 // The winner when existingSecret and the switch are both set is existingSecret.
 func TestClickHouseExistingSecretWinsOverTheSwitch(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	on, secret, _ := chRender(t, chExistingOn...)
 	off, _, _ := chRender(t, chExistingOff...)
@@ -169,10 +181,14 @@ func TestClickHouseExistingSecretWinsOverTheSwitch(t *testing.T) {
 
 // An empty name changes nothing.
 func TestClickHouseExistingSecretEmptyChangesNothing(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	empty := []string{"--set", "clickhouse.credentialsSecret.existingSecret.name=", "--set", "clickhouse.credentialsSecret.existingSecret.key=OTHER"}
 	for name, base := range map[string][]string{"switch off": chOff, "switch on": chOn} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			if got := changedDocs(t, base, append(append([]string{}, base...), empty...)); len(got) != 0 {
 				t.Errorf("an empty existingSecret.name changes %v", got)
 			}
@@ -183,6 +199,8 @@ func TestClickHouseExistingSecretEmptyChangesNothing(t *testing.T) {
 // The switch adds the chart Secret and changes the StatefulSet; existingSecret changes the StatefulSet only; with the
 // switch off and no name nothing is added to the render.
 func TestClickHousePasswordChangesOnlyTheStatefulSetAndTheChartSecret(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	if got, want := changedDocs(t, chOff, chOn), []string{"Secret/" + chCredentialsSecret, "StatefulSet/" + chStatefulSet}; !reflect.DeepEqual(got, want) {
 		t.Errorf("documents changed by the switch = %v, want %v", got, want)
@@ -194,6 +212,8 @@ func TestClickHousePasswordChangesOnlyTheStatefulSetAndTheChartSecret(t *testing
 
 // The chart Secret renders only with the store, and also when the shared Secret is external.
 func TestClickHouseCredentialsSecretRendersOnlyWithTheStore(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	noStore := append(append([]string{}, chOn...), "--set", "clickhouse.enabled=false")
 	if _, secret, _ := chRender(t, noStore...); secret != nil {
@@ -207,6 +227,8 @@ func TestClickHouseCredentialsSecretRendersOnlyWithTheStore(t *testing.T) {
 
 // The guard: with the chart-owned shared Secret the URI Secrets would embed the unused password, so the render fails.
 func TestClickHouseExistingSecretIsRefusedWithTheChartOwnedSharedSecret(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	args := append(append([]string{}, chOff...), "--set", "clickhouse.credentialsSecret.existingSecret.name="+chExistingName)
 	for _, create := range []string{"true", ""} {

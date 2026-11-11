@@ -23,6 +23,8 @@ func goAPIEnforceEnv(t *testing.T, docs []map[string]any, name string) (string, 
 
 // The switch is dark: the default render, with go-api and the auth proxy on, carries no trace of it.
 func TestEnforceListIsAbsentByDefault(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, enforceArgs()...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -36,6 +38,8 @@ func TestEnforceListIsAbsentByDefault(t *testing.T) {
 }
 
 func TestEnforceListRendersOnGoAPIAsOneCommaList(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, enforceArgs("--set-json", `authService.enforce.goApi=["billing","teams"]`)...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -69,6 +73,8 @@ func queryAPIEnv(t *testing.T, extra ...string) map[string]string {
 }
 
 func TestQueryAPIEnforceUnsetRendersNothing(t *testing.T) {
+	t.Parallel()
+
 	if got := queryAPIEnv(t); len(got) != 0 {
 		t.Fatalf("unset keys render %v; want none", got)
 	}
@@ -78,6 +84,8 @@ func TestQueryAPIEnforceUnsetRendersNothing(t *testing.T) {
 }
 
 func TestQueryAPIEnforceCells(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		extra []string
 		want  map[string]string
@@ -92,6 +100,8 @@ func TestQueryAPIEnforceCells(t *testing.T) {
 			map[string]string{"QUERY_API_PDP_MODE": "shadow", "QUERY_API_HEADERS_AUTHZ_ENFORCE": "git"}},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			got := queryAPIEnv(t, tc.extra...)
 			if len(got) != len(tc.want) {
 				t.Fatalf("env %v; want %v", got, tc.want)
@@ -106,6 +116,8 @@ func TestQueryAPIEnforceCells(t *testing.T) {
 }
 
 func TestQueryAPIEnforceRefusals(t *testing.T) {
+	t.Parallel()
+
 	mode := func(m string) []string { return []string{"--set", "authService.enforce.queryApiPdpMode=" + m} }
 	for name, tc := range map[string]struct {
 		extra []string
@@ -124,6 +136,8 @@ func TestQueryAPIEnforceRefusals(t *testing.T) {
 	} {
 		for _, enabled := range []string{"true", "false"} {
 			t.Run(name+"/queryApi.enabled="+enabled, func(t *testing.T) {
+				t.Parallel()
+
 				_, out, err := renderAuth(t, phaseArgs(2, append(append([]string{}, tc.extra...), "--set", "queryApi.enabled="+enabled)...)...)
 				if err == nil || !strings.Contains(out, tc.want) {
 					t.Fatalf("rendered: err=%v out=%.300s; want a refusal containing %q", err, out, tc.want)
@@ -134,6 +148,8 @@ func TestQueryAPIEnforceRefusals(t *testing.T) {
 }
 
 func TestEnforceListRefusals(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		args []string
 		want string
@@ -146,6 +162,8 @@ func TestEnforceListRefusals(t *testing.T) {
 			"goApi.extraEnv must not set GO_API_AUTHZ_ENFORCE"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, tc.args...)
 			if err == nil || !strings.Contains(out, tc.want) {
 				t.Fatalf("rendered: err=%v out=%.300s; want a refusal containing %q", err, out, tc.want)
@@ -156,6 +174,8 @@ func TestEnforceListRefusals(t *testing.T) {
 
 // The chart's namespace enum is the catalog's namespace set: a namespace added to the catalog without the chart fails here.
 func TestEnforceChartEnumIsTheCatalogNamespaces(t *testing.T) {
+	t.Parallel()
+
 	raw, err := os.ReadFile("values.schema.json")
 	if err != nil {
 		t.Fatal(err)
@@ -196,6 +216,8 @@ func TestEnforceChartEnumIsTheCatalogNamespaces(t *testing.T) {
 }
 
 func TestEnforceDefaultValueIsAnEmptyList(t *testing.T) {
+	t.Parallel()
+
 	raw, err := os.ReadFile("values.yaml")
 	if err != nil {
 		t.Fatal(err)

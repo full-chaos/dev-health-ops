@@ -14,6 +14,8 @@ import (
 var feedValkeyACLLine = "user " + ratelimitvalkey.ACLUser + " on #<sha256 hex of the password> " + ratelimitvalkey.ACLRules
 
 func TestValuesPinTheAuthValkeyAclLineWithTheFeedChannel(t *testing.T) {
+	t.Parallel()
+
 	raw, err := os.ReadFile("values.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +33,8 @@ func TestValuesPinTheAuthValkeyAclLineWithTheFeedChannel(t *testing.T) {
 }
 
 func TestValuesKeepTheDefaultUserLineAndTheDatabaseOfTheRateLimitStore(t *testing.T) {
+	t.Parallel()
+
 	raw, err := os.ReadFile("values.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -44,10 +48,12 @@ func TestValuesKeepTheDefaultUserLineAndTheDatabaseOfTheRateLimitStore(t *testin
 // them (the documented ACL line included), and `helm template` with the ACL on is what Valkey starts with: the ACL file
 // from the Secret, the AOF on (the floor's status rule reads it) and fsync never turned off by the chart.
 func TestHelmShowsTheAclLineAndRendersValkeyWithTheAofOnAndTheAclFile(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	out, err := helmCommand("show", "values", ".").CombinedOutput()
+	out, err := helmOutput("show", "values", ".")
 	if err != nil {
 		t.Fatalf("helm show values: %v\n%.300s", err, out)
 	}

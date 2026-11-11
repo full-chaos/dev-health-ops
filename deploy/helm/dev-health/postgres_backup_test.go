@@ -79,10 +79,14 @@ func pgBackupEnv(t *testing.T, cronJob map[string]any, name string) map[string]a
 // Off (the default, explicit or unset): no backup object renders, with the bundled PostgreSQL on or off, and the
 // explicit false changes no document.
 func TestPostgresBackupOffRendersNothing(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	explicitOff := append(append([]string{}, pgCredsOff...), "--set", "postgresql.backup.enabled=false")
 	for name, args := range map[string][]string{"store off": authBase, "store on": pgCredsOff, "explicit false": explicitOff} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			cronJob, pvc, _, out := pgBackupRender(t, args...)
 			if cronJob != nil || pvc != nil {
 				t.Errorf("a backup object renders with postgresql.backup.enabled off: CronJob=%v PVC=%v", cronJob != nil, pvc != nil)
@@ -99,6 +103,8 @@ func TestPostgresBackupOffRendersNothing(t *testing.T) {
 
 // On without the bundled PostgreSQL: there is nothing in the chart to dump, so nothing renders.
 func TestPostgresBackupNeedsTheBundledPostgres(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	args := append(append([]string{}, authBase...), "--set", "postgresql.backup.enabled=true")
 	cronJob, pvc, _, out := pgBackupRender(t, args...)
@@ -112,6 +118,8 @@ func TestPostgresBackupNeedsTheBundledPostgres(t *testing.T) {
 // CronJob and the PVC. With the plain-value mode (credentialsSecret.enabled=false) it also moves the StatefulSet's
 // POSTGRES_PASSWORD onto the chart Secret, which holds the same value, so both read one reference.
 func TestPostgresBackupAddsOnlyTheCronJobAndThePVC(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	only := []string{"CronJob/" + pgBackupCronJob, "PersistentVolumeClaim/" + pgBackupPVC}
 	for name, c := range map[string]struct{ off, on []string }{
@@ -131,6 +139,8 @@ func TestPostgresBackupAddsOnlyTheCronJobAndThePVC(t *testing.T) {
 // The PVC: its own claim (never the database volume), the cluster default StorageClass unless one is named, 20Gi,
 // and kept by helm on uninstall.
 func TestPostgresBackupPVC(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	_, pvc, _, _ := pgBackupRender(t, pgBackupOn...)
 	if pvc == nil {
@@ -160,6 +170,8 @@ func TestPostgresBackupPVC(t *testing.T) {
 
 // The CronJob schedule and Job bounds.
 func TestPostgresBackupCronJobScheduleAndBounds(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	cronJob, _, _, _ := pgBackupRender(t, pgBackupOn...)
 	if cronJob == nil {
@@ -199,6 +211,8 @@ func TestPostgresBackupCronJobScheduleAndBounds(t *testing.T) {
 
 // The image, pull policy, user and database are the StatefulSet's, and PGHOST is the bundled Service.
 func TestPostgresBackupRunsTheStatefulSetImageAgainstTheBundledService(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	cronJob, _, sts, _ := pgBackupRender(t, pgBackupOn...)
 	c, pg := pgBackupContainer(t, cronJob), postgresContainer(t, sts)
@@ -242,6 +256,8 @@ func TestPostgresBackupRunsTheStatefulSetImageAgainstTheBundledService(t *testin
 // when credentialsSecret.enabled is false (the chart Secret renders whenever existingSecret is unset), so the
 // database and the backup can never read two different sources. The value is never in the CronJob.
 func TestPostgresBackupPasswordIsTheStatefulSetSecret(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	cases := map[string]struct {
 		args      []string
@@ -254,6 +270,8 @@ func TestPostgresBackupPasswordIsTheStatefulSetSecret(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			cronJob, _, sts, _ := pgBackupRender(t, c.args...)
 			entry := pgBackupEnv(t, cronJob, "PGPASSWORD")
 			ref := at(entry, "valueFrom", "secretKeyRef")
@@ -274,6 +292,8 @@ func TestPostgresBackupPasswordIsTheStatefulSetSecret(t *testing.T) {
 // Non-root as the image's postgres user (70), no privilege escalation, a read-only root with /tmp and /backups the
 // only writable paths, and /backups is the PVC.
 func TestPostgresBackupPodIsLockedDown(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	cronJob, _, _, _ := pgBackupRender(t, pgBackupOn...)
 	pod, c := pgBackupPod(t, cronJob), pgBackupContainer(t, cronJob)
@@ -308,6 +328,8 @@ func TestPostgresBackupPodIsLockedDown(t *testing.T) {
 // The script: a custom-format dump to a .partial file, a pg_restore --list check, the sha256 file, the rename, one ok
 // line, and the prune only after all of that.
 func TestPostgresBackupScriptWritesChecksAndPrunesInOrder(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	cronJob, _, _, _ := pgBackupRender(t, pgBackupOn...)
 	script := pgBackupScript(t, cronJob)
@@ -349,6 +371,8 @@ func TestPostgresBackupScriptWritesChecksAndPrunesInOrder(t *testing.T) {
 // NetworkPolicy: the backup pod is a release pod, so the release-wide policy admits it at PostgreSQL and lets it
 // reach PostgreSQL. No extra policy is needed, and none renders.
 func TestPostgresBackupReachesPostgresUnderTheReleasePolicy(t *testing.T) {
+	t.Parallel()
+
 	requireHelmUnderCI(t)
 	policies, egress, out := renderPolicySet(t, "--set", "postgresql.enabled=true", "--set", "postgresql.backup.enabled=true")
 	var podLabels map[string]string

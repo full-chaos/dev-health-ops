@@ -37,6 +37,8 @@ func kindDocs(docs []map[string]any, kind string) []map[string]any {
 }
 
 func TestWorkloadExchangeOffRendersNothing(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 2, issuerSets("eddsa", hs256Issuer)...)
 	for _, kind := range []string{"ClusterRole", "ClusterRoleBinding"} {
 		if n := len(kindDocs(docs, kind)); n != 0 {
@@ -56,6 +58,8 @@ func TestWorkloadExchangeOffRendersNothing(t *testing.T) {
 
 // The binding grants create on tokenreviews to the auth-service ServiceAccount alone.
 func TestWorkloadExchangeBindsTokenReviewToAuthServiceOnly(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 2, exchangeSets()...)
 	roles, bindings := kindDocs(docs, "ClusterRole"), kindDocs(docs, "ClusterRoleBinding")
 	if len(roles) != 1 || len(bindings) != 1 {
@@ -78,6 +82,8 @@ func TestWorkloadExchangeBindsTokenReviewToAuthServiceOnly(t *testing.T) {
 
 // Only auth-service mounts a ServiceAccount token; it is the reviewer token.
 func TestWorkloadExchangeMountsTheReviewerTokenForAuthServiceOnly(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 2, exchangeSets()...)
 	for _, d := range append(kindDocs(docs, "Deployment"), kindDocs(docs, "StatefulSet")...) {
 		name := toString(at(d, "metadata", "name"))
@@ -152,6 +158,8 @@ func hasPortRule(rules []any, port int) bool {
 
 // The Kubernetes API is reachable only while the exchange is on, and only at the listed peers; go-api reaches the API port.
 func TestWorkloadExchangeNetworkPolicy(t *testing.T) {
+	t.Parallel()
+
 	off := npDoc(renderPhase(t, 2, issuerSets("eddsa", hs256Issuer)...))
 	on := npDoc(renderPhase(t, 2, exchangeSets()...))
 	if hasPortRule(npRules(t, off, "egress"), 443) {
@@ -182,6 +190,8 @@ func TestWorkloadExchangeNetworkPolicy(t *testing.T) {
 }
 
 func TestWorkloadExchangeRefusals(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		args []string
 		want string
@@ -206,6 +216,8 @@ func TestWorkloadExchangeRefusals(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, c.args...)
 			if err == nil || !strings.Contains(out, c.want) {
 				t.Fatalf("not refused with %q (err %v): %.300s", c.want, err, out)
@@ -241,8 +253,12 @@ func withoutKubeAPI(args []string) []string {
 // The chart keeps only the missing-input gate for the API origin: a malformed origin is refused by auth-service at
 // start (D6465), so a form auth-service accepts must not be refused here.
 func TestWorkloadExchangeLeavesTheAPIOriginToAuthService(t *testing.T) {
+	t.Parallel()
+
 	for _, url := range []string{"https://kubernetes.default.svc/", "https://[fd00::1]:6443", "https://10.43.0.1:6443"} {
 		t.Run(url, func(t *testing.T) {
+			t.Parallel()
+
 			docs, out, err := renderAuth(t, phaseArgs(2, exchangeSets("--set-string", "authService.workloadExchange.kubeAPIURL="+url)...)...)
 			if err != nil {
 				t.Fatalf("the chart refuses %q: %v\n%.300s", url, err, out)
@@ -257,8 +273,12 @@ func TestWorkloadExchangeLeavesTheAPIOriginToAuthService(t *testing.T) {
 
 // helm parses a plain --set number as an integer and --set-json or a values file as a float: both forms render.
 func TestWorkloadExchangeAcceptsAFullPeerAndAnotherPort(t *testing.T) {
+	t.Parallel()
+
 	for flag, set := range map[string]string{"--set": "--set", "--set-json": "--set-json"} {
 		t.Run(flag, func(t *testing.T) {
+			t.Parallel()
+
 			docs := renderPhase(t, 2, exchangeSets(set, `authService.networkPolicy.egress.kubeAPI.port=6443`)...)
 			if !hasPortRule(npRules(t, npDoc(docs), "egress"), 6443) {
 				t.Error("kubeAPI.port 6443 renders no egress rule on 6443")

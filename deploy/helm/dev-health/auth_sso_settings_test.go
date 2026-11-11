@@ -74,6 +74,8 @@ func goAPIProxyFlag(t *testing.T, docs []map[string]any, name string) string {
 
 // A complete set renders the settings on auth-service by secretKeyRef only, and go-api forwards the mode.
 func TestSSOCompleteSetRendersSecretRefsAndProxyFlags(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		modes      []string
 		names      []string
@@ -84,6 +86,8 @@ func TestSSOCompleteSetRendersSecretRefsAndProxyFlags(t *testing.T) {
 		"both": {[]string{"oidc", "saml"}, []string{"AUTH_SSO_STATE_KEY", "APP_BASE_URL", "SETTINGS_ENCRYPTION_KEY", "SETTINGS_ENCRYPTION_SALT"}, "true", "true"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			docs, out, err := renderAuth(t, phaseArgs(2, ssoSets(tc.modes)...)...)
 			if err != nil {
 				t.Fatalf("render: %v\n%.500s", err, out)
@@ -120,6 +124,8 @@ func TestSSOCompleteSetRendersSecretRefsAndProxyFlags(t *testing.T) {
 
 // With the switches off nothing renders, whatever the Secret input says.
 func TestSSOOffRendersNothing(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, phaseArgs(2, "--set", "authService.sso.secretName=a-sso", "--set-json", ssoPeers)...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -140,6 +146,8 @@ func TestSSOOffRendersNothing(t *testing.T) {
 
 // A switch on with a setting missing fails the render and names the key.
 func TestSSOMissingSettingFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	need := map[string][]string{
 		"oidc": {"stateKey", "appBaseURL", "encryptionKey", "encryptionSalt"},
 		"saml": {"appBaseURL", "encryptionKey", "encryptionSalt"},
@@ -147,6 +155,8 @@ func TestSSOMissingSettingFailsClosed(t *testing.T) {
 	for mode, keys := range need {
 		for _, key := range keys {
 			t.Run(mode+"/"+key, func(t *testing.T) {
+				t.Parallel()
+
 				_, out, err := renderAuth(t, phaseArgs(2, ssoSets([]string{mode}, "--set", "authService.sso.keys."+key+"=")...)...)
 				if err == nil || !strings.Contains(out, "authService.sso.keys."+key) || !strings.Contains(out, ssoKeyNames[key]) {
 					t.Fatalf("rendered or the refusal does not name the key: err=%v out=%.400s", err, out)
@@ -154,6 +164,8 @@ func TestSSOMissingSettingFailsClosed(t *testing.T) {
 			})
 		}
 		t.Run(mode+"/secretName", func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, phaseArgs(2, ssoSets([]string{mode}, "--set", "authService.sso.secretName=")...)...)
 			if err == nil || !strings.Contains(out, "authService.sso.secretName") {
 				t.Fatalf("rendered or the refusal does not name the Secret: err=%v out=%.400s", err, out)
@@ -168,6 +180,8 @@ func TestSSOMissingSettingFailsClosed(t *testing.T) {
 
 // go-api must reach auth-service for the SSO routes to be forwarded.
 func TestSSONeedsGoAPIToReachAuthService(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, phaseArgs(1, ssoSets([]string{"oidc"})...)...)
 	if err == nil || !strings.Contains(out, "authService.phase >= 2") {
 		t.Fatalf("phase 1: rendered or wrong refusal: err=%v out=%.300s", err, out)
@@ -176,7 +190,11 @@ func TestSSONeedsGoAPIToReachAuthService(t *testing.T) {
 
 // APP_BASE_URL has one source: SSO owns it when on, the mail block yields only when it names the same Secret key.
 func TestSSOAppBaseURLHasOneSource(t *testing.T) {
+	t.Parallel()
+
 	t.Run("below phase 4 the SSO Secret is the source", func(t *testing.T) {
+		t.Parallel()
+
 		docs, out, err := renderAuth(t, phaseArgs(2, ssoSets([]string{"saml"})...)...)
 		if err != nil {
 			t.Fatalf("render: %v\n%.300s", err, out)
@@ -187,6 +205,8 @@ func TestSSOAppBaseURLHasOneSource(t *testing.T) {
 		}
 	})
 	t.Run("phase 4 with the mail Secret as the SSO Secret renders it once", func(t *testing.T) {
+		t.Parallel()
+
 		docs, out, err := renderAuth(t, phaseArgs(4, append(ssoSets([]string{"saml"}, "--set", "authService.sso.secretName=a-mail"), mailSets()...)...)...)
 		if err != nil {
 			t.Fatalf("render: %v\n%.300s", err, out)
@@ -197,6 +217,8 @@ func TestSSOAppBaseURLHasOneSource(t *testing.T) {
 		}
 	})
 	t.Run("phase 4 with two different sources fails", func(t *testing.T) {
+		t.Parallel()
+
 		_, out, err := renderAuth(t, phaseArgs(4, append(ssoSets([]string{"saml"}), mailSets()...)...)...)
 		if err == nil || !strings.Contains(out, "two sources") {
 			t.Fatalf("rendered or wrong refusal: err=%v out=%.300s", err, out)
@@ -206,6 +228,8 @@ func TestSSOAppBaseURLHasOneSource(t *testing.T) {
 
 // The IdP is reached through the auth-service egress rule, value-driven and rendered only with a switch on (the policy stays on from phase 2).
 func TestSSOEgress(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, phaseArgs(2, "--set", "authService.sso.secretName=a-sso", "--set", "authService.sso.saml=true")...)
 	if err == nil || !strings.Contains(out, "authService.networkPolicy.egress.sso.to") {
 		t.Fatalf("policy on, no peers: rendered or wrong refusal: err=%v out=%.300s", err, out)
@@ -222,6 +246,8 @@ func TestSSOEgress(t *testing.T) {
 
 // The four names have one source, the chart values.
 func TestSSOExtraEnvCannotSetTheSettings(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range []string{"AUTH_SSO_STATE_KEY", "APP_BASE_URL", "SETTINGS_ENCRYPTION_KEY", "SETTINGS_ENCRYPTION_SALT"} {
 		_, out, err := renderAuth(t, phaseArgs(2, ssoSets([]string{"oidc"}, "--set-json", fmt.Sprintf(`authService.extraEnv=[{"name":%q,"valueFrom":{"secretKeyRef":{"name":"x","key":"y"}}}]`, name))...)...)
 		if err == nil || !strings.Contains(out, "authService.extraEnv must not set "+name) {

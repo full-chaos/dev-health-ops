@@ -76,6 +76,7 @@ func reservedPgbouncerArgs() []string {
 }
 
 func TestPgbouncerURIsEncodeReservedPasswords(t *testing.T) {
+
 	r := keepMustRender(t, "reserved pgbouncer passwords", reservedPgbouncerArgs()...)
 	sd := uriStringData(t, r, uriPgbouncerSecret)
 	cases := []struct {
@@ -113,6 +114,8 @@ func TestPgbouncerURIsEncodeReservedPasswords(t *testing.T) {
 }
 
 func TestPgbouncerURIsAreByteIdenticalForUnreservedPasswords(t *testing.T) {
+	t.Parallel()
+
 	r := keepMustRender(t, "unreserved pgbouncer passwords", keepDummyPasswords...)
 	sd := uriStringData(t, r, uriPgbouncerSecret)
 	want := map[string]string{
@@ -128,6 +131,8 @@ func TestPgbouncerURIsAreByteIdenticalForUnreservedPasswords(t *testing.T) {
 }
 
 func TestPgbouncerUserlistDoublesAQuoteInAPassword(t *testing.T) {
+	t.Parallel()
+
 	args := uriCatArgs(
 		jsonSet("goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD", `do"main`),
 		jsonSet("goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD", "queue-0002"),
@@ -144,6 +149,8 @@ func TestPgbouncerUserlistDoublesAQuoteInAPassword(t *testing.T) {
 }
 
 func TestPgbouncerUserlistIsByteIdenticalForUnreservedPasswords(t *testing.T) {
+	t.Parallel()
+
 	r := keepMustRender(t, "unreserved userlist", keepDummyPasswords...)
 	sd := uriStringData(t, r, uriPgbouncerSecret)
 	got := uriKey(t, sd, uriPgbouncerSecret, "userlist.txt")
@@ -154,6 +161,7 @@ func TestPgbouncerUserlistIsByteIdenticalForUnreservedPasswords(t *testing.T) {
 }
 
 func TestChartCredentialURIsEncodeReservedCredentials(t *testing.T) {
+
 	args := uriCatArgs(
 		keepDummyPasswords2(),
 		jsonSet("clickhouse.credentials.user", resCHUser),
@@ -201,6 +209,8 @@ func TestChartCredentialURIsEncodeReservedCredentials(t *testing.T) {
 }
 
 func TestChartCredentialURIsAreByteIdenticalForUnreservedCredentials(t *testing.T) {
+	t.Parallel()
+
 	r := keepMustRender(t, "unreserved chart credentials", uriCatArgs(keepDummyPasswords2(), []string{"--set", "postgresql.enabled=true"})...)
 	shared := uriStringData(t, r, uriSharedSecret)
 	migrate := uriStringData(t, r, uriMigrateSecret)
@@ -227,6 +237,8 @@ func keepDummyPasswords2() []string { return keepDummyPasswords }
 // chart refuses to render a database name that is not identifier-safe ([A-Za-z0-9_]+), by name, so no reader sees an encoded path and no
 // URI carries a raw reserved character.
 func TestAReservedDatabaseNameFailsTheRender(t *testing.T) {
+	t.Parallel()
+
 	for _, db := range []string{"my db", "my#db", "my%db", "my/db", "my?db", "my@db", "my:db", "db-name", "db.name"} {
 		cases := []struct {
 			label, key string
@@ -254,6 +266,8 @@ func TestAReservedDatabaseNameFailsTheRender(t *testing.T) {
 }
 
 func TestAnIdentifierSafeDatabaseNameRendersRawInEveryURI(t *testing.T) {
+	t.Parallel()
+
 	args := uriCatArgs(
 		keepDummyPasswords2(),
 		[]string{"--set", "postgresql.enabled=true"},
@@ -285,6 +299,7 @@ func TestAnIdentifierSafeDatabaseNameRendersRawInEveryURI(t *testing.T) {
 }
 
 func TestPgbouncerURIsEncodeReservedRoleNames(t *testing.T) {
+
 	args := uriCatArgs(
 		keepDummyPasswords2(),
 		jsonSet("config.RIVER_DOMAIN_DATABASE_ROLE", "dev@dom ain"),

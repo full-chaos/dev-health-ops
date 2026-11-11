@@ -28,7 +28,7 @@ func renderJobs(t *testing.T, sets ...string) (jobs, secrets map[string]map[stri
 	for _, set := range sets {
 		args = append(args, "--set", set)
 	}
-	out, err := helmCommand(args...).CombinedOutput()
+	out, err := helmOutput(args...)
 	if err != nil {
 		return nil, nil, string(out)
 	}
@@ -99,6 +99,8 @@ func envOf(c map[string]any) map[string]any {
 // with production's settings; --river exactly when no River hook owns the
 // step.
 func TestMigrateJobRunsDhoMigrateUpgrade(t *testing.T) {
+	t.Parallel()
+
 	for _, testCase := range []struct {
 		name      string
 		sets      []string
@@ -112,6 +114,8 @@ func TestMigrateJobRunsDhoMigrateUpgrade(t *testing.T) {
 			pinnedOperatorImage, []string{"migrate", "upgrade", "--river=false"}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
 			jobs, _, refusal := renderJobs(t, testCase.sets...)
 			if refusal != "" {
 				t.Fatalf("render refused: %s", refusal)
@@ -142,6 +146,8 @@ func TestMigrateJobRunsDhoMigrateUpgrade(t *testing.T) {
 const lockstepHook = "migrations.hook.image=ghcr.io/full-chaos/dev-health-go-operator:sha-aaaaaaaaaaaa"
 
 func TestMigrateJobRefusesImagesThatCannotRunTheVerb(t *testing.T) {
+	t.Parallel()
+
 	for name, testCase := range map[string]struct {
 		sets []string
 		want string
@@ -157,6 +163,8 @@ func TestMigrateJobRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 		"goApi matches, queryApi differs (both enabled)": {[]string{lockstepHook, "queryApi.enabled=true", "queryApi.image.tag=sha-bbbbbbbbbbbb", "goApi.enabled=true", "goApi.image.tag=sha-aaaaaaaaaaaa"}, "and queryApi.image (ghcr.io/full-chaos/dev-health-go-dho:sha-bbbbbbbbbbbb) are pinned to different commits"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, _, refusal := renderJobs(t, testCase.sets...)
 			if !strings.Contains(refusal, testCase.want) {
 				t.Fatalf("render = %q, want a refusal containing %q", refusal, testCase.want)
@@ -168,6 +176,8 @@ func TestMigrateJobRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 // CHAOS-7520: a values file written before the Python api image values were deleted still sets image.tag; the lockstep
 // check no longer reads it, so a hook tag that differs from it renders.
 func TestMigrateJobIgnoresAStalePythonImageTag(t *testing.T) {
+	t.Parallel()
+
 	_, _, refusal := renderJobs(t, lockstepHook, "image.tag=sha-bbbbbbbbbbbb")
 	if refusal != "" {
 		t.Fatalf("a stale image.tag must not refuse the render: %s", refusal)
@@ -178,6 +188,8 @@ func TestMigrateJobIgnoresAStalePythonImageTag(t *testing.T) {
 // native (9000) URI: an explicit hook value wins, then goWorkers.clickhouseURI,
 // then the bundled ClickHouse addressed natively.
 func TestMigrateSecretCarriesANativeClickHouseURI(t *testing.T) {
+	t.Parallel()
+
 	for name, testCase := range map[string]struct {
 		sets []string
 		want string
@@ -187,6 +199,8 @@ func TestMigrateSecretCarriesANativeClickHouseURI(t *testing.T) {
 		"an explicit hook value":  {[]string{"goWorkers.clickhouseURI=clickhouse://u:p@ch.example:9000/db", "migrations.hook.secretData.CLICKHOUSE_URI=clickhouse://m:p@mig.example:9000/db"}, "clickhouse://m:p@mig.example:9000/db"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, secrets, refusal := renderJobs(t, testCase.sets...)
 			if refusal != "" {
 				t.Fatalf("render refused: %s", refusal)
@@ -204,6 +218,8 @@ func TestMigrateSecretCarriesANativeClickHouseURI(t *testing.T) {
 // baked SQL, no password or database name in argv. The route-activate hook
 // already runs only that image (CHAOS-6902): see TestRouteActivateRunsOnlyTheOperatorImage.
 func TestProvisionRolesRunsDhoMigrateRolesOnTheOperatorImage(t *testing.T) {
+	t.Parallel()
+
 	const dsn = "postgresql://migrator:pw@postgres:5432/devhealth"
 	jobs, secrets, refusal := renderJobs(t,
 		"migrations.hook.provisionRoles.enabled=true", "migrations.hook.riverMigrate.enabled=true",
@@ -257,6 +273,8 @@ func TestProvisionRolesRunsDhoMigrateRolesOnTheOperatorImage(t *testing.T) {
 // of the three River DSNs (host, port, user, database as plain values, the
 // password by secretKeyRef) for `dho workers` to assemble.
 func TestRouteActivateRunsOnlyTheOperatorImage(t *testing.T) {
+	t.Parallel()
+
 	jobs, _, refusal := renderJobs(t,
 		"migrations.hook.provisionRoles.enabled=true", "migrations.hook.riverMigrate.enabled=true",
 		"migrations.hook.routeActivate.enabled=true", "migrations.hook.routeActivate.image="+pinnedOperatorImage)
@@ -318,6 +336,8 @@ func TestRouteActivateRunsOnlyTheOperatorImage(t *testing.T) {
 // compared; a serving image without a sha tag is not compared. (CHAOS-7520: a Python image tag is no
 // longer read; see TestMigrateJobIgnoresAStalePythonImageTag.)
 func TestMigrateJobLockstepAcceptsMatchingGoImagesAndSkipsWhatItCannotCompare(t *testing.T) {
+	t.Parallel()
+
 	const digest = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	for name, sets := range map[string][]string{
 		"queryApi by digest (never compared), hook tag set":                     {lockstepHook, "queryApi.enabled=true", "queryApi.image.repository=" + digest},
@@ -328,6 +348,8 @@ func TestMigrateJobLockstepAcceptsMatchingGoImagesAndSkipsWhatItCannotCompare(t 
 		"a serving image without a sha tag (chart default tag) is not compared": {lockstepHook, "queryApi.enabled=true"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			if _, _, refusal := renderJobs(t, sets...); refusal != "" {
 				t.Fatalf("render refused: %q", refusal)
 			}
@@ -339,6 +361,8 @@ func TestMigrateJobLockstepAcceptsMatchingGoImagesAndSkipsWhatItCannotCompare(t 
 // migrate Job as DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST only when it is set;
 // a value that is not sha256:<64 hex> is refused.
 func TestMigrateJobClassDecisionLiveSchemaDigest(t *testing.T) {
+	t.Parallel()
+
 	digest := "sha256:" + strings.Repeat("b", 64)
 	for _, testCase := range []struct {
 		name    string
@@ -350,6 +374,8 @@ func TestMigrateJobClassDecisionLiveSchemaDigest(t *testing.T) {
 		{"set: the env carries the value", []string{"migrations.hook.classDecisionLiveSchemaDigest=" + digest}, digest, true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
 			jobs, _, refusal := renderJobs(t, testCase.sets...)
 			if refusal != "" {
 				t.Fatalf("render refused: %s", refusal)
@@ -365,6 +391,8 @@ func TestMigrateJobClassDecisionLiveSchemaDigest(t *testing.T) {
 	}
 	for _, bad := range []string{"sha256:abc", "fdff794c3fa3", "sha256:" + strings.Repeat("B", 64)} {
 		t.Run("refused "+bad, func(t *testing.T) {
+			t.Parallel()
+
 			_, _, refusal := renderJobs(t, "migrations.hook.classDecisionLiveSchemaDigest="+bad)
 			if !strings.Contains(refusal, "classDecisionLiveSchemaDigest") {
 				t.Fatalf("render of %q was not refused by name: %q", bad, refusal)

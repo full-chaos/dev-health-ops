@@ -22,12 +22,16 @@ func maxAuthorizeBatchItems(t *testing.T) string {
 }
 
 func TestAuthPDPRateLimitBurstFloorIsTheLargestBatch(t *testing.T) {
+	t.Parallel()
+
 	if got := maxAuthorizeBatchItems(t); got != "100" {
 		t.Fatalf("the largest authorize batch is %s: update the chart floor (auth-service.yaml, pdpRateLimit) and its schema note", got)
 	}
 }
 
 func TestAuthPDPRateLimitDefaultsRender(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -46,6 +50,8 @@ func TestAuthPDPRateLimitDefaultsRender(t *testing.T) {
 }
 
 func TestAuthPDPRateLimitOverridesRender(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authWith(
 		"--set-json", `authService.pdpRateLimit.callerPerSecond=0.5`, "--set", "authService.pdpRateLimit.callerBurst=100",
 		"--set-json", `authService.pdpRateLimit.routePerSecond=100000`, "--set", "authService.pdpRateLimit.routeBurst=100")...)
@@ -67,6 +73,8 @@ func TestAuthPDPRateLimitOverridesRender(t *testing.T) {
 
 // A burst under the largest batch refuses that batch for ever; the render refuses it, the service start never does (D6465).
 func TestAuthPDPRateLimitBurstUnderTheLargestBatchFailsTheRender(t *testing.T) {
+	t.Parallel()
+
 	for _, key := range []string{"callerBurst", "routeBurst"} {
 		for _, burst := range []string{"99", "1"} {
 			_, out, err := renderAuth(t, authWith("--set", "authService.pdpRateLimit."+key+"="+burst)...)
@@ -78,6 +86,8 @@ func TestAuthPDPRateLimitBurstUnderTheLargestBatchFailsTheRender(t *testing.T) {
 }
 
 func TestAuthPDPRateLimitOutOfRangeFailsTheSchema(t *testing.T) {
+	t.Parallel()
+
 	for _, set := range []string{"callerPerSecond=0", "callerBurst=100001", "routePerSecond=100001", "routeBurst=0"} {
 		if _, _, err := renderAuth(t, authWith("--set-json", "authService.pdpRateLimit."+set)...); err == nil {
 			t.Errorf("%s rendered, want a schema refusal", set)

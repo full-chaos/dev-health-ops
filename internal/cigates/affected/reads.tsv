@@ -124,6 +124,12 @@ internal/cigates/proofteardown	test	ci
 internal/cigates/queuecreds	code	contracts
 internal/cigates/raceunweighted	test	ci
 internal/cigates/racescope	test	ci
+internal/cigates/retiredcredentialnames	test	.github
+internal/cigates/retiredcredentialnames	test	ci
+internal/cigates/retiredcredentialnames	test	contracts
+internal/cigates/retiredcredentialnames	test	deploy
+internal/cigates/retiredcredentialnames	test	docs
+internal/cigates/retiredcredentialnames	test	docs-data
 internal/cigates/routing	test	ci
 internal/cigates/routing	test	compose.yml
 internal/cigates/routing	test	deploy

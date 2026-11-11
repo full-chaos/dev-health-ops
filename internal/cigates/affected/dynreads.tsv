@@ -289,6 +289,7 @@ internal/cigates/racescope	scan.go
 internal/cigates/raceunweighted	raceunweighted_test.go
 internal/cigates/releasetag	parity_test.go
 internal/cigates/releasetag	releasetag.go
+internal/cigates/retiredcredentialnames	census_test.go
 internal/cigates/routing	chart_test.go
 internal/cigates/routing	cut_test.go
 internal/cigates/routing	deps.go

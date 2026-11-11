@@ -107,6 +107,8 @@ internal/cigates/raceunweighted	raceunweighted_test.go	unexpressed
 internal/cigates/releasetag	parity_test.go	cmd/cigate
 internal/cigates/releasetag	parity_test.go	unexpressed
 internal/cigates/releasetag	releasetag.go	unexpressed
+internal/cigates/retiredcredentialnames	census_test.go	unexpressed
+internal/cigates/retiredcredentialnames	planted_test.go	unexpressed
 internal/cigates/routing	alias_test.go	unexpressed
 internal/cigates/routing	chart_test.go	unexpressed
 internal/cigates/routing	cut_test.go	unexpressed

@@ -812,89 +812,37 @@ var realEnvTree struct {
 	readers envReaderCache
 }
 
-// loadEnvUnits keeps each packages.Load's units and errors private until it completes.
-// An optional environment lets tiny fixture modules disable proxies and inherited GOFLAGS.
-func loadEnvUnits(root string, flags []string, env ...[]string) (units []envUnit, errs []string) {
-	config := &packages.Config{
-		Mode:       packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
-		Dir:        root,
-		Tests:      true,
-		BuildFlags: flags,
-	}
-	if len(env) > 0 {
-		config.Env = env[0]
-	}
-	pkgs, err := packages.Load(config, "./internal/...", "./cmd/...")
-	if err != nil {
-		return nil, []string{err.Error()}
-	}
-	for _, pkg := range pkgs {
-		for _, perr := range pkg.Errors {
-			errs = append(errs, pkg.ID+": "+perr.Error())
-		}
-		files := map[string]*ast.File{}
-		for _, file := range pkg.Syntax {
-			rel, rerr := filepath.Rel(root, pkg.Fset.Position(file.Pos()).Filename)
-			if rerr != nil || strings.HasPrefix(rel, "..") {
-				continue
-			}
-			files[filepath.ToSlash(rel)] = file
-		}
-		units = append(units, envUnit{files: files, info: pkg.TypesInfo, pkg: pkg.Types, fset: pkg.Fset})
-	}
-	return units, errs
-}
-
-func envTreeSerial(env []string) bool {
-	for i := len(env) - 1; i >= 0; i-- {
-		if value, ok := strings.CutPrefix(env[i], "CHARTGATES_ENVTREE_SERIAL="); ok {
-			return value == "1"
-		}
-	}
-	return false
-}
-
-func loadEnvTree(root string, env []string) (units []envUnit, errs []string) {
-	flags := [][]string{nil, {"-tags=integration"}}
-	type result struct {
-		units []envUnit
-		errs  []string
-	}
-	results := make([]result, len(flags))
-	load := func(i int) { results[i].units, results[i].errs = loadEnvUnits(root, flags[i], env) }
-	if envTreeSerial(env) {
-		for i := range flags {
-			load(i)
-		}
-	} else {
-		var done sync.WaitGroup
-		for i := range flags {
-			done.Add(1)
-			go func() {
-				defer done.Done()
-				load(i)
-			}()
-		}
-		done.Wait()
-	}
-	// Preserve the serial order, including errors: default tags, then integration.
-	for _, result := range results {
-		units = append(units, result.units...)
-		errs = append(errs, result.errs...)
-	}
-	return units, errs
-}
-
+// packages.Load is not safe to run twice at once here
 func loadRealEnvTree(root string) {
 	start := time.Now()
-	env := os.Environ()
-	realEnvTree.units, realEnvTree.errs = loadEnvTree(root, env)
-	realEnvTree.elapsed = time.Since(start)
-	mode := "concurrently"
-	if envTreeSerial(env) {
-		mode = "serially"
+	for _, flags := range [][]string{nil, {"-tags=integration"}} {
+		config := &packages.Config{
+			Mode:       packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+			Dir:        root,
+			Tests:      true,
+			BuildFlags: flags,
+		}
+		pkgs, err := packages.Load(config, "./internal/...", "./cmd/...")
+		if err != nil {
+			realEnvTree.errs = append(realEnvTree.errs, err.Error())
+			continue
+		}
+		for _, pkg := range pkgs {
+			for _, perr := range pkg.Errors {
+				realEnvTree.errs = append(realEnvTree.errs, pkg.ID+": "+perr.Error())
+			}
+			files := map[string]*ast.File{}
+			for _, file := range pkg.Syntax {
+				rel, rerr := filepath.Rel(root, pkg.Fset.Position(file.Pos()).Filename)
+				if rerr != nil || strings.HasPrefix(rel, "..") {
+					continue
+				}
+				files[filepath.ToSlash(rel)] = file
+			}
+			realEnvTree.units = append(realEnvTree.units, envUnit{files: files, info: pkg.TypesInfo, pkg: pkg.Types, fset: pkg.Fset})
+		}
 	}
-	fmt.Fprintf(os.Stderr, "chartgates: env tree loaded %s in %s\n", mode, realEnvTree.elapsed)
+	realEnvTree.elapsed = time.Since(start)
 }
 
 // envReaderCache publishes one scan and returns independent maps and nested slices.

@@ -141,7 +141,7 @@ func census(t *testing.T, root string, allow map[string]allowance) []hit {
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
 		}
-		if bytes.IndexByte(body, 0) >= 0 {
+		if bytes.IndexByte(body, 0) >= 0 || !mayHold(body) {
 			continue
 		}
 		for i, line := range strings.Split(string(body), "\n") {
@@ -150,6 +150,18 @@ func census(t *testing.T, root string, allow map[string]allowance) []hit {
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].String() < hits[j].String() })
 	return hits
+}
+
+// literals holds one literal each retired pattern contains, so a file holding none of them is skipped unsplit.
+var literals = [][]byte{[]byte("internal_service_credentials"), []byte("service-credentials"), []byte("servicecred")}
+
+func mayHold(body []byte) bool {
+	for _, l := range literals {
+		if bytes.Contains(body, l) {
+			return true
+		}
+	}
+	return false
 }
 
 func match(rel, where, text string, permitted map[string]bool) []hit {

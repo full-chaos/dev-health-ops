@@ -24,6 +24,6 @@ A credential being accepted does not prove that it has the right namespace, repo
 ## Related guides
 
 - [Workload administration](workload-administration.md)
-- [Manage External Push credentials](../data-sources/external-push-credentials.md)
+- [Manage External Push credentials](external-push-credentials.md)
 - [Grant access to repositories](../teams-and-identities/grant-repository-access.md)
 - [ACR credential authority](../../reference/auth/acr-credential-authority.md)

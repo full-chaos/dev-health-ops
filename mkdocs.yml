@@ -116,7 +116,6 @@ nav:
           - Jira Service Management: admin/data-sources/jira-atlassian.md
           - Incident response / PagerDuty: admin/data-sources/incident-response.md
           - Credential lifecycle: admin/data-sources/credential-lifecycle.md
-          - External Push credentials: admin/data-sources/external-push-credentials.md
       - Sync and coverage:
           - admin/sync-and-coverage/index.md
           - Status and freshness: admin/sync-and-coverage/status-and-freshness.md
@@ -125,6 +124,7 @@ nav:
           - admin/security-and-audit/index.md
           - Credentials: admin/security-and-audit/credentials.md
           - Service accounts: admin/security-and-audit/service-accounts.md
+          - External Push credentials: admin/security-and-audit/external-push-credentials.md
           - Workload administration: admin/security-and-audit/workload-administration.md
           - Privacy and telemetry: admin/security-and-audit/privacy.md
       - Ask Dev:

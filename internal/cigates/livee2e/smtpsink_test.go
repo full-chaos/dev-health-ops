@@ -166,8 +166,9 @@ func TestSMTPSinkRefusesAddressesBeforeWriting(t *testing.T) {
 			state := t.TempDir()
 			dir := filepath.Join(state, "tokens")
 			port := filepath.Join(state, "port")
-			var out, logs bytes.Buffer
-			if rc := Run([]string{"smtp-sink", addr, dir, port}, func(string) string { return "" }, &out, &logs); rc != 1 {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := ServeSMTPSink(ctx, addr, dir, port, io.Discard); err == nil {
 				t.Fatal("unsafe address accepted")
 			}
 			for _, p := range []string{dir, port} {
@@ -232,9 +233,20 @@ func TestMailTokenCLI(t *testing.T) {
 		} else if rc != 1 || out.Len() != 0 || logs.Len() == 0 {
 			t.Fatal("invalid or missing token accepted")
 		}
-		if strings.Contains(logs.String(), "cli-secret") {
-			t.Fatal("mail-token error leaked a token")
+		if strings.Contains(logs.String(), "cli-secret") || strings.Contains(logs.String(), dir) {
+			t.Fatal("mail-token error leaked a token or a path")
 		}
+	}
+	key, err := mailKey("badfile@example.test", "reset")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, key), []byte("not a token hunter2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, logs bytes.Buffer
+	if rc := Run([]string{"mail-token", dir, "badfile@example.test", "reset"}, func(string) string { return "" }, &out, &logs); rc != 1 || out.Len() != 0 || strings.Contains(logs.String(), "hunter2") {
+		t.Fatal("a malformed stored token was printed or leaked in the error")
 	}
 }
 

@@ -21,7 +21,6 @@ import (
 func TestLLMSettingsDeleteClearsDerivedRows(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-llm-delete-32-bytes!"
 
 	orgA, orgB, orgOrphan := uuid.New(), uuid.New(), uuid.New()
 	adminUserID := uuid.New()
@@ -52,7 +51,6 @@ func TestLLMSettingsDeleteClearsDerivedRows(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -88,7 +86,7 @@ VALUES ($1, $2, $3, $4, 'v', false, NULL, now(), now())`, uuid.New(), org.String
 			return tokens
 		}),
 	})
-	base, pool := startGoServer(t, ctx, venue, jwtKey)
+	base, pool := startGoServer(t, ctx, venue)
 	auth := func(name string) map[string]string {
 		return map[string]string{"Authorization": "Bearer " + venue.Tokens[name]}
 	}

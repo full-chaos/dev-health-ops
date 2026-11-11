@@ -218,7 +218,7 @@ func TestCreateOrgInviteVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("invites", t.Name(), "1b2b8dd73ec893c3c7970f0b453c0bd1622f8c46b533f8fd41a1876eb73b5e8f"))
 	root := repoRoot(t)
 	nextID := goldenIDs("inv")
-	const jwtKey = "venue-oracle-test-secret-key-for-org-invites-flow-32-bytes!"
+	const linkKey = "venue-oracle-test-secret-key-for-org-invites-flow-32-bytes!"
 
 	orgID, plainOrgID, otherOrgID := nextID(), nextID(), nextID()
 	ownerID, adminID, secondAdminID, memberID, outsiderID, superID, plainOwnerID, otherAdminID :=
@@ -232,7 +232,6 @@ func TestCreateOrgInviteVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS=" + fromAddress,
 			"SMTP_HOST=" + smtpHost, "SMTP_PORT=" + strconv.Itoa(smtpPort),
@@ -378,8 +377,8 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.
 	if err != nil {
 		t.Fatalf("go mail sender: %v", err)
 	}
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
-		deps.Invites = admin.InviteConfig{Mail: goSender, LinkSecret: jwtKey, AppBaseURL: appBaseURL, AppBaseURLSet: true}
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
+		deps.Invites = admin.InviteConfig{Mail: goSender, LinkSecret: linkKey, AppBaseURL: appBaseURL, AppBaseURLSet: true}
 	})
 
 	var goResponses []venueoracle.Response
@@ -438,7 +437,7 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.
 	// the sha256 of it -- so a token minted by either plane is one the other
 	// would accept. Each plane is checked on its own raw values; the outcome,
 	// invite by invite, is what the golden holds and what is compared.
-	goTokenChecks := inviteTokenChecks(t, ctx, "go", venue.AdminURI(t, venue.GoDB), goResponses, goMails, jwtKey)
+	goTokenChecks := inviteTokenChecks(t, ctx, "go", venue.AdminURI(t, venue.GoDB), goResponses, goMails, linkKey)
 	pythonTokenChecks := golden.CompareRows(t, "invite token checks", goTokenChecks)
 	if !strings.Contains(pythonTokenChecks, "|mailed|the token is _build_token(invite id)") {
 		t.Errorf("no invite of the Python plane was mailed with a checked token:\n%s", pythonTokenChecks)
@@ -482,8 +481,8 @@ FROM audit_logs WHERE action = 'member_invited'`
 	if sendErr := brokenSender.Send(ctx, mailpkg.Message{To: "x@example.com", Subject: "s", HTML: "<p>x</p>"}); sendErr == nil {
 		t.Fatal("the broken sender is supposed to fail against a closed port")
 	}
-	brokenBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
-		deps.Invites = admin.InviteConfig{Mail: brokenSender, LinkSecret: jwtKey}
+	brokenBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
+		deps.Invites = admin.InviteConfig{Mail: brokenSender, LinkSecret: linkKey}
 	})
 	stranded := venueoracle.Do(t, brokenBase, post("invite with a failing mail sender", "owner", orgID, `{"email":"stranded@example.com"}`))
 	if stranded.Status != 201 {

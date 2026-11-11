@@ -26,13 +26,11 @@ import (
 func TestLLMSettingsRefusesABYOProviderWithoutAModel(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-llm-model-rule-32-bytes!"
 	org, adminUserID := uuid.New(), uuid.New()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			for _, stmt := range []struct {
@@ -51,7 +49,7 @@ VALUES ($1, 'llmmodelrule-admin@example.com', true, true, false, 0, now(), now()
 			return map[string]map[string]any{"a": {"user_id": adminUserID.String(), "email": "llmmodelrule-admin@example.com", "org_id": org.String(), "role": "admin"}}
 		}),
 	})
-	base, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	base, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(llmVenueEncryptionKey), "")
 		if err != nil {
 			t.Fatalf("build decryptor: %v", err)

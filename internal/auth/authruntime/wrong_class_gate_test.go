@@ -48,8 +48,8 @@ import (
 // dialCounter is the auth store's Postgres: a TCP listener that counts every connection a request makes and closes
 // it, so each store read is one counted dial that then fails. A pgx cancel request is not a dial of a request: pgx
 // sends it from a goroutine of its own after a failed connect, at a time the request does not wait for, so it can land
-// after any settle window. It is told by its first packet (cancelRequestCode) and counted apart, never as a dial and
-// never as a late one. Every other connection is counted before it is closed, so the request cannot answer before its
+// after any settle window. It is told by its first packet (cancelRequestCode) and not counted: not as a dial and
+// not as a late one. Every other connection is counted before it is closed, so the request cannot answer before its
 // dial is counted. A dial while no cell runs is late: it is kept, with the cell it followed, and fails the gate; so
 // does a cell whose dials never settle.
 type dialCounter struct {

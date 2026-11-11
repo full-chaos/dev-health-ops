@@ -776,7 +776,10 @@ case "$*" in
 esac
 [ "$name" = auth-service ] || [ ! -f "$FAKE_STATE/fail-stub" ] || exit 1
 pid=$(cat "$FAKE_STATE/$name.pid" 2>/dev/null)
-[ "$(cat "$FAKE_STATE/$name.ready" 2>/dev/null)" = "$pid" ] && kill -0 "$pid" 2>/dev/null
+if [ "$(cat "$FAKE_STATE/$name.ready" 2>/dev/null)" = "$pid" ] && kill -0 "$pid" 2>/dev/null; then code=200; else code=000; fi
+[ "$name" = auth-service ] || [ ! -f "$FAKE_STATE/stub-599" ] || code=599
+case "$*" in *%{http_code}*) printf '%s' "$code" ;; esac
+[ "$code" != 000 ]
 `, 0o755)
 	sleep, err := exec.LookPath("sleep")
 	if err != nil {
@@ -890,12 +893,12 @@ func TestLiveE2EEnableSocialAndSSO(t *testing.T) {
 					t.Errorf("missing build %q", want)
 				}
 				curl := liveE2ERead(t, filepath.Join(state, "curl.calls"))
-				ca, url := "social", "https://api.github.com/"
+				readyCurl := "-sS --max-time 1 -o /dev/null -w %{http_code} --cacert " + state + "/social/ca.pem -H Authorization: Bearer gh-live https://api.github.com/user"
 				if name == "idpstub" {
-					ca, url = "idp", "https://localhost:9443/"
+					readyCurl = "-sS --max-time 1 -o /dev/null -w %{http_code} --cacert " + state + "/idp/ca.pem https://localhost:9443/.well-known/openid-configuration"
 				}
-				if !strings.Contains(curl, "-sS --max-time 1 -o /dev/null --cacert "+state+"/"+ca+"/ca.pem "+url) {
-					t.Errorf("%s readiness did not trust its CA or would refuse a non-2xx response", name)
+				if !strings.Contains(curl, readyCurl) {
+					t.Errorf("%s readiness did not trust its CA or did not ask a path that answers 200: readyCurl %q", name, readyCurl)
 				}
 			}
 			hosts := liveE2ERead(t, filepath.Join(state, "hosts"))
@@ -997,6 +1000,71 @@ func TestLiveE2ESocialRefusesOutsideAGitHubRunnerBeforeAnyWrite(t *testing.T) {
 					t.Errorf("%s exists: the refusal came after a write", name)
 				}
 			}
+		})
+	}
+}
+
+func TestLiveE2EStartIdpNeedsNoGitHubRunner(t *testing.T) {
+	state, fake, _ := liveE2EStubFakes(t)
+	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+	for _, args := range [][]string{{"enable-sso", state}, {"start-idp", state, "-redirect-uri", "http://127.0.0.1:3002/callback"}} {
+		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh")}, args...)...)
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s without GITHUB_ACTIONS: %v %s", args[0], err, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(state, "idpstub.pid")); err != nil {
+		t.Fatal("start-idp did not start the stub")
+	}
+}
+
+func TestLiveE2EStubAnsweringNon200IsNotReady(t *testing.T) {
+	for _, verb := range []string{"enable-social", "start-idp"} {
+		t.Run(verb, func(t *testing.T) {
+			state, _, run := liveE2EStubFakes(t)
+			if out, err := run("enable-sso", state); err != nil {
+				t.Fatalf("enable-sso: %v %s", err, out)
+			}
+			writeExec(t, filepath.Join(state, "stub-599"), "", 0o600)
+			name := map[string]string{"enable-social": "providerstub", "start-idp": "idpstub"}[verb]
+			out, err := run(verb, state)
+			if err == nil || !strings.Contains(out, name+" did not become ready") {
+				t.Fatalf("a stub answering 599 read as ready: %v %s", err, out)
+			}
+		})
+	}
+}
+
+func TestLiveE2EStubSecondStartIsRefusedAndDownStopsTheFirst(t *testing.T) {
+	for _, verb := range []string{"enable-social", "start-idp"} {
+		t.Run(verb, func(t *testing.T) {
+			state, _, run := liveE2EStubFakes(t)
+			if out, err := run("enable-sso", state); err != nil {
+				t.Fatalf("enable-sso: %v %s", err, out)
+			}
+			pidFile := filepath.Join(state, map[string]string{"enable-social": "providerstub.pid", "start-idp": "idpstub.pid"}[verb])
+			if out, err := run(verb, state); err != nil {
+				t.Fatalf("first %s: %v %s", verb, err, out)
+			}
+			first := strings.TrimSpace(liveE2ERead(t, pidFile))
+			out, err := run(verb, state)
+			if err == nil || !strings.Contains(out, "already runs (pid "+first+")") {
+				t.Fatalf("a second %s was not refused: %v %s", verb, err, out)
+			}
+			if got := strings.TrimSpace(liveE2ERead(t, pidFile)); got != first {
+				t.Fatalf("the pid file changed from %s to %s", first, got)
+			}
+			if out, err := run("down", state); err != nil {
+				t.Fatalf("down: %v %s", err, out)
+			}
+			for i := 0; i < 50; i++ {
+				if _, statErr := os.Stat("/proc/" + first); statErr != nil {
+					return
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			t.Fatalf("the first stub (pid %s) is still running after down", first)
 		})
 	}
 }

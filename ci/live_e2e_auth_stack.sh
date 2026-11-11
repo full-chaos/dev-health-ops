@@ -405,10 +405,13 @@ refresh_ca_bundle() {
   done
 }
 
+# wait_stub NAME URL CA [CURL_ARG...]: ready only when the readiness path answers HTTP 200 (a stub's 599 is not ready).
 wait_stub() {
-  local name="$1" url="$2" ca="$3" attempt=0 deadline=$((SECONDS + 30))
+  local name="$1" url="$2" ca="$3" attempt=0 deadline=$((SECONDS + 30)) code
+  shift 3
   while [ "${attempt}" -lt 30 ] && [ "${SECONDS}" -lt "${deadline}" ]; do
-    if curl -sS --max-time 1 -o /dev/null --cacert "${ca}" "${url}" 2>/dev/null; then return 0; fi
+    code="$(curl -sS --max-time 1 -o /dev/null -w '%{http_code}' --cacert "${ca}" "$@" "${url}" 2>/dev/null || true)"
+    if [ "${code}" = 200 ]; then return 0; fi
     attempt=$((attempt + 1))
     sleep 1
   done
@@ -416,9 +419,18 @@ wait_stub() {
   die "${name} did not become ready"
 }
 
+# refuse_second_start PIDFILE NAME: a start verb never overwrites the pid file of a stub that still runs (down knows one pid).
+refuse_second_start() {
+  local pid
+  [ -f "$1" ] || return 0
+  pid="$(cat "$1")"
+  if [[ "${pid}" =~ ^[0-9]+$ ]] && [ -d "/proc/${pid}" ]; then die "$2 already runs (pid ${pid}): run down first"; fi
+}
+
 enable_social() {
   # Hard guard, before any write: the verb edits the host /etc/hosts and binds :443 as root, which redirects GitHub for every process on the host.
   [ "${GITHUB_ACTIONS:-}" = true ] || die "enable-social edits /etc/hosts and binds :443: it runs only on a GitHub Actions runner (GITHUB_ACTIONS=true)"
+  refuse_second_start "$(cd "$1" && pwd)/providerstub.pid" providerstub
   command -v sudo >/dev/null 2>&1 || die "enable-social requires sudo for /etc/hosts and port 443"
   STATE="$(cd "$1" && pwd)"
   [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
@@ -439,7 +451,7 @@ enable_social() {
       -cert "${STATE}/social/server.pem" -key "${STATE}/social/server.key" \
       -listen 127.0.0.1:443 -admin 127.0.0.1:9091 >"${STATE}/logs/providerstub.log" 2>&1 &
   )
-  wait_stub providerstub https://api.github.com/ "${STATE}/social/ca.pem"
+  wait_stub providerstub https://api.github.com/user "${STATE}/social/ca.pem" -H 'Authorization: Bearer gh-live'
   chmod 600 "${STATE}/auth-service.env"
   printf '%s\n' 'SOCIAL_GITHUB_CLIENT_ID=gh-client' 'SOCIAL_GITHUB_CLIENT_SECRET=gh-secret' \
     "SSL_CERT_FILE=${STATE}/ca-bundle.pem" >>"${STATE}/auth-service.env"
@@ -473,13 +485,14 @@ enable_sso() {
 start_idp() {
   STATE="$(cd "$1" && pwd)"
   shift
+  refuse_second_start "${STATE}/idpstub.pid" idpstub
   (
     cd "${STATE}"
     nohup "${STATE}/bin/idpstub" serve -cert "${STATE}/idp/server.pem" -key "${STATE}/idp/server.key" \
       -listen 127.0.0.1:9443 -base-url https://localhost:9443 "$@" >"${STATE}/logs/idpstub.log" 2>&1 &
     echo "$!" >"${STATE}/idpstub.pid"
   )
-  wait_stub idpstub https://localhost:9443/ "${STATE}/idp/ca.pem"
+  wait_stub idpstub https://localhost:9443/.well-known/openid-configuration "${STATE}/idp/ca.pem"
 }
 
 # verify_user STATE EMAIL: the e-mail of one user is verified, in auth.users (the authority while users are owned; its

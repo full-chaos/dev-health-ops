@@ -412,12 +412,11 @@ refresh_ca_bundle() {
 
 # wait_stub NAME URL CA [CURL_ARG...]: ready only when the readiness path answers HTTP 200 (a stub's 599 is not ready).
 wait_stub() {
-  local name="$1" url="$2" ca="$3" attempt=0 deadline=$((SECONDS + 30)) code
+  local name="$1" url="$2" ca="$3" deadline=$((SECONDS + ${LIVE_E2E_STUB_WAIT_SECONDS:-30})) code
   shift 3
-  while [ "${attempt}" -lt 30 ] && [ "${SECONDS}" -lt "${deadline}" ]; do
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
     code="$(curl -sS --max-time 1 -o /dev/null -w '%{http_code}' --cacert "${ca}" "$@" "${url}" 2>/dev/null || true)"
     if [ "${code}" = 200 ]; then return 0; fi
-    attempt=$((attempt + 1))
     sleep 1
   done
   tail -n 40 "${STATE}/logs/${name}.log" >&2 || true
@@ -454,13 +453,12 @@ enable_mail() {
       >"${STATE}/logs/smtpsink.log" 2>&1 &
     echo "$!" >"${STATE}/smtpsink.pid"
   )
-  local port='' attempt=0 deadline=$((SECONDS + 30)) ready=false
-  while [ "${attempt}" -lt 30 ] && [ "${SECONDS}" -lt "${deadline}" ]; do
+  local port='' deadline=$((SECONDS + ${LIVE_E2E_MAIL_WAIT_SECONDS:-30})) ready=false
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
     if [ -f "${STATE}/mail/port" ]; then
       port="$(cat "${STATE}/mail/port")"
       if [[ "${port}" =~ ^[0-9]+$ ]] && smtp_ready "${port}" 2>/dev/null; then ready=true; break; fi
     fi
-    attempt=$((attempt + 1))
     sleep 1
   done
   if [ "${ready}" != true ]; then

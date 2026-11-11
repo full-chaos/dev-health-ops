@@ -799,7 +799,7 @@ case "$*" in *%{http_code}*) printf '%s' "$code" ;; esac
 	}
 	writeExec(t, filepath.Join(fake, "sleep"), "#!/bin/sh\n[ \"$1\" != 1 ] || set -- 0.01\nexec '"+sleep+"' \"$@\"\n", 0o755)
 	writeExec(t, filepath.Join(fake, "openssl"), "#!/bin/sh\n[ \"$*\" = 'rand -base64 32' ] || exit 2\nprintf 'new-state-key+test/==\\n'\n", 0o755)
-	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "GITHUB_ACTIONS=true"}
+	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "GITHUB_ACTIONS=true", "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
 	run := func(args ...string) (string, error) {
 		t.Helper()
 		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh")}, args...)...)
@@ -993,7 +993,7 @@ func TestLiveE2ESocialRefusesOutsideAGitHubRunnerBeforeAnyWrite(t *testing.T) {
 	for _, value := range []string{"", "1", "True", "false", "true "} {
 		t.Run("GITHUB_ACTIONS="+value, func(t *testing.T) {
 			state, fake, _ := liveE2EStubFakes(t)
-			env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+			env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
 			if value != "" {
 				env = append(env, "GITHUB_ACTIONS="+value)
 			}
@@ -1018,7 +1018,7 @@ func TestLiveE2ESocialRefusesOutsideAGitHubRunnerBeforeAnyWrite(t *testing.T) {
 
 func TestLiveE2EStartIdpNeedsNoGitHubRunner(t *testing.T) {
 	state, fake, _ := liveE2EStubFakes(t)
-	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
 	for _, args := range [][]string{{"enable-sso", state}, {"start-idp", state, "-redirect-uri", "http://127.0.0.1:3002/callback"}} {
 		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh")}, args...)...)
 		cmd.Env = env
@@ -1305,7 +1305,7 @@ func TestLiveE2EEnableMail(t *testing.T) {
 	state, fake, run := liveE2EStubFakes(t)
 	runWithoutRunner := func(args ...string) (string, error) {
 		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci/live_e2e_auth_stack.sh")}, args...)...)
-		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
 		raw, err := cmd.CombinedOutput()
 		return string(raw), err
 	}
@@ -1383,7 +1383,7 @@ func TestLiveE2EEnableMail(t *testing.T) {
 		key := kind + "." + hex.EncodeToString([]byte("reader@example.test"))
 		writeExec(t, filepath.Join(state, "mail/tokens", key), token, 0o600)
 		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci/live_e2e_auth_stack.sh"), "mail-token", state, "Reader@example.test", kind)
-		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
 		var out, errb bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &errb

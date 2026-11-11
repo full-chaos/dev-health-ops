@@ -5964,6 +5964,19 @@ check_auth_scope_selftest() {
   [ "${rc}" -eq 0 ] || die "auth scope: the scope selftest refused (rc ${rc}; reason above)"
 }
 
+# check_auth_leg_stage STAGE LEG COUNT: `auth STAGE LEG COUNT` (STAGE = KIND-leg). LEG `all` is the all-legs form (CHAOS-13520):
+# it only lists (the leg guards read it) and never runs a test, so it needs AUTH_LEG_LIST=1. Each stage keeps its own case arm in
+# check_auth, the form the workflow guard reads.
+check_auth_leg_stage() {
+  local stage="$1"
+  if [ "${2}" = all ]; then
+    [ "${AUTH_LEG_LIST:-}" = "1" ] || die "auth ${stage} all needs AUTH_LEG_LIST=1: it lists every leg and runs no test"
+    test_legs_all "auth ${stage}" "${3}" check_auth_leg "${stage%-leg}"
+  else
+    check_auth_leg "${stage%-leg}" "${2}" "${3}"
+  fi
+}
+
 check_auth() {
   case "${1:-all}" in
     fmt) check_auth_fmt ;;
@@ -5971,15 +5984,9 @@ check_auth() {
     test) check_auth_test ;;
     race) check_auth_race ;;
     race-integration) check_auth_race_integration ;;
-    test-leg|race-leg|race-integration-leg)
-      if [ "${2:-}" = all ]; then
-        # The all-legs form only lists (the leg guards read it); it never runs a test.
-        [ "${AUTH_LEG_LIST:-}" = "1" ] || die "auth ${1} all needs AUTH_LEG_LIST=1: it lists every leg and runs no test"
-        test_legs_all "auth ${1}" "${3:-}" check_auth_leg "${1%-leg}"
-      else
-        check_auth_leg "${1%-leg}" "${2:-}" "${3:-}"
-      fi
-      ;;
+    test-leg) check_auth_leg_stage test-leg "${2:-}" "${3:-}" ;;
+    race-leg) check_auth_leg_stage race-leg "${2:-}" "${3:-}" ;;
+    race-integration-leg) check_auth_leg_stage race-integration-leg "${2:-}" "${3:-}" ;;
     history) check_auth_history ;;
     fuzz) check_auth_fuzz "${2:-}" ;;
     fuzz-registry) check_auth_fuzz_registry ;;

@@ -35,6 +35,7 @@ const (
 	proofSessState  = "internal/auth/authapi/session_state_user_tokens_test.go"
 	proofDelegated  = "internal/auth/authapi/delegated_user_tokens_test.go"
 	proofAuthorize  = "internal/auth/authapi/authorize_user_tokens_test.go"
+	proofAcrEvents  = "internal/auth/authapi/acr_events_user_tokens_test.go"
 	pushRoutes      = "TestExternalPushAuthenticatedRoutesRefuseUserTokens"
 	acrTest         = "TestInternalACRRoutesRefuseUserTokens"
 	stripeTest      = "TestStripeWebhookRefusesUserTokens"
@@ -49,6 +50,7 @@ const (
 	sessStateTest   = "TestSessionStateRefusesUserTokens"
 	delegatedTest   = "TestDelegatedRoutesRefuseUserTokens"
 	authorizeTest   = "TestAuthorizeRefusesUserTokens"
+	acrEventsTest   = "TestAcrEventsRefusesUserTokens"
 	exemptExchange  = "the credential is the social provider's own token in the request body, sent to the provider; no bearer of ours is read; a user flow, outside this leaf"
 )
 
@@ -116,6 +118,7 @@ var negativeProofs = map[string]negativeProof{
 	"auth-service|POST /internal/v1/sessions/delegated/end [dev-health-auth-service @api]":                     {file: proofDelegated, test: delegatedTest},
 	"auth-service|POST /v1/authorize [dev-health-auth-service @api]":                                           {file: proofAuthorize, test: authorizeTest},
 	"auth-service|POST /v1/authorize:batch [dev-health-auth-service @api]":                                     {file: proofAuthorize, test: authorizeTest},
+	"auth-service|POST /internal/v1/acr/credential-events [dev-health-auth-service @internal]":                 {file: proofAcrEvents, test: acrEventsTest},
 	"auth-service|POST /v1/token/refresh [dev-health-auth-service @api]":                                       {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/refresh [dev-health-auth-service @api]":                                    {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/logout [dev-health-auth-service @api]":                                     {file: proofRefresh, test: refreshTest},
@@ -236,7 +239,8 @@ func TestNegativeProofCensus(t *testing.T) {
 	// CHAOS-12128 the principal access read row; CHAOS-12189 the session state row; CHAOS-10992 the organization onboard and create rows.
 	// CHAOS-10987 the two delegated session rows; CHAOS-12273 the four service account key rows; CHAOS-12275 the organization rename row; CHAOS-10841 the two authorize rows; CHAOS-12670 the eight read rows.
 	// CHAOS-13265 took query-api GET /buildinfo out: it accepts a platform admin's user access token. CHAOS-13378 the four user-admin rows.
-	if len(derivedRows(t)) != 62 || proven != 61 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 62, 61, 1", len(derivedRows(t)), proven, exempt)
+	// CHAOS-13526 the acr credential events row.
+	if len(derivedRows(t)) != 63 || proven != 62 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 63, 62, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

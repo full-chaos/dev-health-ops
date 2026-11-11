@@ -73,6 +73,10 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 		// mounts the session issue routes, with it.
 		exchangeEnvironment(t, env)
 		workloadIssueEnvironment(env)
+		// The acr credential events route is served on the internal listener only: the probe opens that listener
+		// and names the acr-api workload subject with the issuer.
+		env[internalAddressEnv] = "127.0.0.1:0"
+		acrEventsEnvironment(env)
 	}
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(provisioningEnvironment(ssoEnvironment(compatEnvironment(env))))})
 	if err != nil {
@@ -95,7 +99,11 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 		}
 		switch server := announced.listener.(type) {
 		case *httpapi.Server:
-			handlers["api"] = server.Handler()
+			if server.Name() == internalHTTPName {
+				handlers["internal"] = server.Handler()
+			} else {
+				handlers["api"] = server.Handler()
+			}
 		case *health.Server:
 			handlers["operator"] = server.Handler()
 		}
@@ -130,6 +138,11 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 		registered["api"] = append(registered["api"], workloadexchange.Pattern)
 	}
 	registered["api"] = append(registered["api"], authapi.PatternAuthorize, authapi.PatternAuthorizeBatch)
+	if handlers["internal"] != nil {
+		// Each internal-only route is probed on both listeners: served on the internal one, 404 on the API one.
+		registered["internal"] = append(registered["internal"], authapi.PatternAcrCredentialEvents)
+		registered["api"] = append(registered["api"], authapi.PatternAcrCredentialEvents)
+	}
 	// The OAuth authorization server's routes (O3b) mount only with the issuer, the key set and every endpoint-profile row.
 	registered["api"] = append(registered["api"], authapi.PatternOAuthAuthorize, authapi.PatternOAuthMetadata,
 		authapi.PatternOAuthDiscovery, authapi.PatternOAuthJWKS)
@@ -281,8 +294,9 @@ func TestTheRowGateRefusesAPlantedMissingRowForEveryServedRoute(t *testing.T) {
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
 // four compatibility routes, the validate route, the switch-org route, the session issue route, the session state route, the two delegated session routes, the eight federated sign-in routes, the six credentials routes,
 // the twenty-five provisioning routes, the eight read routes, the four user-admin routes, the two authorize routes and the three operator paths on GET and HEAD, GET and
-// HEAD of the JWKS and the discovery document, and the five OAuth authorization server routes.
-const servedAuthRouteCount = 85
+// HEAD of the JWKS and the discovery document, the five OAuth authorization server routes and, on the internal listener,
+// the acr credential events route.
+const servedAuthRouteCount = 86
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -493,6 +507,7 @@ var authPatternConstants = map[string]string{
 	"/.well-known/oauth-authorization-server/oauth": "PatternOAuthMetadata",
 	"/oauth/.well-known/openid-configuration":       "PatternOAuthDiscovery",
 	"/oauth/.well-known/jwks.json":                  "PatternOAuthJWKS",
+	"/internal/v1/acr/credential-events":            "PatternAcrCredentialEvents",
 }
 
 // TestClassConsumersNameEveryAuthRouteThatAcceptsThem: every auth-service row

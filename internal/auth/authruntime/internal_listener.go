@@ -21,36 +21,49 @@ var internalRoutes = map[string]bool{
 	http.MethodPost + " " + authapi.PatternAuthorizeBatch: true,
 }
 
-// internalOnlyRoutes ("METHOD pattern" keys) are served on the internal listener and never on the public API listener;
-// empty until a route needs it.
-var internalOnlyRoutes = map[string]bool{}
+// internalOnlyRoute is one internalOnlyRoutes entry. An optional route mounts only when its configuration is set, so
+// its absence is not a dead key: auth-service starts without it (no start refusal for an unset optional route).
+type internalOnlyRoute struct{ optional bool }
+
+// internalOnlyRoutes ("METHOD pattern" keys) are served on the internal listener and never on the public API listener.
+// The acr credential events route is a workload-to-auth-service call (acr-api reaches auth-service on the internal
+// listener only); it mounts only with AUTH_ACR_EVENTS_WORKLOAD_SUBJECT and its endpoint-profile row.
+var internalOnlyRoutes = map[string]internalOnlyRoute{
+	http.MethodPost + " " + authapi.PatternAcrCredentialEvents: {optional: true},
+}
+
+func isInternalOnly(key string) bool {
+	_, ok := internalOnlyRoutes[key]
+	return ok
+}
 
 // publicRoutes drops every internalOnlyRoutes key, so an internal-only route never reaches the public listener.
 func publicRoutes(routes []httpapi.Route) []httpapi.Route {
 	var kept []httpapi.Route
 	for _, route := range routes {
-		if !internalOnlyRoutes[route.Method+" "+route.Pattern] {
+		if !isInternalOnly(route.Method + " " + route.Pattern) {
 			kept = append(kept, route)
 		}
 	}
 	return kept
 }
 
-// checkInternalOnlyRoutes fails when an internalOnlyRoutes key is no registered route (a dead key would be silent).
+// checkInternalOnlyRoutes fails when a required internalOnlyRoutes key is no registered route (a dead key would be
+// silent). An optional key may be unregistered: its route is off by configuration.
 func checkInternalOnlyRoutes(routes []httpapi.Route) error {
 	registered := map[string]bool{}
 	for _, route := range routes {
 		registered[route.Method+" "+route.Pattern] = true
 	}
-	for key := range internalOnlyRoutes {
-		if !registered[key] {
+	for key, route := range internalOnlyRoutes {
+		if !registered[key] && !route.optional {
 			return fmt.Errorf("internal-only route %q is not a registered route", key)
 		}
 	}
 	return nil
 }
 
-// internalServerOptions is the internal listener: the API listener's options over internalRoutes alone, on
+// internalServerOptions is the internal listener: the API listener's options over internalRoutes and internalOnlyRoutes, on
 // cfg.InternalAddress, with no trusted proxy. Its callers are identified by their tokens, so the client address is
 // always the TCP peer and a forwarded X-Forwarded-For or X-Request-ID is never believed (cfg.TrustedProxies is the
 // API listener's alone). It has no publicaudit middleware: nothing forwards a request id to it.
@@ -58,7 +71,7 @@ func internalServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []
 	var served []httpapi.Route
 	for _, route := range routes {
 		key := route.Method + " " + route.Pattern
-		if internalRoutes[key] || internalOnlyRoutes[key] {
+		if internalRoutes[key] || isInternalOnly(key) {
 			served = append(served, route)
 		}
 	}

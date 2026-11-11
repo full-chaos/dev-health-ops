@@ -1853,7 +1853,48 @@ func TestIntegrationShardPlanCheckerFailsEachPlantedDefect(t *testing.T) {
 		}
 	}
 	srcRows, dstRows := copyWith(byShard[bestShard], bestPkg, -1), copyWith(byShard[target], bestPkg, bestW)
-	unbalanced := withRows(map[int]map[string]int{bestShard: srcRows, target: dstRows})
+	changes := map[int]map[string]int{bestShard: srcRows, target: dstRows}
+	// With many shards one moved package may leave a placement shard the heaviest (CHAOS-13520: 50 shards): keep moving whole
+	// packages into target until it is the heaviest shard by more than any package, so only the balance property refuses it.
+	maxTotal, splitSum := 0, 0
+	for _, tt := range totals {
+		if tt > maxTotal {
+			maxTotal = tt
+		}
+	}
+	for _, w := range splitIn[target] {
+		splitSum += w
+	}
+	sum := func(m map[string]int) int {
+		n := splitSum
+		for _, w := range m {
+			n += w
+		}
+		return n
+	}
+	var donors []int
+	for s := range byShard {
+		if s != target && !splitShards[s] {
+			donors = append(donors, s)
+		}
+	}
+	sort.Ints(donors)
+	for _, s := range donors {
+		if sum(changes[target]) > 2*maxTotal {
+			break
+		}
+		if changes[s] == nil {
+			changes[s] = copyWith(byShard[s], "", -1)
+		}
+		for _, p := range sortedIntKeys(changes[s]) {
+			if splitPackages[p] || len(changes[s]) < 2 {
+				continue
+			}
+			changes[target] = copyWith(changes[target], p, changes[s][p])
+			changes[s] = copyWith(changes[s], p, -1)
+		}
+	}
+	unbalanced := withRows(changes)
 	if _, err := checkShardPlan(unbalanced, gho, facts); err == nil || !strings.Contains(err.Error(), "not balancing") {
 		t.Errorf("an unbalanced but consistent plan must be refused as not balancing, got %v", err)
 	}
@@ -2636,3 +2677,13 @@ func TestEachPackagesShardPlansOneGoTestGroup(t *testing.T) {
 // deadlineEnvNames are pinned to "unset" by the helpers that run ci/check_go.sh with a stand-in go: a hosted run inherits
 // GITHUB_ACTIONS=true, and the job deadline refuses a guarded call without CHECK_GO_JOB_CAP_MIN.
 var deadlineEnvNames = []string{"GITHUB_ACTIONS", "CHECK_GO_JOB_CAP_MIN", "CHECK_GO_JOB_START", "CHECK_GO_NOW_EPOCH", "CHECK_GO_NOW_EPOCH_FILE"}
+
+// sortedIntKeys are the keys of a package -> weight map, sorted.
+func sortedIntKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

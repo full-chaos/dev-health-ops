@@ -617,6 +617,7 @@ type semaphoreProbe struct {
 	capacity, max, renders int
 	timedOut               bool
 	inFlightAtTimeout      int
+	slotsHeld              int // len(m.slots) at the moment `want` renders were in flight
 }
 
 func memoChartDir(t *testing.T) string {
@@ -631,17 +632,16 @@ func memoChartDir(t *testing.T) string {
 }
 
 // probeRenderSemaphore sends 20 calls through m (half bypass the memo with an unknown flag, half are memoized: both
-// must use the same semaphore) and counts the live "processes" in Go. The first calls wait on a channel until
-// `want` are live at once (an event, not a poll; a Go deadline fails the wait and records how many were live), then
-// the released calls are held for `window`; a call above `want` closes `third` at once, so a missing bound shows as
-// max > want without any file, lock or sleep-based counting.
-func probeRenderSemaphore(t *testing.T, m *renderMemo, chart string, want int, deadline, window time.Duration) semaphoreProbe {
+// must use the same semaphore) and holds every render at a channel. It waits, by event, until `want` renders are live at
+// once (a Go deadline fails the wait and records how many were live), reads how many slots are held at that moment, then
+// releases all renders. No fixed window: a correct semaphore holds exactly `want` slots when `want` renders are in
+// flight, a missing or early-released or late-acquired slot holds fewer, a wrong capacity shows in cap(m.slots).
+func probeRenderSemaphore(t *testing.T, m *renderMemo, chart string, want int, deadline time.Duration) semaphoreProbe {
 	t.Helper()
 	t.Setenv("HELM_NO_RENDER_MEMO", "0")
-	var cur, max, renders, inFlightAtTimeout atomic.Int32
-	var timedOut atomic.Bool
-	reached, third := make(chan struct{}), make(chan struct{})
-	var reachedOnce, thirdOnce sync.Once
+	var cur, max, renders atomic.Int32
+	arrived := make(chan struct{}, 64)
+	release := make(chan struct{})
 	m.run = func(cmd *exec.Cmd) ([]byte, error) {
 		if len(cmd.Args) > 1 && cmd.Args[1] == "version" {
 			return []byte("v-fake\n"), nil
@@ -655,32 +655,8 @@ func probeRenderSemaphore(t *testing.T, m *renderMemo, chart string, want int, d
 				break
 			}
 		}
-		if int(n) > want {
-			thirdOnce.Do(func() { close(third) })
-		}
-		select {
-		case <-reached:
-			return []byte("rendered\n"), nil
-		default:
-		}
-		if int(n) >= want {
-			reachedOnce.Do(func() { close(reached) })
-		}
-		timer := time.NewTimer(deadline)
-		select {
-		case <-reached:
-			timer.Stop()
-		case <-timer.C:
-			timedOut.Store(true)
-			inFlightAtTimeout.Store(cur.Load())
-			reachedOnce.Do(func() { close(reached) })
-		}
-		hold := time.NewTimer(window)
-		select {
-		case <-third:
-			hold.Stop()
-		case <-hold.C:
-		}
+		arrived <- struct{}{}
+		<-release
 		return []byte("rendered\n"), nil
 	}
 	var wg sync.WaitGroup
@@ -699,34 +675,50 @@ func probeRenderSemaphore(t *testing.T, m *renderMemo, chart string, want int, d
 		})
 	}
 	close(start)
+	var out semaphoreProbe
+	timer := time.NewTimer(deadline)
+	for got := 0; got < want && !out.timedOut; {
+		select {
+		case <-arrived:
+			got++
+		case <-timer.C:
+			out.timedOut = true
+			out.inFlightAtTimeout = int(cur.Load())
+		}
+	}
+	timer.Stop()
+	out.slotsHeld = len(m.slots)
+	close(release)
 	wg.Wait()
-	return semaphoreProbe{capacity: cap(m.slots), max: int(max.Load()), renders: int(renders.Load()),
-		timedOut: timedOut.Load(), inFlightAtTimeout: int(inFlightAtTimeout.Load())}
+	out.capacity, out.max, out.renders = cap(m.slots), int(max.Load()), int(renders.Load())
+	return out
 }
 
 func TestRenderMemoSemaphoreBoundsLiveProcesses(t *testing.T) {
 	m := newRenderMemoWithBound(2)
-	got := probeRenderSemaphore(t, m, memoChartDir(t), 2, 30*time.Second, 250*time.Millisecond)
+	got := probeRenderSemaphore(t, m, memoChartDir(t), 2, 30*time.Second)
 	if got.timedOut {
 		t.Fatalf("only %d render(s) were live after the deadline: the semaphore never let two overlap (capacity %d)", got.inFlightAtTimeout, got.capacity)
 	}
-	if got.capacity != 2 || got.max != 2 || got.renders != 20 {
-		t.Fatalf("capacity=%d max=%d renders=%d, want capacity=2 max=2 renders=20", got.capacity, got.max, got.renders)
+	if got.capacity != 2 || got.slotsHeld != 2 || got.max != 2 || got.renders != 20 {
+		t.Fatalf("capacity=%d slotsHeld=%d max=%d renders=%d, want capacity=2 slotsHeld=2 (every live render holds a slot) max=2 renders=20",
+			got.capacity, got.slotsHeld, got.max, got.renders)
 	}
 }
 
 // Red cells: the probe reports each failure shape seen on the hosted runners from a memo built with the wrong bound.
 func TestRenderMemoProbeSeesACapacityAboveTheBound(t *testing.T) {
-	got := probeRenderSemaphore(t, newRenderMemoWithBound(3), memoChartDir(t), 2, 5*time.Second, 5*time.Second)
-	if got.timedOut || got.capacity != 3 || got.max != 3 {
-		t.Fatalf("a memo of capacity 3 measured capacity=%d max=%d timedOut=%v, want capacity=3 max=3 (the shape of max=3 want 2)", got.capacity, got.max, got.timedOut)
+	got := probeRenderSemaphore(t, newRenderMemoWithBound(3), memoChartDir(t), 2, 30*time.Second)
+	if got.timedOut || got.capacity != 3 {
+		t.Fatalf("a memo of capacity 3 measured capacity=%d timedOut=%v, want capacity=3 (the cell above compares it with the bound 2: the shape of max=3 want 2)", got.capacity, got.timedOut)
 	}
 }
 
 func TestRenderMemoProbeSeesACapacityBelowTheBound(t *testing.T) {
-	got := probeRenderSemaphore(t, newRenderMemoWithBound(1), memoChartDir(t), 2, 300*time.Millisecond, 150*time.Millisecond)
-	if !got.timedOut || got.inFlightAtTimeout != 1 || got.max != 1 {
-		t.Fatalf("a memo of capacity 1 measured timedOut=%v inFlight=%d max=%d, want timedOut with 1 in flight (the shape of the barrier timeout)", got.timedOut, got.inFlightAtTimeout, got.max)
+	got := probeRenderSemaphore(t, newRenderMemoWithBound(1), memoChartDir(t), 2, 300*time.Millisecond)
+	if !got.timedOut || got.inFlightAtTimeout != 1 || got.capacity != 1 || got.slotsHeld != 1 {
+		t.Fatalf("a memo of capacity 1 measured timedOut=%v inFlight=%d capacity=%d slotsHeld=%d, want a timeout with 1 render in flight and 1 slot held (the shape of the barrier timeout)",
+			got.timedOut, got.inFlightAtTimeout, got.capacity, got.slotsHeld)
 	}
 }
 

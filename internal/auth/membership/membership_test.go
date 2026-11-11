@@ -321,4 +321,31 @@ func TestNoopAnswerNamesTheEffectiveState(t *testing.T) {
 	if got, err := noopAnswer(org, principal, id, state{status: StatusActive, role: "member"}, nil, store); got != nil || !errors.Is(err, store) {
 		t.Fatalf("store failure = %v, %v; want nil and the error", got, err)
 	}
+	for _, seen := range []state{{status: statusAbsent}, {status: StatusRemoved, role: "member"}, {status: StatusInvited, role: "member"}} {
+		if got, err := noopAnswer(org, principal, id, seen, nil, ErrNotMember); got != nil || !errors.Is(err, ErrNotMember) {
+			t.Fatalf("seen %+v with no auth row = %v, %v; want nil and ErrNotMember", seen, got, err)
+		}
+	}
+}
+
+// Only a member's state is a no-op: decide refuses every verb on an absent or
+// removed pair with ErrNotMember (never a no-op), and Add and Remove have no
+// no-op at all. The no-op answer above can only meet an active or suspended
+// state.
+func TestNoopsAreOnlyOnMembers(t *testing.T) {
+	verbs := []verb{verbAdd, verbChangeRole, verbSuspend, verbReactivate, verbRemove}
+	states := []state{{status: statusAbsent}, {status: StatusInvited, role: "member"}, {status: StatusActive, role: "member"},
+		{status: StatusSuspended, role: "member"}, {status: StatusRemoved, role: "member"}}
+	for _, v := range verbs {
+		for _, cur := range states {
+			d, err := decide(v, cur, "member", 2)
+			if err != nil || !d.noop {
+				continue
+			}
+			ok := ((v == verbChangeRole || v == verbReactivate) && cur.status == StatusActive) || (v == verbSuspend && cur.status == StatusSuspended)
+			if !ok {
+				t.Errorf("decide(%s, %+v) is a no-op; only ChangeRole/Reactivate on active and Suspend on suspended are", v, cur)
+			}
+		}
+	}
 }

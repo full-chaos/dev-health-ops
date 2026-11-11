@@ -619,7 +619,8 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 				return nil, fmt.Errorf("%w: %s: %w", ErrStore, v, werr)
 			}
 		}
-		ended = session.Ended{}
+		// A no-op seen by an attempt that is planned again is not this attempt's answer.
+		ended, noop = session.Ended{}, nil
 		var read *locked
 		read, err = s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, ids, c.InvitedBy, c.Actor.PrincipalID, nil, false, nil)
 		if err != nil {
@@ -731,10 +732,12 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 
 // noopAnswer is the answer of a verb that changed nothing: the effective state
 // the locked read saw, as the legacy path answers go-api's row. The auth row,
-// when there is one, gives the id, joined_at and revision; a pair with no
-// auth row (go-api's row only) answers go-api's id at revision 0.
+// when there is one, gives the id, joined_at and revision; a member with no
+// auth row (go-api's row only) answers go-api's id at revision 0. A seen
+// state that is not a member (seen.status absent or removed) keeps
+// ErrNotMember.
 func noopAnswer(orgID, principalID, id uuid.UUID, seen state, m *Membership, err error) (*Membership, error) {
-	if errors.Is(err, ErrNotMember) {
+	if errors.Is(err, ErrNotMember) && (seen.status == StatusActive || seen.status == StatusSuspended) {
 		m, err = &Membership{ID: id, OrgID: orgID, PrincipalID: principalID}, nil
 	}
 	if err != nil {

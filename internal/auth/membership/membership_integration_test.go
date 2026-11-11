@@ -924,3 +924,49 @@ func TestSameRoleChangeOnAStaleAuthRowAnswersTheEffectiveState(t *testing.T) {
 		t.Fatalf("rows after the no-op = %+v", got)
 	}
 }
+
+// A verb on a pair that is not a member (no row at all, or a removed pair)
+// keeps today's ErrNotMember and writes nothing: the no-op answer never turns
+// a refusal into a membership. Green before and after the no-op answer.
+func TestVerbsOnANonMemberKeepErrNotMember(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	absent := e.seedUser(t, ctx)
+	removed := e.seedUser(t, ctx)
+	added := e.add(t, ctx, org, removed, "member")
+	if _, err := e.store.Remove(ctx, Change{OrgID: org, PrincipalID: removed, Authorize: allowAll}); err != nil {
+		t.Fatal(err)
+	}
+	verbs := []struct {
+		name string
+		run  func(Change) (*Membership, error)
+	}{
+		{"change_role", e.store.ChangeRole}, {"suspend", e.store.Suspend}, {"reactivate", e.store.Reactivate}, {"remove", e.store.Remove},
+	}
+	for _, pair := range []struct {
+		name        string
+		user, rowID uuid.UUID
+		auth        rows
+	}{
+		{"no row", absent, uuid.Nil, rows{}},
+		{"removed", removed, added.ID, rows{"", "removed", "member"}},
+	} {
+		for _, v := range verbs {
+			t.Run(pair.name+"/"+v.name, func(t *testing.T) {
+				before := e.written(t, ctx, org, pair.user, pair.rowID)
+				m, err := v.run(Change{OrgID: org, PrincipalID: pair.user, Role: "member", Authorize: allowAll})
+				if m != nil || !errors.Is(err, ErrNotMember) {
+					t.Fatalf("%s on %s = %+v, %v; want ErrNotMember", v.name, pair.name, m, err)
+				}
+				if after := e.written(t, ctx, org, pair.user, pair.rowID); after != before {
+					t.Fatalf("refusal wrote: before %+v, after %+v", before, after)
+				}
+				if got := e.rows(t, ctx, org, pair.user); got != pair.auth {
+					t.Fatalf("rows = %+v, want %+v", got, pair.auth)
+				}
+			})
+		}
+	}
+}

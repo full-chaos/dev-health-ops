@@ -353,6 +353,16 @@ func legacyLinkPurgeStatements(ctx context.Context, conn querier, options Option
 		if err != nil {
 			return nil, err
 		}
+		// Where the role holds nothing the pass sends no statement (the retiredPublicReadTables shape): PostgreSQL
+		// refuses a table-level REVOKE ALL by a role holding no privilege on the table, so a migrator on a database
+		// that never gave the runtime role this grant would fail the whole pass on a statement that changes nothing.
+		held, err := runtimeHoldsPublicGrant(ctx, conn, name, options.RuntimeRole)
+		if err != nil {
+			return nil, err
+		}
+		if !held {
+			continue
+		}
 		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
 		statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
 	}

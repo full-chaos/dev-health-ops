@@ -13,7 +13,7 @@ import (
 func TestTheGrantsPassRevokesTheLegacyLinkTokenGrants(t *testing.T) {
 	for _, owned := range []bool{true, false} {
 		options := Options{Schema: "auth", RuntimeRole: "rt", UsersOwned: owned, RequirePublicTables: true}
-		statements, err := legacyLinkPurgeStatements(context.Background(), presentQuerier{}, options, slog.New(slog.DiscardHandler))
+		statements, err := legacyLinkPurgeStatements(context.Background(), heldQuerier{held: true}, options, slog.New(slog.DiscardHandler))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -51,6 +51,22 @@ func TestUsersOwnedPublicGrantRefusesLegacyLinkDelete(t *testing.T) {
 	for _, privilege := range PublicPrivilegeSet() {
 		if privilege.Table == "email_verification_tokens" || privilege.Table == "password_reset_tokens" {
 			t.Errorf("PublicPrivilegeSet grants %s %v on %s, want no privilege", privilege.Privilege, privilege.Columns, privilege.Table)
+		}
+	}
+}
+
+// A runtime role that holds nothing on the two tables gets no statement, so a migrator with no privilege on them (a
+// database that never gave the purge grant, or one created after the verb went) cannot fail the pass on a REVOKE
+// that changes nothing.
+func TestLegacyLinkTokenRevokeIssuesNothingForARoleThatHoldsNothing(t *testing.T) {
+	for _, owned := range []bool{true, false} {
+		options := Options{Schema: "auth", RuntimeRole: "rt", UsersOwned: owned, RequirePublicTables: true}
+		statements, err := legacyLinkPurgeStatements(context.Background(), heldQuerier{held: false}, options, slog.New(slog.DiscardHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(statements) != 0 {
+			t.Errorf("owned=%v: a role holding nothing got statements %q", owned, statements)
 		}
 	}
 }

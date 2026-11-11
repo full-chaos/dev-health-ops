@@ -12,7 +12,7 @@ lifecycle: active
 
 # Switch organization
 
-The workspace card at the top of the navigation shows the organization you work in. It shows the organization name, and under it either "Organization workspace" or, when your account has only one organization, "Organization workspace · only one on this account". It also shows the data state of the organization: "Data through" a date, "Has data", "No data yet", or "Data status unavailable".
+The workspace card at the top of the navigation shows the organization you work in. It shows the organization name, and under it either "Organization workspace" or, when your account has only one organization, "Organization workspace · only one on this account". The account menu at the bottom of the navigation shows the data state of the organization: "Data through" a date, "Has data", "No data yet", or "Data status unavailable".
 
 ## Switch
 
@@ -26,7 +26,7 @@ Things to know:
 - The list holds only organizations you are a member of. With one organization the list is disabled.
 - Your role can differ between organizations. See [Permissions and availability](../troubleshooting/permissions-and-availability.md).
 - If the switch fails, the card shows "Could not switch organization". Nothing changed. Try again.
-- If the list cannot load, the card shows "Could not load organizations".
+- If the list cannot load, the workspace card is not shown.
 - You cannot switch organization while [viewing as another user](../../admin/security-and-audit/impersonation.md).
 
 To be added to another organization, ask an administrator of that organization to [invite you](../../admin/teams-and-identities/manage-org-members.md).

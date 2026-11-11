@@ -31,7 +31,7 @@ Expected result: the product opens in a new tab on the dashboard. If the browser
 
 ## While you impersonate
 
-- A banner reads "Viewing as" and the user's email address. It shows in every tab.
+- A banner reads "Viewing as" and the user's email address. If the address is not known, it reads "Viewing as another user". It shows in every tab.
 - A start or a stop in one tab applies to all your tabs.
 - You cannot switch organization.
 - Ask Dev is hidden.

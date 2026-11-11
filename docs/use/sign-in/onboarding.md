@@ -28,7 +28,7 @@ Things to know:
 
 ## Guided setup
 
-Depending on how your deployment is configured, onboarding is a guided flow of three steps: **workspace**, **integration**, and **complete**. Without it, onboarding is the single workspace page and you go to the dashboard after you create the organization.
+Depending on how your deployment is configured, onboarding is a guided flow of three steps: **Workspace**, **Integration**, and **Done**. Without it, onboarding is the single workspace page and you go to the dashboard after you create the organization. If you came from a Team plan trial, you go to the trial checkout instead of the dashboard.
 
 ### Add a tool
 
@@ -43,7 +43,7 @@ When a tool is connected, the step shows "Your first integration is connected" a
 
 ### Finish
 
-The last step shows "You're all set" and a button to go to the dashboard.
+The last step shows "You're all set" and a button to go to the dashboard. For a Team plan trial the button reads **Continue to checkout**.
 
 ## After setup
 
@@ -53,7 +53,7 @@ Until the first sync finishes, the dashboard shows a setup prompt that names the
 | --- | --- |
 | Connect a source to begin | Start the app install. |
 | Integration setup skipped | Connect a tool when you are ready. |
-| First sync pending | Choose repositories and start the first sync. |
+| GitHub connected — first sync pending | Choose repositories and start the first sync. |
 | Sync could not complete | Read the message and retry. Your setup is kept. |
 
 The prompt goes away when the first sync is complete.

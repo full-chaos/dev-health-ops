@@ -443,3 +443,18 @@ func TestWebApprover_offRefusesTheKind(t *testing.T) {
 		t.Fatalf("off: why %q err %v; want a refusal", why, err)
 	}
 }
+
+// The resolver itself refuses a missing or malformed sid (the decision
+// transaction refuses it again): the reason names the session.
+func TestWebApprover_resolverRefusesAMissingOrMalformedSid(t *testing.T) {
+	a := newApproverFixture(t)
+	approver, err := NewWebApproverReferences(WebApproverReferencesConfig{Issuer: a.issuer, JWKSFile: a.jwksFile, Caller: a.approver, Now: func() time.Time { return a.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{dropClaim("sid")(a), claim("sid", "sess_1")(a)} {
+		if _, why, err := approver.resolve(ref); why != "session" || err != nil {
+			t.Fatalf("why %q err %v; want session", why, err)
+		}
+	}
+}

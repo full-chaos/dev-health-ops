@@ -5,6 +5,7 @@ package authschema
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -77,8 +78,20 @@ func TestRuntimeRoleHoldsNoLegacyLinkTokenPrivilege(t *testing.T) {
 					t.Errorf("the old purge grant on %s was not reported:\n%s", table, found)
 				}
 			}
-			if _, err := Apply(ctx, env.migration, options); err != nil {
-				t.Fatalf("Apply over the old grant: %v", err)
+			// Revoking the held grant is a narrowing: refused with the pinned digest (the value a roll
+			// acknowledges), then applied with it.
+			_, err := Apply(ctx, env.migration, options)
+			var narrowed *NarrowingError
+			if !errors.As(err, &narrowed) {
+				t.Fatalf("Apply over the old grant without the acknowledgement: err = %v, want the narrowing refusal", err)
+			}
+			if narrowed.Digest != retiredLinkTokensAckDigest || len(narrowed.Lost) != len(retiredLinkTokensLost()) {
+				t.Fatalf("narrowing = %s, %d lost; want %s, %d lost:\n%v", narrowed.Digest, len(narrowed.Lost), retiredLinkTokensAckDigest, len(retiredLinkTokensLost()), narrowed)
+			}
+			acknowledged := options
+			acknowledged.AcknowledgeNarrowing = retiredLinkTokensAckDigest
+			if _, err := Apply(ctx, env.migration, acknowledged); err != nil {
+				t.Fatalf("Apply over the old grant with the acknowledgement: %v", err)
 			}
 			if found := posture(); len(found) > 0 {
 				t.Fatalf("posture after the second Apply is not clean:\n%s", describe(found))

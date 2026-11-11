@@ -57,10 +57,6 @@ func publicPrivilegeSetFor(usersOwned bool) []PublicPrivilege {
 		for _, grant := range RegisterOrganizationGrants() {
 			add(grant.Table, "INSERT", grant.Columns)
 		}
-		for _, grant := range LegacyLinkPurgeGrants() {
-			tableLevel[key{grant.Table, "DELETE"}] = true
-			add(grant.Table, "SELECT", grant.Select)
-		}
 		member := MembershipWriteGrants()
 		if member.Delete {
 			tableLevel[key{member.Table, "DELETE"}] = true

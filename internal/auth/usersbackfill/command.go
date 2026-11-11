@@ -37,7 +37,7 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "auth",
 		Kind:    cli.Group,
-		Summary: "auth control plane operator verbs: users-backfill, users-create, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, repo-identities-sync, platform-role-grant, platform-role-revoke, platform-role-list",
+		Summary: "auth control plane operator verbs: users-backfill, users-create, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, repo-identities-sync, platform-role-grant, platform-role-revoke, platform-role-list",
 		Children: append([]cli.Command{{
 			Name:    "users-backfill",
 			Kind:    cli.Verb,
@@ -63,11 +63,6 @@ func Command() cli.Command {
 			Kind:    cli.Verb,
 			Summary: "compare public.organizations and public.memberships with the auth schema in one read-only snapshot (counts and org ids only; exit 1 on a gated diff; -exact gates every class)",
 			Run:     runOrgsReconcile,
-		}, {
-			Name:    "legacy-link-purge",
-			Kind:    cli.Verb,
-			Summary: "delete go-api's legacy public link-token rows once users are owned (idempotent; counts only; refused unless AUTH_USERS_OWNED is true)",
-			Run:     runLegacyLinkPurge,
 		}, {
 			Name:    "repo-identities-sync",
 			Kind:    cli.Verb,
@@ -309,47 +304,6 @@ func orgsVerdict(rep OrgReport, err error) (int, []string) {
 		return cli.ExitFailure, notes
 	}
 	return cli.ExitOK, notes
-}
-
-// runLegacyLinkPurge is the mirror image of users-backfill: it refuses unless
-// users are owned, because only then can no reader redeem a legacy row.
-func runLegacyLinkPurge(ctx context.Context, env cli.Env) int {
-	flags := flag.NewFlagSet("dho auth legacy-link-purge", flag.ContinueOnError)
-	flags.SetOutput(env.Stderr)
-	dryRun := flags.Bool("dry-run", false, "count and report; delete and write nothing")
-	// The auth-backfill Job passes -batch to every verb; the purge has no pages.
-	batch := flags.Int("batch", 500, "accepted for the backfill Job; unused")
-	runID := flags.String("run-id", "", "names this run in its audit row (lowercase letters, digits, . _ -; at most 63)")
-	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
-		return code
-	}
-	runIDSet := false
-	flags.Visit(func(f *flag.Flag) { runIDSet = runIDSet || f.Name == "run-id" })
-	if flags.NArg() != 0 || *batch < 1 || *batch > 10000 || (runIDSet && !runIDPattern.MatchString(*runID)) {
-		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted, -batch must be 1..10000 and -run-id must be a short lowercase slug")
-		return cli.ExitUsage
-	}
-	if owned, err := authconfig.UsersOwnedFromLookup(env.Lookup); err != nil {
-		fmt.Fprintln(env.Stderr, "legacy-link-purge: AUTH_USERS_OWNED must be true or false")
-		return cli.ExitFailure
-	} else if !owned {
-		fmt.Fprintln(env.Stderr, "legacy-link-purge: refused: AUTH_USERS_OWNED is not true, go-api still serves these rows")
-		return cli.ExitRefused
-	}
-	pool, schema, code := connectFn(ctx, env, "legacy-link-purge")
-	if code != cli.ExitOK {
-		return code
-	}
-	defer pool.Close()
-	rep, err := PurgeLegacyLinks(ctx, pool, schema, PurgeOptions{DryRun: *dryRun, RunID: *runID})
-	if err != nil {
-		fmt.Fprintln(env.Stderr, "legacy-link-purge: stopped; nothing was deleted and no audit row was written")
-		return cli.ExitFailure
-	}
-	for _, line := range rep.Lines() {
-		fmt.Fprintln(env.Stdout, line)
-	}
-	return cli.ExitOK
 }
 
 func runOrgsReconcile(ctx context.Context, env cli.Env) int {

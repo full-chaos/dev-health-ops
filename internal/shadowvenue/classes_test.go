@@ -44,7 +44,7 @@ func TestCustomRowTableCannotReclassifyARow(t *testing.T) {
 			external = append(external, row.ID)
 		}
 	}
-	if len(external) != 17 || len(destructive) != 5 {
+	if len(external) != 20 || len(destructive) != 6 {
 		t.Fatalf("external %v destructive %v", external, destructive)
 	}
 	for _, id := range external {

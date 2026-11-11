@@ -69,10 +69,6 @@ var sqlOperandExemptions = []sqlOperandExemption{
 		reason: "columns holds only quoteIdentifier results of the validated RegisterOrganizationGrants names",
 	},
 	{
-		file: "publicreads.go", fn: "legacyLinkPurgeStatements", operand: `strings.Join(columns, ", ")`,
-		reason: "columns holds only quoteIdentifier results of the validated LegacyLinkPurgeGrants names",
-	},
-	{
 		file: "memberwrite_grants.go", fn: "membershipWriteStatements", operand: `strings.Join(selectColumns, ", ")`,
 		reason: "selectColumns holds only quoteIdentifier results of the validated MembershipWriteGrants names",
 	},

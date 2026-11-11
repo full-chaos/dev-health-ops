@@ -154,6 +154,7 @@ internal/auth/workloadexchange	tokenreview.go
 internal/auth/workloadinput	workloadinput.go
 internal/auth/writerinventory	dynamic_census_test.go
 internal/auth/writerinventory	dynamic_enumerate_test.go
+internal/auth/writerinventory	link_tokens_dropped_test.go
 internal/auth/writerinventory	membership_census_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	users_guard_census_test.go
@@ -290,6 +291,7 @@ internal/cigates/racescope	scan.go
 internal/cigates/raceunweighted	raceunweighted_test.go
 internal/cigates/releasetag	parity_test.go
 internal/cigates/releasetag	releasetag.go
+internal/cigates/retiredservicecred	census_test.go
 internal/cigates/routing	chart_test.go
 internal/cigates/routing	cut_test.go
 internal/cigates/routing	deps.go
@@ -342,6 +344,7 @@ internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go
 internal/cigates/workflows	go_workers_compose_proof_test.go
+internal/cigates/workflows	live_e2e_auth_stack_test.go
 internal/cigates/workflows	live_e2e_no_python_test.go
 internal/cigates/workflows	providerstub_not_release_test.go
 internal/cigates/workflows	providersync_shard_budget_test.go
@@ -630,7 +633,6 @@ internal/teamactive	roster_census_test.go
 internal/teamattribution	is_primary_census_test.go
 internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
-internal/testsupport/authrows	credentials_test.go
 internal/testsupport/authrows	golden_test.go
 internal/testsupport/authrows	responses_test.go
 internal/testsupport/bigboydir	bigboydir.go

@@ -644,7 +644,7 @@ authService:
   #    roll: the same roll sets it false again and reads that the Job is gone.
   backfill:
     enabled: false
-    # -- users-backfill, users-reconcile (read-only; the post-flip detection net), orgs-backfill or legacy-link-purge (the last needs users owned; run it after the phase-4 rollout is complete).
+    # -- users-backfill, users-reconcile (read-only; the post-flip detection net) or orgs-backfill.
     verb: ""
     # -- true: read and report, write nothing. A real run needs an explicit false.
     dryRun: true

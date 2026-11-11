@@ -3,6 +3,7 @@ package devhealth_test
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // The hook is changed only by serial fake-helm tests. Production test calls
@@ -30,27 +32,36 @@ type renderMemoEntry struct {
 }
 
 type renderMemo struct {
-	mu        sync.Mutex
-	entries   map[[32]byte]*renderMemoEntry
-	versions  map[string]*renderMemoEntry
-	limitOnce sync.Once
-	slots     chan struct{}
+	mu       sync.Mutex
+	entries  map[[32]byte]*renderMemoEntry
+	versions map[string]*renderMemoEntry
+	slots    chan struct{}
+	// run executes one helm process; nil means cmd.CombinedOutput. Cells replace it to count and hold calls in Go.
+	run func(*exec.Cmd) ([]byte, error)
 }
 
-func newRenderMemo() *renderMemo {
-	return &renderMemo{entries: make(map[[32]byte]*renderMemoEntry), versions: make(map[string]*renderMemoEntry)}
+// renderMemoBound is read once, when a memo is built: HELM_RENDER_PARALLEL when it is a positive number, else
+// min(GOMAXPROCS, NumCPU). It is never read again, so no earlier call can fix the capacity before a caller sets it.
+func renderMemoBound() int {
+	n := min(runtime.GOMAXPROCS(0), runtime.NumCPU())
+	if override, err := strconv.Atoi(os.Getenv("HELM_RENDER_PARALLEL")); err == nil && override > 0 {
+		n = override
+	}
+	return n
+}
+
+func newRenderMemo() *renderMemo { return newRenderMemoWithBound(renderMemoBound()) }
+
+func newRenderMemoWithBound(n int) *renderMemo {
+	return &renderMemo{entries: make(map[[32]byte]*renderMemoEntry), versions: make(map[string]*renderMemoEntry), slots: make(chan struct{}, n)}
 }
 
 func (m *renderMemo) live(cmd *exec.Cmd) ([]byte, error) {
-	m.limitOnce.Do(func() {
-		n := min(runtime.GOMAXPROCS(0), runtime.NumCPU())
-		if override, err := strconv.Atoi(os.Getenv("HELM_RENDER_PARALLEL")); err == nil && override > 0 {
-			n = override
-		}
-		m.slots = make(chan struct{}, n)
-	})
 	m.slots <- struct{}{}
 	defer func() { <-m.slots }()
+	if m.run != nil {
+		return m.run(cmd)
+	}
 	return cmd.CombinedOutput()
 }
 
@@ -601,39 +612,165 @@ func TestRenderMemoCachesFailuresAsFailures(t *testing.T) {
 	}
 }
 
-func TestRenderMemoSemaphoreBoundsLiveProcesses(t *testing.T) {
-	chart, state := fakeRenderMemo(t)
-	t.Setenv("HELM_RENDER_PARALLEL", "2")
-	// The fake helm holds the first renders at a barrier until two are live at once (the bound), then keeps them
-	// for a grace window so a missing bound shows as more than two. A bound below two never reaches the barrier.
-	memoWrite(t, filepath.Join(state, "barrier"), "2 0.3 20\n")
+// semaphoreProbe is what probeRenderSemaphore measured in Go, around the process the semaphore guards.
+type semaphoreProbe struct {
+	capacity, max, renders int
+	timedOut               bool
+	inFlightAtTimeout      int
+	slotsHeld              int // len(m.slots) at the moment `want` renders were in flight
+}
+
+func memoChartDir(t *testing.T) string {
+	t.Helper()
+	chart := filepath.Join(t.TempDir(), "chart")
+	if err := os.Mkdir(chart, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	memoWrite(t, filepath.Join(chart, "Chart.yaml"), "name: fake\nversion: 0.1.0\n")
+	memoWrite(t, filepath.Join(chart, "values.yaml"), "value: before\n")
+	return chart
+}
+
+// probeRenderSemaphore sends 20 calls through m (half bypass the memo with an unknown flag, half are memoized: both
+// must use the same semaphore) and holds every render at a channel. It waits, by event, until `want` renders are live at
+// once (a Go deadline fails the wait and records how many were live), reads how many slots are held at that moment, then
+// releases all renders. No fixed window: a correct semaphore holds exactly `want` slots when `want` renders are in
+// flight, a missing or early-released or late-acquired slot holds fewer, a wrong capacity shows in cap(m.slots).
+func probeRenderSemaphore(t *testing.T, m *renderMemo, chart string, want int, deadline time.Duration) semaphoreProbe {
+	t.Helper()
+	t.Setenv("HELM_NO_RENDER_MEMO", "0")
+	var cur, max, renders atomic.Int32
+	arrived := make(chan struct{}, 64)
+	release := make(chan struct{})
+	m.run = func(cmd *exec.Cmd) ([]byte, error) {
+		if len(cmd.Args) > 1 && cmd.Args[1] == "version" {
+			return []byte("v-fake\n"), nil
+		}
+		n := cur.Add(1)
+		defer cur.Add(-1)
+		renders.Add(1)
+		for {
+			old := max.Load()
+			if n <= old || max.CompareAndSwap(old, n) {
+				break
+			}
+		}
+		arrived <- struct{}{}
+		<-release
+		return []byte("rendered\n"), nil
+	}
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for i := range 20 {
 		wg.Go(func() {
 			<-start
-			// Half the calls bypass the memo, but must still use the same semaphore.
 			flag := "--set"
 			if i%2 == 0 {
 				flag = "--unknown"
 			}
-			if out, err := helmOutput("template", "memo", chart, flag, fmt.Sprintf("value=%d", i)); err != nil {
+			cmd := helmCommand("template", "memo", chart, flag, fmt.Sprintf("value=%d", i))
+			if out, err := m.output(cmd); err != nil {
 				t.Errorf("%v: %s", err, out)
 			}
 		})
 	}
 	close(start)
-	wg.Wait()
-	if _, err := os.Stat(filepath.Join(state, "barrier-timeout")); err == nil {
-		t.Fatal("barrier timed out: the semaphore never let two renders overlap")
+	var out semaphoreProbe
+	for got := 0; got < want && !out.timedOut; got++ {
+		// The first render must arrive by event (a loaded runner may be slow); `deadline` then measures only the
+		// renders that follow, so a capacity below `want` shows as an absent render, never as a late first one.
+		wait := deadline
+		if got == 0 {
+			wait = 30 * time.Second
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-arrived:
+			timer.Stop()
+		case <-timer.C:
+			out.timedOut = true
+			out.inFlightAtTimeout = int(cur.Load())
+		}
 	}
-	b, err := os.ReadFile(filepath.Join(state, "max"))
-	if err != nil {
+	out.slotsHeld = len(m.slots)
+	close(release)
+	wg.Wait()
+	out.capacity, out.max, out.renders = cap(m.slots), int(max.Load()), int(renders.Load())
+	return out
+}
+
+func TestRenderMemoSemaphoreBoundsLiveProcesses(t *testing.T) {
+	m := newRenderMemoWithBound(2)
+	got := probeRenderSemaphore(t, m, memoChartDir(t), 2, 30*time.Second)
+	if got.timedOut {
+		t.Fatalf("only %d render(s) were live after the deadline: the semaphore never let two overlap (capacity %d)", got.inFlightAtTimeout, got.capacity)
+	}
+	if got.capacity != 2 || got.slotsHeld != 2 || got.max != 2 || got.renders != 20 {
+		t.Fatalf("capacity=%d slotsHeld=%d max=%d renders=%d, want capacity=2 slotsHeld=2 (every live render holds a slot) max=2 renders=20",
+			got.capacity, got.slotsHeld, got.max, got.renders)
+	}
+}
+
+// Red cells: the probe reports each failure shape seen on the hosted runners from a memo built with the wrong bound.
+func TestRenderMemoProbeSeesACapacityAboveTheBound(t *testing.T) {
+	got := probeRenderSemaphore(t, newRenderMemoWithBound(3), memoChartDir(t), 2, 30*time.Second)
+	if got.timedOut || got.capacity != 3 {
+		t.Fatalf("a memo of capacity 3 measured capacity=%d timedOut=%v, want capacity=3 (the cell above compares it with the bound 2: the shape of max=3 want 2)", got.capacity, got.timedOut)
+	}
+}
+
+func TestRenderMemoProbeSeesACapacityBelowTheBound(t *testing.T) {
+	got := probeRenderSemaphore(t, newRenderMemoWithBound(1), memoChartDir(t), 2, 300*time.Millisecond)
+	if !got.timedOut || got.inFlightAtTimeout != 1 || got.capacity != 1 || got.slotsHeld != 1 {
+		t.Fatalf("a memo of capacity 1 measured timedOut=%v inFlight=%d capacity=%d slotsHeld=%d, want a timeout with 1 render in flight and 1 slot held (the shape of the barrier timeout)",
+			got.timedOut, got.inFlightAtTimeout, got.capacity, got.slotsHeld)
+	}
+}
+
+func TestRenderMemoCapacityIsFixedAtConstruction(t *testing.T) {
+	t.Setenv("HELM_RENDER_PARALLEL", "3")
+	m := newRenderMemo()
+	if cap(m.slots) != 3 {
+		t.Fatalf("capacity %d, want 3 from HELM_RENDER_PARALLEL at construction", cap(m.slots))
+	}
+	// A call made before the caller changes its mind must not move the capacity (the old lazy limit read it at first use).
+	m.run = func(*exec.Cmd) ([]byte, error) { return nil, nil }
+	if _, err := m.live(helmCommand("version", "--short")); err != nil {
 		t.Fatal(err)
 	}
-	max, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || max != 2 || memoCalls(t, state) != 20 {
-		t.Fatalf("max=%s err=%v renders=%d, want max=2 and renders=20", b, err, memoCalls(t, state))
+	t.Setenv("HELM_RENDER_PARALLEL", "5")
+	if _, err := m.live(helmCommand("version", "--short")); err != nil {
+		t.Fatal(err)
+	}
+	if cap(m.slots) != 3 {
+		t.Fatalf("capacity %d after the env changed, want 3 (fixed at construction)", cap(m.slots))
+	}
+}
+
+func TestRenderMemoFailingCallReleasesItsSlot(t *testing.T) {
+	m := newRenderMemoWithBound(1)
+	failed := false
+	m.run = func(*exec.Cmd) ([]byte, error) {
+		if !failed {
+			failed = true
+			return []byte("boom\n"), errors.New("render failed")
+		}
+		return []byte("ok\n"), nil
+	}
+	if _, err := m.live(helmCommand("template", "x")); err == nil {
+		t.Fatal("the first call must fail")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if out, err := m.live(helmCommand("template", "y")); err != nil || string(out) != "ok\n" {
+			t.Errorf("second call = %q, %v", out, err)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the slot of the failed call was never released: the next call is blocked")
 	}
 }
 

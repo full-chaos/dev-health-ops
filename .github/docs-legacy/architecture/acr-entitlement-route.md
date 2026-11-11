@@ -4,7 +4,8 @@
 
 | Answer | Meaning |
 | --- | --- |
-| 200 `acr_entitlement.v1` body | The organization exists. Fields: `schema_version`, `org_id`, `agent_context_runtime`, `acr_service_model`, `platform_model_fallback` (booleans). `agent_context_runtime` is the `ask_dev` decision OR the legacy `agent_context_runtime` grant (CHAOS-3695: "ACR = Ask Dev"; the legacy grant retires in CHAOS-12292, and acr stops reading the field in CHAOS-12291). `acr_service_model` is the effective value (`llmorgsettings.EffectiveServiceModel`): a globally disabled or invalid feature is OFF; else the org's active override; else ON for an org with a saved BYO config of any purpose; else the plan or license decision. `platform_model_fallback` opens only on an active org override (the superuser feature-overrides route). |
+| 200 `acr_entitlement.v1` body | The organization exists and is active. Fields: `schema_version`, `org_id`, `agent_context_runtime`, `acr_service_model`, `platform_model_fallback` (booleans). `agent_context_runtime` is the `ask_dev` decision OR the legacy `agent_context_runtime` grant (CHAOS-3695: "ACR = Ask Dev"; the legacy grant retires in CHAOS-12292, and acr stops reading the field in CHAOS-12291). `acr_service_model` is the effective value (`llmorgsettings.EffectiveServiceModel`): a globally disabled or invalid feature is OFF; else the org's active override; else ON for an org with a saved BYO config of any purpose; else the plan or license decision. `platform_model_fallback` opens only on an active org override (the superuser feature-overrides route). |
+| 404 `{"detail":"Not found","code":"acr_organization_disabled"}` | The `organizations` row exists with `is_active` false: disabled by an admin (`PATCH /api/v1/admin/orgs/{id}`), set by the org delete before it purges, or by the org-state reconciler (on only with `AUTH_PROXY_ORG_PROVISIONING`). Read before any entitlement decision. Disabled, not gone. |
 | 404 `{"detail":"Not found","code":"acr_organization_unknown"}` | `org_id` is a well-formed UUID and no `organizations` row exists (deleted or never created). |
 | 404 `{"detail":"Not found"}` (no `code`) | `org_id` is not a UUID. Says nothing about deletion. |
 | 503 `{"detail":"Service unavailable"}` | The store cannot be read (database outage, no store configured). |
@@ -19,7 +20,7 @@ Order, on health and entitlement:
 2. 401 `{"detail":"Unauthorized"}`: no `Authorization: Bearer` header (the scheme is case-sensitive), a bearer that is not a workload token (a `svc_acr_` credential included), or a refused workload token. 403 `{"detail":"Forbidden"}`: a valid workload token of another workload. 503: the workload key source is unavailable.
 3. The route's own answers above.
 
-The entitlement route writes one `internal_service_credential_audits` row per answer, action `acr_entitlement_lookup`, `requested_org_id` the raw path value, `credential_id` always NULL, `principal_id` the workload subject on an accepted token. Outcomes: `missing_or_malformed_token` (every non-workload bearer), `workload_refused`, `workload_forbidden`, `organization_not_found` (404, both kinds), `entitlement_lookup_failed` (503 or 500), `success`. The health route writes none.
+The entitlement route writes one `internal_service_credential_audits` row per answer, action `acr_entitlement_lookup`, `requested_org_id` the raw path value, `credential_id` always NULL, `principal_id` the workload subject on an accepted token. Outcomes: `missing_or_malformed_token` (every non-workload bearer), `workload_refused`, `workload_forbidden`, `organization_disabled` (the disabled 404), `organization_not_found` (the other two 404s), `entitlement_lookup_failed` (503 or 500), `success`. The health route writes none.
 
 An audit write that fails is 503 on the entitlement route. A route with no audit store answers 503; it never serves unauthenticated. Telemetry: `devhealth_acr_internal_requests_total{route,outcome}`, `devhealth_acr_workload_accepted_total{route}`, `devhealth_acr_workload_refused_total{route,reason}`; the token is never logged.
 
@@ -27,11 +28,25 @@ The API database role needs INSERT on `internal_service_credential_audits` (`api
 
 Rules for callers:
 
-- Only the 404 with `code == "acr_organization_unknown"` may be read as "organization gone". Every other 404 (malformed id, unrouted path, proxy) and every 5xx or timeout is "unavailable".
-- The code is stable. Changing it is a breaking contract change for acr.
-- A new answer must never reuse the code for a store failure.
+- Only the 404 with `code == "acr_organization_unknown"` may be read as "organization gone". The 404 with `code == "acr_organization_disabled"` is "organization disabled": acr refuses the organization's credentials and new issuance (acr #2073) and never purges it. Every other 404 (malformed id, unrouted path, proxy) and every 5xx or timeout is "unavailable".
+- The codes are stable. Changing one is a breaking contract change for acr.
+- A new answer must never reuse a code for a store failure.
+- Roll order: the disabled answer goes LIVE only after an acr that reads `acr_organization_disabled` is live. An older acr reads it as "unavailable": its default check admits the credential with a WARN, its required checks (rotate, ack, the `live_orgs` revoke exchange) answer 503.
 
-Code: `UnknownOrganizationCode` in `internal/apiservice/acr/handlers.go`; sentinel `ErrOrgUnknown` in `store.go`.
+Callers: only the acr-api workload token is accepted (Bearer check above), so the readers are acr's entitlement client (`internal/entitlements/client.go`: the bearer check, rotate and ack, device approval and redemption, the browser refresh, the `live_orgs` binding, the organization revoke route) and `acr-projector purge` (`internal/contextfabric/orgpurge`, which purges only on the unknown code).
+
+Code: `UnknownOrganizationCode` and `DisabledOrganizationCode` in `internal/apiservice/acr/handlers.go`; sentinels `ErrOrgUnknown` and `ErrOrgDisabled` in `store.go`.
+
+## acr credentials on org disable and delete
+
+go-api revokes every acr credential of an organization when an admin disables or deletes it (`internal/apiservice/admin/org_acr_revoke.go`), through acr's `POST /internal/v1/organization/credentials/revoke` (`acrrevoke.Client.RevokeOrganization`, the `ACR_REVOKE_*` client of the credential revoke route). acr owns every revoke write (credential row, audit row, lifecycle outbox event); go-api only names the event.
+
+- Disable (`PATCH /api/v1/admin/orgs/{id}` with `is_active: false`, also on an already disabled organization): after the disable is stored, one revoke with reason `organization_disabled`, actor the acting admin. A failure answers 503 `Organization disabled; its acr credentials were not revoked; repeat the request.` (the disable stays stored; a repeat revokes what is left). Reactivation (`is_active: true`) restores no credential: users issue new ones.
+- Delete (`DELETE /api/v1/admin/orgs/{id}` and `dho admin orgs delete`, real delete only): after the auth deprovision and before any count, PagerDuty revoke or purge, the organization is set `is_active = false`, then one revoke with reason `organization_deleted` (actor the acting admin; `operator` for the CLI). A failure stops the delete with 503 `The acr credentials of this organization were not revoked; the organization is now disabled; run the delete again. Nothing was deleted.` A dry run disables and revokes nothing; an id with no organization row is not called.
+- Each revoke is a loop of acr calls, a new token exchange per call (acr revokes the calling binding's credentials last), at most 64 calls (32 000 credentials). Past the bound both answers say `more remains` and a repeat continues.
+- acr answers `409 organization_live` when its fresh read still sees the organization live; go-api answers the same 503, with the log decision `organization_live`.
+- No `ACR_REVOKE_*` client configured: the disable and the delete go on; one ERROR line and one count of `devhealth_api_org_acr_revoke_skipped_total{event,reason="no_client"}`. acr still refuses the credentials at use through the disabled answer.
+- The org-state reconciler's disables (`internal/apiservice/admin/orgstate_reconcile.go`) make no revoke call: the disabled answer refuses those credentials at use.
 
 ## Org LLM config route
 

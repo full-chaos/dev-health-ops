@@ -165,6 +165,9 @@ func (h *handlers) deleteOrganizationData(ctx context.Context, orgUUID uuid.UUID
 		if err := h.deprovisionBeforeDelete(ctx, orgUUID); err != nil {
 			return nil, err
 		}
+		if err := h.revokeACRBeforeDelete(ctx, orgUUID); err != nil {
+			return nil, err
+		}
 	}
 
 	result := &orgDeletionResult{

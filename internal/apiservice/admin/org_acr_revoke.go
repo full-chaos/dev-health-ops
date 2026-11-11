@@ -91,6 +91,11 @@ func (h *handlers) revokeOrgACRCredentials(ctx context.Context, orgID uuid.UUID,
 	return nil
 }
 
+// revokeACRAfterDisable runs after a stored disable.
+func (h *handlers) revokeACRAfterDisable(ctx context.Context, orgID uuid.UUID) error {
+	return h.revokeOrgACRCredentials(ctx, orgID, orgACREventDisable, acrrevoke.ReasonOrganizationDisabled)
+}
+
 // revokeACRBeforeDelete runs on a real delete before any count or purge: it disables the organization, so acr
 // refuses its credentials at once, then revokes them. A failure stops the delete with the organization disabled.
 // An organization with no row has nothing to disable and nothing acr can bind: the delete goes on as before.

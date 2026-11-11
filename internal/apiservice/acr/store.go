@@ -106,12 +106,15 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 	if store.Pool == nil {
 		return Entitlement{}, ErrUnavailable
 	}
-	found, err := organizationExists(ctx, store.Pool, parsedOrgID.String())
+	found, active, err := organizationActive(ctx, store.Pool, parsedOrgID.String())
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if !found {
 		return Entitlement{}, ErrOrgUnknown
+	}
+	if !active {
+		return Entitlement{}, ErrOrgDisabled
 	}
 	decisionStore := licensing.PostgresStore{Pool: store.Pool, Now: store.Now}
 	decision, err := decisionStore.Decide(ctx, parsedOrgID.String(), agentContextRuntimeFeatureKey)

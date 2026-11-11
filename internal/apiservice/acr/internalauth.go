@@ -26,7 +26,6 @@ const authAttemptPath = "/api/v1/internal/acr"
 const (
 	outcomeMissingToken = "missing_or_malformed_token"
 	outcomeOrgNotFound  = "organization_not_found"
-	outcomeOrgDisabled  = "organization_disabled"
 	outcomeLookupFailed = "entitlement_lookup_failed"
 	outcomeSuccess      = "success"
 	routeHealth         = "health"

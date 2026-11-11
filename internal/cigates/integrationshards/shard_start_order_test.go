@@ -45,12 +45,18 @@ func packagesShardsOfThePlan(t *testing.T) (map[int][]string, map[int]map[string
 func TestAPackagesShardStartsItsLongestPackageFirstAndTheOrderIsStable(t *testing.T) {
 	t.Parallel()
 	byShard, planned := packagesShardsOfThePlan(t)
-	checked := 0
+	var shards []int
 	for shard, pkgs := range byShard {
-		if len(pkgs) < 2 {
-			continue
+		if len(pkgs) >= 2 {
+			shards = append(shards, shard)
 		}
-		weights := planned[shard]
+	}
+	sort.Ints(shards)
+	// Two dry runs of every shard, each round in parallel (dryRuns; at 50 shards one after another took the 45 min timeout).
+	first, second := dryRuns(t, "packages", shards), dryRuns(t, "packages", shards)
+	checked := 0
+	for _, shard := range shards {
+		pkgs, weights := byShard[shard], planned[shard]
 		want := append([]string(nil), pkgs...)
 		sort.SliceStable(want, func(i, j int) bool {
 			if weights[want[i]] != weights[want[j]] {
@@ -58,15 +64,13 @@ func TestAPackagesShardStartsItsLongestPackageFirstAndTheOrderIsStable(t *testin
 			}
 			return want[i] < want[j]
 		})
-		first := runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", strconv.Itoa(shard), "--dry-run")
-		second := runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", strconv.Itoa(shard), "--dry-run")
-		if first.code != 0 || second.code != 0 {
-			t.Fatalf("shard %d dry run: exit %d / %d: %s%s", shard, first.code, second.code, first.stderr, second.stderr)
+		if first[shard].code != 0 || second[shard].code != 0 {
+			t.Fatalf("shard %d dry run: exit %d / %d: %s%s", shard, first[shard].code, second[shard].code, first[shard].stderr, second[shard].stderr)
 		}
-		if first.stdout != second.stdout {
+		if first[shard].stdout != second[shard].stdout {
 			t.Errorf("shard %d: two dry runs of the same input print different output", shard)
 		}
-		got := lineValues(first.stdout, "  SHARD-RUN ")
+		got := lineValues(first[shard].stdout, "  SHARD-RUN ")
 		if strings.Join(got, "\n") != strings.Join(want, "\n") {
 			t.Errorf("shard %d starts %v, want weight descending then name ascending: %v", shard, got, want)
 		}

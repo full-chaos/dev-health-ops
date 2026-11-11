@@ -2626,9 +2626,11 @@ func censusDefects(calls []goTestCall, groups int, keys map[string]bool, f tagge
 	return d
 }
 
-// TestEachPackagesShardRunsEverySelectedTestExactlyOnce runs every packages shard for real (not --dry-run) through
-// ci/check_go.sh with a recording `go` first on PATH (go test is recorded, not run; every other go command is real),
-// then applies censusDefects to the recorded calls.
+// TestEachPackagesShardRunsEverySelectedTestExactlyOnce applies censusDefects to the go test calls of every packages
+// shard. The calls of every shard come from its part of the one all-shards dry run (SHARD-GROUP and SHARD-REGEX: what
+// run_integration_packages passes to go test); two shards also run for real (not --dry-run) through ci/check_go.sh with
+// a recording `go` first on PATH (go test is recorded, not run; every other go command is real), and their recorded calls
+// must equal the calls of their dry run, package order included, and pass the census on their own.
 func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 	t.Parallel()
 	stdout, gho := realPlan(t)
@@ -2660,30 +2662,16 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 	if len(shards) < 2 {
 		t.Fatal("fewer than two packages shards: the census measures nothing")
 	}
-	results := make([]cmdResult, len(shards))
-	var wg sync.WaitGroup
-	for i, shard := range shards {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results[i] = runCheckGoSharding(t, shardEnv{extra: []string{
-				"PATH=" + fakeGo + string(os.PathListSeparator) + os.Getenv("PATH"), "GOTEST_RECORD_DIR=" + records[shard],
-			}}, "integration-shard", "packages", strconv.Itoa(shard))
-		}()
-	}
-	wg.Wait()
+	dry := packagesDryRuns(t, allShardsDryRun(t), shards)
 	tf := integrationTaggedFacts(t)
-	hookShard := 0
-	var hookCalls []goTestCall
-	for i, shard := range shards {
-		r := results[i]
-		if r.code != 0 || strings.Contains(r.stdout, "DRY RUN") {
-			t.Fatalf("packages shard %d: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
-		}
-		calls := recordedCalls(t, records[shard], root)
-		groups := len(lineValues(r.stdout, "  SHARD-GROUP "))
+	hookShard, mostGroups, groupsShard := 0, 0, 0
+	planned := map[int][]goTestCall{}
+	for _, shard := range shards {
+		calls := dryRunCalls(t, dry[shard].stdout)
+		planned[shard] = calls
+		groups := len(lineValues(dry[shard].stdout, "  SHARD-GROUP "))
 		if len(calls) == 0 || groups == 0 {
-			t.Fatalf("packages shard %d recorded %d go test call(s) and %d group(s): the census measures nothing", shard, len(calls), groups)
+			t.Fatalf("packages shard %d plans %d go test call(s) and %d group(s): the census measures nothing", shard, len(calls), groups)
 		}
 		if d := censusDefects(calls, groups, wants[shard], tf); len(d) > 0 {
 			t.Errorf("packages shard %d:\n  %s", shard, strings.Join(d, "\n  "))
@@ -2698,8 +2686,50 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 			}
 		}
 		if hasHook && hasFiltered && hookShard == 0 {
-			hookShard, hookCalls = shard, calls
+			hookShard = shard
 		}
+	}
+	for _, shard := range shards {
+		if g := len(planned[shard]); shard != hookShard && (g > mostGroups || groupsShard == 0) {
+			groupsShard, mostGroups = shard, g
+		}
+	}
+	if hookShard == 0 {
+		t.Fatal("no one-group packages shard holds a hook package: the planted defects below measure nothing")
+	}
+	runs := map[int]cmdResult{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, shard := range []int{hookShard, groupsShard} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := runCheckGoSharding(t, shardEnv{extra: []string{
+				"PATH=" + fakeGo + string(os.PathListSeparator) + os.Getenv("PATH"), "GOTEST_RECORD_DIR=" + records[shard],
+			}}, "integration-shard", "packages", strconv.Itoa(shard))
+			mu.Lock()
+			defer mu.Unlock()
+			runs[shard] = r
+		}()
+	}
+	wg.Wait()
+	real := map[int][]goTestCall{}
+	for _, shard := range []int{hookShard, groupsShard} {
+		if r := runs[shard]; r.code != 0 || strings.Contains(r.stdout, "DRY RUN") {
+			t.Fatalf("packages shard %d: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
+		}
+		calls := recordedCalls(t, records[shard], root)
+		real[shard] = calls
+		if got, want := callsText(calls), callsText(planned[shard]); got != want {
+			t.Errorf("packages shard %d: the real run's go test calls differ from its dry run's:\n got  %s\n want %s", shard, got, want)
+		}
+		if d := censusDefects(calls, len(planned[shard]), wants[shard], tf); len(d) > 0 {
+			t.Errorf("packages shard %d, real run:\n  %s", shard, strings.Join(d, "\n  "))
+		}
+	}
+	hookCalls := real[hookShard]
+	if len(hookCalls) != 1 {
+		t.Fatalf("packages shard %d recorded %d go test call(s), want its one group: the planted defects below measure nothing", hookShard, len(hookCalls))
 	}
 	if hookShard == 0 {
 		t.Fatal("no one-group packages shard holds a hook package: the planted defects below measure nothing")
@@ -2742,6 +2772,48 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 			t.Errorf("planted defect not caught: %s", name)
 		}
 	}
+}
+
+// dryRunCalls: the go test calls a packages shard's dry run plans, one per SHARD-GROUP line with the -run of the SHARD-REGEX
+// line after it, the packages as run_integration_packages passes them ("./" plus the key below the module), in group order.
+func dryRunCalls(t *testing.T, stdout string) []goTestCall {
+	t.Helper()
+	var calls []goTestCall
+	for _, l := range strings.Split(stdout, "\n") {
+		if v, ok := strings.CutPrefix(l, "  SHARD-GROUP "); ok {
+			f := strings.Fields(v)
+			c := goTestCall{dir: f[0], hasRun: true}
+			for _, k := range f[2:] {
+				rel := k
+				if f[0] != "." {
+					rel = strings.TrimPrefix(strings.TrimPrefix(k, f[0]), "/")
+				}
+				if rel == "" {
+					rel = "."
+				}
+				c.pkgs = append(c.pkgs, "./"+strings.TrimPrefix(rel, "./"))
+			}
+			calls = append(calls, c)
+		}
+		if v, ok := strings.CutPrefix(l, "  SHARD-REGEX "); ok {
+			module, regex, _ := strings.Cut(v, " ")
+			if len(calls) == 0 || calls[len(calls)-1].dir != module || calls[len(calls)-1].run != "" {
+				t.Fatalf("a SHARD-REGEX line with no SHARD-GROUP line of its module before it: %q", l)
+			}
+			calls[len(calls)-1].run = regex
+		}
+	}
+	return calls
+}
+
+// callsText: the calls as sorted text (each call's packages keep their order), for comparing a real run with its dry run.
+func callsText(calls []goTestCall) string {
+	var out []string
+	for _, c := range calls {
+		out = append(out, fmt.Sprintf("%s|%v|%s|%s", c.dir, c.hasRun, c.run, strings.Join(c.pkgs, " ")))
+	}
+	sort.Strings(out)
+	return strings.Join(out, "\n")
 }
 
 // budgetSplitPackages names the packages whose selected names cannot join the first go test group of their shard within

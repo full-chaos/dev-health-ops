@@ -6,10 +6,11 @@
 # other packages (a package with race-excluded rows runs fresh with -json, so the shard reads its rows' receipts from that run).
 # A new test joins a part with no edit here. A split package is never pinned (ci/go_test_pins.tsv) or solo.
 # parts = ceil(measured seconds / 150), the measured time from the test legs of run 42838102780 (PR #6046, ae06059f).
+# CHAOS-13520 (acp, after PR #6058 run at d4b3b08c): internal/cigates/chartgates 4 -> 6 parts (958 s), internal/cigates/splitshards split in 4 parts (1166 s).
 deploy/helm/dev-health	5
 internal/cigates/affected	3
 internal/cigates/bigboy	2
-internal/cigates/chartgates	4
+internal/cigates/chartgates	6
 internal/cigates/checkgo	5
 internal/cigates/checkgoshards	2
 internal/cigates/integrationshards	6
@@ -17,6 +18,7 @@ internal/cigates/outboundtransport	2
 internal/cigates/racescope	2
 internal/cigates/raceunweighted	2
 internal/cigates/scripts	4
+internal/cigates/splitshards	4
 internal/cigates/testshard	4
 internal/cigates/workflows	4
 internal/gqlgenguard	2

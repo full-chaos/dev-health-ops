@@ -1340,11 +1340,14 @@ check_test_shard_split_list() {
 }
 
 # test_split_job_start MODULE PKG SPLIT_LINES CENSUS_KEYS (CHAOS-13520): starts, in the background, one go test of the names of
-# PKG in SPLIT_LINES (test_shard_split_names) through -run, into its own log, -json and leg-events files. A package with
-# race-excluded rows runs fresh with -json (go_test_json_run_t), so the shard reads the receipts of its rows from that run.
-# Appends to SPLIT_JOB_PIDS, SPLIT_JOB_LABELS and SPLIT_JOB_FILES of check_test_shard; test_split_jobs_finish waits for them.
+# PKG in SPLIT_LINES (test_shard_split_names) through -run, into its own log, -json and leg-events files. The split jobs of a
+# shard run one at a time beside the shard's other packages: each starts once the one before it has ended (a go test per part
+# at full parallelism beside the rest oversubscribed the runner). A package with race-excluded rows runs fresh with -json
+# (go_test_json_run_t), so the shard reads the receipts of its rows from that run. Appends to SPLIT_JOB_PIDS, SPLIT_JOB_LABELS
+# and SPLIT_JOB_FILES of check_test_shard; test_split_jobs_finish waits for them.
 test_split_job_start() {
-  local module_dir="$1" pkg="$2" lines="$3" census_keys="$4" key regex n slog sjson slegjson serr
+  local module_dir="$1" pkg="$2" lines="$3" census_keys="$4" key regex n slog sjson slegjson serr prev=""
+  [ "${#SPLIT_JOB_PIDS[@]}" -eq 0 ] || prev="${SPLIT_JOB_PIDS[-1]}"
   key="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p && key == "" { key = $2 } END { print key }')"
   regex="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p { printf "%s%s", (n++ ? "|" : ""), $3 }')"
   n="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p' | wc -l)"
@@ -1355,11 +1358,13 @@ test_split_job_start() {
   printf 'go test%s (split): %s: %d test name(s) of its parts here\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${key}" "${n}"
   if [ "${module_dir}" = "." ] && printf '%s\n' "${census_keys}" | grep -Fqx -- "${key}"; then
     (
+      [ -z "${prev}" ] || while kill -0 "${prev}" 2>/dev/null; do sleep 1; done
       cd "${ROOT}/${module_dir}"
       go_test_json_run_t "$(cigates_go_test_timeout "${pkg}")" "${sjson}" "${slog}" -run "^(${regex})\$" "${pkg}"
     ) >/dev/null 2>"${serr}" &
   else
     (
+      [ -z "${prev}" ] || while kill -0 "${prev}" 2>/dev/null; do sleep 1; done
       cd "${ROOT}/${module_dir}"
       go_test_leg "${slog}" "${slegjson}" -timeout "$(cigates_go_test_timeout "${pkg}")" -run "^(${regex})\$" "${pkg}"
     ) >/dev/null 2>"${serr}" &

@@ -676,17 +676,22 @@ func probeRenderSemaphore(t *testing.T, m *renderMemo, chart string, want int, d
 	}
 	close(start)
 	var out semaphoreProbe
-	timer := time.NewTimer(deadline)
-	for got := 0; got < want && !out.timedOut; {
+	for got := 0; got < want && !out.timedOut; got++ {
+		// The first render must arrive by event (a loaded runner may be slow); `deadline` then measures only the
+		// renders that follow, so a capacity below `want` shows as an absent render, never as a late first one.
+		wait := deadline
+		if got == 0 {
+			wait = 30 * time.Second
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-arrived:
-			got++
+			timer.Stop()
 		case <-timer.C:
 			out.timedOut = true
 			out.inFlightAtTimeout = int(cur.Load())
 		}
 	}
-	timer.Stop()
 	out.slotsHeld = len(m.slots)
 	close(release)
 	wg.Wait()

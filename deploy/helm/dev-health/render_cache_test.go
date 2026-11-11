@@ -668,7 +668,7 @@ func probeRenderSemaphore(t *testing.T, m *renderMemo, chart string, want int, d
 			if i%2 == 0 {
 				flag = "--unknown"
 			}
-			cmd := exec.Command("helm", "template", "memo", chart, flag, fmt.Sprintf("value=%d", i))
+			cmd := helmCommand("template", "memo", chart, flag, fmt.Sprintf("value=%d", i))
 			if out, err := m.output(cmd); err != nil {
 				t.Errorf("%v: %s", err, out)
 			}
@@ -735,11 +735,11 @@ func TestRenderMemoCapacityIsFixedAtConstruction(t *testing.T) {
 	}
 	// A call made before the caller changes its mind must not move the capacity (the old lazy limit read it at first use).
 	m.run = func(*exec.Cmd) ([]byte, error) { return nil, nil }
-	if _, err := m.live(exec.Command("helm", "version", "--short")); err != nil {
+	if _, err := m.live(helmCommand("version", "--short")); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HELM_RENDER_PARALLEL", "5")
-	if _, err := m.live(exec.Command("helm", "version", "--short")); err != nil {
+	if _, err := m.live(helmCommand("version", "--short")); err != nil {
 		t.Fatal(err)
 	}
 	if cap(m.slots) != 3 {
@@ -757,13 +757,13 @@ func TestRenderMemoFailingCallReleasesItsSlot(t *testing.T) {
 		}
 		return []byte("ok\n"), nil
 	}
-	if _, err := m.live(exec.Command("helm", "template", "x")); err == nil {
+	if _, err := m.live(helmCommand("template", "x")); err == nil {
 		t.Fatal("the first call must fail")
 	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if out, err := m.live(exec.Command("helm", "template", "y")); err != nil || string(out) != "ok\n" {
+		if out, err := m.live(helmCommand("template", "y")); err != nil || string(out) != "ok\n" {
 			t.Errorf("second call = %q, %v", out, err)
 		}
 	}()

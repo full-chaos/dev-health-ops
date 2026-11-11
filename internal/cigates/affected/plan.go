@@ -584,6 +584,10 @@ func boundedReads(t *tables, scanned []Read, changed []string, sel *selection, i
 // PlanVerdict prints the plan verdict of a change set: NONE, `AFFECTED <n>` and one key per line, or `FULL <reason>`.
 // It returns the exit code: 0 with a verdict, 1 on a read, table or event error, 2 on a usage error.
 func PlanVerdict(args []string, stdout, stderr io.Writer) int {
+	return planVerdictFrom(ScanReads, args, stdout, stderr)
+}
+
+func planVerdictFrom(scan func(root string) ([]Read, error), args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("plan-verdict", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	event := fs.String("event", "", "GitHub event name: pull_request (or range, a push-range check for an informational job) judges the change set; any other event is FULL")
@@ -643,7 +647,7 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 		var scanned []Read
 		in.scanned = &scanned
 		in.tables, in.guardFn = tb, func() ([]string, error) {
-			reads, err := ScanReads(*root)
+			reads, err := scan(*root)
 			if err != nil {
 				return nil, fmt.Errorf("scan the Go sources for reads: %w", err)
 			}

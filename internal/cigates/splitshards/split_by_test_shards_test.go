@@ -83,6 +83,11 @@ func TestEverySplitByTestNameRunsInExactlyOnePackagesShard(t *testing.T) {
 	if len(split) == 0 {
 		t.Skip("no package of ci/go_integration_shards.d declares split-by-test")
 	}
+	// The per-package listings compile while the all-shards dry run below runs (bounded by listingSlots).
+	tc := pinnedGoToolchain(t)
+	for _, sp := range split {
+		startListing(root, tc, listingKey{pkg: sp.key, tags: "integration"})
+	}
 	shards := packagesShards(t, root)
 	// One plan for every packages shard: `integration-shard packages all --dry-run` prints each shard's own --dry-run after
 	// a header line (internal/cigates/integrationshards holds the two equal byte for byte).

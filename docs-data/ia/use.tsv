@@ -42,4 +42,6 @@ use-sign-in	use	/use/sign-in/	Sign in and recover access	landing	true	public	pla
 use-sign-in-account	use-sign-in	/use/sign-in/create-account-and-sign-in/	Create an account and sign in	task-guide	true	public	planned	false	Sign up, verify the email address, sign in, and sign out.
 use-sign-in-recover	use-sign-in	/use/sign-in/recover-access/	Recover access	task-guide	true	public	planned	false	Reset a password, request a new verification email, and change a password.
 use-sign-in-methods	use-sign-in	/use/sign-in/social-login-and-sso/	Social sign-in and single sign-on	concept	true	public	planned	false	Compare email and password, social sign-in, and single sign-on.
+use-sign-in-onboarding	use-sign-in	/use/sign-in/onboarding/	Set up your workspace	task-guide	true	public	active	false	Create your organization and add a first tool.
+use-sign-in-switch-org	use-sign-in	/use/sign-in/switch-organization/	Switch organization	task-guide	true	public	active	false	Change the organization you work in.
 use-ask-dev	use	/use/ask-dev/	Ask a question in Ask Dev	task-guide	true	public	active	false	Open Ask Dev, ask an engineering question, read the answer with its evidence and limits, and manage conversations.

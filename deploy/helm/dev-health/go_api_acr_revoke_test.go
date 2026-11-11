@@ -66,6 +66,8 @@ func TestACRRevokeOffRendersNothing(t *testing.T) {
 }
 
 func TestACRRevokeOnRendersEnvVolumeAndDerivedPath(t *testing.T) {
+	t.Parallel()
+
 	dep, env := arGoAPI(t, arOn()...)
 	want := map[string]string{"ACR_REVOKE_URL": arBase, "ACR_REVOKE_TOKEN_URL": arToken, "ACR_REVOKE_SUBJECT_FILE": arMount + "/token"}
 	for name, value := range want {
@@ -101,6 +103,8 @@ func TestACRRevokeOnRendersEnvVolumeAndDerivedPath(t *testing.T) {
 }
 
 func TestACRRevokeExpirationIsSettable(t *testing.T) {
+	t.Parallel()
+
 	dep, _ := arGoAPI(t, arOn("--set", "goApi.acrRevoke.expirationSeconds=600")...)
 	if got := at(dep, "spec", "template", "spec", "volumes", 0, "projected", "sources", 0, "serviceAccountToken", "expirationSeconds"); !reflect.DeepEqual(got, 600) {
 		t.Errorf("expirationSeconds = %v, want 600", got)
@@ -108,6 +112,8 @@ func TestACRRevokeExpirationIsSettable(t *testing.T) {
 }
 
 func TestACRRevokeClusterHTTPNeedsTheOptInAndTheClusterHost(t *testing.T) {
+	t.Parallel()
+
 	_, env := arGoAPI(t, arOn("--set-string", "goApi.acrRevoke.url="+arCluster, "--set-string", "goApi.acrRevoke.tokenURL="+arCluster+"/api/v1/oauth/token",
 		"--set", "goApi.acrRevoke.allowClusterHTTP=true")...)
 	if got := arValue(env, "ACR_REVOKE_ALLOW_CLUSTER_HTTP"); got != "true" {
@@ -123,6 +129,8 @@ func TestACRRevokeClusterHTTPNeedsTheOptInAndTheClusterHost(t *testing.T) {
 }
 
 func TestACRRevokeClusterHostTakesValidLabelsAndATokenQuery(t *testing.T) {
+	t.Parallel()
+
 	host := "http://dev-health-1.ns-2.svc.cluster.local:8080"
 	_, env := arGoAPI(t, arOn("--set", "goApi.acrRevoke.allowClusterHTTP=true", "--set-string", "goApi.acrRevoke.url="+host,
 		"--set-string", "goApi.acrRevoke.tokenURL="+host+"/api/v1/oauth/token?x=1")...)
@@ -132,6 +140,8 @@ func TestACRRevokeClusterHostTakesValidLabelsAndATokenQuery(t *testing.T) {
 }
 
 func TestACRRevokeTokenQueryMayHoldAnAtSign(t *testing.T) {
+	t.Parallel()
+
 	for _, token := range []string{"https://acr.revoke-proof.example?email=a@b", "https://acr.revoke-proof.example/api/v1/oauth/token?email=a@b"} {
 		_, env := arGoAPI(t, arOn("--set-string", "goApi.acrRevoke.tokenURL="+token)...)
 		if got := arValue(env, "ACR_REVOKE_TOKEN_URL"); got != token {
@@ -141,6 +151,8 @@ func TestACRRevokeTokenQueryMayHoldAnAtSign(t *testing.T) {
 }
 
 func TestACRRevokeKeepsTheExistingExtraVolume(t *testing.T) {
+	t.Parallel()
+
 	dep, _ := arGoAPI(t, append(arOn(), "--set-json", "goApi.extraVolumes="+extraVolumesJSON, "--set-json", "goApi.extraVolumeMounts="+extraMountsJSON)...)
 	vols, _ := at(dep, "spec", "template", "spec", "volumes").([]any)
 	mounts, _ := at(dep, "spec", "template", "spec", "containers", 0, "volumeMounts").([]any)
@@ -154,6 +166,8 @@ func TestACRRevokeKeepsTheExistingExtraVolume(t *testing.T) {
 }
 
 func TestACRRevokeRefusesUnusableValues(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		sets []string
@@ -195,6 +209,8 @@ func TestACRRevokeRefusesUnusableValues(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuthRaw(t, arOn(tc.sets...)...)
 			if err == nil {
 				t.Fatalf("render passed; want a refusal naming %s", tc.want)
@@ -231,6 +247,8 @@ func TestACRRevokeNamesNeverComeFromExtraEnv(t *testing.T) {
 }
 
 func TestACRRevokeLeavesOtherWorkloadsUnchanged(t *testing.T) {
+	t.Parallel()
+
 	base, out, err := renderAuth(t, "--set", "goApi.enabled=true")
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)

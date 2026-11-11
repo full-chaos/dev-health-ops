@@ -86,6 +86,8 @@ func ownedSwitchesAgree(t *testing.T, service, job map[string]any) error {
 }
 
 func TestAuthOrgsOwnedDefaultUnset(t *testing.T) {
+	t.Parallel()
+
 	service, job := renderBackfill(t, backfillOn)
 	for _, doc := range []map[string]any{service, job} {
 		if value, set := containerEnvValue(t, doc, "AUTH_ORGS_OWNED"); set {
@@ -100,9 +102,13 @@ func TestAuthOrgsOwnedDefaultUnset(t *testing.T) {
 // The owned switches come from authService.phase alone: auth-service and the Job agree in every rendered phase
 // (4 users owned included), and phase 5 (orgs owned) is cancelled (D6651).
 func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
+	t.Parallel()
+
 	for _, verb := range []string{"users-backfill", "orgs-backfill"} {
 		for _, phase := range []string{"1", "2", "3", "4"} {
 			t.Run(verb+"/phase "+phase, func(t *testing.T) {
+				t.Parallel()
+
 				args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...), "authService.backfill.verb="+verb, "authService.phase="+phase)
 				if phase != "1" {
 					args = append(append(args, sessionReaders...), sessionSuccessor...)
@@ -118,6 +124,8 @@ func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 		}
 		for _, phase := range []string{"5"} {
 			t.Run(verb+"/phase "+phase+" refused", func(t *testing.T) {
+				t.Parallel()
+
 				_, out, err := renderAuth(t, withSets(backfillOn, "authService.backfill.verb="+verb, "authService.phase="+phase)...)
 				if err == nil || !strings.Contains(out, orgsOwnedPhase5Msg) {
 					t.Fatalf("phase %s rendered: err=%v out=%.300s", phase, err, out)
@@ -129,6 +137,8 @@ func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 
 // Each consumer, read a different value or a literal, makes the equality fail.
 func TestAuthOrgsOwnedEqualityFailsForEachConsumer(t *testing.T) {
+	t.Parallel()
+
 	service, job := renderBackfill(t, backfillOn)
 	if err := ownedSwitchesAgree(t, service, job); err != nil {
 		t.Fatalf("baseline: %v", err)
@@ -143,6 +153,8 @@ func TestAuthOrgsOwnedEqualityFailsForEachConsumer(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			s, j := cloneDoc(t, service), cloneDoc(t, job)
 			tc.mutate(s, j)
 			if ownedSwitchesAgree(t, s, j) == nil {
@@ -154,6 +166,8 @@ func TestAuthOrgsOwnedEqualityFailsForEachConsumer(t *testing.T) {
 
 // A stray key is no second source: only authService.phase feeds the switch.
 func TestAuthOrgsOwnedStrayKeyIsIgnoredByTheJob(t *testing.T) {
+	t.Parallel()
+
 	service, job := renderBackfill(t, withSets(backfillOn, "authService.backfill.orgsOwned=true"))
 	for name, doc := range map[string]map[string]any{"auth-service": service, "Job": job} {
 		if value, set := containerEnvValue(t, doc, "AUTH_ORGS_OWNED"); set {
@@ -163,9 +177,13 @@ func TestAuthOrgsOwnedStrayKeyIsIgnoredByTheJob(t *testing.T) {
 }
 
 func TestAuthOrgsOwnedCannotBeSetThroughExtraEnv(t *testing.T) {
+	t.Parallel()
+
 	for _, key := range []string{"authService.extraEnv", "authService.backfill.extraEnv"} {
 		for _, name := range []string{"AUTH_ORGS_OWNED", "AUTH_USERS_OWNED"} {
 			t.Run(key+"/"+name, func(t *testing.T) {
+				t.Parallel()
+
 				args := append(append([]string{}, backfillOn...), "--set-json", fmt.Sprintf(`%s=[{"name":%q,"value":"true"}]`, key, " "+strings.ToLower(name)))
 				_, out, err := renderAuth(t, args...)
 				if err == nil || !strings.Contains(out, key+" must not set") {
@@ -177,6 +195,8 @@ func TestAuthOrgsOwnedCannotBeSetThroughExtraEnv(t *testing.T) {
 }
 
 func TestAuthBackfillJobOffByDefault(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -187,6 +207,8 @@ func TestAuthBackfillJobOffByDefault(t *testing.T) {
 }
 
 func TestAuthBackfillJobVerbEnum(t *testing.T) {
+	t.Parallel()
+
 	for _, verb := range []string{"", "users-delete", "orgs-backfill --x"} {
 		_, out, err := renderAuth(t, withSets(backfillOn, "authService.backfill.verb="+verb)...)
 		if err == nil || !strings.Contains(out, "authService.backfill.verb") {
@@ -196,6 +218,8 @@ func TestAuthBackfillJobVerbEnum(t *testing.T) {
 }
 
 func TestAuthBackfillJobBatchIsBounded(t *testing.T) {
+	t.Parallel()
+
 	for _, batch := range []string{"0", "10001", "-1"} {
 		_, out, err := renderAuth(t, withSets(backfillOn, "authService.backfill.batch="+batch)...)
 		if err == nil || !strings.Contains(out, "authService.backfill.batch") {
@@ -205,6 +229,8 @@ func TestAuthBackfillJobBatchIsBounded(t *testing.T) {
 }
 
 func TestAuthBackfillJobNeedsRunIdAndAuthService(t *testing.T) {
+	t.Parallel()
+
 	noRun := append(append([]string{}, authBase...), "--set", "authService.backfill.enabled=true", "--set", "authService.backfill.verb=orgs-backfill")
 	if _, out, err := renderAuth(t, noRun...); err == nil || !strings.Contains(out, "authService.backfill.runId") {
 		t.Errorf("enabled without runId rendered: err=%v out=%.200s", err, out)
@@ -216,6 +242,8 @@ func TestAuthBackfillJobNeedsRunIdAndAuthService(t *testing.T) {
 }
 
 func TestAuthBackfillJobDryRunDefaultTrue(t *testing.T) {
+	t.Parallel()
+
 	_, job := renderBackfill(t, backfillOn)
 	args := fmt.Sprint(at(job, "spec", "template", "spec", "containers", 0, "args"))
 	if !strings.Contains(args, "orgs-backfill") || !strings.Contains(args, "--dry-run") {
@@ -228,6 +256,8 @@ func TestAuthBackfillJobDryRunDefaultTrue(t *testing.T) {
 }
 
 func TestAuthBackfillJobUsesTheAuthServiceSecretReference(t *testing.T) {
+	t.Parallel()
+
 	service, job := renderBackfill(t, backfillOn)
 	ref := func(doc map[string]any) string {
 		container := at(doc, "spec", "template", "spec", "containers", 0)
@@ -264,6 +294,8 @@ func TestAuthBackfillJobUsesTheAuthServiceSecretReference(t *testing.T) {
 }
 
 func TestAuthBackfillJobUsesTheDhoImage(t *testing.T) {
+	t.Parallel()
+
 	_, job := renderBackfill(t, withSets(backfillOn, "goApi.image.repository=example.test/dho", "goApi.image.tag=sha-abc"))
 	if image := at(job, "spec", "template", "spec", "containers", 0, "image"); image != "example.test/dho:sha-abc" {
 		t.Errorf("image = %v, want the goApi dho image", image)
@@ -271,6 +303,8 @@ func TestAuthBackfillJobUsesTheDhoImage(t *testing.T) {
 }
 
 func TestAuthBackfillJobRunsOnce(t *testing.T) {
+	t.Parallel()
+
 	_, job := renderBackfill(t, backfillOn)
 	meta, _ := job["metadata"].(map[string]any)
 	if ann, _ := meta["annotations"].(map[string]any); ann["helm.sh/hook"] != nil {
@@ -294,6 +328,8 @@ func jobName(job map[string]any) string {
 }
 
 func TestAuthBackfillJobNameIsStableAndFollowsItsInputs(t *testing.T) {
+	t.Parallel()
+
 	_, first := renderBackfill(t, backfillOn)
 	_, again := renderBackfill(t, backfillOn)
 	if jobName(first) != jobName(again) {

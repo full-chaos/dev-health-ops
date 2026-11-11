@@ -79,7 +79,25 @@ type subscriberRig struct {
 	reader *metric.ManualReader
 	cancel context.CancelFunc
 	done   chan struct{}
-	logs   *bytes.Buffer
+	logs   *lockedBuffer
+}
+
+// lockedBuffer is a log sink the subscriber goroutine writes while the test goroutine reads it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func startSubscriber(t *testing.T) *subscriberRig {
@@ -87,7 +105,7 @@ func startSubscriber(t *testing.T) *subscriberRig {
 	reader := metric.NewManualReader()
 	provider := metric.NewMeterProvider(metric.WithReader(reader))
 	rec := &recorder{}
-	logs := &bytes.Buffer{}
+	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	consumer, err := NewConsumer(Config{Invalidator: rec, Logger: logger, Meter: provider.Meter("test")})
 	if err != nil {

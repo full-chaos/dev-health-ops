@@ -25,6 +25,8 @@ func envValue(container any, name string) (string, bool) {
 // With the go-api auth proxy on, auth-service believes the one forwarded address only from the listed peers, and
 // admits no pod but go-api's: trust without that boundary would let any caller name its own address.
 func TestAuthServiceTrustedProxiesRenderWithTheProxyOnAndTheBoundary(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth("--set", "authService.phase=2")...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.500s", err, out)
@@ -58,6 +60,8 @@ func TestAuthServiceProxyOnWithNoTrustedProxiesFailsTheRender(t *testing.T) {
 }
 
 func TestAuthServiceProxyOffRendersWithoutTrustedProxies(t *testing.T) {
+	t.Parallel()
+
 	args := append(append([]string{"--set", "goApi.enabled=true"}, authBase...), sessionReaders...)
 	docs, out, err := renderAuth(t, append(args, sessionSuccessor...)...)
 	if err != nil {
@@ -70,6 +74,8 @@ func TestAuthServiceProxyOffRendersWithoutTrustedProxies(t *testing.T) {
 }
 
 func TestAuthServiceTrustedProxiesRefuseTheWholeInternet(t *testing.T) {
+	t.Parallel()
+
 	for _, entry := range []string{"0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96", "::ffff:10.0.0.0/104", "10.0.0.0/8, 0.0.0.0/0", "*", "0:0:0:0:0:ffff:10.0.0.9", "0:0:0:0:0:FFFF:a00:9", "::0:ffff:10.0.0.9", "0::ffff:10.0.0.9", "::0000:ffff:a00:9", "0:0:0:0:0:ffff:a00:9", "::FFFF:a00:9", "0000:0:0:0:0:ffff:a00:9", "::ffff:a00:9", "0:0:0:0:0:ffff:0:0/96", "::0:ffff:0:0/96", "0:0:0:0:0:FFFF::/96"} {
 		args := append(goAPIWithAuth("--set", "authService.phase=2"), "--set-json", `authService.trustedProxies=["`+entry+`"]`)
 		_, out, err := renderAuth(t, args...)
@@ -80,6 +86,8 @@ func TestAuthServiceTrustedProxiesRefuseTheWholeInternet(t *testing.T) {
 }
 
 func TestAuthServiceExtraEnvCannotSetTheTrustedProxies(t *testing.T) {
+	t.Parallel()
+
 	args := append(append([]string{}, authBase...), "--set-json", `authService.extraEnv=[{"name":"`+trustedEnvName+`","value":"0.0.0.0/0"}]`)
 	if _, out, err := renderAuth(t, args...); err == nil || !strings.Contains(out, trustedEnvName) {
 		t.Errorf("extraEnv set the trusted proxies: err=%v\n%.300s", err, out)
@@ -90,6 +98,8 @@ func TestAuthServiceExtraEnvCannotSetTheTrustedProxies(t *testing.T) {
 // AUTH_JWT_SECRET_KEY and AUTH_SESSION_SUCCESSOR_KEY together, the two secrets authconfig's Session.Enabled needs): on
 // with no store = fail, off = renders.
 func TestAuthServiceStoreIsRequiredExactlyWhenTheSessionRoutesAreOn(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, append(append([]string{}, authBase...), "--set", "authService.sessionKeys.successor.secretName=auth-session")...)
 	if err == nil || !strings.Contains(out, "authService.valkey.secretName is required") {
 		t.Errorf("session routes on without the store: err=%v\n%.300s", err, out)
@@ -109,6 +119,7 @@ func TestAuthServiceStoreIsRequiredExactlyWhenTheSessionRoutesAreOn(t *testing.T
 // A value that renders but the service refuses would stop auth-service at start: that is the failure. The chart may be
 // stricter only where it says so on purpose (a /0 network, an IPv4-mapped form, a padded entry).
 func TestAuthServiceTrustedProxiesRenderIffTheServiceParses(t *testing.T) {
+
 	render := func(entry string) bool {
 		args := append(goAPIWithAuth("--set", "authService.phase=2"), "--set-json", `authService.trustedProxies=["`+entry+`"]`)
 		_, _, err := renderAuth(t, args...)
@@ -162,6 +173,8 @@ func TestAuthServiceTrustedProxiesRenderIffTheServiceParses(t *testing.T) {
 // Trust of the forwarded address is safe only while the API port admits go-api and no other pod, so an operator-set
 // allowedFrom beside a proxy flag fails the render; the operator port (metricsFrom) is untouched.
 func TestAuthServiceProxyOnRefusesAnExtraAPIPortPeer(t *testing.T) {
+	t.Parallel()
+
 	extra := []string{"--set-json", `authService.networkPolicy.allowedFrom=[{"matchLabels":{"app":"other-pod"}}]`}
 	_, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=2"}, extra...)...)...)
 	if err == nil || !strings.Contains(out, "authService.networkPolicy.allowedFrom") {
@@ -170,6 +183,8 @@ func TestAuthServiceProxyOnRefusesAnExtraAPIPortPeer(t *testing.T) {
 }
 
 func TestAuthServiceProxyOffKeepsAllowedFromAndMetricsFromOnTheirPorts(t *testing.T) {
+	t.Parallel()
+
 	args := append(append([]string{"--set", "goApi.enabled=true"}, authBase...),
 		"--set-json", `authService.networkPolicy.allowedFrom=[{"matchLabels":{"app":"consumer"}}]`,
 		"--set-json", `authService.networkPolicy.metricsFrom=[{"matchLabels":{"app":"scraper"}}]`)
@@ -195,6 +210,8 @@ func TestAuthServiceProxyOffKeepsAllowedFromAndMetricsFromOnTheirPorts(t *testin
 }
 
 func TestAuthServiceProxyOnKeepsMetricsFromOnTheOperatorPort(t *testing.T) {
+	t.Parallel()
+
 	args := goAPIWithAuth("--set", "authService.phase=2", "--set-json", `authService.networkPolicy.metricsFrom=[{"matchLabels":{"app":"scraper"}}]`)
 	docs, out, err := renderAuth(t, args...)
 	if err != nil {
@@ -217,6 +234,8 @@ func TestAuthServiceProxyOnKeepsMetricsFromOnTheOperatorPort(t *testing.T) {
 // The trusted proxies are safe only while the auth-service NetworkPolicy admits go-api alone, so a disabled policy
 // beside a proxy flag fails the render; with the proxy off a disabled policy still renders.
 func TestAuthServiceProxyOnRefusesADisabledNetworkPolicy(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, goAPIWithAuth("--set", "authService.phase=2", "--set", "authService.networkPolicy.enabled=false")...)
 	if err == nil || !strings.Contains(out, "authService.networkPolicy.enabled") {
 		t.Fatalf("proxy on with the policy disabled rendered or named the wrong key: err=%v\n%.400s", err, out)
@@ -224,6 +243,8 @@ func TestAuthServiceProxyOnRefusesADisabledNetworkPolicy(t *testing.T) {
 }
 
 func TestAuthServiceProxyOffRendersWithADisabledNetworkPolicy(t *testing.T) {
+	t.Parallel()
+
 	args := append(append([]string{"--set", "goApi.enabled=true"}, authBase...), "--set", "authService.networkPolicy.enabled=false")
 	docs, out, err := renderAuth(t, args...)
 	if err != nil {
@@ -294,6 +315,8 @@ func renderWide(t *testing.T, entry string, extra ...string) ([]map[string]any, 
 
 // The pod range of the node is the widest list entry: a wide entry needs the explicit ack, a wider one is refused with it.
 func TestAuthServiceWideTrustedProxiesRefusedWithoutTheAck(t *testing.T) {
+	t.Parallel()
+
 	for _, entry := range []string{"10.42.0.0/24", "10.42.0.0/27", "10.42.0.0/25", "fd00:0:0:1::/64", "fd00::/120"} {
 		_, out, err := renderWide(t, entry)
 		if err == nil || !strings.Contains(out, wideNeedsAck) {
@@ -303,6 +326,8 @@ func TestAuthServiceWideTrustedProxiesRefusedWithoutTheAck(t *testing.T) {
 }
 
 func TestAuthServiceWideTrustedProxiesRenderWithTheAck(t *testing.T) {
+	t.Parallel()
+
 	for entry, want := range map[string]string{
 		"10.42.0.0/24":   "10.42.0.0/24,!10.42.0.0,!10.42.0.1",
 		"10.42.0.0/27":   "10.42.0.0/27,!10.42.0.0,!10.42.0.1",
@@ -325,6 +350,8 @@ func TestAuthServiceWideTrustedProxiesRenderWithTheAck(t *testing.T) {
 // reaches the API port from them, which the go-api pod selector does not stop. A wide IPv4 entry renders only with both
 // excluded beside it, in any order.
 func TestAuthServiceWideTrustedProxiesNeedTheNodeExclusions(t *testing.T) {
+	t.Parallel()
+
 	ack := []string{"--set", wideAckKey + "=true"}
 	for _, list := range [][]string{
 		{"10.42.0.0/24"},
@@ -360,6 +387,8 @@ func TestAuthServiceWideTrustedProxiesNeedTheNodeExclusions(t *testing.T) {
 // An exclusion is one IPv4 address inside a listed IPv4 network, never a network, an IPv6 or IPv4-mapped form, or an
 // address that is also listed as trusted.
 func TestAuthServiceTrustedProxyExclusionEntries(t *testing.T) {
+	t.Parallel()
+
 	for _, list := range [][]string{
 		{"10.42.0.0/28", "!"},
 		{"10.42.0.0/28", "!10.42.0.1/32"},
@@ -432,6 +461,8 @@ func TestAuthServiceTrustedProxyListsRenderOnlyWhatTheServiceParses(t *testing.T
 
 // An IPv6 network wider than a /124 is refused even with the ack: the render cannot name its node exclusions.
 func TestAuthServiceWideIPv6TrustedProxiesRefusedEvenWithTheAck(t *testing.T) {
+	t.Parallel()
+
 	for _, entry := range []string{"fd00:0:0:1::/64", "fd00::/120", "fd00::/123", "2001:db8::/96"} {
 		_, out, err := renderWide(t, entry, "--set", wideAckKey+"=true")
 		if err == nil || !strings.Contains(out, wideIPv6Msg) {
@@ -441,6 +472,8 @@ func TestAuthServiceWideIPv6TrustedProxiesRefusedEvenWithTheAck(t *testing.T) {
 }
 
 func TestAuthServiceTooWideTrustedProxiesRefusedEvenWithTheAck(t *testing.T) {
+	t.Parallel()
+
 	for _, entry := range []string{"10.42.0.0/23", "10.42.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "fd00::/32", "fd00::/63", "2001:db8::/48"} {
 		_, out, err := renderWide(t, entry, "--set", wideAckKey+"=true")
 		if err == nil || !strings.Contains(out, wideTooWideMsg) {
@@ -450,6 +483,8 @@ func TestAuthServiceTooWideTrustedProxiesRefusedEvenWithTheAck(t *testing.T) {
 }
 
 func TestAuthServiceNarrowTrustedProxiesNeedNoAck(t *testing.T) {
+	t.Parallel()
+
 	for _, entry := range []string{"10.42.0.46", "10.42.0.46/32", "10.42.0.0/28", "10.42.0.16/28", "fd00::1", "fd00::1/128", "fd00::/124"} {
 		if _, out, err := renderWide(t, entry); err != nil {
 			t.Errorf("narrow entry %q: %v\n%.400s", entry, err, out)
@@ -458,6 +493,8 @@ func TestAuthServiceNarrowTrustedProxiesNeedNoAck(t *testing.T) {
 }
 
 func TestAuthServiceWideTrustedProxiesAckIsAPermissionNotARequirement(t *testing.T) {
+	t.Parallel()
+
 	if _, out, err := renderWide(t, "10.42.0.0/28", "--set", wideAckKey+"=true"); err != nil {
 		t.Errorf("ack with a narrow entry: %v\n%.400s", err, out)
 	}
@@ -474,13 +511,20 @@ func TestAuthServiceWideTrustedProxiesAckIsAPermissionNotARequirement(t *testing
 
 // Every prefix length of both families lands in exactly one band, whole-internet and IPv4-mapped forms stay refused.
 func TestAuthServiceTrustedProxiesWidthBands(t *testing.T) {
+	t.Parallel()
 	for bits := 0; bits <= 32; bits++ {
 		entry := fmt.Sprintf("10.0.0.0/%d", bits)
-		checkBand(t, entry, wideTier(entry))
+		t.Run(entry, func(t *testing.T) {
+			t.Parallel()
+			checkBand(t, entry, wideTier(entry))
+		})
 	}
 	for bits := 0; bits <= 128; bits++ {
 		entry := fmt.Sprintf("fd00::/%d", bits)
-		checkBand(t, entry, wideTier(entry))
+		t.Run(entry, func(t *testing.T) {
+			t.Parallel()
+			checkBand(t, entry, wideTier(entry))
+		})
 	}
 }
 
@@ -561,6 +605,8 @@ func goAPIOnlyProblem(rules [][]any) string {
 // port admits the go-api pod selector alone (no ipBlock, no namespace, no second peer, no second rule), and an extra peer or
 // a policy turned off is refused.
 func TestAuthServiceWideTrustedProxiesNeedTheGoAPIOnlyBoundary(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderWide(t, "10.42.0.0/24", "--set", wideAckKey+"=true")
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -580,6 +626,8 @@ func TestAuthServiceWideTrustedProxiesNeedTheGoAPIOnlyBoundary(t *testing.T) {
 // The boundary check sees every rule on the API port: a planted second rule (a fixture, since the chart renders only one)
 // is reported, and so is a second peer, an ipBlock and a wrong selector.
 func TestAuthServiceAPIPortBoundaryCheckSeesASecondIngressRule(t *testing.T) {
+	t.Parallel()
+
 	goAPI := map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/component": "go-api"}}}
 	rule := func(peers ...any) map[string]any {
 		return map[string]any{"from": peers, "ports": []any{map[string]any{"protocol": "TCP", "port": 8095}}}
@@ -615,6 +663,8 @@ func TestAuthServiceAPIPortBoundaryCheckSeesASecondIngressRule(t *testing.T) {
 // A wide list needs the ack at every phase, because the entry is rendered into the env whatever the phase and the API port
 // is open to any listed peer while the proxy is off. A list wider than the pod range is refused at every phase.
 func TestAuthServiceWideTrustedProxiesNeedTheAckAtEveryPhase(t *testing.T) {
+	t.Parallel()
+
 	phase1 := func(entry string, extra ...string) (string, error) {
 		args := append(append([]string{"--set", "goApi.enabled=true"}, authBase...), sessionReaders...)
 		args = append(append(args, sessionSuccessor...), "--set", "authService.phase=1", "--set-json", `authService.trustedProxies=["`+entry+`"]`)

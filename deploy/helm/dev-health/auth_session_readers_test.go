@@ -30,6 +30,8 @@ func containerEnvValue(t *testing.T, doc map[string]any, name string) (string, b
 // auth-migrate grants the session read to exactly the listed logins, and only
 // when some are listed.
 func TestAuthMigrateGrantsSessionReadsToTheListedRoles(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -50,6 +52,8 @@ func TestAuthMigrateGrantsSessionReadsToTheListedRoles(t *testing.T) {
 // go-api and query-api read auth-service sessions in the schema auth-service
 // uses (authService.database.schema).
 func TestGoAPIAndQueryAPIReadSessionsInTheAuthSchema(t *testing.T) {
+	t.Parallel()
+
 	sets := append(append([]string{}, authBase...), "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true",
 		"--set", "authService.database.schema=acp")
 	docs, out, err := renderAuth(t, sets...)
@@ -116,6 +120,8 @@ func secretRefOf(t *testing.T, doc map[string]any, name string) (string, string)
 }
 
 func TestSessionsOnNeedsBothReaderRolesAndNamesTheMissingOnes(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, sessionsArgs(sessionSuccessor)...)
 	if err == nil {
 		t.Fatal("sessions=true without reader roles rendered")
@@ -132,6 +138,8 @@ func TestSessionsOnNeedsBothReaderRolesAndNamesTheMissingOnes(t *testing.T) {
 }
 
 func TestSessionsOnNeedsTheSessionKeys(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, sessionsArgs(sessionReaders)...)
 	if err == nil || !strings.Contains(out, "authService.sessionKeys.successor.secretName") {
 		t.Fatalf("sessions=true without the successor key: err=%v\n%.600s", err, out)
@@ -139,6 +147,8 @@ func TestSessionsOnNeedsTheSessionKeys(t *testing.T) {
 }
 
 func TestSessionsOnRendersRolesAndKeysByReference(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, sessionsArgs(sessionReaders, sessionSuccessor, []string{"--set", "hs256Secret.externalSecretName=hs256-ext"})...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.600s", err, out)
@@ -159,6 +169,8 @@ func TestSessionsOnRendersRolesAndKeysByReference(t *testing.T) {
 }
 
 func TestSessionKeysAbsentWhenNotConfigured(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -175,6 +187,8 @@ func TestSessionKeysAbsentWhenNotConfigured(t *testing.T) {
 }
 
 func TestAuthServiceExtraEnvRejectsSessionKeys(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range []string{"AUTH_JWT_SECRET_KEY", "AUTH_SESSION_SUCCESSOR_KEY"} {
 		args := append(append([]string{}, authBase...), "--set-json", `authService.extraEnv=[{"name":"`+name+`","value":"x"}]`)
 		if _, _, err := renderAuth(t, args...); err == nil {
@@ -184,6 +198,8 @@ func TestAuthServiceExtraEnvRejectsSessionKeys(t *testing.T) {
 }
 
 func TestSessionsOnRefusesBlankReaderRoles(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, sessionsArgs(sessionSuccessor,
 		[]string{"--set-json", `authService.migrate.sessionReaders.goApi=" "`, "--set", "authService.migrate.sessionReaders.queryApi=devhealth_query"})...)
 	if err == nil || !strings.Contains(out, "sessionReaders.goApi") {
@@ -192,6 +208,8 @@ func TestSessionsOnRefusesBlankReaderRoles(t *testing.T) {
 }
 
 func TestAccessTokenKeyCannotBeOverriddenAwayFromGoAPI(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, sessionsArgs(sessionReaders, sessionSuccessor,
 		[]string{"--set", "authService.sessionKeys.accessToken.secretName=other"})...)
 	if err != nil {
@@ -207,6 +225,8 @@ func TestAccessTokenKeyCannotBeOverriddenAwayFromGoAPI(t *testing.T) {
 // auth-migrate and auth-grants grant the projection read to exactly the listed
 // logins, and only when some are listed.
 func TestAuthJobsGrantProjectionReadsToTheListedRoles(t *testing.T) {
+	t.Parallel()
+
 	jobs := []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"}
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
@@ -245,6 +265,8 @@ func TestAuthJobsGrantProjectionReadsToTheListedRoles(t *testing.T) {
 // auth-migrate and auth-grants pass the workload reader roles only when some are listed, so the default render and
 // every existing release render the same Jobs as before.
 func TestAuthJobsGrantTheWorkloadRegistryReadOnlyToTheListedRoles(t *testing.T) {
+	t.Parallel()
+
 	jobs := []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"}
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
@@ -276,6 +298,8 @@ func TestAuthJobsGrantTheWorkloadRegistryReadOnlyToTheListedRoles(t *testing.T) 
 // run names, or auth-migrate refuses the run, so the grants Job renders AUTH_WORKLOAD_READER_ROLES only for roles in its own
 // session reader list; the migrate Job, which holds the union, renders them all.
 func TestGrantsJobRendersOnlyWorkloadReadersItsSessionReadersName(t *testing.T) {
+	t.Parallel()
+
 	prod := append(append([]string{}, authBase...),
 		"--set", "authService.migrate.sessionReaders.goApi=devhealth_api",
 		"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query_api",
@@ -305,6 +329,8 @@ func TestGrantsJobRendersOnlyWorkloadReadersItsSessionReadersName(t *testing.T) 
 // auth-migrate trims every role name it reads from its env (a padded value is the role), so the grants Job compares trimmed names
 // too: a padded sessionReaderRoles or workloadReaderRoles entry must not drop a workload reader.
 func TestGrantsJobTrimsRoleNamesLikeAuthMigrate(t *testing.T) {
+	t.Parallel()
+
 	sets := append(append([]string{}, authBase...),
 		"--set-json", `authService.migrate.sessionReaderRoles=[" devhealth_api ","devhealth_query"]`,
 		"--set-json", `authService.migrate.workloadReaderRoles=["devhealth_api "]`)

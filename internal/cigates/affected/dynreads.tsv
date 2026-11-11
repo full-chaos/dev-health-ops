@@ -26,6 +26,7 @@ cmd/venue-extstub	stub.go
 cmd/venue-extstub	stub_test.go
 deploy/helm/dev-health	auth_phase_test.go
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go
+deploy/helm/dev-health	render_cache_test.go
 internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
 internal/api/policy	delegated_test.go
@@ -290,6 +291,7 @@ internal/cigates/racescope	scan.go
 internal/cigates/raceunweighted	raceunweighted_test.go
 internal/cigates/releasetag	parity_test.go
 internal/cigates/releasetag	releasetag.go
+internal/cigates/retiredservicecred	census_test.go
 internal/cigates/routing	chart_test.go
 internal/cigates/routing	cut_test.go
 internal/cigates/routing	deps.go
@@ -347,7 +349,7 @@ internal/cigates/workflows	providerstub_not_release_test.go
 internal/cigates/workflows	providersync_shard_budget_test.go
 internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go
-internal/cigates/workflows	ready_reuse_test.go
+internal/cigates/workflows	ready_flip_no_reuse_test.go
 internal/cigates/workflows	registry_retry_test.go
 internal/cigates/workflows	ttl_registry_test.go
 internal/cigates/workflows	venue_users_owned_test.go

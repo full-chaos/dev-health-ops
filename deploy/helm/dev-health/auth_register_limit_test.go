@@ -10,8 +10,12 @@ import (
 // for the auth-service container. Phase 4 with usersOwnedStage owned is prod's render (values.prod.yaml); the lower
 // phases are checked too.
 func TestAuthServiceProdRenderHasNoRegisterLimit(t *testing.T) {
+	t.Parallel()
+
 	for phase := 0; phase <= 4; phase++ {
 		t.Run(fmt.Sprintf("phase %d", phase), func(t *testing.T) {
+			t.Parallel()
+
 			env := authServiceContainerEnv(renderPhase(t, phase, mailSets()...))
 			if phase == 4 && len(env) == 0 {
 				t.Fatal("FAIL: the phase 4 render has no auth-service container env")

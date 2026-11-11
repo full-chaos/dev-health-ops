@@ -271,6 +271,8 @@ func censusRenders() map[string][]string {
 }
 
 func TestHookConnectWaitCensus(t *testing.T) {
+	t.Parallel()
+
 	seen := map[string]bool{}
 	renders := censusRenders()
 	names := make([]string, 0, len(renders))
@@ -314,6 +316,8 @@ func TestHookConnectWaitCensus(t *testing.T) {
 // The census goes red on a hook Job, an init container and an image it does
 // not know.
 func TestHookConnectWaitCensusRefusesFixture(t *testing.T) {
+	t.Parallel()
+
 	const fixture = `
 kind: Job
 metadata: {name: fixture-seed, annotations: {helm.sh/hook: pre-upgrade}}

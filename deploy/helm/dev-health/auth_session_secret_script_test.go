@@ -175,6 +175,8 @@ func TestSessionSecretScriptOtherFailureIsQuiet(t *testing.T) {
 }
 
 func TestSessionSecretScriptNamesMatchTheChart(t *testing.T) {
+	t.Parallel()
+
 	values, err := os.ReadFile("values.yaml")
 	if err != nil {
 		t.Fatal(err)

@@ -222,7 +222,7 @@ func gateEnvironment(t *testing.T, databaseURI, keyDir string) map[string]string
 		authconfig.EnvAuthorizeCallerSubjects: testIssueSubject,
 		internalAddressEnv:                    "127.0.0.1:0",
 	}
-	exchangeEnvironment(t, workloadIssueEnvironment(env))
+	exchangeEnvironment(t, acrEventsEnvironment(workloadIssueEnvironment(env)))
 	return provisioningEnvironment(ssoEnvironment(compatEnvironment(env)))
 }
 
@@ -921,7 +921,7 @@ func TestWrongClassGateAuthServiceRigMatchesConfigure(t *testing.T) {
 	served := servedAuthRoutes(t)
 	mounted := map[string]bool{}
 	for key := range rig.mounted {
-		if !strings.HasSuffix(key, "@internal") {
+		if route, internal := strings.CutSuffix(key, "@internal"); !internal || isInternalOnly(route) {
 			mounted[key] = true
 		}
 	}
@@ -948,7 +948,7 @@ func TestWrongClassGateAuthServiceRigMatchesConfigure(t *testing.T) {
 		}
 	}
 	sort.Strings(internal)
-	want := slices.Clone(pepRoutes)
+	want := append(slices.Clone(pepRoutes), acrEventsKey)
 	sort.Strings(want)
 	if !slices.Equal(internal, want) {
 		t.Errorf("the rig's internal listener mounts %v, configure's serves %v", internal, want)

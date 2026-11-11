@@ -20,6 +20,8 @@ func feedArgs(phase int, extra ...string) []string {
 
 // Default and false render the feed nowhere.
 func TestRevisionFeedOffRendersNothing(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []int{1, 2} {
 		for _, extra := range [][]string{nil, {"--set", "authService.revisionFeed.enabled=false"}} {
 			docs, out, err := renderAuth(t, feedArgs(phase, extra...)...)
@@ -38,6 +40,8 @@ func TestRevisionFeedOffRendersNothing(t *testing.T) {
 
 // True renders AUTH_REVISION_FEED=on on auth-service, and on nothing else.
 func TestRevisionFeedOnRendersOnAuthServiceOnly(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []int{1, 2} {
 		docs, out, err := renderAuth(t, feedArgs(phase, "--set", "authService.revisionFeed.enabled=true")...)
 		if err != nil {
@@ -55,6 +59,8 @@ func TestRevisionFeedOnRendersOnAuthServiceOnly(t *testing.T) {
 
 // The feed writes to the rate-limit store: true without its Secret is refused at render time.
 func TestRevisionFeedNeedsTheValkeySecret(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, phaseArgs(1, "--set", "authService.revisionFeed.enabled=true")...)
 	if err == nil || !strings.Contains(out, "authService.revisionFeed.enabled needs authService.valkey.secretName") {
 		t.Errorf("rendered without the store Secret: err=%v out=%.300s", err, out)
@@ -63,6 +69,8 @@ func TestRevisionFeedNeedsTheValkeySecret(t *testing.T) {
 
 // The schema or the template refuses anything but a bool under enabled.
 func TestRevisionFeedMustBeABool(t *testing.T) {
+	t.Parallel()
+
 	for name, set := range map[string][]string{
 		"a string": {"--set-string", "authService.revisionFeed.enabled=on"},
 		"null":     {"--set-json", "authService.revisionFeed.enabled=null"},
@@ -77,6 +85,8 @@ func TestRevisionFeedMustBeABool(t *testing.T) {
 
 // The feed has one source: extraEnv cannot set it past the store check.
 func TestRevisionFeedCannotBeSetThroughExtraEnv(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, feedArgs(1, "--set-json", `authService.extraEnv=[{"name":"AUTH_REVISION_FEED","value":"on"}]`)...)
 	if err == nil || !strings.Contains(out, "authService.extraEnv must not set AUTH_REVISION_FEED") {
 		t.Errorf("extraEnv rendered: err=%v out=%.300s", err, out)
@@ -85,6 +95,8 @@ func TestRevisionFeedCannotBeSetThroughExtraEnv(t *testing.T) {
 
 // Phase 0 renders no auth-service: the switch is refused there, with or without the store Secret, never dropped.
 func TestRevisionFeedNeedsAuthService(t *testing.T) {
+	t.Parallel()
+
 	base := []string{"--set", "web.enabled=false", "--set", "authService.phase=0", "--set", "goApi.enabled=false", "--set", "queryApi.enabled=false"}
 	for name, extra := range map[string][]string{
 		"no store Secret":   {"--set", "authService.revisionFeed.enabled=true"},
@@ -102,6 +114,8 @@ func TestRevisionFeedNeedsAuthService(t *testing.T) {
 
 // The checks run on every render, so a bad value fails when auth-service does not render.
 func TestRevisionFeedIsCheckedWithNoAuthServiceRendered(t *testing.T) {
+	t.Parallel()
+
 	base := []string{"--set", "web.enabled=false", "--set", "authService.phase=0", "--set", "goApi.enabled=false", "--set", "queryApi.enabled=false"}
 	_, out, err := renderAuth(t, append(append([]string{}, base...), "--set-json", "authService.revisionFeed.enabled=null")...)
 	if err == nil || !strings.Contains(out, "authService.revisionFeed.enabled must be true or false") {

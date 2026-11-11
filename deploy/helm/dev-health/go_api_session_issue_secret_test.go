@@ -19,6 +19,8 @@ func issueRef(t *testing.T, docs []map[string]any) any {
 }
 
 func TestSessionIssueDefaultRenderUnchanged(t *testing.T) {
+	t.Parallel()
+
 	base := append(append([]string{}, issueSessionsOn...), riverHook...)
 	docs, def, err := renderAuth(t, goAPIWithAuth(base...)...)
 	if err != nil {
@@ -39,6 +41,8 @@ func TestSessionIssueDefaultRenderUnchanged(t *testing.T) {
 }
 
 func TestSessionIssueOverrideNamesDedicatedSecret(t *testing.T) {
+	t.Parallel()
+
 	sets := append(append([]string{"--set", "goApi.sessionIssue.secretName=" + dedicatedIssueSecret}, issueSessionsOn...), riverHook...)
 	docs, out, err := renderAuth(t, goAPIWithAuth(sets...)...)
 	if err != nil {
@@ -58,6 +62,8 @@ func TestSessionIssueOverrideNamesDedicatedSecret(t *testing.T) {
 }
 
 func TestSessionIssueOverrideSessionsOffRendersNothing(t *testing.T) {
+	t.Parallel()
+
 	sets := append([]string{"--set", "goApi.sessionIssue.secretName=" + dedicatedIssueSecret}, riverHook...)
 	docs, out, err := renderAuth(t, goAPIWithAuth(sets...)...)
 	if err != nil {
@@ -69,6 +75,8 @@ func TestSessionIssueOverrideSessionsOffRendersNothing(t *testing.T) {
 }
 
 func TestSessionIssueSchemaRefusesBadValues(t *testing.T) {
+	t.Parallel()
+
 	for _, set := range []string{
 		"goApi.sessionIssue.secretName=Bad_Name",
 		"goApi.sessionIssue.secretName=a/b",

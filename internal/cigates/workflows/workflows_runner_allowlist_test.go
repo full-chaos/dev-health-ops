@@ -153,7 +153,7 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	for _, p := range draftGatedJobs {
 		pinned[p] = true
 		if j, ok := job(p[0], p[1]); ok {
-			v := withoutReuse(str(j["if"]))
+			v := str(j["if"])
 			if !(v == draftGate || strings.HasPrefix(v, draftGate+" && (")) {
 				add("%s:%s lost the draft gate: got %q", p[0], p[1], v)
 			}
@@ -162,7 +162,7 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	for _, p := range sortedPairs(heavyGatedJobs) {
 		pinned[p] = true
 		if j, ok := job(p[0], p[1]); ok {
-			v, gate := withoutReuse(str(j["if"])), heavyGatedJobs[p]
+			v, gate := str(j["if"]), heavyGatedJobs[p]
 			if !(v == gate || strings.HasPrefix(v, gate+" && (")) {
 				add("%s:%s lost the heavy gate (merge queue, main push, ci:full pull request): got %q, want it to start with %q", p[0], p[1], v, gate)
 			}
@@ -246,10 +246,10 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	// the reproducibility twin pair: the hosted leg is the LITERAL negation
 	if hosted, ok := job("go.yml", "go-container-reproducibility"); ok {
 		if sh, ok := job("go.yml", "go-container-reproducibility-self-hosted"); ok {
-			if got := ungated(withoutReuse(str(sh["if"]))); got != allowlistCondition {
+			if got := ungated(str(sh["if"])); got != allowlistCondition {
 				add("go-container-reproducibility-self-hosted's if does not EXACTLY match the allow-list condition: got %q", got)
 			}
-			if got := ungated(withoutReuse(str(hosted["if"]))); got != "!("+allowlistCondition+")" {
+			if got := ungated(str(hosted["if"])); got != "!("+allowlistCondition+")" {
 				add("go-container-reproducibility's if must be the literal negation !(...) of the self-hosted leg's condition: got %q", got)
 			}
 		}
@@ -258,7 +258,7 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	// dind-smoke-test routing sites
 	for _, f := range []string{"go.yml", "docker-images.yml"} {
 		if j, ok := job(f, "dind-smoke-test"); ok {
-			if got := ungated(withoutReuse(str(j["if"]))); got != dindWant(f) {
+			if got := ungated(str(j["if"])); got != dindWant(f) {
 				add("%s:dind-smoke-test if does not EXACTLY match the allow-list condition: got %q", f, got)
 			}
 		}
@@ -364,7 +364,7 @@ func TestSelfHostedRunnerAllowlistPlantedDefects(t *testing.T) {
 		{"routing ternary gains a merge_group term (test.yml)", []mutation{{test_, "github.event_name == 'schedule')", merge}}, []string{"test.yml", "does not EXACTLY match the routing ternary"}},
 		{"deny-list fragment returns beside SELF_HOSTED_RUNNERS", []mutation{{live, "(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request'", "(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name != 'pull_request'"}}, []string{"EXACTLY", "SELF_HOSTED_RUNNERS"}},
 		{"a go.yml job loses its heavy gate", []mutation{{goYml, "if: " + heavyGate + " && (vars.SELF_HOSTED_RUNNERS", "if: (vars.SELF_HOSTED_RUNNERS"}}, []string{"go.yml", "lost the heavy gate"}},
-		{"a heavy job falls back to the draft gate", []mutation{{goYml, "if: " + heavyGate + " && " + goDocsSkip + reuseClause("go-container") + "\n    runs-on: ubuntu-latest\n    timeout-minutes: 25", "if: " + draftGate + " && (" + goDocsSkip + ")" + reuseClause("go-container") + "\n    runs-on: ubuntu-latest\n    timeout-minutes: 25"}}, []string{"go-container-security", "lost the heavy gate"}},
+		{"a heavy job falls back to the draft gate", []mutation{{goYml, "if: " + heavyGate + " && " + goDocsSkip + "\n    runs-on: ubuntu-latest\n    timeout-minutes: 25", "if: " + draftGate + " && (" + goDocsSkip + ")\n    runs-on: ubuntu-latest\n    timeout-minutes: 25"}}, []string{"go-container-security", "lost the heavy gate"}},
 		{"a docker build loses the hotfix-image arm", []mutation{{dock, " && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image')))) && ((vars.SELF_HOSTED_IMAGE_BUILDS", "))) && ((vars.SELF_HOSTED_IMAGE_BUILDS"}}, []string{"docker-images.yml:dind-smoke-test", "lost the heavy gate"}},
 		{"a job gains ci:full without being pinned", []mutation{{test_, "|| needs.changes.outputs.code == 'true'\n    # Same ARC", "|| needs.changes.outputs.code == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:full')\n    # Same ARC"}}, []string{"ci:full-gated job set drifted", "test.yml:chart-started"}},
 		{"hosted twin stops being the literal negation", []mutation{{goYml, "go-container-reproducibility:\n", "go-container-reproducibility:\n    # planted\n"}, {goYml, "!(vars.SELF_HOSTED_RUNNERS == 'enabled'", "(vars.SELF_HOSTED_RUNNERS != 'enabled'"}}, []string{"literal negation"}},

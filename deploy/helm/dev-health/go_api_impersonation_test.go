@@ -26,6 +26,8 @@ func impersonationArgs(phase string, sets ...string) []string {
 }
 
 func TestImpersonationOffRendersByteEqualToNoValueAtAllPhases(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []string{"0", "1", "2", "3", "4"} {
 		base, baseOut, err := renderAuth(t, impersonationArgs(phase)...)
 		if err != nil {
@@ -48,6 +50,8 @@ func TestImpersonationOffRendersByteEqualToNoValueAtAllPhases(t *testing.T) {
 }
 
 func TestImpersonationOnRendersTheSwitchTrueAndNothingElse(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []string{"2", "3", "4"} {
 		_, offOut, err := renderAuth(t, impersonationArgs(phase)...)
 		if err != nil {
@@ -87,6 +91,8 @@ func TestImpersonationOnRendersTheSwitchTrueAndNothingElse(t *testing.T) {
 }
 
 func TestImpersonationRefusals(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		args []string
 		want string
@@ -114,6 +120,8 @@ func TestImpersonationRefusals(t *testing.T) {
 			"goApi.authProxy.impersonation needs goApi.enabled"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, tc.args...)
 			if err == nil {
 				t.Fatal("the render succeeded; it must refuse")
@@ -127,6 +135,8 @@ func TestImpersonationRefusals(t *testing.T) {
 
 // The two goApi.authProxy keys are independent: both on at phase 4 render both switches.
 func TestImpersonationBesideOrgProvisioning(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, impersonationArgs("4", append([]string{"--set", "goApi.authProxy.impersonation=true", "--set", "goApi.authProxy.orgProvisioning=true"}, membershipRoutesOn...)...)...)
 	if err != nil {
 		t.Fatalf("both keys on: render failed: %v\n%.400s", err, out)

@@ -11,6 +11,8 @@ import (
 // build-index verb from the migrate image as a pre-hook that runs after the weight -5 ConfigMap and Secret it reads and
 // before the weight-0 migrate Job, and a failed build fails the release before the migrate Job.
 func TestStreakIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T) {
+	t.Parallel()
+
 	base := []string{"web.enabled=false"}
 	jobs, _, refusal := renderJobs(t, base...)
 	if refusal != "" {
@@ -49,12 +51,16 @@ func TestStreakIndexJobIsOffByDefaultAndOrderedBeforeTheMigrateJob(t *testing.T)
 }
 
 func TestStreakIndexJobRefusesBadBounds(t *testing.T) {
+	t.Parallel()
+
 	for name, sets := range map[string][]string{
 		"lock timeout over a minute": {"web.enabled=false", "migrations.hook.streakIndex.enabled=true", "migrations.hook.streakIndex.lockTimeoutSeconds=61"},
 		"null enabled":               {"web.enabled=false", "migrations.hook.streakIndex=null"},
 		"deadline over the job":      {"web.enabled=false", "migrations.hook.streakIndex.enabled=true", "migrations.hook.streakIndex.deadlineSeconds=3300"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, _, refusal := renderJobs(t, sets...)
 			if refusal == "" {
 				t.Fatal("the render was not refused")
@@ -69,6 +75,8 @@ func TestStreakIndexJobRefusesBadBounds(t *testing.T) {
 // With the bundled PostgreSQL the Job runs on pre-upgrade only (a fresh install builds the index in revision 0159 on an
 // empty table), waits for the database like the migrate Job, and the flag off renders no Job.
 func TestStreakIndexJobWithBundledPostgresIsPreUpgradeOnly(t *testing.T) {
+	t.Parallel()
+
 	bundled := []string{"web.enabled=false", "migrations.hook.localBundledPostgres=true",
 		"migrations.hook.events={post-install,pre-upgrade}", "postgresql.enabled=true"}
 	jobs, _, refusal := renderJobs(t, bundled...)
@@ -112,6 +120,8 @@ func TestStreakIndexJobWithBundledPostgresIsPreUpgradeOnly(t *testing.T) {
 // The kit pins helm --timeout 90m (roll 24b PLAN-ROLL-24b.md, "./dev-health ... --timeout 90m"): the streak-index hook runs
 // first, the migrate Job (weight 0) after it, and the rollout needs a margin. The chart defaults must fit all three.
 func TestStreakIndexHookAndMigrateJobFitTheHelmTimeout(t *testing.T) {
+	t.Parallel()
+
 	const helmTimeoutSeconds, rolloutMarginSeconds, startupAndCleanupSeconds = 5400, 600, 360
 	jobs, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.streakIndex.enabled=true")
 	if refusal != "" {
@@ -141,6 +151,8 @@ func TestStreakIndexHookAndMigrateJobFitTheHelmTimeout(t *testing.T) {
 // Every pre-upgrade index hook runs before the migrate Job, one after the other, so with all of them on their deadlines
 // plus the migrate Job and the rollout margin must fit helm --timeout 90m, and each hook's build window must fit its own deadline.
 func TestAllIndexHooksAndMigrateJobFitTheHelmTimeout(t *testing.T) {
+	t.Parallel()
+
 	const helmTimeoutSeconds, rolloutMarginSeconds = 5400, 500
 	// open-units-index adds the 70 s first-connect wait (CHAOS-12666) to the 360 s startup and cleanup.
 	startupAndCleanup := map[string]int{"t-dev-health-streak-index": 360, "t-dev-health-open-units-index": 430}
@@ -176,6 +188,8 @@ func TestAllIndexHooksAndMigrateJobFitTheHelmTimeout(t *testing.T) {
 }
 
 func TestOpenUnitsIndexJobRefusesAWindowThatDoesNotFitItsDeadline(t *testing.T) {
+	t.Parallel()
+
 	_, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.openUnitsIndex.enabled=true", "migrations.hook.openUnitsIndex.deadlineSeconds=300")
 	if !strings.Contains(refusal, "openUnitsIndex.deadlineSeconds") {
 		t.Fatalf("refusal = %.300s", refusal)

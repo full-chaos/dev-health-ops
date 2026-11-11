@@ -28,7 +28,6 @@ var connectWaits = map[string]string{
 	"dho auth users-backfill":          "wait: internal/auth/usersbackfill/command.go connect, FirstConnect.Do on Ping",
 	"dho auth users-reconcile":         "wait: internal/auth/usersbackfill/command.go connect, FirstConnect.Do on Ping",
 	"dho auth orgs-backfill":           "wait: internal/auth/usersbackfill/command.go connect, FirstConnect.Do on Ping",
-	"dho auth legacy-link-purge":       "wait: internal/auth/usersbackfill/command.go connect, FirstConnect.Do on Ping",
 	"auth-migrate":                     "wait: cmd/auth-migrate/main.go, newDatabaseWait",
 	"auth-migrate grants":              "wait: cmd/auth-migrate/main.go, newDatabaseWait",
 	"dho version":                      "none: prints the build, connects to no store",
@@ -75,7 +74,6 @@ var connectBudgets = map[string]connectBudget{
 	"dho auth users-backfill":          {wait: firstConnectBound, unbounded: true},
 	"dho auth users-reconcile":         {wait: firstConnectBound, unbounded: true},
 	"dho auth orgs-backfill":           {wait: firstConnectBound, unbounded: true},
-	"dho auth legacy-link-purge":       {wait: firstConnectBound, unbounded: true},
 	"auth-migrate":                     {wait: 60, unbounded: true},
 	"auth-migrate grants":              {wait: 60, unbounded: true},
 	"dho version":                      {},
@@ -269,15 +267,12 @@ func censusRenders() map[string][]string {
 			"--set", "authService.backfill.verb="+verb,
 			"--set", "authService.backfill.runId=census")
 	}
-	// legacy-link-purge renders only where users are owned (phase 4).
-	purge := withSets(append(append([]string{}, backfillOn...), phase3Secrets...),
-		"authService.backfill.verb=legacy-link-purge", "authService.backfill.runId=census",
-		"authService.phase=4", "authService.usersOwnedStage=owned", "goApi.enabled=true")
-	renders["auth backfill legacy-link-purge"] = append(append(append(purge, sessionReaders...), sessionSuccessor...), authTrusted...)
 	return renders
 }
 
 func TestHookConnectWaitCensus(t *testing.T) {
+	t.Parallel()
+
 	seen := map[string]bool{}
 	renders := censusRenders()
 	names := make([]string, 0, len(renders))
@@ -321,6 +316,8 @@ func TestHookConnectWaitCensus(t *testing.T) {
 // The census goes red on a hook Job, an init container and an image it does
 // not know.
 func TestHookConnectWaitCensusRefusesFixture(t *testing.T) {
+	t.Parallel()
+
 	const fixture = `
 kind: Job
 metadata: {name: fixture-seed, annotations: {helm.sh/hook: pre-upgrade}}

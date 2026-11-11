@@ -33,6 +33,8 @@ var riverHook = []string{
 // grants (the migrate Job, the River hook) reads the same flag, so the
 // refresh_tokens REVOKE follows it.
 func TestSessionsOnWiresTheIssueCredentialAndTheGrantFlag(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=2"}, riverHook...)...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -54,6 +56,8 @@ func TestSessionsOnWiresTheIssueCredentialAndTheGrantFlag(t *testing.T) {
 }
 
 func TestSessionsOffRendersNoIssueCredentialOrGrantFlag(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth(riverHook...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)

@@ -41,8 +41,6 @@ func TestUsersDeleteDefaultIsASoftDelete(t *testing.T) {
 	db := startDatabase(t)
 	userID := createUser(t, db, "soft@example.com", "soft")
 	db.seedRefreshToken(t, "soft@example.com")
-	db.exec(t, `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at) VALUES ($1, $2, 'h1', now() + interval '1 hour', now())`, uuid.New(), userID)
-	db.exec(t, `INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, created_at) VALUES ($1, $2, 'h2', now() + interval '1 hour', now())`, uuid.New(), userID)
 	var versionBefore int
 	if err := db.conn.QueryRow(context.Background(), `SELECT token_version FROM users WHERE id = $1`, userID).Scan(&versionBefore); err != nil {
 		t.Fatal(err)
@@ -65,10 +63,6 @@ func TestUsersDeleteDefaultIsASoftDelete(t *testing.T) {
 	}
 	if n := db.count(t, `SELECT count(*) FROM refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL`, userID); n != 0 {
 		t.Fatalf("%d live refresh tokens left", n)
-	}
-	if n := db.count(t, `SELECT count(*) FROM password_reset_tokens WHERE user_id = $1`, userID) +
-		db.count(t, `SELECT count(*) FROM email_verification_tokens WHERE user_id = $1`, userID); n != 0 {
-		t.Fatalf("%d one-time tokens left", n)
 	}
 
 	// the same call again is a no-op that says so; the row is still there
@@ -173,7 +167,6 @@ func TestUsersDeleteSoftOfADeactivatedUserStillEndsItsCredentials(t *testing.T) 
 	db := startDatabase(t)
 	userID := createUser(t, db, "deactivated@example.com", "deactivated")
 	db.seedRefreshToken(t, "deactivated@example.com")
-	db.exec(t, `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at) VALUES ($1, $2, 'h1', now() + interval '1 hour', now())`, uuid.New(), userID)
 	if code, out := goVerb(t, db, []string{"users", "update", "--email", "deactivated@example.com", "--no-active"}); code != 0 {
 		t.Fatalf("deactivate: exit %d %s", code, out)
 	}
@@ -192,8 +185,7 @@ func TestUsersDeleteSoftOfADeactivatedUserStillEndsItsCredentials(t *testing.T) 
 	if versionAfter != versionBefore+1 {
 		t.Fatalf("token_version %d -> %d; want +1", versionBefore, versionAfter)
 	}
-	if n := db.count(t, `SELECT count(*) FROM refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL`, userID) +
-		db.count(t, `SELECT count(*) FROM password_reset_tokens WHERE user_id = $1`, userID); n != 0 {
+	if n := db.count(t, `SELECT count(*) FROM refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL`, userID); n != 0 {
 		t.Fatalf("%d live credentials left on a deactivated user after delete", n)
 	}
 	// a repeat with nothing left says the user is already inactive, and still advances the token version
@@ -208,15 +200,13 @@ func TestUsersDeleteSoftOfADeactivatedUserStillEndsItsCredentials(t *testing.T) 
 	if versionRepeat != versionAfter+1 {
 		t.Fatalf("a repeat soft delete: token_version %d -> %d; want +1", versionAfter, versionRepeat)
 	}
-	// a credential issued after the first delete (a refresh token and a reset token) is ended by the repeat
+	// a refresh token issued after the first delete is ended by the repeat
 	db.seedRefreshToken(t, "deactivated@example.com")
-	db.exec(t, `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at) VALUES ($1, $2, 'h9', now() + interval '1 hour', now())`, uuid.New(), userID)
 	code, out, _ = executeAdmin(t, db, "users", "delete", "--email", "deactivated@example.com", "--yes")
 	if code != 0 || !strings.HasPrefix(out, "Soft-deleted user: deactivated@example.com") {
 		t.Fatalf("repeat soft delete over a new credential: exit %d, stdout %q", code, out)
 	}
-	if n := db.count(t, `SELECT count(*) FROM refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL`, userID) +
-		db.count(t, `SELECT count(*) FROM password_reset_tokens WHERE user_id = $1`, userID); n != 0 {
+	if n := db.count(t, `SELECT count(*) FROM refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL`, userID); n != 0 {
 		t.Fatalf("%d live credentials left after a repeat soft delete", n)
 	}
 }

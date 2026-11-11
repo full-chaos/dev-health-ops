@@ -166,6 +166,8 @@ func TestAuthPhaseRendersExactFlagSet(t *testing.T) {
 
 // The ladder itself, stated once more without the goldens: which AUTH_PROXY_* flags go-api carries "true" per phase.
 func TestAuthPhaseLadder(t *testing.T) {
+	t.Parallel()
+
 	ladder := map[int][]string{
 		0: nil,
 		1: nil,
@@ -193,6 +195,8 @@ func TestAuthPhaseLadder(t *testing.T) {
 
 // Phase 0 is the chart default: setting it changes nothing.
 func TestAuthPhaseZeroIsTheDefaultRender(t *testing.T) {
+	t.Parallel()
+
 	_, plain, err := renderAuth(t, "--set", "goApi.enabled=true")
 	if err != nil {
 		t.Fatalf("default render: %v\n%.400s", err, plain)
@@ -207,6 +211,8 @@ func TestAuthPhaseZeroIsTheDefaultRender(t *testing.T) {
 }
 
 func TestAuthPhase5Refused(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []int{5} {
 		for name, args := range map[string][]string{
 			"alone":             append(append([]string{}, authBase...), "--set", fmt.Sprintf("authService.phase=%d", phase)),
@@ -214,6 +220,8 @@ func TestAuthPhase5Refused(t *testing.T) {
 			"without a service": {"--set", "goApi.enabled=true", "--set", fmt.Sprintf("authService.phase=%d", phase)},
 		} {
 			t.Run(fmt.Sprintf("phase %d %s", phase, name), func(t *testing.T) {
+				t.Parallel()
+
 				_, out, err := renderAuth(t, args...)
 				if err == nil {
 					t.Fatal("rendered; phase 5 must be refused")
@@ -227,6 +235,8 @@ func TestAuthPhase5Refused(t *testing.T) {
 }
 
 func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		args []string
 		want string
@@ -278,6 +288,8 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, tc.args...)
 			if err == nil {
 				t.Fatal("rendered; it must be refused")
@@ -291,6 +303,8 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 
 // The named keys beside the ladder render where the plan puts them, and nowhere else.
 func TestAuthPhaseNamedKeys(t *testing.T) {
+	t.Parallel()
+
 	envOf := func(docs []map[string]any, kind, name, env string) (string, bool) {
 		return containerEnvValue(t, authDoc(docs, kind, name), env)
 	}
@@ -504,6 +518,8 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 // same-named variable from goApi.envFrom, so no envFrom source can forward a route the phase does not move.
 // Phases 0 and 1 render none (the prod render stays byte-identical).
 func TestGoAPIAuthProxyFlagsAreExplicitFromPhase2(t *testing.T) {
+	t.Parallel()
+
 	all := []string{"AUTH_PROXY_SESSIONS", "AUTH_PROXY_LOCAL_LOGIN", "AUTH_PROXY_CREDENTIALS", "AUTH_PROXY_SOCIAL", "AUTH_PROXY_OIDC", "AUTH_PROXY_SAML"}
 	on := map[int]map[string]bool{
 		2: {"AUTH_PROXY_SESSIONS": true},
@@ -534,6 +550,7 @@ func TestGoAPIAuthProxyFlagsAreExplicitFromPhase2(t *testing.T) {
 // authService.extraEnv, in any case: a later entry with the same name would shadow the rendered one, a Secret
 // reference included, and put a literal in the manifest.
 func TestAuthServiceExtraEnvRefusesEveryRenderedName(t *testing.T) {
+	t.Parallel()
 	configs := map[string][]string{
 		"phase 3 with link routes":  phaseArgs(3, "--set", "authService.socialLinkRoutes=true"),
 		"phase 2 with eddsa tokens": phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"),
@@ -578,6 +595,8 @@ func TestAuthServiceExtraEnvRefusesEveryRenderedName(t *testing.T) {
 // authService.extraEnv refuses a literal value under any name that looks like a secret, rendered by the chart or not,
 // in any case; a valueFrom entry (secretKeyRef) under such a name stays allowed.
 func TestAuthServiceExtraEnvRefusesSecretLikeLiterals(t *testing.T) {
+	t.Parallel()
+
 	refused := map[string]string{
 		"collision with a rendered name": `[{"name":"SOCIAL_GITHUB_CLIENT_SECRET","value":"literal"}]`,
 		"unknown social client secret":   `[{"name":"SOCIAL_X_CLIENT_SECRET","value":"literal"}]`,
@@ -590,6 +609,8 @@ func TestAuthServiceExtraEnvRefusesSecretLikeLiterals(t *testing.T) {
 	}
 	for name, env := range refused {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, phaseArgs(3, "--set-json", "authService.extraEnv="+env)...)
 			if err == nil {
 				t.Fatalf("%s rendered a literal under a secret-like name", env)
@@ -622,6 +643,8 @@ func TestAuthServiceExtraEnvRefusesSecretLikeLiterals(t *testing.T) {
 
 // An empty access-token class and issuer are the defaults: they render, and set nothing.
 func TestAuthPhaseEmptyTokenClassIsTheDefault(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 2, "--set-string", "authService.accessToken.class=", "--set-string", "authService.accessToken.issuerURL=")
 	for _, env := range []string{"AUTH_ACCESS_TOKEN_CLASS", "AUTH_TOKEN_ISSUER_URL", "AUTH_JWT_AUDIENCE"} {
 		if value, set := containerEnvValue(t, authDoc(docs, "Deployment", "a-dev-health-auth-service"), env); set {
@@ -633,6 +656,7 @@ func TestAuthPhaseEmptyTokenClassIsTheDefault(t *testing.T) {
 // go-api: every env name the chart renders for go-api is refused in goApi.extraEnv, in any case (a later entry would
 // shadow the rendered one, a Secret reference included).
 func TestGoAPIExtraEnvRefusesEveryRenderedName(t *testing.T) {
+	t.Parallel()
 	configs := map[string][]string{
 		"phase 3":                   phaseArgs(3),
 		"phase 2 with eddsa tokens": phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"),
@@ -673,6 +697,8 @@ func TestGoAPIExtraEnvRefusesEveryRenderedName(t *testing.T) {
 
 // go-api: a literal value under any secret-like name is refused in goApi.extraEnv, in any case; valueFrom stays allowed.
 func TestGoAPIExtraEnvRefusesSecretLikeLiterals(t *testing.T) {
+	t.Parallel()
+
 	refused := map[string]string{
 		"collision JWT_SECRET_KEY":           `[{"name":"JWT_SECRET_KEY","value":"literal"}]`,
 		"collision API_DATABASE_URI":         `[{"name":"API_DATABASE_URI","value":"literal"}]`,
@@ -685,6 +711,8 @@ func TestGoAPIExtraEnvRefusesSecretLikeLiterals(t *testing.T) {
 	}
 	for name, env := range refused {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, phaseArgs(2, "--set-json", "goApi.extraEnv="+env)...)
 			if err == nil {
 				t.Fatalf("%s rendered a literal under a secret-like or rendered name", env)
@@ -716,6 +744,8 @@ func TestGoAPIExtraEnvRefusesSecretLikeLiterals(t *testing.T) {
 // The phase 2 preconditions (both session readers, the successor key) hold whether or not go-api renders: query-api
 // and the River hooks carry AUTH_PROXY_SESSIONS from phase 2 even with go-api off.
 func TestAuthPhase2PreconditionsHoldWithoutGoAPI(t *testing.T) {
+	t.Parallel()
+
 	base := append(append([]string{}, authBase...),
 		"--set", "goApi.enabled=false", "--set", "queryApi.enabled=true", "--set", "authService.phase=2",
 		"--set", "authService.valkey.secretName=auth-valkey",
@@ -732,6 +762,8 @@ func TestAuthPhase2PreconditionsHoldWithoutGoAPI(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, tc.args...)
 			if err == nil {
 				t.Fatal("phase 2 rendered without its preconditions while go-api is off")
@@ -753,12 +785,16 @@ func TestAuthPhase2PreconditionsHoldWithoutGoAPI(t *testing.T) {
 // The session Secret keys must be valid Kubernetes Secret keys wherever the phase needs them: the successor key from
 // phase 2, the login lockout key from phase 3.
 func TestAuthPhaseSessionSecretKeysAreValidKeys(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		phase int
 		key   string
 	}{{2, "authService.sessionKeys.successor.secretKey"}, {3, "authService.sessionKeys.loginLockout.secretKey"}} {
 		for _, bad := range []string{"", "a/b", "a b"} {
 			t.Run(fmt.Sprintf("%s=%q", tc.key, bad), func(t *testing.T) {
+				t.Parallel()
+
 				_, out, err := renderAuth(t, phaseArgs(tc.phase, "--set-string", tc.key+"="+bad)...)
 				if err == nil {
 					t.Fatalf("%s=%q rendered", tc.key, bad)
@@ -791,6 +827,8 @@ func TestAuthPhaseSessionSecretKeysAreValidKeys(t *testing.T) {
 // The phase 2 preconditions hold whatever each enable flag says: every service flag off in turn, the render still
 // refuses phase 2 without the reader grants or without the successor key.
 func TestAuthPhase2PreconditionsHoldWithEachServiceFlagOff(t *testing.T) {
+	t.Parallel()
+
 	// authService.enabled is not a flag any more: a hand-set value is refused (TestAuthPhaseRefusesHandSetFlags).
 	for _, flag := range []string{"goApi.enabled", "queryApi.enabled", "web.enabled", "migrations.hook.enabled",
 		"migrations.hook.riverMigrate.enabled", "authService.migrate.enabled", "goApi.enabled,queryApi.enabled"} {
@@ -803,6 +841,8 @@ func TestAuthPhase2PreconditionsHoldWithEachServiceFlagOff(t *testing.T) {
 			"no successor key": {"authService.sessionKeys.successor.secretName="},
 		} {
 			t.Run(flag+"=false/"+name, func(t *testing.T) {
+				t.Parallel()
+
 				args := append([]string{}, full...)
 				for _, d := range drop {
 					args = append(args, "--set", d)
@@ -820,6 +860,8 @@ func TestAuthPhase2PreconditionsHoldWithEachServiceFlagOff(t *testing.T) {
 			})
 		}
 		t.Run(flag+"=false/all set", func(t *testing.T) {
+			t.Parallel()
+
 			if _, out, err := renderAuth(t, full...); err != nil {
 				t.Fatalf("phase 2 with %s=false and every precondition was refused: %v\n%.400s", flag, err, out)
 			}
@@ -829,12 +871,14 @@ func TestAuthPhase2PreconditionsHoldWithEachServiceFlagOff(t *testing.T) {
 
 // Class rule: every Secret key the auth values read is a valid Kubernetes Secret key, in every render.
 func TestAuthSecretKeysAreValidSecretKeys(t *testing.T) {
+	t.Parallel()
 	keys := []string{"authService.database.secretKey", "authService.migrate.secretKey", "authService.signingKey.secretKey",
 		"authService.valkey.secretKey", "authService.sessionKeys.successor.secretKey",
 		"authService.sessionKeys.loginLockout.secretKey", "goApi.sessionIssue.secretKey"}
 	for _, key := range keys {
 		for _, bad := range []string{"", "a b", "a/b"} {
 			t.Run(fmt.Sprintf("%s=%q", key, bad), func(t *testing.T) {
+				t.Parallel()
 				_, out, err := renderAuth(t, phaseArgs(3, "--set-string", key+"="+bad)...)
 				if err == nil {
 					t.Fatalf("%s=%q rendered", key, bad)
@@ -846,6 +890,7 @@ func TestAuthSecretKeysAreValidSecretKeys(t *testing.T) {
 			})
 		}
 		t.Run(key+" valid", func(t *testing.T) {
+			t.Parallel()
 			if _, out, err := renderAuth(t, phaseArgs(3, "--set-string", key+"=Key-1.x_y")...); err != nil {
 				t.Fatalf("%s=Key-1.x_y refused: %v\n%.400s", key, err, out)
 			}

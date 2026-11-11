@@ -146,6 +146,8 @@ func TestAuthNetworkPolicyOpensTheRateLimitStoreOnlyWhenItIsSet(t *testing.T) {
 }
 
 func TestAuthServiceRateLimitStoreRefusals(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		args []string
 		want string
@@ -155,6 +157,8 @@ func TestAuthServiceRateLimitStoreRefusals(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, tc.args...)
 			if err == nil {
 				t.Fatal("the render succeeded; it must refuse")

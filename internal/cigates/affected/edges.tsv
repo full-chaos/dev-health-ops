@@ -16,6 +16,7 @@ deploy/helm/dev-health	clickhouse_started_test.go	unexpressed
 deploy/helm/dev-health	go_pgbouncer_secret_keep_test.go	unexpressed
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go	unexpressed
 deploy/helm/dev-health	helm_namespace_test.go	unexpressed
+deploy/helm/dev-health	render_cache_test.go	unexpressed
 internal/api/billing/stripeclient	environment_proxy_test.go	unexpressed
 internal/api/externalurl	environment_proxy_test.go	unexpressed
 internal/api/githubapp	environment_proxy_test.go	unexpressed
@@ -109,6 +110,8 @@ internal/cigates/releasetag	parity_test.go	unexpressed
 internal/cigates/releasetag	releasetag.go	unexpressed
 internal/cigates/retiredcredentialnames	census_test.go	unexpressed
 internal/cigates/retiredcredentialnames	planted_test.go	unexpressed
+internal/cigates/retiredservicecred	census_test.go	unexpressed
+internal/cigates/retiredservicecred	planted_test.go	unexpressed
 internal/cigates/routing	alias_test.go	unexpressed
 internal/cigates/routing	chart_test.go	unexpressed
 internal/cigates/routing	cut_test.go	unexpressed

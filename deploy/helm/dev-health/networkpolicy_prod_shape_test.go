@@ -158,7 +158,7 @@ func renderPolicySet(t *testing.T, args ...string) ([]netpolDoc, []egressDoc, st
 	full := append([]string{"template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled=true",
 		"--set", "goApi.enabled=true", "--set", "goApi.internal.enabled=true", "--set", "queryApi.enabled=true",
 		"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, args...)
-	out, err := helmCommand(full...).CombinedOutput()
+	out, err := helmOutput(full...)
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}
@@ -193,6 +193,8 @@ var (
 )
 
 func TestQueryAPIOwnPolicyAdmitsOnlyItsCallers(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		args []string
 		want map[string][]int // source name -> admitted probe ports
@@ -217,6 +219,8 @@ func TestQueryAPIOwnPolicyAdmitsOnlyItsCallers(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			policies, _, _ := renderPolicySet(t, c.args...)
 			for _, source := range []netpolSource{sourceStranger, sourceACR, sourceController, sourceOtherNamespace} {
 				got, selected := admittedFrom(policies, npComponent("query-api"), queryAPIProbes, source)
@@ -232,6 +236,8 @@ func TestQueryAPIOwnPolicyAdmitsOnlyItsCallers(t *testing.T) {
 }
 
 func TestQueryAPIWithoutTrustedListenersStaysInTheReleaseWidePolicy(t *testing.T) {
+	t.Parallel()
+
 	policies, egress, out := renderPolicySet(t)
 	got, _ := admittedFrom(policies, npComponent("query-api"), queryAPIProbes, sourceStranger)
 	if fmt.Sprint(got) != fmt.Sprint(queryAPIProbes) {
@@ -246,8 +252,10 @@ func TestQueryAPIWithoutTrustedListenersStaysInTheReleaseWidePolicy(t *testing.T
 }
 
 func TestQueryAPIPublicPortStaysOpenWithTheReleasePolicyOff(t *testing.T) {
-	out, err := helmCommand("template", "np", ".", "--namespace", releaseNamespace, "--set", "queryApi.enabled=true",
-		"--set", "queryApi.mcp.enabled=true", "--set", "queryApi.internal.enabled=true").CombinedOutput()
+	t.Parallel()
+
+	out, err := helmOutput("template", "np", ".", "--namespace", releaseNamespace, "--set", "queryApi.enabled=true",
+		"--set", "queryApi.mcp.enabled=true", "--set", "queryApi.internal.enabled=true")
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}
@@ -268,6 +276,8 @@ func TestQueryAPIPublicPortStaysOpenWithTheReleasePolicyOff(t *testing.T) {
 }
 
 func TestQueryAPIInternalPortsClosedToTheReleaseNamespace(t *testing.T) {
+	t.Parallel()
+
 	policies, _, _ := renderPolicySet(t, "--set", "queryApi.mcp.enabled=true", "--set-json", "queryApi.mcp.allowedFrom="+acrSelectorJSON,
 		"--set", "queryApi.internal.enabled=true", "--set-json", "queryApi.internal.allowedFrom="+acrSelectorJSON)
 	for _, component := range []string{"web", "go-api", "go-worker", "go-pgbouncer-transaction", "clickhouse"} {
@@ -286,6 +296,8 @@ const prodExtraEgressJSON = `[` +
 	`{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress-nginx"}},"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ingress-nginx","app.kubernetes.io/component":"controller"}}}],"ports":[{"protocol":"TCP","port":80}]}]`
 
 func TestExtraEgressReachesEveryEntryFromEverySharedEgressPod(t *testing.T) {
+	t.Parallel()
+
 	_, egress, _ := renderPolicySet(t, append([]string{"--set", "queryApi.mcp.enabled=true", "--set", "queryApi.internal.enabled=true",
 		"--set-json", "networkPolicy.extraEgress=" + prodExtraEgressJSON}, authBase...)...)
 	controller := map[string]string{"app.kubernetes.io/name": "ingress-nginx", "app.kubernetes.io/component": "controller"}
@@ -329,6 +341,8 @@ func TestExtraEgressReachesEveryEntryFromEverySharedEgressPod(t *testing.T) {
 }
 
 func TestExtraEgressLeavesTheAuthPoliciesUnchanged(t *testing.T) {
+	t.Parallel()
+
 	authPolicies := func(out string) string {
 		var kept []string
 		for _, document := range strings.Split(out, "\n---") {
@@ -349,6 +363,7 @@ func TestExtraEgressLeavesTheAuthPoliciesUnchanged(t *testing.T) {
 }
 
 func TestExtraEgressRefusals(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		value string
 		want  string
@@ -395,8 +410,9 @@ func TestExtraEgressRefusals(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			out, err := helmCommand("template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled=true",
-				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "networkPolicy.extraEgress="+c.value).CombinedOutput()
+			t.Parallel()
+			out, err := helmOutput("template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled=true",
+				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "networkPolicy.extraEgress="+c.value)
 			if err == nil || !strings.Contains(string(out), c.want) {
 				t.Errorf("extraEgress %s must fail the render with %q: err=%v\n%.600s", c.value, c.want, err, out)
 			}
@@ -414,6 +430,7 @@ func TestExtraEgressRefusals(t *testing.T) {
 		"empty namespaceSelector with ports": `[{"to":[{"namespaceSelector":{}}],"ports":[{"port":80}]}]`,
 	} {
 		t.Run("renders: "+name, func(t *testing.T) {
+			t.Parallel()
 			_, egress, _ := renderPolicySet(t, "--set-json", "networkPolicy.extraEgress="+value)
 			if allowed, _ := egressAllowed(egress, npComponent("web"), egressTarget{name: "DNS", namespaceLabels: map[string]string{namespaceNameLabel: "kube-system"}, protocol: "TCP", port: 53}); !allowed {
 				t.Error("the shared egress lost DNS over TCP")
@@ -423,6 +440,8 @@ func TestExtraEgressRefusals(t *testing.T) {
 }
 
 func TestDNSEgressAllowsUDPAndTCP(t *testing.T) {
+	t.Parallel()
+
 	_, egress, _ := renderPolicySet(t, "--set", "queryApi.mcp.enabled=true")
 	for _, component := range []string{"query-api", "go-api", "web", "go-pgbouncer-transaction"} {
 		for _, protocol := range []string{"UDP", "TCP"} {
@@ -437,11 +456,13 @@ func TestDNSEgressAllowsUDPAndTCP(t *testing.T) {
 // The internal listener trusts identity headers, so an empty selector in queryApi.internal.allowedFrom (every pod of the
 // namespace) is refused, as it is for the MCP listener, whether or not networkPolicy is enabled.
 func TestQueryAPIInternalAllowedFromRefusesEmptySelectors(t *testing.T) {
+	t.Parallel()
+
 	for _, np := range []string{"true", "false"} {
 		for _, value := range []string{`[{}]`, `[{"matchLabels":{}}]`, `[{"matchExpressions":[]}]`, `[{"matchLabels":{"app":"tools"}},{}]`, `["tools"]`} {
-			out, err := helmCommand("template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled="+np,
+			out, err := helmOutput("template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled="+np,
 				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set", "queryApi.enabled=true",
-				"--set", "queryApi.internal.enabled=true", "--set-json", "queryApi.internal.allowedFrom="+value).CombinedOutput()
+				"--set", "queryApi.internal.enabled=true", "--set-json", "queryApi.internal.allowedFrom="+value)
 			if err == nil || !strings.Contains(string(out), "queryApi.internal.allowedFrom entries must select pods by non-empty matchLabels or matchExpressions") {
 				t.Errorf("networkPolicy.enabled=%s allowedFrom %s must fail the render: err=%v\n%.400s", np, value, err, out)
 			}

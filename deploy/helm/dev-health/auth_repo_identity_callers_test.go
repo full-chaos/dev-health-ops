@@ -9,6 +9,8 @@ import (
 // NOLOGIN writer and executable by exactly one login, the worker domain login
 // of the provider sync. Both auth Jobs carry the same two settings.
 func TestRepoIdentityWriterRendersIntoBothAuthJobs(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := pushLifecycleRender(t,
 		"--set", "authService.migrate.repoIdentity.writerRole=devhealth_auth_repo_identity_writer",
 		"--set-json", `authService.migrate.repoIdentity.callerRoles=["devhealth_domain"]`)
@@ -30,6 +32,8 @@ func TestRepoIdentityWriterRendersIntoBothAuthJobs(t *testing.T) {
 }
 
 func TestRepoIdentityDefaultRendersNeitherSetting(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := pushLifecycleRender(t)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -45,6 +49,8 @@ func TestRepoIdentityDefaultRendersNeitherSetting(t *testing.T) {
 
 // Each refusal names the key, at phase 0 (no auth Job renders) and at phase 1.
 func TestRepoIdentityRefusalsAtEveryPhase(t *testing.T) {
+	t.Parallel()
+
 	const writer = "devhealth_auth_repo_identity_writer"
 	set := func(callers string) []string {
 		return []string{"--set", "authService.migrate.repoIdentity.writerRole=" + writer,
@@ -76,6 +82,8 @@ func TestRepoIdentityRefusalsAtEveryPhase(t *testing.T) {
 	for name, extra := range cases {
 		for phase, base := range map[string][]string{"phase 0": nil, "phase 1": authBase} {
 			t.Run(name+" at "+phase, func(t *testing.T) {
+				t.Parallel()
+
 				args := append(append([]string{}, base...), extra...)
 				_, out, err := renderAuthRaw(t, args...)
 				if err == nil {
@@ -90,6 +98,8 @@ func TestRepoIdentityRefusalsAtEveryPhase(t *testing.T) {
 }
 
 func TestRepoIdentityValidPairRendersAtPhaseZero(t *testing.T) {
+	t.Parallel()
+
 	if _, out, err := renderAuthRaw(t,
 		"--set", "authService.migrate.repoIdentity.writerRole=devhealth_auth_repo_identity_writer",
 		"--set-json", `authService.migrate.repoIdentity.callerRoles=["devhealth_domain"]`); err != nil {

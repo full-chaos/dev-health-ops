@@ -43,6 +43,8 @@ var excluded = map[string]string{
 	"public.sync_configurations":    "not access-bearing: sync configuration",
 	"public.billing_plans":          "not access-bearing: billing catalogue",
 	"public.billing_prices":         "not access-bearing: billing catalogue",
+	// Retired: no code reads or writes it, every row is revoked, and a migration drops it.
+	"public.internal_service_credentials": "not access-bearing: retired, no reader or writer is left and every row is revoked; a migration drops the table",
 	// Follow-up 11872 (D6459 am.1).
 	"auth.policy_revisions":        "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
 	"auth.workload_assertion_keys": "not access-bearing today: public key metadata for the operator list, no runtime reader and no runtime GRANT (CHAOS-11208); a reader needs a fence section (the tripwire test enforces it)",

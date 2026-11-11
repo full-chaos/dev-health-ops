@@ -26,6 +26,8 @@ func ownerPinJobs(t *testing.T, args ...string) map[string]any {
 }
 
 func TestAuthMigrateJobsRenderTheSchemaOwnerPin(t *testing.T) {
+	t.Parallel()
+
 	args := append(append([]string{}, authBase...), "--set", "authService.migrate.ownerRole=devhealth_auth_migrator")
 	for name, container := range ownerPinJobs(t, args...) {
 		got, ok := envValue(container, "AUTH_SCHEMA_OWNER_ROLE")
@@ -36,6 +38,8 @@ func TestAuthMigrateJobsRenderTheSchemaOwnerPin(t *testing.T) {
 }
 
 func TestAuthMigrateJobsRenderNoPinWhenTheOwnerRoleIsEmpty(t *testing.T) {
+	t.Parallel()
+
 	for name, container := range ownerPinJobs(t, authBase...) {
 		if _, ok := envValue(container, "AUTH_SCHEMA_OWNER_ROLE"); ok {
 			t.Errorf("%s: AUTH_SCHEMA_OWNER_ROLE is rendered while authService.migrate.ownerRole is empty", name)
@@ -44,6 +48,8 @@ func TestAuthMigrateJobsRenderNoPinWhenTheOwnerRoleIsEmpty(t *testing.T) {
 }
 
 func TestAuthOwnerRoleRefusals(t *testing.T) {
+	t.Parallel()
+
 	owner := []string{"--set", "authService.migrate.ownerRole=pinned_owner"}
 	cases := map[string][]string{
 		"the runtime role":    {"--set", "authService.migrate.ownerRole=devhealth_auth"},
@@ -56,6 +62,8 @@ func TestAuthOwnerRoleRefusals(t *testing.T) {
 	}
 	for name, extra := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			args := append(append([]string{}, authBase...), extra...)
 			if name != "the runtime role" {
 				args = append(args, owner...)
@@ -72,6 +80,8 @@ func TestAuthOwnerRoleRefusals(t *testing.T) {
 }
 
 func TestAuthOwnerRoleEmptyIsAllowedAtEveryPhaseThatRenders(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []string{"1", "2", "3", "4"} {
 		args := append([]string{}, authBase...)
 		args = append(args, "--set", "authService.phase="+phase, "--set", "authService.migrate.ownerRole=")

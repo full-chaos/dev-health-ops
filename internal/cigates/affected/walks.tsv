@@ -8,6 +8,8 @@ deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed	-	-
 deploy/helm/dev-health	auth_sso_jit_test.go	deploy/helm/dev-health/templates	dir	*
 deploy/helm/dev-health	auth_switch_strict_test.go	deploy/helm/dev-health/templates	dir	*
 deploy/helm/dev-health	helm_namespace_test.go	deploy/helm/dev-health	dir	*
+deploy/helm/dev-health	render_cache_test.go	deploy/helm/dev-health	tree	*
+deploy/helm/dev-health	render_cache_test.go	unexpressed	-	-
 internal/adminops	users_password_fixtures_test.go	internal/adminops	dir	*
 internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata	dir	*
 internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata/golden	dir	*
@@ -153,6 +155,8 @@ internal/auth/session	liveness_census_test.go	cmd	tree	*
 internal/auth/session	liveness_census_test.go	internal	tree	*
 internal/auth/writerinventory	credential_registry_reader_census_test.go	internal	tree	*.go
 internal/auth/writerinventory	dynamic_enumerate_test.go	unexpressed	-	-
+internal/auth/writerinventory	link_tokens_dropped_test.go	cmd	tree	*.go
+internal/auth/writerinventory	link_tokens_dropped_test.go	internal	tree	*.go
 internal/auth/writerinventory	refresh_tokens_dropped_test.go	internal/auth	tree	*
 internal/auth/writerinventory	scan_test.go	.	tree	*.go
 internal/auth/writerinventory	scan_test.go	internal/storage/postgres/authschema/migrations	dir	*

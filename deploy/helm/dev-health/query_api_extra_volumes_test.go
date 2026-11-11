@@ -13,6 +13,8 @@ func queryAPIExtraVolumeSets() []string {
 }
 
 func TestQueryAPIExtraVolumesDefaultAddsNothing(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, "--set", "queryApi.enabled=true")
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -30,6 +32,8 @@ func TestQueryAPIExtraVolumesDefaultAddsNothing(t *testing.T) {
 }
 
 func TestQueryAPIExtraVolumesAreThePodVolumes(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, queryAPIExtraVolumeSets()...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -53,6 +57,8 @@ func TestQueryAPIExtraVolumesAreThePodVolumes(t *testing.T) {
 }
 
 func TestQueryAPIExtraVolumesLeaveOtherWorkloadsUnchanged(t *testing.T) {
+	t.Parallel()
+
 	base, out, err := renderAuth(t, "--set", "queryApi.enabled=true")
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)

@@ -130,6 +130,11 @@ internal/cigates/retiredcredentialnames	test	contracts
 internal/cigates/retiredcredentialnames	test	deploy
 internal/cigates/retiredcredentialnames	test	docs
 internal/cigates/retiredcredentialnames	test	docs-data
+internal/cigates/retiredservicecred	test	.github
+internal/cigates/retiredservicecred	test	ci
+internal/cigates/retiredservicecred	test	contracts
+internal/cigates/retiredservicecred	test	docs
+internal/cigates/retiredservicecred	test	docs-data
 internal/cigates/routing	test	ci
 internal/cigates/routing	test	compose.yml
 internal/cigates/routing	test	deploy

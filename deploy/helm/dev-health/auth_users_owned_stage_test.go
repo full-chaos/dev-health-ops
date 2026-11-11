@@ -24,6 +24,8 @@ var usersOwnedReaders = []struct{ kind, name string }{
 }
 
 func TestPhase4NeedsAUsersOwnedStage(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, stageArgs("4", "")...)
 	if err == nil || !strings.Contains(out, "authService.usersOwnedStage") {
 		t.Fatalf("phase 4 without a stage rendered: err=%v out=%.300s", err, out)
@@ -31,6 +33,8 @@ func TestPhase4NeedsAUsersOwnedStage(t *testing.T) {
 }
 
 func TestUsersOwnedStageIsRefusedBelowPhase4(t *testing.T) {
+	t.Parallel()
+
 	for _, phase := range []string{"0", "1", "2", "3"} {
 		_, out, err := renderAuth(t, stageArgs(phase, "goApi")...)
 		if err == nil || !strings.Contains(out, "authService.usersOwnedStage") {
@@ -40,6 +44,8 @@ func TestUsersOwnedStageIsRefusedBelowPhase4(t *testing.T) {
 }
 
 func TestUsersOwnedStageValueIsClosed(t *testing.T) {
+	t.Parallel()
+
 	for _, bad := range []string{"GoApi", "go-api", "both", "true"} {
 		_, out, err := renderAuth(t, stageArgs("4", bad)...)
 		if err == nil || !strings.Contains(out, "usersOwnedStage") {
@@ -89,6 +95,8 @@ func TestStageOwnedGivesEveryReaderTheSwitch(t *testing.T) {
 
 // Owned auth-service never renders beside a go-api that does not forward (go-api off in this release).
 func TestStageOwnedIsRefusedWithoutGoAPIForward(t *testing.T) {
+	t.Parallel()
+
 	_, out, err := renderAuth(t, stageArgs("4", "owned", "--set", "goApi.enabled=false")...)
 	if err == nil || !strings.Contains(out, "authService.usersOwnedStage=owned needs go-api") {
 		t.Fatalf("stage owned without go-api rendered: err=%v out=%.300s", err, out)
@@ -100,6 +108,8 @@ func TestStageOwnedIsRefusedWithoutGoAPIForward(t *testing.T) {
 
 // Across every phase and stage the pair (auth-service owned, go-api not on forward) never renders.
 func TestNoRenderPairsOwnedAuthServiceWithANonForwardingGoAPI(t *testing.T) {
+	t.Parallel()
+
 	for _, c := range []struct{ phase, stage string }{{"3", ""}, {"4", "goApi"}, {"4", "owned"}} {
 		docs, out, err := renderAuth(t, stageArgs(c.phase, c.stage)...)
 		if err != nil {
@@ -115,6 +125,8 @@ func TestNoRenderPairsOwnedAuthServiceWithANonForwardingGoAPI(t *testing.T) {
 
 // The first backfill (stage goApi) renders the phase 3 form of the Job: the verb refuses when the switch is on.
 func TestStageGoAPIBackfillJobCarriesNoSwitch(t *testing.T) {
+	t.Parallel()
+
 	args := append(stageArgs("4", "goApi"), "--set", "authService.backfill.enabled=true", "--set", "authService.backfill.verb=users-backfill",
 		"--set", "authService.backfill.runId=r2", "--set", "authService.backfill.dryRun=false")
 	_, job := renderBackfill(t, args)
@@ -123,18 +135,10 @@ func TestStageGoAPIBackfillJobCarriesNoSwitch(t *testing.T) {
 	}
 }
 
-// legacy-link-purge needs users owned: stage goApi refuses it, as phase 3 does.
-func TestStageGoAPIRefusesLegacyLinkPurge(t *testing.T) {
-	args := append(stageArgs("4", "goApi"), "--set", "authService.backfill.enabled=true", "--set", "authService.backfill.verb=legacy-link-purge",
-		"--set", "authService.backfill.runId=r3")
-	_, out, err := renderAuth(t, args...)
-	if err == nil || !strings.Contains(out, "legacy-link-purge needs users owned") {
-		t.Fatalf("legacy-link-purge at stage goApi rendered: err=%v out=%.300s", err, out)
-	}
-}
-
 // users-reconcile is the post-flip detection net: a read-only verb, so no --dry-run flag, whatever dryRun says.
 func TestBackfillJobRendersUsersReconcileWithoutDryRunFlag(t *testing.T) {
+	t.Parallel()
+
 	for _, dry := range []string{"true", "false"} {
 		args := append(stageArgs("4", "owned"), "--set", "authService.backfill.enabled=true", "--set", "authService.backfill.verb=users-reconcile",
 			"--set", "authService.backfill.runId=rc1", "--set", "authService.backfill.dryRun="+dry)

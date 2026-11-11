@@ -8,8 +8,10 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/ratelimit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // The session routes' @limiter.limit decorators (api/middleware/rate_limit.py
@@ -155,4 +157,35 @@ type validateInput struct{ token, key string }
 func validateLimitKey(r *http.Request) string {
 	input, _ := r.Context().Value(validateInputKey{}).(validateInput)
 	return input.key
+}
+
+// authKey is rate_limit.py's get_auth_key: the TCP peer (slowapi's
+// get_remote_address, "127.0.0.1" without one) and the request's e-mail --
+// the body's "email" when it is a string, else the "email" query parameter
+// -- stripped and lowered, "unknown" when empty.
+func authKey(r *http.Request, body pyjson.Value) string {
+	host := "127.0.0.1"
+	if peer := clientHost(r); peer != nil && *peer != "" {
+		host = *peer
+	}
+	email := "unknown"
+	var raw *string
+	if object, ok := body.(*pyjson.Object); ok {
+		if value, present := object.Get("email"); present {
+			if text, isString := value.(string); isString {
+				raw = &text
+			}
+		}
+	}
+	if raw == nil {
+		if value := pybody.LastQueryValue(r.URL.Query(), "email"); value != nil && *value != "" {
+			raw = value
+		}
+	}
+	if raw != nil {
+		if normalized := pythonparity.Lower(pythonparity.Strip(*raw)); normalized != "" {
+			email = normalized
+		}
+	}
+	return host + ":" + email
 }

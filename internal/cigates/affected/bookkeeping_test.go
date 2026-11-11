@@ -72,7 +72,6 @@ func TestBookkeepingTablesSelectTheirReadersInTheRealModule(t *testing.T) {
 	if err := os.WriteFile(keyFile, []byte(strings.Join(keys, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	bin := cigate(t)
 	for _, c := range []struct {
 		changed string
 		want    []string
@@ -90,7 +89,7 @@ func TestBookkeepingTablesSelectTheirReadersInTheRealModule(t *testing.T) {
 			if err := os.WriteFile(list, []byte(c.changed+"\x00"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			res := runRealPlanVerdict(root, env, bin, "plan-verdict", "--event", "pull_request", "--go-files-full",
+			res := inProcessRealPlanVerdict(t, "--event", "pull_request", "--go-files-full",
 				"--changed", list, "--golist", golist, "--keys", keyFile, "--root", root)
 			if res.code != 0 {
 				t.Fatalf("plan-verdict exited %d: %s", res.code, res.stderr)

@@ -1,0 +1,33 @@
+[
+  {
+    "provider": "github",
+    "method": "POST",
+    "path": "/login/oauth/access_token",
+    "status": 200,
+    "body": {"access_token": "gh-live", "token_type": "bearer", "scope": "read:user,user:email"}
+  },
+  {
+    "provider": "github",
+    "method": "GET",
+    "path": "/user",
+    "request_headers": {"Authorization": "Bearer gh-live"},
+    "status": 200,
+    "body": {"id": 920001, "login": "live-social", "name": "Live Social", "email": "live-social@example.test"}
+  },
+  {
+    "provider": "github",
+    "method": "POST",
+    "path": "/applications/gh-client/token",
+    "request_headers": {"Authorization": "Basic Z2gtY2xpZW50OmdoLXNlY3JldA=="},
+    "body_contains": "\"access_token\":\"gh-live\"",
+    "status": 200,
+    "body": {"app": {"client_id": "gh-client"}, "user": {"id": 920001}}
+  },
+  {
+    "provider": "github",
+    "method": "GET",
+    "path": "/__ready",
+    "status": 200,
+    "body": {"ready": true}
+  }
+]

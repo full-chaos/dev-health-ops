@@ -254,6 +254,15 @@ func TestWebApprover_failsClosed(t *testing.T) {
 			return a.reference(c)
 		}},
 		{name: "life over 30 s", ref: claim("exp", "LIFE+31")},
+		{name: "exp before iat", ref: claim("exp", "NOW-1")},
+		{name: "iat in the future only", ref: claim("iat", "NOW+10")},
+		{name: "nbf in the future only", ref: claim("nbf", "NOW+10")},
+		{name: "base session of a delegated session ended", setup: func(a *approverFixture) {
+			a.delegate("acr.credential.issue")
+			s := a.state.sessions[a.sid]
+			s.BaseLive = false
+			a.setSession(s)
+		}},
 		{name: "no sid", ref: dropClaim("sid")},
 		{name: "malformed sid", ref: claim("sid", "sess_1")},
 		{name: "session ended", setup: func(a *approverFixture) {
@@ -327,8 +336,13 @@ func TestWebApprover_failsClosed(t *testing.T) {
 func claim(name string, value any) func(a *approverFixture) string {
 	return func(a *approverFixture) string {
 		c := a.claims()
-		if value == "LIFE+31" {
+		switch value {
+		case "LIFE+31":
 			value = a.now.Unix() + 31
+		case "NOW-1":
+			value = a.now.Unix() - 1
+		case "NOW+10":
+			value = a.now.Unix() + 10
 		}
 		c[name] = value
 		return a.reference(c)
@@ -351,6 +365,12 @@ func TestWebApprover_bindsToTheIssueActionOnItsOrganization(t *testing.T) {
 		},
 		"a key not the org": func(a *approverFixture, q map[string]any) {
 			q["resource"] = map[string]any{"type": "organization", "key": "acme", "organization_id": a.org}
+		},
+		"another resource type, key = org_id": func(a *approverFixture, q map[string]any) {
+			q["resource"] = map[string]any{"type": "membership", "key": a.org, "organization_id": a.org}
+		},
+		"another organization, key = org_id": func(a *approverFixture, q map[string]any) {
+			q["resource"] = map[string]any{"type": "organization", "key": a.org, "organization_id": uuid.NewString()}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

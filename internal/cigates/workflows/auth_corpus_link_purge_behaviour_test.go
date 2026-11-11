@@ -16,6 +16,7 @@ const legacyLinkPurgeCall = "run --rm --no-deps migrate auth legacy-link-purge"
 // the auth role's DELETE on the two tables, are in place from the start), before the corpus is handed the forwarded set.
 // Never with the flag set off.
 func TestAuthCorpusOwnedHandOffsPurgeTheLegacyLinkRows(t *testing.T) {
+	t.Parallel()
 	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)

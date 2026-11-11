@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -25,8 +26,16 @@ func readFile(t *testing.T, path string) string {
 	return string(b)
 }
 
+// yamlCache keeps one parsed document per exact YAML text for the test binary: most guards parse the same real
+// workflow files again and again. A hit returns a deep copy, so a caller that edits its document never changes what
+// the next caller gets. Text that fails to parse is never cached.
+var yamlCache sync.Map // text -> yamlMap
+
 func parseYAML(t *testing.T, text, what string) yamlMap {
 	t.Helper()
+	if v, ok := yamlCache.Load(text); ok {
+		return deepCopyYAML(v.(yamlMap)).(yamlMap)
+	}
 	var doc yamlMap
 	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
 		t.Fatalf("%s: invalid YAML: %v", what, err)
@@ -34,7 +43,34 @@ func parseYAML(t *testing.T, text, what string) yamlMap {
 	if doc == nil {
 		doc = yamlMap{}
 	}
+	yamlCache.Store(text, deepCopyYAML(doc).(yamlMap))
 	return doc
+}
+
+// deepCopyYAML copies the containers yaml.v3 decodes into an any; scalars are immutable values.
+func deepCopyYAML(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = deepCopyYAML(e)
+		}
+		return out
+	case map[any]any:
+		out := make(map[any]any, len(x))
+		for k, e := range x {
+			out[k] = deepCopyYAML(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = deepCopyYAML(e)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func loadWf(t *testing.T, root, name string) yamlMap {

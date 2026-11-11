@@ -156,6 +156,7 @@ func wantDeclined(t *testing.T, r promResult, why string) {
 }
 
 func TestPromoteCopiesTreeImagesWhenProvenanceHolds(t *testing.T) {
+	t.Parallel()
 	r := runPromote(t, newPromFix(t), "promote")
 	if r.code != 0 || r.out["promoted"] != "true" || r.out["sha"] != promSHA {
 		t.Fatalf("expected promoted=true (exit %d, out %v):\n%s", r.code, r.out, r.stdout)
@@ -172,6 +173,7 @@ func TestPromoteCopiesTreeImagesWhenProvenanceHolds(t *testing.T) {
 }
 
 func TestPromoteDeclinesEveryUnprovenCase(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		mut  func(f promFix)
@@ -217,6 +219,7 @@ func TestPromoteIsSilentOutsideAMainPush(t *testing.T) {
 }
 
 func TestHotfixGate(t *testing.T) {
+	t.Parallel()
 	prPath := "api_" + promKey(fmt.Sprintf("repos/%s/pulls/%d", promRepo, promPR))
 	permPath := func(a string) string { return "api_" + promKey("repos/"+promRepo+"/collaborators/"+a+"/permission") }
 	setup := func(t *testing.T, labels ...string) promFix {
@@ -310,6 +313,7 @@ func promCert(src, run string) map[string]string {
 }
 
 func TestPromoteChecksEveryProvenanceCertificate(t *testing.T) {
+	t.Parallel()
 	t.Run("two runs of the same reviewed source are accepted", func(t *testing.T) {
 		f := newPromFix(t)
 		f.attestMany(0, promCert(promMerge, "https://github.com/x/runs/1"), promCert(promMerge, "https://github.com/x/runs/2"))

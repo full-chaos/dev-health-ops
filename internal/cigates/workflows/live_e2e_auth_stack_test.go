@@ -269,6 +269,7 @@ func runLiveE2EUp(t *testing.T, path, fake, state string) string {
 // The web workflow runs the script by a path relative to the ops checkout. `up` changes directory into the state
 // directory before it starts auth-service through `with-env`, so that re-exec has to name the script by an absolute path.
 func TestLiveE2EAuthStackUpStartsAuthServiceWhenRunByARelativePath(t *testing.T) {
+	t.Parallel()
 	state := filepath.Join(t.TempDir(), "state")
 	fake := liveE2EUpFakes(t, state)
 	out := runLiveE2EUp(t, fake+":"+os.Getenv("PATH"), fake, state)
@@ -277,6 +278,7 @@ func TestLiveE2EAuthStackUpStartsAuthServiceWhenRunByARelativePath(t *testing.T)
 
 // Hosted race legs have no xxd. The workload subject is the uuid of the fake psql row as prn_ and unpadded base64url.
 func TestLiveE2EAuthStackUpNeedsNoXxdAndPinsTheWorkloadSubject(t *testing.T) {
+	t.Parallel()
 	state := filepath.Join(t.TempDir(), "state")
 	fake := liveE2EUpFakes(t, state)
 	runLiveE2EUp(t, liveE2ENoXxdPath(t, fake), fake, state)

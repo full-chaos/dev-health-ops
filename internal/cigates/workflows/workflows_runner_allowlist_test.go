@@ -343,6 +343,7 @@ func TestAllowlistExactMatchRejectsAPrependedDisjunct(t *testing.T) {
 }
 
 func TestSelfHostedRunnerAllowlistPlantedDefects(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	var files []string
 	for _, n := range workflowNames(t, root) {

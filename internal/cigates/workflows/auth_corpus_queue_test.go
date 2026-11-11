@@ -330,6 +330,7 @@ func authServiceClosureDirs(t *testing.T, root string) map[string]bool {
 }
 
 func TestAuthCorpusQueuePathSetCoversEveryRouteFile(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	closure := authServiceClosureDirs(t, root)
 	expectNoViolations(t, corpusRouteFilesOutsideSet(t, root, func(dir string) bool { return closure[dir] }))

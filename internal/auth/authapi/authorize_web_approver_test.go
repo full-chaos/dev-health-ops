@@ -529,3 +529,28 @@ func TestWebApprover_overTheBoundIs400(t *testing.T) {
 		t.Fatalf("status %d; want 400", rec.Code)
 	}
 }
+
+// The resolver names why it refuses a bad org_id, req or jti (the route
+// refuses them again at the binding), so each check has its own kill.
+func TestWebApprover_resolverNamesBadOrgReqAndJti(t *testing.T) {
+	a := newApproverFixture(t)
+	approver, err := NewWebApproverReferences(WebApproverReferencesConfig{Issuer: a.issuer, JWKSFile: a.jwksFile, Caller: a.approver, Now: func() time.Time { return a.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		ref  string
+		want string
+	}{
+		{dropClaim("org_id")(a), "organization"},
+		{claim("org_id", "")(a), "organization"},
+		{claim("org_id", strings.ToUpper(a.org))(a), "organization"},
+		{dropClaim("req")(a), "contract"},
+		{claim("req", strings.Repeat("A", 42))(a), "contract"},
+		{dropClaim("jti")(a), "contract"},
+	} {
+		if _, why, err := approver.resolve(c.ref); why != c.want || err != nil {
+			t.Errorf("why %q err %v; want %q", why, err, c.want)
+		}
+	}
+}

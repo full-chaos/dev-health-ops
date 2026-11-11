@@ -119,9 +119,10 @@ type orgStateRead struct {
 // pass compares every organization with auth once, from the row after the cursor. A row auth refuses is skipped and
 // counted; a 429 waits and reads the row again; a read or store failure, or a row still answered 429 after
 // orgStateReconcileRateLimitTries calls, ends the pass, and the next one resumes after the last row covered. A walk
-// to the end of the table resets the cursor. It logs one WARN at most, counts only.
+// to the end of the table resets the cursor, and so does a resumed pass that stops before it covers any row: a row
+// that stops every pass then costs the rows before it at most every second pass. It logs one WARN at most, counts only.
 func (r *OrgStateReconciler) pass(ctx context.Context) {
-	refused, rateLimited := 0, 0
+	refused, rateLimited, covered := 0, 0, 0
 	stopped := false
 	after := r.cursor
 walk:
@@ -150,11 +151,15 @@ walk:
 				}
 			}
 			after = row.id
+			covered++
 		}
 		if len(rows) < orgStateReconcilePage {
 			after = uuid.Nil
 			break
 		}
+	}
+	if stopped && covered == 0 {
+		after = uuid.Nil
 	}
 	r.cursor = after
 	if ctx.Err() == nil && (refused > 0 || stopped) {

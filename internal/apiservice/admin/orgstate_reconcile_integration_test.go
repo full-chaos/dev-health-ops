@@ -929,3 +929,68 @@ func equalOrgs(a, b []uuid.UUID) bool {
 	}
 	return true
 }
+
+// passReads runs one pass and returns the orgs it read, in order.
+func passReads(ctx context.Context, r *OrgStateReconciler, auth *passAuth) []uuid.UUID {
+	before := len(auth.readOrder())
+	boundedPass(ctx, r)
+	return auth.readOrder()[before:]
+}
+
+// CHAOS-13575 C-poison: a row that stops every pass (a row-specific outage) does not freeze the rows before it: the
+// resumed pass that covers no row resets the cursor, so the pass after it reads them again and fixes a drift there.
+func TestReconcileAPoisonRowDoesNotFreezeTheRowsBeforeIt(t *testing.T) {
+	ctx, pool := startOrgsDB(t)
+	auth := newPassAuth()
+	orgs := sortedOrgs(ctx, t, pool, 4)
+	for _, org := range orgs {
+		auth.set(org, "active")
+	}
+	poison := orgs[2]
+	auth.fail(poison, fmt.Errorf("%w: status 503", orgreactivate.ErrUnavailable))
+	r, log := reconcilerFor(pool, auth)
+	if got := passReads(ctx, r, auth); !equalOrgs(got, orgs[:3]) {
+		t.Fatalf("pass 1 read %v, want the rows up to the poison row %v", got, orgs[:3])
+	}
+	if got := passReads(ctx, r, auth); !equalOrgs(got, orgs[2:3]) {
+		t.Fatalf("pass 2 read %v, want it to resume at the poison row only", got)
+	}
+	auth.set(orgs[0], "suspended")
+	if got := passReads(ctx, r, auth); !equalOrgs(got, []uuid.UUID{orgs[0], orgs[0], orgs[1], orgs[2]}) {
+		t.Fatalf("pass 3 read %v, want it to start at the lowest id again (fix re-read included)", got)
+	}
+	if storedActive(ctx, t, pool, orgs[0]) {
+		t.Fatal("a drift before the poison row was not fixed")
+	}
+	if log.count("stopped=true") != 3 {
+		t.Fatalf("want 3 stopped passes:\n%s", log.text())
+	}
+}
+
+// CHAOS-13575 C-keep: a resumed pass that covers at least one row before it stops again keeps its cursor: the next
+// pass resumes after that row, not at the lowest id.
+func TestReconcileAResumedPassThatCoversARowKeepsItsCursor(t *testing.T) {
+	ctx, pool := startOrgsDB(t)
+	auth := newPassAuth()
+	orgs := sortedOrgs(ctx, t, pool, 4)
+	for _, org := range orgs {
+		auth.set(org, "active")
+	}
+	exhaust := func(org uuid.UUID) {
+		errs := make([]error, orgStateReconcileRateLimitTries)
+		for i := range errs {
+			errs[i] = limited(time.Second)
+		}
+		auth.limit(org, errs...)
+	}
+	exhaust(orgs[1])
+	r, _ := reconcilerFor(pool, auth)
+	passReads(ctx, r, auth)
+	exhaust(orgs[2])
+	if got, want := passReads(ctx, r, auth), append([]uuid.UUID{orgs[1]}, repeat(orgs[2], orgStateReconcileRateLimitTries)...); !equalOrgs(got, want) {
+		t.Fatalf("pass 2 read %v, want %v", got, want)
+	}
+	if got := passReads(ctx, r, auth); !equalOrgs(got, orgs[2:]) {
+		t.Fatalf("pass 3 read %v, want it to resume at %s", got, orgs[2])
+	}
+}

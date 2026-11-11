@@ -26,6 +26,7 @@ cmd/venue-extstub	stub.go
 cmd/venue-extstub	stub_test.go
 deploy/helm/dev-health	auth_phase_test.go
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go
+deploy/helm/dev-health	render_cache_test.go
 internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
 internal/api/policy	delegated_test.go
@@ -289,6 +290,7 @@ internal/cigates/racescope	scan.go
 internal/cigates/raceunweighted	raceunweighted_test.go
 internal/cigates/releasetag	parity_test.go
 internal/cigates/releasetag	releasetag.go
+internal/cigates/retiredservicecred	census_test.go
 internal/cigates/routing	chart_test.go
 internal/cigates/routing	cut_test.go
 internal/cigates/routing	deps.go

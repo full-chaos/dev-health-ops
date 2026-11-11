@@ -32,6 +32,8 @@ func ackJobs(t *testing.T, docs []map[string]any) map[string][]string {
 // Job of that release may narrow: each one that passes the acknowledgement
 // also passes -defer-narrowing.
 func TestTheFlipBackReleaseNeverNarrows(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 3, "--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest)
 	flag := "-ack-grant-narrowing=" + ackDigest
 	want := map[string][]string{
@@ -55,6 +57,8 @@ func TestTheFlipBackReleaseNeverNarrows(t *testing.T) {
 // authService.migrate.narrowAfterFlipBack do the same two Jobs pass the
 // acknowledgement without -defer-narrowing; without it, none does.
 func TestTheNarrowRendersOnlyWithTheFlag(t *testing.T) {
+	t.Parallel()
+
 	for name, args := range ackJobs(t, renderPhase(t, 3, "--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest)) {
 		if !strings.Contains(strings.Join(args, " "), "-defer-narrowing") {
 			t.Errorf("without narrowAfterFlipBack, Job %s narrows: args = %v", name, args)
@@ -79,6 +83,8 @@ func TestTheNarrowRendersOnlyWithTheFlag(t *testing.T) {
 // narrowAfterFlipBack without the acknowledgement fails the render and names
 // both settings, with or without the grants hook.
 func TestNarrowAfterFlipBackIsRefusedWithoutTheAck(t *testing.T) {
+	t.Parallel()
+
 	for _, extra := range [][]string{nil, {"--set", "authService.migrate.grantsHook.enabled=false"}} {
 		_, out, err := renderAuth(t, phaseArgs(3, append([]string{"--set", "authService.migrate.narrowAfterFlipBack=true"}, extra...)...)...)
 		if err == nil {
@@ -96,6 +102,8 @@ func TestNarrowAfterFlipBackIsRefusedWithoutTheAck(t *testing.T) {
 // off, narrowAfterFlipBack without a valid acknowledgement still fails the
 // render, with the same acknowledgement check as the Jobs.
 func TestNarrowAfterFlipBackIsRefusedWithAuthMigrateOff(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name  string
 		extra []string
@@ -124,6 +132,8 @@ func TestNarrowAfterFlipBackIsRefusedWithAuthMigrateOff(t *testing.T) {
 // pods still serve, so it defers exactly like the phase 3 release. The defer follows ownership (authOn usersOwned), not the
 // phase number: stage owned never defers.
 func TestStageGoAPIRollbackReleaseNeverNarrows(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 4, "--set", "authService.usersOwnedStage=goApi", "--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest)
 	flag := "-ack-grant-narrowing=" + ackDigest
 	want := map[string][]string{
@@ -136,6 +146,8 @@ func TestStageGoAPIRollbackReleaseNeverNarrows(t *testing.T) {
 }
 
 func TestStageOwnedDoesNotDefer(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 4, "--set", "authService.usersOwnedStage=owned", "--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest)
 	flag := "-ack-grant-narrowing=" + ackDigest
 	want := map[string][]string{
@@ -149,6 +161,8 @@ func TestStageOwnedDoesNotDefer(t *testing.T) {
 
 // narrowAfterFlipBack is refused at phase 4 at every stage, by the one guard, with its one message.
 func TestNarrowAfterFlipBackIsRefusedAtPhase4AtEveryStageByOneGuard(t *testing.T) {
+	t.Parallel()
+
 	for _, stage := range []string{"goApi", "owned"} {
 		_, out, err := renderAuth(t, phaseArgs(4, "--set", "authService.usersOwnedStage="+stage,
 			"--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest,

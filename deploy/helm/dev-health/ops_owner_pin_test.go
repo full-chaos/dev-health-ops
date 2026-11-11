@@ -41,6 +41,8 @@ func opsPinContainers(t *testing.T, args ...string) map[string]map[string]any {
 }
 
 func TestOpsMigratorJobsRenderTheOwnerPin(t *testing.T) {
+	t.Parallel()
+
 	for job, c := range opsPinContainers(t, opsPinArgs("--set", "migrations.hook.ownerRole=devhealth_migrator")...) {
 		got, ok := envValue(c, "MIGRATION_OWNER_ROLE")
 		if !ok || got != "devhealth_migrator" {
@@ -50,6 +52,8 @@ func TestOpsMigratorJobsRenderTheOwnerPin(t *testing.T) {
 }
 
 func TestOpsMigratorJobsRenderNoPinByDefault(t *testing.T) {
+	t.Parallel()
+
 	for job, c := range opsPinContainers(t, opsPinArgs()...) {
 		if _, ok := envValue(c, "MIGRATION_OWNER_ROLE"); ok {
 			t.Errorf("%s: MIGRATION_OWNER_ROLE is rendered while migrations.hook.ownerRole is empty", job)
@@ -72,6 +76,8 @@ func TestOpsMigratorJobsRenderNoPinByDefault(t *testing.T) {
 }
 
 func TestOpsOwnerPinKeepsExtraEnvOnTheIndexJobs(t *testing.T) {
+	t.Parallel()
+
 	args := opsPinArgs("--set", "migrations.hook.ownerRole=devhealth_migrator",
 		"--set-json", `migrations.hook.extraEnv=[{"name":"EXTRA_ONE","value":"1"}]`)
 	containers := opsPinContainers(t, args...)
@@ -86,6 +92,8 @@ func TestOpsOwnerPinKeepsExtraEnvOnTheIndexJobs(t *testing.T) {
 }
 
 func TestOpsOwnerRoleRefusals(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string][]string{
 		"not a plain name":    {"--set", "migrations.hook.ownerRole=Bad-Name"},
 		"the domain login":    {"--set", "migrations.hook.ownerRole=devhealth_domain"},
@@ -99,6 +107,8 @@ func TestOpsOwnerRoleRefusals(t *testing.T) {
 	}
 	for name, extra := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, opsPinArgs(extra...)...)
 			if err == nil {
 				t.Fatal("the render succeeded; it must refuse")
@@ -117,6 +127,8 @@ func opsSessionsOn(extra ...string) []string {
 }
 
 func TestOpsOwnerRoleWithSessionsOwnedNeedsTheAuthGrantsReader(t *testing.T) {
+	t.Parallel()
+
 	args := opsPinArgs(append(opsSessionsOn("--set", "authService.migrate.sessionReaders.goApi=devhealth_api",
 		"--set", "authService.migrate.sessionReaders.queryApi=devhealth_query_api"), "--set", "migrations.hook.ownerRole=devhealth_migrator")...)
 	for job, c := range opsPinContainers(t, args...) {
@@ -132,6 +144,8 @@ func TestOpsOwnerRoleWithSessionsOwnedNeedsTheAuthGrantsReader(t *testing.T) {
 }
 
 func TestProvisionRolesJobPassesTheMigratorLoginWhenNamed(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, provisionRolesArgs(
 		"--set", "migrations.hook.provisionRoles.migratorRole.name=devhealth_migrator",
 		"--set", "migrations.hook.provisionRoles.migratorRole.secretName=dev-health-ops-migrator")...)
@@ -159,6 +173,8 @@ func TestProvisionRolesJobPassesTheMigratorLoginWhenNamed(t *testing.T) {
 }
 
 func TestProvisionRolesJobHasNoMigratorLoginByDefault(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, provisionRolesArgs()...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.500s", err, out)
@@ -172,6 +188,8 @@ func TestProvisionRolesJobHasNoMigratorLoginByDefault(t *testing.T) {
 }
 
 func TestProvisionRolesMigratorLoginNeedsItsSecret(t *testing.T) {
+	t.Parallel()
+
 	for name, sets := range map[string][]string{
 		"no secretName": {"--set", "migrations.hook.provisionRoles.migratorRole.name=devhealth_migrator"},
 		"no secretKey": {"--set", "migrations.hook.provisionRoles.migratorRole.name=devhealth_migrator",
@@ -179,6 +197,8 @@ func TestProvisionRolesMigratorLoginNeedsItsSecret(t *testing.T) {
 			"--set", "migrations.hook.provisionRoles.migratorRole.secretKey="},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			_, out, err := renderAuth(t, provisionRolesArgs(sets...)...)
 			if err == nil || !strings.Contains(out, "migrations.hook.provisionRoles.migratorRole") {
 				t.Fatalf("expected a render refusal naming migratorRole, got err=%v\n%.500s", err, out)
@@ -190,6 +210,8 @@ func TestProvisionRolesMigratorLoginNeedsItsSecret(t *testing.T) {
 // With secrets.create=false the provision-roles Job envFroms provisionRoles.externalSecretName, else the hook Secret;
 // the other ops Jobs keep the hook Secret.
 func TestProvisionRolesExternalSecretName(t *testing.T) {
+	t.Parallel()
+
 	external := []string{"--set", "secrets.create=false", "--set", "secrets.externalSecretName=dev-health-app", "--set", "hs256Secret.externalSecretName=hs256",
 		"--set", "migrations.hook.externalSecretName=dev-health-ops-migrate",
 		"--set", "goWorkers.pgbouncer.secret.create=false", "--set", "goWorkers.pgbouncer.secret.externalSecretName=pooler"}
@@ -210,6 +232,8 @@ func TestProvisionRolesExternalSecretName(t *testing.T) {
 		"own name": {[]string{"--set", "migrations.hook.provisionRoles.externalSecretName=dev-health-ops-migrate-owner"}, "dev-health-ops-migrate-owner", "dev-health-ops-migrate"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			docs, out, err := renderAuth(t, provisionRolesArgs(append(append([]string{}, external...), c.extra...)...)...)
 			if err != nil {
 				t.Fatalf("render: %v\n%.500s", err, out)
@@ -229,6 +253,8 @@ func TestProvisionRolesExternalSecretName(t *testing.T) {
 // With the pin on and auth-service owning sessions, a release whose query-api session reader is not named is refused:
 // the pinned River step leaves that read to auth-grants, so the reader must be configured there.
 func TestOpsOwnerRoleWithSessionsOwnedAndNoAuthGrantsReaderIsRefused(t *testing.T) {
+	t.Parallel()
+
 	args := opsPinArgs(append(opsSessionsOn("--set", "queryApi.enabled=false", "--set", "authService.migrate.sessionReaders.goApi=devhealth_api"),
 		"--set", "migrations.hook.ownerRole=devhealth_migrator")...)
 	_, out, err := renderAuth(t, args...)

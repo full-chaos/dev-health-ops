@@ -52,6 +52,8 @@ func TestAuthServiceIssuerRendersUnderHS256Compat(t *testing.T) {
 }
 
 func TestAuthServiceIssuerUnderEdDSAIsUnchanged(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 2, issuerSets("eddsa", hs256Issuer)...)
 	for _, want := range []struct{ name, env string }{
 		{"a-dev-health-auth-service", "AUTH_TOKEN_ISSUER_URL"},
@@ -66,6 +68,8 @@ func TestAuthServiceIssuerUnderEdDSAIsUnchanged(t *testing.T) {
 }
 
 func TestAuthServiceIssuerIsCheckedUnderEveryClass(t *testing.T) {
+	t.Parallel()
+
 	for _, class := range []string{"hs256_compat", ""} {
 		for _, issuer := range []string{"http://auth.example", "https://auth.example/", "https://Auth.example"} {
 			_, out, err := renderAuth(t, phaseArgs(2, issuerSets(class, issuer)...)...)

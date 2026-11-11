@@ -51,6 +51,8 @@ func saRender(t *testing.T, extra ...string) (pods []saPod, accounts map[string]
 }
 
 func TestWorkloadServiceAccountsDistinct(t *testing.T) {
+	t.Parallel()
+
 	pods, accounts := saRender(t)
 	owner := map[string]string{}
 	var checked []string
@@ -84,6 +86,8 @@ func TestWorkloadServiceAccountsDistinct(t *testing.T) {
 }
 
 func TestWorkloadPodsDoNotMountTheServiceAccountToken(t *testing.T) {
+	t.Parallel()
+
 	pods, accounts := saRender(t)
 	for _, job := range []string{"-migrate", "-auth-migrate", "-auth-grants", "-provision-roles", "-river-migrate", "-route-activate"} {
 		found := false
@@ -107,6 +111,8 @@ func TestWorkloadPodsDoNotMountTheServiceAccountToken(t *testing.T) {
 }
 
 func TestEveryChartImagePodResolvesAPullSecret(t *testing.T) {
+	t.Parallel()
+
 	pods, accounts := saRender(t)
 	checked := 0
 	for _, p := range pods {
@@ -147,6 +153,8 @@ func hasPull(v map[string]any) bool {
 }
 
 func TestOldSharedServiceAccountKeyIsRefused(t *testing.T) {
+	t.Parallel()
+
 	for _, set := range []string{"serviceAccount.name=shared", "serviceAccount.create=false"} {
 		_, out, err := renderAuth(t, append(append([]string{}, saArgs...), "--set", set)...)
 		if err == nil || !strings.Contains(out, "serviceAccount") {

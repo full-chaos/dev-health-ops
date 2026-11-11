@@ -12,7 +12,7 @@ import (
 func goAPIDeployment(t *testing.T, sets ...string) map[string]any {
 	t.Helper()
 	args := append([]string{"template", "go-api-env", ".", "--set", "goApi.enabled=true"}, sets...)
-	output, err := helmCommand(args...).CombinedOutput()
+	output, err := helmOutput(args...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%s", err, output)
 	}
@@ -64,6 +64,8 @@ var goAPIRouteSettings = []string{"HIDE_MIGRATED_CHILD_CONFIGS", "SYNC_WATERMARK
 // Go api takes it from the same key of the same ConfigMap the Python api
 // envFroms, optional, so the two planes see one value (or both none).
 func TestGoAPIReadsTheRouteSettingsThePythonAPIReads(t *testing.T) {
+	t.Parallel()
+
 	env := containerEnv(t, goAPIDeployment(t), "go-api")
 	for _, key := range goAPIRouteSettings {
 		found := 0
@@ -81,7 +83,7 @@ func TestGoAPIReadsTheRouteSettingsThePythonAPIReads(t *testing.T) {
 			t.Errorf("the go-api container carries %s %d times, want once", key, found)
 		}
 	}
-	configMap, err := helmCommand("template", "go-api-env", ".", "--show-only", "templates/configmap.yaml").CombinedOutput()
+	configMap, err := helmOutput("template", "go-api-env", ".", "--show-only", "templates/configmap.yaml")
 	if err != nil {
 		t.Fatalf("configmap render failed: %v\n%s", err, configMap)
 	}

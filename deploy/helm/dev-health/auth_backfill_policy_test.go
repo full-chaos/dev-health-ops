@@ -52,6 +52,8 @@ func jobPodLabels(job map[string]any, instance string) map[string]string {
 
 // (a) The Job has its own policy whenever it renders, with the release-wide policy off.
 func TestAuthBackfillJobHasItsOwnPolicyWithTheReleasePolicyOff(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, backfillOn...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.300s", err, out)
@@ -74,6 +76,8 @@ func TestAuthBackfillJobHasItsOwnPolicyWithTheReleasePolicyOff(t *testing.T) {
 
 // With the Job off there is no Job policy either.
 func TestAuthBackfillPolicyFollowsTheJob(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.300s", err, out)
@@ -95,6 +99,8 @@ func releaseWidePolicies(t *testing.T) (labels map[string]string, policies []net
 
 // (b) With networkPolicy.enabled no policy but the Job's own selects the Job pod.
 func TestAuthBackfillJobIsOutsideTheReleaseWidePolicy(t *testing.T) {
+	t.Parallel()
+
 	labels, policies := releaseWidePolicies(t)
 	own := 0
 	for _, policy := range policies {
@@ -114,6 +120,8 @@ func TestAuthBackfillJobIsOutsideTheReleaseWidePolicy(t *testing.T) {
 
 // (c) The Job's rules are exactly the auth-migrate rules: no ingress, DNS, the auth database.
 func TestAuthBackfillPolicyEqualsTheAuthMigratePolicyRules(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, backfillOn...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.300s", err, out)
@@ -139,6 +147,8 @@ func TestAuthBackfillPolicyEqualsTheAuthMigratePolicyRules(t *testing.T) {
 
 // (d) Dropping auth-backfill from the exclusion list would make (b) fail.
 func TestAuthBackfillExclusionIsWhatKeepsItOutOfTheReleasePolicy(t *testing.T) {
+	t.Parallel()
+
 	labels, policies := releaseWidePolicies(t)
 	var found bool
 	for _, policy := range policies {
@@ -178,7 +188,7 @@ func hasString(list []string, want string) bool {
 
 func renderRelease(t *testing.T, release string, args ...string) []map[string]any {
 	t.Helper()
-	out, err := helmCommand(append([]string{"template", release, "."}, args...)...).CombinedOutput()
+	out, err := helmOutput(append([]string{"template", release, "."}, args...)...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.300s", err, out)
 	}
@@ -197,6 +207,8 @@ func renderRelease(t *testing.T, release string, args ...string) []map[string]an
 }
 
 func TestAuthBackfillNamesFitTheLimitForALongRelease(t *testing.T) {
+	t.Parallel()
+
 	for _, release := range []string{strings.Repeat("r", 53), strings.Repeat("r", 39), strings.Repeat("r", 25) + "-" + strings.Repeat("q", 27)} {
 		docs := renderRelease(t, release, backfillOn...)
 		jobs := backfillJobs2(docs)
@@ -234,6 +246,8 @@ func backfillPolicies(docs []map[string]any) []map[string]any {
 
 // The Job name follows the whole rendered pod template: each input class changes it.
 func TestAuthBackfillJobNameFollowsEveryPodTemplateInput(t *testing.T) {
+	t.Parallel()
+
 	_, first := renderBackfill(t, backfillOn)
 	cases := [][]string{
 		{"--set", "authService.database.secretName=auth-db-next"},

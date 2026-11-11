@@ -12,12 +12,14 @@ import (
 // config.d; no volume is ever mounted over config.d (it holds the image's docker_related_config.xml) and no
 // init container exists for it. The started image is TestClickHouseConfigdStartsAndAnswersOnThePodAddress.
 func TestClickHouseConfigdRendersOneSubPathMountPerFile(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	out, err := helmCommand("template", "t", ".", "--show-only", "templates/clickhouse.yaml",
+	out, err := helmOutput("template", "t", ".", "--show-only", "templates/clickhouse.yaml",
 		"--set-string", `clickhouse.configd.b\.xml=<clickhouse/>`,
-		"--set-string", `clickhouse.configd.a\.xml=<clickhouse/>`).CombinedOutput()
+		"--set-string", `clickhouse.configd.a\.xml=<clickhouse/>`)
 	if err != nil {
 		t.Fatalf("helm template: %v: %.500s", err, out)
 	}
@@ -76,11 +78,13 @@ func TestClickHouseConfigdRendersOneSubPathMountPerFile(t *testing.T) {
 // CHAOS-9177: a configd file named like the image's own docker_related_config.xml would replace it
 // (the mount hides the image file): the render refuses, observed failing by naming the file.
 func TestClickHouseConfigdRefusesTheImageFileName(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	out, err := helmCommand("template", "t", ".", "--show-only", "templates/clickhouse.yaml",
-		"--set-string", `clickhouse.configd.docker_related_config\.xml=<clickhouse/>`).CombinedOutput()
+	out, err := helmOutput("template", "t", ".", "--show-only", "templates/clickhouse.yaml",
+		"--set-string", `clickhouse.configd.docker_related_config\.xml=<clickhouse/>`)
 	if err == nil {
 		t.Fatalf("a configd file named docker_related_config.xml rendered")
 	}

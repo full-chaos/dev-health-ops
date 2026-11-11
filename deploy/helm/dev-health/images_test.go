@@ -65,8 +65,7 @@ func collectImages(node interface{}, out *[]string) {
 
 func renderChartDefaults(t *testing.T) []byte {
 	t.Helper()
-	cmd := helmCommand("template", "dev-health-images-test", ".")
-	out, err := cmd.CombinedOutput()
+	out, err := helmOutput("template", "dev-health-images-test", ".")
 	if err != nil {
 		t.Fatalf("helm template failed: %v\n%s", err, out)
 	}
@@ -99,6 +98,8 @@ func renderedImages(t *testing.T, rendered []byte) []string {
 // ever reached by local/dev evaluation, but it still must resolve to a real,
 // pullable image there.
 func TestDefaultRenderUsesOnlyPublishedImageRepositories(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}

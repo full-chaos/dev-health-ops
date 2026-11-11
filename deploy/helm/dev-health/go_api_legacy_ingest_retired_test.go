@@ -12,6 +12,8 @@ import (
 // file or an extraEnv entry that still names one fails the render loudly
 // instead of being ignored.
 func TestRetiredLegacyIngestChartRendersNoSetting(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, goAPIWithAuth()...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
@@ -38,6 +40,8 @@ func goAPIDisabled(sets ...string) []string {
 // A retired setting that would ask for the routes (the flag on, a sunset, an extraEnv entry in any case) fails the
 // render, with go-api on and off.
 func TestRetiredLegacyIngestChartRefusesTheRetiredSettings(t *testing.T) {
+	t.Parallel()
+
 	for name, args := range map[string][]string{
 		"values legacyIngest.enabled=true":   {"--set", "legacyIngest.enabled=true"},
 		"values legacyIngest.enabled string": {"--set-string", "legacyIngest.enabled=yes"},

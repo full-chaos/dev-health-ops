@@ -28,6 +28,8 @@ const ackDigest = "df0950bc72ed8889"
 // The grant-narrowing acknowledgement reaches both auth-migrate Jobs as exactly
 // one flag, and only when the value is set.
 func TestGrantNarrowingAcknowledgementRendersOnBothJobsOnlyWhenSet(t *testing.T) {
+	t.Parallel()
+
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -55,6 +57,8 @@ func TestGrantNarrowingAcknowledgementRendersOnBothJobsOnlyWhenSet(t *testing.T)
 
 // A value that is not a 16-hex digest fails the render and names the setting.
 func TestGrantNarrowingAcknowledgementMustBeADigest(t *testing.T) {
+	t.Parallel()
+
 	for _, bad := range []string{"DF0950BC72ED8889", "df0950bc72ed888", "df0950bc72ed88890", "not-a-digest", "df0950bc72ed8889 --x"} {
 		_, out, err := renderAuth(t, append(append([]string{}, authBase...),
 			"--set", "authService.migrate.acknowledgeGrantNarrowing="+bad)...)
@@ -72,6 +76,8 @@ func TestGrantNarrowingAcknowledgementMustBeADigest(t *testing.T) {
 // ratchet prints on refusal. Phase 4 alone carries no acknowledgement; the phase 3 render with the key set carries it
 // as the one flag on both Jobs and renders no users-owned switch anywhere.
 func TestPhase4RollbackCarriesTheGrantAcknowledgement(t *testing.T) {
+	t.Parallel()
+
 	docs := renderPhase(t, 4)
 	for _, job := range []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"} {
 		for _, arg := range jobArgs(t, authDoc(docs, "Job", job)) {

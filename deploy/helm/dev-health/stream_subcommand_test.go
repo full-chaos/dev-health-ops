@@ -56,7 +56,7 @@ func renderStreamGroup(t *testing.T, image, profile, extra string) (string, erro
 	if err := os.WriteFile(values, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := helmCommand("template", "stream-subcommand-test", ".", "-f", values).CombinedOutput()
+	output, err := helmOutput("template", "stream-subcommand-test", ".", "-f", values)
 	return string(output), err
 }
 

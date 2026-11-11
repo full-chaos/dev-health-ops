@@ -180,6 +180,7 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 	}
 	var sourceURI secrets.Value
 	sourceSet := false
+	var manifest *restorefence.Manifest
 	platformRolesOwned := false
 	if parsed.verb == "apply" {
 		platformRolesOwned, err = rule.OwnedFromLookup(lookup)
@@ -195,6 +196,20 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 		if sourceSet && parsed.manifest == "" {
 			fmt.Fprintf(stderr, "configuration error: %s needs -manifest (a blind margin names no revocation to queue again); unset it\n", envRevocationSource)
 			return 1
+		}
+		// The manifest is read and parsed before the store is opened: one this binary refuses costs no connection.
+		if parsed.manifest != "" {
+			raw, err := os.ReadFile(parsed.manifest)
+			if err != nil {
+				fmt.Fprintln(stderr, "restore-fence error: could not read the manifest file")
+				return 1
+			}
+			parsedManifest, err := restorefence.ParseManifest(raw)
+			if err != nil {
+				fmt.Fprintf(stderr, "restore-fence error: %v\n", err)
+				return 1
+			}
+			manifest = &parsedManifest
 		}
 	}
 
@@ -273,20 +288,6 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 		return 0
 	}
 
-	var manifest *restorefence.Manifest
-	if parsed.manifest != "" {
-		raw, err := os.ReadFile(parsed.manifest)
-		if err != nil {
-			fmt.Fprintln(stderr, "restore-fence error: could not read the manifest file")
-			return 1
-		}
-		parsedManifest, err := restorefence.ParseManifest(raw)
-		if err != nil {
-			fmt.Fprintf(stderr, "restore-fence error: %v\n", err)
-			return 1
-		}
-		manifest = &parsedManifest
-	}
 	opts := restorefence.Options{Apply: parsed.apply, BlindMargin: parsed.blindMargin, PlatformRolesOwned: platformRolesOwned}
 	if sourceSet {
 		source, closeSource, err := openRevocationSource(ctx, sourceURI.Reveal(), stderr)

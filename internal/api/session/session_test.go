@@ -186,8 +186,8 @@ func TestRecordedMeAnswersEqualTheHandlerOnceThePermissionsMemberIsDropped(t *te
 		checked++
 	}
 	t.Logf("checked %d recorded /auth/me answers", checked)
-	if checked < 3 {
-		t.Fatalf("only %d recorded /auth/me answers checked", checked)
+	if checked != 4 {
+		t.Fatalf("%d recorded /auth/me answers checked, the golden holds 4", checked)
 	}
 }
 
@@ -218,7 +218,7 @@ func TestTheDropOfThePermissionsMemberIsOnTheGoldenSideOnly(t *testing.T) {
 		}
 		checked++
 	}
-	if checked < 3 {
-		t.Fatalf("only %d recorded /auth/me answers checked", checked)
+	if checked != 4 {
+		t.Fatalf("%d recorded /auth/me answers checked, the golden holds 4", checked)
 	}
 }

@@ -81,7 +81,7 @@ func (a *approverFixture) mount(t *testing.T, opts ...func(*AuthorizeDeps)) {
 	}
 	deps := AuthorizeDeps{
 		Callers: a.callers(a.approver, a.other), References: references, State: a.state, Evaluator: authorization.NewEvaluator(), Audit: a.audit.write,
-		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch),
+		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch, PatternAuthorizeRepositories),
 	}
 	for _, opt := range opts {
 		opt(&deps)
@@ -97,7 +97,7 @@ func (a *approverFixture) mount(t *testing.T, opts ...func(*AuthorizeDeps)) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.routes = map[string]http.Handler{PatternAuthorize: server.Handler(), PatternAuthorizeBatch: server.Handler()}
+	a.routes = map[string]http.Handler{PatternAuthorize: server.Handler(), PatternAuthorizeBatch: server.Handler(), PatternAuthorizeRepositories: server.Handler()}
 }
 
 func (a *approverFixture) claims() map[string]any {
@@ -275,6 +275,11 @@ func TestWebApprover_failsClosed(t *testing.T) {
 			return a.reference(c)
 		}},
 		{name: "a claim the kind lacks", ref: claim("repository_scopes", []string{"*"})},
+		{name: "no org_id", ref: dropClaim("org_id")},
+		{name: "empty org_id", ref: claim("org_id", "")},
+		{name: "no req", ref: dropClaim("req")},
+		{name: "req not 43 characters", ref: claim("req", strings.Repeat("A", 42))},
+		{name: "no jti", ref: dropClaim("jti")},
 		{name: "question organization differs", org: func(*approverFixture) string { return uuid.NewString() }},
 		{name: "another caller presents it", caller: func(a *approverFixture) string { return a.other }},
 		{name: "C-1 v: a typ JWT reference from the approver caller", ref: func(a *approverFixture) string {
@@ -456,5 +461,51 @@ func TestWebApprover_resolverRefusesAMissingOrMalformedSid(t *testing.T) {
 		if _, why, err := approver.resolve(ref); why != "session" || err != nil {
 			t.Fatalf("why %q err %v; want session", why, err)
 		}
+	}
+}
+
+// O-5: the repository listing route refuses the kind for the whole call.
+func TestWebApprover_refusedOnTheRepositoriesRoute(t *testing.T) {
+	a := newApproverFixture(t)
+	q := a.question("acr.context.read", "repository", "*", a.org)
+	q["principal_reference"] = a.reference(a.claims())
+
+	rec := a.post(PatternAuthorizeRepositories, a.workloadToken(nil), mustJSON(t, q))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf(":repositories status %d; want 401", rec.Code)
+	}
+}
+
+// O-5 (N-3): an unreadable JWKS file fails only this kind; a user token from
+// another caller is decided as before.
+func TestWebApprover_unreadableJWKSLeavesOtherKindsAlone(t *testing.T) {
+	a := newApproverFixture(t)
+	if err := os.Remove(a.jwksFile); err != nil {
+		t.Fatal(err)
+	}
+
+	status, d := a.ask(a.other, a.issueQuestion(a.authorizeHandlerFixture.reference, a.org))
+
+	if status != http.StatusOK || !d.Allowed {
+		t.Fatalf("user token from another caller: status %d %+v; want the normal 200 allow", status, d)
+	}
+}
+
+// O-5: a reference past the 1000-character bound is the request's 400, as on
+// main for any principal_reference.
+func TestWebApprover_overTheBoundIs400(t *testing.T) {
+	a := newApproverFixture(t)
+	c := a.claims()
+	c["jti"] = strings.Repeat("j", 900)
+	ref := a.reference(c)
+	if len(ref) <= 1000 {
+		t.Fatalf("reference is %d characters; the cell needs more than 1000", len(ref))
+	}
+
+	rec := a.post(PatternAuthorize, a.workloadToken(nil), mustJSON(t, a.issueQuestion(ref, a.org)))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d; want 400", rec.Code)
 	}
 }

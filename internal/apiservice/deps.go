@@ -203,6 +203,9 @@ type Deps struct {
 	// ACRRevoker is the credential revoke route's acr client (EnvACRRevokeURL and its three siblings); nil is not
 	// configured, and the route answers 503.
 	ACRRevoker acrcredentials.Revoker
+	// ACROrgRevoker is the organization revoke of the same client for the admin org disable and delete: nil when
+	// ACR_REVOKE_* is unset (they proceed); a set but unusable configuration is a revoker that always fails.
+	ACROrgRevoker admin.OrgCredentialRevoker
 	// SessionIssuer issues the session and sso routes' token pairs at
 	// auth-service when it owns sessions (AUTH_PROXY_SESSIONS); nil mints
 	// them in go-api.

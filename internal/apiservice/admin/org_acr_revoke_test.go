@@ -197,6 +197,7 @@ type deleteDB struct {
 	mu      sync.Mutex
 	log     *orderLog
 	rows    int64
+	failSet bool
 	sqls    []string
 	updated bool
 }
@@ -219,6 +220,9 @@ func (d *deleteDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.Command
 	flat := d.record(sql)
 	if strings.HasPrefix(flat, "UPDATE organizations SET is_active = false") {
 		d.log.add("db:disable")
+		if d.failSet {
+			return pgconn.CommandTag{}, errTouched
+		}
 		d.updated = d.rows > 0
 		if d.rows > 0 {
 			return pgconn.NewCommandTag("UPDATE 1"), nil
@@ -421,6 +425,62 @@ func TestPatchWithTheSwitchOnRevokesOnlyAStoredDisable(t *testing.T) {
 		}
 		if len(revoker.calls) != 0 {
 			t.Fatalf("%s: acr calls %+v, want none: no disable was stored", name, revoker.calls)
+		}
+	}
+}
+
+// F2: when the delete's own disable UPDATE fails, nothing changed: the 503 says the organization was not disabled,
+// acr is not called and nothing else runs.
+func TestOrgDeleteWhoseDisableFailsSaysTheOrganizationIsUnchanged(t *testing.T) {
+	log := &orderLog{}
+	db := &deleteDB{log: log, rows: 1, failSet: true}
+	revoker := &recordingOrgRevoker{log: log}
+	var logs bytes.Buffer
+	recorder := deleteOrg(deleteHandlers(db, revoker, &logs), "", deleteActor)
+	want := `{"detail":"The organization could not be disabled; it is unchanged and its acr credentials were not revoked; run the delete again. Nothing was deleted."}`
+	if recorder.Code != http.StatusServiceUnavailable || strings.TrimSpace(recorder.Body.String()) != want {
+		t.Fatalf("%d %s, want 503 %s", recorder.Code, recorder.Body.String(), want)
+	}
+	if len(revoker.calls) != 0 || strings.Join(log.steps, ",") != "db:disable" {
+		t.Fatalf("calls %d, steps %v; want no acr call and nothing after the failed disable", len(revoker.calls), log.steps)
+	}
+}
+
+// F3: a set but unusable ACR_REVOKE_* client is a revoke failure, never the no_client path: the disable answers 503
+// (stored), the delete purges nothing, the log names decision client_config_invalid and the no_client count is not
+// moved.
+func TestAnUnusableACRClientConfigIsARevokeFailure(t *testing.T) {
+	unusable := UnusableOrgCredentialRevoker("ACR_REVOKE_URL")
+	before := acrSkipCounts(t)
+
+	log := &orderLog{}
+	db := &lockDB{log: log, active: true}
+	var patchLogs bytes.Buffer
+	code, body := patchOrg(disableHandlers(db, unusable, &patchLogs), `{"is_active": false}`)
+	if code != http.StatusServiceUnavailable || strings.TrimSpace(body) != wantDisableACRRevokeBody || db.active {
+		t.Fatalf("PATCH %d %s (stored active %v), want 503 %s with the disable stored", code, body, db.active, wantDisableACRRevokeBody)
+	}
+
+	deleteLog := &orderLog{}
+	ddb := &deleteDB{log: deleteLog, rows: 1}
+	var deleteLogs bytes.Buffer
+	h := deleteHandlers(ddb, unusable, &deleteLogs)
+	recorder := deleteOrg(h, "", deleteActor)
+	if recorder.Code != http.StatusServiceUnavailable || strings.TrimSpace(recorder.Body.String()) != wantDeleteACRRevokeBody {
+		t.Fatalf("DELETE %d %s, want 503 %s", recorder.Code, recorder.Body.String(), wantDeleteACRRevokeBody)
+	}
+	if strings.Join(deleteLog.steps, ",") != "db:disable" {
+		t.Fatalf("delete steps %v, want only the disable", deleteLog.steps)
+	}
+	for name, logs := range map[string]*bytes.Buffer{"disable": &patchLogs, "delete": &deleteLogs} {
+		if !strings.Contains(logs.String(), `"decision":"client_config_invalid"`) || strings.Contains(logs.String(), `"reason":"no_client"`) {
+			t.Fatalf("%s log %q, want decision client_config_invalid and no no_client line", name, logs.String())
+		}
+	}
+	after := acrSkipCounts(t)
+	for key, n := range after {
+		if n != before[key] {
+			t.Fatalf("counter %s moved by %d, want 0: an unusable client is not the no_client path", key, n-before[key])
 		}
 	}
 }

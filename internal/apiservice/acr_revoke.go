@@ -25,23 +25,21 @@ const (
 // route answers 503. A partial or unusable set never stops start-up: it logs which variable is wrong (never a value)
 // and the route answers 503, the same as not configured.
 func newACRRevoker(lookup func(string) (string, bool), logger *slog.Logger) acrcredentials.Revoker {
+	revoker, _ := acrRevokers(lookup, logger)
+	return revoker
+}
+
+// acrRevokers builds the credential revoke route's client and the admin organization revoke from the same four
+// variables: both nil when unset.
+func acrRevokers(lookup func(string) (string, bool), logger *slog.Logger) (acrcredentials.Revoker, admin.OrgCredentialRevoker) {
 	client, configured, refused := acrrevoke.FromEnv(lookup)
 	switch {
 	case !configured:
 		logger.Info("api: acr credential revoke not configured; the revoke route answers 503")
-		return nil
+		return nil, nil
 	case refused != "":
 		logger.Error("api: acr credential revoke configuration refused; the revoke route answers 503", slog.String("variable", refused))
-		return nil
+		return nil, nil
 	}
-	return client
-}
-
-// orgCredentialRevoker is the organization revoke of the same client: nil when the revoke is not configured (a nil
-// interface fails the assertion, so a typed nil never reaches the admin routes).
-func orgCredentialRevoker(revoker acrcredentials.Revoker) admin.OrgCredentialRevoker {
-	if org, ok := revoker.(admin.OrgCredentialRevoker); ok {
-		return org
-	}
-	return nil
+	return client, client
 }

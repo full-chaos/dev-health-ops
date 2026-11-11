@@ -34,6 +34,8 @@ var (
 	// ErrOrganizationIncomplete is a revoke that reached MaxOrganizationCalls with credentials left; a repeat
 	// continues it.
 	ErrOrganizationIncomplete = errors.New("acrrevoke: organization revoke incomplete, more remains")
+	// ErrClientConfigInvalid is a revoke that could not be sent because ACR_REVOKE_* is set but unusable.
+	ErrClientConfigInvalid = errors.New("acrrevoke: the acr revoke client configuration is set but unusable")
 )
 
 // OrganizationRevocation sums the answers of one RevokeOrganization.

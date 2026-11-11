@@ -22,6 +22,19 @@ type OrgCredentialRevoker interface {
 	RevokeOrganization(ctx context.Context, orgID, actorID, reason string) (acrrevoke.OrganizationRevocation, error)
 }
 
+// UnusableOrgCredentialRevoker is the revoker of a set but unusable ACR_REVOKE_* configuration: every call fails with
+// acrrevoke.ErrClientConfigInvalid, so the disable answers 503 and the delete purges nothing. refused names the first
+// refused variable (never a value).
+func UnusableOrgCredentialRevoker(refused string) OrgCredentialRevoker {
+	return unusableOrgRevoker{refused: refused}
+}
+
+type unusableOrgRevoker struct{ refused string }
+
+func (u unusableOrgRevoker) RevokeOrganization(context.Context, string, string, string) (acrrevoke.OrganizationRevocation, error) {
+	return acrrevoke.OrganizationRevocation{}, fmt.Errorf("%w: %s", acrrevoke.ErrClientConfigInvalid, u.refused)
+}
+
 // The operator-facing answers when acr did not revoke an organization's credentials. The disable is stored and the
 // delete purged nothing; each repeat is safe (acr revokes what is left).
 const (

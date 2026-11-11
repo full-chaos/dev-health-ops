@@ -3,6 +3,8 @@ package apiservice
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -213,5 +215,25 @@ func TestTheClusterHTTPOptInNeedsBothClauses(t *testing.T) {
 				t.Fatalf("logs %q do not name %s", logs, tc.variable)
 			}
 		})
+	}
+}
+
+// F3: a set but unusable ACR_REVOKE_* configuration gives the admin org disable and delete a revoker that always
+// fails, never the nil of "not configured"; all unset stays nil for both.
+func TestAnUnusableACRRevokeConfigGivesTheAdminRoutesAFailingRevoker(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	partial := map[string]string{EnvACRRevokeURL: "https://acr.internal.test"}
+	route, org := acrRevokers(func(name string) (string, bool) { value, ok := partial[name]; return value, ok }, logger)
+	if route != nil {
+		t.Fatalf("route revoker = %v, want nil (the revoke route answers 503)", route)
+	}
+	if org == nil {
+		t.Fatal("org revoker = nil: an unusable config would take the no_client path")
+	}
+	if _, err := org.RevokeOrganization(context.Background(), "0b6f3a52-8c1e-4d7a-9a4e-3f2d1c0b9e87", "actor", acrrevoke.ReasonOrganizationDisabled); !errors.Is(err, acrrevoke.ErrClientConfigInvalid) {
+		t.Fatalf("org revoke = %v, want ErrClientConfigInvalid", err)
+	}
+	if route, org := acrRevokers(func(string) (string, bool) { return "", false }, logger); route != nil || org != nil {
+		t.Fatalf("unset = %v, %v; want nil, nil", route, org)
 	}
 }

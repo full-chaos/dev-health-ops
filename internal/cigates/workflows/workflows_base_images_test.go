@@ -148,10 +148,10 @@ func TestBaseImagesPlantedDefects(t *testing.T) {
 		muts []mutation
 		want []string
 	}{
-		{"a tsv ref loses its digest pin", []mutation{{"ci/base_images.tsv", "library/golang:1.27.3-alpine@sha256:", "library/golang:1.27.3-alpine@sha1:"}}, []string{"ci/builder_images.sh ci/base_images.tsv failed", "@sha256"}},
-		{"a tsv ref has no digest at all", []mutation{{"ci/base_images.tsv", "library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd", "library/golang:1.27.3-alpine"}}, []string{"ci/builder_images.sh ci/base_images.tsv failed"}},
+		{"a tsv ref loses its digest pin", []mutation{{"ci/base_images.tsv", "library/golang:1.27.4-alpine@sha256:", "library/golang:1.27.4-alpine@sha1:"}}, []string{"ci/builder_images.sh ci/base_images.tsv failed", "@sha256"}},
+		{"a tsv ref has no digest at all", []mutation{{"ci/base_images.tsv", "library/golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf", "library/golang:1.27.4-alpine"}}, []string{"ci/builder_images.sh ci/base_images.tsv failed"}},
 		{"a third image is added to the tsv", []mutation{{"ci/base_images.tsv", "tools-runtime\t", "extra\tlibrary/alpine:3@sha256:" + strings.Repeat("a", 64) + "\ntools-runtime\t"}}, []string{"must name exactly go-build and tools-runtime"}},
-		{"a Dockerfile digest drifts from the tsv", []mutation{{"docker/smtpsink.Dockerfile", "@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd", "@sha256:" + strings.Repeat("b", 64)}}, []string{"docker/smtpsink.Dockerfile", "GO_BUILD_IMAGE", "digest and tag must match"}},
+		{"a Dockerfile digest drifts from the tsv", []mutation{{"docker/smtpsink.Dockerfile", "@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf", "@sha256:" + strings.Repeat("b", 64)}}, []string{"docker/smtpsink.Dockerfile", "GO_BUILD_IMAGE", "digest and tag must match"}},
 		{"the runtime pin drifts", []mutation{{"docker/go-api-tools.Dockerfile", "@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171", "@sha256:" + strings.Repeat("c", 64)}}, []string{"TOOLS_RUNTIME_IMAGE"}},
 		{"a Dockerfile pin names another registry", []mutation{{"docker/providerstub.Dockerfile", "ARG GO_BUILD_IMAGE=\"mirror.gcr.io/", "ARG GO_BUILD_IMAGE=\"docker.io/"}}, []string{"names a registry other than"}},
 		{"the precheck resolve step stops reading the tsv", []mutation{{mirrorWf, `bash ci/builder_images.sh "${OWNER}" ci/base_images.tsv`, `bash ci/builder_images.sh "${OWNER}"`}}, []string{"job precheck", "does not read ci/base_images.tsv"}},

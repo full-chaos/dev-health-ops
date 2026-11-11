@@ -270,12 +270,11 @@ spec:
             */}}
             - name: GO_API_REGISTRY_POSTGRES_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: GO_API_REGISTRY_POSTGRES_URI}}
-            - name: GO_API_ENVELOPE_JWKS_PATH
-              value: {{ .Values.queryApi.envelope.jwksPath | quote }}
-            - name: GO_API_ENVELOPE_ISSUER
-              value: {{ .Values.queryApi.envelope.issuer | quote }}
-            - name: GO_API_ENVELOPE_AUDIENCE
-              value: {{ .Values.queryApi.envelope.audience | quote }}
+            {{- /*
+            No GO_API_ENVELOPE_* env and no envelope JWKS volume (CHAOS-13539): the effective-principal envelope is
+            retired, and query-api with no envelope key mounts every route, refuses the envelope class and has no
+            query_jwks readiness dependency (internal/queryapi/server/envelope_key.go).
+            */}}
             {{- /*
             /graphql answers a browser with the Python api's CORS middleware and
             parameters; only the allowed origins are configuration, and they must be
@@ -300,14 +299,10 @@ spec:
             {{- with .Values.queryApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- with .Values.queryApi.extraVolumeMounts }}
           volumeMounts:
-            - name: envelope-jwks
-              mountPath: {{ .Values.queryApi.envelope.jwksPath }}
-              subPath: {{ base .Values.queryApi.envelope.jwksPath }}
-              readOnly: true
-            {{- with .Values.queryApi.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
-            {{- end }}
+          {{- end }}
           livenessProbe:
             {{- toYaml (merge (omit .Values.queryApi.livenessProbe "httpGet") (dict "httpGet" (dict "path" "/healthz" "port" "operator"))) | nindent 12 }}
           readinessProbe:
@@ -315,23 +310,10 @@ spec:
           resources:
             {{- toYaml .Values.queryApi.resources | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+      {{- with .Values.queryApi.extraVolumes }}
       volumes:
-        {{- /*
-        The envelope keypair is minted out of band (scripts/mint-envelope-keys.sh)
-        and only its public half belongs in the cluster, so this chart references
-        the Secret and never creates it. It must exist before this workload is
-        enabled: a missing Secret leaves the Pod in ContainerCreating rather than
-        failing the render, which is the one failure mode a template cannot
-        catch for a resource it does not own.
-        */}}
-        - name: envelope-jwks
-          secret:
-            secretName: {{ include "dev-health.queryApiJwksSecretName" . }}
-            items:
-              - {key: {{ base .Values.queryApi.envelope.jwksPath }}, path: {{ base .Values.queryApi.envelope.jwksPath }}}
-        {{- with .Values.queryApi.extraVolumes }}
         {{- toYaml . | nindent 8 }}
-        {{- end }}
+      {{- end }}
       {{- with .Values.queryApi.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

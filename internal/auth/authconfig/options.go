@@ -310,7 +310,7 @@ var optionRegistry = []Option{
 	},
 	{
 		Env: EnvInviteTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
-		Usage: "signing key of new invite tokens (go-api's LINK_TOKEN_SECRET, else its JWT_SECRET_KEY chain); " +
+		Usage: "signing key of new invite tokens (go-api's LINK_TOKEN_SECRET); " +
 			EnvInviteTokenSecret + "_FILE reads it from a mounted file instead. Required while " + EnvMembershipRoutes + " is true",
 	},
 	{

@@ -56,7 +56,6 @@ var DynamicAllowlist = []Entry{
 	{File: "internal/auth/restorefence/specs.go", Func: "section.applySQL", Table: "public.external_ingest_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/restorefence/specs.go", Func: "section.applySQL", Table: "public.github_app_installations", Verb: "UPDATE"},
 	{File: "internal/auth/restorefence/specs.go", Func: "section.applySQL", Table: "public.integration_credentials", Verb: "UPDATE"},
-	{File: "internal/auth/restorefence/specs.go", Func: "section.applySQL", Table: "public.internal_service_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/restorefence/specs.go", Func: "section.applySQL", Table: "public.memberships", Verb: "DELETE"},
 	{File: "internal/auth/restorefence/specs.go", Func: "section.applySQL", Table: "public.memberships", Verb: "UPDATE"},
 	{File: "internal/auth/restorefence/specs.go", Func: "section.applySQL", Table: "public.org_invites", Verb: "UPDATE"},

@@ -221,10 +221,10 @@ func TestAnAllowlistEntryWithAnEditedRangeIsNotHeldAndItsExpiryOnlyShortens(t *t
 // (written by an earlier binary, without the newer sections) is refused with a clear message at ParseManifest and at
 // Apply, before any database work.
 func TestAVersionOneManifestIsRefusedWithAClearMessage(t *testing.T) {
-	if ManifestVersion != 6 {
-		t.Fatalf("ManifestVersion = %d, want 6", ManifestVersion)
+	if ManifestVersion != 7 {
+		t.Fatalf("ManifestVersion = %d, want 7", ManifestVersion)
 	}
-	for _, v := range []int{1, 2, 3, 4, 5} {
+	for _, v := range []int{1, 2, 3, 4, 5, 6} {
 		m := sampleManifest(t)
 		m.Version = v
 		if err := m.Seal(); err != nil {
@@ -251,12 +251,27 @@ var pinnedSectionSet = map[int]string{
 	4: "16d5494b3fef7ff7ca46007e9cf10b3375d14f1f9b9cf3eac9b21cdd776dd324",
 	5: "69bd95946bcfce41ff5731639769290d7e198a94cf073bacdc9b31815a0b22b7",
 	6: "f01d3f6221516c009d54a3efa0063c12c692a9ec25049e4d5ba772ae0c3d62f1",
+	7: "6fce1297645c707282f42308c539abea60d821007e2aeb6135dcbfe88d6d8d68",
 }
 
+// retiredSections are the sections a later manifest version removed, byte-equal to their last declaration, so the
+// pins of the versions that held them still check every other section. Version 7 removed the retired
+// service-credential table.
+var retiredSections = []section{
+	{name: "public.internal_service_credentials", legacy: true, table: "internal_service_credentials", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colTS("revoked_at")}, revoked: "s.revoked_at IS NOT NULL", active: "t.revoked_at IS NULL"},
+}
+
+// sectionSetDigest is the digest of the sections of version 6 and before: the current set plus retiredSections.
 func sectionSetDigest(t *testing.T, skip ...string) string {
 	t.Helper()
+	return digestOf(t, append(append([]section(nil), sections...), retiredSections...), skip...)
+}
+
+func digestOf(t *testing.T, set []section, skip ...string) string {
+	t.Helper()
 	var lines []string
-	for _, s := range sections {
+	for _, s := range set {
 		if slices.Contains(skip, s.name) {
 			continue
 		}
@@ -267,12 +282,24 @@ func sectionSetDigest(t *testing.T, skip ...string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// Version 7 only removed the retired service-credential section: every other section exports what version 6 held.
+func TestEveryOtherSectionExportsWhatVersionSixHeld(t *testing.T) {
+	if got := sectionSetDigest(t); got != pinnedSectionSet[6] {
+		t.Errorf("a section other than the retired ones changed its export (digest %s, version 6 pinned %s)", got, pinnedSectionSet[6])
+	}
+	for _, r := range retiredSections {
+		if _, ok := sectionByName(r.name); ok {
+			t.Errorf("retired section %s is still declared", r.name)
+		}
+	}
+}
+
 func TestTheSectionSetIsPinnedToTheManifestVersion(t *testing.T) {
 	want, ok := pinnedSectionSet[ManifestVersion]
 	if !ok {
 		t.Fatalf("no pinned section set for manifest version %d", ManifestVersion)
 	}
-	if got := sectionSetDigest(t); got != want {
+	if got := digestOf(t, sections); got != want {
 		t.Errorf("the manifest sections changed (digest %s, pinned %s for version %d): bump ManifestVersion and pin the new set", got, want, ManifestVersion)
 	}
 }

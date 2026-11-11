@@ -124,6 +124,8 @@ nav:
           - admin/security-and-audit/index.md
           - Credentials: admin/security-and-audit/credentials.md
           - Service accounts: admin/security-and-audit/service-accounts.md
+          - External Push credentials: admin/security-and-audit/external-push-credentials.md
+          - Workload administration: admin/security-and-audit/workload-administration.md
           - Privacy and telemetry: admin/security-and-audit/privacy.md
       - Ask Dev:
           - admin/ask-dev/index.md

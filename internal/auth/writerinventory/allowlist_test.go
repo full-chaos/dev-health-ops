@@ -44,6 +44,9 @@ var Allowlist = []Entry{
 	{File: "internal/api/sso/provision.go", Func: "handlers.membershipOrJoin", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/invites.go", Func: "handlers.createInvite", Table: "public.org_invites", Verb: "INSERT"},
+	// CHAOS-13531 acp ruling Q2: a real org delete sets is_active false before the acr revoke, so acr refuses the
+	// organization's credentials at once.
+	{File: "internal/apiservice/admin/org_acr_revoke.go", Func: "handlers.revokeACRBeforeDelete", Table: "public.organizations", Verb: "UPDATE"},
 	// D6528: the reconcile pass writes is_active to auth's state.
 	{File: "internal/apiservice/admin/orgstate_reconcile.go", Func: "OrgStateReconciler.fix", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertMembershipTx", Table: "public.memberships", Verb: "INSERT"},

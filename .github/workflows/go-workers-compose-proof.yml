@@ -26,15 +26,14 @@ concurrency:
   # The fleet-wide shape (go.yml, venue-oracles.yml): a pull request by number, a push to main by commit sha (never
   # cancelled), any other ref by name.
   # A ready_for_review run gets its own group keyed by the head sha and is never cancelled: a synchronize run of the
-  # same sha (a push right before the flip) cannot cancel it, and its ready-reuse job waits for that run instead.
+  # same sha (a push right before the flip) cannot cancel it.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
   cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 jobs:
   go-workers-compose-proof:
     name: go-workers-compose-proof
-    needs: ready-reuse
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && !contains(fromJSON(needs.ready-reuse.outputs.passed), 'go-workers-compose-proof')
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -89,49 +88,3 @@ jobs:
       - name: Not relevant
         if: steps.relevance.outputs.relevant != 'true'
         run: echo "the change touches nothing this proof proves; it did not run"
-
-  # Ready flip: names the legs that already passed on this exact head sha (ci/ready_reuse.sh, read from the BASE commit
-  # so a change cannot rewrite its own judge); each leg below skips when its unit is in `passed`, and its gate prints
-  # REUSED for it. Every other event, and a base without the script, passes [] and every leg runs.
-  ready-reuse:
-    name: ready-reuse
-    runs-on: ubuntu-latest
-    # The judge waits up to 20 minutes for a run of the same sha still in flight.
-    timeout-minutes: 24
-    permissions:
-      actions: read
-      contents: read
-    outputs:
-      passed: ${{ steps.reuse.outputs.passed || '[]' }}
-      reused: ${{ steps.reuse.outputs.reused }}
-    steps:
-      - name: Check out the reuse judge from the base commit
-        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          sparse-checkout: ci/ready_reuse.sh
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - name: Name the legs that already passed on this head sha
-        id: reuse
-        if: github.event_name == 'pull_request' && github.event.action == 'ready_for_review'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MERGE_SHA: ${{ github.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          READY_REUSE_UNITS: |
-            go-workers-compose-proof exact 1 - go-workers-compose-proof
-        run: |
-          if [ ! -f ci/ready_reuse.sh ]; then
-            echo "READY REUSE OFF: the base commit has no ci/ready_reuse.sh; every leg runs"
-            echo 'passed=[]' >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          bash ci/ready_reuse.sh

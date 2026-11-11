@@ -218,6 +218,7 @@ internal/cigates/frozengoldens	reads.go	unexpressed	-	-
 internal/cigates/frozengoldens	reads_guard_test.go	internal/cigates/frozengoldens	dir	*
 internal/cigates/integrationshards	integration_sharding_test.go	unexpressed	-	-
 internal/cigates/integrationshards	support_test.go	unexpressed	-	-
+internal/cigates/livee2e	smtpsink_test.go	unexpressed	-	-
 internal/cigates/membershipreads	membershipreads.go	unexpressed	-	*.go
 internal/cigates/nopython	tests_python_test.go	ci/requirements-*.txt	dir	*
 internal/cigates/outboundtransport	outboundtransport_test.go	.	tree	*.go
@@ -267,6 +268,11 @@ internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed	-	*.go
 internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed	-	-
 internal/cigates/workflows	auth_proxy_local_login_compose_test.go	ci	dir	*
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed	-	-
+internal/cigates/workflows	live_e2e_auth_stack_test.go	*.md	dir	*
+internal/cigates/workflows	live_e2e_auth_stack_test.go	.github/docs-legacy	tree	*
+internal/cigates/workflows	live_e2e_auth_stack_test.go	.github/workflows/*.yml	dir	*
+internal/cigates/workflows	live_e2e_auth_stack_test.go	ci/*.sh	dir	*
+internal/cigates/workflows	live_e2e_auth_stack_test.go	docs	tree	*
 internal/cigates/workflows	live_e2e_auth_stack_test.go	unexpressed	-	-
 internal/cigates/workflows	providerstub_not_release_test.go	.github/workflows	dir	*
 internal/cigates/workflows	race_json_artifact_test.go	unexpressed	-	-

@@ -267,6 +267,13 @@ func TestABlankPresentACRRevokeSetIsUnusableNeverUnset(t *testing.T) {
 	if route, org := acrRevokers(func(string) (string, bool) { return "", false }, logger); route != nil || org != nil {
 		t.Fatalf("all unset: %v %v, want nil nil", route, org)
 	}
+	// The cluster-http opt-in alone is present too: an unusable set, as before.
+	for _, allow := range []string{"false", "true"} {
+		only := map[string]string{EnvACRRevokeAllowClusterHTTP: allow}
+		if route, org := acrRevokers(func(name string) (string, bool) { v, ok := only[name]; return v, ok }, logger); route != nil || org == nil {
+			t.Errorf("only the opt-in %q: route %v org %v, want nil and a failing revoker", allow, route, org)
+		}
+	}
 	usable := map[string]string{EnvACRRevokeURL: "https://acr.internal.test", EnvACRRevokeTokenURL: "https://acr.internal.test/api/v1/oauth/token", EnvACRRevokeSubjectFile: "/var/run/dev-health/acr-revoke/token"}
 	route, org := acrRevokers(func(name string) (string, bool) { v, ok := usable[name]; return v, ok }, logger)
 	if _, isClient := org.(*acrrevoke.Client); route == nil || !isClient {

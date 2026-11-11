@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 )
@@ -101,8 +100,7 @@ func goAPIRefreshRevoked(t *testing.T, ctx context.Context, st stack, hash strin
 
 // The revoke-all writes kept under the flag: with the api role holding the
 // AUTH_PROXY_SESSIONS posture (no INSERT, UPDATE only of revoked_at), a
-// password change and a password reset still revoke the user's go-api
-// refresh tokens.
+// password change still revokes the user's go-api refresh tokens.
 func TestRevokeAllWritesKeptUnderTheSessionsPosture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -122,24 +120,11 @@ func TestRevokeAllWritesKeptUnderTheSessionsPosture(t *testing.T) {
 		t.Fatal("a password change left the user's go-api refresh token live")
 	}
 
-	reset := seedGoAPIRefresh(t, ctx, st, changeBob)
-	token, tokenHash := signedtoken.Build(uuid.New(), testLinkSecret)
-	if _, err := st.pool.Exec(ctx, `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
-		VALUES (gen_random_uuid(), $1::uuid, $2, now() + interval '1 hour', now())`, changeBob, tokenHash); err != nil {
-		t.Fatalf("seed reset token: %v", err)
-	}
-	if status, body := changeRequest(t, ctx, st, http.MethodPost, "/api/v1/auth/reset-password", "",
-		`{"token": "`+token+`", "new_password": "`+newPassword+`"}`); status != http.StatusOK {
-		t.Fatalf("reset-password under the sessions posture: %d %s", status, body)
-	}
-	if !goAPIRefreshRevoked(t, ctx, st, reset) {
-		t.Fatal("a password reset left the user's go-api refresh token live")
-	}
 	var inserted int
-	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM refresh_tokens WHERE user_id IN ($1::uuid, $2::uuid)`, changeAlice, changeBob).Scan(&inserted); err != nil {
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM refresh_tokens WHERE user_id = $1::uuid`, changeAlice).Scan(&inserted); err != nil {
 		t.Fatal(err)
 	}
-	if inserted != 2 {
-		t.Fatalf("%d refresh_tokens rows for the two users, want the 2 seeded (go-api inserts none)", inserted)
+	if inserted != 1 {
+		t.Fatalf("%d refresh_tokens rows for the user, want the 1 seeded (go-api inserts none)", inserted)
 	}
 }

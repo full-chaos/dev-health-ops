@@ -307,9 +307,9 @@ bootstrap credential; after T it revokes the credential of one and disables the 
 it then presents both secrets to `workload.Store.ResolveBootstrap`, the verifier the auth service uses at the workload-token
 exchange, as the unprivileged runtime role: the end-of-WAL copy and the fenced PITR copy must refuse both (`revoked`,
 `disabled`); on the unfenced PITR copy the drill records how many are still accepted, which is the gap itself
-(`attempt-T-pitr.json`, `revoked_access_accepted`). The drill also creates one row in each of `public.refresh_tokens`,
-`public.internal_service_credentials` and `public.external_ingest_tokens` before T and revokes it after T: those come back
-unfenced (`legacy_revokes_after_target_that_came_back` is 3, and they count in `b`) and stay revoked after the fenced apply.
+(`attempt-T-pitr.json`, `revoked_access_accepted`). The drill also creates one row in each of `public.refresh_tokens`
+and `public.external_ingest_tokens` before T and revokes it after T: those come back
+unfenced (`legacy_revokes_after_target_that_came_back` is 2, and they count in `b`) and stay revoked after the fenced apply.
 So the unfenced baseline `b` is larger than in the fenced-drill run below. The attempt secrets live in
 `attempt-secrets.json` of the evidence directory (mode 0600, values made for the drill; nothing prints or passes them as an argument).
 

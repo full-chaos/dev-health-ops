@@ -370,10 +370,8 @@ var goAPISuperuserWriters = map[string]bool{
 // file is looked at here once.
 var goAPIUsersWriteSites = map[string]int{
 	"internal/api/session/changepassword.go":  1,
-	"internal/api/session/register.go":        1,
 	"internal/api/session/social.go":          1,
 	"internal/api/session/store.go":           1,
-	"internal/api/session/verify.go":          2,
 	"internal/api/sso/oauth.go":               1,
 	"internal/api/sso/provision.go":           2,
 	"internal/apiservice/admin/userdelete.go": 1,

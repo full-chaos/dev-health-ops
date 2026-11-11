@@ -16,8 +16,8 @@ func TestUsersOwnedPublicGrantIsExactlyWhatTheSwitchGives(t *testing.T) {
 		{GrantRecord{Kind: "column", Object: "users", Column: "email", Privilege: "INSERT"}, true},
 		{GrantRecord{Kind: "column", Object: "organizations", Column: "slug", Privilege: "INSERT"}, true},
 		{GrantRecord{Kind: "column", Object: "memberships", Column: "role", Privilege: "INSERT"}, true},
-		{GrantRecord{Kind: "relation", Object: "password_reset_tokens", Privilege: "DELETE"}, true},
-		{GrantRecord{Kind: "column", Object: "email_verification_tokens", Column: "id", Privilege: "SELECT"}, true},
+		{GrantRecord{Kind: "relation", Object: "password_reset_tokens", Privilege: "DELETE"}, false},
+		{GrantRecord{Kind: "column", Object: "email_verification_tokens", Column: "id", Privilege: "SELECT"}, false},
 		// full_name UPDATE: the admin profile change go-api makes through auth-service (pm D6872, PLAN-13376 v2 S1).
 		{GrantRecord{Kind: "column", Object: "users", Column: "full_name", Privilege: "UPDATE"}, true},
 		{GrantRecord{Kind: "column", Object: "users", Column: "sso_provider_id", Privilege: "UPDATE"}, false},

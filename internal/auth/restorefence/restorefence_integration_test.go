@@ -181,8 +181,6 @@ VALUES ($1, $2, 'workload_token', decode(md5($1::uuid::text), 'hex'), 'sha256', 
 		uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-prt")), user)
 	d.must(t, ctx, `INSERT INTO public.password_reset_tokens (id, user_id, token_hash, expires_at) VALUES ($1, $2, 'p2', now() + interval '1 day')`,
 		uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-prt-kept")), user)
-	d.must(t, ctx, `INSERT INTO public.internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at) VALUES ($1, 'svc', 's1', 'svc_x', '[]', now())`,
-		uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-isc")))
 	d.must(t, ctx, `INSERT INTO public.org_invites (id, org_id, email, token_hash, expires_at) VALUES ($1, $2, 'inv@example.invalid', 'i1', now() + interval '1 day')`,
 		uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-invite")), org)
 }
@@ -216,7 +214,6 @@ VALUES ($1, $2, 'workload_token', decode(md5($1::uuid::text), 'hex'), 'sha256', 
 	d.must(t, ctx, `UPDATE public.users SET is_active = false, token_version = 3 WHERE id = $1`, user)
 	d.must(t, ctx, `UPDATE public.refresh_tokens SET revoked_at = now()`)
 	d.must(t, ctx, `DELETE FROM public.password_reset_tokens WHERE token_hash = 'p1'`)
-	d.must(t, ctx, `UPDATE public.internal_service_credentials SET revoked_at = now()`)
 	d.must(t, ctx, `UPDATE public.org_invites SET status = 'accepted', accepted_at = now()`)
 }
 
@@ -318,7 +315,7 @@ func TestTheFenceRaisesTheFloorsAndRevokesAgain(t *testing.T) {
 	if got := byName["auth.credential_registry"]; got.Changed != 2 || got.Absent != 1 {
 		t.Errorf("credential_registry = %+v, want 2 revoked again and 1 absent (created and revoked after T)", got)
 	}
-	for _, name := range []string{"public.refresh_tokens", "public.internal_service_credentials", "public.org_invites", "public.users"} {
+	for _, name := range []string{"public.refresh_tokens", "public.org_invites", "public.users"} {
 		if byName[name].Changed != 1 {
 			t.Errorf("%s changed %d, want 1", name, byName[name].Changed)
 		}

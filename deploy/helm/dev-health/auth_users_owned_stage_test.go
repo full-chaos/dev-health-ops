@@ -135,18 +135,6 @@ func TestStageGoAPIBackfillJobCarriesNoSwitch(t *testing.T) {
 	}
 }
 
-// legacy-link-purge needs users owned: stage goApi refuses it, as phase 3 does.
-func TestStageGoAPIRefusesLegacyLinkPurge(t *testing.T) {
-	t.Parallel()
-
-	args := append(stageArgs("4", "goApi"), "--set", "authService.backfill.enabled=true", "--set", "authService.backfill.verb=legacy-link-purge",
-		"--set", "authService.backfill.runId=r3")
-	_, out, err := renderAuth(t, args...)
-	if err == nil || !strings.Contains(out, "legacy-link-purge needs users owned") {
-		t.Fatalf("legacy-link-purge at stage goApi rendered: err=%v out=%.300s", err, out)
-	}
-}
-
 // users-reconcile is the post-flip detection net: a read-only verb, so no --dry-run flag, whatever dryRun says.
 func TestBackfillJobRendersUsersReconcileWithoutDryRunFlag(t *testing.T) {
 	t.Parallel()

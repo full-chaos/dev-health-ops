@@ -326,85 +326,47 @@ func presentUsersWriteColumns(ctx context.Context, conn querier, options Options
 	return present, nil
 }
 
-// DeleteGrant is the switch-gated purge access to one ops-schema table:
-// table-level DELETE and column-level SELECT of the named columns.
-type DeleteGrant struct {
-	Table  string
-	Select []string
-}
+// retiredLinkTokenTables are go-api's public link-token tables. The auth
+// runtime role held a switch-gated DELETE and id SELECT on them for the legacy
+// link-token purge verb; each grants pass revokes it, with users owned or not,
+// so a database migrated before the verb went loses the old grant.
+var retiredLinkTokenTables = []string{"email_verification_tokens", "password_reset_tokens"}
 
-// LegacyLinkPurgeGrants is the switch-gated access the auth runtime role needs
-// to purge go-api's link-token rows once users are owned (AUTH_USERS_OWNED):
-// DELETE on the two legacy link-token tables and SELECT of their id column
-// (the purge counts the rows it deletes). No INSERT, UPDATE, TRUNCATE or other
-// column, and no other table. Off, it is revoked (acp ruling 2026-10-26, CHAOS-11506).
-func LegacyLinkPurgeGrants() []DeleteGrant {
-	return []DeleteGrant{
-		{Table: "email_verification_tokens", Select: []string{"id"}},
-		{Table: "password_reset_tokens", Select: []string{"id"}},
-	}
-}
-
-// legacyLinkPurgeStatements grants LegacyLinkPurgeGrants when the switch is on
-// and revokes anything the role holds on those tables when it is off.
-func legacyLinkPurgeStatements(ctx context.Context, conn querier, options Options, logger *slog.Logger) ([]string, error) {
+// legacyLinkPurgeStatements revokes every privilege the runtime role holds on
+// retiredLinkTokenTables and grants nothing on them.
+func legacyLinkPurgeStatements(ctx context.Context, conn querier, options Options, _ *slog.Logger) ([]string, error) {
 	roleID, err := NewValidatedIdentifier(options.RuntimeRole)
 	if err != nil {
 		return nil, err
 	}
 	role := quoteIdentifier(roleID)
 	var statements []string
-	for _, grant := range LegacyLinkPurgeGrants() {
-		exists, err := publicTableState(ctx, conn, grant.Table)
+	for _, name := range retiredLinkTokenTables {
+		exists, err := publicTableState(ctx, conn, name)
 		if err != nil {
 			return nil, err
 		}
 		if !exists {
-			if options.RequirePublicTables && options.UsersOwned {
-				return nil, fmt.Errorf("%w: %s.%s", ErrPublicTableMissing, publicSchema, grant.Table)
-			}
 			continue
 		}
-		tableID, err := NewValidatedIdentifier(grant.Table)
+		tableID, err := NewValidatedIdentifier(name)
 		if err != nil {
 			return nil, err
+		}
+		// Where the role holds nothing the pass sends no statement (the retiredPublicReadTables shape): PostgreSQL
+		// refuses a table-level REVOKE ALL by a role holding no privilege on the table, so a migrator on a database
+		// that never gave the runtime role this grant would fail the whole pass on a statement that changes nothing.
+		held, err := runtimeHoldsPublicGrant(ctx, conn, name, options.RuntimeRole)
+		if err != nil {
+			return nil, err
+		}
+		if !held {
+			continue
 		}
 		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
-		if !options.UsersOwned {
-			var held bool
-			if err := conn.QueryRow(ctx,
-				`SELECT has_table_privilege($1, format('%I.%I', $2::text, $3::text), 'DELETE')
-				     OR has_column_privilege($1, format('%I.%I', $2::text, $3::text), 'id', 'SELECT')`,
-				options.RuntimeRole, publicSchema, grant.Table,
-			).Scan(&held); err != nil {
-				return nil, fmt.Errorf("%w: reading the legacy link purge grant of %s.%s", ErrMigrationFailed, publicSchema, grant.Table)
-			}
-			if held {
-				statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
-			}
-			continue
-		}
-		columns, err := quotedColumns(grant.Select)
-		if err != nil {
-			return nil, err
-		}
-		logger.InfoContext(ctx, "applying the legacy link purge grant", "schema", publicSchema, "table", grant.Table)
-		statements = append(statements,
-			fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role),
-			fmt.Sprintf(`GRANT DELETE ON TABLE %s TO %s`, table, role),
-			fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s TO %s`, strings.Join(columns, ", "), table, role),
-		)
+		statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
 	}
 	return statements, nil
-}
-
-func isLegacyLinkPurgeTable(table string) bool {
-	for _, grant := range LegacyLinkPurgeGrants() {
-		if grant.Table == table {
-			return true
-		}
-	}
-	return false
 }
 
 // quotedColumns validates and quotes each name.
@@ -628,32 +590,6 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 				}
 			}
 		}
-		for _, grant := range LegacyLinkPurgeGrants() {
-			exists, err := publicTableState(ctx, conn, grant.Table)
-			if err != nil {
-				return nil, err
-			}
-			if !exists {
-				continue
-			}
-			var deleteHeld, selectHeld bool
-			if err := conn.QueryRow(ctx,
-				`SELECT has_table_privilege($1, format('%I.%I', $2::text, $3::text), 'DELETE'),
-				        has_column_privilege($1, format('%I.%I', $2::text, $3::text), 'id', 'SELECT')`,
-				options.RuntimeRole, publicSchema, grant.Table,
-			).Scan(&deleteHeld, &selectHeld); err != nil {
-				return nil, fmt.Errorf("%w: table %s.%s is missing or unreadable to the posture check",
-					ErrMigrationFailed, publicSchema, grant.Table)
-			}
-			for privilege, held := range map[string]bool{"DELETE": deleteHeld, "SELECT": selectHeld} {
-				if !held {
-					violations = append(violations, Violation{
-						Kind: "column", Schema: publicSchema, Object: grant.Table, Privilege: privilege,
-						Detail: "declared in LegacyLinkPurgeGrants (the switch is on) but the runtime role does not hold it (missing grant)",
-					})
-				}
-			}
-		}
 		usersExist, err := publicTableState(ctx, conn, "users")
 		if err != nil {
 			return nil, err
@@ -763,9 +699,6 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 			if _, ok := usersDeclared[privilege][column]; ok {
 				continue
 			}
-		}
-		if options.UsersOwned && schema == publicSchema && privilege == "SELECT" && isLegacyLinkPurgeTable(table) && column == "id" {
-			continue
 		}
 		if options.UsersOwned && schema == publicSchema && privilege == "INSERT" && (kind == "r" || kind == "p") {
 			if _, ok := registerDeclared[table][column]; ok {

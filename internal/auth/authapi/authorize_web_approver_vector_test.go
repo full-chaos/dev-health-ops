@@ -2,6 +2,7 @@ package authapi
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -150,5 +151,58 @@ func TestWebApproverVector_K1AllowsTheRealWebForm(t *testing.T) {
 
 	if status != http.StatusOK || !d.Allowed {
 		t.Fatalf("status %d decision %+v; want 200 allow", status, d)
+	}
+}
+
+// The vector's key is a public test key (its seed is in web's vector test). It
+// may be named only in test files and testdata: no deployed verifier may trust
+// it. Every verifier test above builds its key set from the vector in-test.
+func TestWebApproverVector_keyIsNamedOnlyInTests(t *testing.T) {
+	var vector struct {
+		JWKS struct {
+			Keys []struct {
+				X string `json:"x"`
+			} `json:"keys"`
+		} `json:"jwks"`
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "web-approver.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &vector); err != nil || len(vector.JWKS.Keys) != 1 || vector.JWKS.Keys[0].X == "" {
+		t.Fatalf("vector key: %v", err)
+	}
+	key := []byte(vector.JWKS.Keys[0].X)
+	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "vendor", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(content, key) {
+			t.Errorf("%s names the vector's test key outside tests and testdata", path)
+		}
+		found++
+		return nil
+	})
+	if err != nil || found == 0 {
+		t.Fatalf("walk: %v (%d files)", err, found)
 	}
 }

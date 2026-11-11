@@ -26,3 +26,14 @@ deploy/helm/dev-health/auth_access_lifetime_test.go:generic-api-key:34
 internal/auth/authruntime/access_issuer_retired_test.go:generic-api-key:11
 # test constant, not a secret: the unaccepted-bearer fixture (base64 of "not", "a token", "sig") of the envelope-key cells; it sits in an earlier commit of this branch on the same line (commit-less form).
 internal/queryapi/server/envelope_key_absent_test.go:generic-api-key:26
+# cross-implementation test vector signed with the public test seed; no deployed verifier trusts this key
+internal/auth/authapi/testdata/web-approver.v1.json:jwt:32
+internal/auth/authapi/testdata/web-approver.v1.json:jwt:33
+internal/auth/authapi/testdata/web-approver.v1.json:jwt:43
+internal/auth/authapi/testdata/web-approver.v1.json:jwt:44
+internal/auth/authapi/testdata/web-approver.v1.json:jwt:54
+internal/auth/authapi/testdata/web-approver.v1.json:jwt:55
+internal/auth/authapi/testdata/web-approver.v1.json:jwt:65
+internal/auth/authapi/testdata/web-approver.v1.json:jwt:66
+internal/auth/authapi/testdata/web-approver.v1.json:jwt:76
+internal/auth/authapi/testdata/web-approver.v1.json:jwt:77

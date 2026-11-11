@@ -346,7 +346,7 @@ internal/cigates/workflows	providerstub_not_release_test.go
 internal/cigates/workflows	providersync_shard_budget_test.go
 internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go
-internal/cigates/workflows	ready_reuse_test.go
+internal/cigates/workflows	ready_flip_no_reuse_test.go
 internal/cigates/workflows	registry_retry_test.go
 internal/cigates/workflows	ttl_registry_test.go
 internal/cigates/workflows	venue_users_owned_test.go

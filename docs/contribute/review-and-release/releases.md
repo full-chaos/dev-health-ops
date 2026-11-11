@@ -152,3 +152,18 @@ a separate product change and is not part of this V1 release.
 - **Rollback:** disable Ask Dev or roll back the `dev-health-web` binary; no
   database migration is introduced by the web-side workspace or shared UI
   core.
+
+## Auth recovery and drills release note
+
+- **New:** one page lists every auth recovery drill, the runbook for the real incident, how to rehearse it and its
+  last result ([auth drills and their runbooks](../../operate/runbooks/auth-drills.md)). The signing-key compromise
+  objective is set: 330 s at go-api and query-api, 20 s at auth-service
+  ([readiness and SLO](../../reference/auth/readiness-and-slo.md#service-level-objectives)).
+- **Changed:** a point-in-time restore of the auth schema runs behind the restore fence, so a restore does not bring
+  back a revocation, a password change or a published revision made after the restore point
+  ([the restore fence](../../operate/maintain/backup-and-restore.md#restoring-the-auth-schema-to-a-point-in-time-the-restore-fence)).
+- **Known limited:** a token signed with a compromised key is accepted by go-api and query-api for up to 330 s after
+  the decision, while their JWKS cache holds the key. After a membership removal, the query-api REST routes accept the
+  user's access token until it expires. The auth-service, PDP and JWKS outage drill and the ACR credential revoke and
+  assertion key rotation drill have not run yet.
+- **Rollback:** each runbook names its own rollback. A restore without the fence is not supported for the auth schema.

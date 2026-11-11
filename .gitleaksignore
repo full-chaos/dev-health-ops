@@ -6,7 +6,7 @@
 contracts/auth/v1/examples/external-push-lifecycle-event/invalid-change-secret-hash.json:generic-api-key:19
 # CHAOS-12661: a fixed 32-hex request id in the internal-listener XFF cell matches generic-api-key by shape; it is a test request id, not a credential.
 # A row, not an inline marker: the open PR's earlier branch commits hold the line without a marker, and the pull_request range scan reads them.
-internal/auth/authruntime/internal_listener_test.go:generic-api-key:208
+internal/auth/authruntime/internal_listener_test.go:generic-api-key:209
 # Planted test marker of the service account key exchange tests (saKeyMarker): a fixed literal a test plants in every key value to prove the
 # value reaches no answer, log line, metric or audit row; never a credential. The row also covers the commit that first added the line.
 internal/auth/workloadexchange/service_account_key_test.go:generic-api-key:30

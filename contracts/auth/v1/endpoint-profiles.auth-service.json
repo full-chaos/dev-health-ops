@@ -1904,6 +1904,35 @@
       "tenant_requirement": "none"
     },
     {
+      "accepted_credential_classes": [
+        "workload_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the workload token reads only the signer's published key set; the acr-api workload row (enabled, audiences, allowed actions) is read live on every call, and the event is projected in one transaction of the call.",
+      "disclosure_behavior": "Served on the internal listener only; the API listener answers 404. Every bearer refusal, for every credential class and reason (no bearer, another class, a wrong audience, a subject other than AUTH_ACR_EVENTS_WORKLOAD_SUBJECT, a bad signature or time), is the same 401 error.v1 invalid_credentials, answered before any body byte is read; a workload row that is absent, disabled or lacks audience auth-service or action credentials.project is 403 not_entitled, also before the body is read; a body that is not one acr-credential-lifecycle-event.v1 event is 400 malformed; a decided event that is not applied is 409 projection_retry, projection_conflict or projection_refused; a store, key set or fence failure is 503. An applied, duplicate or stale event is 204 with no body. No event text is logged.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/acr/credential-events [dev-health-auth-service @internal]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 132,
+          "note": "func (h acrEventHandlers) acrEventCaller",
+          "path": "internal/auth/authapi/acr_events.go"
+        },
+        "description": "acrEventHandlers.acrEventCaller (internal/auth/authapi/acr_events.go), before the body is read: only a workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is accepted; its audience must be auth-service and its sub the acr-api workload principal of AUTH_ACR_EVENTS_WORKLOAD_SUBJECT (SessionIssueWorkload.authorize, checked on the unverified payload before the key set is read), then authverify.WorkloadVerifier checks signature, issuer, audience and times. The token has no action claim: the live acr-api workload row must be enabled and list audience auth-service and action credentials.project, which the registry seed (auth-migrate workloads seed) sets."
+      },
+      "route": "/internal/v1/acr/credential-events",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/acr_events.go",
+        "line": 105
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
       "accepted_credential_classes": [],
       "classification": "public",
       "disclosure_behavior": "An unknown, expired, used or wrong-purpose secret is the same 400; no detail names which.",

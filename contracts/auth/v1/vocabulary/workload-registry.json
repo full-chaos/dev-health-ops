@@ -18,7 +18,7 @@
       "name": "acr-api",
       "owner": "platform-operations",
       "audiences": ["auth-service", "dev-health-api"],
-      "allowed_actions": []
+      "allowed_actions": ["credentials.project"]
     },
     {
       "name": "web",

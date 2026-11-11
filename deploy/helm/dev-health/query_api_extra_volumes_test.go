@@ -23,17 +23,15 @@ func TestQueryAPIExtraVolumesDefaultAddsNothing(t *testing.T) {
 	if dep == nil {
 		t.Fatal("no query-api Deployment in the render")
 	}
-	vols, _ := at(dep, "spec", "template", "spec", "volumes").([]any)
-	if len(vols) != 1 || at(vols[0], "name") != "envelope-jwks" {
-		t.Errorf("query-api pod volumes = %v, want only envelope-jwks", vols)
+	if vols := at(dep, "spec", "template", "spec", "volumes"); vols != nil {
+		t.Errorf("query-api pod volumes = %v, want none", vols)
 	}
-	mounts, _ := at(dep, "spec", "template", "spec", "containers", 0, "volumeMounts").([]any)
-	if len(mounts) != 1 || at(mounts[0], "name") != "envelope-jwks" {
-		t.Errorf("query-api volumeMounts = %v, want only envelope-jwks", mounts)
+	if mounts := at(dep, "spec", "template", "spec", "containers", 0, "volumeMounts"); mounts != nil {
+		t.Errorf("query-api volumeMounts = %v, want none", mounts)
 	}
 }
 
-func TestQueryAPIExtraVolumesRenderAfterEnvelopeJWKS(t *testing.T) {
+func TestQueryAPIExtraVolumesAreThePodVolumes(t *testing.T) {
 	t.Parallel()
 
 	docs, out, err := renderAuth(t, queryAPIExtraVolumeSets()...)
@@ -45,16 +43,16 @@ func TestQueryAPIExtraVolumesRenderAfterEnvelopeJWKS(t *testing.T) {
 		t.Fatal("no query-api Deployment in the render")
 	}
 	vols, _ := at(dep, "spec", "template", "spec", "volumes").([]any)
-	if len(vols) != 2 || at(vols[0], "name") != "envelope-jwks" || at(vols[1], "name") != "workload-token" {
-		t.Fatalf("query-api pod volumes = %v, want envelope-jwks then workload-token", vols)
+	if len(vols) != 1 || at(vols[0], "name") != "workload-token" {
+		t.Fatalf("query-api pod volumes = %v, want only workload-token", vols)
 	}
-	src := at(vols[1], "projected", "sources", 0, "serviceAccountToken")
+	src := at(vols[0], "projected", "sources", 0, "serviceAccountToken")
 	if at(src, "audience") != "dev-health-workload-exchange" || at(src, "path") != "token" || !reflect.DeepEqual(at(src, "expirationSeconds"), 3600) {
 		t.Errorf("serviceAccountToken = %v", src)
 	}
 	mounts, _ := at(dep, "spec", "template", "spec", "containers", 0, "volumeMounts").([]any)
-	if len(mounts) != 2 || at(mounts[0], "name") != "envelope-jwks" || at(mounts[1], "name") != "workload-token" || at(mounts[1], "mountPath") != "/var/run/dev-health/workload" || at(mounts[1], "readOnly") != true {
-		t.Errorf("query-api volumeMounts = %v, want envelope-jwks then the read-only workload-token mount", mounts)
+	if len(mounts) != 1 || at(mounts[0], "name") != "workload-token" || at(mounts[0], "mountPath") != "/var/run/dev-health/workload" || at(mounts[0], "readOnly") != true {
+		t.Errorf("query-api volumeMounts = %v, want only the read-only workload-token mount", mounts)
 	}
 }
 
@@ -103,5 +101,48 @@ func TestQueryAPIExtraVolumesSchemaRefusesNullInEveryForm(t *testing.T) {
 				t.Errorf("queryApi.%s null via %s refusal does not name the key:\n%.400s", key, form, out)
 			}
 		}
+	}
+}
+
+// CHAOS-13539 (13173 K5): the envelope is retired, so no render gives query-api the envelope env or the envelope JWKS
+// Secret volume, with or without extra volumes.
+func TestQueryAPIPodHasNoEnvelopeJWKS(t *testing.T) {
+	for name, args := range map[string][]string{
+		"default":       {"--set", "queryApi.enabled=true"},
+		"extra volumes": queryAPIExtraVolumeSets(),
+	} {
+		docs, out, err := renderAuth(t, args...)
+		if err != nil {
+			t.Fatalf("%s: render failed: %v\n%.400s", name, err, out)
+		}
+		dep := authDoc(docs, "Deployment", "a-dev-health-query-api")
+		if dep == nil {
+			t.Fatalf("%s: no query-api Deployment in the render", name)
+		}
+		env, _ := at(dep, "spec", "template", "spec", "containers", 0, "env").([]any)
+		for _, e := range env {
+			if n, _ := at(e, "name").(string); strings.HasPrefix(n, "GO_API_ENVELOPE_") {
+				t.Errorf("%s: query-api env has %s", name, n)
+			}
+		}
+		vols, _ := at(dep, "spec", "template", "spec", "volumes").([]any)
+		for _, v := range vols {
+			if at(v, "name") == "envelope-jwks" || at(v, "secret") != nil {
+				t.Errorf("%s: query-api pod volume %v", name, v)
+			}
+		}
+		mounts, _ := at(dep, "spec", "template", "spec", "containers", 0, "volumeMounts").([]any)
+		for _, m := range mounts {
+			if at(m, "name") == "envelope-jwks" {
+				t.Errorf("%s: query-api mount %v", name, m)
+			}
+		}
+	}
+	_, out, err := renderAuth(t, "--set", "queryApi.enabled=true")
+	if err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+	if strings.Contains(out, "query-api-jwks") || strings.Contains(out, "GO_API_ENVELOPE_") {
+		t.Errorf("the render still names the query-api JWKS Secret or an envelope env")
 	}
 }

@@ -871,23 +871,6 @@ queryApi:
     periodSeconds: 10
     timeoutSeconds: 2
     failureThreshold: 3
-  envelope:
-    # -- Name of an EXISTING Secret holding the envelope JWKS public half. This
-    #    chart never creates it: the keypair is minted out of band and only the
-    #    public half belongs in the cluster. Empty derives
-    #    `<fullname>-query-api-jwks`, the name an existing deployment uses.
-    jwksSecretName: ""
-    # -- Mount path inside the container. Its basename is also the Secret KEY
-    #    the JWKS is read from, so the two cannot drift apart.
-    jwksPath: /secrets/envelope-jwks.json
-    # -- Issuer/audience of the principal envelope the Python edge signs and
-    #    query-api verifies. These MUST match the edge's own values; the
-    #    defaults here are the edge's own Python-side defaults
-    #    (principal_envelope.py), expressed as values rather than hardcoded in
-    #    the template so a future change on either side is a visible override
-    #    rather than a silent disagreement.
-    issuer: "dev-health-ops-edge"
-    audience: "query-api"
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -897,7 +880,7 @@ queryApi:
   #    its own embedded SDL and an operator-supplied value can only disagree
   #    with the binary.
   extraEnv: []
-  # -- Extra pod volumes and query-api container mounts (for example a projected serviceAccountToken), added after the envelope-jwks volume and mount. Empty adds nothing.
+  # -- Extra pod volumes and query-api container mounts (for example a projected serviceAccountToken), the only volumes and mounts the query-api pod has. Empty adds nothing.
   extraVolumes: []
   extraVolumeMounts: []
   # -- Optional envFrom sources (list of {configMapRef: {name: ...}} /

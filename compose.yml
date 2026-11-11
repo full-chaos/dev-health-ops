@@ -1876,7 +1876,7 @@ services:
   # written last, so its presence means a previous run finished and a later `up` changes nothing; a key/ without it
   # is a partial pair and the step fails (remove the volume). Past its 365 days, remove the volume for a new pair.
   auth-issuer-tls-init:
-    image: mirror.gcr.io/library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd
+    image: mirror.gcr.io/library/golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf
     network_mode: none
     restart: "no"
     read_only: true

@@ -1324,6 +1324,31 @@ func TestLiveE2EEnableMail(t *testing.T) {
 		t.Fatal("second enable-mail started another sink")
 	}
 	token := "canned-mail-token-no-log"
+	scanForToken := func() {
+		t.Helper()
+		err := filepath.WalkDir(state, func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if path == filepath.Join(state, "mail/tokens") {
+				return filepath.SkipDir
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if bytes.Contains(raw, []byte(token)) {
+				t.Error("token persisted outside its capture directory")
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, kind := range []string{"reset", "verify"} {
 		key := kind + "." + hex.EncodeToString([]byte("reader@example.test"))
 		writeExec(t, filepath.Join(state, "mail/tokens", key), token, 0o600)
@@ -1335,6 +1360,7 @@ func TestLiveE2EEnableMail(t *testing.T) {
 		if err := cmd.Run(); err != nil || out.String() != token+"\n" || errb.Len() != 0 {
 			t.Fatal("mail-token did not print only its value on stdout")
 		}
+		scanForToken()
 	}
 	for _, args := range [][]string{{"reader@example.test", "bad"}, {"invalid", "reset"}, {"bad address@example.test", "reset"}, {"x'@example.test", "reset"}, {"absent@example.test", "reset"}} {
 		out, err := run("mail-token", state, args[0], args[1])
@@ -1342,28 +1368,7 @@ func TestLiveE2EEnableMail(t *testing.T) {
 			t.Fatal("invalid mail-token request accepted or leaked a token")
 		}
 	}
-	err := filepath.WalkDir(state, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if path == filepath.Join(state, "mail/tokens") {
-			return filepath.SkipDir
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if bytes.Contains(raw, []byte(token)) {
-			t.Error("token persisted outside its capture directory")
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	scanForToken()
 	if out, err := run("down", state); err != nil {
 		t.Fatalf("down: %v %s", err, out)
 	}

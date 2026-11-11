@@ -170,7 +170,7 @@ func TestWithoutProvenanceHeadersDropsOnlyThePlaneAndBuildStamp(t *testing.T) {
 // setting changed in the process, so an external run must leave the same value for the ports to read.
 func TestExternalSetTargetEnvReachesTheGoPortsLikeInProcess(t *testing.T) {
 	useTargetEnvScript(t, "#!/bin/sh\nexit 0\n", 0o755)
-	venue := &Venue{pythonEnv: planeEnv(Options{JWTKey: "k"})}
+	venue := &Venue{pythonEnv: planeEnv(Options{})}
 	valueAfter := func(external bool) (value string) {
 		t.Run(map[bool]string{false: "in-process", true: "external"}[external], func(sub *testing.T) {
 			SetTargetEnv(sub, external, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", " OFF ")

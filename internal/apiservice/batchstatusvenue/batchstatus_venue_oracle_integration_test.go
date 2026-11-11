@@ -173,7 +173,6 @@ func TestBatchStatusShapeVenueOracle(t *testing.T) {
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden, Root: repoRoot(t),
-		JWTKey: "venue-oracle-jwt-signing-key-32-bytes-min",
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
 				t.Helper()

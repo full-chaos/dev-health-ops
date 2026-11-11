@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -185,6 +186,38 @@ func TestRecordedMeAnswersEqualTheHandlerOnceThePermissionsMemberIsDropped(t *te
 		checked++
 	}
 	t.Logf("checked %d recorded /auth/me answers", checked)
+	if checked < 3 {
+		t.Fatalf("only %d recorded /auth/me answers checked", checked)
+	}
+}
+
+// The drop of the retired member applies to the RECORDED side only. The pinned golden file is unedited (LoadGolden refuses a file whose
+// sha256 is not the pinned one, and the raw bytes still carry the member 4 times), and a Go answer that still emits the member does
+// not equal the recorded one after Normalize: it would fail the scenario's comparison.
+func TestTheDropOfThePermissionsMemberIsOnTheGoldenSideOnly(t *testing.T) {
+	golden := sessionscenario.LoadGolden(t)
+	raw, err := os.ReadFile(sessionscenario.GoldenPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(raw), `permissions`); n != 4 {
+		t.Fatalf("the pinned golden file carries the member %d times, want 4: it must stay unedited", n)
+	}
+	checked := 0
+	for _, answer := range golden.Answers {
+		if answer.Status != http.StatusOK || !strings.HasPrefix(answer.Body, `{"id":`) || !strings.Contains(answer.Body, `"is_superuser"`) ||
+			strings.Contains(answer.Body, `"user":`) || strings.Contains(answer.Body, `"access_token"`) || strings.Contains(answer.Body, `"memberships"`) {
+			continue
+		}
+		if strings.Contains(answer.Body, "permissions") {
+			t.Errorf("%s: the loaded golden answer still carries the member: %s", answer.Name, answer.Body)
+		}
+		emitting := strings.TrimSuffix(answer.Body, "}") + `,"permissions":["analytics:read"]}`
+		if got := sessionscenario.Normalize(emitting); got == answer.Body {
+			t.Errorf("%s: a Go answer that still emits permissions equals the recorded one after Normalize: %s", answer.Name, got)
+		}
+		checked++
+	}
 	if checked < 3 {
 		t.Fatalf("only %d recorded /auth/me answers checked", checked)
 	}

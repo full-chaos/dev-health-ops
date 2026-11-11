@@ -327,19 +327,19 @@ var retryAfterPattern = regexp.MustCompile(`"retry_after_seconds":(\d+)`)
 // created, whose id each plane draws at random.
 var randomUUIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
-// mePermissionsMember is the permissions member the recorded Python /auth/me answers carry (a sorted-set rendering) and the live
-// ones carried (a list). GET /auth/me no longer answers it (CHAOS-13585): both sides drop it before they are compared, and the
-// pinned golden file stays unedited.
+// mePermissionsMember is the permissions member the recorded Python /auth/me answers carry (a sorted-set rendering). GET /auth/me no
+// longer answers it (CHAOS-13585): LoadGolden drops it from the RECORDED side only, in memory, and the pinned golden file stays
+// unedited. Normalize, which every Go answer goes through, never drops it: a Go answer that still emits the member differs from the
+// golden and fails the comparison.
 var mePermissionsMember = regexp.MustCompile(`,"permissions":(?:\[[^\]]*\]|<set [^>]*>)`)
 
-// DropRetiredMePermissions removes the retired permissions member from a /auth/me body.
+// DropRetiredMePermissions removes the retired permissions member from a recorded /auth/me body (the golden side only).
 func DropRetiredMePermissions(body string) string {
 	return mePermissionsMember.ReplaceAllString(body, "")
 }
 
 // Normalize is the body normalization every comparison applies.
 func Normalize(body string) string {
-	body = DropRetiredMePermissions(body)
 	body = jwtPattern.ReplaceAllStringFunc(body, describeJWT)
 	body = randomUUIDPattern.ReplaceAllStringFunc(body, func(id string) string {
 		if strings.Contains(id, "-0000-4000-8000-") {

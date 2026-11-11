@@ -685,6 +685,9 @@ type DeleteOrgConfig struct {
 	// Actor is the user (id or email) that acts for a real delete: an active
 	// superuser, as auth-service's deprovision route requires.
 	Actor string
+	// ACROrgRevoker revokes the organization's acr credentials before the purge (ACR_REVOKE_*); nil is the no_client
+	// case: the delete goes on with one ERROR line and one count.
+	ACROrgRevoker OrgCredentialRevoker
 }
 
 // orgDeleteHandlers is the handler set one delete runs. A real delete asks
@@ -703,6 +706,7 @@ func (o Operator) orgDeleteHandlers(config DeleteOrgConfig, httpDoer providerfou
 		httpDoer:          httpDoer,
 		readGrants:        o.readGrants,
 		readRefreshStates: o.readRefreshStates,
+		acrOrgRevoker:     config.ACROrgRevoker,
 	}
 	if !dryRun {
 		h.orgProvision = actorProvisioner{Provisioner: o.Provisioner, actor: config.Actor, resolve: o.resolveActor}
@@ -745,6 +749,9 @@ func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, conf
 		}
 		if errors.Is(err, errOrgDeletionRevocationInFlight) {
 			return nil, refuse("%s", orgDeletionRevocationInFlightDetail)
+		}
+		if errors.Is(err, errOrgDeletionACRRevoke) {
+			return nil, refuse("%s", orgDeletionACRRevokeAnswer(err))
 		}
 		return nil, err
 	}

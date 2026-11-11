@@ -110,6 +110,10 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 			policy.WriteDetail(w, http.StatusServiceUnavailable, orgDeletionRevocationInFlightDetail, nil)
 			return
 		}
+		if errors.Is(err, errOrgDeletionACRRevoke) {
+			policy.WriteDetail(w, http.StatusServiceUnavailable, orgDeletionACRRevokeAnswer(err), nil)
+			return
+		}
 		var step *orgDeletionStepError
 		if errors.As(err, &step) {
 			h.logger.ErrorContext(ctx, "admin: org deletion "+step.step+" failed", "error", step.err)
@@ -144,7 +148,11 @@ func (e *orgDeletionStepError) Unwrap() error { return e.err }
 // *orgDeletionIncompleteError.
 func (h *handlers) deleteOrganizationData(ctx context.Context, orgUUID uuid.UUID, dryRun bool) (*orgDeletionResult, error) {
 	orgIDStr := orgUUID.String()
-	ch, err := h.orgDeletionClickHousePreflight(ctx)
+	preflight := h.openOrgDeletionClickHouse
+	if preflight == nil {
+		preflight = h.orgDeletionClickHousePreflight
+	}
+	ch, err := preflight(ctx)
 	if err != nil {
 		var refused *orgDeletionRefusedError
 		if errors.As(err, &refused) {

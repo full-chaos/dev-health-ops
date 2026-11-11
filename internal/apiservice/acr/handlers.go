@@ -14,7 +14,10 @@
 // CHAOS-3695, store.go Lookup) is ported in full via internal/api/licensing.
 //
 // Entitlement route answers (acr's client depends on these):
-//   - 200 grants body: the org exists.
+//   - 200 grants body: the org exists and is active.
+//   - 404 {"detail":"Not found","code":"acr_organization_disabled"}: the
+//     organizations row exists with is_active false. Disabled, not gone: acr
+//     refuses the org's credentials and never purges it.
 //   - 404 {"detail":"Not found","code":"acr_organization_unknown"}: the id is
 //     a well-formed UUID and no organizations row exists (deleted or never
 //     created). The only answer a caller may read as "organization gone".
@@ -141,6 +144,12 @@ func healthHandler(store EntitlementStore, auth routeAuth, logger *slog.Logger) 
 // treats only a 404 carrying this code as "organization deleted"; any other
 // 404 (malformed id, unrouted path, proxy) is not.
 const UnknownOrganizationCode = "acr_organization_unknown"
+
+// DisabledOrganizationCode is the stable machine code on the entitlement
+// route's 404 for an organization whose row has is_active false. acr reads it
+// as "disabled": it refuses the organization's credentials and new issuance,
+// and never treats the organization as deleted.
+const DisabledOrganizationCode = "acr_organization_disabled"
 
 func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

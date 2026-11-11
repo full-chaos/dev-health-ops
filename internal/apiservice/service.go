@@ -280,6 +280,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgProvisioner:     deps.OrgProvisioner,
 			OrgDeletionAuth:    deps.OrgDeletionAuth,
 			OrgDeprovisioner:   deps.OrgDeprovisioner,
+			ACROrgRevoker:      orgCredentialRevoker(deps.ACRRevoker),
 			OrgSuspender:       deps.OrgSuspender,
 			OrgState:           deps.OrgState,
 			Delegator:          deps.Delegator,

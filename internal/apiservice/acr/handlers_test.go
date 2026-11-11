@@ -314,3 +314,48 @@ func TestEntitlementLookupLogsTheACRBasisAtInfo(t *testing.T) {
 		})
 	}
 }
+
+// E1: a disabled organization is a 404 that carries the disabled code, and its audit row says organization_disabled.
+func TestEntitlementHandlerDisabledOrgCarriesTheDisabledCode(t *testing.T) {
+	creds := newFakeCredentials()
+	mux := http.NewServeMux()
+	for _, route := range Routes(Deps{Store: &fakeStore{err: ErrOrgDisabled}, Auth: creds, Workload: testWorkload, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}) {
+		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+	}
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	response, err := getAuthed(server.URL + "/api/v1/internal/acr/entitlements/6f1c0c1e-1d4b-4a55-9a39-0d0d6f3b8a10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	raw, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", response.StatusCode)
+	}
+	if want := `{"detail":"Not found","code":"acr_organization_disabled"}`; string(raw) != want {
+		t.Fatalf("body = %q, want %q", raw, want)
+	}
+	creds.mu.Lock()
+	defer creds.mu.Unlock()
+	if len(creds.audits) != 1 || creds.audits[0].outcome != "organization_disabled" || creds.audits[0].orgID != "6f1c0c1e-1d4b-4a55-9a39-0d0d6f3b8a10" {
+		t.Fatalf("audit rows = %+v, want one organization_disabled row for the org", creds.audits)
+	}
+}
+
+// E3: only the disabled answer carries the disabled code; the gone answer keeps its own.
+func TestEntitlementHandlerOnlyTheDisabledOrgAnswerCarriesTheDisabledCode(t *testing.T) {
+	for _, storeErr := range []error{nil, ErrOrgUnknown, ErrOrgNotFound, ErrUnavailable, errors.New("boom")} {
+		server := newTestServer(&fakeStore{err: storeErr, entitlement: Entitlement{OrgID: "org-1"}})
+		response, err := getAuthed(server.URL + "/api/v1/internal/acr/entitlements/org-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		server.Close()
+		if strings.Contains(string(raw), DisabledOrganizationCode) {
+			t.Fatalf("error %v answered with the disabled code: %s", storeErr, raw)
+		}
+	}
+}

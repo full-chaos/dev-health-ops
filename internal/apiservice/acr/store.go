@@ -38,6 +38,11 @@ var ErrOrgNotFound = errors.New("organization not found")
 // carries UnknownOrganizationCode; a malformed id stays a bare ErrOrgNotFound.
 var ErrOrgUnknown = fmt.Errorf("%w: no organization row for this id", ErrOrgNotFound)
 
+// ErrOrgDisabled narrows ErrOrgNotFound to an organization whose row exists with is_active false (disabled by an
+// admin, or by the org-state reconciler). It is the only 404 that carries DisabledOrganizationCode: disabled is not
+// gone, so acr refuses its credentials but never purges it.
+var ErrOrgDisabled = fmt.Errorf("%w: the organization is disabled", ErrOrgNotFound)
+
 // ErrUnavailable means the decision could not be READ. Python:
 // api/internal/acr.py:196-204's 503 ("Service unavailable") on the
 // get_org_entitlements_from_db call failing. Deliberately distinct from
@@ -161,6 +166,18 @@ func (store PostgresEntitlementStore) Ready(ctx context.Context) error {
 
 type existsQueryer interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+// organizationActive reads whether the organization row exists and is active, in one statement.
+func organizationActive(ctx context.Context, queryer existsQueryer, orgID string) (found, active bool, err error) {
+	err = queryer.QueryRow(ctx, `SELECT is_active FROM organizations WHERE id = $1::uuid`, orgID).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return true, active, nil
 }
 
 func organizationExists(ctx context.Context, queryer existsQueryer, orgID string) (bool, error) {

@@ -21,7 +21,7 @@ import (
 // assertion key for a device or consent approval; acr-api checks it against
 // the request's web assertion and forwards only it here as the
 // principal_reference. Architecture: web docs/auth-acr-device-approval.md;
-// diagram docs/reference/auth/diagrams/web-approver-reference.mmd.
+// sequence source web_approver_reference.mmd beside this file.
 const (
 	webApproverReferenceType = "web-approver+jwt"
 	// webApproverAction is the one action the reference answers for.

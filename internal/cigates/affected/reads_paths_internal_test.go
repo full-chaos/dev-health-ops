@@ -11,7 +11,8 @@ import (
 // (no slash), a tracked file or directory of the checkout or a declared class glob. A deeper path may name a file that
 // does not exist yet (a guard that a file stays absent, a fixture path): it stays a read,
 // and a Markdown-only plan treats a package whose every named path is absent as a reader of unknown shape.
-func TestReadsPathsAreTrackedRepositoryPaths(t *testing.T) {
+func CheckReadsPathsAreTrackedRepositoryPaths(t *testing.T, scan func(string) ([]Read, error)) {
+	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +35,7 @@ func TestReadsPathsAreTrackedRepositoryPaths(t *testing.T) {
 	for _, g := range tb.globs {
 		globs[g.glob] = true
 	}
-	reads, err := ScanReads(root)
+	reads, err := scan(root)
 	if err != nil {
 		t.Fatal(err)
 	}

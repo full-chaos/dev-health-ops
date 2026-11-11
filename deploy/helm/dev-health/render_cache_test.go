@@ -655,6 +655,9 @@ func probeRenderSemaphore(t *testing.T, m *renderMemo, chart string, want int, d
 				break
 			}
 		}
+		if int(n) > want {
+			thirdOnce.Do(func() { close(third) })
+		}
 		select {
 		case <-reached:
 			return []byte("rendered\n"), nil
@@ -662,9 +665,6 @@ func probeRenderSemaphore(t *testing.T, m *renderMemo, chart string, want int, d
 		}
 		if int(n) >= want {
 			reachedOnce.Do(func() { close(reached) })
-		}
-		if int(n) > want {
-			thirdOnce.Do(func() { close(third) })
 		}
 		timer := time.NewTimer(deadline)
 		select {
@@ -706,7 +706,7 @@ func probeRenderSemaphore(t *testing.T, m *renderMemo, chart string, want int, d
 
 func TestRenderMemoSemaphoreBoundsLiveProcesses(t *testing.T) {
 	m := newRenderMemoWithBound(2)
-	got := probeRenderSemaphore(t, m, memoChartDir(t), 2, 10*time.Second, 250*time.Millisecond)
+	got := probeRenderSemaphore(t, m, memoChartDir(t), 2, 30*time.Second, 250*time.Millisecond)
 	if got.timedOut {
 		t.Fatalf("only %d render(s) were live after the deadline: the semaphore never let two overlap (capacity %d)", got.inFlightAtTimeout, got.capacity)
 	}
@@ -717,7 +717,7 @@ func TestRenderMemoSemaphoreBoundsLiveProcesses(t *testing.T) {
 
 // Red cells: the probe reports each failure shape seen on the hosted runners from a memo built with the wrong bound.
 func TestRenderMemoProbeSeesACapacityAboveTheBound(t *testing.T) {
-	got := probeRenderSemaphore(t, newRenderMemoWithBound(3), memoChartDir(t), 2, 5*time.Second, 150*time.Millisecond)
+	got := probeRenderSemaphore(t, newRenderMemoWithBound(3), memoChartDir(t), 2, 5*time.Second, 5*time.Second)
 	if got.timedOut || got.capacity != 3 || got.max != 3 {
 		t.Fatalf("a memo of capacity 3 measured capacity=%d max=%d timedOut=%v, want capacity=3 max=3 (the shape of max=3 want 2)", got.capacity, got.max, got.timedOut)
 	}

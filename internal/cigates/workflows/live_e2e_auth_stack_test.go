@@ -888,7 +888,7 @@ func TestLiveE2EEnableSocialAndSSO(t *testing.T) {
 			}
 			builds := liveE2ERead(t, filepath.Join(state, "builds"))
 			for _, name := range []string{"providerstub", "idpstub"} {
-				want := repoRoot(t) + " build -o " + state + "/bin/" + name + " ./internal/testsupport/" + name + "/cmd/" + name + "\n"
+				want := repoRoot(t) + " build -trimpath -o " + state + "/bin/" + name + " ./internal/testsupport/" + name + "/cmd/" + name + "\n"
 				if !strings.Contains(builds, want) {
 					t.Errorf("missing build %q", want)
 				}

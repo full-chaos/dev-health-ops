@@ -436,7 +436,7 @@ enable_social() {
   [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
   umask 077
   mkdir -p "${STATE}/bin" "${STATE}/logs" "${STATE}/extra"
-  (cd "${ROOT}" && go build -o "${STATE}/bin/providerstub" ./internal/testsupport/providerstub/cmd/providerstub)
+  (cd "${ROOT}" && go build -trimpath -o "${STATE}/bin/providerstub" ./internal/testsupport/providerstub/cmd/providerstub)
   "${STATE}/bin/providerstub" certs -out "${STATE}/social"
   refresh_ca_bundle
   if ! grep -q '# live-e2e-social' /etc/hosts; then
@@ -466,7 +466,7 @@ enable_sso() {
   [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
   umask 077
   mkdir -p "${STATE}/bin" "${STATE}/logs" "${STATE}/extra"
-  (cd "${ROOT}" && go build -o "${STATE}/bin/idpstub" ./internal/testsupport/idpstub/cmd/idpstub)
+  (cd "${ROOT}" && go build -trimpath -o "${STATE}/bin/idpstub" ./internal/testsupport/idpstub/cmd/idpstub)
   "${STATE}/bin/idpstub" certs -out "${STATE}/idp" -host localhost
   refresh_ca_bundle
   printf '%s\n' 'AUTH_PROXY_OIDC=true' 'AUTH_PROXY_SAML=true' >>"${STATE}/extra/go-api.env"

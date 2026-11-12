@@ -137,7 +137,7 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if cfg.WorkloadExchange.Mounted() {
 		registered["api"] = append(registered["api"], workloadexchange.Pattern)
 	}
-	registered["api"] = append(registered["api"], authapi.PatternAuthorize, authapi.PatternAuthorizeBatch)
+	registered["api"] = append(registered["api"], authapi.PatternAuthorize, authapi.PatternAuthorizeBatch, authapi.PatternAuthorizeRepositories)
 	if handlers["internal"] != nil {
 		// Each internal-only route is probed on both listeners: served on the internal one, 404 on the API one.
 		registered["internal"] = append(registered["internal"], authapi.PatternAcrCredentialEvents)
@@ -293,10 +293,10 @@ func TestTheRowGateRefusesAPlantedMissingRowForEveryServedRoute(t *testing.T) {
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
 // four compatibility routes, the validate route, the switch-org route, the session issue route, the session state route, the two delegated session routes, the eight federated sign-in routes, the six credentials routes,
-// the twenty-five provisioning routes, the eight read routes, the four user-admin routes, the two authorize routes and the three operator paths on GET and HEAD, GET and
+// the twenty-five provisioning routes, the eight read routes, the four user-admin routes, the three authorize routes and the three operator paths on GET and HEAD, GET and
 // HEAD of the JWKS and the discovery document, the five OAuth authorization server routes and, on the internal listener,
 // the acr credential events route.
-const servedAuthRouteCount = 86
+const servedAuthRouteCount = 87
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.

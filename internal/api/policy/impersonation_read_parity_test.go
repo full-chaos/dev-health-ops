@@ -61,7 +61,7 @@ func impersonationReadMounts() []parityMount {
 	}
 }
 
-// An admin with a live go-api impersonation row (its own bearer, EdDSA or HS256) reads an enforced row: the answer
+// An admin with a live go-api impersonation row (its own bearer: a routed user access token or the signed fixture token) reads an enforced row: the answer
 // is the one the row gives with its cell off, served as the target organization (product rule 1). The platform row
 // keeps its legacy impersonation refusal.
 func TestAnImpersonatingAdminsReadOnAnEnforcedRowEqualsTheLegacyAnswer(t *testing.T) {
@@ -74,7 +74,7 @@ func TestAnImpersonatingAdminsReadOnAnEnforcedRowEqualsTheLegacyAnswer(t *testin
 		{"EdDSA", func(t *testing.T) *Authenticator {
 			return routed(t, personaStore(personaSuperuser), &fakeValidator{result: userClaims(nil)})
 		}, map[string]string{"Authorization": "Bearer " + shadowBearer}},
-		{"HS256", func(t *testing.T) *Authenticator {
+		{"fixture", func(t *testing.T) *Authenticator {
 			store := newStore()
 			store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
 			withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))

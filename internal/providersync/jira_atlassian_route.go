@@ -1108,7 +1108,11 @@ func collectJiraGraphQLWorklogs(ctx context.Context, client *providerfoundation.
 			} `json:"data"`
 			Errors []any `json:"errors"`
 		}
-		if err := decodeJiraJSON(raw, &payload); err != nil || len(payload.Errors) > 0 || payload.Data.Issue.Worklogs.Edges == nil {
+		decodeErr := decodeJiraJSON(raw, &payload)
+		if decodeErr == nil && len(payload.Errors) > 0 {
+			return nil, requests, providerfoundation.ResponseGraphQL(response, providerfoundation.ErrNormalizationInvalid)
+		}
+		if decodeErr != nil || payload.Data.Issue.Worklogs.Edges == nil {
 			return nil, requests, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 		}
 		for _, edge := range payload.Data.Issue.Worklogs.Edges {

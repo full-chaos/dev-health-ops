@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -100,18 +98,17 @@ func discoverLinear(ctx context.Context, credential providerfoundation.Credentia
 		if err != nil {
 			return nil, err
 		}
-		response, err := client.Do(ctx, "POST", "/graphql", bytes.NewReader(body))
+		response, err := client.DoRoute(ctx, "POST", "/graphql", "/graphql", bytes.NewReader(body))
 		if err != nil {
 			return nil, linearTransportFailure(err)
 		}
-		raw, readErr := io.ReadAll(response.Body)
-		response.Body.Close()
+		raw, readErr := readDiscoveryBody(response)
 		if readErr != nil {
 			return nil, readErr
 		}
 		var payload linearTeamsResponse
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return nil, fmt.Errorf("decode linear teams response: %w", err)
+		if err := providerfoundation.DecodeResponseJSON(response, raw, &payload, 0); err != nil {
+			return nil, err
 		}
 		if len(payload.Errors) > 0 {
 			return nil, linearErrorsFailure(payload.Errors, linearGenericError(payload.Errors))

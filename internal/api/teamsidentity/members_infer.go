@@ -176,15 +176,15 @@ func jiraSearchIssues(ctx context.Context, client *providerfoundation.HTTPClient
 			values.Set("startAt", strconv.Itoa(startAt))
 		}
 		values.Set("fields", "assignee,reporter,creator,comment")
-		response, err := client.Do(ctx, "GET", "/rest/api/3/search/jql?"+values.Encode(), nil)
+		response, err := client.DoRoute(ctx, "GET", "/rest/api/3/search/jql", "/rest/api/3/search/jql?"+values.Encode(), nil)
 		if err != nil {
 			return nil, walk.pageError(err)
 		}
-		raw, err := readBody(response)
+		raw, err := readDiscoveryBody(response)
 		if err != nil {
 			return nil, walk.pageError(err)
 		}
-		page, err := decodeObject(raw, "jira search page")
+		page, err := decodeObject(response, raw)
 		if err != nil {
 			return nil, walk.pageError(err)
 		}

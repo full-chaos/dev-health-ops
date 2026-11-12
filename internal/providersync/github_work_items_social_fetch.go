@@ -167,12 +167,12 @@ func (fetcher GitHubWorkItemPRSocialFetcher) Fetch(
 		for _, number := range targets[start:end] {
 			pull, ok := pulls[number]
 			if !ok {
-				return fetcher.finishFailure(result, providerfoundation.ErrGraphQLResponse)
+				return fetcher.finishFailure(result, providerfoundation.GraphQLShapeFailure(graphQLRoute, providerfoundation.ErrGraphQLResponse))
 			}
 			payload := result.Payloads[number]
 			if commentsLimit > 0 {
 				if pull.Comments == nil {
-					return fetcher.finishFailure(result, providerfoundation.ErrGraphQLResponse)
+					return fetcher.finishFailure(result, providerfoundation.GraphQLShapeFailure(graphQLRoute, providerfoundation.ErrGraphQLResponse))
 				}
 				appendGitHubWorkItemPRSocialNodes(&payload.Comments, pull.Comments.Nodes, commentsLimit)
 				if err := fetcher.drainComments(
@@ -184,7 +184,7 @@ func (fetcher GitHubWorkItemPRSocialFetcher) Fetch(
 			}
 			if eventsLimit > 0 {
 				if pull.TimelineItems == nil {
-					return fetcher.finishFailure(result, providerfoundation.ErrGraphQLResponse)
+					return fetcher.finishFailure(result, providerfoundation.GraphQLShapeFailure(graphQLRoute, providerfoundation.ErrGraphQLResponse))
 				}
 				appendGitHubWorkItemPRSocialNodes(&payload.Events, pull.TimelineItems.Nodes, eventsLimit)
 				if err := fetcher.drainEvents(
@@ -242,7 +242,7 @@ func (fetcher GitHubWorkItemPRSocialFetcher) drainComments(
 		}
 		pull, ok := pulls[number]
 		if !ok || pull.Comments == nil {
-			return providerfoundation.ErrGraphQLResponse
+			return providerfoundation.GraphQLShapeFailure(graphQLRoute, providerfoundation.ErrGraphQLResponse)
 		}
 		appendGitHubWorkItemPRSocialNodes(&payload.Comments, pull.Comments.Nodes, limit)
 		pageInfo = pull.Comments.PageInfo
@@ -289,7 +289,7 @@ func (fetcher GitHubWorkItemPRSocialFetcher) drainEvents(
 		}
 		pull, ok := pulls[number]
 		if !ok || pull.TimelineItems == nil {
-			return providerfoundation.ErrGraphQLResponse
+			return providerfoundation.GraphQLShapeFailure(graphQLRoute, providerfoundation.ErrGraphQLResponse)
 		}
 		appendGitHubWorkItemPRSocialNodes(&payload.Events, pull.TimelineItems.Nodes, limit)
 		pageInfo = pull.TimelineItems.PageInfo
@@ -379,7 +379,7 @@ func (fetcher GitHubWorkItemPRSocialFetcher) fetchPage(
 		return nil, err
 	}
 	if len(envelope.Errors) > 0 {
-		return nil, providerfoundation.ErrGraphQLResponse
+		return nil, providerfoundation.ResponseGraphQL(response, providerfoundation.ErrGraphQLResponse)
 	}
 	if envelope.Data.Repository == nil {
 		return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)

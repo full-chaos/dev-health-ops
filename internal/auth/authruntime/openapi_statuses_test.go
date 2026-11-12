@@ -120,7 +120,7 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callerBearer := map[string]int{"/v1/authorize": 20000, "/v1/authorize:batch": 300000}
+	callerBearer := map[string]int{"/v1/authorize": 20000, "/v1/authorize:batch": 300000, "/v1/authorize:repositories": 20000}
 
 	raw, err := os.ReadFile("../../../contracts/auth/v1/openapi/auth-v1.openapi.json")
 	if err != nil {

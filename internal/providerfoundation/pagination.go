@@ -422,9 +422,9 @@ func CollectLinearGraphQLPages(
 		if rawErrors, ok := payload["errors"]; ok && string(rawErrors) != "null" &&
 			string(rawErrors) != "[]" {
 			if graphqlComplexityError(rawErrors) {
-				return PageCollection{}, ErrGraphQLComplexity
+				return PageCollection{}, ResponseGraphQL(response, ErrGraphQLComplexity)
 			}
-			return PageCollection{}, ErrGraphQLResponse
+			return PageCollection{}, ResponseGraphQL(response, ErrGraphQLResponse)
 		}
 		connection, err := nestedJSONObject(payload, append([]string{"data"}, options.ConnectionPath...)...)
 		if err != nil {

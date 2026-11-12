@@ -12,34 +12,32 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-go/authverify"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/issuerstub"
 )
 
 // trustEdgeIssuerJWKS makes the JWKS client Build makes trust an in-test issuer whose certificate chains to roots, until
-// the test ends.
+// the test ends. It hands that client its own transport through jwksTestHook: http.DefaultTransport is not touched,
+// because httpguard.SharedTransport (the JWKS client's transport in production) copies it once per process, so a later
+// test's CA would never reach it (CHAOS-13613).
 func trustEdgeIssuerJWKS(t *testing.T, roots *x509.CertPool) {
 	t.Helper()
-	saved := http.DefaultTransport
-	base, ok := saved.(*http.Transport)
-	if !ok {
-		t.Fatalf("http.DefaultTransport is a %T, not an *http.Transport: it cannot be cloned", saved)
+	if jwksTestHook != nil {
+		t.Fatal("jwksTestHook is already set: one in-test issuer per test")
 	}
-	trusting := base.Clone()
+	trusting := httpguard.Transport()
 	if trusting.TLSClientConfig == nil {
 		trusting.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
 	trusting.TLSClientConfig.RootCAs = roots
-	http.DefaultTransport = trusting
+	jwksTestHook = func(cfg *authverify.JWKSClientConfig, _ *metric.Meter) {
+		cfg.HTTPClient = &http.Client{Transport: trusting}
+	}
 	t.Cleanup(func() {
-		if http.DefaultTransport != http.RoundTripper(trusting) {
-			t.Errorf("http.DefaultTransport was replaced again during the test: the restore would drop that replacement")
-		}
-		http.DefaultTransport = saved
-		if http.DefaultTransport != saved {
-			t.Errorf("http.DefaultTransport was not restored")
-		}
+		jwksTestHook = nil
+		trusting.CloseIdleConnections()
 	})
 }
 

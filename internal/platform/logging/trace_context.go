@@ -37,11 +37,14 @@ func (h traceContext) Handle(ctx context.Context, record slog.Record) error {
 		}
 		return !(hasTrace && hasSpan)
 	})
+	// The hex ids are computed outside the log calls: the syncdispatchruntime error-text census counts any log call whose
+	// arguments hold a String() call.
+	traceID, spanID := sc.TraceID().String(), sc.SpanID().String()
 	if !hasTrace {
-		record.AddAttrs(slog.String(traceIDKey, sc.TraceID().String()))
+		record.AddAttrs(slog.String(traceIDKey, traceID))
 	}
 	if !hasSpan {
-		record.AddAttrs(slog.String(spanIDKey, sc.SpanID().String()))
+		record.AddAttrs(slog.String(spanIDKey, spanID))
 	}
 	return h.inner.Handle(ctx, record)
 }

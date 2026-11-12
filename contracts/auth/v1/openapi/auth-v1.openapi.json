@@ -663,7 +663,7 @@
             }
           },
           "401": {
-            "description": "error.v1: invalid_credentials when the caller's workload token is refused (answered before any body byte is read), principal_reference_invalid when the principal_reference token names no live session of its principal; the two codes differ so a policy-enforcement point can tell its own token failing from the user's",
+            "description": "error.v1: invalid_credentials when the caller's workload token is refused (answered before any body byte is read), principal_reference_invalid when the principal_reference token names no live session of its principal (or, for a web approver reference, is presented by another caller or for another question); the two codes differ so a policy-enforcement point can tell its own token failing from the user's",
             "content": {
               "application/json": {
                 "schema": {

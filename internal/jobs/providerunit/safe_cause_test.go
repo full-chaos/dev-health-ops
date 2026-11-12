@@ -25,7 +25,7 @@ func providerErrorWithSecrets() error {
 	return &providerfoundation.ProviderError{
 		Class:      providerfoundation.ErrorAuthentication,
 		StatusCode: 401,
-		Path:       "/repos/octo/hello/actions/artifacts",
+		Route:      "/repos/{owner}/{repo}/actions/artifacts",
 		Body:       "token ghp_do_not_log_this_value is invalid",
 	}
 }
@@ -84,7 +84,7 @@ func TestProviderUnitFailuresCarryASafeCause(t *testing.T) {
 		{
 			name: "provider error class and status",
 			// The 4xx/5xx class the ticket names. Class and status are safe;
-			// Path and Body are not, and the next test proves they stay out.
+			// Route and Body are not, and the next test proves they stay out.
 			attempt: 1, maxAttempts: 5,
 			executorErr: providerErrorWithSecrets(),
 			wantFragments: []string{
@@ -177,14 +177,14 @@ func TestProviderUnitSafeCauseNeverCarriesProviderResponseContent(t *testing.T) 
 	// Precondition: the fixture really does carry both, so the assertions
 	// below cannot pass because the secrets were never there.
 	if !strings.Contains(providerErr.(*providerfoundation.ProviderError).Body, "ghp_do_not_log_this_value") ||
-		!strings.Contains(providerErr.(*providerfoundation.ProviderError).Path, "/repos/octo/hello") {
-		t.Fatalf("fixture no longer carries the path in Path and the body in Body: %q", providerErr.Error())
+		!strings.Contains(providerErr.(*providerfoundation.ProviderError).Route, "/repos/{owner}/{repo}") {
+		t.Fatalf("fixture no longer carries the route in Route and the body in Body: %q", providerErr.Error())
 	}
 	if strings.Contains(cause, "ghp_do_not_log_this_value") {
 		t.Fatalf("cause %q leaked the response body", cause)
 	}
-	if strings.Contains(cause, "/repos/octo/hello") {
-		t.Fatalf("cause %q leaked the request path", cause)
+	if strings.Contains(cause, "/repos/") {
+		t.Fatalf("cause %q leaked the request route", cause)
 	}
 	if strings.Contains(cause, providerErr.Error()) {
 		t.Fatalf("cause %q is the error's own message; it must be constructed from vetted fields only", cause)

@@ -122,7 +122,7 @@ func TestTransportUnknownAuthorityReachesCaller(t *testing.T) {
 	if strings.Contains(err.Error(), "secret-query") || strings.Contains(logs.String(), "secret-query") {
 		t.Fatal("query string leaked")
 	}
-	if strings.Contains(logs.String(), "octocat-login") || strings.Contains(err.Error(), "octocat-login") || providerErr.Path != "" {
+	if strings.Contains(logs.String(), "octocat-login") || strings.Contains(err.Error(), "octocat-login") {
 		t.Fatalf("request path reached the error or log: %q / %s", err.Error(), logs.String())
 	}
 }

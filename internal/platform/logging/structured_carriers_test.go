@@ -17,7 +17,7 @@ import (
 // value in the line.
 func TestProviderErrorAndJSONBytesInEveryStructuredCarrier(t *testing.T) {
 	raw := []byte(`{"\u0074oken":"CANARY_BYTE_SECRET","status":400}`)
-	e := &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 400, Path: "/repos/a/b", Body: `{"message":"CANARY_PROVIDER_CONTENT"}`}
+	e := &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 400, Body: `{"message":"CANARY_PROVIDER_CONTENT"}`}
 	for _, c := range []struct {
 		name  string
 		value any

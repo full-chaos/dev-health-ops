@@ -3,6 +3,14 @@
     "provider": "github",
     "method": "POST",
     "path": "/login/oauth/access_token",
+    "body_contains": "code=live-refused",
+    "status": 200,
+    "body": {"access_token": "gh-refused", "token_type": "bearer", "scope": "read:user,user:email"}
+  },
+  {
+    "provider": "github",
+    "method": "POST",
+    "path": "/login/oauth/access_token",
     "status": 200,
     "body": {"access_token": "gh-live", "token_type": "bearer", "scope": "read:user,user:email"}
   },
@@ -22,6 +30,23 @@
     "body_contains": "\"access_token\":\"gh-live\"",
     "status": 200,
     "body": {"app": {"client_id": "gh-client"}, "user": {"id": 920001}}
+  },
+  {
+    "provider": "github",
+    "method": "GET",
+    "path": "/user",
+    "request_headers": {"Authorization": "Bearer gh-refused"},
+    "status": 200,
+    "body": {"id": 920002, "login": "live-refused", "email": "live-refused@example.test"}
+  },
+  {
+    "provider": "github",
+    "method": "POST",
+    "path": "/applications/gh-client/token",
+    "request_headers": {"Authorization": "Basic Z2gtY2xpZW50OmdoLXNlY3JldA=="},
+    "body_contains": "gh-refused",
+    "status": 200,
+    "body": {"app": {"client_id": "gh-client"}, "user": {"id": 920002}}
   },
   {
     "provider": "github",

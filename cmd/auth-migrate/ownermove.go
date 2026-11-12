@@ -100,6 +100,12 @@ func executeOwnerMove(parent context.Context, args []string, lookup secrets.Look
 	}
 	fmt.Fprintf(stdout, "owner-move applied=%t moved=%s followed=%s public_tables=%d grant_rows=%d extras_revoked=%d extras_kept=%d\n",
 		report.Applied, countList(report.Moved), countList(report.Followed), report.PublicTables, report.GrantRowsMoved, report.ExtrasRevoked, report.ExtrasKept)
+	for _, line := range report.ExtraLines {
+		fmt.Fprintf(stdout, "owner-move extra %s\n", line)
+	}
+	if report.ExtrasKept > 0 {
+		fmt.Fprintf(stderr, "owner-move warning: %d migrator privileges outside the set were kept (see the keep lines)\n", report.ExtrasKept)
+	}
 	return 0
 }
 

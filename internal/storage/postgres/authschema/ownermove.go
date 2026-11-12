@@ -162,6 +162,8 @@ type OwnerMoveReport struct {
 	// ExtrasRevoked counts the migration login's public privileges outside the privilege set that this run takes away;
 	// ExtrasKept counts those it leaves for now (see migratorExtraStatements).
 	ExtrasRevoked, ExtrasKept int
+	// ExtraLines names each one: revoke|table|privilege|column|grantable|grantor, or keep|...|reason.
+	ExtraLines []string
 }
 
 // Validate checks the options without touching the database.

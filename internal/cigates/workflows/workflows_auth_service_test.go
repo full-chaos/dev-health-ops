@@ -32,7 +32,7 @@ var (
 	authFuzzRow    = regexp.MustCompile(`"(\S+) (Fuzz\w+)"`)
 	authStageCall  = regexp.MustCompile(`(?m)^\s*bash ci/check_go\.sh auth ([a-z-]+)`)
 	authClosureFn  = regexp.MustCompile(`(?s)check_auth_closure\(\) \{(.*?)\n\}`)
-	authStagesWant = []string{"test", "race", "race-integration", "fuzz", "history", "vuln", "middleware", "fuzz-registry", "paths-selftest", "scope-selftest"}
+	authStagesWant = []string{"test-leg", "race-leg", "race-integration-leg", "fuzz", "history", "vuln", "middleware", "fuzz-registry", "paths-selftest", "scope-selftest"}
 )
 
 func testSteps0(jobs map[string]any) []map[string]any {
@@ -149,7 +149,7 @@ func authViolations(t *testing.T, root string) []string {
 	}
 	// the auth test and race legs are not duplicates of go-quality (no -count=1 there, race skips on pull requests): they stay, unconditional
 	for _, st := range testSteps0(jobs) {
-		if r := asString(st["run"]); (r == "bash ci/check_go.sh auth test" || r == "bash ci/check_go.sh auth race") && st["if"] != nil {
+		if r := asString(st["run"]); (strings.HasPrefix(r, "bash ci/check_go.sh auth test-leg ") || strings.HasPrefix(r, "bash ci/check_go.sh auth race-leg ")) && st["if"] != nil {
 			out = append(out, fmt.Sprintf("`%s` must run on every event: go-quality is not a superset of it", r))
 		}
 	}
@@ -191,8 +191,8 @@ func authViolations(t *testing.T, root string) []string {
 
 	gateCode := shellCode(asString(gateSteps[0]["run"]))
 	for _, race := range []struct{ job, pair, env, run string }{
-		{"auth-race", `"auth-race=${RACE}"`, "RACE", "bash ci/check_go.sh auth race"},
-		{"auth-race-integration", `"auth-race-integration=${RACE_INTEGRATION}"`, "RACE_INTEGRATION", "bash ci/check_go.sh auth race-integration"},
+		{"auth-race", `"auth-race=${RACE}"`, "RACE", `bash ci/check_go.sh auth race-leg "${{ matrix.leg }}" 7`},
+		{"auth-race-integration", `"auth-race-integration=${RACE_INTEGRATION}"`, "RACE_INTEGRATION", `bash ci/check_go.sh auth race-integration-leg "${{ matrix.leg }}" 12`},
 	} {
 		if !strings.Contains(gateCode, race.pair) || asString(asMap(gate["env"])[race.env]) != "${{ needs."+race.job+".result }}" {
 			out = append(out, fmt.Sprintf("auth-gate must check the %s result in its pair loop: a failed or skipped %s must fail a relevant change", race.job, race.job))
@@ -211,7 +211,7 @@ func authViolations(t *testing.T, root string) []string {
 		}
 	}
 	for _, s := range stepsOf(jobs["auth-test"]) {
-		if r := asString(s["run"]); r == "bash ci/check_go.sh auth race" || r == "bash ci/check_go.sh auth race-integration" {
+		if r := asString(s["run"]); strings.Contains(r, "check_go.sh auth race") {
 			out = append(out, fmt.Sprintf("auth-test must not run `%s`: the race legs have their own job and cap", r))
 		}
 	}
@@ -319,7 +319,7 @@ func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 		{"registry gains a target with no fuzz job", []mutation{{cg, "AUTH_FUZZ_TARGETS=(\n", "AUTH_FUZZ_TARGETS=(\n  \"./internal/auth/x FuzzPlanted\"\n"}}, []string{"differs from the AUTH_FUZZ_TARGETS registry", "FuzzPlanted"}},
 		{"gate stops failing on a skipped job", []mutation{{wf, `[ "${pair#*=}" = "success" ]`, `[ "${pair#*=}" != "failure" ]`}}, []string{"failed, cancelled OR skipped"}},
 		{"gate job drops its always()", []mutation{{wf, "if: always()", "if: success()"}}, []string{"always()"}},
-		{"the auth race step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh auth race\n", "run: 'echo \"run: bash ci/check_go.sh auth race\"'\n"}}, []string{"no longer calls auth stage \"race\""}},
+		{"the auth race step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh auth race-leg \"${{ matrix.leg }}\" 7\n", "run: 'echo \"run: bash ci/check_go.sh auth race-leg\"'\n"}}, []string{"no longer calls auth stage \"race-leg\""}},
 		{"an auth gate job runs on a condition that is always false", []mutation{{wf, "    if: needs.auth-changes.outputs.relevant == 'true'\n", "    if: false && needs.auth-changes.outputs.relevant == 'true'\n"}}, []string{"if must be exactly"}},
 		{"the gate's success check is only echoed", []mutation{{wf, `[ "${pair#*=}" = "success" ] ||`, `echo '[ "${pair#*=}" = "success" ] ||'; true ||`}}, []string{"failed, cancelled OR skipped"}},
 		{"the closure loop survives only in a comment", []mutation{{cg, "for arch in amd64 arm64", "# for arch in amd64 arm64"}}, []string{"no longer covers cgo"}},
@@ -335,7 +335,7 @@ func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 		{"the auth workflow runs gofmt again", []mutation{{wf, "      - name: Fuzz registry matches the tree\n", "      - name: gofmt\n        run: bash ci/check_go.sh auth fmt\n      - name: Fuzz registry matches the tree\n"}}, []string{"runs auth fmt"}},
 		{"go-quality static may be skipped", []mutation{{quality, "the static leg runs on every change set", "the static leg may be skipped"}}, []string{"static leg no longer runs on every change set"}},
 		{"go-quality static drops vet", []mutation{{cg, "      ci_leg_stage vet check_vet\n", ""}}, []string{"static ci-leg no longer runs"}},
-		{"the auth race step gains a pull request guard", []mutation{{wf, "      - name: go test -race (auth packages)\n", "      - name: go test -race (auth packages)\n        if: github.event_name == 'pull_request'\n"}}, []string{"must run on every event"}},
+		{"the auth race step gains a pull request guard", []mutation{{wf, "      - name: go test -race (auth packages, leg ${{ matrix.leg }} of 7)\n", "      - name: go test -race (auth packages, leg ${{ matrix.leg }} of 7)\n        if: github.event_name == 'pull_request'\n"}}, []string{"must run on every event"}},
 		{"closure check stops covering arm64", []mutation{{cg, "for arch in amd64 arm64", "for arch in amd64"}}, []string{"no longer covers cgo"}},
 	}
 	for _, c := range cases {

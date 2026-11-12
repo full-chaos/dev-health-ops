@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-// CHAOS-11421: the plan-reads call-graph result is kept in actions/cache on the GitHub-hosted static leg only, and only a
+// CHAOS-11421: the plan-reads call-graph result is kept in actions/cache on the GitHub-hosted plan-reads leg only, and only a
 // pull request READS it. The self-hosted pool shares a hostPath that any pull request job can write, so no store lives
 // there: a self-hosted leg never restores or saves one and recomputes every time. A merge-queue run and a push to main
 // always compute fresh (PLAN_READS_REACH_FRESH), and only a push to main saves, so the stored result is a fresh compute.
 // The store is never an authenticated source: the digest in its header catches accident, not a writer.
 
-const reachStoreHostedIf = "steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'static'"
+const reachStoreHostedIf = "steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted' && matrix.name == 'plan-reads'"
 
 const reachKeyOutput = "${{ steps.reach-key.outputs.key }}"
 
@@ -30,7 +30,7 @@ func reachStoreViolations(t *testing.T, root string) []string {
 		isCache := usesAction(s, "actions/cache") || usesAction(s, "actions/cache/restore") || usesAction(s, "actions/cache/save")
 		if isCache && strings.Contains(path, "plan-reads-reach") {
 			if !strings.Contains(ifc, reachStoreHostedIf) {
-				add("the reach store step %q must run on GitHub-hosted static legs only (if: %q), got %q", asString(s["name"]), reachStoreHostedIf, ifc)
+				add("the reach store step %q must run on GitHub-hosted plan-reads legs only (if: %q), got %q", asString(s["name"]), reachStoreHostedIf, ifc)
 			}
 			switch {
 			case usesAction(s, "actions/cache/restore"):
@@ -51,7 +51,7 @@ func reachStoreViolations(t *testing.T, root string) []string {
 			exports++
 			hash = s
 			if ifc != reachStoreHostedIf {
-				add("the step that exports PLAN_READS_REACH_CACHE must run on GitHub-hosted static legs only (if: %q), got %q", reachStoreHostedIf, ifc)
+				add("the step that exports PLAN_READS_REACH_CACHE must run on GitHub-hosted plan-reads legs only (if: %q), got %q", reachStoreHostedIf, ifc)
 			}
 		}
 		if asString(s["id"]) == "reach-key" {
@@ -138,18 +138,18 @@ func TestReachStorePlantedDefectsAreCaught(t *testing.T) {
 	const gq = ".github/workflows/go-quality.yml"
 	files := []string{gq}
 	const prOnly = " && github.event_name == 'pull_request'"
-	const looseHosted = "steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'"
+	const looseHosted = "steps.relevance.outputs.relevant == 'true' && matrix.name == 'plan-reads'"
 	const restoreTail = "          key: ${{ steps.reach-key.outputs.key }}\n\n      - name: Compile this leg's packages"
 	cases := []struct {
 		name string
 		m    mutation
 		want string
 	}{
-		{"restore also on the pool", mutation{gq, "        id: reach-store\n        if: " + reachStoreHostedIf + prOnly, "        id: reach-store\n        if: " + looseHosted + prOnly}, "must run on GitHub-hosted static legs only"},
+		{"restore also on the pool", mutation{gq, "        id: reach-store\n        if: " + reachStoreHostedIf + prOnly, "        id: reach-store\n        if: " + looseHosted + prOnly}, "must run on GitHub-hosted plan-reads legs only"},
 		{"restore on every event", mutation{gq, reachStoreHostedIf + prOnly + "\n        uses: actions/cache/restore", reachStoreHostedIf + "\n        uses: actions/cache/restore"}, "must run on pull_request only"},
 		{"restore also in the merge queue", mutation{gq, reachStoreHostedIf + prOnly + "\n        uses: actions/cache/restore", reachStoreHostedIf + " && (github.event_name == 'pull_request' || github.event_name == 'merge_group')\n        uses: actions/cache/restore"}, "must run on pull_request only"},
-		{"save also on the pool", mutation{gq, "success() && " + reachStoreHostedIf, "success() && " + looseHosted}, "must run on GitHub-hosted static legs only"},
-		{"the export also on the pool", mutation{gq, "        id: reach-key\n        if: " + reachStoreHostedIf, "        id: reach-key\n        if: steps.relevance.outputs.relevant == 'true'"}, "must run on GitHub-hosted static legs only"},
+		{"save also on the pool", mutation{gq, "success() && " + reachStoreHostedIf, "success() && " + looseHosted}, "must run on GitHub-hosted plan-reads legs only"},
+		{"the export also on the pool", mutation{gq, "        id: reach-key\n        if: " + reachStoreHostedIf, "        id: reach-key\n        if: steps.relevance.outputs.relevant == 'true'"}, "must run on GitHub-hosted plan-reads legs only"},
 		{"no fresh flag outside pull requests", mutation{gq, "          if [ \"${EVENT_NAME}\" != \"pull_request\" ]; then\n            echo \"PLAN_READS_REACH_FRESH=1\" >> \"${GITHUB_ENV}\"\n          fi\n", ""}, "must set PLAN_READS_REACH_FRESH"},
 		{"the fresh flag only on pull requests", mutation{gq, "if [ \"${EVENT_NAME}\" != \"pull_request\" ]; then", "if [ \"${EVENT_NAME}\" = \"pull_request\" ]; then"}, "must set PLAN_READS_REACH_FRESH"},
 		{"restore-keys", mutation{gq, restoreTail, "          key: ${{ steps.reach-key.outputs.key }}\n          restore-keys: plan-reads-reach-v3-\n\n      - name: Compile this leg's packages"}, "restore-keys would reuse"},

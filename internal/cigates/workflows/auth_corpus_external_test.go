@@ -487,8 +487,8 @@ func TestAuthCorpusOverrideTagsItsBuiltImagesByProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	for service, want := range map[string]string{
-		"providerstub": "authcorpus-providerstub:${AUTH_CORPUS_PROJECT:-local}",
-		"smtpsink":     "authcorpus-smtpsink:${AUTH_CORPUS_PROJECT:-local}",
+		"providerstub": "authcorpus-providerstub:${AUTH_CORPUS_IMAGE_TAG:-local}",
+		"smtpsink":     "authcorpus-smtpsink:${AUTH_CORPUS_IMAGE_TAG:-local}",
 	} {
 		if got := override.Services[service].Image; got != want {
 			t.Errorf("%s image = %q, want %q", service, got, want)

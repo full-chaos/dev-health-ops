@@ -1,0 +1,8 @@
+# CHAOS-13520: the weights of the auth race-integration packages (AUTH_RACE_PACKAGES) for check_go.sh auth race-integration-leg:
+# package<TAB>seconds, the go test -race -tags=integration wall of each package in the auth-race-integration job of run
+# 42838103055 (job 129906427252), rounded up. A package with no row weighs 1.
+internal/audit	233
+internal/auth/identity	102
+internal/auth/identity/local	560
+internal/auth/keyrotation	25
+internal/auth/session	526

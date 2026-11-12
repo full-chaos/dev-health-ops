@@ -183,10 +183,11 @@ var Allowlist = []Entry{
 	{File: "internal/auth/invite/store.go", Func: "Store.acceptOnce", Table: "auth.invites", Verb: "INSERT"},
 	{File: "internal/auth/invite/store.go", Func: "Store.acceptOnce", Table: "auth.invites", Verb: "UPDATE"},
 	{File: "internal/auth/invite/store.go", Func: "Store.acceptOnce", Table: "public.org_invites", Verb: "UPDATE"},
-	// The organization deprovision (one audit.Commit): pending invites revoked (go-api-only ones taken over) and the organization suspended.
+	// The organization deprovision (one audit.Commit): pending invites revoked (go-api-only ones taken over), the organization suspended and its slug freed.
 	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "auth.invites", Verb: "INSERT"},
 	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "auth.invites", Verb: "UPDATE"},
 	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "public.org_invites", Verb: "UPDATE"},
+	{File: "internal/auth/org/deprovision.go", Func: "Store.ApplyFreeSlug", Table: "auth.organizations", Verb: "UPDATE"},
 	{File: "internal/auth/org/deprovision.go", Func: "Store.ApplySuspend", Table: "auth.organizations", Verb: "UPDATE"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.bootstrapApply", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.bootstrapApply", Table: "auth.platform_role_assignments", Verb: "INSERT"},

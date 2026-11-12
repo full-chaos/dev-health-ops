@@ -263,6 +263,7 @@ func TestDelegatedUseIsLoggedOnlyInTheGuardWrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	sites := map[string]int{}
+	callers := map[string]int{}
 	readers := map[string]int{}
 	notCovered := map[string]bool{}
 	for _, dir := range []string{"internal/api", "internal/apiservice"} {
@@ -287,6 +288,8 @@ func TestDelegatedUseIsLoggedOnlyInTheGuardWrap(t *testing.T) {
 						switch sel.Sel.Name {
 						case "noteDelegatedUse":
 							sites[site]++
+						case "userRequest":
+							callers[site]++
 						case "currentUser", "optionalUser":
 							if strings.HasPrefix(rel, "internal/api/policy/") {
 								readers[site]++
@@ -306,8 +309,11 @@ func TestDelegatedUseIsLoggedOnlyInTheGuardWrap(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := sites["internal/api/policy/guard.go:Guard.wrap"]; got != 2 || len(sites) != 1 {
-		t.Errorf("noteDelegatedUse call sites %v, want exactly 2 calls, both in Guard.wrap", sites)
+	if len(sites) != 1 || sites["internal/api/policy/delegated_use.go:Guard.userRequest"] != 1 {
+		t.Errorf("noteDelegatedUse call sites %v, want exactly 1 call, in Guard.userRequest", sites)
+	}
+	if len(callers) != 1 || callers["internal/api/policy/guard.go:Guard.wrap"] != 2 {
+		t.Errorf("Guard.userRequest call sites %v, want exactly 2 calls, both in Guard.wrap", callers)
 	}
 	// Every authentication of a bearer in the Guard is called from Guard.wrap only, so a row the Guard admits reaches the hook.
 	if len(readers) != 1 || readers["internal/api/policy/guard.go:Guard.wrap"] != 2 {

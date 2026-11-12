@@ -21,3 +21,10 @@ func (g *Guard) noteDelegatedUse(r *http.Request, user *User) {
 		slog.String("route", r.Pattern), slog.String("actor", chain.Actor),
 		slog.String("target", chain.Subject), slog.String("sid", chain.SessionID))
 }
+
+// userRequest is r carrying user, after noteDelegatedUse: the one step the Guard takes before it serves a handler the
+// decision point did not decide. One call replaces a line of Guard.wrap, so the line numbers its cited anchors name stay.
+func (g *Guard) userRequest(r *http.Request, user *User) *http.Request {
+	g.noteDelegatedUse(r, user)
+	return r.WithContext(WithUser(r.Context(), user))
+}

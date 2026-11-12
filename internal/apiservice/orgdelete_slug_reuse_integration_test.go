@@ -184,7 +184,7 @@ func compatLoginPlane(t *testing.T, ctx context.Context, pool *pgxpool.Pool) *ht
 		},
 		Limits: limits,
 		Login: &authapi.LoginConfig{Users: local.IdentityUsers{Store: identities}, Attempts: local.NewPGAttempts(pool, schema),
-			LockoutKey: contracts.NewSecretString("slugreuse-lockout-" + uuid.NewString()),
+			LockoutKey: contracts.NewSecretString(base64.RawURLEncoding.EncodeToString([]byte("slugreuse-lockout-key-0000000032"))),
 			Compare:    func(hash, password string) bool { return hash == "hash:"+password }},
 	})
 	if err != nil {
@@ -222,7 +222,7 @@ func (s *slugStack) goAPICall(t *testing.T, method, path, body string) (int, map
 func (s *slugStack) user(t *testing.T, ctx context.Context, label string) (uuid.UUID, string) {
 	t.Helper()
 	id := uuid.New()
-	email := "slugreuse-" + label + "-" + id.String()[:8] + "@example.test"
+	email := "slugreuse-" + label + "-" + id.String()[:8] + "@example.com"
 	if _, err := s.admin.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, $3, 'local', true, true, false, 0, now(), now())`, id, email, "hash:"+slugReusePassword); err != nil {
 		t.Fatal(err)
@@ -300,11 +300,15 @@ func (s *slugStack) liveSessionsIn(t *testing.T, ctx context.Context, principal,
 func wantSignedIn(t *testing.T, s *slugStack, ctx context.Context, label, email string, principal, orgID uuid.UUID) {
 	t.Helper()
 	before := s.liveSessionsIn(t, ctx, principal, orgID)
-	if status, body := s.login(t, email, orgID); status != http.StatusOK {
-		t.Fatalf("%s: live plane sign-in = %d %s, want 200", label, status, body)
+	status, body := s.login(t, email, orgID)
+	if status != http.StatusOK {
+		t.Errorf("%s: live plane sign-in = %d %s, want 200", label, status, body)
 	}
 	if err := s.issueIn(t, ctx, principal, orgID); err != nil {
-		t.Fatalf("%s: issue plane sign-in = %v, want a session", label, err)
+		t.Errorf("%s: issue plane sign-in = %v, want a session", label, err)
+	}
+	if t.Failed() {
+		t.FailNow()
 	}
 	if got := s.liveSessionsIn(t, ctx, principal, orgID); got != before+2 {
 		t.Fatalf("%s: live sessions in the org = %d, want %d", label, got, before+2)
@@ -381,7 +385,7 @@ func TestARemainingSlugClashIsAConflict(t *testing.T) {
 		t.Fatalf("Z's slug = %q, want %q", got, slug)
 	}
 	if status, body := s.login(t, email, z); status != http.StatusConflict {
-		t.Fatalf("live plane sign-in = %d %s, want 409", status, body)
+		t.Errorf("live plane sign-in = %d %s, want 409", status, body)
 	}
 	var refused *sessionissue.RefusedError
 	if err := s.issueIn(t, ctx, owner, z); !errors.As(err, &refused) || refused.Status != http.StatusConflict || refused.Reason != "organization_conflict" {

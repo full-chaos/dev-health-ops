@@ -52,6 +52,7 @@ type slugStack struct {
 	compat *httptest.Server
 	issue  *sessionissue.Client
 	orgs   *org.Store
+	users  *identity.Store
 }
 
 func newSlugStack(t *testing.T, ctx context.Context) *slugStack {
@@ -137,7 +138,7 @@ VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, super, "slug
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &slugStack{admin: admin, goAPI: server.Handler(), bearer: issuer.MustMint(t, edtokens.Claims{UserID: super})}
+	s := &slugStack{admin: admin, goAPI: server.Handler(), bearer: issuer.MustMint(t, edtokens.Claims{UserID: super}), users: identities}
 	s.compat = compatLoginPlane(t, ctx, admin)
 	s.issue = authplane.Start(t, ctx, pg.URI, authplane.NewKey(t), "slugreuse-jwt-"+uuid.NewString()).Issuer
 	schema, err := authschema.NewValidatedIdentifier(authplane.Schema)
@@ -218,7 +219,8 @@ func (s *slugStack) goAPICall(t *testing.T, method, path, body string) (int, map
 	return recorder.Code, answer
 }
 
-// user seeds a go-api user who signs in with slugReusePassword.
+// user seeds a go-api user who signs in with slugReusePassword, projected into the auth schema as a deployed
+// auth-service holds every go-api user (the users backfill).
 func (s *slugStack) user(t *testing.T, ctx context.Context, label string) (uuid.UUID, string) {
 	t.Helper()
 	id := uuid.New()
@@ -226,6 +228,9 @@ func (s *slugStack) user(t *testing.T, ctx context.Context, label string) (uuid.
 	if _, err := s.admin.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, $3, 'local', true, true, false, 0, now(), now())`, id, email, "hash:"+slugReusePassword); err != nil {
 		t.Fatal(err)
+	}
+	if err := s.users.Project(context.Background(), id); err != nil {
+		t.Fatalf("project user: %v", err)
 	}
 	return id, email
 }
@@ -337,6 +342,10 @@ func TestADeletedOrganizationsNameCanBeReused(t *testing.T) {
 				wantSignedIn(t, s, ctx, "R1 X", emailX, ownerX, x)
 			}
 			s.delete(t, x)
+			if n := s.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL AND slug = $2`,
+				x, "~deleted~"+x.String()); n != 1 {
+				t.Fatalf("X's auth row after the delete: %d suspended rows with the freed slug, want 1", n)
+			}
 			ownerY, emailY := s.user(t, ctx, "y")
 			second := name
 			if seq.freshSecond {
@@ -350,8 +359,9 @@ func TestADeletedOrganizationsNameCanBeReused(t *testing.T) {
 			if n := s.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND slug = $2 AND disabled_at IS NULL`, y, slugY); n != 1 {
 				t.Fatalf("Y's own active auth row with slug %q: %d rows, want 1", slugY, n)
 			}
-			if n := s.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL`, x); n != 1 {
-				t.Fatalf("X's suspended auth row: %d rows, want 1", n)
+			if n := s.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL AND slug = $2`,
+				x, "~deleted~"+x.String()); n != 1 {
+				t.Fatalf("X's suspended auth row with the freed slug after Y's sign-in: %d rows, want 1", n)
 			}
 			if n := s.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE organization_id = $1 AND revoked_at IS NULL`, x); n != 0 {
 				t.Fatalf("X has %d live sessions after its delete, want 0", n)

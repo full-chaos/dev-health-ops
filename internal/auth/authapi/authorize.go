@@ -201,11 +201,11 @@ type authorizeHandlers struct {
 	resolve func(reference string) (ReferencedPrincipal, string, error)
 }
 
-func (h authorizeHandlers) resolveReference(reference string) (ReferencedPrincipal, string, error) {
+func (h authorizeHandlers) resolveReference(reference, caller string) (ReferencedPrincipal, string, error) {
 	if h.resolve != nil {
 		return h.resolve(reference)
 	}
-	return h.References.Resolve(reference)
+	return h.References.ResolveFor(reference, caller)
 }
 
 // AuthorizeRoutes returns the routes whose endpoint-profile row admits the
@@ -389,7 +389,7 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		p, seen := resolved[q.PrincipalReference]
 		if !seen {
 			var why string
-			p, why, err = h.resolveReference(q.PrincipalReference)
+			p, why, err = h.resolveReference(q.PrincipalReference, caller.Subject)
 			if err != nil {
 				h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
 				return nil, false
@@ -400,6 +400,11 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 				return nil, false
 			}
 			resolved[q.PrincipalReference] = p
+		}
+		if p.Kind == ReferenceWebApprover && !webApproverBinds(op, q, p) {
+			h.Logger.WarnContext(ctx, "authorize refused: principal reference", "refusal", "approver_binding", "operation", op)
+			h.rec.refuse(w, r, op, unauthorized(reasonPrincipalReferenceInvalid), nil)
+			return nil, false
 		}
 		items[i] = authorizeItem{question: q, principal: p, listing: op == opAuthorizeRepositories}
 	}
@@ -522,7 +527,8 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			key.session = rs.id
 		}
 		items[i].cache = cacheBypass
-		if cached && !delegated && !account {
+		// A web approver reference is decided on the live session every call, never from the cache.
+		if cached && !delegated && !account && items[i].principal.Kind != ReferenceWebApprover {
 			u, ok := unfed[key]
 			if !ok {
 				var err error

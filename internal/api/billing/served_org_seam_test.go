@@ -210,8 +210,8 @@ func seamOrgParam(r *http.Request) *uuid.UUID {
 }
 
 // With billing enforced, a caller whose token org is A asks a billing org_id row for B: a member of B, and a superuser.
-// The request keeps the legacy answer (the guard, then the route's own org resolution) with no PDP call (product rule
-// 1, D6773): the PDP judges one organization and the route serves another. org_id=A is judged on A and served A.
+// The request keeps the legacy answer (the guard, then the route's own org resolution) and the PDP is asked ONE question,
+// about the token org A, never about B (product rule 1, D6773, S2-parity): the route serves another organization. org_id=A is judged on A and served A.
 func TestBillingOrgIDQueryRowsKeepTheLegacyAnswerForAnotherOrg(t *testing.T) {
 	cases := []struct {
 		pattern  string
@@ -251,9 +251,9 @@ func TestBillingOrgIDQueryRowsKeepTheLegacyAnswerForAnotherOrg(t *testing.T) {
 			}
 			for _, superuser := range []bool{false, true} {
 				wantStatus, wantBody := serve(superuser, seamOrgB, nil)
-				if status, body, asked := do(superuser, seamOrgB); status != wantStatus || body != wantBody || len(asked) != 0 {
-					t.Errorf("superuser %v, token A, org_id=B: %d %s, PDP asked %v, want the legacy %d %s and no PDP call", superuser, status, body,
-						asked, wantStatus, wantBody)
+				if status, body, asked := do(superuser, seamOrgB); status != wantStatus || body != wantBody || len(asked) != 1 || asked[0] != seamOrgA.String() {
+					t.Errorf("superuser %v, token A, org_id=B: %d %s, PDP asked %v, want the legacy %d %s and one question on the token org %s", superuser, status, body,
+						asked, wantStatus, wantBody, seamOrgA)
 				}
 			}
 			if status, body, asked := do(false, seamOrgA); status != http.StatusOK || body != `{"served":"`+seamOrgA.String()+`"}` ||

@@ -397,3 +397,51 @@ func TestARedirectHopIsCountedIntoTheUnitLedger(t *testing.T) {
 		t.Fatalf("wire requests = %d, unit ledger = %v, want both counted", hits, got)
 	}
 }
+
+func TestAFollowedRedirectHopOfAnUnauthenticatedRequestIsCountedWhateverTheDecoratorsDoWithTheContext(t *testing.T) {
+	t.Parallel()
+	hits := 0
+	hc := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		hits++
+		if r.URL.Path == "/old" {
+			return testHTTPResponse(r, http.StatusFound, http.Header{"Location": {"https://api.github.test/next"}}, ``), nil
+		}
+		return testHTTPResponse(r, http.StatusOK, http.Header{}, `{}`), nil
+	})}
+	build := func(doer HTTPDoer) *HTTPClient {
+		client, err := NewHTTPClient("github", "https://api.github.test", doer,
+			TokenAuth("Authorization", "Bearer ", secrets.NewValue("token")),
+			RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
+			LeaseGuardFunc(func(context.Context) error { return nil }))
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.Ledger = NewRequestLedger()
+		return client
+	}
+	ctx := WithRequestAccount(context.Background(), "prs", "")
+	for name, client := range map[string]*HTTPClient{
+		"a decorator that drops the context": build(contextDroppingDoer{inner: hc}),
+		"a Doer replaced after construction": func() *HTTPClient {
+			client := build(hc)
+			client.Doer = hc
+			return client
+		}(),
+		"a replaced Doer behind a decorator that drops the context": func() *HTTPClient {
+			client := build(hc)
+			client.Doer = contextDroppingDoer{inner: hc}
+			return client
+		}(),
+		"the constructed client": build(hc),
+	} {
+		hits = 0
+		response, err := client.DoUnauthenticated(ctx, http.MethodGet, "https://api.github.test/old")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		_ = response.Body.Close()
+		if got := entriesOf(client.Ledger); hits != 2 || got[LedgerKey{"prs", "rest_core"}] != 2 || len(got) != 1 {
+			t.Errorf("%s: wire requests = %d, ledger = %v, want both requests under prs/rest_core", name, hits, got)
+		}
+	}
+}

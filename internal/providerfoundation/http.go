@@ -293,6 +293,38 @@ func originGuardedDoer(doer HTTPDoer, target *url.URL, hop func(*http.Request)) 
 	return &guarded, left
 }
 
+// hopCountingDoer is the unauthenticated call's counterpart of the per-call guard of Do: an *http.Client (behind any Wrapper
+// chain) is copied with a CheckRedirect that asks hop about every hop its own policy follows, so a hop is counted when a
+// decorator dropped the request context or the client never had the construction guard. It decides nothing: the policy of
+// the client (the construction guard included) runs first and its refusal is returned as it is; the recorder counts a
+// request once, so a hop the construction guard counted already is not counted again.
+func hopCountingDoer(doer HTTPDoer, hop func(*http.Request)) HTTPDoer {
+	if wrapper, ok := doer.(httpguard.Wrapper); ok {
+		if rebuilt, ok := wrapper.Rewrap(hopCountingDoer(wrapper.Unwrap(), hop)).(HTTPDoer); ok && !isNilDoer(rebuilt) {
+			return rebuilt
+		}
+		return doer
+	}
+	hc, ok := doer.(*http.Client)
+	if !ok || hc == nil {
+		return doer
+	}
+	counting := *hc
+	inner := hc.CheckRedirect
+	counting.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if inner != nil {
+			if err := inner(req, via); err != nil {
+				return err
+			}
+		} else if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		hop(req)
+		return nil
+	}
+	return &counting
+}
+
 // strippedMarker is set on a redirect request whose credential headers the origin guard removed because the credential origin was
 // lost (a decorator dropped the request context): the after-the-fact check lets such a followed hop through.
 const strippedMarker = "X-Origin-Guard-Stripped"
@@ -560,12 +592,14 @@ func (c *HTTPClient) DoUnauthenticated(
 			err = errors.Join(err, releaseErr)
 		}()
 	}
-	request, requestErr := http.NewRequestWithContext(withHopRecorder(ctx, c.newHopRecorder(ctx, target.Path)), method, target.String(), nil)
+	recorder := c.newHopRecorder(ctx, target.Path)
+	request, requestErr := http.NewRequestWithContext(withHopRecorder(ctx, recorder), method, target.String(), nil)
 	if requestErr != nil {
 		return nil, ErrCredentialInvalid
 	}
 	c.recordWireRequest(ctx, target.Path)
-	response, err = c.Doer.Do(request)
+	counting := hopCountingDoer(c.Doer, recorder.record)
+	response, err = counting.Do(request)
 	if err != nil {
 		failure := c.transportFailure(ctx, err, 1)
 		c.observe(failure.Class)

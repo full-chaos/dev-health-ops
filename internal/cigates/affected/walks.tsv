@@ -272,6 +272,9 @@ internal/cigates/workflows	live_e2e_auth_stack_test.go	*.md	dir	*
 internal/cigates/workflows	live_e2e_auth_stack_test.go	.github/docs-legacy	tree	*
 internal/cigates/workflows	live_e2e_auth_stack_test.go	.github/workflows/*.yml	dir	*
 internal/cigates/workflows	live_e2e_auth_stack_test.go	ci/*.sh	dir	*
+internal/cigates/workflows	live_e2e_auth_stack_test.go	ci/bigboy/*.yml	dir	*
+internal/cigates/workflows	live_e2e_auth_stack_test.go	compose.yml	dir	*
+internal/cigates/workflows	live_e2e_auth_stack_test.go	deploy	tree	*.yaml
 internal/cigates/workflows	live_e2e_auth_stack_test.go	docs	tree	*
 internal/cigates/workflows	live_e2e_auth_stack_test.go	unexpressed	-	-
 internal/cigates/workflows	providerstub_not_release_test.go	.github/workflows	dir	*

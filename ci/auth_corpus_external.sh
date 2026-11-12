@@ -60,6 +60,19 @@ source "${SCRIPT_DIR}/lib/auth_workload_session_issue.sh"
 PROJECT="authcorpus$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
 # The override tags the images this run builds with the project, so the trap removes exactly its own two.
 export AUTH_CORPUS_PROJECT="${PROJECT}"
+# CHAOS-13520: AUTH_CORPUS_PREBUILT_TAG names images a CI step built and loaded before this script (go-auth-service.yml: docker
+# buildx bake of this compose set from the cache main seeds). The stub images then carry that tag, `up` runs --no-build (a missing
+# image fails, nothing builds) and `run` builds nothing. Unset (a local run), the script builds as before.
+if [ -n "${AUTH_CORPUS_PREBUILT_TAG:-}" ]; then
+  [[ "${AUTH_CORPUS_PREBUILT_TAG}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || die "AUTH_CORPUS_PREBUILT_TAG must be a lower-case image tag, got '${AUTH_CORPUS_PREBUILT_TAG}'"
+  export AUTH_CORPUS_IMAGE_TAG="${AUTH_CORPUS_PREBUILT_TAG}"
+  UP_BUILD=--no-build
+  RUN_BUILD=()
+else
+  export AUTH_CORPUS_IMAGE_TAG="${PROJECT}"
+  UP_BUILD=--build
+  RUN_BUILD=(--build)
+fi
 WORK="$(mktemp -d)"
 STATE="${WORK}/state.env"
 SEEDED_FILE="${WORK}/seeded"
@@ -174,7 +187,7 @@ cleanup() {
   timeout --kill-after=10 "${AUTH_CORPUS_DOWN_SECONDS:-180}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth down --volumes --remove-orphans >/dev/null 2>&1 || true
   # Exactly the two images this run built, by name, after down: no prune and no other image (the dev stack's own :local
   # images share tags with other projects and stay).
-  for image in "authcorpus-providerstub:${PROJECT}" "authcorpus-smtpsink:${PROJECT}"; do
+  for image in "authcorpus-providerstub:${AUTH_CORPUS_IMAGE_TAG}" "authcorpus-smtpsink:${AUTH_CORPUS_IMAGE_TAG}"; do
     timeout --kill-after=5 60 docker image rm "${image}" >/dev/null 2>&1 || true
   done
   [ -z "${TEST_PID}" ] || kill "${TEST_PID}" 2>/dev/null || true
@@ -220,11 +233,16 @@ infra_class() {
   done
 }
 
-# up_once SERVICE LOGFILE: one bounded up --build; its output goes to the console and to LOGFILE; returns up's status.
+# up_once SERVICE LOGFILE: one bounded up --build (--no-build on prebuilt images); its output goes to the console and to LOGFILE;
+# returns up's status.
 up_once() {
   local status=0
   set +e
-  { timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --build --detach --wait --wait-timeout 900 "$1"; } 2>&1 | tee -- "$2"
+  if [ "${UP_BUILD}" = --build ]; then
+    { timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --build --detach --wait --wait-timeout 900 "$1"; } 2>&1 | tee -- "$2"
+  else
+    { timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --no-build --detach --wait --wait-timeout 900 "$1"; } 2>&1 | tee -- "$2"
+  fi
   status="${PIPESTATUS[0]}"
   set -e
   return "${status}"
@@ -266,7 +284,7 @@ if [ "${LEG}" = "acp" ]; then
   # again with them. The values go to the state file, so go-api's start and every recreate (ci/auth_corpus_set_env.sh)
   # keep them.
   printf 'step 1a: the go-api workload credential (auth-workload-bootstrap)\n'
-  auth_workload_session_issue compose --build || die "the go-api workload credential is not ready"
+  auth_workload_session_issue compose ${RUN_BUILD[@]+"${RUN_BUILD[@]}"} || die "the go-api workload credential is not ready"
   {
     printf 'export AUTH_TOKEN_ISSUER_URL=%q\n' "${AUTH_TOKEN_ISSUER_URL}"
     printf 'export AUTH_WORKLOAD_BOOTSTRAP=%q\n' "${AUTH_WORKLOAD_BOOTSTRAP}"

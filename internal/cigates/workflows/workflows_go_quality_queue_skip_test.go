@@ -17,10 +17,17 @@ const (
 	qualityLegPrefix = "go-quality-leg ("
 )
 
-var qualityLegNames = []string{
-	"static", "test-1-of-5", "test-2-of-5", "test-3-of-5", "test-4-of-5", "test-5-of-5",
-	"race-1-of-6", "race-2-of-6", "race-3-of-6", "race-4-of-6", "race-5-of-6", "race-6-of-6",
-}
+// static, plan-reads, test 1..28, race 1..6 (CHAOS-13520).
+var qualityLegNames = func() []string {
+	names := []string{"static", "plan-reads"}
+	for k := 1; k <= 28; k++ {
+		names = append(names, fmt.Sprintf("test-%d-of-28", k))
+	}
+	for k := 1; k <= 6; k++ {
+		names = append(names, fmt.Sprintf("race-%d-of-6", k))
+	}
+	return names
+}()
 
 type qualityLeg struct{ name, job, step string }
 
@@ -74,7 +81,7 @@ func runQualityHelper(t *testing.T, sha string, runs string, jobs string, failRu
 	if failRuns {
 		write("fail-runs", "")
 	}
-	command := exec.Command("bash", script, qualityRepo, sha, "go-quality.yml", qualityLegPrefix, qualityLegStep, "12")
+	command := exec.Command("bash", script, qualityRepo, sha, "go-quality.yml", qualityLegPrefix, qualityLegStep, fmt.Sprint(len(qualityLegNames)))
 	command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "STUB_DIR="+dir)
 	if idFile != "" {
 		command.Env = append(command.Env, "QUEUE_TESTED_RUN_ID_FILE="+idFile)
@@ -135,7 +142,7 @@ func TestQueueTestedShaForGoQualityAnswersOnlyForAFullyRanQueueRun(t *testing.T)
 					l.job = "cancelled"
 				}
 			})), false, false},
-		{"only eleven legs", qualitySha, good, qualityJobsJSON(qualityLegs(nil)[1:]), false, false},
+		{"one leg short", qualitySha, good, qualityJobsJSON(qualityLegs(nil)[1:]), false, false},
 		{"no leg job at all", qualitySha, good, qualityJobsJSON(nil), false, false},
 		{"the run is from a fork repository", qualitySha, qualityRunsJSON(qualitySha, "merge_group", "someone/dev-health-ops", "success"), allRan, false, false},
 		{"the run is not a merge_group run", qualitySha, qualityRunsJSON(qualitySha, "push", qualityRepo, "success"), allRan, false, false},
@@ -347,8 +354,8 @@ func TestGoQualityLegSkipIsPushOnlyNeverStaticAndKeepsReceipts(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(qualityLegNames, ",") {
 		t.Errorf("matrix legs %v differ from the pinned list %v", names, qualityLegNames)
 	}
-	if len(names) != 12 {
-		t.Errorf("the matrix has %d legs, want 12 (static + 5 test + 6 race)", len(names))
+	if len(names) != 36 {
+		t.Errorf("the matrix has %d legs, want 36 (static + plan-reads + 28 test + 6 race)", len(names))
 	}
 }
 

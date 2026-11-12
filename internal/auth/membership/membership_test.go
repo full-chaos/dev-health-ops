@@ -3,6 +3,7 @@ package membership
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -275,6 +276,77 @@ func TestRefusedPlansAreWellFormed(t *testing.T) {
 			}
 			if err := audit.ValidateAttributes(auditFor(v, org, principal, id, Actor{}, prev, next).Attributes); err != nil {
 				t.Fatalf("%s from %+v: ValidateAttributes: %v", v, prev, err)
+			}
+		}
+	}
+}
+
+// A verb that changed nothing answers the effective state its locked read saw:
+// go-api's row only answers go-api's id at revision 0; a stale auth row keeps
+// its id, joined_at and revision but names the effective state.
+func TestNoopAnswerNamesTheEffectiveState(t *testing.T) {
+	org, principal, id := uuid.New(), uuid.New(), uuid.New()
+	joined := time.Date(2026, 11, 11, 21, 0, 0, 0, time.UTC)
+	stale := func() *Membership {
+		return &Membership{ID: id, OrgID: org, PrincipalID: principal, Role: ptr("admin"), Status: StatusRemoved, JoinedAt: &joined, Revision: 7}
+	}
+	store := errors.New("read failure")
+	cases := []struct {
+		name string
+		seen state
+		m    *Membership
+		err  error
+		want *Membership
+	}{
+		{"no auth row", state{status: StatusActive, role: "member"}, nil, ErrNotMember,
+			&Membership{ID: id, OrgID: org, PrincipalID: principal, Role: ptr("member"), Status: StatusActive}},
+		{"stale auth row", state{status: StatusActive, role: "member"}, stale(), nil,
+			&Membership{ID: id, OrgID: org, PrincipalID: principal, Role: ptr("member"), Status: StatusActive, JoinedAt: &joined, Revision: 7}},
+		{"suspended, auth row gone after the commit", state{status: StatusSuspended, role: "member"}, nil, ErrNotMember,
+			&Membership{ID: id, OrgID: org, PrincipalID: principal, Role: ptr("member"), Status: StatusSuspended}},
+		{"no role", state{status: StatusSuspended}, stale(), nil,
+			&Membership{ID: id, OrgID: org, PrincipalID: principal, Status: StatusSuspended, JoinedAt: &joined, Revision: 7}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := noopAnswer(org, principal, id, tc.seen, tc.m, tc.err)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ID != tc.want.ID || got.OrgID != tc.want.OrgID || got.PrincipalID != tc.want.PrincipalID || got.Status != tc.want.Status ||
+				got.Revision != tc.want.Revision || got.JoinedAt != tc.want.JoinedAt || (got.Role == nil) != (tc.want.Role == nil) ||
+				(got.Role != nil && *got.Role != *tc.want.Role) {
+				t.Fatalf("noopAnswer = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+	if got, err := noopAnswer(org, principal, id, state{status: StatusActive, role: "member"}, nil, store); got != nil || !errors.Is(err, store) {
+		t.Fatalf("store failure = %v, %v; want nil and the error", got, err)
+	}
+	for _, seen := range []state{{status: statusAbsent}, {status: StatusRemoved, role: "member"}, {status: StatusInvited, role: "member"}} {
+		if got, err := noopAnswer(org, principal, id, seen, nil, ErrNotMember); got != nil || !errors.Is(err, ErrNotMember) {
+			t.Fatalf("seen %+v with no auth row = %v, %v; want nil and ErrNotMember", seen, got, err)
+		}
+	}
+}
+
+// Only a member's state is a no-op: decide refuses every verb on an absent or
+// removed pair with ErrNotMember (never a no-op), and Add and Remove have no
+// no-op at all. The no-op answer above can only meet an active or suspended
+// state.
+func TestNoopsAreOnlyOnMembers(t *testing.T) {
+	verbs := []verb{verbAdd, verbChangeRole, verbSuspend, verbReactivate, verbRemove}
+	states := []state{{status: statusAbsent}, {status: StatusInvited, role: "member"}, {status: StatusActive, role: "member"},
+		{status: StatusSuspended, role: "member"}, {status: StatusRemoved, role: "member"}}
+	for _, v := range verbs {
+		for _, cur := range states {
+			d, err := decide(v, cur, "member", 2)
+			if err != nil || !d.noop {
+				continue
+			}
+			ok := ((v == verbChangeRole || v == verbReactivate) && cur.status == StatusActive) || (v == verbSuspend && cur.status == StatusSuspended)
+			if !ok {
+				t.Errorf("decide(%s, %+v) is a no-op; only ChangeRole/Reactivate on active and Suspend on suspended are", v, cur)
 			}
 		}
 	}

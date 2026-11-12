@@ -76,7 +76,8 @@ func planFor(t *testing.T, root, plan string, shard, count int) map[string]bool 
 	}
 	keys := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if f := strings.Split(line, "\t"); len(f) == 3 {
+		// A part of a split package (ci/go_test_splits.tsv, CHAOS-13520) is a 5-column line; its package counts once.
+		if f := strings.Split(line, "\t"); len(f) == 3 || len(f) == 5 {
 			keys[f[2]] = true
 		}
 	}

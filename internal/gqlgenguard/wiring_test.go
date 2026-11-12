@@ -79,13 +79,25 @@ func TestTheDriftCheckIsWiredIntoGoQualityAndIsActive(t *testing.T) {
 
 	// The step's operative condition, exactly -- the relevance gate every
 	// step in the job uses, plus the leg that runs it (CHAOS-6690: go-quality
-	// runs as parallel legs; the drift check is a `static`-leg step, so it is
+	// runs as parallel legs; the drift check is a `plan-reads`-leg step since
+	// CHAOS-13520, and that leg, like static, runs on every change set, so it is
 	// still executed on every relevant change). A bool `false`, a different
 	// expression, or a missing `if:` all fail.
-	const gate = "steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'"
+	const gate = "steps.relevance.outputs.relevant == 'true' && matrix.name == 'plan-reads'"
 	cond, ok := st["if"].(string)
 	if !ok || strings.TrimSpace(cond) != gate {
 		t.Fatalf("the guard step's `if:` is %#v; it must be exactly %q", st["if"], gate)
+	}
+	// The plan-reads leg must itself run on every change set: its relevance branch exits relevant=true before any plan verdict.
+	relevant := false
+	for _, rs := range wf.Jobs[hits[0].job].Steps {
+		if rs["id"] == "relevance" {
+			body, _ := rs["run"].(string)
+			relevant = strings.Contains(body, "if [ \"${LEG}\" = \"plan-reads\" ]; then\n  echo \"the plan-reads leg runs on every change set\"\n  printf 'relevant=true\\n' >> \"${GITHUB_OUTPUT}\"\n  exit 0")
+		}
+	}
+	if !relevant {
+		t.Fatal("the plan-reads leg no longer runs on every change set (its relevance branch), so the drift check could skip a relevant change")
 	}
 	if v, ok := st["continue-on-error"]; ok && v != false {
 		t.Fatalf("the guard step sets continue-on-error: %#v, so a failing drift check would not fail the job", v)

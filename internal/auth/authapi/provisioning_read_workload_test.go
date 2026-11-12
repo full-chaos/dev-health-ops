@@ -29,6 +29,7 @@ func newReadWorkloadFixture(t *testing.T, rows []byte) *readWorkloadFixture {
 }
 
 func TestReadRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
+	t.Parallel()
 	for _, c := range readCases() {
 		f := newReadWorkloadFixture(t, nil)
 		header, _ := f.w.mint(contracts.WorkloadTokenTyp, nil)
@@ -43,6 +44,7 @@ func TestReadRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 }
 
 func TestReadRoutesRefuseOtherWorkloadTokens(t *testing.T) {
+	t.Parallel()
 	refused := map[string]func(*contracts.WorkloadTokenClaims){
 		"foreign subject": func(c *contracts.WorkloadTokenClaims) { c.Sub = "prn_00000000-0000-4000-8000-000000000001" },
 		"wrong audience":  func(c *contracts.WorkloadTokenClaims) { c.Aud = "dev-health-api" },
@@ -66,6 +68,7 @@ func TestReadRoutesRefuseOtherWorkloadTokens(t *testing.T) {
 }
 
 func TestReadRoutesRefuseAWorkloadTokenWithoutTheWorkloadPath(t *testing.T) {
+	t.Parallel()
 	f := newProvFixtureOff(t, docWithRows(t, append(readPatterns(), PatternOrgSuspend, PatternOrgRename)...))
 	seedReads(f)
 	w := newWorkloadIssueFixture(t)
@@ -76,6 +79,7 @@ func TestReadRoutesRefuseAWorkloadTokenWithoutTheWorkloadPath(t *testing.T) {
 }
 
 func TestReadRoutesStayDarkUnlessTheRowListsExactlyTheWorkloadToken(t *testing.T) {
+	t.Parallel()
 	for _, classes := range [][]string{{serviceSessionIssuerClass}, {serviceSessionIssuerClass, workloadTokenClass}, {workloadTokenClass, serviceSessionIssuerClass}} {
 		for _, c := range readCases() {
 			f := newReadWorkloadFixture(t, plantReadClasses(t, c.path, classes...))
@@ -111,6 +115,7 @@ func plantReadClasses(t *testing.T, route string, classes ...string) []byte {
 }
 
 func TestReadRoutesRefuseOtherKeyClassesOnTheWorkloadPath(t *testing.T) {
+	t.Parallel()
 	for _, typ := range []string{"at+jwt", "jwt", contracts.ServiceAccountTokenTyp, "workload+jwt-x"} {
 		for _, c := range readCases() {
 			f := newReadWorkloadFixture(t, nil)
@@ -124,6 +129,7 @@ func TestReadRoutesRefuseOtherKeyClassesOnTheWorkloadPath(t *testing.T) {
 }
 
 func TestReadRoutesRefuseEveryWorkloadTokenWithoutAConfiguredSubject(t *testing.T) {
+	t.Parallel()
 	for _, c := range readCases() {
 		w := newWorkloadIssueFixture(t)
 		unset := &SessionIssueWorkload{verifier: w.workload.verifier, now: w.workload.now}
@@ -143,6 +149,7 @@ func TestReadRoutesRefuseEveryWorkloadTokenWithoutAConfiguredSubject(t *testing.
 }
 
 func TestReadRoutesRefuseTheSubjectAnotherRouteAllows(t *testing.T) {
+	t.Parallel()
 	for _, c := range readCases() {
 		f := newReadWorkloadFixture(t, nil)
 		otherSubject := session.WirePrincipalID(uuid.New())

@@ -115,7 +115,9 @@ func TestProvidersyncShardJSONIsUploaded(t *testing.T) {
 	t.Fatalf("job %s must upload the per-test json with an always() upload-artifact step", providersyncShardJob)
 }
 
-func TestProvidersyncShardCountIsAtLeastEight(t *testing.T) {
+// Six providersync shards of about nine minutes each (the eleven shards of PR #6105 summed 3146 s of job time) keep each
+// shard far under the 25 min job cap.
+func TestProvidersyncShardCountIsAtLeastSix(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "go_providersync_test_shards.tsv"))
 	if err != nil {
 		t.Fatal(err)
@@ -124,8 +126,8 @@ func TestProvidersyncShardCountIsAtLeastEight(t *testing.T) {
 		f := strings.Fields(line)
 		if len(f) == 2 && f[0] == "shards" {
 			n, _ := strconv.Atoi(f[1])
-			if n < 8 {
-				t.Fatalf("providersync shards = %d; shard 2 needs >= 8 to keep headroom under the job cap", n)
+			if n < 6 {
+				t.Fatalf("providersync shards = %d; it needs >= 6 to keep headroom under the job cap", n)
 			}
 			return
 		}

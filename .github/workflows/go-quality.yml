@@ -159,6 +159,7 @@ jobs:
           # CHAOS-11418: every go command of this workflow runs with GOWORK=off, as ci/check_go.sh does.
           GOWORK: "off"
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -uo pipefail

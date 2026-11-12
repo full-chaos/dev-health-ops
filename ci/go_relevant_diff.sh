@@ -42,6 +42,15 @@ if [ -n "${BASE_SHA:-}" ]; then
     echo "BASE_SHA (${BASE_SHA}) is not an ancestor of HEAD (a force-push likely rewrote history); refusing to guess a range" >&2
     exit 1
   fi
+  # A pull_request checkout is GitHub's test merge (parents: the base tip, the PR head). Its first parent is the exact
+  # base under test; the event's base.sha can be older and would count main's newer commits as the PR's own change.
+  if [ "${GITHUB_EVENT_NAME:-}" = pull_request ] \
+    && parent2="$(git rev-parse -q --verify 'HEAD^2^{commit}')" \
+    && [ "${parent2}" = "${PR_HEAD_SHA:-}" ] \
+    && git merge-base --is-ancestor "${BASE_SHA}" HEAD^1; then
+    echo "event BASE_SHA ${BASE_SHA} is an ancestor of this merge ref's first parent; judging against that parent" >&2
+    BASE_SHA="$(git rev-parse HEAD^1)"
+  fi
   range="${BASE_SHA}...HEAD"
 else
   # No base sha at all: the documented LOCAL fallback (a bare invocation with

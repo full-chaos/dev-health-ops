@@ -134,7 +134,7 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				return
 			}
 			if user != nil {
-				r = r.WithContext(WithUser(r.Context(), user))
+				r = g.userRequest(r, user)
 			}
 			next.ServeHTTP(w, r)
 		}))
@@ -242,7 +242,7 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			}
 		}
 		g.observeShadow(r, caller, bearer, true, gt)
-		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
+		next.ServeHTTP(w, g.userRequest(r, user))
 	}))
 }
 

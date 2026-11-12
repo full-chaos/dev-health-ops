@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	delegatedUseEvent = "api_delegated_use"
-	invoicesRow       = "GET /api/v1/billing/invoices"
+	wantUseEvent = "api_delegated_use"
+	invoicesRow  = "GET /api/v1/billing/invoices"
 )
 
 // useLines returns the parsed delegated-use lines of the log buffer.
@@ -34,7 +34,7 @@ func useLines(t *testing.T, logs *bytes.Buffer) []map[string]any {
 		if err := json.Unmarshal(raw, &line); err != nil {
 			t.Fatalf("log line is not JSON: %q", raw)
 		}
-		if line["event"] == delegatedUseEvent {
+		if line["event"] == wantUseEvent {
 			out = append(out, line)
 		}
 	}
@@ -194,7 +194,7 @@ func TestDelegatedUseLineCarriesIDsOnly(t *testing.T) {
 	}
 }
 
-// C8: a token with no sid (the HS256 compat mint) logs an empty sid; every guard form that admits the bearer logs once.
+// C8: the fixture bearer's session id (the user id) is the sid; every guard form that admits the bearer logs once.
 func TestDelegatedUseOnEveryAdmittingWrapLogsOneLine(t *testing.T) {
 	for _, w := range delegatedWraps {
 		store := newStore()
@@ -215,8 +215,8 @@ func TestDelegatedUseOnEveryAdmittingWrapLogsOneLine(t *testing.T) {
 			t.Errorf("%s: lines = %d, want 1", w.name, len(lines))
 			continue
 		}
-		if lines[0]["sid"] != "" || lines[0]["actor"] != actorID.String() || lines[0]["target"] != userID.String() || lines[0]["route"] != allowedRow {
-			t.Errorf("%s: line %v, want empty sid and the actor, target and route", w.name, lines[0])
+		if lines[0]["sid"] != userID.String() || lines[0]["actor"] != actorID.String() || lines[0]["target"] != userID.String() || lines[0]["route"] != allowedRow {
+			t.Errorf("%s: line %v, want the fixture session id and the actor, target and route", w.name, lines[0])
 		}
 		// The same wrap on a row that denies the bearer logs none.
 		logger, logs = jsonLogs()

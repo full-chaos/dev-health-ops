@@ -124,6 +124,12 @@ internal/cigates/proofteardown	test	ci
 internal/cigates/queuecreds	code	contracts
 internal/cigates/raceunweighted	test	ci
 internal/cigates/racescope	test	ci
+internal/cigates/retiredcredentialnames	test	.github
+internal/cigates/retiredcredentialnames	test	ci
+internal/cigates/retiredcredentialnames	test	contracts
+internal/cigates/retiredcredentialnames	test	deploy
+internal/cigates/retiredcredentialnames	test	docs
+internal/cigates/retiredcredentialnames	test	docs-data
 internal/cigates/retiredservicecred	test	.github
 internal/cigates/retiredservicecred	test	ci
 internal/cigates/retiredservicecred	test	contracts
@@ -140,7 +146,9 @@ internal/cigates/scripts	test	contracts
 internal/cigates/scripts	test	docker
 internal/cigates/scripts	test	deploy
 internal/cigates/scripts	test	docs
+internal/cigates/splitshards	test	.github
 internal/cigates/splitshards	test	ci
+internal/cigates/splitshards	test	contracts
 internal/cigates/suitecatalog	test	.github
 internal/cigates/suitecatalog	test	ci
 internal/cigates/testshard	test	.github

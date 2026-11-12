@@ -13,12 +13,18 @@ import (
 	"testing"
 )
 
-func packagesShardsOfThePlan(t *testing.T) map[int][]string {
+// packagesShardsOfThePlan: per packages shard, its packages and their planned weights: a whole package at its manifest weight
+// (SHARD rows), a split-by-test package at the weight of its parts in that shard (SHARD-SPLIT-PACKAGE rows, CHAOS-13520).
+func packagesShardsOfThePlan(t *testing.T) (map[int][]string, map[int]map[string]int) {
 	t.Helper()
 	stdout, _ := realPlan(t)
 	byShard := map[int][]string{}
+	weights := map[int]map[string]int{}
 	for _, l := range strings.Split(stdout, "\n") {
 		m := shardRow.FindStringSubmatch(l)
+		if m == nil {
+			m = splitRow.FindStringSubmatch(l)
+		}
 		if m == nil || splitPackages[m[2]] {
 			continue
 		}
@@ -26,19 +32,39 @@ func packagesShardsOfThePlan(t *testing.T) map[int][]string {
 		if err != nil {
 			t.Fatal(err)
 		}
+		w, _ := strconv.Atoi(m[3])
 		byShard[s] = append(byShard[s], m[2])
+		if weights[s] == nil {
+			weights[s] = map[string]int{}
+		}
+		weights[s][m[2]] = w
 	}
-	return byShard
+	return byShard, weights
 }
 
 func TestAPackagesShardStartsItsLongestPackageFirstAndTheOrderIsStable(t *testing.T) {
 	t.Parallel()
-	_, weights := manifestRows(t)
-	checked := 0
-	for shard, pkgs := range packagesShardsOfThePlan(t) {
-		if len(pkgs) < 2 {
-			continue
+	byShard, planned := packagesShardsOfThePlan(t)
+	var shards []int
+	for shard, pkgs := range byShard {
+		if len(pkgs) >= 2 {
+			shards = append(shards, shard)
 		}
+	}
+	sort.Ints(shards)
+	// Two dry runs of every shard: two all-shards runs, one plan each (one plan per shard took the 20 min timeout at 50 shards).
+	var again cmdResult
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		again = runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", "all", "--dry-run")
+	}()
+	first := packagesDryRuns(t, allShardsDryRun(t), shards)
+	<-done
+	second := packagesDryRuns(t, again, shards)
+	checked := 0
+	for _, shard := range shards {
+		pkgs, weights := byShard[shard], planned[shard]
 		want := append([]string(nil), pkgs...)
 		sort.SliceStable(want, func(i, j int) bool {
 			if weights[want[i]] != weights[want[j]] {
@@ -46,15 +72,13 @@ func TestAPackagesShardStartsItsLongestPackageFirstAndTheOrderIsStable(t *testin
 			}
 			return want[i] < want[j]
 		})
-		first := runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", strconv.Itoa(shard), "--dry-run")
-		second := runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", strconv.Itoa(shard), "--dry-run")
-		if first.code != 0 || second.code != 0 {
-			t.Fatalf("shard %d dry run: exit %d / %d: %s%s", shard, first.code, second.code, first.stderr, second.stderr)
+		if first[shard].code != 0 || second[shard].code != 0 {
+			t.Fatalf("shard %d dry run: exit %d / %d: %s%s", shard, first[shard].code, second[shard].code, first[shard].stderr, second[shard].stderr)
 		}
-		if first.stdout != second.stdout {
+		if first[shard].stdout != second[shard].stdout {
 			t.Errorf("shard %d: two dry runs of the same input print different output", shard)
 		}
-		got := lineValues(first.stdout, "  SHARD-RUN ")
+		got := lineValues(first[shard].stdout, "  SHARD-RUN ")
 		if strings.Join(got, "\n") != strings.Join(want, "\n") {
 			t.Errorf("shard %d starts %v, want weight descending then name ascending: %v", shard, got, want)
 		}
@@ -84,8 +108,9 @@ func fixedWeightManifest(t *testing.T) (string, map[string]int) {
 		}
 		var key, real string
 		for _, l := range strings.Split(readText(t, f), "\n") {
-			if strings.TrimSpace(l) != "" && !strings.HasPrefix(l, "#") {
-				key, real, _ = strings.Cut(l, "\t")
+			// The package row; a split-by-test row (CHAOS-13520) is left out of this fixed-weight fixture.
+			if k, v, _ := strings.Cut(l, "\t"); strings.TrimSpace(l) != "" && !strings.HasPrefix(l, "#") && strings.Contains(k, "/") {
+				key, real = k, v
 			}
 		}
 		w := 60 + 60*(i%3)
@@ -115,9 +140,9 @@ func TestTheSortDoesNotChangeTheLocaleOfTheGoTestChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	shard := 0
-	for s := 1; s <= localeFixtureShards && shard == 0; s++ {
-		d := runCheckGoSharding(t, shardEnv{manifest: manifest}, "integration-shard", "packages", strconv.Itoa(s), "--dry-run")
-		if d.code == 0 && len(lineValues(d.stdout, "  SHARD-RUN ")) >= 2 {
+	_, order, parts := splitAllShardsDryRun(t, runCheckGoSharding(t, shardEnv{manifest: manifest}, "integration-shard", "packages", "all", "--dry-run"))
+	for _, s := range order {
+		if shard == 0 && len(lineValues(parts[s], "  SHARD-RUN ")) >= 2 {
 			shard = s
 		}
 	}
@@ -153,19 +178,26 @@ func TestTheSortDoesNotChangeTheLocaleOfTheGoTestChild(t *testing.T) {
 
 func TestTheGoTestGroupsOfAShardKeepTheLongestFirstOrder(t *testing.T) {
 	t.Parallel()
-	_, weights := manifestRows(t)
-	byWeight := func(a, b string) bool {
-		if weights[a] != weights[b] {
-			return weights[a] > weights[b]
+	byShard, planned := packagesShardsOfThePlan(t)
+	var shards []int
+	for shard, pkgs := range byShard {
+		if len(pkgs) >= 2 {
+			shards = append(shards, shard)
 		}
-		return a < b
 	}
+	sort.Ints(shards)
+	dry := packagesDryRuns(t, allShardsDryRun(t), shards)
 	checked := 0
-	for shard, pkgs := range packagesShardsOfThePlan(t) {
-		if len(pkgs) < 2 {
-			continue
+	for _, shard := range shards {
+		pkgs := byShard[shard]
+		weights := planned[shard]
+		byWeight := func(a, b string) bool {
+			if weights[a] != weights[b] {
+				return weights[a] > weights[b]
+			}
+			return a < b
 		}
-		r := runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", strconv.Itoa(shard), "--dry-run")
+		r := dry[shard]
 		if r.code != 0 {
 			t.Fatalf("shard %d dry run: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
 		}
@@ -193,7 +225,6 @@ func TestTheGoTestGroupsOfAShardKeepTheLongestFirstOrder(t *testing.T) {
 
 func TestTheShardPathStartsLongestFirstAndTheUnshardedVerbStillSorts(t *testing.T) {
 	t.Parallel()
-	_, weights := manifestRows(t)
 	root, err := filepath.EvalSymlinks(rootOf(t))
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +243,8 @@ func TestTheShardPathStartsLongestFirstAndTheUnshardedVerbStillSorts(t *testing.
 	keyOf := func(c goTestCall, p string) string { return path.Join(c.dir, strings.TrimPrefix(p, "./")) }
 
 	shard, shardPkgs := 0, []string(nil)
-	for s, p := range packagesShardsOfThePlan(t) {
+	byShard, planned := packagesShardsOfThePlan(t)
+	for s, p := range byShard {
 		if len(p) >= 2 && (shard == 0 || s < shard) {
 			shard, shardPkgs = s, p
 		}
@@ -220,6 +252,7 @@ func TestTheShardPathStartsLongestFirstAndTheUnshardedVerbStillSorts(t *testing.
 	if shard == 0 {
 		t.Fatal("no packages shard held two packages")
 	}
+	weights := planned[shard]
 	longest := shardPkgs[0]
 	for _, p := range shardPkgs {
 		if weights[p] > weights[longest] || (weights[p] == weights[longest] && p < longest) {

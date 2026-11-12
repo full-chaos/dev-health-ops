@@ -54,8 +54,14 @@ func legNames(t *testing.T, root string, matrixJSON string) []string {
 
 func TestLegScriptSelectsRaceLegsByEvent(t *testing.T) {
 	root := repoRoot(t)
-	all := []string{"static", "test-1-of-5", "test-2-of-5", "test-3-of-5", "test-4-of-5", "test-5-of-5", "race-1-of-6", "race-2-of-6", "race-3-of-6", "race-4-of-6", "race-5-of-6", "race-6-of-6"}
-	noRace := all[:6]
+	all := []string{"static", "plan-reads"}
+	for k := 1; k <= 28; k++ {
+		all = append(all, fmt.Sprintf("test-%d-of-28", k))
+	}
+	noRace := append([]string{}, all...)
+	for k := 1; k <= 6; k++ {
+		all = append(all, fmt.Sprintf("race-%d-of-6", k))
+	}
 	for _, c := range []struct {
 		event, full string
 		want        []string

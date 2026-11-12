@@ -64,7 +64,8 @@ func TestProvidersyncPlanStaysUnderTheBudgetAndFailsEachPlantedDefect(t *testing
 		{"an empty name field", withWeights(write("emptyname.tsv", original+"\t6\n")), "not a top-level Test function"},
 		{"a row with no tab", withWeights(write("notab.tsv", original+"TestZZZ 6\n")), "exactly two tab-separated fields"},
 		{"a missing weights file", withWeights(filepath.Join(dir, "absent.tsv")), "weights file not found"},
-		{"a planned shard over the budget", withWeights(write("ok.tsv", original), "DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET=85000"), "over the shard budget"},
+		// 11 shards plan about 64,000 each (CHAOS-13520); a 50,000 budget puts every shard over it.
+		{"a planned shard over the budget", withWeights(write("ok.tsv", original), "DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET=50000"), "over the shard budget"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

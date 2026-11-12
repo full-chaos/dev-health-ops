@@ -68,8 +68,11 @@ func fullPlan(t *testing.T, shard, count int) []string {
 		t.Fatalf("test-shard-plan %d %d: %v\n%s", shard, count, err, errs)
 	}
 	var pkgs []string
+	seen := map[string]bool{}
 	for _, l := range strings.Split(out, "\n") {
-		if f := strings.Split(l, "\t"); len(f) == 3 {
+		// A split package (ci/go_test_splits.tsv) has one plan line per part in the shard and one summary line per go test.
+		if f := strings.Split(l, "\t"); (len(f) == 3 || len(f) == 5) && !seen[f[1]] {
+			seen[f[1]] = true
 			pkgs = append(pkgs, f[1])
 		}
 	}

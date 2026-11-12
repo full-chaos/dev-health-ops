@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -142,6 +144,29 @@ func TestPatchFailsClosedWhenTheStateReadFails(t *testing.T) {
 			if len(life.verbs) != 0 || log.index("db:begin") != -1 {
 				t.Fatalf("%s %s: a call or a write followed the failed read: %v", name, body, log.steps)
 			}
+		}
+	}
+}
+
+// CHAOS-13575: a 429 on the state read is the same 503 and the same WARN (refused=true) as any other refusal.
+func TestPatchKeepsItsAnswerAndLogOnAStateRead429(t *testing.T) {
+	for _, body := range []string{`{"is_active": true}`, `{"is_active": false}`} {
+		log := &orderLog{}
+		db := &reactivationDB{log: log, found: true, active: true}
+		life := &fakeLifecycle{log: log}
+		state := &fakeAuthState{log: log, errs: map[int]error{1: &orgreactivate.RateLimited{RetryAfter: time.Second}}, seq: []orgreactivate.State{{Status: "active"}}}
+		h := newRevisionHandlers(db, life, state)
+		var logs bytes.Buffer
+		h.logger = slog.New(slog.NewTextHandler(&logs, nil))
+		code, text := patchOrg(h, body)
+		if code != http.StatusServiceUnavailable || strings.TrimSpace(text) != authUnavailableBody {
+			t.Fatalf("%s: %d %s, want 503 %s", body, code, text, authUnavailableBody)
+		}
+		if !strings.Contains(logs.String(), "auth-service state read failed") || !strings.Contains(logs.String(), "refused=true") {
+			t.Fatalf("%s: want the state read WARN with refused=true:\n%s", body, logs.String())
+		}
+		if len(life.verbs) != 0 || log.index("db:begin") != -1 || state.calls != 1 {
+			t.Fatalf("%s: a call, a write or a retry followed the 429: %v", body, log.steps)
 		}
 	}
 }

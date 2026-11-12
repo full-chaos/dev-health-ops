@@ -755,6 +755,7 @@ case "$1" in
     ;;
   serve)
     echo "$name serve started"
+    [ ! -f "$FAKE_STATE/stub-slow-start" ] || sleep 1.5
     echo $$ > "$FAKE_STATE/$name.ready"
     sleep 60 & child=$!
     trap 'kill "$child"; exit 0' TERM
@@ -814,7 +815,7 @@ case "$*" in *%{http_code}*) printf '%s' "$code" ;; esac
 		t.Fatal("cannot generate fake SAML certificate")
 	}
 	writeExec(t, filepath.Join(fake, "openssl"), "#!/bin/sh\nif [ \"$1\" = x509 ]; then exec '"+openssl+"' \"$@\"; fi\n[ \"$*\" = 'rand -base64 32' ] || exit 2\nprintf 'new-state-key+test/==\\n'\n", 0o755)
-	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "GITHUB_ACTIONS=true"}
+	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "GITHUB_ACTIONS=true", "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
 	run := func(args ...string) (string, error) {
 		t.Helper()
 		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh")}, args...)...)
@@ -968,6 +969,7 @@ func TestLiveE2EEnableSocialAndSSO(t *testing.T) {
 func TestLiveE2EStubReadinessFailure(t *testing.T) {
 	for _, verb := range []string{"enable-social", "start-idp"} {
 		t.Run(verb, func(t *testing.T) {
+			t.Parallel()
 			state, _, run := liveE2EStubFakes(t)
 			if out, err := run("enable-sso", state); err != nil {
 				t.Fatalf("enable-sso: %v %s", err, out)
@@ -978,7 +980,7 @@ func TestLiveE2EStubReadinessFailure(t *testing.T) {
 			if verb == "start-idp" {
 				name = "idpstub"
 			}
-			if err == nil || !strings.Contains(out, name+" did not become ready") || !strings.Contains(out, name+" serve") {
+			if err == nil || !readinessDied(out, name) || !strings.Contains(out, name+" serve") {
 				t.Fatalf("readiness failure did not report the stub and its log: %v %s", err, out)
 			}
 		})
@@ -1008,7 +1010,7 @@ func TestLiveE2ESocialRefusesOutsideAGitHubRunnerBeforeAnyWrite(t *testing.T) {
 	for _, value := range []string{"", "1", "True", "false", "true "} {
 		t.Run("GITHUB_ACTIONS="+value, func(t *testing.T) {
 			state, fake, _ := liveE2EStubFakes(t)
-			env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+			env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
 			if value != "" {
 				env = append(env, "GITHUB_ACTIONS="+value)
 			}
@@ -1033,7 +1035,7 @@ func TestLiveE2ESocialRefusesOutsideAGitHubRunnerBeforeAnyWrite(t *testing.T) {
 
 func TestLiveE2EStartIdpNeedsNoGitHubRunner(t *testing.T) {
 	state, fake, _ := liveE2EStubFakes(t)
-	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+	env := []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
 	for _, args := range [][]string{{"enable-sso", state}, {"start-idp", state, "-redirect-uri", "http://127.0.0.1:3002/callback"}} {
 		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh")}, args...)...)
 		cmd.Env = env
@@ -1049,6 +1051,7 @@ func TestLiveE2EStartIdpNeedsNoGitHubRunner(t *testing.T) {
 func TestLiveE2EStubAnsweringNon200IsNotReady(t *testing.T) {
 	for _, verb := range []string{"enable-social", "start-idp"} {
 		t.Run(verb, func(t *testing.T) {
+			t.Parallel()
 			state, _, run := liveE2EStubFakes(t)
 			if out, err := run("enable-sso", state); err != nil {
 				t.Fatalf("enable-sso: %v %s", err, out)
@@ -1056,7 +1059,7 @@ func TestLiveE2EStubAnsweringNon200IsNotReady(t *testing.T) {
 			writeExec(t, filepath.Join(state, "stub-599"), "", 0o600)
 			name := map[string]string{"enable-social": "providerstub", "start-idp": "idpstub"}[verb]
 			out, err := run(verb, state)
-			if err == nil || !strings.Contains(out, name+" did not become ready") {
+			if err == nil || !readinessDied(out, name) {
 				t.Fatalf("a stub answering 599 read as ready: %v %s", err, out)
 			}
 		})
@@ -1253,12 +1256,15 @@ func TestLiveE2ESMTPFakeProcess(t *testing.T) {
 		if err := os.MkdirAll(args[3], 0o700); err != nil {
 			os.Exit(1)
 		}
+		state := os.Getenv("FAKE_STATE")
+		if _, err := os.Stat(filepath.Join(state, "smtp-slow-start")); err == nil {
+			time.Sleep(1500 * time.Millisecond)
+		}
 		listener, err := net.Listen("tcp", args[2])
 		if err != nil {
 			os.Exit(1)
 		}
 		port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
-		state := os.Getenv("FAKE_STATE")
 		if _, err := os.Stat(filepath.Join(state, "smtp-no-port")); err == nil {
 			fmt.Println("fake sink startup failed")
 		} else {
@@ -1298,11 +1304,48 @@ func TestLiveE2ESMTPFakeProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+// readinessDied: the loud failure names the elapsed seconds and the bound (D6418: the bound is a wait limit; only a ready
+// signal passes, and a hit deadline fails with how long it waited). The fixture bound is 5 s, so the wait was at least that;
+// no upper time bound is asserted.
+func readinessDied(out, name string) bool {
+	m := regexp.MustCompile(regexp.QuoteMeta(name) + ` did not become ready after ([0-9]+)s \(bound 5s\)`).FindStringSubmatch(out)
+	if m == nil {
+		return false
+	}
+	elapsed, err := strconv.Atoi(m[1])
+	//abstime:allow lower bound only: the script dies after its own wall-clock bound, so load can only lengthen the elapsed time; this fails only a run that died before the bound
+	return err == nil && elapsed >= 5
+}
+
+// A slow start must not be read as a failed start: the wait is wall clock, whatever the fake sleep does (CHAOS-13590:
+// the -race test binary behind the fake sink needs ~1.5 s to start, the old wait gave it ~0.45 s).
+func TestLiveE2EEnableMailWaitsOnWallClockForASlowSink(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	writeExec(t, filepath.Join(state, "smtp-slow-start"), "", 0o600)
+	if out, err := run("enable-mail", state); err != nil {
+		t.Fatalf("enable-mail with a slow sink start: %v %s", err, out)
+	}
+	if port := strings.TrimSpace(liveE2ERead(t, filepath.Join(state, "mail/port"))); port == "" {
+		t.Fatal("the slow sink never published its port")
+	}
+}
+
+func TestLiveE2EStartIdpWaitsOnWallClockForASlowStub(t *testing.T) {
+	state, _, run := liveE2EStubFakes(t)
+	if out, err := run("enable-sso", state); err != nil {
+		t.Fatalf("enable-sso: %v %s", err, out)
+	}
+	writeExec(t, filepath.Join(state, "stub-slow-start"), "", 0o600)
+	if out, err := run("start-idp", state, "-redirect-uri", "http://127.0.0.1:3002/callback"); err != nil {
+		t.Fatalf("start-idp with a slow stub start: %v %s", err, out)
+	}
+}
+
 func TestLiveE2EEnableMail(t *testing.T) {
 	state, fake, run := liveE2EStubFakes(t)
 	runWithoutRunner := func(args ...string) (string, error) {
 		cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "ci/live_e2e_auth_stack.sh")}, args...)...)
-		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
 		raw, err := cmd.CombinedOutput()
 		return string(raw), err
 	}
@@ -1380,7 +1423,7 @@ func TestLiveE2EEnableMail(t *testing.T) {
 		key := kind + "." + hex.EncodeToString([]byte("reader@example.test"))
 		writeExec(t, filepath.Join(state, "mail/tokens", key), token, 0o600)
 		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci/live_e2e_auth_stack.sh"), "mail-token", state, "Reader@example.test", kind)
-		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake}
+		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "FAKE_STATE=" + state, "FAKE_BIN=" + fake, "LIVE_E2E_MAIL_WAIT_SECONDS=5", "LIVE_E2E_STUB_WAIT_SECONDS=5"}
 		var out, errb bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &errb
@@ -1434,11 +1477,12 @@ func TestLiveE2EEnableMailNeedsSavedEnvironment(t *testing.T) {
 func TestLiveE2EMailReadinessRequiresPortAndBanner(t *testing.T) {
 	for _, failure := range []string{"smtp-no-port", "smtp-bad-port", "smtp-bad-banner"} {
 		t.Run(failure, func(t *testing.T) {
+			t.Parallel()
 			state, _, run := liveE2EStubFakes(t)
 			before := liveE2ERead(t, filepath.Join(state, "auth-service.env"))
 			writeExec(t, filepath.Join(state, failure), "", 0o600)
 			out, err := run("enable-mail", state)
-			if err == nil || !strings.Contains(out, "smtpsink did not become ready") {
+			if err == nil || !readinessDied(out, "smtpsink") {
 				t.Fatal("unready mail sink accepted")
 			}
 			if failure == "smtp-no-port" && !strings.Contains(out, "fake sink startup failed") {

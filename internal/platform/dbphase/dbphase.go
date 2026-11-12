@@ -174,6 +174,10 @@ func (trace *Trace) AcquireWaits() []time.Duration {
 // Culprit names the phase that consumed the budget of a failed call: the
 // phase still in flight when the call returned, else the last phase that
 // ended in an error, else the longest phase. ok is false when nothing ran.
+//
+// A ROLLBACK is never the culprit while another phase ran (CHAOS-11431): a
+// stage that spends its budget runs its deferred rollback on the expired
+// context, so the rollback errors last although another phase spent the time.
 func (trace *Trace) Culprit() (Phase, bool) {
 	phases := trace.Phases()
 	if len(phases) == 0 {
@@ -184,18 +188,33 @@ func (trace *Trace) Culprit() (Phase, bool) {
 			return candidate, true
 		}
 	}
-	for index := len(phases) - 1; index >= 0; index-- {
-		if phases[index].Err != nil {
-			return phases[index], true
+	candidates := make([]Phase, 0, len(phases))
+	for _, candidate := range phases {
+		if !isRollback(candidate) {
+			candidates = append(candidates, candidate)
 		}
 	}
-	longest := phases[0]
-	for _, candidate := range phases[1:] {
+	if len(candidates) == 0 {
+		candidates = phases
+	}
+	for index := len(candidates) - 1; index >= 0; index-- {
+		if candidates[index].Err != nil {
+			return candidates[index], true
+		}
+	}
+	longest := candidates[0]
+	for _, candidate := range candidates[1:] {
 		if candidate.Elapsed > longest.Elapsed {
 			longest = candidate
 		}
 	}
 	return longest, true
+}
+
+// isRollback reports a transaction ROLLBACK, which pgx issues as the
+// statement "rollback".
+func isRollback(phase Phase) bool {
+	return phase.Kind == KindStatement && strings.EqualFold(phase.Name, "rollback")
 }
 
 // Summary renders the phases as "kind:name=<ms>ms[!]" joined by ";", `!`

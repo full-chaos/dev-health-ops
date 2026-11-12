@@ -136,6 +136,22 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- end }}
 {{- end }}
 {{- end }}
+{{- /* CHAOS-11207: the web approver reference kind of POST /v1/authorize. issuer, caller and jwks.secretName come
+together or not at all: a partial key is an operator slip, refused here with every missing key named (auth-service
+itself still starts on a partial env and logs one ERROR, product rule 3). */}}
+{{- $wa := default dict $a.webApprover }}
+{{- $waJwks := default dict $wa.jwks }}
+{{- $waIssuer := trim (toString (default "" $wa.issuer)) }}
+{{- $waCaller := trim (toString (default "" $wa.caller)) }}
+{{- $waSecret := trim (toString (default "" $waJwks.secretName)) }}
+{{- $waKey := trim (toString (default "web-jwks.json" $waJwks.secretKey)) }}
+{{- $waMissing := list }}
+{{- if not $waIssuer }}{{- $waMissing = append $waMissing "authService.webApprover.issuer" }}{{- end }}
+{{- if not $waCaller }}{{- $waMissing = append $waMissing "authService.webApprover.caller" }}{{- end }}
+{{- if not $waSecret }}{{- $waMissing = append $waMissing "authService.webApprover.jwks.secretName" }}{{- end }}
+{{- $waOn := eq (len $waMissing) 0 }}
+{{- if and (not $waOn) (lt (len $waMissing) 3) }}{{- fail (printf "authService.webApprover is partly set: missing %s. Set issuer, caller and jwks.secretName together, or none of them" (join ", " $waMissing)) }}{{- end }}
+{{- if and $waOn (not $waKey) }}{{- fail "authService.webApprover.jwks.secretKey must not be empty: it names the JWKS file in the Secret" }}{{- end }}
 {{- range $a.extraEnv }}
 {{- if eq (upper (trim (toString .name))) "AUTH_SERVICE_INTERNAL_HTTP_ADDR" }}{{- fail "authService.extraEnv must not set AUTH_SERVICE_INTERNAL_HTTP_ADDR: use authService.internal, which renders the listener with its own NetworkPolicy" }}{{- end }}
 {{- if eq .name "AUTH_SERVICE_TRUSTED_PROXIES" }}{{- fail "authService.extraEnv must not set AUTH_SERVICE_TRUSTED_PROXIES: use authService.trustedProxies, which the render checks" }}{{- end }}
@@ -382,11 +398,22 @@ spec:
             - name: OTEL_SERVICE_NAME
               value: "auth-service"
           {{- end }}
+          {{- if $waOn }}
+            - name: AUTH_AUTHORIZE_WEB_APPROVER_ISSUER
+              value: {{ $waIssuer | quote }}
+            - name: AUTH_AUTHORIZE_WEB_APPROVER_JWKS_FILE
+              value: "/run/auth/web-approver/jwks.json"
+            - name: AUTH_AUTHORIZE_WEB_APPROVER_CALLER
+              value: {{ $waCaller | quote }}
+          {{- end }}
           {{- with $a.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
             - {name: signing-key, mountPath: /run/auth/signing, readOnly: true}
+          {{- if $waOn }}
+            - {name: web-approver-jwks, mountPath: /run/auth/web-approver, readOnly: true}
+          {{- end }}
           livenessProbe:
             httpGet: {path: /healthz, port: operator}
             {{- toYaml $a.livenessProbe | nindent 12 }}
@@ -421,6 +448,14 @@ spec:
         {{- end }}
         - name: signing-key
           emptyDir: {medium: Memory, sizeLimit: 1Mi}
+      {{- if $waOn }}
+        - name: web-approver-jwks
+          secret:
+            secretName: {{ $waSecret | quote }}
+            defaultMode: 0440
+            items:
+              - {key: {{ $waKey | quote }}, path: jwks.json}
+      {{- end }}
       {{- with $a.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

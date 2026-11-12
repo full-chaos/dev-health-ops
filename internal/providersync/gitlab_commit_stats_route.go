@@ -128,7 +128,7 @@ func (handler GitLabCommitStatsRouteHandler) Collect(
 	for _, raw := range page.Items {
 		commit, decodeErr := decodeGitLabCommit(raw)
 		if decodeErr != nil {
-			return CompleteRouteBatch{}, decodeErr
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(gitlabCommitsRoute, providerfoundation.ReasonBodyDecode, decodeErr)
 		}
 		committedWhen := parseCommitTime(commit.CommittedDate)
 		if committedWhen != nil && claim.BeforeAt != nil && committedWhen.After(claim.BeforeAt.UTC()) {

@@ -344,7 +344,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, key
 	// Sessions are auth-service's (AUTH_PROXY_SESSIONS=true), as in production: the sign-in routes run their own
 	// validation and take a completed sign-in's pair from the issue route of an in-process auth plane.
 	venue.ApplyAuthSchema(t, ctx)
-	plane := authplane.Start(t, ctx, venue.AdminURI(t, venue.GoDB), key, jwtKey)
+	plane := authplane.Start(t, ctx, venue.AdminURI(t, venue.GoDB), key)
 	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), SSOStateSecret: ssoStateKey,
 		SessionIssuer: plane.Issuer,
 		AuthProxy:     apiservice.AuthProxyConfig{Upstream: plane.URL, On: map[apiservice.AuthAggregate]bool{apiservice.AuthSessions: true}}}

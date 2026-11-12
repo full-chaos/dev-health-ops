@@ -157,7 +157,33 @@ func toolchainHitsUnder(t *testing.T, root string) []toolchainHit {
 // toolchainPathAllowlist names each real hit that stays, keyed by file and path, with the reason it stays.
 var toolchainPathAllowlist = []struct {
 	file, path, reason string
-}{}
+}{
+	{"ci/posture_integration.sh", "/bin/chmod", postureHermetic},
+	{"ci/posture_integration.sh", "/bin/rm", postureHermetic},
+	{"ci/posture_integration.sh", "/usr/bin/cmp", postureHermetic},
+	{"ci/posture_integration.sh", "/usr/bin/git", postureHermetic},
+	{"ci/posture_integration.sh", "/usr/bin/jq", postureHermetic},
+	{"ci/posture_integration.sh", "/usr/bin/mktemp", postureHermetic},
+	{"ci/posture_integration.sh", "/usr/bin/sha256sum", postureHermetic},
+	{"deploy/helm/dev-health/auth_session_secret_script_test.go", "/usr/bin/base64", shimExecsRealTool},
+	{"internal/cigates/scripts/pdp_load_k3s_test.go", "/usr/bin/sha256sum", shimExecsRealTool},
+	{"internal/cigates/workflows/auth_corpus_external_behaviour_test.go", "/bin/chmod", shimExecsRealTool},
+	{"internal/cigates/workflows/live_e2e_auth_stack_test.go", "/bin/kill", shimExecsRealTool},
+	{"scripts/create-auth-keyset-secrets_test.sh", "/usr/bin/mktemp", shimExecsRealTool},
+	{"scripts/create-session-issue-secret_test.sh", "/usr/bin/mktemp", shimExecsRealTool},
+	{"internal/cigates/bigboy/compose_ch_users_test.go", "/usr/bin/ps", "the process snapshot runs with a PATH of stubs only, so ps must be named by its system path; it is a diagnostic, not a toolchain lookup"},
+	{"internal/cigates/docs/parity_test.go", "/usr/bin/python", testDataLiteral},
+	{"internal/cigates/nopython/nopython_test.go", "/usr/bin/python3", testDataLiteral},
+	{"internal/cigates/scripts/posture_integration_test.go", "/bin/true", "test data: POSTURE_CAPPED_SH=/bin/true and GOFLAGS=-exec=/bin/true are the hostile values the posture refusal cells plant"},
+	{"internal/cigates/scripts/posture_integration_test.go", "/usr/local/go", "the older posture guard's own forbidden-path list and its comment (TestPostureIntegrationHardCodesNoToolchainPath)"},
+	{"internal/cigates/suitecatalog/runblock_plants_test.go", "/usr/local/go", testDataLiteral},
+}
+
+const (
+	postureHermetic   = "ci/posture_integration.sh re-execs itself under env -i with PATH reset, so it pins system coreutils, git and jq by path on purpose; go itself is resolved from the caller PATH (TestPostureIntegrationHardCodesNoToolchainPath)"
+	shimExecsRealTool = "a fake tool shim that wraps the real binary: it must exec the system path, because a PATH lookup would find the shim itself"
+	testDataLiteral   = "test data: a planted forbidden literal that another guard must refuse"
+)
 
 func TestNoAbsoluteToolchainPathsInCIScripts(t *testing.T) {
 	type key struct{ file, path string }

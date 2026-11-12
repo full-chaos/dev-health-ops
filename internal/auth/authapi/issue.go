@@ -217,7 +217,7 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonNotEntitled}, nil)
 		return
 	case err != nil:
-		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonDependency), err)
+		h.rec.refuseProjection(w, r, opSessionIssue, err)
 		return
 	}
 	var issued session.Issued

@@ -76,10 +76,10 @@ func (s *Store) ProjectOrganization(ctx context.Context, orgID uuid.UUID) (err e
 		return nil
 	case err != nil:
 		return s.storeErr(ctx, "read auth.organizations", err)
-	case cur == keepSuspended(cur, src):
+	case cur == keepSuspended(orgID, cur, src):
 		return nil
 	}
-	if err := s.updateOrganization(ctx, orgID, keepSuspended(cur, src), cur); err != nil {
+	if err := s.updateOrganization(ctx, orgID, keepSuspended(orgID, cur, src), cur); err != nil {
 		return err
 	}
 	outcome = "updated"
@@ -91,10 +91,15 @@ func (s *Store) ProjectOrganization(ctx context.Context, orgID uuid.UUID) (err e
 // organization suspended in the auth schema stays suspended. go-api's name and
 // slug still flow, and its is_active can suspend, never reactivate: a
 // suspension, an organization deprovision's included, ends only by an
-// auth-service verb (D6456, deny first).
-func keepSuspended(cur, src orgState) orgState {
+// auth-service verb (D6456, deny first). A slug a deprovision freed stays
+// freed: go-api's row keeps the old slug until its purge (or after a purge
+// that failed), and writing it back would hold it from a new organization.
+func keepSuspended(orgID uuid.UUID, cur, src orgState) orgState {
 	if !cur.active {
 		src.active = false
+	}
+	if cur.slug == copyproject.DeletedOrganizationSlug(orgID) {
+		src.slug = cur.slug
 	}
 	return src
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -202,4 +203,24 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(status)
 	_, _ = io.Copy(w, bytes.NewReader(raw))
+}
+
+// organizationConflictText is go-api's detail text of a sign-in refused for an organization slug clash.
+const organizationConflictText = "Organization conflict"
+
+// isOrganizationConflict reports a session route whose organization copy met a slug another auth organization holds.
+func isOrganizationConflict(err error) bool {
+	return errors.Is(err, identity.ErrOrganizationSlugCollision)
+}
+
+// refuseProjection answers a failed principal or organization projection of a session route: a slug clash is the
+// 409 organization_conflict, any other failure the 503 dependency. Both are recorded as errors (an ERROR line): a
+// clash does not heal by itself, an operator must act on it.
+func (rec recorder) refuseProjection(w http.ResponseWriter, r *http.Request, operation string, err error) {
+	answer := unavailable(reasonDependency)
+	if isOrganizationConflict(err) {
+		answer = refusal{http.StatusConflict, reasonOrganizationConflict}
+	}
+	rec.record(r.Context(), operation, "error", answer.reason, err)
+	writeRefusal(w, r, answer)
 }

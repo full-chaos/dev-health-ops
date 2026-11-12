@@ -139,7 +139,7 @@ func (h compatHandlers) startDelegated(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opDelegatedStart, refusal{http.StatusForbidden, reasonNotEntitled}, nil)
 		return
 	case err != nil:
-		h.rec.refuse(w, r, opDelegatedStart, unavailable(reasonDependency), err)
+		h.rec.refuseProjection(w, r, opDelegatedStart, err)
 		return
 	}
 	record, err := h.Sessions.StartDelegation(ctx, in)

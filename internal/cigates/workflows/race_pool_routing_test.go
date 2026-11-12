@@ -10,11 +10,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The race legs of go-quality-leg may run on the ARC pool named by vars.CI_RACE_RUNNER. ops is a
-// public repo: the pool term must carry the push-to-main and same-repository guards, the variable
-// unset must mean hosted, and a pool job must run with Ryuk off and prove at start that its docker daemon holds no testcontainers.
-
-const raceHostedFallback = "'ubuntu-latest' }}"
+// The race legs of go-quality-leg ran on the ARC pool named by vars.CI_RACE_RUNNER until the pool was retired (D6994).
+// They are hosted now: the hosted label, the hosted budgets, Ryuk on, no pool-only step and no pool flag on any leg.
 
 func goQualityLeg(t *testing.T) map[string]any {
 	t.Helper()
@@ -35,60 +32,27 @@ func goQualityLeg(t *testing.T) map[string]any {
 	return leg
 }
 
-func TestRaceLegsRouteToThePoolOnlyOnPushToMainOfThisRepo(t *testing.T) {
+func TestRaceLegsRunHosted(t *testing.T) {
 	leg := goQualityLeg(t)
-	runsOn, _ := leg["runs-on"].(string)
-	want := "${{ (" + racePoolTerm + ") && vars.CI_RACE_RUNNER || "
-	if !strings.HasPrefix(runsOn, want) {
-		t.Fatalf("runs-on must start with the guarded CI_RACE_RUNNER term\n got: %s\nwant prefix: %s", runsOn, want)
+	if got := leg["runs-on"]; got != "ubuntu-latest" {
+		t.Fatalf("go-quality-leg runs-on = %v, want ubuntu-latest", got)
 	}
-	if !strings.HasSuffix(runsOn, raceHostedFallback) {
-		t.Fatalf("runs-on must end in the hosted fallback, got: %s", runsOn)
+	if got := leg["timeout-minutes"]; got != 45 {
+		t.Fatalf("timeout-minutes = %v, want 45 (CHAOS-13036: 30m per package, 45 job minutes)", got)
 	}
-	if strings.Count(runsOn, "vars.CI_RACE_RUNNER") != 2 {
-		t.Fatalf("CI_RACE_RUNNER must appear only in the guard and the value, got: %s", runsOn)
-	}
-	timeout, _ := leg["timeout-minutes"].(string)
-	if !strings.HasPrefix(timeout, "${{ ("+racePoolTerm+") && ") || !strings.HasSuffix(timeout, " && 45 || (github.event_name == 'merge_group' && 45 || 45) }}") {
-		t.Fatalf("timeout-minutes must be 45 on the pool path, on merge_group and on pull requests (CHAOS-13036), got: %s", timeout)
-	}
-}
-
-func TestRaceLegsOnThePoolRunWithoutRyukAndAssertAnEmptyDaemonAtStart(t *testing.T) {
-	leg := goQualityLeg(t)
 	env, _ := leg["env"].(map[string]any)
-	wantRyuk := "${{ (" + racePoolTerm + ") && 'true' || 'false' }}"
-	if env["TESTCONTAINERS_RYUK_DISABLED"] != wantRyuk {
-		t.Fatalf("TESTCONTAINERS_RYUK_DISABLED must be on only for the pool legs\n got: %v\nwant: %s", env["TESTCONTAINERS_RYUK_DISABLED"], wantRyuk)
+	if got := env["CHECK_GO_JOB_CAP_MIN"]; got != 45 {
+		t.Fatalf("CHECK_GO_JOB_CAP_MIN = %v, want 45", got)
 	}
-	ryukArm := strings.TrimSuffix(strings.TrimPrefix(wantRyuk, "${{ ("), ") && 'true' || 'false' }}")
-	for name, over := range map[string]map[string]string{
-		"static":   {"matrix.pool": ""},
-		"test":     {"matrix.pool": ""},
-		"pull req": {"github.event_name": "pull_request", "github.ref": "refs/pull/1/merge"},
-	} {
-		if evalRacePoolTerm(t, ryukArm, poolContext(over)) {
-			t.Fatalf("%s must not inherit TESTCONTAINERS_RYUK_DISABLED=true", name)
-		}
-	}
-	if !evalRacePoolTerm(t, ryukArm, poolContext(nil)) {
-		t.Fatal("the pool legs must run with Ryuk disabled")
+	if got := env["TESTCONTAINERS_RYUK_DISABLED"]; got != "false" {
+		t.Fatalf("TESTCONTAINERS_RYUK_DISABLED = %v, want 'false': Ryuk reaps the hosted runner's containers", got)
 	}
 	steps, _ := leg["steps"].([]any)
-	found := false
 	for _, s := range steps {
 		step, _ := s.(map[string]any)
-		if run, _ := step["run"].(string); strings.Contains(run, "ci/assert_no_testcontainers.sh") {
-			found = step["if"] == "matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'"
-		}
-	}
-	if !found {
-		t.Fatal("go-quality-leg needs a pool-only step that runs ci/assert_no_testcontainers.sh")
-	}
-	for _, s := range steps {
-		step, _ := s.(map[string]any)
-		if run, _ := step["run"].(string); strings.Contains(run, "reap_testcontainers") {
-			t.Fatal("the session reap step is gone: each pool pod has its own docker daemon")
+		run, _ := step["run"].(string)
+		if strings.Contains(run, "ci/assert_no_testcontainers.sh") || strings.Contains(run, "reap_testcontainers") {
+			t.Fatalf("a pool-only step is back in go-quality-leg: %v", step["name"])
 		}
 	}
 }
@@ -122,109 +86,16 @@ func TestAssertNoTestcontainersAtJobStart(t *testing.T) {
 	}
 }
 
-// evalRacePoolTerm evaluates a term made only of `a && b` clauses: `matrix.pool`, `x == 'lit'` and `x != 'lit'`.
-func evalRacePoolTerm(t *testing.T, term string, ctx map[string]string) bool {
-	t.Helper()
-	for _, clause := range strings.Split(term, " && ") {
-		clause = strings.TrimSpace(clause)
-		switch {
-		case clause == "matrix.pool":
-			if ctx[clause] != "true" {
-				return false
-			}
-		case strings.Contains(clause, " == '"), strings.Contains(clause, " != '"):
-			op := " == "
-			if strings.Contains(clause, " != ") {
-				op = " != "
-			}
-			lhs, rhs, _ := strings.Cut(clause, op)
-			lit := strings.Trim(rhs, "'")
-			if (ctx[lhs] == lit) != (op == " == ") {
-				return false
-			}
-		default:
-			t.Fatalf("unsupported clause %q in the pool term", clause)
-		}
-	}
-	return true
-}
-
-func poolContext(over map[string]string) map[string]string {
-	ctx := map[string]string{
-		"matrix.pool":         "true",
-		"vars.CI_RACE_RUNNER": "oci-arc-runners",
-		"github.event_name":   "push",
-		"github.ref":          "refs/heads/main",
-		"github.repository":   "full-chaos/dev-health-ops",
-	}
-	for k, v := range over {
-		ctx[k] = v
-	}
-	return ctx
-}
-
-func TestRacePoolTermRoutesByEvaluation(t *testing.T) {
-	leg := goQualityLeg(t)
-	runsOn, _ := leg["runs-on"].(string)
-	term := strings.TrimPrefix(runsOn, "${{ (")
-	term, _, _ = strings.Cut(term, ") && vars.CI_RACE_RUNNER || ")
-	cases := []struct {
-		name string
-		over map[string]string
-		want bool
-	}{
-		{"eligible push to main", nil, true},
-		{"variable unset", map[string]string{"vars.CI_RACE_RUNNER": ""}, false},
-		{"pull request", map[string]string{"github.event_name": "pull_request", "github.ref": "refs/pull/1/merge"}, false},
-		{"push to another branch", map[string]string{"github.ref": "refs/heads/feature"}, false},
-		{"push to main of another repository", map[string]string{"github.repository": "someone/dev-health-ops"}, false},
-		{"leg without the pool flag", map[string]string{"matrix.pool": ""}, false},
-		{"workflow dispatch", map[string]string{"github.event_name": "workflow_dispatch"}, false},
-	}
-	for _, c := range cases {
-		if got := evalRacePoolTerm(t, term, poolContext(c.over)); got != c.want {
-			t.Errorf("%s: pool = %v, want %v (term %q)", c.name, got, c.want, term)
-		}
-	}
-}
-
-func TestRacePoolTermPlantedDefectsRoute(t *testing.T) {
-	planted := map[string]string{
-		"no repository clause": strings.Replace(racePoolTerm, " && github.repository == 'full-chaos/dev-health-ops'", "", 1),
-		"no push clause":       strings.Replace(racePoolTerm, "github.event_name == 'push' && ", "", 1),
-		"no main clause":       strings.Replace(racePoolTerm, " && github.ref == 'refs/heads/main'", "", 1),
-		"no variable clause":   strings.Replace(racePoolTerm, "vars.CI_RACE_RUNNER != '' && ", "", 1),
-	}
-	bad := map[string]map[string]string{
-		"no repository clause": {"github.repository": "someone/dev-health-ops"},
-		"no push clause":       {"github.event_name": "pull_request"},
-		"no main clause":       {"github.ref": "refs/heads/feature"},
-		"no variable clause":   {"vars.CI_RACE_RUNNER": ""},
-	}
-	for name, term := range planted {
-		if term == racePoolTerm {
-			t.Fatalf("%s: the mutation changed nothing", name)
-		}
-		if !evalRacePoolTerm(t, term, poolContext(bad[name])) {
-			t.Errorf("%s: the planted term did not route a case it must not route, so the evaluation cannot catch it", name)
-		}
-	}
-}
-
-func TestRaceLegsTurnSetupGoCacheOffOnThePool(t *testing.T) {
+// CHAOS-10486: setup-go's own cache stays off on every leg; the hosted legs restore their own per-leg cache.
+func TestRaceLegsKeepSetupGoCacheOff(t *testing.T) {
 	leg := goQualityLeg(t)
 	steps, _ := leg["steps"].([]any)
 	for _, s := range steps {
 		step, _ := s.(map[string]any)
 		if uses, _ := step["uses"].(string); strings.HasPrefix(uses, "actions/setup-go@") {
 			with, _ := step["with"].(map[string]any)
-			// off everywhere (CHAOS-10486: the hosted legs restore their own cache) is off on the pool path too
-			if off, ok := with["cache"].(bool); ok && !off {
-				return
-			}
-			cache, _ := with["cache"].(string)
-			if !strings.Contains(cache, racePoolTerm) {
-				t.Fatalf("setup-go cache must be off on the CI_RACE_RUNNER path, got %q", cache)
+			if off, ok := with["cache"].(bool); !ok || off {
+				t.Fatalf("setup-go cache must be false in go-quality-leg, got %v", with["cache"])
 			}
 			return
 		}
@@ -232,86 +103,36 @@ func TestRaceLegsTurnSetupGoCacheOffOnThePool(t *testing.T) {
 	t.Fatal("no setup-go step in go-quality-leg")
 }
 
-// Only the six race legs are budgeted for the pool (queue measured 7-10 min hosted vs under 1 min pool): static and test stay hosted.
-func TestOnlyTheSixRaceLegsCarryThePoolFlag(t *testing.T) {
-	got := map[string]bool{}
+// No leg carries the retired pool flag.
+func TestNoLegCarriesThePoolFlag(t *testing.T) {
 	for _, entry := range goQualityLegList(t, authProofRoot(t)) {
-		name, _ := entry["name"].(string)
-		if pool, _ := entry["pool"].(bool); pool {
-			got[name] = true
-		}
-	}
-	want := map[string]bool{"race-1-of-6": true, "race-2-of-6": true, "race-3-of-6": true, "race-4-of-6": true, "race-5-of-6": true, "race-6-of-6": true}
-	if len(got) != len(want) {
-		t.Fatalf("pool-flagged legs = %v, want exactly %v", got, want)
-	}
-	for name := range want {
-		if !got[name] {
-			t.Fatalf("pool-flagged legs = %v, want exactly %v", got, want)
+		if _, ok := entry["pool"]; ok {
+			t.Fatalf("leg %v carries the retired pool flag", entry["name"])
 		}
 	}
 }
 
-const raceTimeoutPool, raceTimeoutDefault = "'25m'", "'30m'"
+const raceTimeoutExpr = "${{ github.event_name == 'merge_group' && '25m' || '30m' }}"
 
-func raceTimeoutExpr(term, pool, other string) string {
-	return "${{ (" + term + ") && " + pool + " || (github.event_name == 'merge_group' && " + pool + " || " + other + ") }}"
-}
-
-func raceTimeoutValue(t *testing.T, expr string, ctx map[string]string) string {
-	t.Helper()
-	term, rest, ok := strings.Cut(strings.TrimPrefix(expr, "${{ ("), ") && ")
-	if !ok || !strings.HasPrefix(expr, "${{ (") {
-		return "unparsed"
-	}
-	pool, other, ok := strings.Cut(strings.TrimSuffix(rest, " }}"), " || ")
-	if !ok {
-		return "unparsed"
-	}
-	if evalRacePoolTerm(t, term, ctx) {
-		return pool
-	}
-	// CHAOS-12856: the other arm is `(github.event_name == 'merge_group' && <pool> || <default>)`.
-	inner := strings.TrimSuffix(strings.TrimPrefix(other, "(github.event_name == 'merge_group' && "), ")")
-	if inner == other {
-		return "unparsed"
-	}
-	mqPool, def, ok := strings.Cut(inner, " || ")
-	if !ok {
-		return "unparsed"
-	}
-	if ctx["github.event_name"] == "merge_group" {
-		return mqPool
-	}
-	return def
-}
-
-// raceTimeoutProblems pins the exact expression, then evaluates it per leg and event.
-func raceTimeoutProblems(t *testing.T, expr string) []string {
-	t.Helper()
+// raceTimeoutProblems pins the exact expression and evaluates it per event: 25m in the merge queue (CHAOS-12856), 30m
+// everywhere else.
+func raceTimeoutProblems(expr string) []string {
 	var bad []string
-	if want := raceTimeoutExpr(racePoolTerm, raceTimeoutPool, raceTimeoutDefault); expr != want {
+	if expr != raceTimeoutExpr {
 		bad = append(bad, "not the pinned expression: "+expr)
 	}
-	for _, c := range []struct {
-		name string
-		over map[string]string
-		want string
-	}{
-		{"race leg on push to main of this repo", nil, raceTimeoutPool},
-		{"static leg", map[string]string{"matrix.pool": ""}, raceTimeoutDefault},
-		{"test leg", map[string]string{"matrix.pool": ""}, raceTimeoutDefault},
-		{"race leg on pull request", map[string]string{"github.event_name": "pull_request", "github.ref": "refs/pull/1/merge"}, raceTimeoutDefault},
-		{"race leg on push to another branch", map[string]string{"github.ref": "refs/heads/feature"}, raceTimeoutDefault},
-		{"race leg on another repository", map[string]string{"github.repository": "someone/dev-health-ops"}, raceTimeoutDefault},
-		{"race leg with the variable unset", map[string]string{"vars.CI_RACE_RUNNER": ""}, raceTimeoutDefault},
-		{"race leg on merge group", map[string]string{"github.event_name": "merge_group", "github.ref": "refs/heads/gh-readonly-queue/main/pr-1"}, raceTimeoutPool},
-		{"static leg on merge group", map[string]string{"github.event_name": "merge_group", "matrix.pool": ""}, raceTimeoutPool},
-		{"race leg on workflow dispatch", map[string]string{"github.event_name": "workflow_dispatch"}, raceTimeoutDefault},
-		{"race leg on schedule", map[string]string{"github.event_name": "schedule"}, raceTimeoutDefault},
-	} {
-		if v := raceTimeoutValue(t, expr, poolContext(c.over)); v != c.want {
-			bad = append(bad, c.name+": timeout "+v+", want "+c.want)
+	cond, rest, ok := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(expr, "${{ "), " }}"), " && ")
+	mq, other, ok2 := strings.Cut(rest, " || ")
+	if !ok || !ok2 || cond != "github.event_name == 'merge_group'" {
+		return append(bad, "unparsed: "+expr)
+	}
+	for event, want := range map[string]string{"merge_group": "'25m'", "push": "'30m'", "pull_request": "'30m'", "schedule": "'30m'", "workflow_dispatch": "'30m'"} {
+		got := other
+		if event == "merge_group" {
+			got = mq
+		}
+		if got != want {
+			bad = append(bad, event+": timeout "+got+", want "+want)
 		}
 	}
 	return bad
@@ -320,22 +141,19 @@ func raceTimeoutProblems(t *testing.T, expr string) []string {
 func TestRaceTestTimeoutIsPinnedPerLeg(t *testing.T) {
 	env, _ := goQualityLeg(t)["env"].(map[string]any)
 	got, _ := env["DEV_HEALTH_GO_RACE_TEST_TIMEOUT"].(string)
-	for _, p := range raceTimeoutProblems(t, got) {
+	for _, p := range raceTimeoutProblems(got) {
 		t.Error(p)
 	}
 }
 
 func TestRaceTestTimeoutPlantedMutantsAreRed(t *testing.T) {
-	noPush := strings.Replace(racePoolTerm, "github.event_name == 'push' && ", "", 1)
-	noRepo := strings.Replace(racePoolTerm, " && github.repository == 'full-chaos/dev-health-ops'", "", 1)
 	for name, mutant := range map[string]string{
-		"unconditional 25m":    "${{ '25m' }}",
-		"25m on both arms":     raceTimeoutExpr(racePoolTerm, raceTimeoutPool, raceTimeoutPool),
-		"inverted arms":        raceTimeoutExpr(racePoolTerm, raceTimeoutDefault, raceTimeoutPool),
-		"no push clause":       raceTimeoutExpr(noPush, raceTimeoutPool, raceTimeoutDefault),
-		"no repository clause": raceTimeoutExpr(noRepo, raceTimeoutPool, raceTimeoutDefault),
+		"unconditional 25m": "${{ '25m' }}",
+		"25m on both arms":  "${{ github.event_name == 'merge_group' && '25m' || '25m' }}",
+		"inverted arms":     "${{ github.event_name == 'merge_group' && '30m' || '25m' }}",
+		"wrong event":       "${{ github.event_name == 'push' && '25m' || '30m' }}",
 	} {
-		if len(raceTimeoutProblems(t, mutant)) == 0 {
+		if len(raceTimeoutProblems(mutant)) == 0 {
 			t.Errorf("%s: the planted mutant passes the timeout pin", name)
 		}
 	}

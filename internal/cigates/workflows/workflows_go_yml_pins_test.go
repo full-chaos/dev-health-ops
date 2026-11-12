@@ -8,32 +8,17 @@ import (
 )
 
 // Ported from tests/tooling (test_go_self_hosted_setup_go_cache_disabled, test_go_arm64_numeric_parity_inner_test_timeout,
-// test_go_arm64_and_docker_build_pool_routing, test_go_storage_and_reproducibility_pilot): the pins of the self-hosted
-// pool routing in go.yml and docker-images.yml. Each guard is a function of parsed workflow documents, so a constructed
-// document (a decoy job) or a mutated copy of the real file plants one defect.
-
-const selfHostedCondition = "vars.SELF_HOSTED_RUNNERS == 'enabled' && " +
-	"((github.event_name == 'pull_request' && " +
-	"github.event.pull_request.head.repo.full_name == github.repository) || " +
-	"(github.event_name == 'push' && github.ref == 'refs/heads/main') || " +
-	"(github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || " +
-	"github.event_name == 'release' || " +
-	"github.event_name == 'schedule')"
+// test_go_arm64_and_docker_build_pool_routing, test_go_storage_and_reproducibility_pilot), re-cut when the ARC pool was
+// retired (D6994): the arm64 parity job runs on the hosted arm64 runner, the dho arm64 image build and the reproducibility
+// job run hosted, and the pool-only jobs (dind-smoke-test, the reproducibility twin) stay deleted. Each guard is a
+// function of parsed workflow documents, so a constructed document (a decoy job) or a mutated copy of the real file
+// plants one defect.
 
 const eligibilityCondition = "github.event_name == 'workflow_dispatch' || " +
 	"github.event_name == 'release' || " +
 	"(github.event_name == 'merge_group' && needs.changes.outputs.docs_only != 'true') || " +
 	"(github.event_name == 'push' && github.ref == 'refs/heads/main') || " +
 	"needs.changes.outputs.code == 'true'"
-
-const routingExpression = "${{ (" + selfHostedCondition + ") " +
-	"&& fromJSON('[\"self-hosted\",\"oci-arc-runners\"]') " +
-	"|| 'ubuntu-latest' }}"
-
-var imageRoutingExpression = "${{ ((vars.SELF_HOSTED_IMAGE_BUILDS == 'enabled' || vars.SELF_HOSTED_RUNNERS == 'enabled') && " +
-	strings.TrimPrefix(selfHostedCondition, "vars.SELF_HOSTED_RUNNERS == 'enabled' && ") + ") " +
-	"&& fromJSON('[\"self-hosted\",\"oci-arc-runners\"]') " +
-	"|| 'ubuntu-latest' }}"
 
 const draftGatePrefix = "(!(github.event_name == 'pull_request' && github.event.pull_request.draft && " +
 	"!contains(github.event.pull_request.labels.*.name, 'ci:full'))) && ("
@@ -260,18 +245,19 @@ func TestArm64ParityGoTestCarriesAnInnerTimeoutShorterThanTheJobCap(t *testing.T
 	}
 }
 
-// poolRoutingDefects pins the arm64 parity job (go.yml) and the dho arm64 image build (docker-images.yml) to the pool routing.
+// poolRoutingDefects pins the arm64 parity job (go.yml) to the hosted arm64 runner and the dho arm64 image build
+// (docker-images.yml) to the hosted x64 runner with QEMU.
 func poolRoutingDefects(goDoc, dockerDoc yamlMap) []string {
 	var out []string
 	add := func(f string, a ...any) { out = append(out, fmt.Sprintf(f, a...)) }
 	const dind, build, merge = "dind-smoke-test", "go-build-dho-arm64", "go-merge"
 
 	parity := pinJob(goDoc, "go-arm64-numeric-parity")
-	if got := withoutDraftGate(asString(parity["if"])); got != selfHostedCondition {
-		add("go-arm64-numeric-parity if %q is not the self-hosted-eligible condition", got)
+	if got := asString(parity["if"]); got != strings.TrimSuffix(draftGatePrefix, " && (") {
+		add("go-arm64-numeric-parity if %q is not exactly the draft gate", got)
 	}
-	if !isSelfHostedARC(parity["runs-on"]) {
-		add("go-arm64-numeric-parity runs-on %v is not the oci-arc-runners pool", parity["runs-on"])
+	if got := parity["runs-on"]; got != "ubuntu-24.04-arm" {
+		add("go-arm64-numeric-parity runs-on %v is not the hosted arm64 runner ubuntu-24.04-arm", got)
 	}
 	if contains(pinNeeds(parity), dind) {
 		add("go-arm64-numeric-parity needs %s but never uses Docker", dind)
@@ -293,18 +279,18 @@ func poolRoutingDefects(goDoc, dockerDoc yamlMap) []string {
 	noPoll("go-arm64-numeric-parity", parity)
 
 	db := pinJob(dockerDoc, build)
-	expectedIf := "always() && needs.changes.result == 'success' && needs.resolve.result == 'success' && needs.resolve.outputs.promoted != 'true' && needs." + dind + ".result != 'failure' && needs." + dind + ".result != 'cancelled' && (" + eligibilityCondition + ")"
+	expectedIf := "always() && needs.changes.result == 'success' && needs.resolve.result == 'success' && needs.resolve.outputs.promoted != 'true' && (" + eligibilityCondition + ")"
 	if got := withoutDraftGate(asString(db["if"])); got != expectedIf {
-		add("%s if %q is not the eligibility and dind-tolerance condition", build, got)
+		add("%s if %q is not the eligibility condition", build, got)
 	}
-	if got := asString(db["runs-on"]); got != imageRoutingExpression {
-		add("%s runs-on %q is not the ARC-or-x64 routing expression", build, got)
+	if got := asString(db["runs-on"]); got != "ubuntu-latest" {
+		add("%s runs-on %q is not the hosted runner ubuntu-latest", build, got)
 	}
 	if _, n := stepNamed(db, "Set up QEMU"); n == 0 {
-		add("%s must set up QEMU for its x64 fallback", build)
+		add("%s must set up QEMU: the hosted x64 runner cross-builds linux/arm64", build)
 	}
-	if !contains(pinNeeds(db), dind) {
-		add("%s does not need %s", build, dind)
+	if contains(pinNeeds(db), dind) {
+		add("%s needs the deleted %s", build, dind)
 	}
 	if db["timeout-minutes"] != 25 {
 		add("%s timeout-minutes %v is not 25", build, db["timeout-minutes"])
@@ -325,7 +311,12 @@ func poolRoutingDefects(goDoc, dockerDoc yamlMap) []string {
 		}
 	}
 	if !excluded {
-		add("go-build matrix must exclude (dho, linux/arm64): the pilot leg builds it")
+		add("go-build matrix must exclude (dho, linux/arm64): the dedicated leg builds it")
+	}
+	for _, doc := range []yamlMap{goDoc, dockerDoc} {
+		if _, has := jobsOf(doc)[dind]; has {
+			add("the pool-only %s job is back", dind)
+		}
 	}
 
 	gm := pinJob(dockerDoc, merge)
@@ -347,7 +338,8 @@ func TestPoolRoutingOfArm64ParityAndDhoImageBuild(t *testing.T) {
 	}
 	files := []string{".github/workflows/go.yml", ".github/workflows/docker-images.yml"}
 	for _, m := range []mutation{
-		{files[0], "oci-arc-runners]\n    timeout-minutes: 10", "oci-arc-runners]\n    timeout-minutes: 11"},
+		{files[0], "runs-on: ubuntu-24.04-arm\n    timeout-minutes: 10", "runs-on: ubuntu-24.04-arm\n    timeout-minutes: 11"},
+		{files[0], "runs-on: ubuntu-24.04-arm\n", "runs-on: ubuntu-latest\n"},
 		{files[1], "timeout-minutes: 25", "timeout-minutes: 26"},
 	} {
 		tmp := plantTree(t, root, files, m)
@@ -357,52 +349,30 @@ func TestPoolRoutingOfArm64ParityAndDhoImageBuild(t *testing.T) {
 	}
 }
 
-// pilotDefects pins go-container-reproducibility (hosted) and its self-hosted twin, and the hosted-only storage shards.
+// pilotDefects pins go-container-reproducibility (hosted, the only leg now) and the hosted-only storage shards.
 func pilotDefects(doc yamlMap) []string {
 	var out []string
 	add := func(f string, a ...any) { out = append(out, fmt.Sprintf(f, a...)) }
-	const dind, plan, shard, shardRemoved, agg = "dind-smoke-test", "go-storage-integration-plan", "go-storage-integration-shard", "go-storage-integration-shard-self-hosted", "go-storage-integration"
-	const hosted, selfHosted, runStep = "go-container-reproducibility", "go-container-reproducibility-self-hosted", "Verify reproducible Go images"
-	hostedCond := "!(" + selfHostedCondition + ")"
+	const plan, shard, shardRemoved, agg = "go-storage-integration-plan", "go-storage-integration-shard", "go-storage-integration-shard-self-hosted", "go-storage-integration"
+	const hosted = "go-container-reproducibility"
 
-	if got := withoutDraftGate(asString(pinJob(doc, hosted)["if"])); got != hostedCond {
-		add("%s if %q is not the hosted-fallback condition", hosted, got)
+	repro := pinJob(doc, hosted)
+	if got, want := asString(repro["if"]), strings.TrimSuffix(goHeavyGatePrefix, " && ("); got != want {
+		add("%s if %q is not exactly the heavy gate %q", hosted, got, want)
 	}
-	sh := pinJob(doc, selfHosted)
-	if got := withoutDraftGate(asString(sh["if"])); got != selfHostedCondition {
-		add("%s if %q is not the self-hosted-eligible condition", selfHosted, got)
+	if repro["runs-on"] != "ubuntu-latest" {
+		add("%s must run on ubuntu-latest, got %v", hosted, repro["runs-on"])
 	}
-	if pinJob(doc, hosted)["name"] != sh["name"] {
-		add("%s and %s must share one name so flipping SELF_HOSTED_RUNNERS never renames the required check", hosted, selfHosted)
+	if repro["name"] != hosted {
+		add("%s must keep its required-check name, got %v", hosted, repro["name"])
 	}
-	if !contains(pinNeeds(sh), dind) {
-		add("%s does not need %s", selfHosted, dind)
-	}
-	if sh["timeout-minutes"] != 57 {
-		add("%s timeout-minutes %v is not 57", selfHosted, sh["timeout-minutes"])
-	}
-	step, _ := stepNamed(sh, runStep)
-	m := regexp.MustCompile(pyBefore + `timeout (` + pyD + `+)m` + pyAfterAny).FindStringSubmatch(asString(step["run"]))
-	jt, ok := sh["timeout-minutes"].(int)
-	inner, innerOK := 0, false
-	if m != nil {
-		inner, innerOK = pyAtoi(m[1])
-	}
-	if m == nil || !ok || !innerOK || inner >= jt {
-		add("%s inner timeout %v is not strictly shorter than the job timeout %v", selfHosted, m, sh["timeout-minutes"])
-	}
-	for _, j := range []string{selfHosted, dind} {
-		if _, has := pinJob(doc, j)["concurrency"]; has {
-			add("%s has a job-level concurrency group (tried and reverted: a required check was cancelled)", j)
+	for _, j := range []string{"go-container-reproducibility-self-hosted", "dind-smoke-test"} {
+		if _, has := jobsOf(doc)[j]; has {
+			add("the pool-only %s job is back", j)
 		}
 	}
-	if contains(pinNeeds(sh), "pick-runner") || strings.Contains(asString(sh["if"]), "pick-runner") {
-		add("%s still references pick-runner", selfHosted)
-	}
-	for _, s := range stepsOf(sh) {
-		if run := asString(s["run"]); strings.Contains(run, "job_status()") || strings.Contains(run, "run_here") {
-			add("%s still has the fallback poller", selfHosted)
-		}
+	if _, has := repro["concurrency"]; has {
+		add("%s has a job-level concurrency group (tried and reverted: a required check was cancelled)", hosted)
 	}
 	if _, has := jobsOf(doc)["pick-runner"]; has {
 		add("a pick-runner job still exists")
@@ -432,7 +402,8 @@ func TestReproducibilityAndStorageShardPins(t *testing.T) {
 	}
 	f := ".github/workflows/go.yml"
 	for _, m := range []mutation{
-		{f, "timeout-minutes: 57", "timeout-minutes: 58"},
+		{f, "  go-container-reproducibility:\n", "  go-container-reproducibility-self-hosted:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n  go-container-reproducibility:\n"},
+		{f, "      needs.go-storage-integration-plan.outputs.docs_only != 'true'\n    runs-on: ubuntu-latest\n    timeout-minutes: 25", "      needs.go-storage-integration-plan.outputs.docs_only != 'true'\n    runs-on: ubuntu-latest\n    concurrency: repro\n    timeout-minutes: 25"},
 	} {
 		if m.new == "" {
 			continue

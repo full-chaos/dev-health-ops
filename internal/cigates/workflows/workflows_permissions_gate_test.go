@@ -86,7 +86,7 @@ var wildcardJobs = map[string][]string{
 	"freeze-provider-worlds.yml":   {"freeze"},
 	"go-quality.yml":               {"go-quality-leg", "go-quality"},
 	"go-workers-compose-proof.yml": {"go-workers-compose-proof"},
-	"go.yml":                       {"go-arm64-numeric-parity", "dind-smoke-test", "go-storage-integration-shard", "go-golden-drift", "go-container-build", "go-container-smoke", "go-container-security", "go-container-reproducibility", "go-container-reproducibility-self-hosted", "go-auth-compose-proof", "go-auth-web-proxy-proof", "graphql-wire-parity", "go-queue-gate"},
+	"go.yml":                       {"go-arm64-numeric-parity", "go-storage-integration-shard", "go-golden-drift", "go-container-build", "go-container-smoke", "go-container-security", "go-container-reproducibility", "go-auth-compose-proof", "go-auth-web-proxy-proof", "graphql-wire-parity", "go-queue-gate"},
 	"venue-oracles-changed.yml":    {"venue-oracles-changed"},
 	"venue-oracles.yml":            {"venue-oracles", "auth-corpus-external"},
 }

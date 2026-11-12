@@ -588,7 +588,7 @@ func gitHubFilesInventoryCached(
 	if treeCapExceeded {
 		slog.Warn(
 			"github files tree response exceeded the shared object cap; falling back to non-recursive walk",
-			"repository", fullName, "path", tooLarge.Path,
+			"repository", fullName, "route", githubTreeRoute,
 			"cap_bytes", tooLarge.CapBytes, "content_length", tooLarge.ContentLength,
 		)
 	} else if treeErr != nil {

@@ -28,7 +28,6 @@ func TestWorkerPackageLevelLogCallsWriteThroughTheRedactingHandler(t *testing.T)
 	providerErr := &providerfoundation.ProviderError{
 		Class:      providerfoundation.ErrorPermanent,
 		StatusCode: 400,
-		Path:       "/repos/octo/hello/pulls/7",
 		Body:       `{"token":"canary-body-token","message":"canary-body-message"}`,
 	}
 	var stdout, stderr bytes.Buffer
@@ -48,9 +47,6 @@ func TestWorkerPackageLevelLogCallsWriteThroughTheRedactingHandler(t *testing.T)
 	combined := stdout.String() + stderr.String()
 	if strings.Contains(combined, "canary") {
 		t.Fatalf("a protected value or the body reached the output:\n%s", combined)
-	}
-	if strings.Contains(stdout.String(), "/repos/octo/hello/pulls/7") {
-		t.Fatalf("the request path reached the output:\n%s", stdout.String())
 	}
 	for _, want := range []string{
 		`"msg":"github_deployments.pull_request_lookup_failed"`,

@@ -31,6 +31,7 @@ internal/api/session/permissions.go	userPermissions	admin.orgs	2
 internal/api/session/permissions.go	userPermissions	admin.users	2
 internal/api/telemetry/report.go	handlers.requirePlatformRole	admin.telemetry	handler
 internal/api/telemetry/telemetry.go	handlers.withOrg	admin.telemetry	handler
+internal/api/telemetry/telemetry.go	handlers.requireOrgAdmin	admin.telemetry	handler
 internal/apiservice/admin/auditlogs.go	handlers.auditLogRoutes	admin.audit	route
 internal/apiservice/admin/featureflags.go	handlers.featureRoutes	admin.flags	route
 internal/apiservice/admin/guards.go	handlers.ensureOrgAdminAccess	admin.orgs	3

@@ -6784,7 +6784,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:121)",
       "gaps": [
         "action: no catalog action is proven to equal the telemetry settings check; settings.read is the candidate (this leaf does not extend the vocabulary)"
       ],
@@ -6823,12 +6823,12 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:85)",
+      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:86)",
       "route": "/api/v1/telemetry/status",
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/telemetry/telemetry.go",
-        "line": 56
+        "line": 57
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -14545,7 +14545,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:121); a caller who is not the admin or owner of the resolved organization (a caller that holds admin.telemetry, or a request in an active impersonation session, passes) answers 403 (internal/api/telemetry/telemetry.go#handlers.requireOrgAdmin)",
       "gaps": [
         "action: no catalog action is proven to equal the telemetry settings check; settings.write is the candidate (this leaf does not extend the vocabulary)"
       ],
@@ -14584,12 +14584,12 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:85)",
+      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:86)",
       "route": "/api/v1/telemetry/opt-in",
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/telemetry/telemetry.go",
-        "line": 57
+        "line": 58
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -14616,7 +14616,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:121); a caller who is not the admin or owner of the resolved organization (a caller that holds admin.telemetry, or a request in an active impersonation session, passes) answers 403 (internal/api/telemetry/telemetry.go#handlers.requireOrgAdmin)",
       "gaps": [
         "action: no catalog action is proven to equal the telemetry settings check; settings.write is the candidate (this leaf does not extend the vocabulary)"
       ],
@@ -14655,12 +14655,12 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:85)",
+      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:86)",
       "route": "/api/v1/telemetry/opt-out",
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/telemetry/telemetry.go",
-        "line": 58
+        "line": 59
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -14687,7 +14687,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120); a caller that does not hold admin.telemetry (a superuser holds it), or a request in an active impersonation session, answers 403 (internal/api/telemetry/report.go:46)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:121); a caller that does not hold admin.telemetry (a superuser holds it), or a request in an active impersonation session, answers 403 (internal/api/telemetry/report.go:46)",
       "gaps": [
         "action: the route admits only a caller holding admin.telemetry (internal/api/telemetry/report.go:32) and acts in one organization; admin.telemetry is a platform action and this route is org-scoped, so the row keeps no action"
       ],
@@ -14726,12 +14726,12 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:85)",
+      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:86)",
       "route": "/api/v1/telemetry/report",
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/telemetry/telemetry.go",
-        "line": 59
+        "line": 60
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",

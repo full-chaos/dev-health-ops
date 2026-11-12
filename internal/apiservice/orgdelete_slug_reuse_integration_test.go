@@ -4,6 +4,7 @@ package apiservice
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -158,7 +159,7 @@ func compatLoginPlane(t *testing.T, ctx context.Context, pool *pgxpool.Pool) *ht
 		t.Fatal(err)
 	}
 	sessions, err := session.New(session.Config{Pool: pool, Schema: schema, Logger: quietLogger(),
-		SuccessorKey: contracts.NewSecretString("slugreuse-successor-key-00000032")})
+		SuccessorKey: contracts.NewSecretString(base64.RawURLEncoding.EncodeToString([]byte("slugreuse-successor-key-00000032")))})
 	if err != nil {
 		t.Fatal(err)
 	}

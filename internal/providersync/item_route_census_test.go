@@ -65,11 +65,16 @@ func TestItemDecoderFailuresCarryTheRoute(t *testing.T) {
 	calls := 0
 	for _, file := range parsed {
 		ast.Inspect(file, func(node ast.Node) bool {
-			block, ok := node.(*ast.BlockStmt)
-			if !ok {
+			var list []ast.Stmt
+			switch n := node.(type) {
+			case *ast.BlockStmt:
+				list = n.List
+			case *ast.CaseClause:
+				list = n.Body
+			default:
 				return true
 			}
-			for i, stmt := range block.List {
+			for i, stmt := range list {
 				callee, errName := itemDecoderCall(stmt, decoders)
 				if callee == "" || itemDecoderExceptions[callee] != "" {
 					continue
@@ -78,8 +83,8 @@ func TestItemDecoderFailuresCarryTheRoute(t *testing.T) {
 				routed := false
 				if inIf, ok := strings.CutPrefix(errName, "@if:"); ok {
 					routed = blockReturnsRouted(stmt.(*ast.IfStmt).Body, inIf)
-				} else if i+1 < len(block.List) {
-					routed = returnsRoutedError(block.List[i+1], errName)
+				} else if i+1 < len(list) {
+					routed = returnsRoutedError(list[i+1], errName)
 				}
 				if !routed {
 					bad = append(bad, fset.Position(stmt.Pos()).String()+" "+callee)
@@ -92,8 +97,8 @@ func TestItemDecoderFailuresCarryTheRoute(t *testing.T) {
 	if len(bad) > 0 {
 		t.Fatalf("item decoder calls whose error does not name a route:\n%s", strings.Join(bad, "\n"))
 	}
-	if calls < 12 {
-		t.Fatalf("checked %d item decoder calls, want at least 12", calls)
+	if calls < 13 {
+		t.Fatalf("checked %d item decoder calls, want the 13 call sites of CHAOS-10292", calls)
 	}
 }
 

@@ -37,6 +37,10 @@ func TestAuditRowIsInTheAllowlist(t *testing.T) {
 	if err := provisioning.CheckEvent(e.AggregateType, e.AggregateID, e.EventType, e.Change); err != nil || e.EventType != "organization.suspended" {
 		t.Fatalf("suspended event %+v: %v", e, err)
 	}
+	f := org.SlugFreedEvent(in.OrgID)
+	if err := provisioning.CheckEvent(f.AggregateType, f.AggregateID, f.EventType, f.Change); err != nil || f.EventType != "organization.updated" || len(f.Change) != 0 {
+		t.Fatalf("slug freed event %+v: %v", f, err)
+	}
 }
 
 func TestOutcomeLabels(t *testing.T) {

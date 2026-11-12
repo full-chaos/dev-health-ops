@@ -110,7 +110,8 @@ func (s *Store) runChanged(ctx context.Context, v verb, m audit.Mutation) (bool,
 }
 
 // Create inserts an active organization with a server-minted id. The slug is
-// required, validated against the wire pattern, and immutable afterwards.
+// required, validated against the wire pattern, and immutable afterwards; only
+// a deprovision changes it, to the freed form (ApplyFreeSlug).
 func (s *Store) Create(ctx context.Context, in CreateInput, a Actor) (uuid.UUID, error) {
 	name, err := NormalizeName(in.Name)
 	if err == nil {

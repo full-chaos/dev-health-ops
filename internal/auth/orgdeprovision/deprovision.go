@@ -1,7 +1,8 @@
 // Package orgdeprovision ends an organization in the auth schema in one
 // audit.Commit: every pending invite revoked, every live membership removed
 // (both tables each), every session of the organization ended, every live
-// key of its service accounts revoked, and the organization suspended. go-api
+// key of its service accounts revoked, the organization suspended and its slug
+// freed (a later organization may take the name). go-api
 // runs it before it purges the organization's data, so the purge never leaves
 // an auth membership, invite, session or service-account key live.
 package orgdeprovision
@@ -19,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/copyproject"
 	"github.com/full-chaos/dev-health-ops/internal/auth/grantend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
@@ -130,11 +132,13 @@ const planAttempts = 5
 // the events before the transaction, so the locked read must find the same
 // rows, or the deprovision is planned again.
 type plan struct {
-	active  bool
-	members *membership.OrgRemoval
-	invites *invite.OrgRevocation
-	grants  *grantend.Plan
-	keys    *keyPlan
+	active bool
+	// freeSlug: the row still holds a slug other than the freed form.
+	freeSlug bool
+	members  *membership.OrgRemoval
+	invites  *invite.OrgRevocation
+	grants   *grantend.Plan
+	keys     *keyPlan
 }
 
 // Deprovision runs the one commit, in the auth lock order (membership.Store readPairs): the principal rows
@@ -190,6 +194,7 @@ func (s *Service) plan(ctx context.Context, orgID uuid.UUID) (plan, error) {
 		return plan{}, fmt.Errorf("%w: %w", ErrStore, err)
 	default:
 		p.active = o.Status == org.StatusActive
+		p.freeSlug = o.Slug != copyproject.DeletedOrganizationSlug(orgID)
 	}
 	if p.members, err = s.members.PlanRemoveAll(ctx, orgID); err != nil {
 		return plan{}, storeErr(err)
@@ -214,6 +219,9 @@ func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 	events := append(p.invites.Events(), p.members.Events()...)
 	events = append(events, p.grants.Events()...)
 	events = append(events, p.keys.events()...)
+	if p.freeSlug && !p.active {
+		events = append(events, org.SlugFreedEvent(in.OrgID))
+	}
 	if p.active || len(events) == 0 {
 		events = append(events, org.SuspendedEvent(in.OrgID))
 	}
@@ -273,6 +281,13 @@ func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 			// Step 6e: the organization's service-account key rows, after its grants.
 			if err := p.keys.apply(ctx, tx); err != nil {
 				return err
+			}
+			freed, err := s.orgs.ApplyFreeSlug(ctx, tx, in.OrgID)
+			if err != nil {
+				return err
+			}
+			if freed != p.freeSlug {
+				return membership.ErrStateMoved
 			}
 			if !active {
 				return nil

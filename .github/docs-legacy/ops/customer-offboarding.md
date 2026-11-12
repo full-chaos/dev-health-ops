@@ -96,10 +96,6 @@ All analytics data, raw logs, and derived metrics are purged from the ClickHouse
 ### Phase 5: Invalidate Access
 All active sessions, tokens, and membership records are invalidated. Stale browser sessions or API clients are immediately blocked by the platform's central middleware and auth guards, redirecting users to the sign-in page.
 
-### Known limit: re-creating a deleted organization's name
-
-After an organization is deleted, do not create a new organization with the same name or slug. The deleted organization keeps its slug in the auth schema, so every sign-in into the new organization fails with HTTP 500. Pass a different slug in `POST /api/v1/admin/orgs`. If it already happened, contact engineering; do not edit auth tables by hand.
-
 ---
 
 ## 4. Backup Expiry Policy

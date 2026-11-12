@@ -14,11 +14,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 const (
-	wantUseEvent = "api_delegated_use"
+	wantUseEvent = "api.delegated_use"
 	invoicesRow  = "GET /api/v1/billing/invoices"
 )
 
@@ -43,7 +44,7 @@ func useLines(t *testing.T, logs *bytes.Buffer) []map[string]any {
 
 func jsonLogs() (*slog.Logger, *bytes.Buffer) {
 	buf := &bytes.Buffer{}
-	return slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})), buf
+	return logging.NewJSON(buf, slog.LevelDebug), buf
 }
 
 func wantUseLine(t *testing.T, lines []map[string]any, sid string) {
@@ -68,6 +69,12 @@ type useCell struct {
 	admitted func(string) bool
 	enforce  *testPDP
 	shadow   *testPDP
+	// namespace is the enforced namespace of the Enforcer (default billing).
+	namespace string
+	// quiet discards the logger.
+	quiet bool
+	// row and path override the invoices route; an id in the path pins that no path value is logged.
+	row, path string
 }
 
 // serveUse serves GET invoices to an access-token bearer as the cell says and returns the answer and the log.
@@ -91,18 +98,29 @@ func serveUse(t *testing.T, c useCell) (response, *bytes.Buffer) {
 		auth.DelegatedRows(c.admitted)
 	}
 	logger, logs := jsonLogs()
+	if c.quiet {
+		logger = quiet()
+	}
 	guard := NewGuard(auth, logger)
 	if c.enforce != nil {
-		guard.SetEnforcer(parityEnforcer(t, c.enforce, goAPIRows(t), "billing"))
+		namespace := c.namespace
+		if namespace == "" {
+			namespace = "billing"
+		}
+		guard.SetEnforcer(parityEnforcer(t, c.enforce, goAPIRows(t), namespace))
 	}
 	var shadow *Shadow
 	if c.shadow != nil {
 		shadow, _ = newShadowFor(t, c.shadow.client(t), nil)
 		guard.SetShadow(shadow)
 	}
+	row, path := invoicesRow, "/api/v1/billing/invoices"
+	if c.row != "" {
+		row, path = c.row, c.path
+	}
 	mux := http.NewServeMux()
-	mux.Handle(invoicesRow, guard.Wrap(Authenticated, echo))
-	got := enforceRequest(mux, http.MethodGet, "/api/v1/billing/invoices")
+	mux.Handle(row, guard.Wrap(Authenticated, echo))
+	got := enforceRequest(mux, http.MethodGet, path)
 	if shadow != nil {
 		shadow.wg.Wait()
 	}
@@ -245,6 +263,7 @@ func TestDelegatedUseIsLoggedOnlyInTheGuardWrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	sites := map[string]int{}
+	readers := map[string]int{}
 	notCovered := map[string]bool{}
 	for _, dir := range []string{"internal/api", "internal/apiservice"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, entry fs.DirEntry, err error) error {
@@ -268,6 +287,10 @@ func TestDelegatedUseIsLoggedOnlyInTheGuardWrap(t *testing.T) {
 						switch sel.Sel.Name {
 						case "noteDelegatedUse":
 							sites[site]++
+						case "currentUser", "optionalUser":
+							if strings.HasPrefix(rel, "internal/api/policy/") {
+								readers[site]++
+							}
 						case "RefuseDelegated":
 							if !strings.HasPrefix(rel, "internal/api/policy/") {
 								notCovered[site] = true
@@ -286,6 +309,10 @@ func TestDelegatedUseIsLoggedOnlyInTheGuardWrap(t *testing.T) {
 	if got := sites["internal/api/policy/guard.go:Guard.wrap"]; got != 2 || len(sites) != 1 {
 		t.Errorf("noteDelegatedUse call sites %v, want exactly 2 calls, both in Guard.wrap", sites)
 	}
+	// Every authentication of a bearer in the Guard is called from Guard.wrap only, so a row the Guard admits reaches the hook.
+	if len(readers) != 1 || readers["internal/api/policy/guard.go:Guard.wrap"] != 2 {
+		t.Errorf("Guard.currentUser/optionalUser callers %v, want exactly 2 calls, both in Guard.wrap", readers)
+	}
 	var names []string
 	for site := range notCovered {
 		names = append(names, site)
@@ -295,4 +322,72 @@ func TestDelegatedUseIsLoggedOnlyInTheGuardWrap(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Errorf("bearer readers outside the Guard that refuse delegated bearers = %v, want %v (not covered by the use line)", names, want)
 	}
+}
+
+// C-2: through the production logging handler (the redaction layer) the four values are present and not redacted;
+// the key is "sid" because "session_id" is a protected key. The read-back needle is the event field of this line.
+func TestDelegatedUseLineSurvivesTheProductionRedaction(t *testing.T) {
+	got, logs := serveUse(t, useCell{actor: true, admitted: admitAll})
+	if got.status != http.StatusOK {
+		t.Fatalf("answer %d %s, want 200", got.status, got.body)
+	}
+	wantUseLine(t, useLines(t, logs), liveSID.String())
+	if !strings.Contains(logs.String(), `"event":"api.delegated_use"`) {
+		t.Errorf("the line has no read-back needle %q: %s", `"event":"api.delegated_use"`, logs.String())
+	}
+	for _, key := range []string{"route", "actor", "target", "sid"} {
+		if strings.Contains(logs.String(), `"`+key+`":"[REDACTED]"`) {
+			t.Errorf("key %q is redacted by the production handler", key)
+		}
+	}
+}
+
+// C-1: the helper only logs: the answer is byte-equal with a logger and with a discarding one.
+func TestDelegatedUseLogChangesNoAnswer(t *testing.T) {
+	cells := map[string]useCell{
+		"no enforcer": {actor: true, admitted: admitAll},
+		"legacy":      {actor: true, noOrg: true, admitted: admitAll, enforce: newTestPDP(t, denyWith("role_lacks_action"))},
+		"refused":     {actor: true, admitted: func(string) bool { return false }},
+	}
+	for name, c := range cells {
+		recordEnforce(t)
+		with, _ := serveUse(t, c)
+		c.quiet = true
+		recordEnforce(t)
+		without, _ := serveUse(t, c)
+		if with.status != without.status || with.body != without.body || with.header.Get("Content-Type") != without.header.Get("Content-Type") {
+			t.Errorf("%s: with a logger %d %q, without %d %q", name, with.status, with.body, without.status, without.body)
+		}
+	}
+}
+
+// C-7: the line names the route template, never a path parameter value.
+func TestDelegatedUseLineHasNoPathParameterValue(t *testing.T) {
+	const secret = "99999999-9999-4999-8999-999999999999"
+	got, logs := serveUse(t, useCell{actor: true, admitted: admitAll, row: "GET /api/v1/billing/invoices/{id}", path: "/api/v1/billing/invoices/" + secret})
+	if got.status != http.StatusOK {
+		t.Fatalf("answer %d %s, want 200", got.status, got.body)
+	}
+	lines := useLines(t, logs)
+	if len(lines) != 1 || lines[0]["route"] != "GET /api/v1/billing/invoices/{id}" {
+		t.Fatalf("lines %v, want one with the route template", lines)
+	}
+	if strings.Contains(logs.String(), secret) {
+		t.Errorf("the log carries the path parameter value")
+	}
+}
+
+// C-5: the admin cell is on, so the request carries platform decisions, and the route's own namespace is off: the
+// route verdict is not enforceAllow, the request is served, and the line is written.
+func TestDelegatedBearerWithPlatformDecisionsOnANonEnforcedRowLogsOneLine(t *testing.T) {
+	recordEnforce(t)
+	pdp := newTestPDP(t, allowAll)
+	got, logs := serveUse(t, useCell{actor: true, admitted: admitAll, enforce: pdp, namespace: "admin"})
+	if got.status != http.StatusOK {
+		t.Fatalf("answer %d %s, want 200", got.status, got.body)
+	}
+	if len(pdp.seen) != 0 {
+		t.Fatalf("the PDP was asked %d times, want 0 (the route is not enforced)", len(pdp.seen))
+	}
+	wantUseLine(t, useLines(t, logs), liveSID.String())
 }

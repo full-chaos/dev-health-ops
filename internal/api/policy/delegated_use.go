@@ -6,7 +6,7 @@ import (
 )
 
 // delegatedUseEvent is the event field of the line noteDelegatedUse writes.
-const delegatedUseEvent = "api_delegated_use"
+const delegatedUseEvent = "api.delegated_use"
 
 // noteDelegatedUse writes one line for a request the Guard is about to serve to a
 // delegated bearer on a row the decision point does not decide. A plain bearer

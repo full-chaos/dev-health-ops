@@ -49,15 +49,16 @@ var rejected = func() metric.Int64Counter {
 func Routes(pool *pgxpool.Pool, guard *policy.Guard, auth *policy.Authenticator, endpoint string, logger *slog.Logger) []httpapi.Route {
 	h := handlers{pool: pool, auth: auth, logger: logger, now: time.Now, endpoint: endpoint,
 		client: &http.Client{Timeout: sendTimeout, Transport: httpguard.SharedTransport()}}
-	wrap := func(next http.HandlerFunc) http.Handler {
-		return guard.Wrap(policy.Authenticated, h.withOrg(next))
-	}
+	return h.routeTable(func(next http.Handler) http.Handler { return guard.Wrap(policy.Authenticated, next) })
+}
+
+func (h handlers) routeTable(wrap func(http.Handler) http.Handler) []httpapi.Route {
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: "/api/v1/telemetry/status", Handler: wrap(h.status)},
-		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-in", Handler: wrap(h.optIn)},
-		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-out", Handler: wrap(h.optOut)},
+		{Method: http.MethodGet, Pattern: "/api/v1/telemetry/status", Handler: wrap(h.withOrg(h.status))},
+		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-in", Handler: wrap(h.withOrg(h.optIn))},
+		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-out", Handler: wrap(h.withOrg(h.optOut))},
 		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/report",
-			Handler: guard.Wrap(policy.Authenticated, h.requirePlatformRole(h.withOrg(h.report)))},
+			Handler: wrap(h.requirePlatformRole(h.withOrg(h.report)))},
 	}
 }
 

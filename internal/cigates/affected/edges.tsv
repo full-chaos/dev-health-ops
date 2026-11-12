@@ -69,6 +69,7 @@ internal/cigates/bigboyrender	parity_test.go	cmd/cigate
 internal/cigates/bigboyrender	parity_test.go	unexpressed
 internal/cigates/bigboyrender	posture.go	unexpressed
 internal/cigates/chartgates	helpers_test.go	unexpressed
+internal/cigates/chartgates	overlay_parallel_test.go	unexpressed
 internal/cigates/chartgates	overlay_test.go	unexpressed
 internal/cigates/chartgates	worker_secret_env_scan_test.go	**/cmd/...
 internal/cigates/chartgates	worker_secret_env_scan_test.go	**/internal/...

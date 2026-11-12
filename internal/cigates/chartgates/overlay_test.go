@@ -2,12 +2,13 @@
 
 package chartgates_test
 
-// Nested `go test -overlay` builds: compile-heavy, so they run in the plain unit leg only and serially.
+// Nested `go test -overlay` builds: compile-heavy, so they run in the plain unit leg only, with a bounded number of processes.
 import (
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -21,11 +22,24 @@ type overlayCase struct {
 	want string
 }
 
+// Serial fixture cells may replace this hook; parallel cases only read it.
+var overlayGoTest = func(dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("go", args...)
+	cmd.Dir = dir
+	return cmd.CombinedOutput()
+}
+
+var overlayGoTestSlots = make(chan struct{}, min(runtime.GOMAXPROCS(0), 4))
+
 // runWithOverlay compiles a mutated copy of one Go file into a nested `go test` of the named guard and returns
 // its output and whether it failed. The planted text must land.
 func runWithOverlay(t *testing.T, c overlayCase) (string, bool) {
 	t.Helper()
-	root := realRoot(t)
+	return runOverlayAtRoot(t, realRoot(t), c)
+}
+
+func runOverlayAtRoot(t *testing.T, root string, c overlayCase) (string, bool) {
+	t.Helper()
 	src := filepath.Join(root, filepath.FromSlash(c.file))
 	b, err := os.ReadFile(src)
 	if err != nil {
@@ -44,9 +58,10 @@ func runWithOverlay(t *testing.T, c overlayCase) (string, bool) {
 	if err := os.WriteFile(overlay, js, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("go", "test", "-count=1", "-overlay="+overlay, "-run", c.run, "./internal/cigates/chartgates")
-	cmd.Dir = root
-	out, err := cmd.CombinedOutput()
+	// Acquire immediately before exec. A Fatal/Goexit in a test hook also releases it.
+	overlayGoTestSlots <- struct{}{}
+	defer func() { <-overlayGoTestSlots }()
+	out, err := overlayGoTest(root, "test", "-count=1", "-overlay="+overlay, "-run", c.run, "./internal/cigates/chartgates")
 	return string(out), err != nil
 }
 
@@ -88,6 +103,7 @@ func TestExecGuardsPlantedByOverlay(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			out, failed := runWithOverlay(t, c)
 			if !failed {
 				t.Fatalf("planted defect %q was not caught: the nested guard passed:\n%s", c.name, out)

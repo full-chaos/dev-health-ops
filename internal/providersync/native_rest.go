@@ -677,7 +677,7 @@ func fetchObjectRoute(ctx context.Context, client *providerfoundation.HTTPClient
 	defer response.Body.Close()
 	// Read into a bounded buffer first, rather than decoding straight off a
 	// LimitReader, so a response that legitimately exceeds the cap is
-	// reported as ITS OWN error (ObjectTooLargeError, with the path/cap/
+	// reported as ITS OWN error (ObjectTooLargeError, with the cap/
 	// content-length that caused it) instead of collapsing into the same
 	// bare ErrNormalizationInvalid a genuinely malformed body produces. A
 	// caller with its own truncation-recovery path (github/files' recursive
@@ -692,7 +692,6 @@ func fetchObjectRoute(ctx context.Context, client *providerfoundation.HTTPClient
 	body, readErr := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
 	if len(body) > nativeMaxObjectBytes {
 		return providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, &providerfoundation.ObjectTooLargeError{
-			Path:          path,
 			CapBytes:      nativeMaxObjectBytes,
 			ContentLength: response.ContentLength,
 		})

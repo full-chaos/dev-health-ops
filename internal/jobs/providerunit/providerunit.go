@@ -372,7 +372,7 @@ func deterministicTerminalCategory(err error) (string, bool) {
 //   - provider / dataset: registry keys from providersync.Descriptor, not user
 //     input.
 //   - class / status: providerfoundation.ErrorClass (a fixed enum) and an HTTP
-//     status integer. Deliberately NOT Path or Body.
+//     status integer. Deliberately NOT Route or Body.
 //   - attempt / max_attempts: integers from the River job row.
 //
 // The unit id is deliberately absent: it is already on every lifecycle log line

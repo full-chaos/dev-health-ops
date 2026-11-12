@@ -40,7 +40,6 @@ func TestOrgDeletionPurgesEveryDiscoveredClickHouseTable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-ch-flow-32-byte"
 
 	targetOrgID := uuid.New()
 	controlOrgID := uuid.New()
@@ -49,7 +48,6 @@ func TestOrgDeletionPurgesEveryDiscoveredClickHouseTable(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, adminPool *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -182,7 +180,7 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 		t.Fatalf("seed: backfill_log count for target org = %d, want 1", got)
 	}
 
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.ClickHouseDSN = chURI
 	})
 

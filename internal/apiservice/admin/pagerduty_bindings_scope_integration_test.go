@@ -18,7 +18,6 @@ import (
 func TestPagerDutyBindingOrganizationScope(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-pd-binding-scope-32-b"
 	const prefix = "/api/v1/admin/integrations/pagerduty/webhook-bindings"
 
 	orgMain, orgOther := uuid.New(), uuid.New()
@@ -33,7 +32,6 @@ func TestPagerDutyBindingOrganizationScope(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -70,7 +68,7 @@ VALUES ($1, $2, $3, 'pagerduty', 'service', 'src-no-credential', 'src-no-credent
 			}
 		}),
 	})
-	base, pool := startGoServer(t, ctx, venue, jwtKey)
+	base, pool := startGoServer(t, ctx, venue)
 	headers := map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}
 	body := func(source, credential uuid.UUID) string {
 		return fmt.Sprintf(`{"integration_source_id":"%s","credential_id":"%s","provider_subscription_id":"sub-x","signing_secret":"s"}`, source, credential)

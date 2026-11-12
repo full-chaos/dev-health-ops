@@ -214,9 +214,9 @@ func TestAnEnforcerWithNoDecisionPointRefusesEveryRequestOfItsNamespacesWithA503
 			}
 		})
 	}
-	got := serve(hs256Handler(t, newUnconfiguredEnforcerFor(t, onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
+	got := serve(fixtureBearerHandler(t, newUnconfiguredEnforcerFor(t, onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 	if got.status != http.StatusServiceUnavailable || got.body != enforceNoDecisionPointBody {
-		t.Fatalf("no decision point, legacy HS256 caller: %d %q, want the 503: fail-closed refuses every request", got.status, got.body)
+		t.Fatalf("no decision point, signed fixture caller: %d %q, want the 503: fail-closed refuses every request", got.status, got.body)
 	}
 }
 
@@ -239,7 +239,7 @@ func TestADeadPDPIsA503NotALegacyAllow(t *testing.T) {
 	}
 }
 
-func hs256Handler(t *testing.T, enf *Enforcer) http.Handler {
+func fixtureBearerHandler(t *testing.T, enf *Enforcer) http.Handler {
 	t.Helper()
 	store := newStore()
 	withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
@@ -292,15 +292,15 @@ func TestAnImpersonatingAdminOnAnEnforcedRowIsRefusedBeforeThePDP(t *testing.T) 
 	}
 }
 
-// A legacy HS256 bearer with a live go-api impersonation row is refused on a write too: the row, not the token class,
+// A signed fixture bearer with a live go-api impersonation row is refused on a write too: the row, not the token class,
 // makes the caller one the decision point cannot judge as the delegation.
-func TestAnImpersonatingHS256CallerOnAnEnforcedRowIsRefused(t *testing.T) {
+func TestAnImpersonatingFixtureCallerOnAnEnforcedRowIsRefused(t *testing.T) {
 	rec := recordEnforce(t)
 	pdp := newTestPDP(t, allowAll)
-	got := serve(impersonating(hs256Handler(t, newEnforcerFor(t, pdp.client(t), onFor("teams")))), http.MethodPost, "/api/v1/admin/teams",
+	got := serve(impersonating(fixtureBearerHandler(t, newEnforcerFor(t, pdp.client(t), onFor("teams")))), http.MethodPost, "/api/v1/admin/teams",
 		validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 	if got.status != http.StatusForbidden || got.body != impersonationRefusalBody || len(pdp.calls()) != 0 {
-		t.Fatalf("impersonating HS256 caller: %d %q, %d PDP calls, want 403 %q and 0", got.status, got.body, len(pdp.calls()), impersonationRefusalBody)
+		t.Fatalf("impersonating fixture caller: %d %q, %d PDP calls, want 403 %q and 0", got.status, got.body, len(pdp.calls()), impersonationRefusalBody)
 	}
 	if d, u := rec.snapshot(), rec.unjudgedSnapshot(); !slices.Equal(d, []string{"teams/impersonation_refused"}) || len(u) != 0 {
 		t.Fatalf("decisions %v unjudged %v, want [teams/impersonation_refused] and none", d, u)
@@ -672,7 +672,7 @@ func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	servedOrgServe(t, members, servedOrgSetup{who: personaAdmin, enforcer: servedOrgEnforcer(t, allow, "members")}, strangerOrg)
 	description, outcomes := collectSum(t, reader, enforceDecisionMetric, "outcome")
 	want := []string{"allow", "deny", "error_deny", "impersonation_refused"}
-	if !slices.Equal(outcomes, want) {
+	if outcomes = slices.Compact(outcomes); !slices.Equal(outcomes, want) {
 		t.Errorf("outcomes %v, want %v", outcomes, want)
 	}
 	if suffix := "outcome: allow, deny, error_deny, impersonation_refused"; !strings.HasSuffix(description, suffix) {

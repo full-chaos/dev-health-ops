@@ -520,7 +520,7 @@ func TestAdminAdmissionKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
 // admin-or row: main skips the membership read for a holder of admin.orgs, and the decision point, for which the
 // superuser is a platform admin, allows admin.users. (The fixture's routed token is judged now that the /admin/users
 // rows name admin.users.)
-func TestAnHS256SuperuserKeepsMainsAdmissionWithTheAdminCellOn(t *testing.T) {
+func TestAFixtureSuperuserKeepsMainsAdmissionWithTheAdminCellOn(t *testing.T) {
 	headers := bearer(t, func(m jwt.MapClaims) {
 		superClaims(m)
 		m["role"] = "admin"
@@ -545,9 +545,9 @@ func TestAnHS256SuperuserKeepsMainsAdmissionWithTheAdminCellOn(t *testing.T) {
 	}
 }
 
-// With the admin cell on, an HS256 superuser whose token names an organization it has no membership row in keeps
+// With the admin cell on, a fixture superuser whose token names an organization it has no membership row in keeps
 // main's answer at an admin route: main skips the membership read for a holder of admin.orgs (product rule 1).
-func TestAnHS256SuperuserWithNoMembershipRowKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
+func TestAFixtureSuperuserWithNoMembershipRowKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
 	serveWith := func(cell string) response {
 		store := newStore()
 		store.users[userID] = UserState{IsActive: true, IsSuperuser: true}

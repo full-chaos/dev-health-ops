@@ -43,6 +43,36 @@ func TestCulpritPrefersTheOpenPhaseThenTheLastErroredThenTheLongest(t *testing.T
 	open.End(nil)
 }
 
+func TestCulpritIgnoresTheDeferredRollbackOnAnExpiredBudget(t *testing.T) {
+	ctx, trace := With(context.Background())
+	acquire := Start(ctx, KindAcquire, "coordinator", "")
+	acquire.End(nil)
+	slow := Start(ctx, KindStatement, "coordinator", "-- materialize rows\nSELECT 1")
+	time.Sleep(20 * time.Millisecond)
+	slow.End(nil)
+	rollback := Start(ctx, KindStatement, "coordinator", "rollback")
+	rollback.End(context.DeadlineExceeded)
+	if got, _ := trace.Culprit(); got.Name != "materialize rows" {
+		t.Fatalf("the deferred rollback on the expired budget is not the culprit; the slowest statement is; got %+v", got)
+	}
+
+	ctx, trace = With(context.Background())
+	failed := Start(ctx, KindStatement, "coordinator", "SELECT failing")
+	failed.End(context.DeadlineExceeded)
+	rollback = Start(ctx, KindStatement, "coordinator", "ROLLBACK")
+	rollback.End(context.DeadlineExceeded)
+	if got, _ := trace.Culprit(); got.Name != "SELECT failing" || got.Err == nil {
+		t.Fatalf("the errored statement before the rollback is the culprit; got %+v", got)
+	}
+
+	ctx, trace = With(context.Background())
+	only := Start(ctx, KindStatement, "coordinator", "rollback")
+	only.End(context.DeadlineExceeded)
+	if got, ok := trace.Culprit(); !ok || got.Name != "rollback" {
+		t.Fatalf("a rollback that is the only phase is still named; got %+v ok=%v", got, ok)
+	}
+}
+
 func TestAcquireWaitsIncludeAnAcquireStillInFlight(t *testing.T) {
 	ctx, trace := With(context.Background())
 	Start(ctx, KindAcquire, "coordinator", "")

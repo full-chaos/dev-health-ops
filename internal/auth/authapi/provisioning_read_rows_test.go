@@ -13,6 +13,7 @@ import (
 )
 
 func TestEmbeddedProfileHoldsAWorkloadOnlyRowForEveryReadRoute(t *testing.T) {
+	t.Parallel()
 	var document struct {
 		Rows []struct {
 			ID      string   `json:"id"`
@@ -51,6 +52,7 @@ func newEmbeddedReadFixture(t *testing.T) *readWorkloadFixture {
 }
 
 func TestEmbeddedProfileServesTheReadRoutesToTheirCredentials(t *testing.T) {
+	t.Parallel()
 	for _, c := range readCases() {
 		f := newEmbeddedReadFixture(t)
 		header, _ := f.w.mint(contracts.WorkloadTokenTyp, nil)
@@ -115,6 +117,7 @@ func mountedReadPatterns(t *testing.T, rows []byte) []string {
 }
 
 func TestReadRoutesMountOnlyOnAnExactClassRow(t *testing.T) {
+	t.Parallel()
 	if got := mountedReadPatterns(t, authv1.AuthServiceEndpointProfiles); len(got) != len(readCases()) {
 		t.Errorf("exact workload-only rows mount %d routes, want %d", len(got), len(readCases()))
 	}

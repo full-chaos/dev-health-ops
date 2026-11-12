@@ -395,7 +395,7 @@ func (handler PagerDutyIncidentFamilyRouteHandler) Collect(
 	counted := *client
 	counted.Doer = pagerDutyIncidentFamilyCountingDoer{delegate: client.Doer, attempts: &requests}
 	parentEndpoint := pagerDutyIncidentFamilyEndpoint{
-		path: "/incidents", route: "/incidents", decode: decodePagerDutyIncidents, paginated: true,
+		path: "/incidents", route: pagerDutyIncidentsRoute, decode: decodePagerDutyIncidents, paginated: true,
 	}
 	query := url.Values{}
 	if claim.SinceAt != nil {
@@ -520,7 +520,7 @@ func (handler PagerDutyIncidentFamilyRouteHandler) collectPagerDutyIncidents(
 	for _, raw := range parents.Items {
 		payload, err := decodePagerDutyIncidentPayload(raw)
 		if err != nil {
-			return CompleteRouteBatch{}, err
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutyIncidentsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		createdAt, err := pagerDutyOptionalTime(payload.CreatedAt)
 		if err != nil {
@@ -621,7 +621,7 @@ func (handler PagerDutyIncidentFamilyRouteHandler) collectPagerDutyEnrichment(
 	for _, raw := range parents.Items {
 		incident, err := decodePagerDutyIncidentPayload(raw)
 		if err != nil {
-			return CompleteRouteBatch{}, err
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(pagerDutyIncidentsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		createdAt, err := pagerDutyOptionalTime(incident.CreatedAt)
 		if err != nil {
@@ -670,7 +670,7 @@ func (handler PagerDutyIncidentFamilyRouteHandler) collectPagerDutyEnrichment(
 					case "incident-alerts":
 						payload, decodeErr := decodePagerDutyAlertPayload(childRaw)
 						if decodeErr != nil {
-							return CompleteRouteBatch{}, decodeErr
+							return CompleteRouteBatch{}, providerfoundation.RouteFailure(endpoint.route, providerfoundation.ReasonBodyDecode, decodeErr)
 						}
 						row, normalizeErr := normalizePagerDutyAlert(claim, providerInstance, payload, incidentRow.ID, normalizedAt)
 						if normalizeErr != nil {
@@ -680,7 +680,7 @@ func (handler PagerDutyIncidentFamilyRouteHandler) collectPagerDutyEnrichment(
 					case "incident-log-entries":
 						payload, decodeErr := decodePagerDutyLogEntryPayload(childRaw)
 						if decodeErr != nil {
-							return CompleteRouteBatch{}, decodeErr
+							return CompleteRouteBatch{}, providerfoundation.RouteFailure(endpoint.route, providerfoundation.ReasonBodyDecode, decodeErr)
 						}
 						row, normalizeErr := normalizePagerDutyLogEntry(claim, providerInstance, payload, incidentRow.ID, normalizedAt)
 						if normalizeErr != nil {
@@ -690,7 +690,7 @@ func (handler PagerDutyIncidentFamilyRouteHandler) collectPagerDutyEnrichment(
 					case "incident-notes":
 						payload, decodeErr := decodePagerDutyNotePayload(childRaw)
 						if decodeErr != nil {
-							return CompleteRouteBatch{}, decodeErr
+							return CompleteRouteBatch{}, providerfoundation.RouteFailure(endpoint.route, providerfoundation.ReasonBodyDecode, decodeErr)
 						}
 						row, normalizeErr := normalizePagerDutyNote(claim, providerInstance, payload, incidentRow.ID, normalizedAt)
 						if normalizeErr != nil {
@@ -808,6 +808,9 @@ func pagerDutyTimePointer(value *time.Time) *time.Time {
 	copy := value.UTC().Truncate(time.Microsecond)
 	return &copy
 }
+
+// pagerDutyIncidentsRoute is the route template of the parent incident list.
+const pagerDutyIncidentsRoute = "/incidents"
 
 func decodePagerDutyIncidentPayload(raw json.RawMessage) (pagerDutyIncidentPayload, error) {
 	var payload pagerDutyIncidentPayload

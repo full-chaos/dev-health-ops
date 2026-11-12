@@ -81,7 +81,6 @@ func TestPagerDutyDisconnectVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("disconnect", "TestPagerDutyDisconnectVenueOracle", "fde105bee2dd3c2db34a0aee1d6a6eb95116a6a76b53ed9c5de6cdb39844dc2d"))
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-disconnect-32-by"
 
 	fake := &pagerDutyDisconnectFakeServer{failTokens: map[string]bool{}}
 	fakeServer := httptest.NewServer(http.HandlerFunc(fake.handler))
@@ -105,7 +104,6 @@ func TestPagerDutyDisconnectVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"PAGER_DUTY_CLIENT_ID=" + pagerDutyDisconnectVenueClientID,
 			"SETTINGS_ENCRYPTION_KEY=" + pagerDutyDisconnectVenueEncryptionKey,
@@ -239,7 +237,7 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`,
 		t.Fatalf("build decryptor: %v", err)
 	}
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: pagerDutyDisconnectVenueClientID, RevokeURL: fakeServer.URL}
 	})

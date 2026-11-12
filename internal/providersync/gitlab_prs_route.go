@@ -148,7 +148,7 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 	consume := func(raw json.RawMessage) error {
 		var payload gitLabMergeRequestPayload
 		if err := decodeGitLabMergeRequest(raw, &payload); err != nil {
-			return err
+			return providerfoundation.RouteFailure(gitlabMergeRequestsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		updatedAt := parseGitLabPullTime(payload.UpdatedAt)
 		if claim.BeforeAt != nil && updatedAt != nil && updatedAt.After(claim.BeforeAt.UTC()) {

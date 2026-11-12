@@ -392,25 +392,29 @@ func TestRowsGateRefusesTheRetiredClass(t *testing.T) {
 	t.Parallel()
 	workload := newWorkloadIssueFixture(t).workload
 	for op, pattern := range provisioningRouteOps {
-		for _, wrong := range [][]string{{serviceSessionIssuerClass}, {serviceSessionIssuerClass, workloadTokenClass}, {workloadTokenClass, serviceSessionIssuerClass}} {
-			raw := plantClasses(t, pattern, wrong...)
-			if err := provisioningRowsPresent(raw); !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
-				t.Errorf("%s on the set %v: %v, want a refusal naming the route", op, wrong, err)
-			}
-			for _, w := range []*SessionIssueWorkload{nil, workload} {
-				if routes, err := ProvisioningRoutes(provisioningDepsOver(t, raw, w)); !errors.Is(err, errProvisioningRows) || routes != nil {
-					t.Errorf("%s on the set %v: %d routes, %v; want none and a start-up refusal", op, wrong, len(routes), err)
+		t.Run(op, func(t *testing.T) {
+			t.Parallel()
+			for _, wrong := range [][]string{{serviceSessionIssuerClass}, {serviceSessionIssuerClass, workloadTokenClass}, {workloadTokenClass, serviceSessionIssuerClass}} {
+				raw := plantClasses(t, pattern, wrong...)
+				if err := provisioningRowsPresent(raw); !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
+					t.Errorf("%s on the set %v: %v, want a refusal naming the route", op, wrong, err)
+				}
+				for _, w := range []*SessionIssueWorkload{nil, workload} {
+					if routes, err := ProvisioningRoutes(provisioningDepsOver(t, raw, w)); !errors.Is(err, errProvisioningRows) || routes != nil {
+						t.Errorf("%s on the set %v: %d routes, %v; want none and a start-up refusal", op, wrong, len(routes), err)
+					}
 				}
 			}
-		}
+		})
 	}
 }
 
+// provisioningDepsOver is deps whose stores are fresh empty fakes, one set per call: the callers plant a profile
+// document the routes refuse at start-up, before any store is read, so the stores only have to be non-nil.
 func provisioningDepsOver(t *testing.T, rows []byte, workload *SessionIssueWorkload) ProvisioningDeps {
 	t.Helper()
-	f := newProvFixture(t)
-	return ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs, Memberships: f.members,
-		Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, Workload: workload, ProfileRows: rows}
+	return ProvisioningDeps{Users: &fakeProvUsers{}, Reader: noRows{}, Organizations: &fakeEnsurer{}, Memberships: &fakeMembers{},
+		Invites: &fakeInvites{}, Deprovision: &fakeDeprovision{}, Orgs: &fakeReactivate{}, ServiceAccounts: &fakeServiceAccounts{}, Grants: &fakeGrants{}, Workload: workload, ProfileRows: rows}
 }
 
 // TestReadRoutesRefuseUserTokens: every user access token class is the same 401 on every read route, with no store

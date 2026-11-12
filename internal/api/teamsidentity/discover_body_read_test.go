@@ -37,7 +37,16 @@ func (r *failingReader) Read(p []byte) (int, error) {
 
 type zeroStream struct{ read *atomic.Int64 }
 
+// zeroStream ends after streamEnd bytes so an unbounded reader stops (a red
+// run on a tree without the cap must not exhaust memory).
+const streamEnd = 2 * wantBodyCap
+
 func (z zeroStream) Read(p []byte) (int, error) {
+	done := z.read.Load()
+	if done >= streamEnd {
+		return 0, io.EOF
+	}
+	p = p[:min(int64(len(p)), streamEnd-done)]
 	for i := range p {
 		p[i] = ' '
 	}

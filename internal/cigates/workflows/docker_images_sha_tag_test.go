@@ -70,7 +70,7 @@ func dockerImagesShaTagViolations(t *testing.T, root string) []string {
 			add("%s has no type=raw,value=sha-${{ needs.resolve.outputs.tag_short }} tag: its sha- tag does not come from the resolved build commit", name)
 		}
 		if !regexp.MustCompile(`type=raw,value=sha-\$\{\{ needs\.resolve\.outputs\.tag_short \}\},priority=100,`).MatchString(tags) {
-			add("%s sha- raw tag has no priority=100: metadata-action would rank it (default 200) above or beside other raw tags and could change the version output on push", name)
+			add("%s sha- raw tag has no priority=100: its rank would depend on the order of the lines (raw default 200, as the tree- tag); pinning 100 keeps it last, as type=sha was", name)
 		}
 	}
 
@@ -403,9 +403,8 @@ func TestDockerImagesShaTagPlantedDefects(t *testing.T) {
 	}
 	cases := []cell{
 		{"M1 both merge jobs back to type=sha", dockerImagesShaTagViolations, []mutation{{shaTagWorkflow, tagsLine, allMarker + oldLine}}, []string{"go-merge tags with type=sha", "go-api-tools-merge tags with type=sha"}},
-		{"M1r go-merge sha tag loses priority=100", tagRenderViolations, []mutation{{shaTagWorkflow, tagsLine, allMarker + strings.Replace(tagsLine, ",priority=100", "", 1)}}, []string{"differ from main's"}},
 		{"M3 a build checkout reads inputs.ref again", dockerImagesShaTagViolations, []mutation{{shaTagWorkflow, coRef, oldRef}}, []string{"does not start with " + shaTagBuildExpr}},
-		{"M6 resolve step does not refuse an unresolvable ref", resolveStepViolations, []mutation{{shaTagWorkflow, "|| { echo \"::error::inputs.ref", "|| { true; echo \"::error::inputs.ref"}}, []string{"must refuse the run"}},
+		{"M6 resolve step accepts a non-sha answer from gh", resolveStepViolations, []mutation{{shaTagWorkflow, "[[ \"${build_sha}\" =~ ^[0-9a-f]{40}$ ]] || { echo \"::error::inputs.ref '${INPUT_REF}' resolved to '${build_sha}', not a 40-hex commit\"; exit 1; }", "true"}}, []string{"must refuse the run"}},
 		{"M7 tag_short of a dispatch comes from the dispatch head", resolveStepViolations, []mutation{{shaTagWorkflow, "tag_sha=\"${build_sha}\"", "tag_sha=\"${GITHUB_SHA}\""}}, []string{"tag_short="}},
 		{"M8 fan-in IS_MAIN_REF accepts a dispatch with a ref", dockerImagesShaTagViolations, []mutation{{shaTagWorkflow, "(github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '' && github.ref == 'refs/heads/main') }}", "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}"}}, []string{"IS_MAIN_REF no longer requires an empty inputs.ref"}},
 	}

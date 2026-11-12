@@ -223,7 +223,13 @@ func legSelectionViolations(t *testing.T, root string) []string {
 	if types := asList(asMap(triggerEvents(doc)["pull_request"])["types"]); !reflect.DeepEqual(types, []any{"opened", "synchronize", "reopened", "ready_for_review"}) {
 		add("go-quality pull_request types are %v, want [opened synchronize reopened ready_for_review]: the ready flip runs the legs a draft skipped", types)
 	}
-	if got := asString(asMap(fan["env"])["GATED_JOB_1"]); got != "go-quality-leg|unconditional|${{ needs.go-quality-plan.outputs.draft_skip == 'true' && 'success' || needs.go-quality-leg.result }}" {
+	gated := ""
+	for _, st := range stepsOf(fan) {
+		if asString(st["name"]) == "Aggregate go-quality result" {
+			gated = asString(asMap(st["env"])["GATED_JOB_1"])
+		}
+	}
+	if got := gated; got != "go-quality-leg|unconditional|${{ needs.go-quality-plan.outputs.draft_skip == 'true' && 'success' || needs.go-quality-leg.result }}" {
 		add("the fan-in GATED_JOB_1 is %q: only an unlabelled draft may count the skipped legs as passed, every other run keeps `unconditional` on the leg result", got)
 	}
 	legsAt, planAt := -1, -1
@@ -377,7 +383,7 @@ func TestGoQualityLegSelectionPlantedDefects(t *testing.T) {
 	}{
 		{"a static matrix comes back", []mutation{{legsWorkflow, "include: ${{ fromJSON(needs.go-quality-plan.outputs.legs) }}", "include:\n          - name: static\n            args: static"}}, []string{"matrix.include must be"}},
 		{"the matrix points at another output", []mutation{{legsWorkflow, "include: ${{ fromJSON(needs.go-quality-plan.outputs.legs) }}", "include: ${{ fromJSON(needs.go-quality-plan.outputs.race_policy) }}"}}, []string{"matrix.include must be"}},
-		{"the producer is handed another file", []mutation{{legsWorkflow, `"${CI_FULL}" > "${out}"`, `"${CI_FULL}" ci/other_legs.json > "${out}"`}}, []string{"third argument"}},
+		{"the producer is handed another file", []mutation{{legsWorkflow, `"${CI_FULL}" "" "${DRAFT_SKIP}" > "${out}"`, `"${CI_FULL}" ci/other_legs.json "${DRAFT_SKIP}" > "${out}"`}}, []string{"third argument"}},
 		{"the script reads another file", []mutation{{legsScript, `${here}/go_quality_legs.json`, `${here}/other_legs.json`}}, []string{"literal ${here}/go_quality_legs.json"}},
 		{"a second file is concatenated into the list", []mutation{{legsScript, `matrix="$(jq -ce '.' "${legs}")"`, `matrix="$(jq -ce -s 'add' "${legs}" "${here}/extra.json")"`}}, []string{"runs jq as"}},
 		{"another step rewrites the legs output", []mutation{{legsWorkflow, "      - name: Configure self-hosted Go cache paths\n        if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')\n        run: |\n          echo \"GOMODCACHE=/mnt/go-cache/mod\" >> \"${GITHUB_ENV}\"\n          echo \"GOCACHE=/mnt/go-cache/build\" >> \"${GITHUB_ENV}\"\n\n      - name: Set up Go\n        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache-dependency-path", "      - name: Rewrite the legs\n        run: echo 'legs=[]' >> \"${GITHUB_OUTPUT}\"\n\n      - name: Set up Go\n        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache-dependency-path"}}, []string{"only producer"}},

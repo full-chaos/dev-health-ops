@@ -6709,14 +6709,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "org.read",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26)",
-      "gaps": [
-        "action: no catalog action is proven to equal this handler's own check on the own organization profile (candidate for a ruling; this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/orgs/me [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -6776,7 +6774,7 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "settings.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -6785,9 +6783,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
-      "gaps": [
-        "action: no catalog action is proven to equal the telemetry settings check; settings.read is the candidate (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/telemetry/status [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -8438,14 +8434,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "acr.credential.revoke",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the handler asks the caller's admin.orgs platform action live on every request (internal/api/policy/platform_decision.go:69) and, for a caller without it, reads the caller's membership row live (internal/api/acrcredentials/routes.go:149)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id, another organization's id, a credential that is not MCP-bound and one the caller did not approve all answer the same 404, acr's one refusal answer (internal/api/acrcredentials/routes.go:124); acr resolves the id only in the token organization the handler sends (internal/api/acrcredentials/routes.go:107); a platform admin (admin.orgs, internal/api/policy/platform_decision.go:69) acts as that organization's admin with or without a membership row there; any other caller with no membership row in that organization answers 403 (internal/api/acrcredentials/routes.go:149); a malformed id answers the same 404 without an acr call (internal/api/acrcredentials/routes.go:103)",
-      "gaps": [
-        "action: no catalog action is proven to equal this handler's own check (the caller's admin.orgs platform action, else the caller's live membership row, decides the acr actor type; acr decides whether the credential admits that actor); candidate for a ruling, this leaf does not extend the vocabulary"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/acr/credentials/{credential_id}/revoke [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",

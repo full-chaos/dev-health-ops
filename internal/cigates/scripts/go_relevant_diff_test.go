@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // CHAOS-10174 PR C: Go port of tests/tooling/test_go_relevant_diff.py. ci/go_relevant_diff.sh is the diff-range
@@ -32,6 +34,55 @@ func buildDiffFixture(work string) (*diffFixture, error) {
 	f.feature1 = r.commit("feature_change.go", "feature1")
 	f.feature2 = r.commit("feature_change2.go", "feature2")
 	return f, r.err
+}
+
+type mergeFixture struct {
+	repo                                          *gitRepo
+	eventBase, mainTip, feature1, feature2, merge string
+}
+
+// buildMergeFixture: eventBase -- mainTip on main, eventBase -- feature1 -- feature2 on the pull request, and merge =
+// GitHub's test merge (parents mainTip, feature2), the refs/pull/N/merge checkout of a run whose event base.sha
+// (eventBase) is older than the main the merge was built on.
+func buildMergeFixture(work string) (*mergeFixture, error) {
+	r := newGitRepo(filepath.Join(work, "merge"))
+	f := &mergeFixture{repo: r}
+	f.eventBase = r.commit("base.txt", "base")
+	r.git("branch", "feature")
+	f.mainTip = r.commit("main_only.txt", "main moved on")
+	r.git("checkout", "-q", "feature")
+	f.feature1 = r.commit("feature_change.go", "feature1")
+	f.feature2 = r.commit("feature_change2.go", "feature2")
+	r.git("checkout", "-q", "--detach", f.mainTip)
+	r.git("merge", "-q", "--no-ff", "--no-edit", "-m", "Merge "+f.feature2+" into "+f.mainTip, f.feature2)
+	f.merge = r.git("rev-parse", "HEAD")
+	return f, r.err
+}
+
+// prDiff runs the script as a pull_request step does: BASE_SHA plus whatever event env the cell sets.
+func prDiff(script string, r *gitRepo, head string, env ...string) ([]string, string, error) {
+	res, err := runDiff(script, r, head, env...)
+	if err != nil {
+		return nil, "", err
+	}
+	if res.code != 0 {
+		return nil, res.stderr, fmt.Errorf("script exited %d: stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
+	}
+	var names []string
+	for _, p := range strings.Split(res.stdout, "\x00") {
+		if p != "" {
+			names = append(names, p)
+		}
+	}
+	sort.Strings(names)
+	return names, res.stderr, nil
+}
+
+func wantRange(stderr, base string) error {
+	if want := "diff range: " + base + "...HEAD"; !strings.Contains(stderr, want) {
+		return fmt.Errorf("stderr %q does not say %q", stderr, want)
+	}
+	return nil
 }
 
 func runDiff(script string, r *gitRepo, head string, env ...string) (cmdResult, error) {
@@ -80,7 +131,58 @@ func relevantDiffScenarios() []scenario {
 			return f(script, fx)
 		}
 	}
+	withMerge := func(f func(script string, fx *mergeFixture) error) func(string, string) error {
+		return func(script, work string) error {
+			fx, err := buildMergeFixture(work)
+			if err != nil {
+				return err
+			}
+			return f(script, fx)
+		}
+	}
 	return []scenario{
+		{"stale_event_base_on_a_merge_ref_judges_against_its_first_parent", withMerge(func(s string, fx *mergeFixture) error {
+			if stale := fx.repo.git("diff", "--name-only", fx.eventBase+"..."+fx.merge); !strings.Contains(stale, "main_only.txt") {
+				return fmt.Errorf("control: eventBase...merge saw %q, want main_only.txt in it, so this cell measures nothing", stale)
+			}
+			got, stderr, err := prDiff(s, fx.repo, fx.merge, "BASE_SHA="+fx.eventBase, "GITHUB_EVENT_NAME=pull_request", "PR_HEAD_SHA="+fx.feature2)
+			if err := wantNames(got, err, "feature_change.go", "feature_change2.go"); err != nil {
+				return err
+			}
+			return wantRange(stderr, fx.mainTip)
+		})},
+		{"a_pull_request_checkout_that_is_no_merge_keeps_the_event_base", withFixture(func(s string, fx *diffFixture) error {
+			got, _, err := prDiff(s, fx.repo, fx.feature2, "BASE_SHA="+fx.trunk, "GITHUB_EVENT_NAME=pull_request", "PR_HEAD_SHA="+fx.feature2)
+			return wantNames(got, err, "feature_change.go", "feature_change2.go")
+		})},
+		{"a_merge_whose_second_parent_is_not_the_pr_head_keeps_the_event_base", withMerge(func(s string, fx *mergeFixture) error {
+			for _, head := range []string{"PR_HEAD_SHA=" + fx.feature1, "PR_HEAD_SHA="} {
+				got, stderr, err := prDiff(s, fx.repo, fx.merge, "BASE_SHA="+fx.eventBase, "GITHUB_EVENT_NAME=pull_request", head)
+				if err := wantNames(got, err, "feature_change.go", "feature_change2.go", "main_only.txt"); err != nil {
+					return fmt.Errorf("%s: %w", head, err)
+				}
+				if err := wantRange(stderr, fx.eventBase); err != nil {
+					return fmt.Errorf("%s: %w", head, err)
+				}
+			}
+			return nil
+		})},
+		{"a_merge_ref_outside_a_pull_request_event_keeps_the_event_base", withMerge(func(s string, fx *mergeFixture) error {
+			for _, event := range []string{"GITHUB_EVENT_NAME=merge_group", "GITHUB_EVENT_NAME=push", "GITHUB_EVENT_NAME="} {
+				got, _, err := prDiff(s, fx.repo, fx.merge, "BASE_SHA="+fx.eventBase, event, "PR_HEAD_SHA="+fx.feature2)
+				if err := wantNames(got, err, "feature_change.go", "feature_change2.go", "main_only.txt"); err != nil {
+					return fmt.Errorf("%s: %w", event, err)
+				}
+			}
+			return nil
+		})},
+		{"an_event_base_off_the_first_parent_keeps_the_event_base", withMerge(func(s string, fx *mergeFixture) error {
+			got, stderr, err := prDiff(s, fx.repo, fx.merge, "BASE_SHA="+fx.feature1, "GITHUB_EVENT_NAME=pull_request", "PR_HEAD_SHA="+fx.feature2)
+			if err := wantNames(got, err, "feature_change2.go", "main_only.txt"); err != nil {
+				return err
+			}
+			return wantRange(stderr, fx.feature1)
+		})},
 		{"push_shape_diffs_against_the_previous_commit", withFixture(func(s string, fx *diffFixture) error {
 			got, err := diffNames(s, fx.repo, fx.pushHead, "")
 			return wantNames(got, err, "push_change.go")
@@ -184,4 +286,70 @@ func TestGoRelevantDiffScript(t *testing.T) {
 		p("non-ancestor base not refused", `! git merge-base --is-ancestor "${BASE_SHA}" HEAD 2>/dev/null`, `false`,
 			"non_ancestor_base_sha_refuses_rather_than_guessing", "must refuse"),
 	})
+}
+
+const prHeadExpr = "${{ github.event.pull_request.head.sha }}"
+
+// prHeadWiringDefects: every step that runs ci/go_relevant_diff.sh with the pull_request base sha must hand over the PR
+// head. Without PR_HEAD_SHA the script cannot tell GitHub's test merge from any other merge and keeps the event's base
+// sha, which can be behind the merge's first parent. n counts the steps found, so a parse that finds none is no pass.
+func prHeadWiringDefects(workflows map[string]string) (n int, d []string) {
+	for _, name := range []string{".github/workflows/go-quality.yml", ".github/workflows/go.yml", ".github/workflows/venue-oracles.yml"} {
+		var doc struct {
+			Jobs map[string]struct {
+				Steps []struct {
+					Name string            `yaml:"name"`
+					Env  map[string]string `yaml:"env"`
+					Run  string            `yaml:"run"`
+				} `yaml:"steps"`
+			} `yaml:"jobs"`
+		}
+		if err := yaml.Unmarshal([]byte(workflows[name]), &doc); err != nil {
+			d = append(d, name+" is not valid YAML: "+err.Error())
+			continue
+		}
+		for job, j := range doc.Jobs {
+			for _, st := range j.Steps {
+				if !strings.Contains(st.Run, "ci/go_relevant_diff.sh") || !strings.Contains(st.Env["BASE_SHA"], "github.event.pull_request.base.sha") {
+					continue
+				}
+				n++
+				if got := st.Env["PR_HEAD_SHA"]; got != prHeadExpr {
+					d = append(d, fmt.Sprintf("%s job %s step %q: PR_HEAD_SHA is %q, want %q", name, job, st.Name, got, prHeadExpr))
+				}
+			}
+		}
+	}
+	return n, d
+}
+
+func TestGoRelevantDiffPullRequestCallersPassThePRHead(t *testing.T) {
+	workflows := map[string]string{}
+	for _, name := range []string{".github/workflows/go-quality.yml", ".github/workflows/go.yml", ".github/workflows/venue-oracles.yml"} {
+		workflows[name] = readText(t, scriptPath(t, name))
+	}
+	n, d := prHeadWiringDefects(workflows)
+	if n != 3 {
+		t.Fatalf("found %d pull_request steps that run ci/go_relevant_diff.sh, want 3 (go.yml integration plan and golden drift, go-quality.yml plan)", n)
+	}
+	if len(d) > 0 {
+		t.Fatalf("%s", strings.Join(d, "; "))
+	}
+	for _, name := range []string{".github/workflows/go-quality.yml", ".github/workflows/go.yml"} {
+		name := name
+		t.Run("plant/PR_HEAD_SHA dropped from "+name, func(t *testing.T) {
+			line := "\n          PR_HEAD_SHA: " + prHeadExpr
+			if strings.Count(workflows[name], line) < 1 {
+				t.Fatalf("anchor %q is absent from %s: the plant measured nothing", line, name)
+			}
+			planted := map[string]string{}
+			for k, v := range workflows {
+				planted[k] = v
+			}
+			planted[name] = strings.Replace(workflows[name], line, "", 1)
+			if _, d := prHeadWiringDefects(planted); len(d) != 1 || !strings.Contains(d[0], "PR_HEAD_SHA is \"\"") {
+				t.Fatalf("dropping PR_HEAD_SHA from %s not caught: %q", name, d)
+			}
+		})
+	}
 }

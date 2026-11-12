@@ -13,9 +13,11 @@ import (
 
 // itemDecoderExceptions are item decoders whose callers do not name a route yet, each with its reason.
 var itemDecoderExceptions = map[string]string{
-	"decodeGitLabTestsPipeline": "gitlab tests route, not in CHAOS-10292's site list: follow-up",
-	"decodeGitLabTestsJob":      "gitlab tests route, not in CHAOS-10292's site list: follow-up",
-	"gitLabRawSize":             "decodes a field value of a GraphQL node, not a page item",
+	"decodeGitLabTestsPipeline":          "gitlab tests route, not in CHAOS-10292's site list: follow-up",
+	"decodeGitLabTestsJob":               "gitlab tests route, not in CHAOS-10292's site list: follow-up",
+	"gitLabRawSize":                      "decodes a field value of a GraphQL node, not a page item",
+	"adaptGitHubWorkItemPRSocialComment": "github work-items PR social adapter, not in CHAOS-10292's site list (next to 10291's social fetch): follow-up",
+	"adaptGitHubWorkItemPRSocialEvent":   "github work-items PR social adapter, not in CHAOS-10292's site list (next to 10291's social fetch): follow-up",
 }
 
 // TestItemDecoderFailuresCarryTheRoute: a providersync function whose first parameter is `raw json.RawMessage` and that returns the bare

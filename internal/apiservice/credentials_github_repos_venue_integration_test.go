@@ -402,7 +402,7 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	var ids map[string]string
 	rows := githubRepoSeedRows(pemKey)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: venueRoot(), Logger: quietLogger(),
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey,
 		},

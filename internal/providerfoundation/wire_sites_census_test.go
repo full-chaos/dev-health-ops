@@ -39,7 +39,7 @@ func doSites(t *testing.T, sources map[string]string) []string {
 
 var listedDoSites = map[string]string{
 	"http.go: guarded.Do":                              "HTTPClient.Do: counted per attempt, redirect hops counted by the per-call guard",
-	"http.go: c.Doer.Do":                               "HTTPClient.DoUnauthenticated: counted",
+	"http.go: counting.Do":                             "HTTPClient.DoUnauthenticated: counted, redirect hops counted by the per-call hook",
 	"http.go: c.Do":                                    "HTTPClient.DoRoute: goes through HTTPClient.Do",
 	"budget.go: r.once.Do":                             "sync.Once, not a request",
 	"budget.go: g.Client.Do":                           "Valkey command, not a provider request",

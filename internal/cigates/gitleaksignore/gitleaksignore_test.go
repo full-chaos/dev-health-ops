@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,7 +13,27 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/recordedfiles"
 )
 
-const genericRule = "generic-api-key"
+const (
+	genericRule = "generic-api-key"
+	jwtRule     = "jwt"
+)
+
+// jwtFinding is the repo's port of gitleaks' jwt rule: a three-part token whose
+// first two parts start "ey" (base64url JSON).
+// It is the capture group of the gitleaks v8.24.3 jwt rule without its end-of-token group: slightly wider, so it can only keep a stale row, never ignore more.
+var jwtFinding = regexp.MustCompile(`\bey[a-zA-Z0-9]{17,}\.ey[a-zA-Z0-9/\\_-]{17,}\.(?:[a-zA-Z0-9/\\_-]{10,}={0,2})?`)
+
+// holdsFinding reports whether line still holds a finding of rule; ok is false
+// for a rule the guard does not port.
+func holdsFinding(rule, line string) (found, ok bool) {
+	switch rule {
+	case genericRule:
+		return len(goldenscan.SecretsIn(line)) > 0, true
+	case jwtRule:
+		return jwtFinding.MatchString(line), true
+	}
+	return false, false
+}
 
 type row struct {
 	file string
@@ -54,8 +75,8 @@ func violations(root, text string) []string {
 			continue
 		}
 		seen[r.raw] = true
-		if r.rule != genericRule {
-			out = append(out, fmt.Sprintf("row %q: rule %s is not covered by the guard (only %s)", r.raw, r.rule, genericRule))
+		if _, ok := holdsFinding(r.rule, ""); !ok {
+			out = append(out, fmt.Sprintf("row %q: rule %s is not covered by the guard (only %s, %s)", r.raw, r.rule, genericRule, jwtRule))
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(r.file)))
@@ -73,7 +94,7 @@ func violations(root, text string) []string {
 			out = append(out, fmt.Sprintf("row %q: the line carries an inline gitleaks:allow, drop the row", r.raw))
 			continue
 		}
-		if len(goldenscan.SecretsIn(line)) == 0 {
+		if found, _ := holdsFinding(r.rule, line); !found {
 			out = append(out, fmt.Sprintf("row %q: line %d no longer holds a %s finding (stale row)", r.raw, r.line, r.rule))
 		}
 	}
@@ -105,6 +126,8 @@ func TestPlantedDefects(t *testing.T) {
 	write("hit.txt", "first\n"+flagged+"\n")
 	write("marked.txt", flagged+" // gitleaks:allow\n")
 	write("plain.txt", "nothing here\n\n")
+	token := strings.Join([]string{"eyJhbGciOiJFZERTQSIsImtpZCI6IngifQ", "eyJzdWIiOiJ0ZXN0LXN1YmplY3QtMDAwMSJ9", "c2lnbmF0dXJlLXNpZ25hdHVyZQ"}, ".")
+	write("jwt.json", "{\n  \"t\": \""+token+"\"\n}\n")
 	cases := []struct {
 		name string
 		text string
@@ -118,7 +141,10 @@ func TestPlantedDefects(t *testing.T) {
 		{"missing file", "gone.txt:generic-api-key:1\n", "not readable"},
 		{"inline allow on the line", "marked.txt:generic-api-key:1\n", "inline gitleaks:allow"},
 		{"duplicate row", "hit.txt:generic-api-key:2\nhit.txt:generic-api-key:2\n", "listed twice"},
-		{"other rule", "hit.txt:jwt:2\n", "not covered"},
+		{"jwt row on a token line passes", "jwt.json:jwt:2\n", ""},
+		{"jwt row on a line with no token", "jwt.json:jwt:1\n", "stale row"},
+		{"generic row on the token line", "jwt.json:generic-api-key:2\n", "stale row"},
+		{"other rule", "hit.txt:aws-access-token:2\n", "not covered"},
 		{"commit-pinned row", "abc123:hit.txt:generic-api-key:2\n", "not file:rule:line"},
 		{"zero line", "hit.txt:generic-api-key:0\n", "no positive line"},
 	}

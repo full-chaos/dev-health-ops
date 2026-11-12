@@ -35,8 +35,6 @@ import (
 // copies of one seeded Postgres database. Responses must match byte for
 // byte, and the rows a write touches must match afterwards.
 
-const venueKey = "venue-oracle-signing-key-0123456789abcdef"
-
 // timestampFieldPattern matches created_at/updated_at/last_drift_sync_at
 // JSON string values (team/identity admin responses, CHAOS-6310) so the
 // venue oracle diff can blank them before comparing bodies.
@@ -74,7 +72,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	members := newMembersStub(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), OrglessSuperusers: protectedOrglessSuperusers,
+		Root:   venueRoot(), Logger: quietLogger(), OrglessSuperusers: protectedOrglessSuperusers,
 		PythonEnv: []string{"EXPECTED_WORKER_GROUPS=" + venueWorkerGroups, "TELEMETRY_ENDPOINT=" + endpoint.URL + "/py", "SETTINGS_ENCRYPTION_KEY=" + venueEncryptionKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			// Python's collect_usage_stats counts a Postgres repos table the

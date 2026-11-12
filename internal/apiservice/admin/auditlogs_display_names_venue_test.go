@@ -36,11 +36,9 @@ func TestAuditLogDisplayNamesVenueOracle(t *testing.T) {
 		logIDs[action] = id("audit-" + action)
 	}
 
-	const jwtKey = "venue-oracle-audit-display-names-key-32-bytes!"
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   repoRoot(t),
 		GoOnly: true,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(query string, args ...any) {
@@ -120,7 +118,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $4, '{}'::json, '{}'::json, 'success',
 			}
 		},
 	})
-	base, _ := startGoServer(t, ctx, venue, jwtKey)
+	base, _ := startGoServer(t, ctx, venue)
 	auth := map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}
 
 	expected := map[string]auditDisplayExpectation{

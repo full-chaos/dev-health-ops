@@ -26,7 +26,6 @@ func TestGovernanceRoutesVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, governanceGolden("governance", "TestGovernanceRoutesVenueOracle", "686d3bae4e71ab6b655b2d57dc647f86b8d907bfef485292a0a7dc151b0ecbcf"))
 	root := repoRoot(t)
 	nextID := goldenIDs("gov")
-	const jwtKey = "venue-oracle-test-secret-key-for-governance-flow-32-bytes!!"
 
 	orgEnterprise := nextID() // org_licenses tier enterprise
 	orgCommunity := nextID()  // org_licenses tier community
@@ -53,7 +52,6 @@ func TestGovernanceRoutesVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -433,7 +431,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 	)
 
 	python := golden.Python(t, venue, requests)
-	goBase, goPool := startGoServer(t, ctx, venue, jwtKey)
+	goBase, goPool := startGoServer(t, ctx, venue)
 
 	// CHAOS-10082: see xuserid_divergence_test.go.
 	compared, pythonCompared, pythonDivergent := splitXUserIDRequests(t, ipPath, requests, python)

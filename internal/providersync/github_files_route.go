@@ -792,7 +792,10 @@ func fetchGitHubFileContents(
 		if decodeErr := providerfoundation.DecodeResponseJSON(response, raw, &envelope, 0); decodeErr != nil {
 			return nil, decodeErr
 		}
-		if closeErr != nil || len(envelope.Errors) > 0 {
+		if len(envelope.Errors) > 0 {
+			return nil, providerfoundation.ResponseGraphQL(response, providerfoundation.ErrNormalizationInvalid)
+		}
+		if closeErr != nil {
 			return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 		}
 		for index, filePath := range chunk {

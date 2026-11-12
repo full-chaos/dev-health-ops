@@ -32,9 +32,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// venueKey is the venue's JWT signing key (a fixed test value).
-const venueKey = "venue-oracle-signing-key-0123456789abcdef"
-
 // venueUUID matches a UUID in a response body or a row.
 var venueUUID = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 

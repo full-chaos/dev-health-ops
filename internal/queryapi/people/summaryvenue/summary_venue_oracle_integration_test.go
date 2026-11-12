@@ -54,7 +54,6 @@ func runPeopleSummaryVenue(t *testing.T, goldenName string) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   root,
 		Golden: golden,
-		JWTKey: "venue-oracle-test-secret-key-for-people-summary-32b!",
 		Seed: func(*testing.T, context.Context, *pgxpool.Pool, *venueoracle.Venue) map[string]map[string]any {
 			return nil
 		},

@@ -48,7 +48,7 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
-		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv, OrglessSuperusers: billingOrglessSuperusers,
+		Root:   venueRoot(), Logger: quietLogger(), PythonEnv: pythonEnv, OrglessSuperusers: billingOrglessSuperusers,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			return seed.tokenSpecs()

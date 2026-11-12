@@ -81,7 +81,7 @@ const (
 	appBaseURL  = "https://app.example.test/"
 )
 
-// linkToken is the link token for id under the venue's JWT key: both planes
+// linkToken is the link token for id under the venue's link key: both planes
 // sign with it, so a seeded row's token is the same text on both.
 func linkToken(id string) (token, hash string) {
 	return signedtoken.Build(uuid.MustParse(id), sessionscenario.Key)
@@ -936,7 +936,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		planeKey = authplane.NewKey(t)
 	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{External: external, TokenIssuer: planeKey.Tokens,
-		Golden: golden, Root: venueRoot(), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Golden: golden, Root: venueRoot(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PythonEnv: []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS=" + fromAddress,
 			"SMTP_HOST=" + pyHost, "SMTP_PORT=" + strconv.Itoa(pyPort), "APP_BASE_URL=" + appBaseURL},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {

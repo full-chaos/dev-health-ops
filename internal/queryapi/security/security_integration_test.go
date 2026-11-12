@@ -21,14 +21,14 @@ const (
     id UUID, repo String, ref Nullable(String), created_at DateTime64(3, 'UTC'),
     settings Nullable(String), tags Nullable(String), last_synced DateTime64(3, 'UTC'),
     org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (id)`
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`
 	alertsDDL = `CREATE TABLE security_alerts (
     repo_id UUID, alert_id String, source String, severity Nullable(String), state Nullable(String),
     package_name Nullable(String), cve_id Nullable(String), url Nullable(String), title Nullable(String),
     description Nullable(String), created_at DateTime64(3, 'UTC'), fixed_at Nullable(DateTime64(3, 'UTC')),
     dismissed_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
     org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, alert_id)`
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, alert_id)`
 )
 
 const (

@@ -17,13 +17,13 @@ import (
 
 var ddls = []string{
 	`CREATE TABLE repos (id UUID, repo String, provider String DEFAULT 'unknown', org_id String DEFAULT 'default',
-      created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY id`,
+      created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
 	`CREATE TABLE git_commits (repo_id UUID, hash String, author_name Nullable(String), author_email Nullable(String),
       committer_when DateTime64(3, 'UTC'), org_id String DEFAULT 'default', last_synced DateTime64(3, 'UTC'))
-      ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, hash)`,
+      ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, hash)`,
 	`CREATE TABLE git_commit_stats (repo_id UUID, commit_hash String, file_path String, additions Int32, deletions Int32,
       org_id String DEFAULT 'default', last_synced DateTime64(3, 'UTC'))
-      ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, commit_hash, file_path)`,
+      ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`,
 	`CREATE TABLE teams (id String, org_id String DEFAULT 'default', is_active UInt8 DEFAULT 1,
       updated_at DateTime64(6) DEFAULT now64(6), last_synced DateTime64(6) DEFAULT now64(6))
       ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,

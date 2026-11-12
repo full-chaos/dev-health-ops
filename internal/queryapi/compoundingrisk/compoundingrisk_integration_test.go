@@ -27,9 +27,9 @@ var ddls = []string{
       w_churn Float64, w_complexity Float64, w_ownership Float64, w_review Float64,
       threshold_elevated Float64, threshold_high Float64, computed_at DateTime DEFAULT now(),
       merged_prs_30d Nullable(Float64), reviewed_prs_30d Nullable(Float64), review_share_30d Nullable(Float64))
-      ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, scope, scope_id, day, computed_at)`,
+      ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, scope, scope_id, day)`,
 	`CREATE TABLE repos (id UUID, repo String, provider String DEFAULT 'unknown', org_id String DEFAULT 'default',
-      created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY id`,
+      created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
 	`CREATE TABLE teams (id String, name String, org_id String DEFAULT 'default', repo_patterns Array(String) DEFAULT [],
       is_active UInt8 DEFAULT 1, updated_at DateTime64(6), last_synced DateTime64(6) DEFAULT now64(6)) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 	`CREATE TABLE team_repo_ownership (org_id String, provider String, team_id String, repo_id Nullable(UUID),

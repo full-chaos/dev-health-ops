@@ -46,7 +46,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/legacyjwt"
 )
 
 // env is one Postgres with go-api's schema and the auth schema, the auth
@@ -81,7 +80,6 @@ type env struct {
 	// issuePlane is go-api's workload principal and its token key: the session
 	// issue route takes only the go-api workload token.
 	issuePlane *issuePlane
-	signer     *legacyjwt.Signer
 	// tokens mints the routed EdDSA user access tokens go-api's routes verify.
 	tokens     *edtokens.Issuer
 	linkSecret string
@@ -211,10 +209,6 @@ func newEnv(t *testing.T) (*env, error) {
 		return nil, fmt.Errorf("clickhouse table: %w", err)
 	}
 
-	const jwtKey = "lockorder-test-signing-key-32-bytes-long!!"
-	if e.signer, err = legacyjwt.NewSigner(jwtKey, "dev-health-ops", "dev-health-api"); err != nil {
-		return nil, err
-	}
 	logger := slog.New(slog.NewTextHandler(e.goLog, nil))
 	e.tokens = edtokens.New(t)
 	auth := e.tokens.Authenticator(t, policy.PGStore{Pool: admin0}, logger)
@@ -230,7 +224,7 @@ func newEnv(t *testing.T) (*env, error) {
 	}
 	// go-api mints no pair of its own: both servers' accept and onboard take theirs from auth-service's issue route
 	// (the auth plane starts first).
-	if err := e.startAuthPlane(ctx, schema, logger, jwtKey); err != nil {
+	if err := e.startAuthPlane(ctx, schema, logger); err != nil {
 		return nil, err
 	}
 	issuer, err := e.seedIssueClient(ctx)

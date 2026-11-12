@@ -19,6 +19,8 @@ internal/api/integrationsadmin/discoveryvenue	discover_venue_oracle_integration_
 internal/api/policy	accessroute_test.go	.	tree	*.go
 internal/api/policy	delegated_test.go	internal/api	tree	*
 internal/api/policy	delegated_test.go	internal/apiservice	tree	*
+internal/api/policy	delegated_use_test.go	internal/api	tree	*
+internal/api/policy	delegated_use_test.go	internal/apiservice	tree	*
 internal/api/policy	platform_question_no_decision_point_cells_test.go	internal/api/policy	dir	*
 internal/api/policy	principalonce_test.go	unexpressed	-	-
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
@@ -27,6 +29,7 @@ internal/api/syncadmin	dataset_writer_lock_census_test.go	unexpressed	-	-
 internal/api/syncadmin	gate_reader_census_test.go	unexpressed	-	*.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go	cmd	tree	*.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go	internal	tree	*.go
+internal/api/teamsidentity	response_read_census_test.go	internal/api/teamsidentity	dir	*
 internal/api/teamsidentity	team_id_writer_census_test.go	cmd	tree	*.go
 internal/api/teamsidentity	team_id_writer_census_test.go	internal	tree	*.go
 internal/api/teamsidentity	team_id_writer_census_test.go	internal/api/teamsidentity	dir	*

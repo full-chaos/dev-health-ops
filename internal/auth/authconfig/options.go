@@ -244,7 +244,7 @@ var optionRegistry = []Option{
 	},
 	{
 		Env: EnvAuthorizeCallerSubjects, Kind: KindString, Group: GroupSession,
-		Usage: "comma-separated workload principal ids (prn_ and 22 base64url characters) whose workload token (audience auth-service) POST /v1/authorize and /v1/authorize:batch accept; unset refuses every caller. Needs " +
+		Usage: "comma-separated workload principal ids (prn_ and 22 base64url characters) whose workload token (audience auth-service) POST /v1/authorize, /v1/authorize:batch and /v1/authorize:repositories accept; unset refuses every caller. Needs " +
 			EnvTokenIssuerURL,
 	},
 	{

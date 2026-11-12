@@ -588,7 +588,7 @@ func gitHubFilesInventoryCached(
 	if treeCapExceeded {
 		slog.Warn(
 			"github files tree response exceeded the shared object cap; falling back to non-recursive walk",
-			"repository", fullName, "path", tooLarge.Path,
+			"repository", fullName, "route", githubTreeRoute,
 			"cap_bytes", tooLarge.CapBytes, "content_length", tooLarge.ContentLength,
 		)
 	} else if treeErr != nil {
@@ -792,7 +792,10 @@ func fetchGitHubFileContents(
 		if decodeErr := providerfoundation.DecodeResponseJSON(response, raw, &envelope, 0); decodeErr != nil {
 			return nil, decodeErr
 		}
-		if closeErr != nil || len(envelope.Errors) > 0 {
+		if len(envelope.Errors) > 0 {
+			return nil, providerfoundation.ResponseGraphQL(response, providerfoundation.ErrNormalizationInvalid)
+		}
+		if closeErr != nil {
 			return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 		}
 		for index, filePath := range chunk {

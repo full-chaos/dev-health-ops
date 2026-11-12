@@ -451,10 +451,9 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		// rate-limit bodies -- it was then discarded rather than attached to
 		// the classification returned to the caller, so every consumer saw
 		// only the generic Class and never the provider's own rejection
-		// reason. Path excludes the query string deliberately (see Path's
-		// doc comment); Body is kept for classification parsers and never
-		// reaches a log.
-		classification.Path = target.Path
+		// reason. The raw path is not kept (it can carry an owner or
+		// repository name; the dimension was read from it above); Body is
+		// kept for classification parsers and never reaches a log.
 		classification.Route = routeTemplate(ctx)
 		classification.Body = string(message)
 		if dimension := budgetDimension(ctx); dimension != "" && classification.Class == ErrorRateLimited {

@@ -214,9 +214,9 @@ func TestAnEnforcerWithNoDecisionPointRefusesEveryRequestOfItsNamespacesWithA503
 			}
 		})
 	}
-	got := serve(hs256Handler(t, newUnconfiguredEnforcerFor(t, onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
+	got := serve(fixtureBearerHandler(t, newUnconfiguredEnforcerFor(t, onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 	if got.status != http.StatusServiceUnavailable || got.body != enforceNoDecisionPointBody {
-		t.Fatalf("no decision point, legacy HS256 caller: %d %q, want the 503: fail-closed refuses every request", got.status, got.body)
+		t.Fatalf("no decision point, signed fixture caller: %d %q, want the 503: fail-closed refuses every request", got.status, got.body)
 	}
 }
 
@@ -239,7 +239,7 @@ func TestADeadPDPIsA503NotALegacyAllow(t *testing.T) {
 	}
 }
 
-func hs256Handler(t *testing.T, enf *Enforcer) http.Handler {
+func fixtureBearerHandler(t *testing.T, enf *Enforcer) http.Handler {
 	t.Helper()
 	store := newStore()
 	withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
@@ -292,15 +292,15 @@ func TestAnImpersonatingAdminOnAnEnforcedRowIsRefusedBeforeThePDP(t *testing.T) 
 	}
 }
 
-// A legacy HS256 bearer with a live go-api impersonation row is refused on a write too: the row, not the token class,
+// A signed fixture bearer with a live go-api impersonation row is refused on a write too: the row, not the token class,
 // makes the caller one the decision point cannot judge as the delegation.
-func TestAnImpersonatingHS256CallerOnAnEnforcedRowIsRefused(t *testing.T) {
+func TestAnImpersonatingFixtureCallerOnAnEnforcedRowIsRefused(t *testing.T) {
 	rec := recordEnforce(t)
 	pdp := newTestPDP(t, allowAll)
-	got := serve(impersonating(hs256Handler(t, newEnforcerFor(t, pdp.client(t), onFor("teams")))), http.MethodPost, "/api/v1/admin/teams",
+	got := serve(impersonating(fixtureBearerHandler(t, newEnforcerFor(t, pdp.client(t), onFor("teams")))), http.MethodPost, "/api/v1/admin/teams",
 		validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 	if got.status != http.StatusForbidden || got.body != impersonationRefusalBody || len(pdp.calls()) != 0 {
-		t.Fatalf("impersonating HS256 caller: %d %q, %d PDP calls, want 403 %q and 0", got.status, got.body, len(pdp.calls()), impersonationRefusalBody)
+		t.Fatalf("impersonating fixture caller: %d %q, %d PDP calls, want 403 %q and 0", got.status, got.body, len(pdp.calls()), impersonationRefusalBody)
 	}
 	if d, u := rec.snapshot(), rec.unjudgedSnapshot(); !slices.Equal(d, []string{"teams/impersonation_refused"}) || len(u) != 0 {
 		t.Fatalf("decisions %v unjudged %v, want [teams/impersonation_refused] and none", d, u)
@@ -1100,5 +1100,51 @@ func TestEveryMappedRowAcceptsOnlyUserTokenClasses(t *testing.T) {
 	}
 	if mapped == 0 {
 		t.Fatal("no row names an action")
+	}
+}
+
+// CHAOS-10872 S3: a present bearer that is not a user access token (an HS256 token, a workload token, a push token: whatever the
+// routed verifier refuses, and an authenticator with no access check at all) is refused at authentication, before the enforcer is
+// asked anything: 401, no decision point question, no decision outcome and no unjudged count. So the unjudged reason hs256 cannot be
+// produced by a bearer that reaches the guard on an enforced row.
+func TestANonUserTokenIsRefusedAtAuthenticationBeforeTheEnforcerDecides(t *testing.T) {
+	const refusal = `{"detail":{"message":"Invalid or expired token"}}`
+	for _, tc := range []struct {
+		name string
+		auth func(t *testing.T) *Authenticator
+	}{
+		{"the verifier refuses the token", func(t *testing.T) *Authenticator {
+			return routed(t, personaStore(personaAdmin), &fakeValidator{err: errRefusedByValidator})
+		}},
+		{"the verifier answers no result", func(t *testing.T) *Authenticator {
+			return routed(t, personaStore(personaAdmin), &fakeValidator{})
+		}},
+		{"the verifier answers a result with no claims", func(t *testing.T) *Authenticator {
+			return routed(t, personaStore(personaAdmin), &fakeValidator{result: &RoutedResult{}})
+		}},
+		{"the authenticator has no access check", func(t *testing.T) *Authenticator {
+			return unrouted(t, personaStore(personaAdmin))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := recordEnforce(t)
+			pdp := newTestPDP(t, allowAll)
+			guard := NewGuard(tc.auth(t), quiet())
+			guard.SetEnforcer(newEnforcerFor(t, pdp.client(t), onFor("teams")))
+			mux := http.NewServeMux()
+			mux.Handle("GET /api/v1/admin/teams", guard.Wrap(AdminOrg, echo))
+			for _, bearer := range []string{shadowBearer, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ4In0.c2ln"} {
+				got := serve(mux, http.MethodGet, "/api/v1/admin/teams", map[string]string{"Authorization": "Bearer " + bearer})
+				if got.status != http.StatusUnauthorized || got.body != refusal {
+					t.Errorf("%s: %d %q, want 401 %s", tc.name, got.status, got.body, refusal)
+				}
+			}
+			if calls := pdp.calls(); len(calls) != 0 {
+				t.Errorf("%s: the decision point saw %+v, want no question", tc.name, calls)
+			}
+			if d, u := rec.snapshot(), rec.unjudgedSnapshot(); len(d) != 0 || len(u) != 0 {
+				t.Errorf("%s: decisions %v unjudged %v, want none and none (the enforcer is never reached)", tc.name, d, u)
+			}
+		})
 	}
 }

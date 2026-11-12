@@ -26,6 +26,10 @@
 # pin=<tsv> (CHAOS-13422, ci/go_test_pins.tsv, package<TAB>reason): the listed packages are placed before everything else, each on the
 # then-lightest shard, heaviest first, so as many pinned packages as there are shards land on distinct shards. A pinned package
 # is split like any other (same part, same run): only its placement differs. Still a partition.
+# splits=<tsv> (CHAOS-13520, ci/go_test_splits.tsv, package<TAB>parts): a listed package becomes PARTS items, part 1..PARTS, each
+# of weight ceil(weight / PARTS), placed like packages; such an item prints as "<path><TAB><part><TAB><parts>" and check_go.sh runs
+# that part's share of the package's test names. A split package that is also pinned or solo is refused (exit 2). Still a
+# partition: every part of every split package lands in exactly one shard.
 # serial=<key> serialx=<factor> (CHAOS-13422): the package check_go.sh runs alone after the shard's other packages. Its whole wall
 # adds to the shard, while the other packages overlap (sum / factor), so its weight counts factor times. A pinned serial package is
 # placed after the other pins.
@@ -47,6 +51,16 @@ BEGIN {
     }
     close(pin)
   }
+  if (splits != "") {
+    while ((getline line < splits) > 0) {
+      if (line ~ /^[[:space:]]*(#|$)/) continue
+      nf = split(line, f, "\t")
+      if (nf != 2 || f[2] !~ /^[0-9]+$/ || f[2] + 0 < 2) { print "go_race_shard.awk: bad split row: " line > "/dev/stderr"; bad = 1; exit 2 }
+      if (f[1] in parts) { print "go_race_shard.awk: split row repeats " f[1] > "/dev/stderr"; bad = 1; exit 2 }
+      parts[f[1]] = f[2] + 0
+    }
+    close(splits)
+  }
   if (solo != "") {
     while ((getline line < solo) > 0) {
       if (line ~ /^[[:space:]]*(#|$)/) continue
@@ -62,21 +76,32 @@ BEGIN {
   key = pkg
   if (key == mod) key = "."
   else if (index(key, mod "/") == 1) key = substr(key, length(mod) + 2)
-  n++
-  path[n] = pkg
-  weight[n] = (key in w) ? w[key] : defw + 0
-  if (serial != "" && key == serial && serialx + 0 > 0) weight[n] = weight[n] * serialx
-  serialPkg[n] = (serial != "" && key == serial) ? 1 : 0
-  soloPkg[n] = (key in isSolo) ? 1 : 0
-  pinPkg[n] = ((key in isPin) && !(key in isSolo)) ? 1 : 0
+  np = (key in parts) ? parts[key] : 1
+  if (np > 1 && ((key in isPin) || (key in isSolo))) {
+    print "go_race_shard.awk: split package " key " is also pinned or solo" > "/dev/stderr"; bad = 1; exit 2
+  }
+  if (np > 1) splitSeen[key] = 1
+  for (pp = 1; pp <= np; pp++) {
+    n++
+    path[n] = pkg
+    pidx[n] = (np > 1) ? pp : 0
+    nparts[n] = np
+    weight[n] = (key in w) ? w[key] : defw + 0
+    if (np > 1) weight[n] = int((weight[n] + np - 1) / np)
+    if (serial != "" && key == serial && serialx + 0 > 0) weight[n] = weight[n] * serialx
+    serialPkg[n] = (serial != "" && key == serial) ? 1 : 0
+    soloPkg[n] = (key in isSolo) ? 1 : 0
+    pinPkg[n] = ((key in isPin) && !(key in isSolo)) ? 1 : 0
+  }
 }
 END {
+  if (bad) exit 2
   # insertion sort by (weight desc, path asc): n is a few hundred at most
   for (i = 1; i <= n; i++) order[i] = i
   for (i = 2; i <= n; i++) {
     v = order[i]
     j = i - 1
-    while (j >= 1 && (weight[order[j]] < weight[v] || (weight[order[j]] == weight[v] && path[order[j]] > path[v]))) {
+    while (j >= 1 && (weight[order[j]] < weight[v] || (weight[order[j]] == weight[v] && (path[order[j]] > path[v] || (path[order[j]] == path[v] && pidx[order[j]] > pidx[v]))))) {
       order[j + 1] = order[j]
       j--
     }
@@ -109,6 +134,8 @@ END {
   # (input, weights, count), so it is stable.
   for (i = 1; i <= n; i++) {
     k = order[i]
-    if ((k in keep) && ((part == "solo") == (soloPkg[k] == 1))) print path[k]
+    if (!(k in keep) || ((part == "solo") != (soloPkg[k] == 1))) continue
+    if (pidx[k] > 0) print path[k] "\t" pidx[k] "\t" nparts[k]
+    else print path[k]
   }
 }

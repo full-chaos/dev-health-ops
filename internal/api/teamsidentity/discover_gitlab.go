@@ -2,9 +2,7 @@ package teamsidentity
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/url"
 	"strconv"
 
@@ -117,14 +115,13 @@ func gitlabGetGroup(ctx context.Context, client *providerfoundation.HTTPClient, 
 	if err != nil {
 		return gitlabGroupEntry{}, err
 	}
-	defer response.Body.Close()
-	raw, err := io.ReadAll(response.Body)
+	raw, err := readDiscoveryBody(response)
 	if err != nil {
 		return gitlabGroupEntry{}, err
 	}
 	var group gitlabGroupEntry
-	if err := json.Unmarshal(raw, &group); err != nil {
-		return gitlabGroupEntry{}, fmt.Errorf("decode gitlab group response: %w", err)
+	if err := providerfoundation.DecodeResponseJSON(response, raw, &group, 0); err != nil {
+		return gitlabGroupEntry{}, err
 	}
 	return group, nil
 }
@@ -134,7 +131,7 @@ func gitlabGetGroup(ctx context.Context, client *providerfoundation.HTTPClient, 
 // team_discovery.py:42-66): truncated is true when MORE than limit items were available, never merely when exactly limit were
 // returned. The walk is also bounded by pages and fails closed on a continuation that does not progress (pageWalk, CHAOS-8786);
 // an item that two pages both carry is listed once.
-func gitlabListPages[T any](ctx context.Context, client *providerfoundation.HTTPClient, walkName, owner, route, path, extraQuery string, limit int, key func(T) string, decodeLabel string) ([]T, bool, error) {
+func gitlabListPages[T any](ctx context.Context, client *providerfoundation.HTTPClient, walkName, owner, route, path, extraQuery string, limit int, key func(T) string) ([]T, bool, error) {
 	var out []T
 	seenItems := map[string]struct{}{}
 	page := 1
@@ -144,15 +141,14 @@ func gitlabListPages[T any](ctx context.Context, client *providerfoundation.HTTP
 		if err != nil {
 			return nil, false, walk.pageError(err)
 		}
-		raw, readErr := io.ReadAll(response.Body)
 		nextPage := response.Header.Get("X-Next-Page")
-		response.Body.Close()
+		raw, readErr := readDiscoveryBody(response)
 		if readErr != nil {
 			return nil, false, walk.pageError(readErr)
 		}
 		var entries []T
-		if err := json.Unmarshal(raw, &entries); err != nil {
-			return nil, false, walk.pageError(fmt.Errorf("decode %s: %w", decodeLabel, err))
+		if err := providerfoundation.DecodeResponseJSON(response, raw, &entries, 0); err != nil {
+			return nil, false, walk.pageError(err)
 		}
 		out = appendNew(out, seenItems, entries, key)
 		next, more, err := walk.gitlabNextPage(nextPage, page, len(entries))
@@ -172,7 +168,7 @@ func gitlabListPages[T any](ctx context.Context, client *providerfoundation.HTTP
 
 func gitlabListGroupPages(ctx context.Context, client *providerfoundation.HTTPClient, owner, route, path string, limit int) ([]gitlabGroupEntry, bool, error) {
 	return gitlabListPages(ctx, client, "subgroups", owner, route, path, "", limit,
-		func(entry gitlabGroupEntry) string { return strconv.FormatInt(entry.ID, 10) }, "gitlab group list page")
+		func(entry gitlabGroupEntry) string { return strconv.FormatInt(entry.ID, 10) })
 }
 
 func gitlabListProjectPages(ctx context.Context, client *providerfoundation.HTTPClient, owner, route, path string, limit int, includeSubgroups bool) ([]gitlabProjectEntry, bool, error) {
@@ -181,5 +177,5 @@ func gitlabListProjectPages(ctx context.Context, client *providerfoundation.HTTP
 		extra = "&include_subgroups=true"
 	}
 	return gitlabListPages(ctx, client, "projects", owner, route, path, extra, limit,
-		func(entry gitlabProjectEntry) string { return strconv.FormatInt(entry.ID, 10) }, "gitlab project list page")
+		func(entry gitlabProjectEntry) string { return strconv.FormatInt(entry.ID, 10) })
 }

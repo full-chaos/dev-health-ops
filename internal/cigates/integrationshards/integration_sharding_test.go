@@ -53,6 +53,28 @@ func manifestText(t *testing.T, root string) string {
 	return b.String()
 }
 
+// manifestSplitKeys: the packages of the manifest with a `split-by-test N` row (CHAOS-13520): each runs as N parts of its
+// test names, in up to N packages shards, so a shard runs only some of its names (internal/cigates/splitshards holds that
+// every name runs in exactly one shard).
+func manifestSplitKeys(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	last := ""
+	for _, l := range strings.Split(manifestText(t, root), "\n") {
+		if strings.TrimSpace(l) == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		k, _, _ := strings.Cut(l, "\t")
+		switch {
+		case strings.Contains(k, "/"):
+			last = k
+		case k == "split-by-test":
+			out[last] = true
+		}
+	}
+	return out
+}
+
 type shardEnv struct {
 	manifest, providerManifest, githubOutput string
 	extra                                    []string
@@ -133,9 +155,10 @@ func manifestRows(t *testing.T) (int, map[string]int) {
 		if err != nil {
 			t.Fatalf("manifest row %q", l)
 		}
-		if k == "shards" {
+		switch {
+		case k == "shards":
 			shards = n
-		} else {
+		case strings.Contains(k, "/"):
 			weights[k] = n
 		}
 	}
@@ -149,6 +172,7 @@ var (
 	planHeader = regexp.MustCompile(`^integration shard plan: ([0-9]+) shard\(s\), ([0-9]+) package\(s\)$`)
 	shardRow   = regexp.MustCompile(`^  SHARD ([0-9]+) ([A-Za-z0-9_./-]+) weight=([0-9]+)s$`)
 	shardTotal = regexp.MustCompile(`^integration shard ([0-9]+): estimated ([0-9]+)s, ([0-9]+) package\(s\)$`)
+	splitRow   = regexp.MustCompile(`^  SHARD-SPLIT-PACKAGE ([0-9]+) ([A-Za-z0-9_./-]+) weight=([0-9]+)s$`)
 )
 
 type planFacts struct {
@@ -179,6 +203,28 @@ func checkShardPlan(stdout, githubOutput string, f planFacts) (map[int]map[strin
 		return nil, fmt.Errorf("the plan header counts %d package(s), discovery found %d", n, len(f.expected))
 	}
 	assignments := map[int]map[string]int{}
+	// The parts of a split-by-test package (CHAOS-13520): SHARD-SPLIT-PACKAGE rows, in up to N shards each.
+	splitIn := map[int]map[string]int{}
+	splitSeen := map[string]bool{}
+	for _, l := range lines {
+		m := splitRow.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		shard, _ := strconv.Atoi(m[1])
+		if shard < 1 || shard > declared {
+			return nil, fmt.Errorf("shard %d is outside 1..%d: %q", shard, declared, l)
+		}
+		w, _ := strconv.Atoi(m[3])
+		if splitIn[shard] == nil {
+			splitIn[shard] = map[string]int{}
+		}
+		if _, dup := splitIn[shard][m[2]]; dup || w <= 0 {
+			return nil, fmt.Errorf("split package %s is listed twice in shard %d, or at no weight", m[2], shard)
+		}
+		splitIn[shard][m[2]] = w
+		splitSeen[m[2]] = true
+	}
 	for _, l := range lines {
 		if !strings.HasPrefix(l, "  SHARD ") {
 			continue
@@ -211,8 +257,16 @@ func checkShardPlan(stdout, githubOutput string, f planFacts) (map[int]map[strin
 			return nil, fmt.Errorf("the plan adds %s", p)
 		}
 	}
+	for p := range splitSeen {
+		if count[p] > 0 {
+			return nil, fmt.Errorf("%s is planned whole and split", p)
+		}
+		if !f.expected[p] {
+			return nil, fmt.Errorf("the plan adds %s", p)
+		}
+	}
 	for p := range f.expected {
-		if count[p] == 0 {
+		if count[p] == 0 && !splitSeen[p] {
 			return nil, fmt.Errorf("the plan misses %s", p)
 		}
 	}
@@ -226,6 +280,14 @@ func checkShardPlan(stdout, githubOutput string, f planFacts) (map[int]map[strin
 	for _, p := range []string{providerPackage, dailyPackage, workerservicePackage} {
 		if count[p] == 0 {
 			return nil, fmt.Errorf("the plan lacks %s", p)
+		}
+	}
+	for shard, rows := range splitIn {
+		if assignments[shard] == nil {
+			assignments[shard] = map[string]int{}
+		}
+		for p, w := range rows {
+			assignments[shard][p] = w
 		}
 	}
 	type tot struct{ seconds, count int }
@@ -519,6 +581,9 @@ type taggedFacts struct {
 	// effect is, per package without an init or TestMain hook, "<key>/<file> <finding>" of the first package-level
 	// side effect gotestfuncs reports in a tag-only file that no reviewed row covers.
 	effect map[string]string
+	// partial: the split-by-test packages (CHAOS-13520); a shard runs only its part of their names, so the per-shard
+	// completeness checks skip them (internal/cigates/splitshards holds that each name runs in exactly one shard).
+	partial map[string]bool
 }
 
 var (
@@ -561,7 +626,7 @@ func integrationTaggedFacts(t *testing.T) taggedFacts {
 		if withTag == nil || plain == nil {
 			return
 		}
-		taggedVal = taggedFacts{tagged: map[string]map[string]bool{}, untagged: map[string]map[string]bool{}, hook: map[string]string{}, effect: map[string]string{}}
+		taggedVal = taggedFacts{tagged: map[string]map[string]bool{}, untagged: map[string]map[string]bool{}, hook: map[string]string{}, effect: map[string]string{}, partial: manifestSplitKeys(t, root)}
 		tagOnly := map[string][]string{}
 		for _, k := range keys {
 			inPlain := map[string]bool{}
@@ -675,6 +740,15 @@ func checkTaggedSelection(stdout string, shardKeys map[string]bool, f taggedFact
 		unfiltered[k] = true
 	}
 	for k := range shardKeys {
+		if f.partial[k] {
+			if f.hookOf(k) != "" && !unfiltered[k] {
+				return fmt.Errorf("%s has a tag-only hook (%s) but no SHARD-UNFILTERED line", k, f.hookOf(k))
+			}
+			if len(selected[k]) == 0 {
+				return fmt.Errorf("split package %s runs in this shard but selects no name", k)
+			}
+			continue
+		}
 		if f.hookOf(k) != "" {
 			if !unfiltered[k] {
 				return fmt.Errorf("%s has a tag-only hook (%s) but no SHARD-UNFILTERED line", k, f.hookOf(k))
@@ -753,6 +827,7 @@ var discoveryFunctions = []string{
 	"die", "check_listed_test_file", "scan_listed_go_tests", "scan_go_test_paths", "gotestfuncs_bin", "go_run_name_ok", "byte_len", "go_test_name_ok",
 	"integration_test_files", "split_plain_test_files", "split_package_hook", "discover_integration_tagged_tests",
 	"run_integration_packages", "warn_integration_weight_drift", "discover_daily_tests",
+	"is_assoc", "run_integration_split_filter",
 }
 
 // discoveryHarness runs body in bash with the discovery functions of ci/check_go.sh. With files, ROOT is a temporary
@@ -1623,6 +1698,18 @@ func TestIntegrationShardPlanCheckerFailsEachPlantedDefect(t *testing.T) {
 			byShard[s][m[2]] = w
 		}
 	}
+	// the parts of split-by-test packages (CHAOS-13520) stay as they are; a shard's total counts them too
+	splitIn := map[int]map[string]int{}
+	for _, l := range lines {
+		if m := splitRow.FindStringSubmatch(l); m != nil {
+			s, _ := strconv.Atoi(m[1])
+			w, _ := strconv.Atoi(m[3])
+			if splitIn[s] == nil {
+				splitIn[s] = map[string]int{}
+			}
+			splitIn[s][m[2]] = w
+		}
+	}
 	// the plan with some shards' rows replaced and their total lines made consistent
 	withRows := func(changes map[int]map[string]int) string {
 		assigned := map[int]map[string]int{}
@@ -1649,7 +1736,10 @@ func TestIntegrationShardPlanCheckerFailsEachPlantedDefect(t *testing.T) {
 					names = append(names, n)
 				}
 				sort.Strings(names)
-				out = append(out, fmt.Sprintf("integration shard %d: estimated %ds, %d package(s)", s, sum, len(assigned[s])))
+				for _, w := range splitIn[s] {
+					sum += w
+				}
+				out = append(out, fmt.Sprintf("integration shard %d: estimated %ds, %d package(s)", s, sum, len(assigned[s])+len(splitIn[s])))
 				for _, n := range names {
 					out = append(out, fmt.Sprintf("  SHARD %d %s weight=%ds", s, n, assigned[s][n]))
 				}
@@ -1763,7 +1853,48 @@ func TestIntegrationShardPlanCheckerFailsEachPlantedDefect(t *testing.T) {
 		}
 	}
 	srcRows, dstRows := copyWith(byShard[bestShard], bestPkg, -1), copyWith(byShard[target], bestPkg, bestW)
-	unbalanced := withRows(map[int]map[string]int{bestShard: srcRows, target: dstRows})
+	changes := map[int]map[string]int{bestShard: srcRows, target: dstRows}
+	// With many shards one moved package may leave a placement shard the heaviest (CHAOS-13520: 50 shards): keep moving whole
+	// packages into target until it is the heaviest shard by more than any package, so only the balance property refuses it.
+	maxTotal, splitSum := 0, 0
+	for _, tt := range totals {
+		if tt > maxTotal {
+			maxTotal = tt
+		}
+	}
+	for _, w := range splitIn[target] {
+		splitSum += w
+	}
+	sum := func(m map[string]int) int {
+		n := splitSum
+		for _, w := range m {
+			n += w
+		}
+		return n
+	}
+	var donors []int
+	for s := range byShard {
+		if s != target && !splitShards[s] {
+			donors = append(donors, s)
+		}
+	}
+	sort.Ints(donors)
+	for _, s := range donors {
+		if sum(changes[target]) > 2*maxTotal {
+			break
+		}
+		if changes[s] == nil {
+			changes[s] = copyWith(byShard[s], "", -1)
+		}
+		for _, p := range sortedIntKeys(changes[s]) {
+			if splitPackages[p] || len(changes[s]) < 2 {
+				continue
+			}
+			changes[target] = copyWith(changes[target], p, changes[s][p])
+			changes[s] = copyWith(changes[s], p, -1)
+		}
+	}
+	unbalanced := withRows(changes)
 	if _, err := checkShardPlan(unbalanced, gho, facts); err == nil || !strings.Contains(err.Error(), "not balancing") {
 		t.Errorf("an unbalanced but consistent plan must be refused as not balancing, got %v", err)
 	}
@@ -2032,6 +2163,169 @@ func TestMirroredImageMatchesTestcontainersPrefixSemantics(t *testing.T) {
 	}
 }
 
+// allShardsHeader opens the part of one packages shard in `integration-shard packages all --dry-run`.
+var allShardsHeader = regexp.MustCompile(`(?m)^==> integration-shard packages ([0-9]+) --dry-run\n`)
+
+// splitAllShardsDryRun cuts the output of `integration-shard packages all --dry-run` into the plan (what precedes the first
+// shard) and, per shard, the lines after its header. A shard's own --dry-run prints the plan, then that part.
+func splitAllShardsDryRun(t *testing.T, r cmdResult) (string, []int, map[int]string) {
+	t.Helper()
+	if r.code != 0 {
+		t.Fatalf("integration-shard packages all --dry-run: exit %d: %s%s", r.code, r.stdout, r.stderr)
+	}
+	loc := allShardsHeader.FindAllStringSubmatchIndex(r.stdout, -1)
+	if len(loc) == 0 {
+		t.Fatalf("integration-shard packages all --dry-run prints no shard header: %s", r.stdout)
+	}
+	var order []int
+	parts := map[int]string{}
+	for i, m := range loc {
+		n, _ := strconv.Atoi(r.stdout[m[2]:m[3]])
+		end := len(r.stdout)
+		if i+1 < len(loc) {
+			end = loc[i+1][0]
+		}
+		if _, dup := parts[n]; dup {
+			t.Fatalf("integration-shard packages all --dry-run prints shard %d twice", n)
+		}
+		order = append(order, n)
+		parts[n] = r.stdout[m[1]:end]
+	}
+	return r.stdout[:loc[0][0]], order, parts
+}
+
+var (
+	allShardsOnce   sync.Once
+	allShardsResult cmdResult
+)
+
+// allShardsDryRun runs `integration-shard packages all --dry-run` (one plan for every packages shard) once per test binary.
+func allShardsDryRun(t *testing.T) cmdResult {
+	t.Helper()
+	allShardsOnce.Do(func() {
+		allShardsResult = runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", "all", "--dry-run")
+	})
+	return allShardsResult
+}
+
+// packagesDryRuns gives, per shard, what `integration-shard packages SHARD --dry-run` prints, cut from the one all-shards
+// run r (TestOneShardDryRunIsItsPartOfTheAllShardsDryRun holds the two equal byte for byte).
+func packagesDryRuns(t *testing.T, r cmdResult, shards []int) map[int]cmdResult {
+	t.Helper()
+	plan, _, parts := splitAllShardsDryRun(t, r)
+	out := map[int]cmdResult{}
+	for _, shard := range shards {
+		part, ok := parts[shard]
+		if !ok {
+			t.Fatalf("integration-shard packages all --dry-run prints no part for packages shard %d", shard)
+		}
+		out[shard] = cmdResult{stdout: plan + part, stderr: r.stderr}
+	}
+	return out
+}
+
+// TestOneShardDryRunIsItsPartOfTheAllShardsDryRun: the shard guards read `integration-shard packages all --dry-run`, so
+// it must print exactly what each shard's own --dry-run prints (the plan once, then per shard its part), for every shard
+// the matrix lists, in order. Two real single-shard dry runs check the bytes: a shard of several whole packages and a
+// shard holding a part of a split-by-test package.
+func TestOneShardDryRunIsItsPartOfTheAllShardsDryRun(t *testing.T) {
+	t.Parallel()
+	_, gho := realPlan(t)
+	var matrix []int
+	for _, m := range regexp.MustCompile(`\{"target":"packages","shard":([0-9]+)\}`).FindAllStringSubmatch(gho, -1) {
+		n, _ := strconv.Atoi(m[1])
+		matrix = append(matrix, n)
+	}
+	all := allShardsDryRun(t)
+	plan, order, parts := splitAllShardsDryRun(t, all)
+	if fmt.Sprint(order) != fmt.Sprint(matrix) {
+		t.Errorf("the all-shards dry run prints shards %v, the matrix lists packages shards %v", order, matrix)
+	}
+	split := manifestSplitKeys(t, rootOf(t))
+	// Most packages shards hold a split-by-test part next to whole packages: the first shard of two or more whole packages,
+	// and the other shard holding the most split-by-test parts.
+	multi, splitShard, mostSplit := 0, 0, 0
+	for _, shard := range order {
+		whole := 0
+		for _, k := range lineValues(parts[shard], "  SHARD-RUN ") {
+			if !split[k] {
+				whole++
+			}
+		}
+		if multi == 0 && whole >= 2 {
+			multi = shard
+		}
+	}
+	for _, shard := range order {
+		n := 0
+		for _, k := range lineValues(parts[shard], "  SHARD-RUN ") {
+			if split[k] {
+				n++
+			}
+		}
+		if shard != multi && n > mostSplit {
+			splitShard, mostSplit = shard, n
+		}
+	}
+	if multi == 0 || splitShard == 0 {
+		t.Fatalf("no shard of two or more whole packages (%d) or no other shard with a split-by-test part (%d): the equality check measures nothing", multi, splitShard)
+	}
+	// A hook package's rows (its SHARD-UNFILTERED line) come from the discovery cache in the all-shards run and from a fresh
+	// discovery in the one-shard run, so one shard holding a hook package is compared too.
+	shards := []int{multi, splitShard}
+	hookShard := 0
+	for _, shard := range order {
+		if len(lineValues(parts[shard], "  SHARD-UNFILTERED ")) > 0 {
+			hookShard = shard
+			break
+		}
+	}
+	if hookShard == 0 {
+		t.Fatalf("no packages shard of the all-shards dry run holds a hook package (SHARD-UNFILTERED): the cached hook rows are not compared")
+	}
+	if hookShard != multi && hookShard != splitShard {
+		shards = append(shards, hookShard)
+	}
+	single := dryRuns(t, "packages", shards)
+	for _, shard := range shards {
+		r := single[shard]
+		if r.code != 0 {
+			t.Fatalf("shard %d dry run: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
+		}
+		if want := plan + parts[shard]; r.stdout != want {
+			got, exp := strings.Split(r.stdout, "\n"), strings.Split(want, "\n")
+			i := 0
+			for i < len(got) && i < len(exp) && got[i] == exp[i] {
+				i++
+			}
+			g, e := "<end>", "<end>"
+			if i < len(got) {
+				g = got[i]
+			}
+			if i < len(exp) {
+				e = exp[i]
+			}
+			t.Errorf("shard %d: its own --dry-run differs from its part of the all-shards dry run at line %d: %q, all-shards form %q", shard, i+1, g, e)
+		}
+		if r.stderr != all.stderr {
+			t.Errorf("shard %d: stderr %q, the all-shards dry run %q", shard, r.stderr, all.stderr)
+		}
+	}
+}
+
+// TestTheAllShardsFormIsADryRunOfThePackagesShardsOnly: `integration-shard ... all` never runs tests and names no other
+// target, so a run without --dry-run and a test-shard target are refused before any plan.
+func TestTheAllShardsFormIsADryRunOfThePackagesShardsOnly(t *testing.T) {
+	t.Parallel()
+	const want = "integration-shard SHARD 'all' needs TARGET 'packages' and --dry-run"
+	for _, args := range [][]string{{"packages", "all"}, {"providersync", "all", "--dry-run"}} {
+		r := runCheckGoSharding(t, shardEnv{}, append([]string{"integration-shard"}, args...)...)
+		if r.code != 2 || !strings.Contains(r.stderr, want) {
+			t.Errorf("%v: exit %d, want 2 with %q: %s%s", args, r.code, want, r.stdout, r.stderr)
+		}
+	}
+}
+
 // dryRuns runs `integration-shard TARGET SHARD --dry-run` for every shard at once (the cap in freeSpec bounds the
 // concurrency) and returns the results by shard.
 func dryRuns(t *testing.T, target string, shards []int) map[int]cmdResult {
@@ -2079,12 +2373,14 @@ func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.
 	for s := 1; s <= facts.providerShards; s++ {
 		provider = append(provider, s)
 	}
-	var pkgResults, providerResults map[int]cmdResult
+	var all cmdResult
+	var providerResults map[int]cmdResult
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); pkgResults = dryRuns(t, "packages", shards) }()
+	go func() { defer wg.Done(); all = allShardsDryRun(t) }()
 	go func() { defer wg.Done(); providerResults = dryRuns(t, "providersync", provider) }()
 	wg.Wait()
+	pkgResults := packagesDryRuns(t, all, shards)
 
 	var selected []string
 	for _, shard := range shards {
@@ -2115,8 +2411,21 @@ func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.
 			want[p] = true
 		}
 	}
-	if len(selected) != len(got) || !sameSet(got, want) {
-		t.Errorf("the packages shards run %d packages (%d distinct), want %d", len(selected), len(got), len(want))
+	repeats := 0
+	for _, shard := range shards {
+		for k := range wants[shard] {
+			if tf := integrationTaggedFacts(t); tf.partial[k] {
+				repeats++
+			}
+		}
+	}
+	for k := range integrationTaggedFacts(t).partial {
+		if got[k] {
+			repeats--
+		}
+	}
+	if len(selected) != len(got)+repeats || !sameSet(got, want) {
+		t.Errorf("the packages shards run %d packages (%d distinct, %d repeats of split packages), want %d", len(selected), len(got), repeats, len(want))
 	}
 	tf := integrationTaggedFacts(t)
 	plantShard, plantKey := 0, ""
@@ -2320,7 +2629,12 @@ func censusDefects(calls []goTestCall, groups int, keys map[string]bool, f tagge
 			if f.tagged[key][n] || f.hookOf(key) != "" {
 				want = 1
 			}
-			if got := count[key][n]; got != want {
+			got := count[key][n]
+			// A split-by-test package runs only its part here: a name runs at most once, never one it does not select.
+			if f.partial[key] && got <= want {
+				continue
+			}
+			if got != want {
 				d = append(d, fmt.Sprintf("%s %s runs %d time(s), want %d", key, n, got, want))
 			}
 		}
@@ -2328,9 +2642,11 @@ func censusDefects(calls []goTestCall, groups int, keys map[string]bool, f tagge
 	return d
 }
 
-// TestEachPackagesShardRunsEverySelectedTestExactlyOnce runs every packages shard for real (not --dry-run) through
-// ci/check_go.sh with a recording `go` first on PATH (go test is recorded, not run; every other go command is real),
-// then applies censusDefects to the recorded calls.
+// TestEachPackagesShardRunsEverySelectedTestExactlyOnce applies censusDefects to the go test calls of every packages
+// shard. The calls of every shard come from its part of the one all-shards dry run (SHARD-GROUP and SHARD-REGEX: what
+// run_integration_packages passes to go test); two shards also run for real (not --dry-run) through ci/check_go.sh with
+// a recording `go` first on PATH (go test is recorded, not run; every other go command is real), and their recorded calls
+// must equal the calls of their dry run, package order included, and pass the census on their own.
 func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 	t.Parallel()
 	stdout, gho := realPlan(t)
@@ -2362,30 +2678,16 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 	if len(shards) < 2 {
 		t.Fatal("fewer than two packages shards: the census measures nothing")
 	}
-	results := make([]cmdResult, len(shards))
-	var wg sync.WaitGroup
-	for i, shard := range shards {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results[i] = runCheckGoSharding(t, shardEnv{extra: []string{
-				"PATH=" + fakeGo + string(os.PathListSeparator) + os.Getenv("PATH"), "GOTEST_RECORD_DIR=" + records[shard],
-			}}, "integration-shard", "packages", strconv.Itoa(shard))
-		}()
-	}
-	wg.Wait()
+	dry := packagesDryRuns(t, allShardsDryRun(t), shards)
 	tf := integrationTaggedFacts(t)
-	hookShard := 0
-	var hookCalls []goTestCall
-	for i, shard := range shards {
-		r := results[i]
-		if r.code != 0 || strings.Contains(r.stdout, "DRY RUN") {
-			t.Fatalf("packages shard %d: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
-		}
-		calls := recordedCalls(t, records[shard], root)
-		groups := len(lineValues(r.stdout, "  SHARD-GROUP "))
+	hookShard, mostGroups, groupsShard := 0, 0, 0
+	planned := map[int][]goTestCall{}
+	for _, shard := range shards {
+		calls := dryRunCalls(t, dry[shard].stdout)
+		planned[shard] = calls
+		groups := len(lineValues(dry[shard].stdout, "  SHARD-GROUP "))
 		if len(calls) == 0 || groups == 0 {
-			t.Fatalf("packages shard %d recorded %d go test call(s) and %d group(s): the census measures nothing", shard, len(calls), groups)
+			t.Fatalf("packages shard %d plans %d go test call(s) and %d group(s): the census measures nothing", shard, len(calls), groups)
 		}
 		if d := censusDefects(calls, groups, wants[shard], tf); len(d) > 0 {
 			t.Errorf("packages shard %d:\n  %s", shard, strings.Join(d, "\n  "))
@@ -2394,13 +2696,56 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 		if groups == 1 && len(calls) == 1 {
 			for _, p := range calls[0].pkgs {
 				k := path.Join(calls[0].dir, strings.TrimPrefix(p, "./"))
-				hasHook = hasHook || tf.hookOf(k) != ""
-				hasFiltered = hasFiltered || (tf.hookOf(k) == "" && len(tf.untagged[k]) > 0)
+				// A split-by-test package runs only its part of a shard (tf.partial): no plant is made on it.
+				hasHook = hasHook || (tf.hookOf(k) != "" && !tf.partial[k])
+				hasFiltered = hasFiltered || (tf.hookOf(k) == "" && len(tf.untagged[k]) > 0 && !tf.partial[k])
 			}
 		}
 		if hasHook && hasFiltered && hookShard == 0 {
-			hookShard, hookCalls = shard, calls
+			hookShard = shard
 		}
+	}
+	for _, shard := range shards {
+		if g := len(planned[shard]); shard != hookShard && (g > mostGroups || groupsShard == 0) {
+			groupsShard, mostGroups = shard, g
+		}
+	}
+	if hookShard == 0 {
+		t.Fatal("no one-group packages shard holds a hook package: the planted defects below measure nothing")
+	}
+	runs := map[int]cmdResult{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, shard := range []int{hookShard, groupsShard} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := runCheckGoSharding(t, shardEnv{extra: []string{
+				"PATH=" + fakeGo + string(os.PathListSeparator) + os.Getenv("PATH"), "GOTEST_RECORD_DIR=" + records[shard],
+			}}, "integration-shard", "packages", strconv.Itoa(shard))
+			mu.Lock()
+			defer mu.Unlock()
+			runs[shard] = r
+		}()
+	}
+	wg.Wait()
+	real := map[int][]goTestCall{}
+	for _, shard := range []int{hookShard, groupsShard} {
+		if r := runs[shard]; r.code != 0 || strings.Contains(r.stdout, "DRY RUN") {
+			t.Fatalf("packages shard %d: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
+		}
+		calls := recordedCalls(t, records[shard], root)
+		real[shard] = calls
+		if got, want := callsText(calls), callsText(planned[shard]); got != want {
+			t.Errorf("packages shard %d: the real run's go test calls differ from its dry run's:\n got  %s\n want %s", shard, got, want)
+		}
+		if d := censusDefects(calls, len(planned[shard]), wants[shard], tf); len(d) > 0 {
+			t.Errorf("packages shard %d, real run:\n  %s", shard, strings.Join(d, "\n  "))
+		}
+	}
+	hookCalls := real[hookShard]
+	if len(hookCalls) != 1 {
+		t.Fatalf("packages shard %d recorded %d go test call(s), want its one group: the planted defects below measure nothing", hookShard, len(hookCalls))
 	}
 	if hookShard == 0 {
 		t.Fatal("no one-group packages shard holds a hook package: the planted defects below measure nothing")
@@ -2410,10 +2755,10 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 	hookKey, filteredPkg := "", ""
 	for _, p := range c.pkgs {
 		k := path.Join(c.dir, strings.TrimPrefix(p, "./"))
-		if tf.hookOf(k) != "" && hookKey == "" {
+		if tf.hookOf(k) != "" && hookKey == "" && !tf.partial[k] {
 			hookKey = k
 		}
-		if tf.hookOf(k) == "" && filteredPkg == "" && len(tf.untagged[k]) > 0 {
+		if tf.hookOf(k) == "" && filteredPkg == "" && len(tf.untagged[k]) > 0 && !tf.partial[k] {
 			filteredPkg = p
 		}
 	}
@@ -2443,6 +2788,48 @@ func TestEachPackagesShardRunsEverySelectedTestExactlyOnce(t *testing.T) {
 			t.Errorf("planted defect not caught: %s", name)
 		}
 	}
+}
+
+// dryRunCalls: the go test calls a packages shard's dry run plans, one per SHARD-GROUP line with the -run of the SHARD-REGEX
+// line after it, the packages as run_integration_packages passes them ("./" plus the key below the module), in group order.
+func dryRunCalls(t *testing.T, stdout string) []goTestCall {
+	t.Helper()
+	var calls []goTestCall
+	for _, l := range strings.Split(stdout, "\n") {
+		if v, ok := strings.CutPrefix(l, "  SHARD-GROUP "); ok {
+			f := strings.Fields(v)
+			c := goTestCall{dir: f[0], hasRun: true}
+			for _, k := range f[2:] {
+				rel := k
+				if f[0] != "." {
+					rel = strings.TrimPrefix(strings.TrimPrefix(k, f[0]), "/")
+				}
+				if rel == "" {
+					rel = "."
+				}
+				c.pkgs = append(c.pkgs, "./"+strings.TrimPrefix(rel, "./"))
+			}
+			calls = append(calls, c)
+		}
+		if v, ok := strings.CutPrefix(l, "  SHARD-REGEX "); ok {
+			module, regex, _ := strings.Cut(v, " ")
+			if len(calls) == 0 || calls[len(calls)-1].dir != module || calls[len(calls)-1].run != "" {
+				t.Fatalf("a SHARD-REGEX line with no SHARD-GROUP line of its module before it: %q", l)
+			}
+			calls[len(calls)-1].run = regex
+		}
+	}
+	return calls
+}
+
+// callsText: the calls as sorted text (each call's packages keep their order), for comparing a real run with its dry run.
+func callsText(calls []goTestCall) string {
+	var out []string
+	for _, c := range calls {
+		out = append(out, fmt.Sprintf("%s|%v|%s|%s", c.dir, c.hasRun, c.run, strings.Join(c.pkgs, " ")))
+	}
+	sort.Strings(out)
+	return strings.Join(out, "\n")
 }
 
 // budgetSplitPackages names the packages whose selected names cannot join the first go test group of their shard within
@@ -2504,7 +2891,7 @@ func TestEachPackagesShardPlansOneGoTestGroup(t *testing.T) {
 		t.Fatal("fewer than two packages shards: the guard measures nothing")
 	}
 	split := map[string]bool{}
-	results := dryRuns(t, "packages", shards)
+	results := packagesDryRuns(t, allShardsDryRun(t), shards)
 	for _, shard := range shards {
 		r := results[shard]
 		if r.code != 0 {
@@ -2527,3 +2914,13 @@ func TestEachPackagesShardPlansOneGoTestGroup(t *testing.T) {
 // deadlineEnvNames are pinned to "unset" by the helpers that run ci/check_go.sh with a stand-in go: a hosted run inherits
 // GITHUB_ACTIONS=true, and the job deadline refuses a guarded call without CHECK_GO_JOB_CAP_MIN.
 var deadlineEnvNames = []string{"GITHUB_ACTIONS", "CHECK_GO_JOB_CAP_MIN", "CHECK_GO_JOB_START", "CHECK_GO_NOW_EPOCH", "CHECK_GO_NOW_EPOCH_FILE"}
+
+// sortedIntKeys are the keys of a package -> weight map, sorted.
+func sortedIntKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

@@ -30,12 +30,15 @@ deploy/helm/dev-health	render_cache_test.go
 internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
 internal/api/policy	delegated_test.go
+internal/api/policy	delegated_use_test.go
 internal/api/policy	principalonce_test.go
+internal/api/session	session_test.go
 internal/api/syncadmin	dataset_writer_census_test.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go
 internal/api/syncadmin	gate_reader_census_test.go
 internal/api/syncadmin	repositories_write_venue_oracle_integration_test.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go
+internal/api/teamsidentity	response_read_census_test.go
 internal/api/teamsidentity	team_id_writer_census_test.go
 internal/apiservice	accessroute_probe_test.go
 internal/apiservice	accessroute_routed_test.go
@@ -293,6 +296,7 @@ internal/cigates/racescope	scan.go
 internal/cigates/raceunweighted	raceunweighted_test.go
 internal/cigates/releasetag	parity_test.go
 internal/cigates/releasetag	releasetag.go
+internal/cigates/retiredcredentialnames	census_test.go
 internal/cigates/retiredservicecred	census_test.go
 internal/cigates/routing	chart_test.go
 internal/cigates/routing	cut_test.go

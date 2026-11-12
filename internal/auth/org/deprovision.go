@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/copyproject"
 )
 
 // LockForUpdate takes the organization row FOR UPDATE inside the caller's
@@ -31,6 +32,19 @@ func (s *Store) ApplySuspend(ctx context.Context, tx audit.TxOps, id uuid.UUID) 
 WHERE id = $1 AND disabled_at IS NULL`, id)
 	return err
 }
+
+// ApplyFreeSlug frees a deprovisioned organization's slug inside the deprovision's audit.Commit, on a row the caller
+// locked with LockForUpdate: the row takes copyproject.DeletedOrganizationSlug, so a new organization may take the
+// name and slug. freed is false when the row holds that form already.
+func (s *Store) ApplyFreeSlug(ctx context.Context, tx audit.TxOps, id uuid.UUID) (freed bool, err error) {
+	tag, err := tx.Exec(ctx, `UPDATE `+s.q+`.organizations SET slug = $2, updated_at = clock_timestamp()
+WHERE id = $1 AND slug <> $2`, id, copyproject.DeletedOrganizationSlug(id))
+	return tag.RowsAffected() == 1, err
+}
+
+// SlugFreedEvent is the organization.updated event of a freed slug. The freed form is outside the wire slug pattern,
+// so the event carries no slug, as a rename carries none.
+func SlugFreedEvent(id uuid.UUID) audit.OutboxEvent { return eventFor(verbRename, id, "") }
 
 // SuspendedEvent is the organization.suspended provisioning event.
 func SuspendedEvent(id uuid.UUID) audit.OutboxEvent { return eventFor(verbSuspend, id, "") }

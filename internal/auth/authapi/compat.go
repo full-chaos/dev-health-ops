@@ -321,9 +321,14 @@ func (h compatHandlers) refuseCompat(w http.ResponseWriter, r *http.Request, ope
 }
 
 // fail records a failure and writes go-api's 503 for a dependency failure
-// (httpapi.DependencyFailure) or its generic 500 for any other. The error is logged
-// by class only.
+// (httpapi.DependencyFailure), a 409 for an organization slug clash, or its
+// generic 500 for any other. The error is logged by class only.
 func (h compatHandlers) fail(w http.ResponseWriter, r *http.Request, operation string, err error) {
+	if isOrganizationConflict(err) {
+		h.rec.record(r.Context(), operation, "error", reasonOrganizationConflict, err)
+		policy.WriteDetail(w, http.StatusConflict, policy.ErrorDetail(organizationConflictText), nil)
+		return
+	}
 	if httpapi.DependencyFailure(err) {
 		h.unavailableCompat(w, r, operation, err)
 		return

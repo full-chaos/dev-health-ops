@@ -27,8 +27,6 @@ internal/api/policy/scope.go	Scope.Impersonation	admin.impersonate	carry
 internal/api/policy/scope.go	Scope.mayUseOrg	admin.orgs	4
 internal/api/policy/scope.go	Scope.useTokenOrg	admin.orgs	4
 internal/api/policy/shadow_guard.go	shadowCallerKind	admin.orgs	handler
-internal/api/session/permissions.go	userPermissions	admin.orgs	2
-internal/api/session/permissions.go	userPermissions	admin.users	2
 internal/api/telemetry/report.go	handlers.requirePlatformRole	admin.telemetry	handler
 internal/api/telemetry/telemetry.go	handlers.withOrg	admin.telemetry	handler
 internal/api/telemetry/telemetry.go	handlers.requireOrgAdmin	admin.telemetry	handler

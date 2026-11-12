@@ -500,6 +500,7 @@ internal/providerfoundation	clients.go
 internal/providerfoundation	wire_sites_census_test.go
 internal/providersync	client_ledger_census_test.go
 internal/providersync	gitlab_pr_commit_links_integration_test.go
+internal/providersync	item_route_census_test.go
 internal/providersync	jira_search_endpoint_guard_test.go
 internal/providersync	log_sites_redaction_test.go
 internal/providersync	oracle_compare_test.go

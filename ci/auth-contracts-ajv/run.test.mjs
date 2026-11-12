@@ -3,7 +3,7 @@
 // non-zero. The clean copy must exit 0, or the cases prove nothing.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -216,6 +216,98 @@ test("the row schema (strict ajv) rejects a row that omits accepted_credential_c
     delete row.accepted_credential_classes;
     delete row.class_disambiguator;
     assert.equal(validate(document), false, `selector row: ${withSelector}`);
+  }
+});
+
+test("the row schema (strict ajv) holds the two reachable-validator kinds apart (CHAOS-4742)", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const { default: addFormats } = await import("ajv-formats");
+  const v1 = path.join(repo, "contracts", "auth", "v1");
+  const ajv = new Ajv2020({ strict: true, allErrors: true });
+  addFormats(ajv);
+  const validate = ajv.compile(JSON.parse(readFileSync(path.join(v1, "endpoint-profile.schema.json"), "utf8")));
+  const read = () => JSON.parse(readFileSync(path.join(v1, "endpoint-profiles.go-api.json"), "utf8"));
+  assert.equal(validate(read()), true, JSON.stringify(validate.errors));
+  const index = read().rows.findIndex((r) => (r.reachable_validators ?? []).length > 0);
+  assert.ok(index >= 0, "no go-api row has a reachable validator");
+  const plant = (mutate) => {
+    const document = read();
+    mutate(document.rows[index].reachable_validators[0]);
+    return validate(document);
+  };
+  assert.equal(plant((v) => { v.is_intended_validator = true; v.earlier_auth_gate = false; v.foreign_class_validator = false; }), true, "the intended validator may set both false");
+  assert.equal(plant((v) => { v.earlier_auth_gate = false; v.foreign_class_validator = true; }), true, "a foreign-class entry is valid");
+  const refused = {
+    // On the intended validator with the other field false, only `required` refuses a missing field.
+    "earlier_auth_gate missing": (v) => { v.is_intended_validator = true; v.foreign_class_validator = false; delete v.earlier_auth_gate; },
+    "foreign_class_validator missing": (v) => { v.is_intended_validator = true; v.earlier_auth_gate = false; delete v.foreign_class_validator; },
+    "the retired name": (v) => (v.reachable_but_not_owner = true),
+    "both true": (v) => (v.foreign_class_validator = true),
+    "a non-owner with both false": (v) => { v.is_intended_validator = false; v.earlier_auth_gate = false; v.foreign_class_validator = false; },
+  };
+  for (const [name, mutate] of Object.entries(refused)) assert.equal(plant(mutate), false, name);
+});
+
+test("the credential-class schema holds the two validator kinds and the retired member out (CHAOS-4742)", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const { default: addFormats } = await import("ajv-formats");
+  const v1 = path.join(repo, "contracts", "auth", "v1");
+  // Not strict: this schema is outside the strict corpus (its markers rule states maxItems without a type and a
+  // required member its then-branch does not define); the cell checks only the validator members.
+  const ajv = new Ajv2020({ strict: false, allErrors: true });
+  addFormats(ajv);
+  ajv.addSchema(JSON.parse(readFileSync(path.join(v1, "endpoint-profile.schema.json"), "utf8")));
+  for (const name of readdirSync(path.join(v1, "jsonschema")).filter((n) => n.endsWith(".schema.json"))) {
+    ajv.addSchema(JSON.parse(readFileSync(path.join(v1, "jsonschema", name), "utf8")));
+  }
+  const validate = ajv.compile(JSON.parse(readFileSync(path.join(v1, "credential-classes.schema.json"), "utf8")));
+  const read = () => JSON.parse(readFileSync(path.join(v1, "credential-classes.json"), "utf8"));
+  assert.equal(validate(read()), true, JSON.stringify(validate.errors));
+  const plant = (anchored, mutate) => {
+    const document = read();
+    const validator = document.classes.flatMap((c) => c.validators ?? []).find((v) => (v.anchor !== null) === anchored && "earlier_auth_gate" in v);
+    assert.ok(validator, `no ${anchored ? "anchored" : "unanchored"} validator with the fields`);
+    mutate(validator);
+    return validate(document);
+  };
+  assert.equal(plant(false, (v) => { delete v.earlier_auth_gate; delete v.foreign_class_validator; }), true, "an unanchored entry may leave both out");
+  const refused = {
+    "anchored, earlier_auth_gate missing": [true, (v) => delete v.earlier_auth_gate],
+    "anchored, foreign_class_validator missing": [true, (v) => delete v.foreign_class_validator],
+    "anchored, both missing": [true, (v) => { delete v.earlier_auth_gate; delete v.foreign_class_validator; }],
+    "both true": [true, (v) => { v.earlier_auth_gate = true; v.foreign_class_validator = true; }],
+    "both true, unanchored": [false, (v) => { v.earlier_auth_gate = true; v.foreign_class_validator = true; }],
+    "the retired name": [true, (v) => (v.reachable_but_not_owner = true)],
+  };
+  for (const [name, [anchored, mutate]] of Object.entries(refused)) assert.equal(plant(anchored, mutate), false, name);
+});
+
+// The documented count command, run as written on the docs page: 0 here with the four retired entries named as
+// not counted, and 1 with one planted foreign-class entry.
+test("the foreign-class count command of the docs answers 0 here, names what it does not count, and 1 on a planted fixture", () => {
+  const page = readFileSync(path.join(repo, "docs", "reference", "auth", "endpoint-profiles.md"), "utf8");
+  const commands = page.split("\n").filter((line) => line.startsWith("jq -n '[inputs] as $d | {foreign_class_validator:"));
+  assert.equal(commands.length, 1, "the page holds the count command once");
+  const run = (cwd) => {
+    const result = spawnSync("sh", ["-c", commands[0]], { cwd, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  const retired = ["ops_refresh_token validators[0]", "internal_svc_acr_token validators[0]", "internal_svc_worker_token validators[0]", "external_push_ingest_token validators[0]"];
+  assert.deepEqual(run(repo), { foreign_class_validator: 0, not_counted_pending_chaos_13627: retired });
+  const root = mkdtempSync(path.join(os.tmpdir(), "foreign-count-"));
+  try {
+    const v1 = path.join(root, "contracts", "auth", "v1");
+    mkdirSync(v1, { recursive: true });
+    copyFileSync(path.join(repo, "contracts", "auth", "v1", "credential-classes.json"), path.join(v1, "credential-classes.json"));
+    const document = JSON.parse(readFileSync(path.join(repo, "contracts", "auth", "v1", "endpoint-profiles.go-api.json"), "utf8"));
+    const row = document.rows.find((r) => (r.reachable_validators ?? []).length > 0);
+    row.reachable_validators[0].earlier_auth_gate = false;
+    row.reachable_validators[0].foreign_class_validator = true;
+    writeFileSync(path.join(v1, "endpoint-profiles.go-api.json"), JSON.stringify(document));
+    assert.deepEqual(run(root), { foreign_class_validator: 1, not_counted_pending_chaos_13627: retired });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

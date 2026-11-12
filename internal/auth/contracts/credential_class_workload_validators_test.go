@@ -44,8 +44,8 @@ func TestWorkloadTokenClassPinsItsValidators(t *testing.T) {
 		if validator["is_intended_validator"] != true {
 			t.Errorf("%s: is_intended_validator = %v, want true: it verifies the workload token on its routes", path, validator["is_intended_validator"])
 		}
-		if validator["reachable_but_not_owner"] == true {
-			t.Errorf("%s: reachable_but_not_owner is true on an owning validator", path)
+		if validator["foreign_class_validator"] != false || validator["earlier_auth_gate"] != false {
+			t.Errorf("%s: an owning validator is neither a foreign-class validator nor an earlier gate: %v", path, validator)
 		}
 		if anchor["repo"] != "ops" {
 			t.Errorf("%s: anchor repo = %v, want ops", path, anchor["repo"])

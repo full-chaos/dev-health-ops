@@ -26,7 +26,7 @@ The question "which validators can observe a credential they do not own" is a
 property of the middleware stack rather than of any single route, so every row
 records it explicitly in `reachable_validators`. That makes it a checkable fact
 per surface instead of an argument; see
-[Reachable-but-not-owner findings](#reachable-but-not-owner-findings) below.
+[Earlier auth gates and foreign-class validators](#earlier-auth-gates-and-foreign-class-validators) below.
 
 ## Scope and counts
 
@@ -93,13 +93,59 @@ On the advisory fields (`action`, `resource_resolver`,
 Never infer "absent" from silence: a missing note is not an examination. This
 matches `issued_credential` and `exposure`, which already work this way.
 
-## Reachable-but-not-owner findings
+## Earlier auth gates and foreign-class validators
 
-Every row's `reachable_validators` array records each validator that can
-observe a credential before (or instead of) the route's intended one, with
-`reachable_but_not_owner: true` marking a credential that reaches a validator
-that is not its own (see
-[credential-classes.md](credential-classes.md#credentials-that-reach-a-validator-that-is-not-their-own)).
+Every entry in a row's `reachable_validators` array carries two required
+booleans. They answer two different questions, so they are never summed:
+
+- `foreign_class_validator: true` (the CHAOS-3271 defect shape): a validator
+  that does not own a credential's class can observe or try to parse that
+  credential before (or regardless of) the route's intended validator. This is
+  the number to watch.
+- `earlier_auth_gate: true` (a design property): an earlier gate of the same
+  class runs before the route's own check. It is defence in depth, recorded so
+  that it stays visible.
+
+The schema refuses an entry that sets both, an entry that leaves out either
+field, an entry with the retired name `reachable_but_not_owner`, and an entry
+that is not the intended validator but sets both to false. Both false is
+allowed only on the route's intended validator.
+
+Worked examples:
+
+- Earlier auth gate (ops): `Scope.OrgScope` (`internal/api/policy/scope.go:128`)
+  and `Scope.Impersonation` (`internal/api/policy/scope.go:221`) run around
+  every api-listener route. They read the caller from the `Scope.Principal`
+  decision only (`principalFrom`, `internal/api/policy/scope.go:102-105`); they never read the
+  `Authorization` header. The `Principal` step
+  (`internal/api/policy/principalonce.go:112`) sends a credential that the
+  refusal table or the route's row rules out to no validator.
+- Earlier auth gate (web): the session and organization gate of `src/proxy.ts`
+  runs before each route's own check.
+- Foreign-class validator: the Python `OrgIdMiddleware` ran every
+  `Authorization` bearer (an opaque ACR service credential included) through
+  the user-JWT decoder (CHAOS-3271). That code is gone. Today no row in ops,
+  web or acr sets `foreign_class_validator: true`.
+
+`contracts/auth/v1/credential-classes.json` lists the validators of each
+credential class with the same two fields. Four of its entries are retired
+Python validators with a null anchor (the first validator of
+`ops_refresh_token`, `internal_svc_acr_token`, `internal_svc_worker_token` and
+`external_push_ingest_token`). They carry neither field and are not counted;
+CHAOS-13627 removes them. The schema lets only an unanchored entry leave the
+fields out.
+
+The count of foreign-class validators, with the entries it does not count named
+in its output (run at the ops repository root; add the web and acr profile files
+for the platform-wide count):
+
+```sh
+jq -n '[inputs] as $d | {foreign_class_validator: ([$d[] | .. | objects | select(.foreign_class_validator == true)] | length), not_counted_pending_chaos_13627: [$d[] | .classes[]? | .class_id as $c | (.validators // []) | to_entries[] | select(.value | has("foreign_class_validator") | not) | "\($c) validators[\(.key)]"]}' contracts/auth/v1/endpoint-profiles.*.json contracts/auth/v1/credential-classes.json
+```
+
+`ci/auth-contracts-ajv/run.test.mjs` runs this command text from this page:
+on this repository it answers 0 and names the four retired entries; on a
+fixture with one planted foreign-class entry it answers 1.
 
 ## Retired worker service credentials
 
@@ -342,7 +388,7 @@ every anchor line holds, and empty `rewritten_anchors`.
    `contracts/auth/v1/credential-classes.json`'s closed vocabulary plus
    `reachable_validators` derived from where your router mounts (which
    middleware sees it, per [Deployed apps](#deployed-apps) and
-   [Reachable-but-not-owner findings](#reachable-but-not-owner-findings)
+   [Earlier auth gates and foreign-class validators](#earlier-auth-gates-and-foreign-class-validators)
    above). Then run the Go row tests (`internal/queryapi/server/endpoint_profile_rows_test.go`,
    `internal/auth/contracts/endpoint_profiles_query_api_test.go` and
    `endpoint_profiles_auth_service_test.go`): they fail when the route and its

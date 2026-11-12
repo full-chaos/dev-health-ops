@@ -348,15 +348,34 @@ func TestGoRelevantDiffPullRequestCallersPassThePRHead(t *testing.T) {
 	for _, name := range []string{".github/workflows/go-quality.yml", ".github/workflows/go.yml"} {
 		name := name
 		t.Run("plant/PR_HEAD_SHA dropped from "+name, func(t *testing.T) {
+			// The PR_HEAD_SHA line right under a step's BASE_SHA line: go.yml also sets PR_HEAD_SHA in a step that does not run
+			// ci/go_relevant_diff.sh (under PR_BASE_SHA), and dropping that one would measure nothing.
 			line := "\n          PR_HEAD_SHA: " + prHeadExpr
-			if strings.Count(workflows[name], line) < 1 {
-				t.Fatalf("anchor %q is absent from %s: the plant measured nothing", line, name)
+			text, at := workflows[name], -1
+			for i := 0; i < len(text); {
+				j := strings.Index(text[i:], "\n          BASE_SHA: ")
+				if j < 0 {
+					break
+				}
+				k := strings.Index(text[i+j+1:], "\n")
+				if k < 0 {
+					break
+				}
+				end := i + j + 1 + k
+				if strings.HasPrefix(text[end:], line) {
+					at = end
+					break
+				}
+				i = end
+			}
+			if at < 0 {
+				t.Fatalf("no BASE_SHA line of %s is followed by %q: the plant measured nothing", name, line)
 			}
 			planted := map[string]string{}
 			for k, v := range workflows {
 				planted[k] = v
 			}
-			planted[name] = strings.Replace(workflows[name], line, "", 1)
+			planted[name] = text[:at] + text[at+len(line):]
 			if _, d := prHeadWiringDefects(planted); len(d) != 1 || !strings.Contains(d[0], "PR_HEAD_SHA is \"\"") {
 				t.Fatalf("dropping PR_HEAD_SHA from %s not caught: %q", name, d)
 			}

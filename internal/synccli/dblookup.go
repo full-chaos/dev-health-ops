@@ -587,8 +587,8 @@ func resolveDBLookups(ctx context.Context, lookups dbLookups, plan Plan, env cli
 	if plan.OrgSource == OrgFromDBFirst {
 		id, err := lookups.FirstOrg(ctx, dbURL)
 		if err != nil {
+			logFirstOrganizationFailure(ctx, err)
 			if wantsDBCredential {
-				logFirstOrganizationFailure(ctx, err)
 				// ns.org stays None: `if db_url and org_id` is false.
 				return plan, exitRefusal(missingGitHubCredentials)
 			}

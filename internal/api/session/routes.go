@@ -33,16 +33,6 @@ func optionalPtr(value *string) pyjson.Value {
 // me is GET /api/v1/auth/me (session.py get_me).
 func (h handlers) me(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
-	var targetRole *string
-	if session := policy.ImpersonationFrom(r.Context()); session != nil {
-		role := session.TargetRole
-		targetRole = &role
-	}
-	permissions := userPermissions(targetRole, user)
-	list := make([]pyjson.Value, len(permissions))
-	for index, permission := range permissions {
-		list[index] = permission
-	}
 	out := pyjson.NewObject()
 	out.Set("id", user.UserID)
 	out.Set("email", user.Email)
@@ -51,7 +41,6 @@ func (h handlers) me(w http.ResponseWriter, r *http.Request) {
 	out.Set("org_id", user.OrgID)
 	out.Set("role", user.Role)
 	out.Set("is_superuser", user.IsSuperuser)
-	out.Set("permissions", list)
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 

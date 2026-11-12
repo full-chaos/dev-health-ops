@@ -743,7 +743,7 @@ func fetchGitHubProjectV2GraphQL(
 		errorsHolder = typed
 	}
 	if errorsHolder != nil && len(errorsHolder.graphQLErrors()) > 0 {
-		return providerfoundation.ErrGraphQLResponse
+		return providerfoundation.ResponseGraphQL(response, providerfoundation.ErrGraphQLResponse)
 	}
 	return nil
 }

@@ -25,12 +25,18 @@ var (
 	ciLegStage  = regexp.MustCompile(`ci_leg_stage (?:"[^"]*"|\S+) (\w+)`)
 	staticSteps = []string{
 		"Prove the migration matrix contract",
-		"Check the gqlgen output",
 		"Install pinned shellcheck",
 		"Check the shellcheck pin",
 		"Validate River compatibility harness",
 		"Prepare base job contracts",
 		"Check the migration matrix has not gone stale",
+	}
+	// CHAOS-13520: these run on the plan-reads leg, so the static leg stays under five minutes.
+	planReadsSteps = []string{
+		"Check the gqlgen output",
+		"Point the plan-reads call graph at its store",
+		"Restore the plan-reads call-graph result",
+		"Save the plan-reads call-graph result",
 	}
 )
 
@@ -117,8 +123,8 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	}
 	sort.Strings(nonRace)
 	sort.Strings(races)
-	if !reflect.DeepEqual(nonRace, []string{"static"}) {
-		add("the legs that are neither race nor test shards must be exactly static, got %v", nonRace)
+	if !reflect.DeepEqual(nonRace, []string{"plan-reads", "static"}) {
+		add("the legs that are neither race nor test shards must be exactly static and plan-reads, got %v", nonRace)
 	}
 	want := make([]string, len(races))
 	for k := range races {
@@ -187,6 +193,11 @@ func qualityLegViolations(t *testing.T, root string) []string {
 
 	for _, s := range stepsOf(leg) {
 		name := str(s["name"])
+		for _, prefix := range planReadsSteps {
+			if strings.HasPrefix(name, prefix) && !strings.Contains(str(s["if"]), "matrix.name == 'plan-reads'") {
+				add("plan-reads-only step %q must run only on the plan-reads leg (matrix.name == 'plan-reads'), if: %q", name, str(s["if"]))
+			}
+		}
 		for _, prefix := range staticSteps {
 			if strings.HasPrefix(name, prefix) && !strings.Contains(str(s["if"]), "matrix.name == 'static'") {
 				add("static-only step %q must run only on the static leg (matrix.name == 'static'), if: %q", name, str(s["if"]))

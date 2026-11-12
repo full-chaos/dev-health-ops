@@ -78,6 +78,7 @@ var goOnlyRoutes = map[string]struct {
 	"POST /internal/v1/sessions/delegated/end":       {false, "internal delegated session end, go-api calls it; no go-api twin; writes no Python-shaped body"},
 	"POST /v1/authorize":                             {false, "policy decision point, a policy-enforcement point calls it; no go-api twin; writes no Python-shaped body"},
 	"POST /v1/authorize:batch":                       {false, "policy decision point batch, a policy-enforcement point calls it; no go-api twin; writes no Python-shaped body"},
+	"POST /v1/authorize:repositories":                {false, "policy decision point repository listing, a policy-enforcement point calls it; no go-api twin; writes no Python-shaped body"},
 	"POST /v1/identities/social":                     {false, "auth-service native route; no go-api twin; writes no policy body"},
 	"POST /v1/sessions/revoke-all":                   {false, "auth-service native route; no go-api twin; writes no policy body"},
 	"POST /v1/sessions/revoke":                       {false, "auth-service native route; no go-api twin; writes no policy body"},

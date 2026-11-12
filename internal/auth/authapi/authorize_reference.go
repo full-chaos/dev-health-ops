@@ -29,6 +29,8 @@ type accessVerifier interface {
 type PrincipalReferences struct {
 	verifier accessVerifier
 	now      func() time.Time
+	// webApprover is the web approver reference kind; nil is off.
+	webApprover *WebApproverReferences
 }
 
 // PrincipalReferencesConfig builds a PrincipalReferences.
@@ -38,6 +40,9 @@ type PrincipalReferencesConfig struct {
 	// Keys is the signing key set the JWKS publishes.
 	Keys KeySetSource
 	Now  func() time.Time
+	// WebApprover turns on the web approver reference kind (CHAOS-11207); nil
+	// refuses it.
+	WebApprover *WebApproverReferences
 }
 
 // ReferenceKind is the kind of principal a verified reference names.
@@ -49,6 +54,10 @@ const (
 	// ReferenceServiceAccount is a service-account token: it has no session;
 	// the key row it was exchanged for must be live.
 	ReferenceServiceAccount
+	// ReferenceWebApprover is a web approver reference (CHAOS-11207): web
+	// signed it for one approval and acr-api forwards it. Its session must be
+	// live; it answers only acr.credential.issue on its own organization.
+	ReferenceWebApprover
 )
 
 // ReferencedPrincipal is the principal a verified reference names. It is
@@ -80,7 +89,37 @@ func NewPrincipalReferences(cfg PrincipalReferencesConfig) (*PrincipalReferences
 	if now == nil {
 		now = time.Now
 	}
-	return &PrincipalReferences{verifier: verifier, now: now}, nil
+	return &PrincipalReferences{verifier: verifier, now: now, webApprover: cfg.WebApprover}, nil
+}
+
+// ResolveFor resolves reference for the authenticated caller. A web approver
+// reference (typ web-approver+jwt) resolves only for the configured approver
+// caller, and that caller may present nothing else; every other caller gets
+// Resolve's answer.
+func (p *PrincipalReferences) ResolveFor(reference, caller string) (ReferencedPrincipal, string, error) {
+	if p == nil || p.webApprover == nil {
+		return p.Resolve(reference)
+	}
+	if !principalReferencePattern.MatchString(reference) {
+		return ReferencedPrincipal{}, "malformed", nil
+	}
+	header, _, ok := compactSegments(reference)
+	if !ok {
+		return ReferencedPrincipal{}, "contract", nil
+	}
+	var parsed struct {
+		Typ string `json:"typ"`
+	}
+	approver := json.Unmarshal(header, &parsed) == nil && parsed.Typ == webApproverReferenceType
+	switch {
+	case approver && caller != p.webApprover.Caller():
+		return ReferencedPrincipal{}, "approver_caller", nil
+	case approver:
+		return p.webApprover.resolve(reference)
+	case caller == p.webApprover.Caller():
+		return ReferencedPrincipal{}, "approver_caller_other_class", nil
+	}
+	return p.Resolve(reference)
 }
 
 // Resolve verifies reference. Another token class or a wrong audience is

@@ -124,7 +124,8 @@ VALUES ($1, $2, 'not-a-hash', true, true, false, 0, now(), now())`, user, email)
 // plain user's HS256 token claiming org and role member. A (the org exists: removed member or suspended org):
 // 403 X-Org-Id on the org-scoped and Admin rows. B (no organizations row): the request goes on in the
 // claimed org, so the org-less row answers and the Admin rows refuse the member role. /auth/me answers the
-// claimed org with role member in every case.
+// claimed org with role member in every case. The recorded answer also carried a permissions member (the static map); GET /auth/me no
+// longer answers it (CHAOS-13585), so the literal is the recorded body without that one member and every other byte as recorded.
 func rule1LegacyLiteral(org string, orgExists bool, user uuid.UUID, email string) func(path string) (int, string) {
 	const (
 		notPermitted   = `{"detail": "X-Org-Id not permitted for this user"}`
@@ -132,7 +133,7 @@ func rule1LegacyLiteral(org string, orgExists bool, user uuid.UUID, email string
 		notImpersonate = `{"is_impersonating":false,"target_user_id":null,"target_email":null,"target_org_id":null,"expires_at":null}`
 	)
 	me := `{"id":"` + user.String() + `","email":"` + email + `","username":null,"full_name":null,"org_id":"` + org +
-		`","role":"member","is_superuser":false,"permissions":["analytics:read","analytics:export","metrics:read","work_items:read","git:read","teams:read","settings:read","members:read","org:read"]}`
+		`","role":"member","is_superuser":false}`
 	return func(path string) (int, string) {
 		switch {
 		case path == "/api/v1/auth/me":

@@ -244,8 +244,21 @@ var optionRegistry = []Option{
 	},
 	{
 		Env: EnvAuthorizeCallerSubjects, Kind: KindString, Group: GroupSession,
-		Usage: "comma-separated workload principal ids (prn_ and 22 base64url characters) whose workload token (audience auth-service) POST /v1/authorize and /v1/authorize:batch accept; unset refuses every caller. Needs " +
+		Usage: "comma-separated workload principal ids (prn_ and 22 base64url characters) whose workload token (audience auth-service) POST /v1/authorize, /v1/authorize:batch and /v1/authorize:repositories accept; unset refuses every caller. Needs " +
 			EnvTokenIssuerURL,
+	},
+	{
+		Env: EnvAuthorizeWebApproverIssuer, Kind: KindString, Group: GroupSession,
+		Usage: "iss of the web approver reference POST /v1/authorize accepts from " + EnvAuthorizeWebApproverCaller + " (the ACR web assertion issuer); with " +
+			EnvAuthorizeWebApproverJWKSFile + " and " + EnvAuthorizeWebApproverCaller + " it turns the kind on, else it stays off with one ERROR line",
+	},
+	{
+		Env: EnvAuthorizeWebApproverJWKSFile, Kind: KindString, Group: GroupSession,
+		Usage: "path of the public JWKS (the ACR web assertion keys, Secret acr-web-assertion-jwks) the web approver reference is verified with; read on every reference",
+	},
+	{
+		Env: EnvAuthorizeWebApproverCaller, Kind: KindString, Group: GroupSession,
+		Usage: "workload principal id (prn_) of acr-api, the only caller that may present a web approver reference; it must also be in " + EnvAuthorizeCallerSubjects,
 	},
 	{
 		Env: EnvSessionIssueWorkloadSubject, Kind: KindString, Group: GroupSession,

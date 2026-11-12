@@ -770,7 +770,8 @@ internal/auth/ratelimitvalkey
 func manifestPackages(t *testing.T, dir string) []string {
 	var pkgs []string
 	for _, row := range dataRows(t, dir) {
-		if row[0] != "shards" {
+		// A package key holds a "/"; `split-by-test` and measured-test rows (CHAOS-13520) belong to the package above them.
+		if row[0] != "shards" && strings.Contains(row[0], "/") {
 			pkgs = append(pkgs, row[0])
 		}
 	}

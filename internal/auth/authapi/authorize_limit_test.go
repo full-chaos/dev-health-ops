@@ -1,11 +1,13 @@
 package authapi
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -220,10 +222,12 @@ func TestAuthorizeZeroCallerLimitSetsNoLimit(t *testing.T) {
 	}
 }
 
+var zeroStartRun atomic.Int64
+
 func TestAuthorizeCallerRejectionSeriesExistAtZero(t *testing.T) {
-	// The process-wide counter is shared by every test, so the zero start is read on an id only this test uses.
-	const id = "auth_svc_pdp_test_zero_start"
-	if text := rejectionsText(t); strings.Contains(text, id) {
+	// The process-wide counter is shared by every test and every -count iteration, so the zero start is read on an id only this run uses.
+	id := fmt.Sprintf("auth_svc_pdp_test_zero_start_%d", zeroStartRun.Add(1))
+	if text := rejectionsText(t); strings.Contains(text, `limit="`+id+`"`) {
 		t.Fatalf("series %s exists before its limiter is built:\n%s", id, text)
 	}
 	limiter := newCallerLimiter(id, []string{"s"}, PDPCallerLimit{PerSecond: 1, Burst: 1})

@@ -40,19 +40,10 @@ func dryRun(t *testing.T, root, target string, shard int) cmdResult {
 	return freeSpec{dir: root, env: inheritedEnv(nil)}.run("bash", "ci/check_go.sh", "integration-shard", target, strconv.Itoa(shard), "--dry-run")
 }
 
+// goTestList is `go test -tags=integration -list` of pkg, from the listing cache (listing_cache_test.go).
 func goTestList(t *testing.T, root, pkg string) map[string]bool {
 	t.Helper()
-	res := freeSpec{dir: root, env: inheritedEnv(nil, "GOTOOLCHAIN="+pinnedGoToolchain(t), "GOWORK=off")}.run("go", "test", "-mod=readonly", "-tags=integration", "-list", ".*", "./"+pkg)
-	if res.code != 0 {
-		t.Fatalf("go test -list %s: %s%s", pkg, res.stdout, res.stderr)
-	}
-	out := map[string]bool{}
-	for _, l := range strings.Split(res.stdout, "\n") {
-		if strings.HasPrefix(l, "Test") {
-			out[l] = true
-		}
-	}
-	return out
+	return listedOrFail(t, root, pinnedGoToolchain(t), listingKey{pkg: pkg, tags: "integration"})
 }
 
 // goTestSignature is the signature rule of cmd/go for a test: one parameter of type *T or *x.T, no results, no type

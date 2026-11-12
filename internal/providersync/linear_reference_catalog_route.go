@@ -718,9 +718,9 @@ func collectLinearReferenceConnection(
 		}
 		if len(envelope.Errors) > 0 {
 			if strings.Contains(strings.ToLower(envelope.Errors[0].Message), "complexity") {
-				return items, pages, false, providerfoundation.ErrGraphQLComplexity
+				return items, pages, false, providerfoundation.ResponseGraphQL(response, providerfoundation.ErrGraphQLComplexity)
 			}
-			return items, pages, false, providerfoundation.ErrGraphQLResponse
+			return items, pages, false, providerfoundation.ResponseGraphQL(response, providerfoundation.ErrGraphQLResponse)
 		}
 		connection, ok := linearReferenceConnection(envelope.Data, path)
 		if !ok {

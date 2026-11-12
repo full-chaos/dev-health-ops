@@ -67,7 +67,7 @@ func TestTheQueueHelperCountsDistinctLegNamesNotJobs(t *testing.T) {
 	}
 }
 
-func TestTheShippedLegListHasTwelveDistinctLegs(t *testing.T) {
+func TestTheShippedLegListHasDistinctLegs(t *testing.T) {
 	seen := map[string]bool{}
 	legs := goQualityLegList(t, repoRoot(t))
 	for _, e := range legs {
@@ -77,7 +77,8 @@ func TestTheShippedLegListHasTwelveDistinctLegs(t *testing.T) {
 		}
 		seen[n] = true
 	}
-	if len(legs) != 12 || len(seen) != 12 {
-		t.Errorf("ci/go_quality_legs.json has %d entries and %d distinct names, want 12 and 12", len(legs), len(seen))
+	// static, plan-reads, test 1..28, race 1..6 (CHAOS-13520).
+	if len(legs) != 36 || len(seen) != 36 {
+		t.Errorf("ci/go_quality_legs.json has %d entries and %d distinct names, want 36 and 36", len(legs), len(seen))
 	}
 }

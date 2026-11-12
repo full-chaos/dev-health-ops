@@ -216,7 +216,7 @@ func normalizeGitLabFeatureFlags(
 	for _, raw := range items {
 		flag, err := decodeGitLabFeatureFlagObject(raw)
 		if err != nil {
-			return nil, err
+			return nil, providerfoundation.RouteFailure(gitlabFeatureFlagsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		scopes, err := gitLabFeatureFlagScopes(flag)
 		if err != nil {
@@ -254,7 +254,7 @@ func normalizeGitLabFeatureFlagEvents(
 	for _, raw := range items {
 		flag, err := decodeGitLabFeatureFlagObject(raw)
 		if err != nil {
-			return nil, err
+			return nil, providerfoundation.RouteFailure(gitlabFeatureFlagsRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		scopes, err := gitLabFeatureFlagScopes(flag)
 		if err != nil {

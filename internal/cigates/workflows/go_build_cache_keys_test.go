@@ -137,8 +137,24 @@ func goCacheViolations(t *testing.T, root string) []string {
 				add("go-quality.yml: the restore key reads steps.%s.outputs.go-version but there is no step with id %q", m[1], m[1])
 			}
 		}
-		if prefix, _, ok := strings.Cut(key, "${{ hashFiles"); !ok || strings.TrimSpace(rk) != prefix {
+		// restore-keys: the key without its go.sum hash, then the test-leg fallback of the same layout (a leg with no entry of
+		// its own restores the newest test-leg entry; the save key stays the leg's own).
+		prefix, _, ok := strings.Cut(key, "${{ hashFiles")
+		layout := ""
+		if m := cacheLayoutRE.FindStringSubmatch(key); m != nil {
+			layout = "go-quality-v" + m[1] + "-"
+		}
+		var rkLines []string
+		for _, l := range strings.Split(rk, "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				rkLines = append(rkLines, l)
+			}
+		}
+		if !ok || len(rkLines) == 0 || rkLines[0] != prefix {
 			add("go-quality.yml: restore-keys must be the key without its go.sum hash (got %q)", rk)
+		}
+		if len(rkLines) != 2 || layout == "" || rkLines[1] != layout+"test-" {
+			add("go-quality.yml: restore-keys must end with the test-leg fallback %q as its second and last line (got %q)", layout+"test-", rk)
 		}
 		if strings.TrimSpace(cond) != hostedOnlyIf {
 			add("go-quality.yml: the cache restore must run on GitHub-hosted legs only, if: exactly %q (got %q)", hostedOnlyIf, cond)
@@ -243,6 +259,8 @@ func TestGoCacheGuardPlantedDefectsAreCaught(t *testing.T) {
 		{"the export is set after check_go.sh", mutation{gq, "        run: bash ci/check_go.sh ci-leg ${{ matrix.args }}\n", "        run: bash ci/check_go.sh ci-leg ${{ matrix.args }}\n\n      - name: late export\n        if: runner.environment == 'github-hosted'\n        run: echo \"DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build\" >> \"${GITHUB_ENV}\"\n"}, "after the leg step"},
 		{"the layout segment is back to v1", mutation{gq, "go-quality-v2-", allMarker + "go-quality-v1-"}, "layout-version v1"},
 		{"the key has no layout segment", mutation{gq, "go-quality-v2-", allMarker + "go-quality-"}, "no layout-version segment"},
+		{"restore-keys loses the test-leg fallback", mutation{gq, "-go${{ steps.setup-go.outputs.go-version }}-\n            go-quality-v2-test-\n", "-go${{ steps.setup-go.outputs.go-version }}-\n"}, "the test-leg fallback"},
+		{"the test-leg fallback names another leg kind", mutation{gq, "            go-quality-v2-test-\n", "            go-quality-v2-race-\n"}, "the test-leg fallback"},
 		{"restore-keys keeps the old layout", mutation{gq, "restore-keys: |\n            go-quality-v2-", "restore-keys: |\n            go-quality-"}, "restore-keys must be the key without its go.sum hash"},
 		{"auth-changes back on the shared cache", mutation{".github/workflows/go-auth-service.yml", "          cache: false", "          cache: true"}, "go-auth-service.yml:auth-changes"},
 		{"graphql-wire-parity back on the shared cache", mutation{".github/workflows/go.yml", "empty entry.\n          cache: false\n\n      - uses: pnpm/action-setup", "empty entry.\n          cache: true\n\n      - uses: pnpm/action-setup"}, "go.yml:graphql-wire-parity"},

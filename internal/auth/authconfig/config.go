@@ -314,6 +314,9 @@ type Config struct {
 	// AuthorizeCallerSubjects are the workload principals (prn_) whose
 	// workload token the authorize routes accept; empty = none.
 	AuthorizeCallerSubjects []string
+	// AuthorizeWebApprover is the web approver reference kind's settings
+	// (CHAOS-11207); see workload.go.
+	AuthorizeWebApprover WebApprover
 
 	// EnvOnlySettings names the non-secret settings that were resolved from
 	// the environment although a canonical flag exists for them. A deployment
@@ -631,6 +634,7 @@ func Load(spec Spec) (Config, error) {
 	if cfg.AuthorizeCallerSubjects, err = authorizeCallerSubjects(lookup, cfg.TokenIssuerURL); err != nil {
 		return Config{}, err
 	}
+	cfg.AuthorizeWebApprover = webApprover(lookup)
 	if cfg.AcrEventsWorkloadSubject, err = workloadSubject(lookup, EnvAcrEventsWorkloadSubject, cfg.TokenIssuerURL); err != nil {
 		return Config{}, err
 	}

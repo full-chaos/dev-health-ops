@@ -3,9 +3,7 @@
 // suspend, state and rename routes. A suspension
 // in the auth schema ends only by this route (D6456), so go-api's PATCH
 // is_active=true calls it before it writes its own row, behind
-// AUTH_PROXY_ORG_PROVISIONING. It presents the go-api service credential
-// (AUTH_SESSION_ISSUE_TOKEN) holding memberships:write, or the go-api
-// workload token.
+// AUTH_PROXY_ORG_PROVISIONING. It presents the go-api workload token.
 package orgreactivate
 
 import (

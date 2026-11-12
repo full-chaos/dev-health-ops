@@ -27,21 +27,16 @@ goApi:
     annotations: {}
     automountToken: false
   replicas: 1
-  # -- CHAOS-11217: where go-api reads AUTH_SESSION_ISSUE_TOKEN (sessions on only).
-  #    Empty secretName = the shared Secret. Set it to a dedicated operator-created
-  #    Secret that holds the key.
+  # -- go-api's credential on auth-service's session issue route (sessions on only). The workload token is the only mode: with
+  #    sessions on the chart renders AUTH_SESSION_ISSUE_CREDENTIAL=workload, and goApi.extraEnv cannot set that name.
   sessionIssue:
-    secretName: ""
-    secretKey: AUTH_SESSION_ISSUE_TOKEN
-    # -- Optional, absent by default. "workload" (the only mode; "" = absent): go-api presents its workload token on the session issue route and
-    #    reads no AUTH_SESSION_ISSUE_TOKEN. The chart renders AUTH_SESSION_ISSUE_CREDENTIAL=workload, renders no token reference, and
-    #    ignores secretName and secretKey. goApi.extraEnv cannot set AUTH_SESSION_ISSUE_CREDENTIAL while this is set. Absent = the token reference.
-    #    "" = absent (CHAOS-13467): a venue that layers values.prod.yaml sets credential: "" to keep the token reference.
+    # -- Optional: "workload" or "" (both render the workload mode). Kept so that values files that still set it render unchanged.
+    #    secretName and secretKey here are accepted and ignored (retired token mode), for the same reason.
     # credential: workload
-    # -- CHAOS-13039: go-api presents its workload token on the session issue route instead of AUTH_SESSION_ISSUE_TOKEN. Off by
+    # -- CHAOS-13039: go-api's workload token from a bootstrap credential file. Off by
     #    default, and off renders nothing. On (sessions on, authService.accessToken.issuerURL set, secretName set) the chart renders
     #    AUTH_SESSION_ISSUE_CREDENTIAL=workload, AUTH_WORKLOAD_BOOTSTRAP_FILE=/run/workload/api.bootstrap and AUTH_WORKLOAD_ISSUER
-    #    (the access-token issuer), mounts secretName/secretKey read-only at /run/workload, and renders no AUTH_SESSION_ISSUE_TOKEN.
+    #    (the access-token issuer) and mounts secretName/secretKey read-only at /run/workload.
     #    The Secret holds the bootstrap credential of the api workload (auth-migrate workloads bootstrap-create); the operator makes it.
     #    auth-service needs AUTH_WORKLOAD_BOOTSTRAP=true and AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT (the api workload's prn_ id) in
     #    authService.extraEnv. goApi.extraEnv cannot set the three names while this is on.

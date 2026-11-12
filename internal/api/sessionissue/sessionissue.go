@@ -28,20 +28,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
-// EnvToken is the go-api session issuer service credential. The session issue
-// route no longer takes it; auth-service's provisioning routes still read it.
-const EnvToken = "AUTH_SESSION_ISSUE_TOKEN"
-
 // Path is the issue route on auth-service's API listener.
 const Path = "/internal/v1/sessions"
-
-// tokenPattern is the svc_ credential shape of the auth-session-issuer
-// service: its prefix and 32 random bytes as unpadded base64url.
-var tokenPattern = regexp.MustCompile(`^svc_authsess_[A-Za-z0-9_-]{43}$`)
-
-// ValidToken reports whether token has the auth-session-issuer credential
-// shape, for the go-api clients of auth-service that still present it.
-func ValidToken(token string) bool { return tokenPattern.MatchString(token) }
 
 // maxAnswerBytes bounds the issue route's answer.
 const maxAnswerBytes = 64 << 10

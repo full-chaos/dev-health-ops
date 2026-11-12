@@ -169,7 +169,6 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("integration-discover-venue-oracle", t.Name(), "2d5708683eab6b01cc9105dfe853dc76e9ff096b0c0c48e950e5306980cda78f"))
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-integration-discover!"
 	v := newIDs()
 	jira, certFile := fakeJira(t, root)
 	t.Setenv("NO_PROXY", "127.0.0.1,localhost")
@@ -177,7 +176,6 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden, Root: root,
-		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + venueKey,
 			"NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost",
@@ -211,7 +209,7 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 	// The dho api's operator /metrics, the Go api's scrape surface: the
 	// discovery counter is read from it after the requests.
 	registry := health.NewRegistry(0)
-	base := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	base := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.Now = func() time.Time { return pinned }
 		deps.Decryptor = decryptor
 		deps.SyncJiraHTTP = jiraClient
@@ -272,7 +270,7 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 	// reaches the answer or the log.
 	var logs bytes.Buffer
 	refusing := &http.Client{Transport: refusingProviders{}}
-	refusingBase := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	refusingBase := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.Now = func() time.Time { return pinned }
 		deps.Decryptor = decryptor
 		deps.SyncJiraHTTP = refusing
@@ -455,7 +453,7 @@ func normalize(_ venueoracle.Request, body string) string {
 	})
 }
 
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, adjust func(*apiservice.Deps), loggers ...*slog.Logger) string {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, adjust func(*apiservice.Deps), loggers ...*slog.Logger) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {

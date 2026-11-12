@@ -40,7 +40,6 @@ func TestExternalIngestLimiterVenueOracle(t *testing.T) {
 	seed := newSeed()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden, Root: root,
-		JWTKey:    "venue-oracle-jwt-signing-key-32-bytes-min",
 		PythonEnv: []string{"TRUSTED_PROXIES=testclient"},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seedVenue(t, ctx, admin, seed)

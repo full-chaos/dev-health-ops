@@ -94,8 +94,6 @@ type Options struct {
 	// Root is the repository root (the directory that holds src/ and
 	// scripts/).
 	Root string
-	// JWTKey is unused: the plane no longer carries JWT_SECRET_KEY.
-	JWTKey string
 	// TokenIssuer, when set, mints the seed's tokens (unset: a new edtokens.New issuer): a plane that fetches its
 	// keys from an issuer URL verifies them against that issuer.
 	TokenIssuer *edtokens.Issuer

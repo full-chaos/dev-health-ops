@@ -44,15 +44,21 @@ func countEnforce(ctx context.Context, namespace, outcome string) {
 const (
 	enforceUnjudgedHS256 = "hs256"
 	enforceUnjudgedNoOrg = "no_org"
-	// enforceUnjudgedServedOrg: the request serves another organization than the token's, or the token has none.
+	// enforceUnjudgedServedOrg: a token with no organization that names one. No request is counted so since every such
+	// request is decided (decideOrgless); the label leaves the set once its read after the roll is zero.
 	enforceUnjudgedServedOrg = "served_org"
+	// enforceUnjudgedOrgRequired: a token with no organization on an AdminOrg row, refused before any question.
+	enforceUnjudgedOrgRequired = "org_required"
+	// enforceUnjudgedDelegatedOrgless: a delegated session's bearer with no organization; the legacy answer stands (F1).
+	enforceUnjudgedDelegatedOrgless = "delegated_orgless"
 	// enforceUnjudgedImpersonation: a read by a caller with a live go-api impersonation row. The legacy answer stands
 	// by design (product rule 1), so this reason does not block a flip.
 	enforceUnjudgedImpersonation = "impersonation"
 )
 
 // enforceUnjudgedReasons is the closed reason set of the unjudged counter.
-var enforceUnjudgedReasons = []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg, enforceUnjudgedServedOrg, enforceUnjudgedImpersonation}
+var enforceUnjudgedReasons = []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg, enforceUnjudgedServedOrg, enforceUnjudgedOrgRequired,
+	enforceUnjudgedDelegatedOrgless, enforceUnjudgedImpersonation}
 
 type enforceUnjudgedAdder func(ctx context.Context, route, reason string)
 

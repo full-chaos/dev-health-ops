@@ -92,24 +92,10 @@ func decodeObjectList(response *http.Response, raw []byte) ([]*pyjson.Object, er
 }
 
 // discoveryBodyLimit is the cap of one discovery response body, the value of
-// providerfoundation's maxProviderPageBody (pagination.go:16).
+// providerfoundation's maxProviderPageBody (pagination.go:16). readDiscoveryBody
+// sits at the end of this file so the line numbers that the endpoint profiles
+// cite in the handlers below stay put.
 const discoveryBodyLimit = 32 << 20
-
-// readDiscoveryBody reads and closes the body of a 2xx response. A read
-// failure or a body above discoveryBodyLimit is a *ProviderError that names
-// the route template and wraps ErrNormalizationInvalid.
-func readDiscoveryBody(response *http.Response) ([]byte, error) {
-	defer response.Body.Close()
-	body, over, err := providerfoundation.ReadResponseBodyWithin(response, discoveryBodyLimit,
-		func(error) error { return providerfoundation.ErrNormalizationInvalid })
-	if err != nil {
-		return nil, err
-	}
-	if over > 0 {
-		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
-	}
-	return body, nil
-}
 
 var pyQuoteUnreserved = regexp.MustCompile(`[A-Za-z0-9_.~-]`)
 
@@ -804,4 +790,20 @@ func (h handlers) discoverMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, membersDiscoverJSON(teamID, provider, matches), nil)
+}
+
+// readDiscoveryBody reads and closes the body of a 2xx response. A read
+// failure or a body above discoveryBodyLimit is a *ProviderError that names
+// the route template and wraps ErrNormalizationInvalid.
+func readDiscoveryBody(response *http.Response) ([]byte, error) {
+	defer response.Body.Close()
+	body, over, err := providerfoundation.ReadResponseBodyWithin(response, discoveryBodyLimit,
+		func(error) error { return providerfoundation.ErrNormalizationInvalid })
+	if err != nil {
+		return nil, err
+	}
+	if over > 0 {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
+	}
+	return body, nil
 }

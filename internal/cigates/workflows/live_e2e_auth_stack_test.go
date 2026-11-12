@@ -1150,7 +1150,7 @@ func TestLiveE2ESocialFixtures(t *testing.T) {
 		status                               int
 	}{
 		{"POST", "github.com", "/login/oauth/access_token", "", "code=test&client_id=gh-client&client_secret=gh-secret", `{"access_token":"gh-live","token_type":"bearer","scope":"read:user,user:email"}`, 200},
-		{"GET", "api.github.com", "/user", "Bearer gh-live", "", `{"id":920001,"login":"live-social","name":"Live Social","email":"live-social@example.test"}`, 200},
+		{"GET", "api.github.com", "/user", "Bearer gh-live", "", `{"id":920001,"login":"live-social","name":"Live Social","email":"live-social@example.com"}`, 200},
 		{"POST", "api.github.com", "/applications/gh-client/token", "Basic Z2gtY2xpZW50OmdoLXNlY3JldA==", `{"access_token":"gh-live"}`, `{"app":{"client_id":"gh-client"},"user":{"id":920001}}`, 200},
 		{"GET", "api.github.com", "/__ready", "", "", `{"ready":true}`, 200},
 		{"GET", "api.github.com", "/unknown", "", "", "", 599},

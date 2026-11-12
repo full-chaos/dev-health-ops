@@ -12,7 +12,7 @@
     "path": "/user",
     "request_headers": {"Authorization": "Bearer gh-live"},
     "status": 200,
-    "body": {"id": 920001, "login": "live-social", "name": "Live Social", "email": "live-social@example.test"}
+    "body": {"id": 920001, "login": "live-social", "name": "Live Social", "email": "live-social@example.com"}
   },
   {
     "provider": "github",

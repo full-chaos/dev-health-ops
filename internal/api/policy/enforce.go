@@ -200,8 +200,14 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 	}
 	e.logger.InfoContext(ctx, "api enforcement: a request that serves another organization than the token's was decided on the token organization",
 		slog.String("route", o.pattern), slog.String("namespace", e.rows[o.pattern].Namespace),
-		slog.String("decided_org", strings.ToLower(o.orgID)), slog.String("served_org", o.served.raw), slog.String("outcome", outcome))
+		slog.String("decided_org", strings.ToLower(o.orgID)), slog.String("served_org", logSafe(o.served.raw)), slog.String("outcome", outcome))
 	return verdict
+}
+
+// logSafe drops the line breaks of a request-supplied value so it cannot start a second log line.
+func logSafe(value string) string {
+	value = strings.ReplaceAll(value, "\n", "")
+	return strings.ReplaceAll(value, "\r", "")
 }
 
 func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforceVerdict {

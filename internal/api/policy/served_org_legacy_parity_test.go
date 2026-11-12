@@ -205,3 +205,13 @@ func TestServedOrgEveryDecisionLogsBothOrganizationsAtInfo(t *testing.T) {
 		}
 	}
 }
+
+// The organization a request names is request input: its line breaks are dropped before it is logged.
+func TestServedOrgLogValueHasNoLineBreak(t *testing.T) {
+	if got := logSafe("a\r\nforged=1\nb"); got != "aforged=1b" {
+		t.Errorf("logSafe = %q, want %q", got, "aforged=1b")
+	}
+	if got := logSafe(memberOrg); got != memberOrg {
+		t.Errorf("logSafe(%q) = %q, want it unchanged", memberOrg, got)
+	}
+}

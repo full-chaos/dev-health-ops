@@ -21,6 +21,7 @@ const usage = `usage: cigate live-e2e <verb>
   edge-request DOCUMENTS OPERATION ORG
   mint-token                             (env E2E_SESSION_ID, E2E_ISSUER_URL, E2E_ISSUER_KEY_FILE; optional E2E_USER_ID, E2E_ORG_ID, E2E_ISSUER_KID)
   mint-license PUBLIC_FILE LICENSE_FILE   (throwaway enterprise licence; files must not exist)
+  seed-sso-provider EMAIL PROTOCOL [flags]   (TEST-ONLY stand-in for the missing provider create route, CHAOS-13636; PROTOCOL oidc|saml; env PG*, SETTINGS_ENCRYPTION_KEY, SSO_CLIENT_SECRET (oidc); prints the provider id only)
   valkey-ping                            (env REDIS_URL)
   subject-jws FILE                       (test subject token for the fake TokenReview; FILE must not exist)
   reviewer-token FILE                    (random reviewer bearer for the fake TokenReview; FILE must not exist)
@@ -134,6 +135,15 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 			return fail(err)
 		}
 		fmt.Fprintln(stdout, token)
+		return 0
+	case "seed-sso-provider":
+		if len(args) < 3 {
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+		if err := seedSSOProvider(ctx, args[1:], getenv, stdout, openSSODB); err != nil {
+			return fail(err)
+		}
 		return 0
 	case "mint-license":
 		if !need(2) {

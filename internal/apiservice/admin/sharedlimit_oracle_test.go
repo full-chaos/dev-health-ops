@@ -49,14 +49,14 @@ func TestSharedRateLimitAcrossReplicasVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("sharedlimit", t.Name(), "de2ce6f486b354de34ef501a869191811a7571c972749639db0f740fcb1c20f3"))
 	root := repoRoot(t)
 	nextID := goldenIDs("shl")
-	const jwtKey = "venue-oracle-test-secret-key-for-shared-rate-limit-32-by"
+	const linkKey = "venue-oracle-test-secret-key-for-shared-rate-limit-32-by"
 	const adminPlaintextPassword = "correct horse battery staple sl"
 	const invites, resets = 12, 7
 
 	orgID, adminID, targetID := nextID(), nextID(), nextID()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   root, JWTKey: jwtKey,
+		Root:   root,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			return seedRateLimitVenue(t, ctx, admin, orgID, []uuid.UUID{adminID}, []uuid.UUID{targetID}, adminPlaintextPassword)
 		},
@@ -80,8 +80,8 @@ func TestSharedRateLimitAcrossReplicasVenueOracle(t *testing.T) {
 	python := golden.Python(t, venue, requests)
 
 	// Two replicas: separate pools, separate Valkey clients, one Valkey.
-	replicaA, _ := startGoServer(t, ctx, venue, jwtKey, withLinkSecret(jwtKey))
-	replicaB, _ := startGoServer(t, ctx, venue, jwtKey, withLinkSecret(jwtKey))
+	replicaA, _ := startGoServer(t, ctx, venue, withLinkSecret(linkKey))
+	replicaB, _ := startGoServer(t, ctx, venue, withLinkSecret(linkKey))
 	balanced := roundRobin(t, replicaA, replicaB)
 
 	receipt := venueoracle.Diff(t, balanced, requests, python, venueoracle.DiffOptions{

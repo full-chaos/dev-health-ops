@@ -236,7 +236,6 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 	root := webhookintakeRepoRoot(t)
 
 	const (
-		jwtKey          = "venue-oracle-jwt-signing-key-32-bytes-min"
 		encryptionKey   = "venue-pagerduty-settings-encryption-key-fixture"
 		secretActive    = "pd-secret-active"
 		secretCandidate = "pd-secret-candidate"
@@ -247,7 +246,6 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden, Root: root,
-		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + encryptionKey,
 		},

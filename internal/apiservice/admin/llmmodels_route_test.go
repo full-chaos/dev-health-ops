@@ -23,13 +23,11 @@ import (
 func TestLLMSettingsModelsRouteServesListCachesAndDropsOnDelete(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-llm-models-32-bytes!!!"
 	orgID, bareOrgID, adminUserID := uuid.New(), uuid.New(), uuid.New()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -68,7 +66,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), timestamptz '2026-07-01 00:00
 		lastURL.Store(req.URL.String())
 		return jsonResponse(200, `{"object":"list","data":[{"id":"gpt-5-mini"},{"id":"gpt-5"}]}`), nil
 	})
-	base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(doer) })
+	base, _ := startGoServer(t, ctx, venue, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(doer) })
 
 	decode := func(resp routeResponse) map[string]any {
 		t.Helper()

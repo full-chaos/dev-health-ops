@@ -37,7 +37,6 @@ func TestOrgCRUDMatchesThePythonAPI(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgs_crud", t.Name(), "f0fa55b5949c42974898aac8801e38bafe50ced53bd056a54225e8f2919afa13", scrubSlugSuffix))
 	root := repoRoot(t)
 	nextID := goldenIDs("orgs")
-	const jwtKey = "venue-oracle-test-secret-key-for-org-crud-flow-32-bytes!!!"
 
 	orgID := nextID()
 	ownerID := nextID()
@@ -51,7 +50,6 @@ func TestOrgCRUDMatchesThePythonAPI(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			clock := seedClock()
@@ -269,7 +267,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, newMemberI
 			Headers: authHeaders("owner")},
 	}
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
+	goBase, _ := startGoServer(t, ctx, venue)
 
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/admin/orgs_crud.go-pin.json", SHA256: orgsCrudPinSHA256, Ruling: orgsCrudOwnerRuling})
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{

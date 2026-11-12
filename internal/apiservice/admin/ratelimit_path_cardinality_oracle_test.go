@@ -30,14 +30,14 @@ func TestRateLimitPathCardinalityVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, adminGolden("ratelimit_path_cardinality", t.Name(), "2448fe8a75a7360e1cf80bebc2f0170488ae8c9cff2b96c1deac66d8b7073d2c"))
 	root := repoRoot(t)
 	nextID := goldenIDs("rlpc")
-	const jwtKey = "venue-oracle-test-secret-key-for-path-cardinality-32-by"
+	const linkKey = "venue-oracle-test-secret-key-for-path-cardinality-32-by"
 	const adminPlaintextPassword = "correct horse battery staple pc"
 	const distinctPaths = 1001
 
 	orgID, adminID, targetID := nextID(), nextID(), nextID()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   root, JWTKey: jwtKey,
+		Root:   root,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			return seedRateLimitVenue(t, ctx, admin, orgID, []uuid.UUID{adminID}, []uuid.UUID{targetID}, adminPlaintextPassword)
 		},
@@ -58,7 +58,7 @@ func TestRateLimitPathCardinalityVenueOracle(t *testing.T) {
 		}
 	}
 
-	replica, _ := startGoServer(t, ctx, venue, jwtKey, withLinkSecret(jwtKey))
+	replica, _ := startGoServer(t, ctx, venue, withLinkSecret(linkKey))
 	receipt := venueoracle.Diff(t, replica, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 	golden.Finish(t)

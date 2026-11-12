@@ -31,7 +31,6 @@ func TestRetentionRoutesVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, governanceGolden("retention", "TestRetentionRoutesVenueOracle", "de6a34074ae06da8e8b928e79191d38d1a1b90831981fa7ada074a481780ba3d"))
 	root := repoRoot(t)
 	nextID := goldenIDs("ret")
-	const jwtKey = "venue-oracle-test-secret-key-for-retention-flow-32-bytes!"
 
 	orgEnterprise, orgCommunity, orgOverride, orgTierOnly, orgBogus := nextID(), nextID(), nextID(), nextID(), nextID()
 	superID := nextID()
@@ -42,7 +41,6 @@ func TestRetentionRoutesVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -299,7 +297,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		noBody("W delete community", "DELETE", "/"+pAudit.String(), "comm"),
 	)
 	python := golden.Python(t, venue, requests)
-	goBase, goPool := startGoServer(t, ctx, venue, jwtKey)
+	goBase, goPool := startGoServer(t, ctx, venue)
 
 	// CHAOS-10082: see xuserid_divergence_test.go.
 	requestsAll, pythonAll := requests, python

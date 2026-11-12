@@ -71,7 +71,6 @@ func TestOrgDeletionRevokesPagerDutyOnBothPlanes(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion_pagerduty", t.Name(), "daa6e6fec2494fa8dbafcf75620ecefa7d96401886843ce57f091be60a19f828"))
 	root := repoRoot(t)
 	nextID := goldenIDs("odpd")
-	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-pd-flow-32-byt"
 
 	fake := &fakePagerDutyRevokeServer{}
 	fakeServer := httptest.NewServer(http.HandlerFunc(fake.handler))
@@ -88,7 +87,6 @@ func TestOrgDeletionRevokesPagerDutyOnBothPlanes(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"PAGER_DUTY_CLIENT_ID=" + orgDeletionVenuePagerDutyID,
 			"SETTINGS_ENCRYPTION_KEY=" + orgDeletionVenueEncryptionKey,
@@ -168,7 +166,7 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 	// counted from here on.
 	pythonCalls := golden.InspectRows(t, "pagerduty revoke calls by the python plane")
 	beforeGo := fake.count()
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: orgDeletionVenuePagerDutyID, RevokeURL: fakeServer.URL}
 		// See orgdeletion_oracle_test.go's identical wiring: the admin

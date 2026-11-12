@@ -139,6 +139,10 @@ func TestEveryPlatformActionSiteIsListed(t *testing.T) {
 		}
 	}
 	for i := 1; i <= 9; i++ {
+		if i == 2 {
+			// Mix 2, the permission list GET /auth/me sent to web, is retired (CHAOS-13585): no site decides it any more.
+			continue
+		}
 		if !mixes[strconv.Itoa(i)] {
 			problems = append(problems, "mix site "+strconv.Itoa(i)+" has no platform action row")
 		}

@@ -35,7 +35,6 @@ func TestPagerDutyWebhookLimiterVenueOracle(t *testing.T) {
 	root := repoRoot(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden, Root: root,
-		JWTKey:    "venue-oracle-jwt-signing-key-32-bytes-min",
 		PythonEnv: []string{"TRUSTED_PROXIES=testclient"},
 	})
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1")

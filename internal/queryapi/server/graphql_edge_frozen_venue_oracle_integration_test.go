@@ -79,7 +79,7 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 
 	issuer := startEdgeIssuer(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: root, JWTKey: edgeOracleJWTKey, TokenIssuer: issuer.tokens,
+		Golden: golden, Root: root, TokenIssuer: issuer.tokens,
 		Seed: edgeSeed(users, docs, schemaDigest),
 	})
 	// The member's tokens the seed cannot express, each keyed as the HS256 token the recording sent for it.

@@ -45,7 +45,6 @@ func TestLLMSettingsStatusRouteVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, adminRunTimeShapesGolden("llmsettingsstatus", t.Name(), "0e1126a5d5d258ef41627a86bd6ca8720d1ad2390e799810cb1fa1aae5272229"))
 	root := repoRoot(t)
 	nextID := goldenIDs("llmst")
-	const jwtKey = "venue-oracle-test-secret-key-for-llm-status-32-bytes!"
 
 	adminID, memberID, superID := nextID(), nextID(), nextID()
 	type orgSpec struct {
@@ -87,7 +86,6 @@ func TestLLMSettingsStatusRouteVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -251,7 +249,7 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 	}
 
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {})
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {})
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		KnownDivergences: []venueoracle.KnownDivergence{

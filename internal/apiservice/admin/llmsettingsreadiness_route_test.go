@@ -122,7 +122,6 @@ func (p *poisonDoer) Do(req *http.Request) (*http.Response, error) {
 func TestLLMSettingsReadinessRouteSuccessPath(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-llm-readiness-32-bytes!"
 
 	readyOrgID, failOrgID, ssrfOrgID := uuid.New(), uuid.New(), uuid.New()
 	anthropicOrgID, geminiOrgID := uuid.New(), uuid.New()
@@ -131,7 +130,6 @@ func TestLLMSettingsReadinessRouteSuccessPath(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -187,7 +185,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), timestamptz '2026-07-01 00:00
 	}
 
 	t.Run("ready", func(t *testing.T) {
-		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(readyDoer()) })
+		base, _ := startGoServer(t, ctx, venue, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(readyDoer()) })
 
 		postResp := doRouteRequest(t, base, "POST", "/api/v1/admin/llm-settings/readiness", auth("ready"))
 		if postResp.status != 200 {
@@ -257,7 +255,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), timestamptz '2026-07-01 00:00
 	})
 
 	t.Run("failed", func(t *testing.T) {
-		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(failingDoer()) })
+		base, _ := startGoServer(t, ctx, venue, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(failingDoer()) })
 
 		postResp := doRouteRequest(t, base, "POST", "/api/v1/admin/llm-settings/readiness", auth("fail"))
 		if postResp.status != 200 {
@@ -302,7 +300,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), timestamptz '2026-07-01 00:00
 			}
 			return jsonResponse(200, `{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"toolu_route","name":"readiness_echo_v1","input":{"nonce":"ready-v1"}}]}`), nil
 		})
-		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(doer) })
+		base, _ := startGoServer(t, ctx, venue, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(doer) })
 
 		postResp := doRouteRequest(t, base, "POST", "/api/v1/admin/llm-settings/readiness", auth("anthropic"))
 		if postResp.status != 200 {
@@ -322,7 +320,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), timestamptz '2026-07-01 00:00
 
 	t.Run("a provider without a prober is named in the 404", func(t *testing.T) {
 		doer := &poisonDoer{}
-		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(doer) })
+		base, _ := startGoServer(t, ctx, venue, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(doer) })
 
 		postResp := doRouteRequest(t, base, "POST", "/api/v1/admin/llm-settings/readiness", auth("gemini"))
 		if postResp.status != 404 {
@@ -343,7 +341,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), timestamptz '2026-07-01 00:00
 
 	t.Run("ssrf_refused_base_url_never_reaches_the_network", func(t *testing.T) {
 		doer := &poisonDoer{}
-		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(doer) })
+		base, _ := startGoServer(t, ctx, venue, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(doer) })
 
 		postResp := doRouteRequest(t, base, "POST", "/api/v1/admin/llm-settings/readiness", auth("ssrf"))
 		if postResp.status != 404 {

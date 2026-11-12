@@ -55,7 +55,7 @@ const (
 // OrgScope/Impersonation middlewares -- against venue's Go copy, the same
 // wiring apiservice's own configure() does when deps.Pool is set
 // (service.go). Everything it opens is closed by t.Cleanup.
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, extras ...adminDepsExtra) (base string, pool *pgxpool.Pool) {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, extras ...adminDepsExtra) (base string, pool *pgxpool.Pool) {
 	t.Helper()
 	goPool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {

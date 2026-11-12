@@ -486,7 +486,7 @@ func TestVenueOracleGitHubAppInstall(t *testing.T) {
 
 	var seed venueFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: repoRoot(t), JWTKey: venueKey,
+		Golden: golden, Root: repoRoot(t),
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsKey,
 		},

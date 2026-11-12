@@ -255,7 +255,7 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root:   venueRoot(), Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			// Org C's tier is managed by hand: Stripe events leave it alone.

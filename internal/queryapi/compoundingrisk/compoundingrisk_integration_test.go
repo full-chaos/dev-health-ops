@@ -510,3 +510,30 @@ func TestRealClickHouse_CoverageBesideAScoreOnly(t *testing.T) {
 		t.Errorf("team rows = %v", ids(teams.Rows))
 	}
 }
+
+// A superseded repo name row must neither select a repository by the old
+// name nor label it, for the repo breakout (filter subquery and label read).
+func TestRealClickHouse_RepoBreakoutIgnoresSupersededRepoName(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) SELECT '%s', 'acme/old', 'github', 'org-1', now64(3), now64(3) - INTERVAL 1 HOUR`, rA)
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) SELECT '%s', 'acme/new', 'github', 'org-1', now64(3), now64(3)`, rA)
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 1), score: "0.2", sev: "low"})
+	in := func(repoIDs []string) *model.CompoundingRiskFilterInput {
+		return &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeRepo, RepoIds: repoIDs, TrendDays: 30}
+	}
+	current, err := Resolve(ctx, client, "org-1", in([]string{"acme/new"}), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current.Rows) != 1 || current.Rows[0].ScopeLabel != "acme/new" {
+		t.Fatalf("current name %#v", current.Rows)
+	}
+	stale, err := Resolve(ctx, client, "org-1", in([]string{"acme/old"}), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale.Rows) != 0 {
+		t.Fatalf("a superseded name selected the repository: %#v", stale.Rows)
+	}
+}

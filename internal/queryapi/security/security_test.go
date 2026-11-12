@@ -295,3 +295,33 @@ func TestResolveOverview_NaNMeanIsAbsentAndNumberIsKept(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveOverview_ReadsReplacingTablesWithFinal(t *testing.T) {
+	c := &recordingClient{}
+	if _, err := ResolveOverview(context.Background(), c, "o", nil); err != nil {
+		t.Fatal(err)
+	}
+	wantAlerts := []int{1, 1, 1, 2}
+	if len(c.statements) != len(wantAlerts) {
+		t.Fatalf("statements %d", len(c.statements))
+	}
+	for i, s := range c.statements {
+		if got := strings.Count(s, "FROM security_alerts sa FINAL"); got != wantAlerts[i] {
+			t.Errorf("statement %d: security_alerts FINAL %d want %d", i, got, wantAlerts[i])
+		}
+		if got := strings.Count(s, "INNER JOIN repos r FINAL ON"); got != wantAlerts[i] {
+			t.Errorf("statement %d: repos FINAL %d want %d", i, got, wantAlerts[i])
+		}
+	}
+}
+
+func TestResolveAlerts_ReadsReplacingTablesWithFinal(t *testing.T) {
+	c := &recordingClient{}
+	if _, err := ResolveAlerts(context.Background(), c, "o", nil, &model.SecurityPaginationInput{First: 2}); err != nil {
+		t.Fatal(err)
+	}
+	s := c.statements[0]
+	if !strings.Contains(s, "FROM security_alerts sa FINAL") || !strings.Contains(s, "INNER JOIN repos r FINAL ON") {
+		t.Errorf("alerts statement lacks FINAL: %s", s)
+	}
+}

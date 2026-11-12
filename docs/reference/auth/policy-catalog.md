@@ -59,6 +59,7 @@ Names are dotted and namespaced. A bare single segment is not an action (the pat
 | `acr.context.read` | organization | repository | low | `resource_revision_bound` |
 | `acr.evidence.read` | organization | repository | low | `resource_revision_bound` |
 | `acr.credential.issue` | organization | organization | high | `none` |
+| `acr.credential.revoke` | organization | organization | high | `none` |
 | `admin.users` | platform | platform | high | `none` |
 | `admin.orgs` | platform | platform | high | `none` |
 | `admin.impersonate` | platform | platform | high | `none` |
@@ -88,12 +89,12 @@ A high-risk action must have cache class `none`. The loader refuses a catalog th
 
 | Role | Scope | Actions held |
 | --- | --- | --- |
-| `viewer` | organization | 12 of 38 |
-| `member` | organization | 13 of 38 |
-| `admin` | organization | 24 of 38 |
-| `owner` | organization | 25 of 38 |
-| `platform_admin` | platform | 8 of 38 |
-| `platform_owner` | platform | 0 of 38 |
+| `viewer` | organization | 15 of 39 |
+| `member` | organization | 16 of 39 |
+| `admin` | organization | 27 of 39 |
+| `owner` | organization | 28 of 39 |
+| `platform_admin` | platform | 8 of 39 |
+| `platform_owner` | platform | 0 of 39 |
 
 Each role lists its actions explicitly. There is no inheritance, no wildcard and no all-actions role. Which role holds which action:
 
@@ -126,7 +127,8 @@ Each role lists its actions explicitly. There is no inheritance, no wildcard and
 | `license.read` | yes | yes | yes | yes |  |
 | `acr.context.read` | yes | yes | yes | yes |  |
 | `acr.evidence.read` |  |  |  |  |  |
-| `acr.credential.issue` |  |  |  |  |  |
+| `acr.credential.issue` | yes | yes | yes | yes |  |
+| `acr.credential.revoke` | yes | yes | yes | yes |  |
 | `admin.users` |  |  |  |  | yes |
 | `admin.orgs` |  |  |  |  | yes |
 | `admin.impersonate` |  |  |  |  | yes |
@@ -222,6 +224,7 @@ From `contracts/auth/v1/README.md`:
 - Version 16: `platform_admin: allowed` on `billing.read` and `license.read`. The legacy go-api billing and licensing handlers admit an `admin.billing` holder (or a `users.is_superuser` user) with no membership row on every row that asks these two actions. The flagged allow also holds in an organization with no organization row, because the legacy paths admit a superuser there without reading the organization (see below). No role changed.
 - Version 17: `viewer`, `member`, `admin` and `owner` hold `acr.evidence.read` and `acr.credential.issue`, the same answers as the legacy web path, which lets every organization member read ACR evidence and issue an ACR credential (device approval and consent); `acr.credential.issue` stays impersonation `denied`. No platform role holds either action.
 - Version 18: `acr.credential.issue` is `repository_scope` `filtered`, because device approval and consent take their repository scopes from this decision, and it carries `platform_admin: allowed`. Product rule 1: a platform admin with no membership row gets the legacy answer, and the legacy web routes let it approve a device and give consent in the organization of its session; its allow is org-wide (`repository_scope` `organization`). A repository allow that covers every repository in fact (the membership default with no grant row, or a live wildcard grant) now carries `repository_scope` `organization` instead of the one asked key, for `acr.context.read`, `acr.evidence.read` and `acr.credential.issue` alike; an allow by exact grants still lists its keys. The ACR repository reads carry no platform-admin flag: the legacy path refuses them to a platform admin with no membership row in its own organization. No role changed.
+- Version 19: `platform_admin: allowed` on `org.read` and `settings.read`, and the new action `acr.credential.revoke` (organization, organization, high, `none`, impersonation `denied`, `platform_admin: allowed`) held by `viewer`, `member`, `admin` and `owner`. Product rule 1: a platform admin with no membership row gets the legacy answer on `GET /api/v1/orgs/me`, `GET /api/v1/telemetry/status` and `POST /api/v1/acr/credentials/{credential_id}/revoke`; every organization member reaches the same routes today. Which credentials a member may revoke stays with acr.
 
 ## Platform admin on organization actions
 

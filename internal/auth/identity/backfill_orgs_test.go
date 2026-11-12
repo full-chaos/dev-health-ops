@@ -52,12 +52,29 @@ func TestKeepSuspended(t *testing.T) {
 		{"active follows a suspension", active, suspended, suspended},
 		{"active stays active", active, active, active},
 	} {
-		if got := keepSuspended(c.cur, c.src); got != c.out {
+		if got := keepSuspended(uuid.New(), c.cur, c.src); got != c.out {
 			t.Fatalf("%s: keepSuspended = %+v, want %+v", c.name, got, c.out)
 		}
 	}
-	if d := decideOrg(true, suspended, keepSuspended(suspended, active)); d != (orgDecision{}) {
+	if d := decideOrg(true, suspended, keepSuspended(uuid.New(), suspended, active)); d != (orgDecision{}) {
 		t.Fatalf("a suspended organization against an active go-api row decides %+v, want nothing", d)
+	}
+}
+
+// A slug a deprovision freed stays freed against go-api's row, which still holds the old slug: only the exact freed
+// form of that organization's own id counts, never another id's form or a prefix.
+func TestKeepSuspendedKeepsTheFreedSlug(t *testing.T) {
+	id, other := uuid.New(), uuid.New()
+	freed := orgState{slug: "~deleted~" + id.String(), name: "Acme"}
+	src := orgState{slug: "acme", name: "Acme 2", active: true}
+	if got, want := keepSuspended(id, freed, src), (orgState{slug: freed.slug, name: "Acme 2"}); got != want {
+		t.Fatalf("freed row: keepSuspended = %+v, want %+v", got, want)
+	}
+	for _, slug := range []string{"~deleted~" + other.String(), "~deleted~", "~deleted~" + id.String() + "x"} {
+		cur := orgState{slug: slug, name: "Acme"}
+		if got := keepSuspended(id, cur, src); got.slug != "acme" {
+			t.Fatalf("slug %q is not this organization's freed form, but keepSuspended kept it: %+v", slug, got)
+		}
 	}
 }
 

@@ -1,6 +1,5 @@
-# CHAOS-13520: the auth race-integration packages too long for one five-minute leg run as PARTS parts of their test names (a part's
+# CHAOS-13520: the auth race-integration packages too long for one leg run as PARTS parts of their test names (a part's
 # names come from `go test -race -tags=integration -list`; each part checks the AUTH_RACE_EXECUTED marker of its TestRace* tests).
-# Format: package<TAB>parts, sorted.
-internal/audit	2
-internal/auth/identity/local	4
-internal/auth/session	4
+# Format: package<TAB>parts, sorted. CHAOS-13622 (legs of about ten minutes): PARTS = ceil(seconds / 540) of
+# ci/auth_race_integration_weights.tsv; a package of 540 s or less runs whole.
+internal/auth/identity/local	2

@@ -8,6 +8,6 @@
 # go_workerservice_test_shards.tsv, CHAOS-9060) and never in the `packages`
 # target. Every discovered top-level test lands in exactly one shard.
 # Weights are relative classes (integration-tagged vs ordinary), not seconds.
-shards	4
+shards	2
 integration-test-weight	100
 ordinary-test-weight	1

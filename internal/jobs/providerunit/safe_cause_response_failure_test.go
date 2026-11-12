@@ -32,3 +32,12 @@ func TestSafeCauseDoesNotLabelAPostResponseFailureWithAnHTTPClass(t *testing.T) 
 		t.Fatalf("cause=%q lost the HTTP class", got)
 	}
 }
+
+func TestSafeCauseLabelsAGraphQLErrorsResponseFailure(t *testing.T) {
+	claim := providersync.Claim{Unit: providersync.Unit{Provider: "github", Dataset: "work-items"}}
+	err := providerfoundation.ResponseGraphQL(&http.Response{Body: http.NoBody}, providerfoundation.ErrGraphQLResponse)
+	got := safeCause("category", claim, nil, err)
+	if !strings.Contains(got, "response_failure=graphql_errors") || strings.Contains(got, "provider_error_class=") {
+		t.Fatalf("cause=%q: a GraphQL errors body must name response_failure=graphql_errors and no HTTP class", got)
+	}
+}

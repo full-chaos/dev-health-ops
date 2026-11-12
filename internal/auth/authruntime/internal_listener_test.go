@@ -34,6 +34,7 @@ var pepRoutes = []string{
 	http.MethodPost + " " + workloadexchange.Pattern,
 	http.MethodPost + " " + authapi.PatternAuthorize,
 	http.MethodPost + " " + authapi.PatternAuthorizeBatch,
+	http.MethodPost + " " + authapi.PatternAuthorizeRepositories,
 }
 
 // listenerHandlers returns the handler of each httpapi listener configure built, by component name.
@@ -269,7 +270,7 @@ func TestTheInternalListenerRefusesANonWorkloadOrUnlistedCaller(t *testing.T) {
 		"forwarded address": unsignedBearer(`{"alg":"EdDSA","typ":"workload+jwt","kid":"k"}`, claims("auth-service", session.WirePrincipalID(uuid.New()))),
 	}
 	for name, bearer := range bearers {
-		for _, path := range []string{authapi.PatternAuthorize, authapi.PatternAuthorizeBatch} {
+		for _, path := range []string{authapi.PatternAuthorize, authapi.PatternAuthorizeBatch, authapi.PatternAuthorizeRepositories} {
 			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
 			request.RemoteAddr = "127.0.0.1:4321"
 			if bearer != "" {

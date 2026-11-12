@@ -28,7 +28,6 @@ func TestUserCRUDAndPasswordChangeMatchesThePythonAPI(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("users", t.Name(), "de576d358c41c012c6bc4d8eecaed870d6cb3306c3032242650fb6b335c72cf4"))
 	root := repoRoot(t)
 	nextID := goldenIDs("usr")
-	const jwtKey = "venue-oracle-test-secret-key-for-user-crud-flow-32-bytes!!"
 	const adminPlaintextPassword = "correct horse battery staple 9"
 
 	orgID := nextID()
@@ -39,7 +38,6 @@ func TestUserCRUDAndPasswordChangeMatchesThePythonAPI(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			clock := seedClock()
@@ -218,7 +216,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, memberID)
 			Headers: map[string]string{"Content-Type": "application/json"}, Body: venueoracle.B64(`{`)},
 	}
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
+	goBase, _ := startGoServer(t, ctx, venue)
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,

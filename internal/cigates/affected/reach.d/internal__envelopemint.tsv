@@ -25,6 +25,7 @@ internal/envelopemint	keygen.go	internal/api/integrationsadmin/backfillvenue
 internal/envelopemint	keygen.go	internal/api/integrationsadmin/discoveryvenue
 internal/envelopemint	keygen.go	internal/api/integrationsadmin/integrationsvenue
 internal/envelopemint	keygen.go	internal/api/integrationsadmin/syncvenue
+internal/envelopemint	keygen.go	internal/api/orgs
 internal/envelopemint	keygen.go	internal/api/policy
 internal/envelopemint	keygen.go	internal/api/session
 internal/envelopemint	keygen.go	internal/api/sso

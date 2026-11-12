@@ -20,7 +20,6 @@ func TestPagerDutyStatusAndPreflightVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("status_preflight", "TestPagerDutyStatusAndPreflightVenueOracle", "330564a0e051de2fcfce96251f9f048e5a4ccc26bce120fcdabefc9c8ba86858"))
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-status-32-bytes!"
 
 	type orgSpec struct {
 		id   uuid.UUID
@@ -35,7 +34,6 @@ func TestPagerDutyStatusAndPreflightVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -171,7 +169,7 @@ VALUES ($1, 'pagerduty', $2, 'v1:not-decryptable-here', 1, now(), now(), $3, $4,
 	}
 
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
+	goBase, _ := startGoServer(t, ctx, venue)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 	golden.Finish(t)

@@ -29,12 +29,10 @@ import (
 // such rule.
 func TestAProviderChangeNeverKeepsTheOldVendorsKey(t *testing.T) {
 	ctx := context.Background()
-	const jwtKey = "venue-oracle-test-secret-key-for-llm-binding-32-bytes!"
 	org, adminUserID := uuid.New(), uuid.New()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   repoRoot(t),
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			for _, stmt := range []struct {
@@ -53,7 +51,7 @@ VALUES ($1, 'llmbinding-admin@example.com', true, true, false, 0, now(), now())`
 			return map[string]map[string]any{"a": {"user_id": adminUserID.String(), "email": "llmbinding-admin@example.com", "org_id": org.String(), "role": "admin"}}
 		}),
 	})
-	base, pool := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	base, pool := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(llmVenueEncryptionKey), "")
 		if err != nil {
 			t.Fatalf("build decryptor: %v", err)

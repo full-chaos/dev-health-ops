@@ -41,6 +41,8 @@ on:
       - 'src/**/*.md'
       - 'src/**/*.sh'
       - 'src/**/*.py'
+      # the auth/authapi and sharedserver directory reads see the PDP's diagram source beside its Go owner
+      - 'internal/auth/authapi/web_approver_reference.mmd'
       # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
       # render deploy/helm/dev-health, so a chart-only change is a Go input.
       - 'deploy/helm/dev-health/**'

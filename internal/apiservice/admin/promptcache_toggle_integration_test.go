@@ -27,7 +27,6 @@ const (
 func TestPromptCacheOptIn(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-prompt-cache-32-bytes!"
 
 	orgSaved, orgOpenAI, orgEmpty := uuid.New(), uuid.New(), uuid.New()
 	adminID, memberID := uuid.New(), uuid.New()
@@ -35,7 +34,6 @@ func TestPromptCacheOptIn(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -66,7 +64,7 @@ VALUES (gen_random_uuid(), $1, 'llm', $2, $3, $4, now() - interval '1 day', now(
 			}
 		}),
 	})
-	base, pool := startGoServer(t, ctx, venue, jwtKey)
+	base, pool := startGoServer(t, ctx, venue)
 	auth := func(name string) map[string]string {
 		return map[string]string{"Authorization": "Bearer " + venue.Tokens[name]}
 	}

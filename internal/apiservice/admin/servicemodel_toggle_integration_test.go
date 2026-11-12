@@ -66,7 +66,6 @@ func decodeObject(t *testing.T, resp routeResponse) map[string]any {
 func TestServiceModelSelfServiceToggle(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-svc-model-32-bytes!"
 
 	orgTeam, orgEnterprise, orgCommunity, orgNoACR, orgBilling, orgFresh := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	orgSavedBYO := uuid.New()
@@ -76,7 +75,6 @@ func TestServiceModelSelfServiceToggle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -131,7 +129,7 @@ VALUES (gen_random_uuid(), $1, 'llm', 'provider', 'anthropic', false, now(), now
 			return tokens
 		}),
 	})
-	base, pool := startGoServer(t, ctx, venue, jwtKey)
+	base, pool := startGoServer(t, ctx, venue)
 	auth := func(name string) map[string]string {
 		return map[string]string{"Authorization": "Bearer " + venue.Tokens[name]}
 	}

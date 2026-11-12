@@ -27,7 +27,6 @@ func TestImpersonationStartStopMatchesThePythonAPI(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("impersonation", t.Name(), "5987024ab34598026aaeee851ff0f3bc025c4f1efd586f40c166c8dc223892be"))
 	root := repoRoot(t)
 	nextID := goldenIDs("imp")
-	const jwtKey = "venue-oracle-test-secret-key-for-impersonation-flow-32bytes!"
 
 	orgID := nextID()
 	adminID := nextID()
@@ -49,7 +48,6 @@ func TestImpersonationStartStopMatchesThePythonAPI(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -157,7 +155,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, target.membershipID, orgID,
 			Body:    venueoracle.B64(`{`)},
 	}
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
+	goBase, _ := startGoServer(t, ctx, venue)
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,

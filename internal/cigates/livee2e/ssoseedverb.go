@@ -2,11 +2,13 @@ package livee2e
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +48,7 @@ func seedSSOProvider(ctx context.Context, args []string, getenv func(string) str
 	name := fs.String("name", "Live E2E SSO", "provider name")
 	role := fs.String("default-role", "member", "role of a user the provider creates")
 	autoProvision := fs.Bool("auto-provision", true, "create users on first sign-in")
+	allowedDomains := fs.String("allowed-domains", "", "comma-separated e-mail domains the provider admits; empty admits any")
 	issuer := fs.String("issuer", "", "OIDC issuer")
 	clientID := fs.String("client-id", "", "OIDC client id")
 	authorizationEndpoint := fs.String("authorization-endpoint", "", "OIDC authorization endpoint")
@@ -103,7 +106,17 @@ func seedSSOProvider(ctx context.Context, args []string, getenv func(string) str
 	if err != nil {
 		return err
 	}
-	domains := "[]"
+	domainList := []string{}
+	for _, domain := range strings.Split(*allowedDomains, ",") {
+		if domain = strings.TrimSpace(domain); domain != "" {
+			domainList = append(domainList, domain)
+		}
+	}
+	domainJSON, err := json.Marshal(domainList)
+	if err != nil {
+		return err
+	}
+	domains := string(domainJSON)
 	now := time.Now().UTC()
 	provider := ssoseed.Provider{
 		ID: providerID, OrgID: org, Name: *name, Protocol: protocol, Status: "active", DefaultRole: *role,

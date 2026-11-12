@@ -198,3 +198,27 @@ func TestSSOSeedOnlyLinkedByCigate(t *testing.T) {
 		}
 	}
 }
+
+// -allowed-domains is stored as the JSON array the provider row holds; unset it stores [] (any domain).
+func TestSeedSSOProviderStoresTheAllowedDomains(t *testing.T) {
+	for _, tc := range []struct{ flag, want string }{{"", "[]"}, {"example.com, example.org ,", `["example.com","example.org"]`}} {
+		db, opened := &seedFakeDB{}, 0
+		var out bytes.Buffer
+		args := append([]string{"admin@example.com", "oidc"}, oidcFlags...)
+		if tc.flag != "" {
+			args = append(args, "-allowed-domains", tc.flag)
+		}
+		if err := seedSSOProvider(context.Background(), args, seedEnv(nil), &out, fakeOpen(db, &opened)); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, arg := range db.execs[0] {
+			if text, ok := arg.(*string); ok && text != nil && *text == tc.want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("flag %q: no allowed_domains argument %s in %v", tc.flag, tc.want, db.execs[0])
+		}
+	}
+}

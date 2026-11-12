@@ -30,12 +30,15 @@ deploy/helm/dev-health	render_cache_test.go
 internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
 internal/api/policy	delegated_test.go
+internal/api/policy	delegated_use_test.go
 internal/api/policy	principalonce_test.go
+internal/api/session	session_test.go
 internal/api/syncadmin	dataset_writer_census_test.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go
 internal/api/syncadmin	gate_reader_census_test.go
 internal/api/syncadmin	repositories_write_venue_oracle_integration_test.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go
+internal/api/teamsidentity	response_read_census_test.go
 internal/api/teamsidentity	team_id_writer_census_test.go
 internal/apiservice	accessroute_probe_test.go
 internal/apiservice	accessroute_routed_test.go
@@ -205,6 +208,7 @@ internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	alerts_auth_slo_test.go
 internal/cigates/chartgates	helpers_test.go
+internal/cigates/chartgates	overlay_parallel_test.go
 internal/cigates/chartgates	overlay_test.go
 internal/cigates/chartgates	worker_secret_env_scan_test.go
 internal/cigates/chconstructor	chconstructor_test.go
@@ -276,6 +280,8 @@ internal/cigates/integrationshards	shard_run_tee_bound_test.go
 internal/cigates/integrationshards	shard_start_order_test.go
 internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
+internal/cigates/livee2e	mintlicense.go
+internal/cigates/livee2e	mintlicense_test.go
 internal/cigates/livee2e	smtpsink.go
 internal/cigates/livee2e	smtpsink_test.go
 internal/cigates/livee2e	tokenreview.go
@@ -293,6 +299,7 @@ internal/cigates/racescope	scan.go
 internal/cigates/raceunweighted	raceunweighted_test.go
 internal/cigates/releasetag	parity_test.go
 internal/cigates/releasetag	releasetag.go
+internal/cigates/retiredcredentialnames	census_test.go
 internal/cigates/retiredservicecred	census_test.go
 internal/cigates/routing	chart_test.go
 internal/cigates/routing	cut_test.go
@@ -497,6 +504,7 @@ internal/providerfoundation	clients.go
 internal/providerfoundation	wire_sites_census_test.go
 internal/providersync	client_ledger_census_test.go
 internal/providersync	gitlab_pr_commit_links_integration_test.go
+internal/providersync	item_route_census_test.go
 internal/providersync	jira_search_endpoint_guard_test.go
 internal/providersync	log_sites_redaction_test.go
 internal/providersync	oracle_compare_test.go

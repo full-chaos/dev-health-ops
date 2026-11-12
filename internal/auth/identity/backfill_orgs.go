@@ -73,7 +73,7 @@ func (s *Store) BackfillOrganization(ctx context.Context, t OrgBackfillTarget, d
 		return res, s.storeErr(ctx, "read auth.organizations", err)
 	}
 	if found {
-		src = keepSuspended(cur, src)
+		src = keepSuspended(t.ID, cur, src)
 	}
 	d := decideOrg(found, cur, src)
 	if d.action == orgNone {

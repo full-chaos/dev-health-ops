@@ -136,8 +136,11 @@ func SessionReaderReadsWith(platformRolesOwned, workloadReader bool) []ColumnGra
 // role held a column grant on it for the one-time legacy refresh exchange; a
 // grants pass that finds the role still holding a direct privilege there revokes
 // it, so a database migrated before the removal loses it. A database where the
-// role holds nothing gets no statement: the migration login no longer holds
-// GRANT OPTION on the table, so a REVOKE there would fail with 42501.
+// role holds nothing gets no statement: a migration login that holds nothing on
+// the table would fail that REVOKE with 42501. The migration login may still
+// hold the old column privileges and REFERENCES here, granted by the owner;
+// owner-move takes them away once the runtime role holds no privilege on the
+// table (migratorExtraStatements), and until then the pass needs them.
 const retiredRefreshTokensTable = "refresh_tokens"
 
 // retiredPublicReadTables are public tables the auth runtime role once read by a

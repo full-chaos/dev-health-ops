@@ -187,6 +187,14 @@ func cacheWriter(s step) (string, bool) {
 	if v, set := withString(s, "cache-to"); set && !off(v) && !gatedWith(v) {
 		return s.Uses + " (cache-to: " + v + ")", true
 	}
+	// CHAOS-13520: docker/bake-action writes through a `set` line `<target>.cache-to=...`.
+	if v, set := withString(s, "set"); set {
+		for _, line := range strings.Split(v, "\n") {
+			if _, val, ok := strings.Cut(strings.TrimSpace(line), ".cache-to="); ok && !off(val) && !gatedWith(val) {
+				return s.Uses + " (set: " + strings.TrimSpace(line) + ")", true
+			}
+		}
+	}
 	return "", false
 }
 
@@ -293,6 +301,8 @@ func TestPlants(t *testing.T) {
 		{"buildx cache-to literal", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/build-push-action@cccc\n        with:\n          cache-from: type=gha\n          cache-to: type=gha,mode=max\n"), 1},
 		{"buildx cache-to gated on the ref input", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/build-push-action@cccc\n        with:\n          cache-from: type=gha\n          cache-to: ${{ github.event.inputs.ref == '' && 'type=gha,mode=max' || '' }}\n"), 0},
 		{"buildx cache-from only", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/build-push-action@cccc\n        with:\n          cache-from: type=gha\n"), 0},
+		{"bake set cache-to", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/bake-action@cccc\n        with:\n          set: |\n            a.cache-from=type=gha\n            a.cache-to=type=gha,mode=max\n"), 1},
+		{"bake set cache-from only", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/bake-action@cccc\n        with:\n          set: |\n            a.cache-from=type=gha\n"), 0},
 		{"setup-go cache default ON", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/setup-go@dddd\n        with:\n          go-version: '1.24'\n"), 1},
 		{"setup-go cache true", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/setup-go@dddd\n        with:\n          cache: true\n"), 1},
 		{"setup-go cache false", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/setup-go@dddd\n        with:\n          cache: false\n"), 0},

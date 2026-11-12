@@ -20,6 +20,7 @@ const usage = `usage: cigate live-e2e <verb>
   assert-login-token FILE ISSUER KID     (FILE holds the login answer; prints one proof line)
   edge-request DOCUMENTS OPERATION ORG
   mint-token                             (env E2E_SESSION_ID, E2E_ISSUER_URL, E2E_ISSUER_KEY_FILE; optional E2E_USER_ID, E2E_ORG_ID, E2E_ISSUER_KID)
+  mint-license PUBLIC_FILE LICENSE_FILE   (throwaway enterprise licence; files must not exist)
   valkey-ping                            (env REDIS_URL)
   subject-jws FILE                       (test subject token for the fake TokenReview; FILE must not exist)
   reviewer-token FILE                    (random reviewer bearer for the fake TokenReview; FILE must not exist)
@@ -133,6 +134,14 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 			return fail(err)
 		}
 		fmt.Fprintln(stdout, token)
+		return 0
+	case "mint-license":
+		if !need(2) {
+			return 2
+		}
+		if err := mintLicense(args[1], args[2]); err != nil {
+			return fail(err)
+		}
 		return 0
 	case "subject-jws", "reviewer-token":
 		if !need(1) {

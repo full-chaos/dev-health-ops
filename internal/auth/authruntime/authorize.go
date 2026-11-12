@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -55,7 +57,8 @@ func authorizeRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.P
 		if !ok {
 			return nil, fmt.Errorf("authruntime: the authorize routes need a signer that reads the key set")
 		}
-		if deps.References, err = authapi.NewPrincipalReferences(authapi.PrincipalReferencesConfig{IssuerURL: cfg.TokenIssuerURL, Keys: keys}); err != nil {
+		if deps.References, err = authapi.NewPrincipalReferences(authapi.PrincipalReferencesConfig{IssuerURL: cfg.TokenIssuerURL, Keys: keys,
+			WebApprover: webApproverReferences(cfg, logger)}); err != nil {
 			return nil, err
 		}
 		if len(cfg.AuthorizeCallerSubjects) > 0 {
@@ -68,4 +71,39 @@ func authorizeRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.P
 		}
 	}
 	return authapi.AuthorizeRoutes(deps)
+}
+
+// webApproverReferences builds the web approver reference kind (CHAOS-11207),
+// or nil when it is off. Off with only part of its settings is one ERROR line
+// that names the missing settings (never a value); auth-service starts either
+// way (product rule 3).
+func webApproverReferences(cfg authconfig.Config, logger *slog.Logger) *authapi.WebApproverReferences {
+	w := cfg.AuthorizeWebApprover
+	var missing []string
+	for _, setting := range []struct{ name, value string }{
+		{authconfig.EnvAuthorizeWebApproverIssuer, w.Issuer},
+		{authconfig.EnvAuthorizeWebApproverJWKSFile, w.JWKSFile},
+		{authconfig.EnvAuthorizeWebApproverCaller, w.Caller},
+	} {
+		if setting.value == "" {
+			missing = append(missing, setting.name)
+		}
+	}
+	if len(missing) == 3 {
+		return nil
+	}
+	if w.Caller != "" && !slices.Contains(cfg.AuthorizeCallerSubjects, w.Caller) {
+		missing = append(missing, authconfig.EnvAuthorizeWebApproverCaller+" in "+authconfig.EnvAuthorizeCallerSubjects)
+	}
+	if len(missing) > 0 {
+		logger.Error("web approver reference off: settings missing", "missing", strings.Join(missing, ","))
+		return nil
+	}
+	references, err := authapi.NewWebApproverReferences(authapi.WebApproverReferencesConfig{Issuer: w.Issuer, JWKSFile: w.JWKSFile, Caller: w.Caller})
+	if err != nil {
+		logger.Error("web approver reference off: settings invalid", "error", err.Error())
+		return nil
+	}
+	logger.Info("web approver reference on")
+	return references
 }

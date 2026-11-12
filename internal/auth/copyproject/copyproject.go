@@ -36,6 +36,10 @@ var (
 
 const usersEmailLowerKey = "users_email_lower_key"
 
+// DeletedOrganizationSlug is the slug a deprovision leaves on the organization's auth row: go-api's slugify never keeps
+// "~" and the wire slug pattern refuses it, so no create asks for it, and the id makes it unique.
+func DeletedOrganizationSlug(id uuid.UUID) string { return "~deleted~" + id.String() }
+
 type source struct {
 	email      string
 	emailLower string

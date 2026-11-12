@@ -47,6 +47,10 @@ func driftShard(t *testing.T) (shard int, weights map[string]int, heavy, light s
 	byShard := map[int]map[string]int{}
 	for _, l := range strings.Split(stdout, "\n") {
 		m := shardRow.FindStringSubmatch(l)
+		if m == nil {
+			// A split-by-test package (CHAOS-13520) drifts against its planned weight in the shard.
+			m = splitRow.FindStringSubmatch(l)
+		}
 		if m == nil || splitPackages[m[2]] {
 			continue
 		}
@@ -57,7 +61,7 @@ func driftShard(t *testing.T) (shard int, weights map[string]int, heavy, light s
 		}
 		byShard[s][m[2]] = w
 	}
-	for s := 1; s <= 64; s++ {
+	for s := 1; s <= 80; s++ {
 		rows := byShard[s]
 		if len(rows) < 2 {
 			continue

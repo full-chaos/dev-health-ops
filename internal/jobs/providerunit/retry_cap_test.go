@@ -15,7 +15,7 @@ import (
 )
 
 func providerClassError(class providerfoundation.ErrorClass) error {
-	return &providerfoundation.ProviderError{Class: class, StatusCode: 500, Path: "/repos/acme/api"}
+	return &providerfoundation.ProviderError{Class: class, StatusCode: 500}
 }
 
 // Every class of the closed vocabulary has a stated try cap; 0 = registry ceiling.

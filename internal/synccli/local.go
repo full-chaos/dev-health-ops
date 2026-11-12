@@ -25,6 +25,8 @@ func runLocalRepo(ctx context.Context, deps InlineDeps, lookups dbLookups, plan 
 		}
 		if id, err := lookups.FirstOrg(ctx, dbURL); err == nil {
 			plan.Org, plan.OrgSource = &id, OrgFromDB
+		} else {
+			logFirstOrganizationFailure(ctx, err)
 		}
 	}
 	conn, err := deps.OpenStore(ctx, plan.SinkURI)

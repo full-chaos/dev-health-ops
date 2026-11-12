@@ -159,6 +159,11 @@ type OwnerMoveReport struct {
 	PublicTables int
 	// GrantRowsMoved counts the runtime role's public privilege rows given to a new grantor.
 	GrantRowsMoved int
+	// ExtrasRevoked counts the migration login's public privileges outside the privilege set that this run takes away;
+	// ExtrasKept counts those it leaves for now (see migratorExtraStatements).
+	ExtrasRevoked, ExtrasKept int
+	// ExtraLines names each one: revoke|table|privilege|column|grantable|grantor, or keep|...|reason.
+	ExtraLines []string
 }
 
 // Validate checks the options without touching the database.
@@ -583,7 +588,11 @@ func ownerMovePublicStatements(ctx context.Context, tx pgx.Tx, options OwnerMove
 		}
 	}
 	if options.GrantsOnly {
-		return statements, nil
+		extras, err := migratorExtraStatements(ctx, tx, options.To, options.RuntimeRole, nil, report)
+		if err != nil {
+			return nil, err
+		}
+		return append(statements, extras...), nil
 	}
 
 	names := make([]string, 0, len(tables))
@@ -595,6 +604,7 @@ func ownerMovePublicStatements(ctx context.Context, tx pgx.Tx, options OwnerMove
 		priv, col string
 		grantable bool
 	}
+	var regranted []dependentRow
 	for _, table := range names {
 		var owner string
 		if err := tx.QueryRow(ctx, `SELECT r.rolname::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_roles r ON r.oid = c.relowner
@@ -649,6 +659,9 @@ func ownerMovePublicStatements(ctx context.Context, tx pgx.Tx, options OwnerMove
 		}
 		report.GrantRowsMoved += len(held)
 		if len(held) > 0 {
+			for _, r := range held {
+				regranted = append(regranted, dependentRow{table: table, privilege: r.priv, quotedColumn: r.col})
+			}
 			if options.Restore {
 				statements = append(statements, regrant...)
 				statements = append(statements, "SET LOCAL ROLE "+from)
@@ -664,6 +677,13 @@ func ownerMovePublicStatements(ctx context.Context, tx pgx.Tx, options OwnerMove
 		if options.Restore {
 			statements = append(statements, "REVOKE ALL ON TABLE "+qualified(table)+" FROM "+from)
 		}
+	}
+	if !options.Restore {
+		extras, err := migratorExtraStatements(ctx, tx, options.To, options.RuntimeRole, regranted, report)
+		if err != nil {
+			return nil, err
+		}
+		statements = append(statements, extras...)
 	}
 	return statements, nil
 }

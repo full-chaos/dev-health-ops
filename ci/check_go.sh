@@ -345,7 +345,7 @@ run_providersync_bounded() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-skips JSON_LOG LEDGER NAME...|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-skips JSON_LOG LEDGER NAME...|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|test-shard-split-list SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -413,6 +413,7 @@ usage() {
          GO_QUALITY_SELECTION_FILE (the go-quality-plan verdict) narrows the test
          and race legs to an AFFECTED package subset:
          static (format, vet, build, contract, integration-vet, shard plans),
+         plan-reads (the plan-reads guard),
          test SHARD COUNT (go test, the SHARD-th of COUNT weight-balanced
          package slices, ci/go_test_weights.tsv; shard 1 also runs the
          multi-replica worker gate), race SHARD
@@ -428,7 +429,11 @@ usage() {
          Print the packages (module, import path, weights key) of the SHARD-th of
          COUNT weight-balanced slices of the unit tests (ci/go_test_weights.tsv,
          a package with no row weighs 1). Fails when the slice is empty, unless
-         GO_QUALITY_SELECTION_FILE selects a package subset.
+         GO_QUALITY_SELECTION_FILE selects a package subset. A part of a split
+         package (ci/go_test_splits.tsv) adds its part and part count.
+  test-shard-split-list SHARD COUNT
+         Print TEST-SPLIT-RUN <key> <name> for every test name the split-package
+         parts of the SHARD-th of COUNT test slices run; runs no test.
   race-shard-plan SHARD COUNT
          Print the packages (module, import path, weights key) the SHARD-th of
          COUNT race legs runs: its weight-balanced slice, its solo packages and
@@ -437,13 +442,18 @@ usage() {
          Print the rows of ci/race_excluded_tests.tsv that the SHARD-th of COUNT
          test legs checks without -race: the rows whose package is in the plan of that
          shard (every row is checked in exactly one leg).
+         SHARD `all` (test-shard-plan, test-shard-split-list and
+         race-excluded-shard-plan) prints, for each SHARD of 1..COUNT, a
+         `==> VERB SHARD COUNT` line and the output of that shard, listing each
+         module and split package once.
   race-excluded-receipts JSON...
          Read the receipt of every row of ci/race_excluded_tests.tsv from go test
          -json files: exactly one pass event per row, and a missing, skipped,
          failed, repeated or cached (package) result fails.
   test-shard-wall-guard SHARD COUNT WALL LOGFILE
-         Log the wall seconds of a test shard and fail above 85% of the 30 min
-         job cap (GO_TEST_SHARD_CAP_SECONDS), naming the shard and its three
+         Log the wall seconds of a test shard, warn above 300 s
+         (GO_TEST_SHARD_WALL_WARN_SECONDS) and fail above 600 s
+         (GO_TEST_SHARD_WALL_FAIL_SECONDS), naming the shard and its three
          heaviest packages (measured in LOGFILE, else by weight).
   security-fresh-receipt RAN JSON...
          The cache receipt of a test or race leg (CHAOS-11448), read from the go test -json events of its stages: how many
@@ -528,7 +538,9 @@ usage() {
          test shard of internal/queryapi/server, or `remaining` for a top-level
          test shard of internal/jobs/metrics/remaining. `--dry-run` prints the
          exact selection without starting Docker-backed tests; CI never passes
-         that option.
+         that option. `packages all --dry-run` prints, from one plan, the
+         dry run of every packages shard, each after a
+         `==> integration-shard packages N --dry-run` line.
          Every target runs only the integration-tagged top-level tests (the
          untagged ones run in the go-quality test and race legs); a package
          whose tag-only test file declares func init or func TestMain runs whole.
@@ -721,7 +733,7 @@ check_authhistory_vet() {
 # A line must be exactly <package><TAB><test> (CHAOS-11436): an empty line and a # comment are skipped; a whitespace-only line, one
 # column, more than two columns or an empty column dies naming the line; a CRLF ending is trimmed.
 race_excluded_rows() {
-  local list="${GO_RACE_EXCLUDED_TESTS:-${ROOT}/ci/race_excluded_tests.tsv}" row shard="${1:-}" shard_count="${2:-}" plan="" plan_keys="" normalised
+  local list="${GO_RACE_EXCLUDED_TESTS:-${ROOT}/ci/race_excluded_tests.tsv}" row shard="${1:-}" shard_count="${2:-}" plan="" plan_keys="" split_pairs="" normalised
   local -a rows=()
   [ -f "${list}" ] || die "ci/race_excluded_tests.tsv is missing"
   normalised="$(awk -F'\t' '
@@ -735,12 +747,15 @@ race_excluded_rows() {
   [ "${#rows[@]}" -gt 0 ] || die "ci/race_excluded_tests.tsv lists no test: nothing would be measured"
   if [ -n "${shard}" ]; then
     check_test_shard_args "${shard}" "${shard_count}"
-    census_assert_listed "$(printf '%s\n' "${rows[@]}")"
+    test_leg_listed "census-listed|${list}" census_assert_listed "$(printf '%s\n' "${rows[@]}")"
     plan="$(check_test_shard_plan "${shard}" "${shard_count}")" || exit 2
-    plan_keys="$(printf '%s\n' "${plan}" | awk -F'\t' '$1 == "." { print $3 }')"
+    plan_keys="$(printf '%s\n' "${plan}" | awk -F'\t' '$1 == "." && NF == 3 { print $3 }')"
+    # A split package (CHAOS-13520) is in several shards: its row belongs to the shard whose part runs the row's test.
+    split_pairs="$(test_shard_split_names "${plan}" ".")" || exit 2
+    split_pairs="$(printf '%s\n' "${split_pairs}" | cut -f2,3)"
   fi
   for row in "${rows[@]}"; do
-    if [ -z "${shard}" ] || grep -qxF -- "${row%%$'\t'*}" <<<"${plan_keys}"; then printf '%s\n' "${row}"; fi
+    if [ -z "${shard}" ] || grep -qxF -- "${row%%$'\t'*}" <<<"${plan_keys}" || grep -qxF -- "${row}" <<<"${split_pairs}"; then printf '%s\n' "${row}"; fi
   done
 }
 
@@ -748,8 +763,8 @@ race_excluded_rows() {
 # stale row, or a directory `go list` omits (testdata, no buildable file), is in no shard plan, so no shard would ever check it.
 census_assert_listed() {
   local census_rows="$1" modpath all row package
-  modpath="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed"
-  all="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./...)" || die "go list failed"
+  modpath="$(test_leg_listed "go-list-m|." module_go . list -m)" || die "go list -m failed"
+  all="$(test_leg_listed "go-list-all|." module_go . list -mod=readonly -f '{{.ImportPath}}' ./...)" || die "go list failed"
   while IFS= read -r row; do
     [ -n "${row}" ] || continue
     package="${row%%$'\t'*}"
@@ -1064,11 +1079,15 @@ check_test() {
 GO_TEST_WEIGHTS="${GO_TEST_WEIGHTS:-${ROOT}/ci/go_test_weights.tsv}"
 # ci/go_test_pins.tsv (CHAOS-13422): the packages ci/go_race_shard.awk places first: the heavy ones each on its own shard, then the apart ones, then the serial one.
 GO_TEST_PINS="${GO_TEST_PINS:-${ROOT}/ci/go_test_pins.tsv}"
+# ci/go_test_splits.tsv (CHAOS-13520): package<TAB>parts; such a package runs as PARTS parts of its test names, placed like packages.
+GO_TEST_SPLITS="${GO_TEST_SPLITS:-${ROOT}/ci/go_test_splits.tsv}"
 # GO_TEST_SERIAL_FACTOR (CHAOS-13422): the other packages of a test shard overlap, so a shard's wall is about their summed time / 1.9
 # (1.80-2.01 over the 5 shards of PR #5995's run at 9244407eb); the serial package adds its whole wall, so it weighs 2x in the split.
 GO_TEST_SERIAL_FACTOR=2
-GO_TEST_SHARD_CAP_SECONDS="${GO_TEST_SHARD_CAP_SECONDS:-1800}"
-GO_TEST_SHARD_WALL_PERCENT=85
+# CHAOS-13520: every job five minutes or less. A test shard warns past GO_TEST_SHARD_WALL_WARN_SECONDS of go test wall and fails
+# past GO_TEST_SHARD_WALL_FAIL_SECONDS, so a slow runner warns and a shard plan that no longer fits fails.
+GO_TEST_SHARD_WALL_WARN_SECONDS="${GO_TEST_SHARD_WALL_WARN_SECONDS:-300}"
+GO_TEST_SHARD_WALL_FAIL_SECONDS="${GO_TEST_SHARD_WALL_FAIL_SECONDS:-600}"
 
 check_test_shard_args() {
   local shard="${1:-}" count="${2:-}"
@@ -1078,40 +1097,50 @@ check_test_shard_args() {
     || die "test shard ${shard} is outside 1..${count}"
   [ -f "${GO_TEST_WEIGHTS}" ] || die "test shards need ${GO_TEST_WEIGHTS}"
   [ -f "${GO_TEST_PINS}" ] || die "test shards need ${GO_TEST_PINS}"
+  [ -f "${GO_TEST_SPLITS}" ] || die "test shards need ${GO_TEST_SPLITS}"
 }
 
 # check_test_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package of the shard, key = import path relative
-# to the module root (the weights key). A shard that selects no package fails: it would read green while running nothing.
+# to the module root (the weights key); a part of a split package (ci/go_test_splits.tsv, CHAOS-13520) is one
+# "module<TAB>package<TAB>key<TAB>part<TAB>parts" line. A shard that selects no package fails: it would read green while running nothing.
 check_test_shard_plan() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg key selected=0
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg key spart sparts listing selected=0
   check_test_shard_args "${shard}" "${count}"
   load_quality_selection
   for module_dir in "${MODULE_DIRS[@]}"; do
-    modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed in ${module_dir}"
-    while IFS= read -r pkg; do
+    modpath="$(test_leg_listed "go-list-m|${module_dir}" module_go "${module_dir}" list -m)" || die "go list -m failed in ${module_dir}"
+    listing="$(test_leg_listed "go-list-all|${module_dir}" module_go "${module_dir}" list -mod=readonly -f '{{.ImportPath}}' ./... \
+      | quality_filter "${module_dir}" "${modpath}" \
+      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" \
+          -v splits="${GO_TEST_SPLITS}" \
+          -v serial="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}" -v serialx="${GO_TEST_SERIAL_FACTOR}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" \
+      || die "test shard ${shard}/${count}: the package list or its split (ci/go_race_shard.awk) failed in ${module_dir}"
+    while IFS=$'\t' read -r pkg spart sparts; do
       [ -n "${pkg}" ] || continue
       key="${pkg#"${modpath}/"}"
       [ "${pkg}" != "${modpath}" ] || key="."
-      printf '%s\t%s\t%s\n' "${module_dir}" "${pkg}" "${key}"
+      if [ -n "${spart}" ]; then
+        printf '%s\t%s\t%s\t%s\t%s\n' "${module_dir}" "${pkg}" "${key}" "${spart}" "${sparts}"
+      else
+        printf '%s\t%s\t%s\n' "${module_dir}" "${pkg}" "${key}"
+      fi
       selected=$((selected + 1))
-    done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./... \
-      | quality_filter "${module_dir}" "${modpath}" \
-      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" \
-          -v serial="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}" -v serialx="${GO_TEST_SERIAL_FACTOR}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")
+    done <<<"${listing}"
   done
   [ "${selected}" -gt 0 ] || [ "${QUALITY_FILTER_ACTIVE}" -eq 1 ] \
     || die "test shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"
 }
 
-# check_test_shard_wall_guard SHARD COUNT WALL_SECONDS LOGFILE: logs the shard's wall time and FAILS above 85% of the job cap
-# (GO_TEST_SHARD_CAP_SECONDS, 1800), naming the shard and its three heaviest packages: by measured time (the `ok` lines of the
-# go test log), else by weight when the log holds none.
+# check_test_shard_wall_guard SHARD COUNT WALL_SECONDS LOGFILE: logs the shard's wall time, warns above
+# GO_TEST_SHARD_WALL_WARN_SECONDS (300) and FAILS above GO_TEST_SHARD_WALL_FAIL_SECONDS (600), naming the shard and its three
+# heaviest packages: by measured time (the `ok` lines of the go test log), else by weight when the log holds none.
 check_test_shard_wall_guard() {
-  local shard="${1:-}" count="${2:-}" wall="${3:-}" log="${4:-}" limit top="" basis="measured time"
+  local shard="${1:-}" count="${2:-}" wall="${3:-}" log="${4:-}" limit="${GO_TEST_SHARD_WALL_FAIL_SECONDS}" top="" basis="measured time"
   check_test_shard_args "${shard}" "${count}"
   case "${wall}" in ""|*[!0-9]*) die "test shard wall seconds must be a non-negative integer, got '${wall}'" ;; esac
-  limit=$((GO_TEST_SHARD_CAP_SECONDS * GO_TEST_SHARD_WALL_PERCENT / 100))
-  printf 'test shard %s/%s: wall %ss (limit %ss = %s%% of the %ss cap)\n' "${shard}" "${count}" "${wall}" "${limit}" "${GO_TEST_SHARD_WALL_PERCENT}" "${GO_TEST_SHARD_CAP_SECONDS}"
+  printf 'test shard %s/%s: wall %ss (warn above %ss, fail above %ss)\n' "${shard}" "${count}" "${wall}" "${GO_TEST_SHARD_WALL_WARN_SECONDS}" "${limit}"
+  [ "${wall}" -le "${GO_TEST_SHARD_WALL_WARN_SECONDS}" ] \
+    || printf '::warning title=TEST SHARD WALL::test shard %s/%s took %ss, over %ss\n' "${shard}" "${count}" "${wall}" "${GO_TEST_SHARD_WALL_WARN_SECONDS}"
   [ "${wall}" -gt "${limit}" ] || return 0
   if [ -f "${log}" ]; then
     top="$(awk -F'\t' '$1 ~ /^ok/ && $3 ~ /^[0-9.]+s$/ { t = $3; sub(/s$/, "", t); print t "\t" $2 }' "${log}" \
@@ -1127,7 +1156,7 @@ check_test_shard_wall_guard() {
       | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2 \
       | awk -F'\t' 'NR <= 3 { printf "%s%s (weight %s)", (NR > 1 ? ", " : ""), $2, $1 }')"
   fi
-  die "test shard ${shard}/${count} took ${wall}s, over ${GO_TEST_SHARD_WALL_PERCENT}% (${limit}s) of the ${GO_TEST_SHARD_CAP_SECONDS}s job cap; heaviest packages by ${basis}: ${top} -- rebalance ci/go_test_weights.tsv or add a shard"
+  die "test shard ${shard}/${count} took ${wall}s, over the ${limit}s cap; heaviest packages by ${basis}: ${top} -- rebalance ci/go_test_weights.tsv, split a package (ci/go_test_splits.tsv) or add a shard"
 }
 
 # check_test_shard_unweighted_guard SHARD COUNT LOGFILE [partial] (CHAOS-10498): fails when a package of the shard ran 45 s or more
@@ -1265,11 +1294,177 @@ leg_events_file() {
   trap remove_leg_events_tmp EXIT
 }
 
+# test_leg_listed KEY COMMAND... (CHAOS-13520): the output of COMMAND. While TEST_LEG_LIST_CACHE names a directory (the
+# all-legs forms of test_legs_all), the output of the first call with KEY is kept there and every later call with KEY reads
+# it, so one all-legs run lists each module and each split package once instead of once per leg.
+test_leg_listed() {
+  local key="$1" file
+  shift
+  if [ -z "${TEST_LEG_LIST_CACHE:-}" ]; then
+    "$@"
+    return
+  fi
+  file="${TEST_LEG_LIST_CACHE}/$(printf '%s' "${key}" | sha256sum | cut -c1-32)"
+  if [ ! -f "${file}" ]; then
+    "$@" > "${file}.$$" || { rm -f -- "${file}.$$"; return 1; }
+    mv -f -- "${file}.$$" "${file}"
+  fi
+  cat -- "${file}"
+}
+
+# module_go MODULE ARG...: `go ARG...` in MODULE (a directory below the root), with the GO_ENV_OFF environment and no workspace.
+module_go() {
+  local module_dir="$1"
+  shift
+  (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go "$@")
+}
+
+# test_legs_all VERB COUNT COMMAND... (CHAOS-13520): `VERB all COUNT`: for each SHARD of 1..COUNT one "==> VERB SHARD COUNT"
+# line, then exactly what `VERB SHARD COUNT` prints (COMMAND... SHARD COUNT), from one listing of each module and split package
+# (test_leg_listed).
+test_legs_all() {
+  local verb="$1" count="$2" shard rc=0
+  shift 2
+  case "${count}" in ""|*[!0-9]*) die "test COUNT must be a positive integer, got '${count}'" ;; esac
+  [ "${count}" -ge 1 ] || die "test COUNT must be a positive integer, got '${count}'"
+  local TEST_LEG_LIST_CACHE
+  TEST_LEG_LIST_CACHE="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-test-legs.XXXXXX")" || die "no temp directory for ${verb} all"
+  # Each leg runs in its own subshell with errexit on, as a plain command (never inside an || / && list or an if): bash
+  # ignores set -e in every command of such a list, functions included, so a failure only errexit catches would pass here
+  # while `VERB K COUNT` fails. Its rc is taken right after it, with errexit off for that one command.
+  for ((shard = 1; shard <= count; shard++)); do
+    printf '==> %s %d %d\n' "${verb}" "${shard}" "${count}"
+    set +e
+    (
+      set -e
+      "$@" "${shard}" "${count}"
+    )
+    rc=$?
+    set -e
+    [ "${rc}" -eq 0 ] || { rc=2; break; }
+  done
+  rm -rf -- "${TEST_LEG_LIST_CACHE}"
+  [ "${rc}" -eq 0 ] || exit "${rc}"
+}
+
+# test_split_part_names MODULE PKG PART PARTS [GO FLAG...] (CHAOS-13520): the test names of part PART of PARTS of the split package
+# PKG: every name `go test -list` reports for the package (the leg's own build: -mod=readonly -trimpath plus the GO FLAGs) that go test can run
+# (Test*, Example*, Fuzz*), sorted (C locale), name i (1-based) in part ((i - 1) mod PARTS) + 1. A new test joins a part with
+# no table edit. Fails when the list fails, reports no name, or has fewer names than parts.
+test_split_part_names() {
+  local module_dir="$1" pkg="$2" part="$3" parts="$4" listing names count
+  shift 4
+  listing="$(test_leg_listed "go-test-list|${module_dir}|${pkg}|${MERGE_GROUP_FRESH:+fresh}|$*" \
+    module_go "${module_dir}" test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} "$@" -list '.*' "${pkg}")" \
+    || die "go test -list failed for split package ${pkg}"
+  names="$(printf '%s\n' "${listing}" | grep -E '^(Test|Example|Fuzz)[^[:space:]]*$' | LC_ALL=C sort -u || true)"
+  [ -n "${names}" ] || die "go test -list reported no test of split package ${pkg}"
+  count="$(printf '%s\n' "${names}" | wc -l)"
+  [ "${count}" -ge "${parts}" ] || die "split package ${pkg} has ${count} test name(s), fewer than its ${parts} parts (ci/go_test_splits.tsv)"
+  printf '%s\n' "${names}" | awk -v p="${part}" -v np="${parts}" '(NR - 1) % np == p - 1'
+}
+
+# test_shard_split_names PLAN MODULE: one "package<TAB>key<TAB>name" line per test name of the split-package parts of PLAN (the
+# output of check_test_shard_plan) in MODULE. A fresh security package (ci/security_fresh_packages.txt) is not split: it runs in
+# its own -count=1 call on merge_group.
+test_shard_split_names() {
+  local plan="$1" module_dir="$2" pkg key part parts name names parts_rows
+  parts_rows="$(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" '$1 == m && NF == 5 { print $2 "\t" $3 "\t" $4 "\t" $5 }')"
+  [ -n "${parts_rows}" ] || return 0
+  security_fresh_load
+  while IFS=$'\t' read -r pkg key part parts; do
+    [ -n "${pkg}" ] || continue
+    if printf '%s\n' "${SECURITY_FRESH_SET}" | grep -Fqx -- "${pkg}"; then
+      die "split package ${key} is a fresh security package (${SECURITY_FRESH_FILE#"${ROOT}/"}); it cannot be split"
+    fi
+    names="$(test_split_part_names "${module_dir}" "${pkg}" "${part}" "${parts}")" || exit 2
+    while IFS= read -r name; do
+      [ -n "${name}" ] || continue
+      printf '%s\t%s\t%s\n' "${pkg}" "${key}" "${name}"
+    done <<<"${names}"
+  done <<<"${parts_rows}"
+}
+
+# check_test_shard_split_list SHARD COUNT: prints "TEST-SPLIT-RUN <key> <name>" for every test name the split-package parts of
+# the shard run, with no test run (the guard reads it).
+check_test_shard_split_list() {
+  local shard="${1:-}" count="${2:-}" plan module_dir pkg key name lines
+  plan="$(check_test_shard_plan "${shard}" "${count}")" || exit 2
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    lines="$(test_shard_split_names "${plan}" "${module_dir}")" || exit 2
+    while IFS=$'\t' read -r pkg key name; do
+      [ -n "${name}" ] || continue
+      printf 'TEST-SPLIT-RUN %s %s\n' "${key}" "${name}"
+    done <<<"${lines}"
+  done
+}
+
+# test_split_job_start MODULE PKG SPLIT_LINES CENSUS_KEYS (CHAOS-13520): starts, in the background, one go test of the names of
+# PKG in SPLIT_LINES (test_shard_split_names) through -run, into its own log, -json and leg-events files. The split jobs of a
+# shard run one at a time beside the shard's other packages: each starts once the one before it has ended (a go test per part
+# at full parallelism beside the rest oversubscribed the runner). A package with race-excluded rows runs fresh with -json
+# (go_test_json_run_t), so the shard reads the receipts of its rows from that run. Appends to SPLIT_JOB_PIDS, SPLIT_JOB_LABELS
+# and SPLIT_JOB_FILES of check_test_shard; test_split_jobs_finish waits for them.
+test_split_job_start() {
+  local module_dir="$1" pkg="$2" lines="$3" census_keys="$4" key regex n slog sjson slegjson serr prev=""
+  [ "${#SPLIT_JOB_PIDS[@]}" -eq 0 ] || prev="${SPLIT_JOB_PIDS[-1]}"
+  key="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p && key == "" { key = $2 } END { print key }')"
+  regex="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p { printf "%s%s", (n++ ? "|" : ""), $3 }')"
+  n="$(printf '%s\n' "${lines}" | awk -F'\t' -v p="${pkg}" '$1 == p' | wc -l)"
+  slog="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-log.XXXXXX")"
+  sjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-json.XXXXXX")"
+  slegjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-legjson.XXXXXX")"
+  serr="$(mktemp "${TMPDIR:-/tmp}/dev-health-split-err.XXXXXX")"
+  printf 'go test%s (split): %s: %d test name(s) of its parts here\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${key}" "${n}"
+  if [ "${module_dir}" = "." ] && printf '%s\n' "${census_keys}" | grep -Fqx -- "${key}"; then
+    (
+      [ -z "${prev}" ] || while kill -0 "${prev}" 2>/dev/null; do sleep 1; done
+      cd "${ROOT}/${module_dir}"
+      go_test_json_run_t "$(cigates_go_test_timeout "${pkg}")" "${sjson}" "${slog}" -run "^(${regex})\$" "${pkg}"
+    ) >/dev/null 2>"${serr}" &
+  else
+    (
+      [ -z "${prev}" ] || while kill -0 "${prev}" 2>/dev/null; do sleep 1; done
+      cd "${ROOT}/${module_dir}"
+      go_test_leg "${slog}" "${slegjson}" -timeout "$(cigates_go_test_timeout "${pkg}")" -run "^(${regex})\$" "${pkg}"
+    ) >/dev/null 2>"${serr}" &
+  fi
+  SPLIT_JOB_PIDS+=("$!")
+  SPLIT_JOB_LABELS+=("${key}")
+  SPLIT_JOB_FILES+=("${slog} ${sjson} ${slegjson} ${serr}")
+}
+
+# test_split_jobs_finish SHARD COUNT: waits for every split job test_split_job_start started, in start order, and adds its files to
+# the leg's (log, json and legjson of check_test_shard; the log also to stdout, so no two jobs' lines interleave). Fails when one
+# failed, after all of them ended.
+test_split_jobs_finish() {
+  local shard="$1" count="$2" i rc failed=0 slog sjson slegjson serr
+  for i in "${!SPLIT_JOB_PIDS[@]}"; do
+    rc=0
+    wait "${SPLIT_JOB_PIDS[${i}]}" || rc=$?
+    read -r slog sjson slegjson serr <<<"${SPLIT_JOB_FILES[${i}]}"
+    printf 'split part ended (shard %s/%s): %s rc %s\n' "${shard}" "${count}" "${SPLIT_JOB_LABELS[${i}]}" "${rc}"
+    cat -- "${slog}"
+    cat -- "${slog}" >>"${log}"
+    cat -- "${sjson}" >>"${json}"
+    cat -- "${slegjson}" >>"${legjson}"
+    cat -- "${serr}" >&2
+    rm -f -- "${slog}" "${sjson}" "${slegjson}" "${serr}"
+    [ "${rc}" -eq 0 ] || failed=1
+  done
+  SPLIT_JOB_PIDS=()
+  SPLIT_JOB_LABELS=()
+  SPLIT_JOB_FILES=()
+  [ "${failed}" -eq 0 ]
+}
+
 # check_test_shard SHARD COUNT: the SHARD-th of COUNT slices of the unit tests (what check_test runs as one). The slices
 # partition `go list ./...`; internal/gqlgenguard runs alone after the rest of its shard. The packages that hold race-excluded rows run once,
 # fresh, with go test -json, and the shard reads the receipts of its rows from that run (check_race_excluded_receipts): no second execution.
 check_test_shard() {
   local shard="${1:-}" count="${2:-}" plan log json started wall module_dir rest rest_rows rest_sec rows_timeout census_keys heavy_is_row listing legjson
+  local split_lines split_pkg split_serial
+  local -a SPLIT_JOB_PIDS=() SPLIT_JOB_LABELS=() SPLIT_JOB_FILES=()
   check_test_shard_args "${shard}" "${count}"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
   listing="$(race_excluded_rows "${shard}" "${count}")" || exit 2
@@ -1287,10 +1482,10 @@ check_test_shard() {
   for module_dir in "${MODULE_DIRS[@]}"; do
     rest="$(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
       BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) if (k[i] != "") isrow[k[i]] = 1 }
-      $1 == m && $2 != heavy && !(m == "." && ($3 in isrow)) { print $2 }')"
+      NF == 3 && $1 == m && $2 != heavy && !(m == "." && ($3 in isrow)) { print $2 }')"
     rest_rows="$(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
       BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) if (k[i] != "") isrow[k[i]] = 1 }
-      $1 == m && $2 != heavy && m == "." && ($3 in isrow) { print $2 }')"
+      NF == 3 && $1 == m && $2 != heavy && m == "." && ($3 in isrow) { print $2 }')"
     # shellcheck disable=SC2086
     rows_timeout="$(cigates_go_test_timeout ${rest_rows})"
     rest_sec=""
@@ -1300,12 +1495,20 @@ check_test_shard() {
     fi
     printf 'go test%s (shard %s/%s): %s: %d package(s), %d with race-excluded rows\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${module_dir}" \
       "$(printf '%s\n%s\n' "${rest}" "${rest_rows}" | grep -c . || true)" "$(printf '%s\n' "${rest_rows}" | grep -c . || true)"
+    # The parts of split packages (ci/go_test_splits.tsv, CHAOS-13520) run beside the shard's other packages, each in its own go
+    # test with -run (go test has no per-package -run), into files of their own that join the leg's logs when they end.
+    split_lines="$(test_shard_split_names "${plan}" "${module_dir}")" || { rm -f -- "${log}" "${json}"; exit 2; }
+    split_serial=""
+    for split_pkg in $(printf '%s\n' "${split_lines}" | cut -f1 | grep -v '^$' | LC_ALL=C sort -u); do
+      if [ "${split_pkg}" = "${SERIAL_HEAVY_TEST_PACKAGE}" ]; then split_serial="${split_pkg}"; continue; fi
+      test_split_job_start "${module_dir}" "${split_pkg}" "${split_lines}" "${census_keys}"
+    done
     if [ -n "${rest}" ]; then
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
         go_test_leg "${log}" "${legjson}" -timeout "$(cigates_go_test_timeout ${rest})" ${rest}
-      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+      ) || { test_split_jobs_finish "${shard}" "${count}" || true; (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if [ -n "${rest_sec}" ]; then
       printf 'go test (shard %s/%s, security -count=1): %s: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "$(printf '%s\n' "${rest_sec}" | grep -c .)"
@@ -1313,16 +1516,22 @@ check_test_shard() {
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
         go_test_leg "${log}" "${legjson}" -timeout "$(cigates_go_test_timeout ${rest_sec})" ${rest_sec}
-      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+      ) || { test_split_jobs_finish "${shard}" "${count}" || true; (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if [ -n "${rest_rows}" ]; then
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
         go_test_json_run_t "${rows_timeout}" "${json}" "${log}" ${rest_rows}
-      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+      ) || { test_split_jobs_finish "${shard}" "${count}" || true; (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
-    if printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" '$1 == m && $2 == heavy { found = 1 } END { exit !found }'; then
+    # The serial package's parts run last, one at a time, alone (CHAOS-13422), after the other split parts finished.
+    test_split_jobs_finish "${shard}" "${count}" || { test_split_jobs_finish "${shard}" "${count}" || true; (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+    if [ -n "${split_serial}" ]; then
+      test_split_job_start "${module_dir}" "${split_serial}" "${split_lines}" "${census_keys}"
+      test_split_jobs_finish "${shard}" "${count}" || { test_split_jobs_finish "${shard}" "${count}" || true; (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+    fi
+    if printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" 'NF == 3 && $1 == m && $2 == heavy { found = 1 } END { exit !found }'; then
       printf 'go test%s (shard %s/%s, alone): %s\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${SERIAL_HEAVY_TEST_PACKAGE}"
       heavy_is_row=0
       if [ "${module_dir}" = "." ] && printf '%s\n' "${plan}" | awk -F'\t' -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
@@ -1332,12 +1541,12 @@ check_test_shard() {
         (
           cd "${ROOT}/${module_dir}"
           go_test_json_run "${json}" "${log}" "${SERIAL_HEAVY_TEST_PACKAGE}"
-        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+        ) || { test_split_jobs_finish "${shard}" "${count}" || true; (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
       else
         (
           cd "${ROOT}/${module_dir}"
           go_test_leg "${log}" "${legjson}" -timeout 10m "${SERIAL_HEAVY_TEST_PACKAGE}"
-        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+        ) || { test_split_jobs_finish "${shard}" "${count}" || true; (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
       fi
     fi
   done
@@ -1703,7 +1912,8 @@ ci_leg_stage() {
 # check_ci_leg LEG [SHARD COUNT]: one parallel slice of `ci` for the go-quality
 # workflow (CHAOS-6690). The legs together run exactly the steps of `ci`
 # (internal/cigates/workflows/workflows_quality_legs_test.go pins the union against the `ci` case):
-#   static   format, vet, build, contract, ratchets, integration-vet, the shard plans, the plan-reads guard
+#   static   format, vet, build, contract, ratchets, integration-vet, the shard plans
+#   plan-reads   the plan-reads guard (CHAOS-13520: its own leg, so neither leg passes five minutes)
 #   test     go test, slice SHARD of COUNT (weight-balanced, ci/go_test_weights.tsv); shard 1 also the multi-replica worker gate
 #   race     go test -race, slice SHARD of COUNT (weight-balanced)
 check_ci_leg() {
@@ -1719,6 +1929,8 @@ check_ci_leg() {
       ci_leg_stage integration-vet check_integration_vet
       ci_leg_stage plan-integration-shards plan_integration_shards
       ci_leg_stage plan-providersync-shards plan_providersync_test_shards
+      ;;
+    plan-reads)
       ci_leg_stage plan-reads check_plan_reads
       ;;
     test)
@@ -1732,7 +1944,7 @@ check_ci_leg() {
       ci_leg_stage "race ${2:-}/${3:-}" check_race_shard "${2:-}" "${3:-}"
       ;;
     *)
-      die "ci-leg LEG must be one of static, test SHARD COUNT, race SHARD COUNT (got '${leg}')"
+      die "ci-leg LEG must be one of static, plan-reads, test SHARD COUNT, race SHARD COUNT (got '${leg}')"
       ;;
   esac
   printf 'ci-leg %s: OK\n' "${leg}"
@@ -2397,6 +2609,37 @@ check_contract() {
 declare -A INTEGRATION_DENYLIST=()
 declare -A INTEGRATION_SHARD_WEIGHTS=()
 declare -A INTEGRATION_SHARD_BY_KEY=()
+# Split-by-test packages of the packages target (CHAOS-13520): a package file in ci/go_integration_shards.d with a
+# `split-by-test N` row runs as N parts (sets of its top-level tests) that the same longest-first plan places like packages.
+# SPLIT_KEYS: key -> N. SPLIT_PART: "key|name" -> part. SPLIT_TEST_SECONDS: "key|name" -> measured seconds (the file's test rows). SPLIT_NAMES: key -> the
+# newline list of names its shards run. SPLIT_UNIT_SHARD: "key|name" -> shard. SPLIT_SHARDS: key -> " s1 s2 ... ".
+# SPLIT_SHARD_WEIGHT: "key|shard" -> the summed unit weight of the key in that shard.
+declare -A INTEGRATION_SPLIT_KEYS=()
+declare -A INTEGRATION_SPLIT_TEST_SECONDS=()
+declare -A INTEGRATION_SPLIT_NAMES=()
+declare -A INTEGRATION_SPLIT_UNIT_SHARD=()
+declare -A INTEGRATION_SPLIT_PART=()
+declare -A INTEGRATION_SPLIT_SHARDS=()
+declare -A INTEGRATION_SPLIT_SHARD_WEIGHT=()
+# is_assoc NAME: true when NAME is an associative array here. A harness that loads only some functions of this script has no
+# global declarations; indexing an undeclared name with a key like "./pkg" would evaluate the key arithmetically.
+is_assoc() {
+  [[ "$(declare -p "$1" 2>/dev/null)" == "declare -A"* ]]
+}
+# Per packages shard (check_integration_package_shard shadows both with locals): the names a split-by-test package runs in the
+# shard, keyed by its "./dir", and its planned weight there. Declared here so every other caller of run_integration_packages and
+# warn_integration_weight_drift reads an empty associative array, never an undeclared name bash would index arithmetically.
+declare -A INTEGRATION_RUN_FILTER=()
+declare -A INTEGRATION_DRIFT_WEIGHT=()
+# The discovery rows of check_integration_package_shards_dry_run (CHAOS-13520), keyed "module|./dir": read by
+# discover_integration_tagged_tests only while INTEGRATION_DISCOVERY_CACHE is set, so every other caller lists and parses.
+declare -A INTEGRATION_DISCOVERY_DONE=()
+declare -A INTEGRATION_DISCOVERY_TAGGED=()
+declare -A INTEGRATION_DISCOVERY_UNTAGGED=()
+declare -A INTEGRATION_DISCOVERY_HOOK=()
+# The wall of one packages shard's go test runs (CHAOS-13520): a warning above WARN, a failure above FAIL.
+INTEGRATION_SHARD_WALL_WARN_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_WARN_SECONDS:-300}"
+INTEGRATION_SHARD_WALL_FAIL_SECONDS="${DEV_HEALTH_GO_INTEGRATION_SHARD_WALL_FAIL_SECONDS:-600}"
 declare -A AFFECTED_KEYS=()
 AFFECTED_FILTER_ACTIVE=0
 declare -a INTEGRATION_SHARD_TOTALS=()
@@ -2668,13 +2911,30 @@ split_plan_scope() {
 # and INTEGRATION_HOOK ("<key>/<file> <func>" of the first `func init` or `func TestMain` in an integration-only file:
 # that hook changes the process the untagged tests run in under the tag, so the package selects every name it has).
 discover_integration_tagged_tests() {
-  local module_dir="$1" pkg key base dir go_file path name rel
+  local module_dir="$1" pkg key base dir go_file path name rel row
   shift
   declare -gA INTEGRATION_TAGGED_TESTS=() INTEGRATION_UNTAGGED_TESTS=() INTEGRATION_HOOK=()
   local -A path_pkg=()
   local -a paths=()
 
   [ "$#" -gt 0 ] || return 0
+  # Every row of a package comes from its own files only, so a call for packages an earlier call of the same run already
+  # discovered reads those rows (the all-shards dry run discovers each module once, then every shard reads).
+  if [ -n "${INTEGRATION_DISCOVERY_CACHE:-}" ]; then
+    local cached=1
+    for pkg in "$@"; do
+      [ -n "${INTEGRATION_DISCOVERY_DONE[${module_dir}|${pkg}]+set}" ] || { cached=0; break; }
+    done
+    if [ "${cached}" -eq 1 ]; then
+      for pkg in "$@"; do
+        row="${module_dir}|${pkg}"
+        [ -z "${INTEGRATION_DISCOVERY_TAGGED[${row}]+set}" ] || INTEGRATION_TAGGED_TESTS["${pkg}"]="${INTEGRATION_DISCOVERY_TAGGED[${row}]}"
+        [ -z "${INTEGRATION_DISCOVERY_UNTAGGED[${row}]+set}" ] || INTEGRATION_UNTAGGED_TESTS["${pkg}"]="${INTEGRATION_DISCOVERY_UNTAGGED[${row}]}"
+        [ -z "${INTEGRATION_DISCOVERY_HOOK[${row}]+set}" ] || INTEGRATION_HOOK["${pkg}"]="${INTEGRATION_DISCOVERY_HOOK[${row}]}"
+      done
+      return 0
+    fi
+  fi
   integration_test_files "${module_dir}" "$@"
   base="${ROOT}"
   [ "${module_dir}" = "." ] || base="${ROOT}/${module_dir}"
@@ -2707,6 +2967,36 @@ discover_integration_tagged_tests() {
       fi
     done <<<"${SCAN_TESTS[${path}]-}${SCAN_RUNS[${path}]-}"
   done
+  if [ -n "${INTEGRATION_DISCOVERY_CACHE:-}" ]; then
+    for pkg in "$@"; do
+      row="${module_dir}|${pkg}"
+      INTEGRATION_DISCOVERY_DONE["${row}"]=1
+      [ -z "${INTEGRATION_TAGGED_TESTS[${pkg}]+set}" ] || INTEGRATION_DISCOVERY_TAGGED["${row}"]="${INTEGRATION_TAGGED_TESTS[${pkg}]}"
+      [ -z "${INTEGRATION_UNTAGGED_TESTS[${pkg}]+set}" ] || INTEGRATION_DISCOVERY_UNTAGGED["${row}"]="${INTEGRATION_UNTAGGED_TESTS[${pkg}]}"
+      [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ] || INTEGRATION_DISCOVERY_HOOK["${row}"]="${INTEGRATION_HOOK[${pkg}]}"
+    done
+  fi
+}
+
+# run_integration_split_filter LABEL KEY SELECT FILTER: fails unless FILTER (a newline list) is a non-empty subset of SELECT
+# with no repeat; sets SPLIT_FILTER_OTHERS to the names of SELECT outside FILTER (newline list).
+run_integration_split_filter() {
+  local label="$1" key="$2" select="$3" filter="$4" name n=0
+  local -A in_select=() in_filter=()
+  SPLIT_FILTER_OTHERS=""
+  while IFS= read -r name; do [ -z "${name}" ] || in_select["${name}"]=1; done <<<"${select}"
+  while IFS= read -r name; do
+    [ -n "${name}" ] || continue
+    [ -n "${in_select[${name}]+set}" ] || die "${label}: ${key} split-by-test name '${name}' is not a name this package selects"
+    [ -z "${in_filter[${name}]+set}" ] || die "${label}: ${key} split-by-test name '${name}' is listed twice"
+    in_filter["${name}"]=1
+    n=$((n + 1))
+  done <<<"${filter}"
+  [ "${n}" -gt 0 ] || die "${label}: ${key} is a split-by-test package with no name in this shard"
+  while IFS= read -r name; do
+    [ -n "${name}" ] || continue
+    [ -n "${in_filter[${name}]+set}" ] || SPLIT_FILTER_OTHERS+="${name}"$'\n'
+  done <<<"${select}"
 }
 
 # run_integration_packages MODE MODULE_DIR LABEL PKG...: runs the PKGs of one module under the integration tag
@@ -2735,6 +3025,7 @@ warn_integration_weight_drift() {
     key="${module_dir}/${pkg#./}"
     key="${key#./}"
     weight="${INTEGRATION_SHARD_WEIGHTS[${key}]:-}"
+    if is_assoc INTEGRATION_DRIFT_WEIGHT && [ -n "${INTEGRATION_DRIFT_WEIGHT[${key}]+set}" ]; then weight="${INTEGRATION_DRIFT_WEIGHT[${key}]}"; fi
     [ -n "${weight}" ] || continue
     while IFS=$'\t' read -r import_path seconds; do
       [[ "${import_path}" == */"${pkg#./}" ]] || continue
@@ -2782,6 +3073,13 @@ run_integration_packages() {
     fi
     [ -n "${select_names[${pkg}]}" ] \
       || die "${label}: ${key} runs in an integration shard, but no test file that only the integration build lists declares a top-level Test"
+    # A split-by-test package (CHAOS-13520) selects only this shard's names; its other names count as skipped, so no
+    # package of the same group can run them again through a shared -run.
+    if is_assoc INTEGRATION_RUN_FILTER && [ -n "${INTEGRATION_RUN_FILTER[${pkg}]+set}" ]; then
+      run_integration_split_filter "${label}" "${key}" "${select_names[${pkg}]}" "${INTEGRATION_RUN_FILTER[${pkg}]}"
+      select_names["${pkg}"]="${INTEGRATION_RUN_FILTER[${pkg}]}"
+      skip_names["${pkg}"]+="${SPLIT_FILTER_OTHERS}"
+    fi
     seen=()
     names_len=0
     while IFS= read -r name; do
@@ -3021,6 +3319,8 @@ load_integration_shard_manifest() {
   local file base as_dir=0
 
   INTEGRATION_SHARD_WEIGHTS=()
+  INTEGRATION_SPLIT_KEYS=()
+  INTEGRATION_SPLIT_TEST_SECONDS=()
   INTEGRATION_SHARD_COUNT=0
   SHARDS_SEEN=0
   if [ -d "${manifest}" ]; then
@@ -3051,9 +3351,15 @@ load_integration_shard_manifest() {
 # In directory mode a file holds exactly one package row and is named for its key
 # ('_shards.tsv' holds the shards row instead), so a key cannot hide in a
 # misnamed file and two PRs adding the same package collide on the file name.
+#
+# Below its package row, a package may have a `split-by-test<TAB>N` row (CHAOS-13520, N >= 2): the package then runs as N
+# parts, each a set of the top-level test names its shards select, that the same plan places like packages; and below that,
+# `<TestName><TAB><seconds>` rows, the measured seconds of its slow tests (unlisted tests share what is left of the package
+# weight). Such a row belongs to the package row above it (in a single manifest file as in a package file); one with no
+# package row above it, or a test row with no split row above it, fails.
 load_integration_shard_manifest_file() {
   local file="$1" as_dir="$2" base="$3"
-  local line_number=0 key value extra package_rows=0
+  local line_number=0 key value extra package_rows=0 file_key=""
 
   while IFS=$'\t ' read -r key value extra; do
     line_number=$((line_number + 1))
@@ -3082,6 +3388,24 @@ load_integration_shard_manifest_file() {
       INTEGRATION_SHARD_COUNT="${value}"
       continue
     fi
+    if [ "${key}" = "split-by-test" ] || [[ "${key}" =~ ^(Test|Fuzz|Example)[A-Za-z0-9_]*$ ]]; then
+      { [ "${as_dir}" -eq 0 ] || [ "${base}" != "_shards.tsv" ]; } \
+        || die "integration shard manifest ${file}:${line_number}: _shards.tsv holds only the 'shards' row"
+      [ -n "${file_key}" ] \
+        || die "integration shard manifest ${file}:${line_number}: a '${key}' row belongs below its package row"
+      if [ "${key}" = "split-by-test" ]; then
+        [ "${value}" -ge 2 ] || die "integration shard manifest ${file}:${line_number}: split-by-test needs at least 2 parts, got '${value}'"
+        [ -z "${INTEGRATION_SPLIT_KEYS[${file_key}]+set}" ] || die "integration shard manifest ${file}:${line_number}: split-by-test more than once for '${file_key}'"
+        INTEGRATION_SPLIT_KEYS["${file_key}"]="${value}"
+      else
+        [ -n "${INTEGRATION_SPLIT_KEYS[${file_key}]+set}" ] \
+          || die "integration shard manifest ${file}:${line_number}: test rows need a split-by-test row above them"
+        [ -z "${INTEGRATION_SPLIT_TEST_SECONDS[${file_key}|${key}]+set}" ] \
+          || die "integration shard manifest ${file}:${line_number}: test '${key}' more than once for '${file_key}'"
+        INTEGRATION_SPLIT_TEST_SECONDS["${file_key}|${key}"]="${value}"
+      fi
+      continue
+    fi
     if [ "${as_dir}" -eq 1 ]; then
       [ "${base}" != "_shards.tsv" ] \
         || die "integration shard manifest ${file}:${line_number}: _shards.tsv holds only the 'shards' row"
@@ -3095,11 +3419,155 @@ load_integration_shard_manifest_file() {
       die "integration shard manifest lists '${key}' more than once"
     fi
     INTEGRATION_SHARD_WEIGHTS["${key}"]="${value}"
+    file_key="${key}"
   done < "${file}"
 
   if [ "${as_dir}" -eq 1 ] && [ "${base}" != "_shards.tsv" ] && [ "${package_rows}" -eq 0 ]; then
     die "integration shard manifest ${file} holds no package row"
   fi
+}
+
+# plan_integration_split_units (CHAOS-13520): for every split-by-test package, the names its shards run (what
+# run_integration_packages selects: the integration-only names, every name when a tag-only hook makes it run whole) in
+# INTEGRATION_SPLIT_NAMES, cut into the package's N parts by longest-first (ties by name; the lightest part, the lowest
+# number on a tie, takes the next name) in INTEGRATION_SPLIT_PART, and one "weight<TAB>key<TAB>#part" row per part in
+# INTEGRATION_SPLIT_UNIT_ROWS. A name's weight is its measured row, else an even share of what the measured rows leave of
+# the package weight (at least 1), so a new test joins the lightest part with no manifest edit. A measured row that names
+# no such test fails, as do more parts than names and a split of a package that already has its own test shards or an
+# isolated one.
+plan_integration_split_units() {
+  local index module_dir pkg key name names weight measured unmeasured left share row parts part best
+  local -a pkgs=() keys=() part_total=()
+  local -A key_found=() by_module=() here=()
+  INTEGRATION_SPLIT_NAMES=()
+  INTEGRATION_SPLIT_PART=()
+  INTEGRATION_SPLIT_UNIT_ROWS=""
+  [ "${#INTEGRATION_SPLIT_KEYS[@]}" -gt 0 ] || return 0
+  for index in "${!INTEGRATION_PACKAGES[@]}"; do
+    module_dir="${INTEGRATION_PACKAGE_MODULES[${index}]}"
+    pkg="${INTEGRATION_PACKAGES[${index}]}"
+    key="${module_dir}/${pkg#./}"
+    key="${key#./}"
+    [ -n "${INTEGRATION_SPLIT_KEYS[${key}]+set}" ] || continue
+    key_found["${key}"]=1
+    by_module["${module_dir}"]+="${pkg}"$'\n'
+  done
+  mapfile -t keys < <(printf '%s\n' "${!INTEGRATION_SPLIT_KEYS[@]}" | LC_ALL=C sort)
+  for key in "${keys[@]}"; do
+    [ -n "${key_found[${key}]+set}" ] || die "split-by-test package '${key}' matches no discovered integration package"
+    case " ${PROVIDER_INTEGRATION_PACKAGE_KEY} ${DAILY_INTEGRATION_PACKAGE_KEY} ${WORKERSERVICE_INTEGRATION_PACKAGE_KEY} ${QAPISERVER_INTEGRATION_PACKAGE_KEY} ${REMAINING_INTEGRATION_PACKAGE_KEY} " in
+      *" ${key} "*) die "split-by-test package '${key}' already runs as its own test shards" ;;
+    esac
+    case "${INTEGRATION_ISOLATED_PACKAGE_KEYS}" in
+      *" ${key} "*) die "split-by-test package '${key}' is an isolated package" ;;
+    esac
+  done
+  for module_dir in $(printf '%s\n' "${!by_module[@]}" | LC_ALL=C sort); do
+    mapfile -t pkgs < <(printf '%s' "${by_module[${module_dir}]}")
+    discover_integration_tagged_tests "${module_dir}" "${pkgs[@]}"
+    for pkg in "${pkgs[@]}"; do
+      key="${module_dir}/${pkg#./}"
+      key="${key#./}"
+      names="${INTEGRATION_TAGGED_TESTS[${pkg}]-}"
+      [ -z "${INTEGRATION_HOOK[${pkg}]+set}" ] || names+="${INTEGRATION_UNTAGGED_TESTS[${pkg}]-}"
+      names="$(printf '%s' "${names}" | grep -v '^$' | LC_ALL=C sort -u || true)"
+      [ -n "${names}" ] || die "split-by-test package '${key}' selects no test"
+      INTEGRATION_SPLIT_NAMES["${key}"]="${names}"
+    done
+  done
+  for key in "${keys[@]}"; do
+    here=()
+    measured=0
+    unmeasured=0
+    while IFS= read -r name; do
+      here["${name}"]=1
+      if [ -n "${INTEGRATION_SPLIT_TEST_SECONDS[${key}|${name}]+set}" ]; then
+        row="${INTEGRATION_SPLIT_TEST_SECONDS[${key}|${name}]}"
+        measured=$((measured + row))
+      else
+        unmeasured=$((unmeasured + 1))
+      fi
+    done <<<"${INTEGRATION_SPLIT_NAMES[${key}]}"
+    for row in "${!INTEGRATION_SPLIT_TEST_SECONDS[@]}"; do
+      [ "${row%%|*}" = "${key}" ] || continue
+      [ -n "${here[${row#*|}]+set}" ] \
+        || die "integration shard manifest: '${key}' has a test row for '${row#*|}', which its shards do not run"
+    done
+    parts="${INTEGRATION_SPLIT_KEYS[${key}]}"
+    [ "${parts}" -le "${#here[@]}" ] \
+      || die "split-by-test package '${key}' declares ${parts} parts but its shards run ${#here[@]} test(s)"
+    weight="${INTEGRATION_SHARD_WEIGHTS[${key}]}"
+    left=$((weight - measured))
+    share=1
+    if [ "${unmeasured}" -gt 0 ] && [ "${left}" -gt "${unmeasured}" ]; then
+      share=$(((left + unmeasured - 1) / unmeasured))
+    fi
+    part_total=()
+    for ((part = 1; part <= parts; part++)); do part_total[part]=0; done
+    while IFS=$'\t' read -r weight name; do
+      best=1
+      for ((part = 2; part <= parts; part++)); do
+        if [ "${part_total[${part}]}" -lt "${part_total[${best}]}" ]; then best="${part}"; fi
+      done
+      INTEGRATION_SPLIT_PART["${key}|${name}"]="${best}"
+      part_total[best]=$((part_total[best] + weight))
+    done < <(
+      while IFS= read -r name; do
+        printf '%s\t%s\n' "${INTEGRATION_SPLIT_TEST_SECONDS[${key}|${name}]:-${share}}" "${name}"
+      done <<<"${INTEGRATION_SPLIT_NAMES[${key}]}" | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
+    )
+    printf 'integration split package %s: %d test(s) in %d part(s), %d measured, weight %ss, unmeasured test weight %ss\n' \
+      "${key}" "${#here[@]}" "${parts}" "$((${#here[@]} - unmeasured))" "${INTEGRATION_SHARD_WEIGHTS[${key}]}" "${share}"
+    for ((part = 1; part <= parts; part++)); do
+      INTEGRATION_SPLIT_UNIT_ROWS+="${part_total[${part}]}"$'\t'"${key}"$'\t'"#${part}"$'\n'
+    done
+  done
+  INTEGRATION_SPLIT_UNIT_ROWS="${INTEGRATION_SPLIT_UNIT_ROWS%$'\n'}"
+}
+
+# plan_integration_place_split_unit WEIGHT KEY #PART: puts one part of a split-by-test package on the lightest open shard
+# (lowest number on a tie), the rule a whole package follows, and every name of that part with it. Reads closed_shards of
+# plan_integration_shards.
+plan_integration_place_split_unit() {
+  local weight="$1" key="$2" part="${3#\#}" shard selected_shard=0 selected_total=0 name
+  for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
+    case "${closed_shards}" in *" ${shard} "*) continue ;; esac
+    if [ "${selected_shard}" -eq 0 ] || [ "${INTEGRATION_SHARD_TOTALS[${shard}]}" -lt "${selected_total}" ]; then
+      selected_shard="${shard}"
+      selected_total="${INTEGRATION_SHARD_TOTALS[${shard}]}"
+    fi
+  done
+  [ "${selected_shard}" -ne 0 ] || die "integration shard plan has no shard left for '${key}' part ${part}"
+  while IFS= read -r name; do
+    [ "${INTEGRATION_SPLIT_PART[${key}|${name}]}" = "${part}" ] || continue
+    INTEGRATION_SPLIT_UNIT_SHARD["${key}|${name}"]="${selected_shard}"
+  done <<<"${INTEGRATION_SPLIT_NAMES[${key}]}"
+  INTEGRATION_SHARD_TOTALS[selected_shard]=$((INTEGRATION_SHARD_TOTALS[selected_shard] + weight))
+  case "${INTEGRATION_SPLIT_SHARDS[${key}]- }" in
+    *" ${selected_shard} "*) ;;
+    *)
+      INTEGRATION_SPLIT_SHARDS["${key}"]="${INTEGRATION_SPLIT_SHARDS[${key}]- }${selected_shard} "
+      INTEGRATION_SHARD_PACKAGE_COUNTS[selected_shard]=$((INTEGRATION_SHARD_PACKAGE_COUNTS[selected_shard] + 1))
+      INTEGRATION_SHARD_NON_PROVIDER_COUNTS[selected_shard]=$((INTEGRATION_SHARD_NON_PROVIDER_COUNTS[selected_shard] + 1))
+      ;;
+  esac
+  INTEGRATION_SPLIT_SHARD_WEIGHT["${key}|${selected_shard}"]=$((${INTEGRATION_SPLIT_SHARD_WEIGHT[${key}|${selected_shard}]:-0} + weight))
+}
+
+# check_integration_split_partition: every name of every split-by-test package sits in exactly one shard of 1..COUNT.
+check_integration_split_partition() {
+  local key name shard placed
+  for key in "${!INTEGRATION_SPLIT_KEYS[@]}"; do
+    placed=0
+    while IFS= read -r name; do
+      shard="${INTEGRATION_SPLIT_UNIT_SHARD[${key}|${name}]:-0}"
+      { [ "${shard}" -ge 1 ] && [ "${shard}" -le "${INTEGRATION_SHARD_COUNT}" ]; } \
+        || die "integration shard plan placed no shard for '${key}' test '${name}'"
+      case "${INTEGRATION_SPLIT_SHARDS[${key}]-}" in *" ${shard} "*) ;; *) die "integration shard plan lost shard ${shard} of '${key}'" ;; esac
+      placed=$((placed + 1))
+    done <<<"${INTEGRATION_SPLIT_NAMES[${key}]}"
+    [ "${placed}" -gt 0 ] || die "integration shard plan placed no test of split-by-test package '${key}'"
+  done
 }
 
 # plan_integration_shards performs deterministic longest-processing-time-first
@@ -3155,14 +3623,23 @@ plan_integration_shards() {
   INTEGRATION_SHARD_TOTALS=()
   INTEGRATION_SHARD_PACKAGE_COUNTS=()
   INTEGRATION_SHARD_NON_PROVIDER_COUNTS=()
+  INTEGRATION_SPLIT_UNIT_SHARD=()
+  INTEGRATION_SPLIT_SHARDS=()
+  INTEGRATION_SPLIT_SHARD_WEIGHT=()
   for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
     INTEGRATION_SHARD_TOTALS[shard]=0
     INTEGRATION_SHARD_PACKAGE_COUNTS[shard]=0
     INTEGRATION_SHARD_NON_PROVIDER_COUNTS[shard]=0
   done
 
-  local isolated closed_shards=" "
-  while IFS=$'\t' read -r weight key; do
+  plan_integration_split_units
+  local units="${INTEGRATION_SPLIT_UNIT_ROWS}"
+  local isolated closed_shards=" " name
+  while IFS=$'\t' read -r weight key name; do
+    if [ -n "${name}" ]; then
+      plan_integration_place_split_unit "${weight}" "${key}" "${name}"
+      continue
+    fi
     isolated=0
     case "${INTEGRATION_ISOLATED_PACKAGE_KEYS}" in *" ${key} "*) isolated=1 ;; esac
     selected_shard=0
@@ -3199,10 +3676,15 @@ plan_integration_shards() {
       ))
     fi
   done < <(
-    for key in "${!INTEGRATION_SHARD_WEIGHTS[@]}"; do
-      printf '%s\t%s\n' "${INTEGRATION_SHARD_WEIGHTS[${key}]}" "${key}"
-    done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
+    {
+      for key in "${!INTEGRATION_SHARD_WEIGHTS[@]}"; do
+        [ -z "${INTEGRATION_SPLIT_KEYS[${key}]+set}" ] || continue
+        printf '%s\t%s\n' "${INTEGRATION_SHARD_WEIGHTS[${key}]}" "${key}"
+      done
+      [ -z "${units}" ] || printf '%s\n' "${units}"
+    } | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2 -k3,3
   )
+  check_integration_split_partition
 
   printf 'integration shard plan: %d shard(s), %d package(s)\n' \
     "${INTEGRATION_SHARD_COUNT}" "${runnable_count}"
@@ -3220,6 +3702,16 @@ plan_integration_shards() {
         printf '  SHARD %d %s weight=%ss\n' \
           "${shard}" "${key}" "${INTEGRATION_SHARD_WEIGHTS[${key}]}"
       fi
+      case "${INTEGRATION_SPLIT_SHARDS[${key}]-}" in
+        *" ${shard} "*)
+          printf '  SHARD-SPLIT-PACKAGE %d %s weight=%ss\n' "${shard}" "${key}" "${INTEGRATION_SPLIT_SHARD_WEIGHT[${key}|${shard}]}"
+          while IFS= read -r name; do
+            [ -n "${name}" ] || continue
+            [ "${INTEGRATION_SPLIT_UNIT_SHARD[${key}|${name}]}" -eq "${shard}" ] || continue
+            printf '  SHARD-SPLIT-UNIT %d %s %s\n' "${shard}" "${key}" "${name}"
+          done <<<"${INTEGRATION_SPLIT_NAMES[${key}]}"
+          ;;
+      esac
     done
   done
 }
@@ -4379,6 +4871,10 @@ emit_integration_shard_matrix() {
         for i in "${!split_keys[@]}"; do [ "${key}" != "${split_keys[${i}]}" ] || continue 2; done
         [ -z "${AFFECTED_KEYS[${key}]+set}" ] || hit=1
       done
+      for key in "${!INTEGRATION_SPLIT_SHARDS[@]}"; do
+        case "${INTEGRATION_SPLIT_SHARDS[${key}]}" in *" ${shard} "*) ;; *) continue ;; esac
+        [ -z "${AFFECTED_KEYS[${key}]+set}" ] || hit=1
+      done
       [ "${hit}" -eq 1 ] || continue
     fi
     matrix+="${separator}{\"target\":\"packages\",\"shard\":${shard}}"
@@ -4608,14 +5104,24 @@ check_integration_prepull() {
 # manifest weight descending, then key ascending in byte order. One go test starts its packages in argument order, four
 # at a time, so a long package that starts last sets the shard wall (CHAOS-8935). LC_ALL=C is local to this function:
 # it must not reach the go test child, which keeps the caller's locale.
+# integration_run_weight KEY: the weight a packages shard orders KEY by: a split-by-test package's planned weight in this shard
+# (INTEGRATION_DRIFT_WEIGHT of check_integration_package_shard), else the manifest weight.
+integration_run_weight() {
+  if is_assoc INTEGRATION_DRIFT_WEIGHT && [ -n "${INTEGRATION_DRIFT_WEIGHT[$1]+set}" ]; then
+    printf '%s\n' "${INTEGRATION_DRIFT_WEIGHT[$1]}"
+  else
+    printf '%s\n' "${INTEGRATION_SHARD_WEIGHTS[$1]}"
+  fi
+}
+
 sort_integration_shard_packages() {
   local i j tmp_pkg tmp_key LC_ALL=C
   for ((i = 1; i < ${#run_keys[@]}; i++)); do
     tmp_pkg="${run_pkgs[${i}]}"
     tmp_key="${run_keys[${i}]}"
     for ((j = i - 1; j >= 0; j--)); do
-      if [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -gt "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
-        || { [ "${INTEGRATION_SHARD_WEIGHTS[${run_keys[${j}]}]}" -eq "${INTEGRATION_SHARD_WEIGHTS[${tmp_key}]}" ] \
+      if [ "$(integration_run_weight "${run_keys[${j}]}")" -gt "$(integration_run_weight "${tmp_key}")" ] \
+        || { [ "$(integration_run_weight "${run_keys[${j}]}")" -eq "$(integration_run_weight "${tmp_key}")" ] \
           && [[ ! "${run_keys[${j}]}" > "${tmp_key}" ]]; }; then
         break
       fi
@@ -4627,12 +5133,30 @@ sort_integration_shard_packages() {
   done
 }
 
+# check_integration_shard_wall SHARD MODULE WALL (CHAOS-13520): the go test wall of one packages shard (one module) against the
+# five-minute job goal: a ::warning:: above INTEGRATION_SHARD_WALL_WARN_SECONDS (300), a failure above
+# INTEGRATION_SHARD_WALL_FAIL_SECONDS (600), so a slow runner warns and a plan that no longer fits fails.
+check_integration_shard_wall() {
+  local shard="$1" module_dir="$2" wall="$3"
+  printf 'integration package shard %s (%s): go test wall %ss (warn above %ss, fail above %ss)\n' \
+    "${shard}" "${module_dir}" "${wall}" "${INTEGRATION_SHARD_WALL_WARN_SECONDS}" "${INTEGRATION_SHARD_WALL_FAIL_SECONDS}"
+  [ "${wall}" -le "${INTEGRATION_SHARD_WALL_FAIL_SECONDS}" ] \
+    || die "integration package shard ${shard} (${module_dir}) took ${wall}s of go test, over the ${INTEGRATION_SHARD_WALL_FAIL_SECONDS}s cap -- add shards in ci/go_integration_shards.d/_shards.tsv or split a package (split-by-test)"
+  [ "${wall}" -le "${INTEGRATION_SHARD_WALL_WARN_SECONDS}" ] \
+    || printf '::warning title=INTEGRATION SHARD WALL::packages shard %s (%s) took %ss of go test, over %ss\n' \
+      "${shard}" "${module_dir}" "${wall}" "${INTEGRATION_SHARD_WALL_WARN_SECONDS}"
+  return 0
+}
+
 check_integration_package_shard() {
   local shard="$1" mode="$2"
-  local index module_dir pkg key
+  local index module_dir pkg key name started wall
   local selected_count=0
   local -a run_pkgs=()
   local -a run_keys=()
+  # Read by run_integration_packages (the names a split-by-test package runs here, keyed by its "./dir") and by
+  # warn_integration_weight_drift (the planned weight of that package in this shard).
+  local -A INTEGRATION_RUN_FILTER=() INTEGRATION_DRIFT_WEIGHT=()
 
   if [ "${shard}" -lt 1 ] || [ "${shard}" -gt "${INTEGRATION_SHARD_COUNT}" ]; then
     die "integration package shard ${shard} is outside 1..${INTEGRATION_SHARD_COUNT}"
@@ -4651,7 +5175,17 @@ check_integration_package_shard() {
       [ "${key}" != "${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" ] || continue
       [ "${key}" != "${QAPISERVER_INTEGRATION_PACKAGE_KEY}" ] || continue
       [ "${key}" != "${REMAINING_INTEGRATION_PACKAGE_KEY}" ] || continue
-      [ "${INTEGRATION_SHARD_BY_KEY[${key}]:-0}" -eq "${shard}" ] || continue
+      if [ -n "${INTEGRATION_SPLIT_KEYS[${key}]+set}" ]; then
+        case "${INTEGRATION_SPLIT_SHARDS[${key}]-}" in *" ${shard} "*) ;; *) continue ;; esac
+        INTEGRATION_RUN_FILTER["${pkg}"]=""
+        while IFS= read -r name; do
+          [ "${INTEGRATION_SPLIT_UNIT_SHARD[${key}|${name}]}" -eq "${shard}" ] || continue
+          INTEGRATION_RUN_FILTER["${pkg}"]+="${name}"$'\n'
+        done <<<"${INTEGRATION_SPLIT_NAMES[${key}]}"
+        INTEGRATION_DRIFT_WEIGHT["${key}"]="${INTEGRATION_SPLIT_SHARD_WEIGHT[${key}|${shard}]}"
+      else
+        [ "${INTEGRATION_SHARD_BY_KEY[${key}]:-0}" -eq "${shard}" ] || continue
+      fi
       run_pkgs+=("${pkg}")
       run_keys+=("${key}")
       selected_count=$((selected_count + 1))
@@ -4666,7 +5200,9 @@ check_integration_package_shard() {
       printf '  SHARD-RUN %s\n' "${key}"
     done
     local INTEGRATION_KEEP_ARG_ORDER=1
+    started="$(date +%s)"
     run_integration_packages "${mode}" "${module_dir}" "integration package shard ${shard} (${module_dir})" "${run_pkgs[@]}"
+    [ "${mode}" = "--dry-run" ] || check_integration_shard_wall "${shard}" "${module_dir}" "$(($(date +%s) - started))"
   done
 
   [ "${selected_count}" -gt 0 ] \
@@ -4678,6 +5214,36 @@ check_integration_package_shard() {
     printf 'integration package shard %s: DRY RUN selected %d package(s); no tests executed\n' \
       "${shard}" "${selected_count}"
   fi
+}
+
+# check_integration_package_shards_dry_run (CHAOS-13520): the --dry-run of every packages shard the matrix lists (a shard
+# holding a package), from one plan: per shard one "==> integration-shard packages N --dry-run" line, then exactly what
+# `integration-shard packages N --dry-run` prints after the plan. The shard guards read this one output instead of one
+# plan per shard.
+check_integration_package_shards_dry_run() {
+  local shard module_dir index pkg key
+  local -a pkgs=()
+  # One discovery per module for every package a packages shard runs; each shard then reads its rows.
+  local INTEGRATION_DISCOVERY_CACHE=1
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    pkgs=()
+    for index in "${!INTEGRATION_PACKAGES[@]}"; do
+      [ "${INTEGRATION_PACKAGE_MODULES[${index}]}" = "${module_dir}" ] || continue
+      pkg="${INTEGRATION_PACKAGES[${index}]}"
+      key="${module_dir}/${pkg#./}"
+      key="${key#./}"
+      case " ${PROVIDER_INTEGRATION_PACKAGE_KEY} ${DAILY_INTEGRATION_PACKAGE_KEY} ${WORKERSERVICE_INTEGRATION_PACKAGE_KEY} ${QAPISERVER_INTEGRATION_PACKAGE_KEY} ${REMAINING_INTEGRATION_PACKAGE_KEY} " in
+        *" ${key} "*) continue ;;
+      esac
+      pkgs+=("${pkg}")
+    done
+    [ "${#pkgs[@]}" -eq 0 ] || discover_integration_tagged_tests "${module_dir}" "${pkgs[@]}"
+  done
+  for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
+    [ "${INTEGRATION_SHARD_NON_PROVIDER_COUNTS[${shard}]}" -gt 0 ] || continue
+    printf '==> integration-shard packages %d --dry-run\n' "${shard}"
+    check_integration_package_shard "${shard}" --dry-run
+  done
 }
 
 check_providersync_test_shard() {
@@ -4727,6 +5293,8 @@ check_integration_shard() {
     *) die "integration-shard TARGET must be 'packages', 'providersync', 'daily', 'workerservice', 'queryapiserver' or 'remaining'" ;;
   esac
   case "${shard}" in
+    all) [ "${target}" = packages ] && [ "${mode}" = --dry-run ] \
+      || die "integration-shard SHARD 'all' needs TARGET 'packages' and --dry-run" ;;
     ""|*[!0-9]*) die "integration-shard requires a numeric shard id" ;;
   esac
   case "${mode}" in
@@ -4741,7 +5309,13 @@ check_integration_shard() {
   plan_queryapiserver_test_shards
   plan_remaining_test_shards
   case "${target}" in
-    packages) check_integration_package_shard "${shard}" "${mode}" ;;
+    packages)
+      if [ "${shard}" = all ]; then
+        check_integration_package_shards_dry_run
+      else
+        check_integration_package_shard "${shard}" "${mode}"
+      fi
+      ;;
     providersync) check_providersync_test_shard "${shard}" "${mode}" ;;
     daily) check_daily_test_shard "${shard}" "${mode}" ;;
     workerservice) check_workerservice_test_shard "${shard}" "${mode}" ;;
@@ -4997,6 +5571,148 @@ check_auth_race_integration() {
   printf 'auth race-integration: %d package(s), %d race test(s)\n' "${#AUTH_RACE_PACKAGES[@]}" "${total}"
 }
 
+# CHAOS-13520: auth test, auth race and auth race-integration run as COUNT legs (a matrix of the job; its job id, and so auth-gate,
+# stays). auth_leg_plan KIND LEG COUNT prints the leg's whole packages ("<import path>") and the parts of split packages
+# ("<import path><TAB><part><TAB><parts>"), by ci/go_race_shard.awk over the KIND's package list:
+#   test              AUTH_PACKAGES, ci/go_test_weights.tsv, no split
+#   race              AUTH_PACKAGES, ci/go_race_weights.d, splits ci/auth_race_splits.tsv
+#   race-integration  AUTH_RACE_PACKAGES, ci/auth_race_integration_weights.tsv, splits ci/auth_race_integration_splits.tsv
+# A part runs the names test_split_part_names gives it under the leg's own flags. A leg that plans nothing fails.
+AUTH_RACE_SPLITS="${AUTH_RACE_SPLITS:-${ROOT}/ci/auth_race_splits.tsv}"
+AUTH_RACE_INTEGRATION_WEIGHTS="${AUTH_RACE_INTEGRATION_WEIGHTS:-${ROOT}/ci/auth_race_integration_weights.tsv}"
+AUTH_RACE_INTEGRATION_SPLITS="${AUTH_RACE_INTEGRATION_SPLITS:-${ROOT}/ci/auth_race_integration_splits.tsv}"
+
+auth_leg_args() {
+  local leg="${1:-}" count="${2:-}"
+  case "${leg}" in ""|*[!0-9]*) die "auth leg LEG must be a positive integer, got '${leg}'" ;; esac
+  case "${count}" in ""|*[!0-9]*) die "auth leg COUNT must be a positive integer, got '${count}'" ;; esac
+  { [ "${leg}" -ge 1 ] && [ "${leg}" -le "${count}" ]; } || die "auth leg ${leg} is outside 1..${count}"
+}
+
+auth_leg_plan() {
+  local kind="$1" leg="$2" count="$3" modpath pkgs weights splits="" out tmp=""
+  auth_leg_args "${leg}" "${count}"
+  modpath="$(test_leg_listed "go-list-m|." auth_go list -m)" || die "go list -m failed"
+  case "${kind}" in
+    test)
+      pkgs="$(test_leg_listed "auth-packages" auth_go list -mod=readonly "${AUTH_PACKAGES[@]}")" || die "go list of the auth packages failed"
+      weights="${GO_TEST_WEIGHTS}"
+      ;;
+    race)
+      pkgs="$(test_leg_listed "auth-packages" auth_go list -mod=readonly "${AUTH_PACKAGES[@]}")" || die "go list of the auth packages failed"
+      tmp="$(mktemp "${TMPDIR:-/tmp}/dev-health-auth-race-weights.XXXXXX")"
+      test_leg_listed "race-weights-rows" race_weights_rows >"${tmp}" || { rm -f -- "${tmp}"; die "the race weights rows failed"; }
+      weights="${tmp}"
+      splits="${AUTH_RACE_SPLITS}"
+      ;;
+    race-integration)
+      pkgs="$(test_leg_listed "auth-race-packages" auth_go list -mod=readonly "${AUTH_RACE_PACKAGES[@]}")" || die "go list of the auth race-integration packages failed"
+      weights="${AUTH_RACE_INTEGRATION_WEIGHTS}"
+      splits="${AUTH_RACE_INTEGRATION_SPLITS}"
+      ;;
+    *) die "auth leg KIND must be test, race or race-integration, got '${kind}'" ;;
+  esac
+  { [ -f "${weights}" ] && { [ -z "${splits}" ] || [ -f "${splits}" ]; }; } || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} legs need ${weights}${splits:+ and ${splits}}"; }
+  out="$(printf '%s\n' "${pkgs}" | awk -v mod="${modpath}" -v shard="${leg}" -v count="${count}" -v weights="${weights}" \
+    -v splits="${splits}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" || { [ -z "${tmp}" ] || rm -f -- "${tmp}"; die "auth ${kind} leg ${leg}/${count}: the split (ci/go_race_shard.awk) failed"; }
+  [ -z "${tmp}" ] || rm -f -- "${tmp}"
+  [ -n "${out}" ] || die "auth ${kind} leg ${leg}/${count} plans no package: more legs than packages and parts"
+  printf '%s\n' "${out}"
+}
+
+# auth_leg_flags KIND: the go test flags of the KIND's legs (one per line).
+auth_leg_flags() {
+  local min tmo
+  case "$1" in
+    test) printf '%s\n' -count=1 ;;
+    race)
+      min="$(auth_race_timeout_min)" || return 2
+      tmo="$(job_go_test_timeout "${min}")" || return 2
+      printf '%s\n' -count=1 -race "-timeout=${tmo}"
+      ;;
+    race-integration)
+      tmo="$(job_go_test_timeout 27)" || return 2
+      printf '%s\n' -count=1 -race -tags=integration -v "-timeout=${tmo}"
+      ;;
+  esac
+}
+
+# auth_leg_units KIND LEG COUNT: one "<import path><TAB><-run regex or empty>" line per go test the leg runs: the whole packages
+# (empty regex; for race-integration one line per package, so each gets its marker check) and per split package the names of
+# its parts in the leg. AUTH_LEG_LIST=1 prints "AUTH-LEG-RUN <kind> <key> <name|*>" receipts instead (the guard reads them).
+auth_leg_units() {
+  local kind="$1" leg="$2" count="$3" plan modpath pkg part parts names regex whole=""
+  local -a flags=()
+  plan="$(auth_leg_plan "${kind}" "${leg}" "${count}")" || exit 2
+  mapfile -t flags < <(auth_leg_flags "${kind}" | grep -v -- '-timeout=\|^-v$')
+  modpath="$(test_leg_listed "go-list-m|." auth_go list -m)" || die "go list -m failed"
+  while IFS=$'\t' read -r pkg part parts; do
+    [ -n "${pkg}" ] || continue
+    if [ -z "${part}" ]; then
+      if [ "${kind}" = race-integration ]; then printf '%s\t\n' "${pkg}"; else whole+="${pkg} "; fi
+      continue
+    fi
+    names="$(test_split_part_names . "${pkg}" "${part}" "${parts}" "${flags[@]}")" || exit 2
+    regex="$(printf '%s\n' "${names}" | paste -sd'|' -)"
+    printf '%s\t^(%s)$\n' "${pkg}" "${regex}"
+  done <<<"$(printf '%s\n' "${plan}" | LC_ALL=C sort -t$'\t' -k1,1 -k2,2n)"
+  [ -z "${whole}" ] || printf '%s\t\n' "${whole% }"
+}
+
+# check_auth_leg KIND LEG COUNT: runs the leg. A race-integration go test passes only when every TestRace* test it selected logged
+# AUTH_RACE_MARKER (the check of check_auth_race_integration, narrowed to the names of the leg's part).
+check_auth_leg() {
+  local kind="$1" leg="$2" count="$3" units pkg regex output want got listed total=0 p
+  local -a flags=() pkgs=() runarg=()
+  units="$(auth_leg_units "${kind}" "${leg}" "${count}")" || exit 2
+  mapfile -t flags < <(auth_leg_flags "${kind}") || exit 2
+  [ "${#flags[@]}" -gt 0 ] || die "auth ${kind}: no go test flags"
+  while IFS=$'\t' read -r pkg regex; do
+    [ -n "${pkg}" ] || continue
+    if [ "${AUTH_LEG_LIST:-}" = "1" ]; then
+      if [ -z "${regex}" ]; then
+        for p in ${pkg}; do printf 'AUTH-LEG-RUN %s %s *\n' "${kind}" "${p}"; done
+      else
+        printf '%s\n' "${regex}" | sed -E 's/^\^\(//; s/\)\$$//' | tr '|' '\n' | while IFS= read -r n; do printf 'AUTH-LEG-RUN %s %s %s\n' "${kind}" "${pkg}" "${n}"; done
+      fi
+      continue
+    fi
+    read -r -a pkgs <<<"${pkg}"
+    runarg=()
+    [ -z "${regex}" ] || runarg=(-run "${regex}")
+    printf 'auth go test %s (leg %s/%s): %s%s\n' "${kind}" "${leg}" "${count}" "${pkg}" "${regex:+ -run ${regex}}"
+    if [ "${kind}" != race-integration ]; then
+      auth_go test -mod=readonly -trimpath "${flags[@]}" "${runarg[@]}" "${pkgs[@]}"
+      continue
+    fi
+    want="$(cd "${ROOT}" && grep -hoE '^func TestRace[A-Za-z0-9_]+' "${pkg#"$(auth_go list -m)/"}"/*_test.go | sed 's/^func //' | LC_ALL=C sort -u || true)"
+    if [ -n "${regex}" ]; then
+      listed="$(printf '%s\n' "${regex}" | sed -E 's/^\^\(//; s/\)\$$//' | tr '|' '\n' | LC_ALL=C sort -u)"
+      want="$(LC_ALL=C comm -12 <(printf '%s\n' "${want}") <(printf '%s\n' "${listed}") | grep -v '^$' || true)"
+    else
+      [ -n "${want}" ] || die "auth race-integration: no TestRace* test found in ${pkg}"
+    fi
+    output="$(mktemp)"
+    if ! auth_go test -mod=readonly -trimpath "${flags[@]}" "${runarg[@]}" "${pkg}" >"${output}" 2>&1; then
+      cat "${output}" >&2
+      rm -f "${output}"
+      die "auth race-integration: ${pkg} failed"
+    fi
+    got="$(grep -oE "${AUTH_RACE_MARKER} TestRace[A-Za-z0-9_]+" "${output}" | sed "s/^${AUTH_RACE_MARKER} //" | LC_ALL=C sort -u || true)"
+    grep -E '^(ok|FAIL|---)' "${output}" || true
+    rm -f "${output}"
+    [ "${want}" = "${got}" ] || die "auth race-integration: ${pkg}: these race tests did not log ${AUTH_RACE_MARKER} (not run, skipped, or built without -race): $(comm -23 <(printf '%s\n' "${want}") <(printf '%s\n' "${got}") | tr '\n' ' ')"
+    printf '%s %s: %s race test(s) ran with -race on a live PostgreSQL\n' "${AUTH_RACE_MARKER}" "${pkg}" "$(printf '%s\n' "${got}" | grep -c . || true)"
+    total=$((total + $(printf '%s\n' "${got}" | grep -c . || true)))
+  done <<<"${units}"
+  [ "${AUTH_LEG_LIST:-}" = "1" ] && return 0
+  if [ "${kind}" = race-integration ]; then
+    printf 'auth race-integration leg %s/%s: OK, %d race test(s) with the marker\n' "${leg}" "${count}" "${total}"
+  else
+    printf 'auth %s leg %s/%s: OK\n' "${kind}" "${leg}" "${count}"
+  fi
+}
+
 check_auth_fuzz_registry() {
   local listed registered
   listed="$(cd "${ROOT}" && grep -rhoE '^func Fuzz[A-Za-z0-9_]+' \
@@ -5248,6 +5964,19 @@ check_auth_scope_selftest() {
   [ "${rc}" -eq 0 ] || die "auth scope: the scope selftest refused (rc ${rc}; reason above)"
 }
 
+# check_auth_leg_stage STAGE LEG COUNT: `auth STAGE LEG COUNT` (STAGE = KIND-leg). LEG `all` is the all-legs form (CHAOS-13520):
+# it only lists (the leg guards read it) and never runs a test, so it needs AUTH_LEG_LIST=1. Each stage keeps its own case arm in
+# check_auth, the form the workflow guard reads.
+check_auth_leg_stage() {
+  local stage="$1"
+  if [ "${2}" = all ]; then
+    [ "${AUTH_LEG_LIST:-}" = "1" ] || die "auth ${stage} all needs AUTH_LEG_LIST=1: it lists every leg and runs no test"
+    test_legs_all "auth ${stage}" "${3}" check_auth_leg "${stage%-leg}"
+  else
+    check_auth_leg "${stage%-leg}" "${2}" "${3}"
+  fi
+}
+
 check_auth() {
   case "${1:-all}" in
     fmt) check_auth_fmt ;;
@@ -5255,6 +5984,9 @@ check_auth() {
     test) check_auth_test ;;
     race) check_auth_race ;;
     race-integration) check_auth_race_integration ;;
+    test-leg) check_auth_leg_stage test-leg "${2:-}" "${3:-}" ;;
+    race-leg) check_auth_leg_stage race-leg "${2:-}" "${3:-}" ;;
+    race-integration-leg) check_auth_leg_stage race-integration-leg "${2:-}" "${3:-}" ;;
     history) check_auth_history ;;
     fuzz) check_auth_fuzz "${2:-}" ;;
     fuzz-registry) check_auth_fuzz_registry ;;
@@ -5281,7 +6013,7 @@ check_auth() {
       check_auth_fuzz
       check_auth_vuln
       ;;
-    *) die "auth accepts fmt|vet|test|race|race-integration|history|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all" ;;
+    *) die "auth accepts fmt|vet|test|race|race-integration|test-leg|race-leg|race-integration-leg LEG COUNT|history|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all" ;;
   esac
 }
 
@@ -5325,11 +6057,15 @@ case "${1:-all}" in
     ;;
   race-excluded-shard-plan)
     [ "$#" -eq 3 ] || die "race-excluded-shard-plan accepts SHARD COUNT"
-    race_excluded_rows "$2" "$3"
+    if [ "$2" = all ]; then test_legs_all race-excluded-shard-plan "$3" race_excluded_rows; else race_excluded_rows "$2" "$3"; fi
     ;;
   test-shard-plan)
     [ "$#" -eq 3 ] || die "test-shard-plan accepts SHARD COUNT"
-    check_test_shard_plan "$2" "$3"
+    if [ "$2" = all ]; then test_legs_all test-shard-plan "$3" check_test_shard_plan; else check_test_shard_plan "$2" "$3"; fi
+    ;;
+  test-shard-split-list)
+    [ "$#" -eq 3 ] || die "test-shard-split-list accepts SHARD COUNT"
+    if [ "$2" = all ]; then test_legs_all test-shard-split-list "$3" check_test_shard_split_list; else check_test_shard_split_list "$2" "$3"; fi
     ;;
   race-shard-plan)
     [ "$#" -eq 3 ] || die "race-shard-plan accepts SHARD COUNT"

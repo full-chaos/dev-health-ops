@@ -215,7 +215,7 @@ func (wrapped *safeCauseError) Unwrap() error        { return wrapped.error }
 // WithSafeCause above promotes err.Error() itself, which requires the whole
 // message to be vettable. That rules it out for a large and important class of
 // handler error: providerfoundation.ProviderError's Error() embeds the request
-// PATH (types.go's Path field), request-derived text the runtime cannot vet,
+// route template and status, request-derived text the runtime cannot vet,
 // so a provider unit that fails on a 4xx cannot
 // use WithSafeCause at all -- and the result was that the provider-unit and
 // provider-sync packages had ZERO call sites of either, leaving every durable

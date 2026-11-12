@@ -212,7 +212,8 @@ func shardPlan(t *testing.T, verb, shard, count, selection string) ([]string, cm
 	res := cmdSpec{dir: root, env: env}.run("bash", filepath.Join(root, "ci", "check_go.sh"), verb, shard, count)
 	var keys []string
 	for _, line := range strings.Split(strings.TrimSpace(res.stdout), "\n") {
-		if f := strings.Split(line, "\t"); len(f) == 3 {
+		// A part of a split package (ci/go_test_splits.tsv, CHAOS-13520) is a 5-column line, one per part of the shard.
+		if f := strings.Split(line, "\t"); len(f) == 3 || len(f) == 5 {
 			keys = append(keys, f[2])
 		}
 	}
@@ -228,7 +229,12 @@ func TestQualityShardPlansRunOnlyTheSelection(t *testing.T) {
 			if res.code != 0 {
 				t.Fatalf("%s %s 3 with a one-package selection exited %d: %s", verb, shard, res.code, res.stderr)
 			}
-			all = append(all, keys...)
+			for _, k := range keys {
+				// The parts of one split package land on several shards; the selection holds the package once.
+				if len(all) == 0 || all[len(all)-1] != k || k != pkg {
+					all = append(all, k)
+				}
+			}
 		}
 		if len(all) != 1 || all[0] != pkg {
 			shown := all

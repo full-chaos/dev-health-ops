@@ -4,13 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
-	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -219,7 +214,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 }
 
 // catalogOnly is the closed set of catalog actions that have no permission in
-// internal/api/session/permissions.go. Catalog-only = not served in /auth/me
+// the frozen table of sessionPermissions (the former internal/api/session/permissions.go). Catalog-only = not in that table
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
 var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "reports.write": true, "acr.evidence.read": true, "acr.credential.issue": true,
@@ -232,51 +227,33 @@ type sessionEntry struct {
 	perm []string
 }
 
-// sessionPermissions parses roleHierarchy and standardPermissions from
-// internal/api/session/permissions.go.
+// sessionPermissions is the legacy permission table the catalog was validated against: roleHierarchy (each role's own entries; a
+// role holds its own and every lower role's) and the 22 standard permission names. It is frozen here from
+// internal/api/session/permissions.go as it stood before CHAOS-13585 deleted that file (git show cfeabc7f4cd1:internal/api/session/permissions.go);
+// the catalog parity below stays pinned without the production map.
 func sessionPermissions(t *testing.T) ([]sessionEntry, []string) {
 	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, filepath.Join(repoRoot(t), "internal/api/session/permissions.go"), nil, 0)
-	if err != nil {
-		t.Fatal(err)
+	std := []string{
+		"analytics:read", "analytics:export", "metrics:read", "metrics:compute", "work_items:read", "work_items:sync",
+		"git:read", "git:sync", "teams:read", "teams:write", "settings:read", "settings:write", "integrations:read",
+		"integrations:write", "members:read", "members:invite", "members:manage", "org:read", "org:write", "org:delete",
+		"admin:users", "admin:orgs",
 	}
-	var hier []sessionEntry
-	var std []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		vs, ok := n.(*ast.ValueSpec)
-		if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
-			return true
-		}
-		lit, ok := vs.Values[0].(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
-		switch vs.Names[0].Name {
-		case "standardPermissions":
-			for _, e := range lit.Elts {
-				std = append(std, unq(t, e))
-			}
-		case "roleHierarchy":
-			for _, e := range lit.Elts {
-				el := e.(*ast.CompositeLit)
-				en := sessionEntry{role: unq(t, el.Elts[0])}
-				for _, p := range el.Elts[1].(*ast.CompositeLit).Elts {
-					en.perm = append(en.perm, unq(t, p))
-				}
-				hier = append(hier, en)
-			}
-		}
-		return false
-	})
+	hier := []sessionEntry{
+		{"viewer", []string{"analytics:read", "metrics:read", "work_items:read", "git:read", "teams:read", "settings:read", "members:read", "org:read"}},
+		{"member", []string{"analytics:export"}},
+		{"admin", []string{"metrics:compute", "work_items:sync", "git:sync", "teams:write", "settings:write", "integrations:read",
+			"integrations:write", "members:invite", "members:manage", "org:write"}},
+		{"owner", []string{"org:delete"}},
+	}
 	if len(hier) != 4 || len(std) != 22 {
-		t.Fatalf("parsed %d roles and %d permissions from permissions.go", len(hier), len(std))
+		t.Fatalf("frozen table has %d roles and %d permissions", len(hier), len(std))
 	}
 	return hier, std
 }
 
 // Parity: the role -> action sets equal the hierarchy in
-// internal/api/session/permissions.go (roleHierarchy; each role holds its own
+// internal/api/session/permissions.go (roleHierarchy of the frozen table; each role holds its own
 // entries and every lower role's), with ':' spelled '.'; catalogOnly actions
 // are left out of the comparison.
 func TestRolesMatchTheSessionHierarchy(t *testing.T) {
@@ -315,20 +292,8 @@ func TestRolesMatchTheSessionHierarchy(t *testing.T) {
 		}
 	}
 	if len(c.Actions()) != len(std)+len(catalogOnly) {
-		t.Errorf("catalog has %d actions, permissions.go %d plus %d catalog-only", len(c.Actions()), len(std), len(catalogOnly))
+		t.Errorf("catalog has %d actions, frozen table %d plus %d catalog-only", len(c.Actions()), len(std), len(catalogOnly))
 	}
-	if _, err := os.Stat(filepath.Join(repoRoot(t), "internal/api/session/permissions.go")); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func unq(t *testing.T, e ast.Expr) string {
-	t.Helper()
-	s, err := strconv.Unquote(e.(*ast.BasicLit).Value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
 }
 
 func keys(m map[string]bool) []string {

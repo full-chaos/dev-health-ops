@@ -329,6 +329,9 @@ var imagePullingActionDebt = map[actionDebt]bool{
 	{"docker-images.yml", "fan-in-latest", "docker/setup-buildx-action"}:      true,
 	{"arc-runner-image.yml", "build", "docker/setup-buildx-action"}:           true,
 	{"docker-images.yml", "go-build-dho-arm64", "docker/setup-buildx-action"}: true,
+	// CHAOS-13520: the auth corpus bake (the builder image is the mirrored one, ci/builder_images.tsv).
+	{"go-auth-service.yml", "auth-corpus-queue", "docker/setup-buildx-action"}:       true,
+	{"go-auth-service.yml", "auth-corpus-image-cache", "docker/setup-buildx-action"}: true,
 }
 
 func resolveImageExpressions(image string) string {

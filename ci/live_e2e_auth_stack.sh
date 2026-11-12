@@ -12,6 +12,7 @@
 #   bash ci/live_e2e_auth_stack.sh enable-social STATE_DIR                  enable the throwaway GitHub provider (needs sudo)
 #   bash ci/live_e2e_auth_stack.sh enable-sso STATE_DIR                     enable OIDC/SAML before go-api starts
 #   bash ci/live_e2e_auth_stack.sh start-idp STATE_DIR [ARG...]              start the IdP with extra idpstub serve arguments
+#   bash ci/live_e2e_auth_stack.sh stop-idp STATE_DIR                       stop the IdP before changing its arguments
 #   bash ci/live_e2e_auth_stack.sh enable-mail STATE_DIR                    capture auth mail on loopback SMTP
 #   bash ci/live_e2e_auth_stack.sh down STATE_DIR                           stop the stack and remove the social hosts entry
 #   bash ci/live_e2e_auth_stack.sh stop-auth STATE_DIR      stop auth-service by pid (the outage cell); start-auth starts it again with the same environment
@@ -76,7 +77,7 @@ print_env() {
   raw_env "$1" "$2" | awk '
     { k = substr($0, 1, index($0, "=") - 1) }
     k == "AUTH_JWT_SECRET_KEY" || k == "AUTH_SESSION_SUCCESSOR_KEY" || k == "AUTH_LOGIN_LOCKOUT_KEY" { print k "=<redacted>"; next }
-    k ~ /(_SECRET|_STATE_KEY)$/ || k == "SETTINGS_ENCRYPTION_KEY" { print k "=<redacted>"; next }
+    k ~ /(_SECRET|_STATE_KEY)$/ || k == "SETTINGS_ENCRYPTION_KEY" || k == "LICENSE_KEY" { print k "=<redacted>"; next }
     k == "AUTH_DATABASE_URI" { sub(/password=\047[^\047]*\047/, "password=\047<redacted>\047") }
     { print }'
 }
@@ -357,6 +358,9 @@ down() {
   stop_pid "${STATE}/tokenreview.pid"
   stop_pid "${STATE}/idpstub.pid"
   stop_pid "${STATE}/smtpsink.pid"
+  if [ ! -L "${STATE}/license" ] && [ -d "${STATE}/license" ] && [ "$(cd "${STATE}/license" && pwd -P)" = "${STATE}/license" ]; then
+    rm -rf -- "${STATE}/license"
+  fi
   if [ ! -L "${STATE}/mail" ] && [ -d "${STATE}/mail" ] && [ "$(cd "${STATE}/mail" && pwd -P)" = "${STATE}/mail" ]; then
     rm -rf -- "${STATE}/mail/tokens"
   fi
@@ -412,16 +416,16 @@ refresh_ca_bundle() {
 
 # wait_stub NAME URL CA [CURL_ARG...]: ready only when the readiness path answers HTTP 200 (a stub's 599 is not ready).
 wait_stub() {
-  local name="$1" url="$2" ca="$3" attempt=0 deadline=$((SECONDS + 30)) code
+  local name="$1" url="$2" ca="$3" start="${SECONDS}" bound="${LIVE_E2E_STUB_WAIT_SECONDS:-30}" code
+  local deadline=$((start + bound))
   shift 3
-  while [ "${attempt}" -lt 30 ] && [ "${SECONDS}" -lt "${deadline}" ]; do
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
     code="$(curl -sS --max-time 1 -o /dev/null -w '%{http_code}' --cacert "${ca}" "$@" "${url}" 2>/dev/null || true)"
     if [ "${code}" = 200 ]; then return 0; fi
-    attempt=$((attempt + 1))
     sleep 1
   done
   tail -n 40 "${STATE}/logs/${name}.log" >&2 || true
-  die "${name} did not become ready"
+  die "${name} did not become ready after $((SECONDS - start))s (bound ${bound}s)"
 }
 
 # refuse_second_start PIDFILE NAME: a start verb never overwrites the pid file of a stub that still runs (down knows one pid).
@@ -454,18 +458,18 @@ enable_mail() {
       >"${STATE}/logs/smtpsink.log" 2>&1 &
     echo "$!" >"${STATE}/smtpsink.pid"
   )
-  local port='' attempt=0 deadline=$((SECONDS + 30)) ready=false
-  while [ "${attempt}" -lt 30 ] && [ "${SECONDS}" -lt "${deadline}" ]; do
+  local port='' start="${SECONDS}" bound="${LIVE_E2E_MAIL_WAIT_SECONDS:-30}" ready=false
+  local deadline=$((start + bound))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
     if [ -f "${STATE}/mail/port" ]; then
       port="$(cat "${STATE}/mail/port")"
       if [[ "${port}" =~ ^[0-9]+$ ]] && smtp_ready "${port}" 2>/dev/null; then ready=true; break; fi
     fi
-    attempt=$((attempt + 1))
     sleep 1
   done
   if [ "${ready}" != true ]; then
     tail -n 40 "${STATE}/logs/smtpsink.log" >&2 || true
-    die "smtpsink did not become ready"
+    die "smtpsink did not become ready after $((SECONDS - start))s (bound ${bound}s)"
   fi
   chmod 600 "${STATE}/auth-service.env"
   printf '%s\n' 'EMAIL_PROVIDER=smtp' 'SMTP_HOST=127.0.0.1' "SMTP_PORT=${port}" 'SMTP_USE_TLS=false' >>"${STATE}/auth-service.env"
@@ -523,12 +527,17 @@ enable_sso() {
   (cd "${ROOT}" && go build -trimpath -o "${STATE}/bin/idpstub" ./internal/testsupport/idpstub/cmd/idpstub)
   "${STATE}/bin/idpstub" certs -out "${STATE}/idp" -host localhost
   refresh_ca_bundle
+  mkdir -m 700 "${STATE}/license"
+  "${STATE}/bin/cigate" live-e2e mint-license "${STATE}/license/public.b64" "${STATE}/license/licence.txt"
+  touch "${STATE}/extra/go-api.env"
+  chmod 600 "${STATE}/extra/go-api.env"
+  printf 'LICENSE_PUBLIC_KEY=%s\nLICENSE_KEY=%s\n' "$(cat "${STATE}/license/public.b64")" "$(cat "${STATE}/license/licence.txt")" >>"${STATE}/extra/go-api.env"
   printf '%s\n' 'AUTH_PROXY_OIDC=true' 'AUTH_PROXY_SAML=true' >>"${STATE}/extra/go-api.env"
   printf '%s\n' 'AUTH_SSO_ENABLED=true' "NODE_EXTRA_CA_CERTS=${STATE}/ca-bundle.pem" >>"${STATE}/extra/web.env"
   chmod 600 "${STATE}/auth-service.env"
   local state_key
   state_key="$(new_secret)"
-  printf '%s\n' "AUTH_SSO_STATE_KEY=${state_key}" \
+  printf '%s\n' 'AUTH_SSO_JIT=true' "AUTH_SSO_STATE_KEY=${state_key}" \
     "SETTINGS_ENCRYPTION_KEY=${LIVE_E2E_SETTINGS_ENCRYPTION_KEY:-live-e2e-test-settings-key-do-not-use}" \
     "APP_BASE_URL=${LIVE_E2E_WEB_ORIGIN:-http://127.0.0.1:3002}" \
     "SSL_CERT_FILE=${STATE}/ca-bundle.pem" >>"${STATE}/auth-service.env"
@@ -547,6 +556,27 @@ start_idp() {
     echo "$!" >"${STATE}/idpstub.pid"
   )
   wait_stub idpstub https://localhost:9443/.well-known/openid-configuration "${STATE}/idp/ca.pem"
+  if ! curl -fsS --max-time 10 --cacert "${STATE}/idp/ca.pem" https://localhost:9443/saml/cert >"${STATE}/idp/saml-cert.pem" 2>/dev/null \
+    || [ ! -s "${STATE}/idp/saml-cert.pem" ] \
+    || ! grep -q '^-----BEGIN CERTIFICATE-----$' "${STATE}/idp/saml-cert.pem" \
+    || ! openssl x509 -inform PEM -in "${STATE}/idp/saml-cert.pem" -noout >/dev/null 2>&1; then
+    die "idpstub returned no valid SAML PEM certificate"
+  fi
+  chmod 644 "${STATE}/idp/saml-cert.pem"
+}
+
+stop_idp() {
+  STATE="$(cd "$1" && pwd)"
+  stop_pid "${STATE}/idpstub.pid"
+  local pid deadline=$((SECONDS + 10))
+  if [ -f "${STATE}/idpstub.pid" ]; then
+    pid="$(cat "${STATE}/idpstub.pid")"
+    while kill -0 "${pid}" 2>/dev/null; do
+      [ "${SECONDS}" -lt "${deadline}" ] || die "idpstub still runs after stop"
+      sleep 0.1
+    done
+    rm -f -- "${STATE}/idpstub.pid"
+  fi
 }
 
 # verify_user STATE EMAIL: the e-mail of one user is verified, in auth.users (the authority while users are owned; its
@@ -638,6 +668,10 @@ case "${verb}" in
     [ "$#" -ge 2 ] || die "usage: start-idp STATE_DIR [idpstub serve ARG...]"
     start_idp "${@:2}"
     ;;
+  stop-idp)
+    [ "$#" -eq 2 ] || die "usage: stop-idp STATE_DIR"
+    stop_idp "$2"
+    ;;
   verify-user)
     [ "$#" -eq 3 ] || die "usage: verify-user STATE_DIR EMAIL"
     verify_user "$2" "$3"
@@ -646,5 +680,5 @@ case "${verb}" in
     [ "$#" -eq 3 ] || die "usage: grant-platform-admin STATE_DIR EMAIL"
     grant_platform_admin "$2" "$3"
     ;;
-  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | enable-mail | mail-token | enable-social | enable-sso | start-idp | verify-user | grant-platform-admin" ;;
+  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth | enable-mail | mail-token | enable-social | enable-sso | start-idp | stop-idp | verify-user | grant-platform-admin" ;;
 esac

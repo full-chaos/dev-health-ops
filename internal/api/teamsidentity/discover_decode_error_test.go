@@ -39,7 +39,7 @@ func TestDiscoveryDecodeErrorsCarryNoRequestPath(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s: want a decode error", name)
 		}
-		for _, secret := range []string{"secret-org", "secret-team", "secret-group", "secret%2Forg", "/orgs/", "/api/v4"} {
+		for _, secret := range []string{"secret-org", "secret-team", "secret-group", "secret%2Forg", "/api/v4"} {
 			if strings.Contains(err.Error(), secret) {
 				t.Fatalf("%s: error %q carries the request path (%s)", name, err.Error(), secret)
 			}

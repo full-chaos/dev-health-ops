@@ -83,6 +83,7 @@ func (f *provFixture) usersReached() int {
 // The go-api workload token passes the gate: a {} body is the handler's own 400 malformed (not 401/404) with no store
 // call, and a served body reaches the user-admin store once.
 func TestUsersAdminRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
+	t.Parallel()
 	for _, c := range usersRouteCases(t) {
 		f := newEmbeddedUsersFixture(t)
 		expectRefusal(t, f.post(c.path, "{}", nil), http.StatusBadRequest, reasonMalformed)
@@ -104,6 +105,7 @@ func TestUsersAdminRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 // admits elsewhere on the same key set (acr-api on the acr events gate, all three on the authorize caller gate), so
 // only a users gate that names go-api alone refuses them.
 func TestUsersAdminRoutesRefuseOtherProdWorkloadSubjects(t *testing.T) {
+	t.Parallel()
 	acrAPI, queryAPI, web := session.WirePrincipalID(uuid.New()), session.WirePrincipalID(uuid.New()), session.WirePrincipalID(uuid.New())
 	admitted := newEmbeddedUsersFixture(t).w
 	acrEvents, err := NewSessionIssueWorkload(SessionIssueWorkloadConfig{IssuerURL: goldenIssuer, Keys: admitted.keys, Subject: acrAPI})
@@ -147,6 +149,7 @@ func TestUsersAdminRoutesRefuseOtherProdWorkloadSubjects(t *testing.T) {
 }
 
 func TestUsersAdminRoutesRefuseNoToken(t *testing.T) {
+	t.Parallel()
 	f := newEmbeddedUsersFixture(t)
 	for _, c := range usersRouteCases(t) {
 		for name, header := range map[string]map[string]string{
@@ -170,6 +173,7 @@ func TestUsersAdminRoutesRefuseNoToken(t *testing.T) {
 // Every kind of user token, as the bearer, is the one 401 at the credential gate on every route: no key-set read, no
 // actor read, no store call, no echo of the token.
 func TestUsersAdminRoutesRefuseUserTokens(t *testing.T) {
+	t.Parallel()
 	tokens := userTokensWithIssuer(t)
 	f := newEmbeddedUsersFixture(t)
 	for _, c := range usersRouteCases(t) {
@@ -189,6 +193,7 @@ func TestUsersAdminRoutesRefuseUserTokens(t *testing.T) {
 
 // The retired session issuer credential is refused from the bearer text alone, before any read, and logged per route.
 func TestUsersAdminRoutesRefuseTheRetiredServiceCredential(t *testing.T) {
+	t.Parallel()
 	f := newEmbeddedUsersFixture(t)
 	for _, c := range usersRouteCases(t) {
 		expectRefusal(t, f.post(c.path, c.body(f), map[string]string{"Authorization": "Bearer " + provisioningToken}),

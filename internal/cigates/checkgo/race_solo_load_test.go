@@ -183,12 +183,12 @@ func TestRaceShardInputOrderTripsHeaviestFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const sorted = "    k = order[i]\n    if ((k in keep)"
+	const sorted = "    k = order[i]\n    if (!(k in keep)"
 	if !strings.Contains(string(src), sorted) {
 		t.Fatalf("ci/go_race_shard.awk no longer holds the print loop %q: update this planted copy", sorted)
 	}
 	planted := filepath.Join(t.TempDir(), "input_order.awk")
-	if err := os.WriteFile(planted, []byte(strings.Replace(string(src), sorted, "    k = i\n    if ((k in keep)", 1)), 0o644); err != nil {
+	if err := os.WriteFile(planted, []byte(strings.Replace(string(src), sorted, "    k = i\n    if (!(k in keep)", 1)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if ok, _ := orderHeavyFirst(t, planted, weights, pkgs, 1); ok {

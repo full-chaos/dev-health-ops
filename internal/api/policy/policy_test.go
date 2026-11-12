@@ -177,6 +177,33 @@ func (fixtureValidator) Validate(_ context.Context, _, _, bearer string) (*Route
 	return &RoutedResult{Claims: out}, nil
 }
 
+// The fixture validator admits only sign()'s own tokens: another key, the retired HMAC form (alg HS256 under the
+// old fixture key) and an expired token are each refused.
+func TestFixtureValidatorAdmitsOnlyItsOwnUnexpiredEdDSATokens(t *testing.T) {
+	ctx := context.Background()
+	if result, err := (fixtureValidator{}).Validate(ctx, "", "", sign(t, claims(nil))); err != nil || result == nil {
+		t.Fatalf("sign() token: %+v %v, want admitted", result, err)
+	}
+	_, otherKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSigned, err := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims(nil)).SignedString(otherKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hmacSigned, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims(nil)).SignedString([]byte(strings.Repeat("policy-fixture-", 3)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := sign(t, claims(func(c jwt.MapClaims) { c["exp"] = time.Now().Add(-time.Minute).Unix() }))
+	for name, bearer := range map[string]string{"another key": otherSigned, "alg HS256": hmacSigned, "expired": expired} {
+		if result, err := (fixtureValidator{}).Validate(ctx, "", "", bearer); !errors.Is(err, errRejected) || result != nil {
+			t.Errorf("%s: %+v %v, want refused", name, result, err)
+		}
+	}
+}
+
 // unrouted is an Authenticator with no access check (no RouteAccess).
 func unrouted(t *testing.T, store Store) *Authenticator {
 	t.Helper()

@@ -205,7 +205,8 @@ func TestBranchesThatAddAndRetimeRowsMergeWithoutConflict(t *testing.T) {
 	}
 	pkgSeen := map[string]bool{}
 	for _, row := range dataRows(t, shards) {
-		if row[0] == "shards" {
+		// A package key holds a "/"; `split-by-test` and measured-test rows (CHAOS-13520) belong to the package above them.
+		if row[0] == "shards" || !strings.Contains(row[0], "/") {
 			continue
 		}
 		if len(row) != 2 {
@@ -245,8 +246,11 @@ func TestBranchesThatAddAndRetimeRowsMergeWithoutConflict(t *testing.T) {
 func TestTheOldFlatLayoutConflictsOnTheSameEdits(t *testing.T) {
 	var lines []string
 	for _, f := range packageRowFiles(t, filepath.Join(rootOf(t), "ci", "go_integration_shards.d")) {
-		rows := strings.Split(strings.TrimSpace(readText(t, f)), "\n")
-		lines = append(lines, rows[len(rows)-1])
+		for _, row := range strings.Split(strings.TrimSpace(readText(t, f)), "\n") {
+			if key, _, _ := strings.Cut(row, "\t"); strings.Contains(key, "/") && !strings.HasPrefix(row, "#") {
+				lines = append(lines, row)
+			}
+		}
 	}
 	sort.Strings(lines)
 	if len(lines) < 100 {

@@ -82,6 +82,8 @@ var allowed = map[string]allowance{
 	"internal/pgmigrate/testdata/hand_ddl_ledger.tsv":                                            {[]string{nameTable}, untilDrop},
 	"internal/pushcli/testdata/golden/push.json":                                                 {[]string{nameVerbs}, history},
 	"internal/storage/postgres/api_authorization.go":                                             {[]string{nameTable, nameVerbs}, untilDrop},
+	"internal/storage/postgres/authschema/migrator_extras.go":                                    {[]string{nameTable}, untilDrop},
+	"internal/storage/postgres/authschema/migrator_extras_integration_test.go":                   {[]string{nameTable}, untilDrop},
 	"internal/storage/postgres/authschema/public_reads_integration_test.go":                      {[]string{nameTable}, untilDrop},
 	"internal/storage/postgres/authschema/publicreads.go":                                        {[]string{nameTable}, untilDrop},
 	"internal/storage/postgres/authschema/retired_credentials_grant_revoked_test.go":             {[]string{nameTable}, untilDrop},

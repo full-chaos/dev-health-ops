@@ -18,7 +18,7 @@ var itemDecoderExceptions = map[string]string{
 	"gitLabRawSize":             "decodes a field value of a GraphQL node, not a page item",
 }
 
-// TestItemDecoderFailuresCarryTheRoute: a providersync function that takes a json.RawMessage and returns the bare
+// TestItemDecoderFailuresCarryTheRoute: a providersync function whose first parameter is `raw json.RawMessage` and that returns the bare
 // providerfoundation.ErrNormalizationInvalid is an item decoder. The page walker has dropped the response by the time it
 // runs, so every call site must return its error through RouteFailure (or ResponseFailure) naming the route that served
 // the page.
@@ -95,13 +95,14 @@ func TestItemDecoderFailuresCarryTheRoute(t *testing.T) {
 	}
 }
 
+// takesRawMessage: the page-item decoder form, a first parameter `raw json.RawMessage` (one item of a page).
 func takesRawMessage(fn *ast.FuncDecl) bool {
-	for _, field := range fn.Type.Params.List {
-		if selector, ok := field.Type.(*ast.SelectorExpr); ok && selector.Sel.Name == "RawMessage" {
-			return true
-		}
+	params := fn.Type.Params.List
+	if len(params) == 0 || len(params[0].Names) == 0 || params[0].Names[0].Name != "raw" {
+		return false
 	}
-	return false
+	selector, ok := params[0].Type.(*ast.SelectorExpr)
+	return ok && selector.Sel.Name == "RawMessage"
 }
 
 func isNormalizationInvalid(expr ast.Expr) bool {

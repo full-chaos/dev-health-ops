@@ -241,5 +241,7 @@
   "teams: patch missing team": "404 {\"detail\":\"Team not found\"}",
   "teams: patch null repo_patterns keeps existing (update-shaped, | None)": "200 {\"id\":\"f102af58-b8c7-5eb9-8127-04e2926232e4\",\"team_id\":\"custom:qa\",\"name\":\"QA\",\"description\":null,\"repo_patterns\":[\"qa-*\"],\"project_keys\":[],\"extra_data\":{},\"managed_fields\":[],\"sync_policy\":2,\"flagged_changes\":null,\"last_drift_sync_at\":null,\"is_active\":true,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}",
   "teams: patch rejects extra_data null-vs-object mismatch": "422 {\"detail\":[{\"type\":\"dict_type\",\"loc\":[\"body\",\"extra_data\"],\"msg\":\"Input should be a valid dictionary\"}]}",
-  "teams: patch wrong type": "422 {\"detail\":[{\"type\":\"list_type\",\"loc\":[\"body\",\"repo_patterns\"],\"msg\":\"Input should be a valid list\"}]}"
+  "teams: patch wrong type": "422 {\"detail\":[{\"type\":\"list_type\",\"loc\":[\"body\",\"repo_patterns\"],\"msg\":\"Input should be a valid list\"}]}",
+  "tel: opt-in again": "403 {\"detail\":\"You must be an org admin or owner to change telemetry settings\"}",
+  "tel: opt-in member": "403 {\"detail\":\"You must be an org admin or owner to change telemetry settings\"}"
 }

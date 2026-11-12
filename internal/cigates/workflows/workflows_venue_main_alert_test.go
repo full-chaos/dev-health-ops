@@ -88,8 +88,11 @@ func venueMainAlertViolations(t *testing.T, root string) []string {
 	case run == nil:
 		out = append(out, "the workflow_run trigger is bare: it names no workflow and no type")
 	default:
-		if keys := sortedKeys(run); !reflect.DeepEqual(keys, []string{"types", "workflows"}) {
-			out = append(out, fmt.Sprintf("workflow_run declares %v, want only types and workflows: a branches or branches-ignore filter suppresses alerts for main runs", keys))
+		if keys := sortedKeys(run); !reflect.DeepEqual(keys, []string{"branches", "types", "workflows"}) {
+			out = append(out, fmt.Sprintf("workflow_run declares %v, want only branches, types and workflows: a branches-ignore filter or a branches list other than [main] suppresses alerts for main runs or wakes the alert for every branch run", keys))
+		}
+		if got := asList(run["branches"]); !reflect.DeepEqual(got, []any{"main"}) {
+			out = append(out, fmt.Sprintf("workflow_run.branches is %v, want [main]: the alert job only acts on main runs, so other branch runs must not start it", got))
 		}
 		if got := asList(run["workflows"]); !reflect.DeepEqual(got, covered) {
 			out = append(out, fmt.Sprintf("workflow_run.workflows is %v, want %v: the alert must listen to each covered workflow by its exact name, in ci/main-red-workflows.tsv order", got, covered))

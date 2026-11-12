@@ -164,6 +164,9 @@ type enforceObservation struct {
 	orgRequired bool
 	// delegated: the bearer is a delegated session's (the token names an actor).
 	delegated bool
+	// orglessAction is the platform action the route's legacy guard admits a caller with no organization by (the wrap's
+	// gate action, else admin.orgs; gate.orglessAction).
+	orglessAction string
 	// platform, when set, keeps the request's platform answers for HoldsPlatform.
 	platform *platformDecisions
 }
@@ -289,9 +292,9 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 }
 
 // decideOrgless decides an organization row for a token with no organization (CHAOS-10872 S1, product rule 1). The
-// legacy guard admits such a caller only if it holds admin.orgs (Guard.wrap's org-less check, the org-less action of a
-// plain wrap) and refuses it on an AdminOrg row whoever it is, so the decision point is asked that one platform action
-// and never the row's organization action, which needs an organization. An AdminOrg row refuses before any question: no
+// legacy guard admits such a caller only if it holds the wrap's org-less action (Guard.wrap's org-less check: the gate's
+// action, else admin.orgs) and refuses it on an AdminOrg row whoever it is, so the decision point is asked that one
+// platform action and never the row's organization action, which needs an organization. An AdminOrg row refuses before any question: no
 // verdict could change its answer, so it is no deny either. A delegated session's bearer keeps the legacy answer: the
 // decision point refuses a delegated session every platform action, so judging it would narrow impersonation (F1).
 func (e *Enforcer) decideOrgless(ctx context.Context, o enforceObservation, row ShadowRow) enforceVerdict {
@@ -310,9 +313,9 @@ func (e *Enforcer) decideOrgless(ctx context.Context, o enforceObservation, row 
 	var held bool
 	var err error
 	if o.platform != nil {
-		held, err = o.platform.holds(ctx, ActionAdminOrgs)
+		held, err = o.platform.holds(ctx, o.orglessAction)
 	} else {
-		held, err = e.askPlatform(ctx, o.bearer, ActionAdminOrgs)
+		held, err = e.askPlatform(ctx, o.bearer, o.orglessAction)
 	}
 	if err != nil {
 		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
@@ -477,7 +480,7 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, level
 	verdict := g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
 		userAccessToken: user.accessToken, impersonating: impersonating, read: readMethod(r.Method), platformWrap: platformRoute,
 		served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern]), adminOr: gt.kind == gateAdminOr, orgRequired: level == AdminOrg,
-		delegated: user.ImpersonatedBy != nil, platform: platform})
+		delegated: user.ImpersonatedBy != nil, orglessAction: gt.orglessAction(), platform: platform})
 	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
 	// impersonation_refused without a decision point call.
 	if verdict == enforceImpersonationRefused {

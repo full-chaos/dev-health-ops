@@ -9,10 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/google/uuid"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
@@ -133,8 +135,9 @@ func TestOrglessOrgRowsRealHandlersKeepTheLegacyAnswer(t *testing.T) {
 			}
 			pdp.reset("evaluate")
 			got := orglessDo(on, key, c.onToken)
-			if got.status != want.status || got.body != want.body {
-				t.Errorf("%s / %s on: %d %s, want the legacy %d %s", key, c.name, got.status, got.body, want.status, want.body)
+			if got.status != want.status || got.body != want.body || got.header.Get("Content-Type") != want.header.Get("Content-Type") ||
+				got.header.Get("Retry-After") != want.header.Get("Retry-After") {
+				t.Errorf("%s / %s on: %d %s %v, want the legacy %d %s %v", key, c.name, got.status, got.body, got.header, want.status, want.body, want.header)
 			}
 			calls := pdp.calls()
 			if level == "policy.AdminOrg" {
@@ -173,5 +176,84 @@ func TestOrglessOrgRowsRealHandlersWithNoVerdict(t *testing.T) {
 		if got.status != http.StatusServiceUnavailable || !strings.Contains(got.body, "Authorization service temporarily unavailable") {
 			t.Errorf("%s: %d %s, want the enforced 503", key, got.status, got.body)
 		}
+	}
+}
+
+// orglessAskedProblems serves the org-less platform admin (no membership row) on every organization row of handler and
+// names each row whose decision point question is not the one the legacy guard reads for that caller: admin.orgs on an
+// Admin or Authenticated row, none on an AdminOrg row.
+func orglessAskedProblems(handler http.Handler, pdp *cellPDP, token string, rows map[string]string) (problems []string, checked int) {
+	for _, key := range sortedKeys(rows) {
+		pdp.reset("evaluate")
+		orglessDo(handler, key, token)
+		calls := pdp.calls()
+		checked++
+		if rows[key] == "policy.AdminOrg" {
+			if len(calls) != 0 {
+				problems = append(problems, key+": a question on an AdminOrg row")
+			}
+			continue
+		}
+		if len(calls) != 1 || calls[0].Action != policy.ActionAdminOrgs || calls[0].ResourceType != policycatalog.ScopePlatform || calls[0].OrganizationID != "" {
+			problems = append(problems, key+": asked "+orglessCallsText(calls)+", want admin.orgs on the platform")
+		}
+	}
+	return problems, checked
+}
+
+func orglessCallsText(calls []pep.Request) string {
+	parts := make([]string, 0, len(calls))
+	for _, c := range calls {
+		parts = append(parts, c.Action+"@"+c.ResourceType)
+	}
+	return "[" + strings.Join(parts, " ") + "]"
+}
+
+// The census (acp F-4): over the production mounts of the 127 organization rows, the org-less caller is asked exactly
+// the platform action the legacy guard admits it by. Every row is a plain level mount today, so that action is
+// admin.orgs (Guard.wrap orglessAction); a row mounted with its own gate action would be asked that action instead.
+func TestOrglessOrgRowsAskTheLegacyOrglessActionOnEveryRow(t *testing.T) {
+	rows := orglessRealRows(t)
+	pdp := newCellPDP(t)
+	handler, minter := adminConfigServerWith(t, func(t *testing.T) *policy.Enforcer { return newCellEnforcer(t, pdp, orglessOrgNamespaces, false) }, withPlatformAdmins)
+	token := minter.mint(cellPlatformNoRow, map[string]any{"sid": sessionid.Wire(cellNoRowSID), "org_id": nil})
+	pdp.register(map[string]cellCaller{"admin": {token: token, snap: cellSnapshot{platformRole: "platform_admin"}}})
+	problems, checked := orglessAskedProblems(handler, pdp, token, rows)
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	if checked != 127 {
+		t.Fatalf("%d rows checked, want 127", checked)
+	}
+}
+
+// The census fails on a planted row: one Admin organization row mounted WrapAdminOr(admin.users), as an admin-or row
+// is, is asked admin.users (its own gate action, the one the legacy guard reads), and the census names that row only.
+func TestOrglessCensusNamesAPlantedRowWithItsOwnAction(t *testing.T) {
+	rows := orglessRealRows(t)
+	planted := ""
+	for _, key := range sortedKeys(rows) {
+		if rows[key] == "policy.Admin" && strings.HasPrefix(key, "GET ") {
+			planted = key
+			break
+		}
+	}
+	method, pattern, _ := strings.Cut(planted, " ")
+	pdp := newCellPDP(t)
+	handler, minter := adminConfigServerOver(t, func(t *testing.T) *policy.Enforcer { return newCellEnforcer(t, pdp, orglessOrgNamespaces, false) }, withPlatformAdmins,
+		func(_ *testing.T, deps Deps) []httpapi.Route {
+			routes := Routes(deps, quietLogger())
+			for i, route := range routes {
+				if route.Method == method && route.Pattern == pattern {
+					routes[i].Handler = deps.Guard.WrapAdminOr(policy.ActionAdminUsers, http.HandlerFunc(principalEcho))
+				}
+			}
+			return routes
+		})
+	token := minter.mint(cellPlatformNoRow, map[string]any{"sid": sessionid.Wire(cellNoRowSID), "org_id": nil})
+	pdp.register(map[string]cellCaller{"admin": {token: token, snap: cellSnapshot{platformRole: "platform_admin"}}})
+	problems, _ := orglessAskedProblems(handler, pdp, token, rows)
+	if len(problems) != 1 || !strings.HasPrefix(problems[0], planted+": asked [admin.users@platform]") {
+		t.Fatalf("problems %v, want exactly the planted row %s asked admin.users", problems, planted)
 	}
 }

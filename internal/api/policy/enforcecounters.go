@@ -44,8 +44,10 @@ func countEnforce(ctx context.Context, namespace, outcome string) {
 const (
 	enforceUnjudgedHS256 = "hs256"
 	enforceUnjudgedNoOrg = "no_org"
-	// enforceUnjudgedServedOrg: a token with no organization that names one. No request is counted so since every such
-	// request is decided (decideOrgless); the label leaves the set once its read after the roll is zero.
+	// enforceUnjudgedServedOrg: a token with no organization that names one. go-api counts no request so since every such
+	// request is decided (decideOrgless). The label stays in the set because the shadow venue judge
+	// (internal/shadowvenue: JudgeEnforced, UnjudgedTotals) reads it to judge go-api builds before CHAOS-10872 S1; its
+	// removal is CHAOS-13596's.
 	enforceUnjudgedServedOrg = "served_org"
 	// enforceUnjudgedOrgRequired: a token with no organization on an AdminOrg row, refused before any question.
 	enforceUnjudgedOrgRequired = "org_required"

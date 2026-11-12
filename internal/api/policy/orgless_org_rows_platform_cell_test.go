@@ -467,3 +467,22 @@ func TestOrglessPlatformRowStillAsksItsOwnAction(t *testing.T) {
 		t.Fatalf("%s: PDP saw %+v, want one question for %s", pattern, calls, rows[pattern].Action)
 	}
 }
+
+// A token that is not a user access token comes first (unjudgedReason): with no organization on an organization row it is
+// still the hs256 reason and the legacy answer, never a platform question. No such token reaches the guard today
+// (Authenticate builds user access tokens only); this pins the order if one ever does.
+func TestOrglessNonUserTokenKeepsTheHS256Reason(t *testing.T) {
+	rows := orglessOrgRows(t)
+	rec := recordEnforce(t)
+	pdp := newTestPDP(t, allowAll)
+	enf := seamEnforcer(t, pdp.client(t), productionGoAPIRows(t), orglessOrgNamespaces...)
+	for _, bearer := range []string{"", shadowBearer} {
+		verdict := enf.decide(t.Context(), enforceObservation{pattern: rows[0].pattern, bearer: bearer, userAccessToken: false, read: true})
+		if verdict != enforceLegacy {
+			t.Errorf("bearer %q: verdict %v, want the legacy answer", bearer, verdict)
+		}
+	}
+	if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{rows[0].pattern + "/hs256", rows[0].pattern + "/hs256"}) {
+		t.Fatalf("%d PDP calls, unjudged %v, want 0 and hs256 twice", n, rec.unjudgedSnapshot())
+	}
+}

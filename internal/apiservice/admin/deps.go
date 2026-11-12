@@ -101,6 +101,9 @@ type Deps struct {
 	// OrgDeprovisioner is the delete's auth-service client with AUTH_PROXY_ORG_PROVISIONING off; nil while
 	// OrgDeletionAuth is the no_client case. Unused with the switch on (OrgProvisioner deprovisions then).
 	OrgDeprovisioner OrgDeprovisioner
+	// ACROrgRevoker revokes every acr credential of an organization on disable and delete (ACR_REVOKE_*); nil is
+	// "not configured": both proceed with one ERROR line and one count.
+	ACROrgRevoker OrgCredentialRevoker
 	// OrgSuspender is the client of auth-service's organization suspend route, from the same switch; nil leaves PATCH
 	// is_active=false as it was.
 	OrgSuspender orgreactivate.Suspender
@@ -162,6 +165,7 @@ func Routes(deps Deps) []httpapi.Route {
 		orgProvision:       deps.OrgProvisioner,
 		orgDeletionAuth:    deps.OrgDeletionAuth,
 		orgDeprovision:     deps.OrgDeprovisioner,
+		acrOrgRevoker:      deps.ACROrgRevoker,
 		orgSuspender:       deps.OrgSuspender,
 		orgState:           deps.OrgState,
 		delegator:          deps.Delegator,
@@ -244,6 +248,10 @@ type handlers struct {
 	// orgDeletionAuth and orgDeprovision are Deps.OrgDeletionAuth and Deps.OrgDeprovisioner.
 	orgDeletionAuth bool
 	orgDeprovision  OrgDeprovisioner
+	// acrOrgRevoker is Deps.ACROrgRevoker.
+	acrOrgRevoker OrgCredentialRevoker
+	// openOrgDeletionClickHouse replaces the org deletion's ClickHouse preflight in tests; nil is the preflight.
+	openOrgDeletionClickHouse func(context.Context) (*orgDeletionClickHouse, error)
 	// orgSuspender is Deps.OrgSuspender, the PATCH is_active=false counterpart.
 	orgSuspender orgreactivate.Suspender
 	// orgState is Deps.OrgState: the read whose revision the is_active call sends.

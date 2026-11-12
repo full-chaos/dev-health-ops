@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +23,8 @@ const usage = `usage: cigate live-e2e <verb>
   valkey-ping                            (env REDIS_URL)
   subject-jws FILE                       (test subject token for the fake TokenReview; FILE must not exist)
   reviewer-token FILE                    (random reviewer bearer for the fake TokenReview; FILE must not exist)
+  smtp-sink ADDR DIR PORTFILE             (loopback SMTP capture; blocks)
+  mail-token DIR EMAIL KIND              (KIND reset|verify; prints only the token)
   tokenreview-serve ADDR CERT KEY SUBJECT_FILE REVIEWER_FILE   (env TR_NAMESPACE, TR_SERVICE_ACCOUNT, TR_UID; blocks)
 `
 
@@ -31,7 +35,7 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		return 2
 	}
 	timeout := 2 * time.Minute
-	if args[0] == "tokenreview-serve" {
+	if args[0] == "tokenreview-serve" || args[0] == "smtp-sink" {
 		timeout = 24 * time.Hour
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -155,6 +159,26 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		if err := ServeTokenReview(ctx, args[1], args[2], args[3], args[4], args[5], cfg); err != nil {
 			return fail(err)
 		}
+		return 0
+	case "smtp-sink":
+		if !need(3) {
+			return 2
+		}
+		ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := ServeSMTPSink(ctx, args[1], args[2], args[3], stderr); err != nil {
+			return fail(err)
+		}
+		return 0
+	case "mail-token":
+		if !need(3) {
+			return 2
+		}
+		token, err := readMailToken(args[1], args[2], args[3])
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Fprintln(stdout, token)
 		return 0
 	case "valkey-ping":
 		if !need(0) {

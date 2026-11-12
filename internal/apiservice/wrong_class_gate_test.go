@@ -256,7 +256,9 @@ const (
 	gateDivergencePrefix = "wrong-class G3 known divergence: "
 )
 
-// The ledger rows anchored here (each needle is a line below, verbatim): none.
+// The ledger rows anchored here (each needle is a line below, verbatim):
+//
+//	wrong-class G3 known divergence: POST /api/v1/auth/logout
 func gateDivergences(t *testing.T) map[string]string {
 	t.Helper()
 	root, err := moduleroot.Root()

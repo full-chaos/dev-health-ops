@@ -387,6 +387,7 @@ func stalePages(n, per int) map[string]string {
 }
 
 func TestStackedQueueCancelPagesAreRequestedInOrderAndStopAtAnEmptyOne(t *testing.T) {
+	t.Parallel()
 	r := runCancelScriptWith(t, rootOf(t), nil)
 	if got, want := strings.Join(r.gets, ","), "queued 1,queued 2,in_progress 1,in_progress 2"; got != want {
 		t.Fatalf("list GETs %q, want %q (page 2 is empty, so each status stops there)", got, want)
@@ -398,6 +399,7 @@ func TestStackedQueueCancelPagesAreRequestedInOrderAndStopAtAnEmptyOne(t *testin
 }
 
 func TestStackedQueueCancelTruncatedScanIsLoudAndNonZero(t *testing.T) {
+	t.Parallel()
 	r := runCancelScriptWith(t, rootOf(t), stalePages(5, 100))
 	if r.rc != 2 {
 		t.Fatalf("a full last page (5 x 100) must exit 2, got %d", r.rc)
@@ -462,6 +464,7 @@ func TestStackedQueueCancelSurvivesFailures(t *testing.T) {
 }
 
 func TestStackedQueueCancelPlantedSelectionFaults(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	for _, m := range []mutation{
 		{cancelScript, `branch_re='^gh-readonly-queue/main/pr-[0-9]+-([0-9a-f]{40})$'`, `branch_re='^gh-readonly-queue/.*/pr-[0-9]+-([0-9a-f]{40})'`},
@@ -483,6 +486,7 @@ func TestStackedQueueCancelPlantedSelectionFaults(t *testing.T) {
 }
 
 func TestStackedQueueCancelPlantedTruncationFaults(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	for _, m := range []mutation{
 		{cancelScript, `max_pages=5`, `max_pages=50`},
@@ -540,6 +544,7 @@ func TestStackedQueueCancelInvalidRunsAreSkippedNeverChained(t *testing.T) {
 
 // One summary line per run: scanned, candidates, cancelled, skipped_invalid, truncated. Zero candidates is exit 0 and visible.
 func TestStackedQueueCancelPrintsOneSummaryLine(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	count := func(out string) int { return strings.Count(out, "scanned=") }
 	r := runCancelScriptWith(t, root, nil)

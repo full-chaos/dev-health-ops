@@ -19,6 +19,7 @@ func TestPDPRoutesAreNotOnTheDefaultRouteBucket(t *testing.T) {
 	routes := []httpapi.Route{
 		{Method: http.MethodPost, Pattern: authapi.PatternAuthorize},
 		{Method: http.MethodPost, Pattern: authapi.PatternAuthorizeBatch},
+		{Method: http.MethodPost, Pattern: authapi.PatternAuthorizeRepositories},
 		{Method: http.MethodPost, Pattern: "/v1/other"},
 	}
 	got := apiServerOptions(cfg, slog.Default(), routes).Routes

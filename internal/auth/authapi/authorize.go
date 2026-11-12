@@ -239,13 +239,15 @@ func AuthorizeRoutes(deps AuthorizeDeps) ([]httpapi.Route, error) {
 	}
 	subjects := deps.Callers.callerSubjects()
 	h := authorizeHandlers{AuthorizeDeps: deps, rec: rec, cache: cache, decisionID: newDecisionID, limiters: map[string]*callerLimiter{
-		opAuthorize:      newCallerLimiter(pdpAuthorizeCallerLimitID, subjects, deps.CallerLimit),
-		opAuthorizeBatch: newCallerLimiter(pdpAuthorizeBatchCallerLimitID, subjects, deps.CallerLimit),
+		opAuthorize:             newCallerLimiter(pdpAuthorizeCallerLimitID, subjects, deps.CallerLimit),
+		opAuthorizeBatch:        newCallerLimiter(pdpAuthorizeBatchCallerLimitID, subjects, deps.CallerLimit),
+		opAuthorizeRepositories: newCallerLimiter(pdpAuthorizeRepositoriesCallerLimitID, subjects, deps.CallerLimit),
 	}}
 	var routes []httpapi.Route
 	for _, route := range []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternAuthorize, Handler: http.HandlerFunc(h.authorize), MaxBodyBytes: maxAuthorizeBody, Admit: h.admit(opAuthorize)},
 		{Method: http.MethodPost, Pattern: PatternAuthorizeBatch, Handler: http.HandlerFunc(h.authorizeBatch), MaxBodyBytes: maxAuthorizeBatchBody, Admit: h.admit(opAuthorizeBatch)},
+		{Method: http.MethodPost, Pattern: PatternAuthorizeRepositories, Handler: http.HandlerFunc(h.authorizeRepositories), MaxBodyBytes: maxAuthorizeBody, Admit: h.admit(opAuthorizeRepositories)},
 	} {
 		if rowsAcceptFor(rows, []string{route.Pattern}, []string{workloadTokenClass}) != nil {
 			h.Logger.Info("auth authorize route not mounted: no endpoint-profile row", "route", route.Pattern)
@@ -323,6 +325,9 @@ var (
 type authorizeItem struct {
 	question  AuthorizationQuestion
 	principal ReferencedPrincipal
+	// listing is true on the repository listing route: the item is decided by
+	// Evaluator.ReadableRepositories and never through the decision cache.
+	listing   bool
 	decision  authorization.Decision
 	now       int64
 	delegated bool
@@ -396,11 +401,12 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 			}
 			resolved[q.PrincipalReference] = p
 		}
-		items[i] = authorizeItem{question: q, principal: p}
+		items[i] = authorizeItem{question: q, principal: p, listing: op == opAuthorizeRepositories}
 	}
 	// The stamp is taken BEFORE the transaction's snapshot: an event the
 	// snapshot misses is later than the stamp, so a Put of what it read misses.
-	cached := h.Cache != nil && h.Ready != nil && h.Ready()
+	// A listing is never cached: its key would be one repository question's.
+	cached := h.Cache != nil && h.Ready != nil && h.Ready() && op != opAuthorizeRepositories
 	var stamp decisioncache.Stamp
 	if cached {
 		stamp = h.Cache.Begin()
@@ -568,7 +574,12 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		if q.ResourceType == "repository" {
 			req.ResourceKey = q.ResourceKey
 		}
-		d := h.Evaluator.Evaluate(req, snap)
+		var d authorization.Decision
+		if items[i].listing {
+			d = h.Evaluator.ReadableRepositories(req, snap)
+		} else {
+			d = h.Evaluator.Evaluate(req, snap)
+		}
 		if _, onWire := wireReasonCode(d.Reason); !onWire || !obligationsFit(d, delegated, q.OrganizationID) {
 			return errAuthorizeStateFailure
 		}

@@ -43,7 +43,7 @@ func apiPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
 			// Read root for GET /api/v1/internal/acr/entitlements/{org_id}:
-			// existence (404 if absent) and the tier fallback when no
+			// existence and is_active (404 if absent or disabled) and the tier fallback when no
 			// org_licenses row exists (internal/apiservice/acr/store.go).
 			// Also plan area L's self-service profile: read, and the name
 			// and description update of PATCH /api/v1/orgs/me. The admin

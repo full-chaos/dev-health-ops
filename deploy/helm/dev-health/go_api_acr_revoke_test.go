@@ -271,3 +271,31 @@ func TestACRRevokeLeavesOtherWorkloadsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// go-api reads a present but blank ACR_REVOKE_* value as an unusable client (the org disable and delete answer 503),
+// so the chart must never render one: off renders no ACR_REVOKE_* name at all, on renders all four non-blank, and a
+// blank url or tokenURL with the switch on refuses the render.
+func TestACRRevokeNeverRendersABlankValue(t *testing.T) {
+	t.Parallel()
+
+	_, off := arGoAPI(t, "--set", "goApi.enabled=true")
+	for name := range off {
+		if strings.HasPrefix(name, "ACR_REVOKE_") {
+			t.Errorf("off renders %s = %v, want the name omitted", name, arValue(off, name))
+		}
+	}
+	for _, args := range [][]string{arOn(), arOn("--set-string", "goApi.acrRevoke.url="+arCluster, "--set", "goApi.acrRevoke.allowClusterHTTP=true")} {
+		_, on := arGoAPI(t, args...)
+		for _, name := range arOwnEnv {
+			value, isString := arValue(on, name).(string)
+			if !isString || strings.TrimSpace(value) == "" {
+				t.Errorf("on renders %s = %v, want a non-blank value", name, arValue(on, name))
+			}
+		}
+	}
+	for _, key := range []string{"url", "tokenURL"} {
+		if _, out, err := renderAuth(t, arOn("--set-string", "goApi.acrRevoke."+key+"=")...); err == nil {
+			t.Errorf("a blank goApi.acrRevoke.%s rendered: %.300s", key, out)
+		}
+	}
+}

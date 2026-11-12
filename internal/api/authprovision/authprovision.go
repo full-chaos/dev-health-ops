@@ -45,6 +45,8 @@ const (
 	defaultTimeout = 10 * time.Second
 	// maxRequestMetadataBytes is the routes' bound on request_metadata.
 	maxRequestMetadataBytes = 2048
+	// maxRetryAfter bounds the Retry-After a 429 can carry here; a caller bounds its own wait below it.
+	maxRetryAfter = time.Hour
 )
 
 var (
@@ -58,9 +60,12 @@ var (
 
 // Refused is a 4xx answer: its status and its error.v1 reason_code ("" when
 // the answer named none, or named something that is not a plain code).
+// RetryAfter is a 429's Retry-After in whole seconds (at most maxRetryAfter),
+// zero on any other answer or when the header is not delta-seconds.
 type Refused struct {
-	Status int
-	Reason string
+	Status     int
+	Reason     string
+	RetryAfter time.Duration
 }
 
 func (r *Refused) Error() string {
@@ -140,7 +145,7 @@ func (c *Core) Post(ctx context.Context, path string, request, answer any) error
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxAnswerBytes+1))
 	switch {
 	case response.StatusCode >= 400 && response.StatusCode < 500:
-		return &Refused{Status: response.StatusCode, Reason: reasonIn(body)}
+		return &Refused{Status: response.StatusCode, Reason: reasonIn(body), RetryAfter: retryAfterIn(response)}
 	case response.StatusCode != http.StatusOK:
 		return fmt.Errorf("%w: status %d", ErrUnavailable, response.StatusCode)
 	case err != nil:
@@ -152,6 +157,25 @@ func (c *Core) Post(ctx context.Context, path string, request, answer any) error
 		return fmt.Errorf("%w: answer is not JSON", ErrUnavailable)
 	}
 	return nil
+}
+
+// retryAfterIn reads a 429's Retry-After as delta-seconds only (RFC 9110 10.2.3); an HTTP-date, a sign or any
+// other form is zero.
+func retryAfterIn(response *http.Response) time.Duration {
+	value := response.Header.Get("Retry-After")
+	if response.StatusCode != http.StatusTooManyRequests || value == "" {
+		return 0
+	}
+	var seconds int64
+	for _, c := range value {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		if seconds = seconds*10 + int64(c-'0'); seconds > int64(maxRetryAfter/time.Second) {
+			return maxRetryAfter
+		}
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func reasonIn(body []byte) string {

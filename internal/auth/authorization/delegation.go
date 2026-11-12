@@ -87,16 +87,10 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 	rev := e.cat.Version()
 	deny := func(why Reason) Decision { return Decision{Reason: why, PolicyRevision: rev, CacheClass: CacheNone} }
 
-	switch {
-	case len(del.Chain) == 0:
-		return deny(ReasonDelegationInvalid)
-	case len(del.Chain) > 1:
-		return deny(ReasonImpersonationDenied)
-	case del.Chain[0].ActorPrincipalID == "", del.TargetOrganizationID == "", !assuranceLevels[del.Assurance]:
-		return deny(ReasonDelegationInvalid)
-	case r.ResourceKind != resourcePlatform && r.OrganizationID != del.TargetOrganizationID:
-		return deny(ReasonDelegationInvalid)
-	case r.ResourceKind == resourceRepository && r.ResourceKey == wildcardKey:
+	if why := delegationDenial(r, del); why != "" {
+		return deny(why)
+	}
+	if r.ResourceKind == resourceRepository && r.ResourceKey == wildcardKey {
 		return deny(ReasonImpersonationDenied)
 	}
 
@@ -104,6 +98,41 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 	if !d.Allowed {
 		return d
 	}
+	if d = e.delegatedAllow(r, del, d, rev); !d.Allowed {
+		return d
+	}
+	if r.ResourceKind == resourceRepository {
+		// A delegated repository allow covers the asked repository only, even where the subject's own allow is
+		// org-wide: the org-wide marker never reaches a delegated session.
+		d.Obligations.RepositoryScope = ""
+		d.Obligations.RepositoryAllowlist = []string{r.ResourceKey}
+		d.Obligations.RepositoryRestricted = true
+	}
+	return d
+}
+
+// delegationDenial is the shape rule of a delegated session, before any state is read: one hop, an actor, a target
+// organization, a known assurance level, and a question in that organization (a platform question names none).
+func delegationDenial(r Request, del Delegation) Reason {
+	switch {
+	case len(del.Chain) == 0:
+		return ReasonDelegationInvalid
+	case len(del.Chain) > 1:
+		return ReasonImpersonationDenied
+	case del.Chain[0].ActorPrincipalID == "", del.TargetOrganizationID == "", !assuranceLevels[del.Assurance]:
+		return ReasonDelegationInvalid
+	case r.ResourceKind != resourcePlatform && r.OrganizationID != del.TargetOrganizationID:
+		return ReasonDelegationInvalid
+	}
+	return ""
+}
+
+// delegatedAllow narrows the effective subject's allow d to the delegated session: the action must be one the
+// session permits and not a platform action; an action on the impersonation floor, or one the catalog does not allow
+// under impersonation, needs a platform_owner actor and carries the owner-exemption audit. The allow then carries the
+// tenant scope and the session's assurance level. A denial carries rev.
+func (e *Evaluator) delegatedAllow(r Request, del Delegation, d Decision, rev int) Decision {
+	deny := func(why Reason) Decision { return Decision{Reason: why, PolicyRevision: rev, CacheClass: CacheNone} }
 	act, err := e.cat.Action(r.Action)
 	if err != nil || act.Scope == policycatalog.ScopePlatform ||
 		!hasAction(del.Chain[0].PermittedActions, r.Action) {
@@ -122,12 +151,5 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 		d.Obligations = &Obligations{}
 	}
 	d.Obligations.TenantScope, d.Obligations.MinimumAssurance = r.OrganizationID, del.Assurance
-	if r.ResourceKind == resourceRepository {
-		// A delegated repository allow covers the asked repository only, even where the subject's own allow is
-		// org-wide: the org-wide marker never reaches a delegated session.
-		d.Obligations.RepositoryScope = ""
-		d.Obligations.RepositoryAllowlist = []string{r.ResourceKey}
-		d.Obligations.RepositoryRestricted = true
-	}
 	return d
 }

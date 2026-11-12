@@ -344,7 +344,7 @@ func TestADeletedOrganizationsNameCanBeReused(t *testing.T) {
 			s.delete(t, x)
 			if n := s.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL AND slug = $2`,
 				x, "~deleted~"+x.String()); n != 1 {
-				t.Fatalf("X's auth row after the delete: %d suspended rows with the freed slug, want 1", n)
+				t.Errorf("X's auth row after the delete: %d suspended rows with the freed slug, want 1", n)
 			}
 			ownerY, emailY := s.user(t, ctx, "y")
 			second := name

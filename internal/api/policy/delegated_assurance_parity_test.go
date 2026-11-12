@@ -75,8 +75,8 @@ func TestADelegatedReadWithAnAAL1AllowEqualsTheLegacyAnswerOnEveryDelegatedRow(t
 			}
 		})
 	}
-	if cells != 9 {
-		t.Fatalf("%d enforced delegated-allowed rows, want the 7 billing and licensing reads and the 2 org.read and settings.read reads (GET /api/v1/orgs/me, GET /api/v1/telemetry/status)", cells)
+	if cells != 8 {
+		t.Fatalf("%d enforced delegated-allowed rows, want the 7 billing and licensing reads and the org.read read (GET /api/v1/orgs/me)", cells)
 	}
 }
 

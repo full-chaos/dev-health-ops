@@ -12,8 +12,7 @@ import (
 // handlerDecidedActions are the go-api rows CHAOS-13604 (part of CHAOS-13592) gives a catalog action. The target is the
 // legacy answer for every caller class, status and body (product rule 1: the same answers as the legacy path).
 var handlerDecidedActions = map[string]string{
-	"GET /api/v1/orgs/me":                                 "org.read",
-	"GET /api/v1/telemetry/status":                        "settings.read",
+	"GET /api/v1/orgs/me": "org.read",
 	"POST /api/v1/acr/credentials/{credential_id}/revoke": "acr.credential.revoke",
 }
 

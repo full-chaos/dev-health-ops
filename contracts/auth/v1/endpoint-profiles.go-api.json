@@ -6774,7 +6774,7 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": "settings.read",
+      "action": null,
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -6783,7 +6783,9 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
-      "gaps": [],
+      "gaps": [
+        "action: no catalog action is proven to equal the telemetry settings check; settings.read is the candidate (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/telemetry/status [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",

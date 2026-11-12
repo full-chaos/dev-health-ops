@@ -233,7 +233,11 @@ func compatRoutes(
 	if err != nil {
 		return nil, err
 	}
-	return append(append(append(routes, links...), sso...), provisioning...), nil
+	readable, err := readableRepositoriesRoutes(cfg, logger, pool, schema, issueWorkload)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(append(routes, links...), sso...), provisioning...), readable...), nil
 }
 
 // validateConfig is the validate route's go-api session read over the auth

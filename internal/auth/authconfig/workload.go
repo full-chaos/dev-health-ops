@@ -196,6 +196,34 @@ func workloadSubject(lookup secrets.LookupEnv, env, tokenIssuerURL string) (stri
 // the routes accept no caller. Set, it needs EnvTokenIssuerURL.
 const EnvAuthorizeCallerSubjects = "AUTH_AUTHORIZE_CALLER_SUBJECTS"
 
+// The web approver reference kind of the authorize routes (CHAOS-11207): the
+// web assertion issuer, the public JWKS file acr verifies web assertions with,
+// and the one workload principal (acr-api) that may present the kind. All three
+// set and the caller listed in EnvAuthorizeCallerSubjects turn the kind on;
+// any other state leaves it off and auth-service logs one ERROR naming what is
+// missing. It never refuses to start (product rule 3).
+const (
+	EnvAuthorizeWebApproverIssuer   = "AUTH_AUTHORIZE_WEB_APPROVER_ISSUER"
+	EnvAuthorizeWebApproverJWKSFile = "AUTH_AUTHORIZE_WEB_APPROVER_JWKS_FILE"
+	EnvAuthorizeWebApproverCaller   = "AUTH_AUTHORIZE_WEB_APPROVER_CALLER"
+)
+
+// WebApprover is the raw web approver reference settings; authruntime decides
+// whether they turn the kind on.
+type WebApprover struct {
+	Issuer   string
+	JWKSFile string
+	Caller   string
+}
+
+func webApprover(lookup secrets.LookupEnv) WebApprover {
+	read := func(name string) string {
+		value, _ := lookup(name)
+		return strings.TrimSpace(value)
+	}
+	return WebApprover{Issuer: read(EnvAuthorizeWebApproverIssuer), JWKSFile: read(EnvAuthorizeWebApproverJWKSFile), Caller: read(EnvAuthorizeWebApproverCaller)}
+}
+
 // authorizeCallerSubjects reads the authorize routes' caller subjects. Errors
 // name the variable and an item's position, never a value.
 func authorizeCallerSubjects(lookup secrets.LookupEnv, tokenIssuerURL string) ([]string, error) {

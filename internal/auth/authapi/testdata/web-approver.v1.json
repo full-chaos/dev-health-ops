@@ -1,0 +1,84 @@
+{
+    "schema_version": "web_approver_vector.v1",
+    "source_repository": "full-chaos/dev-health-web",
+    "producer": "src/lib/acr/__tests__/approver-vector.test.ts",
+    "clock": 1800000000,
+    "issuer": "https://www.fullchaos.dev",
+    "assertion_audience": "acr-api",
+    "jwks": {
+        "keys": [
+            {
+                "crv": "Ed25519",
+                "x": "c8NeR8tLlni-CHpchzR9ilqn7yk44zmh1j97KbfqdZE",
+                "kty": "OKP",
+                "alg": "EdDSA",
+                "kid": "web-test-1",
+                "use": "sig"
+            }
+        ]
+    },
+    "principal": {
+        "org_id": "3f9a1c77-2e4b-4d10-b5c8-6a7e9d0b1c23",
+        "session_uuid": "7d0c3e52-91b4-4f7a-8a63-0e5b9c2d4f10",
+        "sid": "ses_fQw-UpG0T3qKYw5bnC1PEA",
+        "user_id": "5e5510aa-6a1e-4c4e-9d3b-2b7f0c1a9e01"
+    },
+    "method": "POST",
+    "cases": [
+        {
+            "name": "V1 device approval pair",
+            "body": "{\"repository_scopes\":[\"*\"],\"schema_version\":\"device_approval_request.v1\",\"user_code\":\"ALU23456\"}",
+            "path": "/api/v1/oauth/device_approval",
+            "web_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6IndlYi10ZXN0LTEiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJhY3ItYXBpIiwiYm9keV9zaGEyNTYiOiJnX25yZFhFNmFER3dERDlDUVJEVjdjNmdOdmloV2lWZk80aXF0SmJrS0kwIiwiZXhwIjoxODAwMDAwMDMwLCJpYXQiOjE4MDAwMDAwMDAsImlzcyI6Imh0dHBzOi8vd3d3LmZ1bGxjaGFvcy5kZXYiLCJqdGkiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwYTEiLCJtZXRob2QiOiJQT1NUIiwibmJmIjoxODAwMDAwMDAwLCJvcmdfaWQiOiIzZjlhMWM3Ny0yZTRiLTRkMTAtYjVjOC02YTdlOWQwYjFjMjMiLCJwYXRoIjoiL2FwaS92MS9vYXV0aC9kZXZpY2VfYXBwcm92YWwiLCJwZXJtaXNzaW9ucyI6WyJjcmVkZW50aWFsOmlzc3VlIl0sInJlcG9zaXRvcnlfc2NvcGVzIjpbIioiXSwic3ViIjoiNWU1NTEwYWEtNmExZS00YzRlLTlkM2ItMmI3ZjBjMWE5ZTAxIn0.OlvxcUm0_Num1yTx9IDe6Wrf6NYmZtCwEiJ6GMnbnRdCXKhMDG43MvwtbvJ6aJLbkt3RD7-zji_cngrHOHMMDw",
+            "approver_reference": "eyJhbGciOiJFZERTQSIsImtpZCI6IndlYi10ZXN0LTEiLCJ0eXAiOiJ3ZWItYXBwcm92ZXIrand0In0.eyJhY3Rpb24iOiJhY3IuY3JlZGVudGlhbC5pc3N1ZSIsImF1ZCI6ImF1dGgtc2VydmljZSIsImV4cCI6MTgwMDAwMDAzMCwiaWF0IjoxODAwMDAwMDAwLCJpbXBlcnNvbmF0aW5nIjpmYWxzZSwiaXNzIjoiaHR0cHM6Ly93d3cuZnVsbGNoYW9zLmRldiIsImp0aSI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBiMSIsIm5iZiI6MTgwMDAwMDAwMCwib3JnX2lkIjoiM2Y5YTFjNzctMmU0Yi00ZDEwLWI1YzgtNmE3ZTlkMGIxYzIzIiwicmVxIjoiU3lmbTc5OF9IMG8tY0Znd0RHaTluN0VIc1FYQ2U4b2dJRmdQb0l3TE80SSIsInNpZCI6InNlc19mUXctVXBHMFQzcUtZdzVibkMxUEVBIiwic3ViIjoiNWU1NTEwYWEtNmExZS00YzRlLTlkM2ItMmI3ZjBjMWE5ZTAxIn0.CFhwCPIW31Vk7N6S1DIcdlCAM_KTNE6zYZkoG7leC_bqnX6JgAyyEy8c0iZOVFO5RE9iKRbgAFTa3EMndB-3Dg",
+            "expect": {
+                "acr_pair": "accept",
+                "pdp_reference": "accept"
+            }
+        },
+        {
+            "name": "V2 consent pair",
+            "body": "{\"action\":\"approve\",\"handle\":\"HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH\",\"repository_scopes\":[\"*\"]}",
+            "path": "/authorize/consent",
+            "web_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6IndlYi10ZXN0LTEiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJhY3ItYXBpIiwiYm9keV9zaGEyNTYiOiJUR0JVQS1NeGF6c1ZKSDM4WWVCQ0FCSlJGZ3FKQzcwZ2Q3ZVJmRHNEQk9ZIiwiZXhwIjoxODAwMDAwMDMwLCJpYXQiOjE4MDAwMDAwMDAsImlzcyI6Imh0dHBzOi8vd3d3LmZ1bGxjaGFvcy5kZXYiLCJqdGkiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwYTIiLCJtZXRob2QiOiJQT1NUIiwibmJmIjoxODAwMDAwMDAwLCJvcmdfaWQiOiIzZjlhMWM3Ny0yZTRiLTRkMTAtYjVjOC02YTdlOWQwYjFjMjMiLCJwYXRoIjoiL2F1dGhvcml6ZS9jb25zZW50IiwicGVybWlzc2lvbnMiOlsiY3JlZGVudGlhbDppc3N1ZSJdLCJyZXBvc2l0b3J5X3Njb3BlcyI6WyIqIl0sInN1YiI6IjVlNTUxMGFhLTZhMWUtNGM0ZS05ZDNiLTJiN2YwYzFhOWUwMSJ9.WB25nbo5epkFJF7b-mFYIim_ZzbYTdMKMfL1HXH-uGR-4N5PQjf3NAnz84Ijwz4BPiK0mkqdfRJR2nNjXrLYDg",
+            "approver_reference": "eyJhbGciOiJFZERTQSIsImtpZCI6IndlYi10ZXN0LTEiLCJ0eXAiOiJ3ZWItYXBwcm92ZXIrand0In0.eyJhY3Rpb24iOiJhY3IuY3JlZGVudGlhbC5pc3N1ZSIsImF1ZCI6ImF1dGgtc2VydmljZSIsImV4cCI6MTgwMDAwMDAzMCwiaWF0IjoxODAwMDAwMDAwLCJpbXBlcnNvbmF0aW5nIjpmYWxzZSwiaXNzIjoiaHR0cHM6Ly93d3cuZnVsbGNoYW9zLmRldiIsImp0aSI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBiMiIsIm5iZiI6MTgwMDAwMDAwMCwib3JnX2lkIjoiM2Y5YTFjNzctMmU0Yi00ZDEwLWI1YzgtNmE3ZTlkMGIxYzIzIiwicmVxIjoiYXlCb1h2SXNPdXVqOFV3THdhS0JhZjdRSFRZci1qNHBKdk9FZ0JBLTl2TSIsInNpZCI6InNlc19mUXctVXBHMFQzcUtZdzVibkMxUEVBIiwic3ViIjoiNWU1NTEwYWEtNmExZS00YzRlLTlkM2ItMmI3ZjBjMWE5ZTAxIn0.rctYTH9yNcVX51ECVK9ww2zGAz8RZH6I8lIevuCWscTLPtuFZjxWn5D96Ofan-PF_Zn-j17HbQ6WTBWbUEB4AQ",
+            "expect": {
+                "acr_pair": "accept",
+                "pdp_reference": "accept"
+            }
+        },
+        {
+            "name": "V3 reference of V1 with the assertion of V2: req differs",
+            "body": "{\"action\":\"approve\",\"handle\":\"HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH\",\"repository_scopes\":[\"*\"]}",
+            "path": "/authorize/consent",
+            "web_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6IndlYi10ZXN0LTEiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJhY3ItYXBpIiwiYm9keV9zaGEyNTYiOiJUR0JVQS1NeGF6c1ZKSDM4WWVCQ0FCSlJGZ3FKQzcwZ2Q3ZVJmRHNEQk9ZIiwiZXhwIjoxODAwMDAwMDMwLCJpYXQiOjE4MDAwMDAwMDAsImlzcyI6Imh0dHBzOi8vd3d3LmZ1bGxjaGFvcy5kZXYiLCJqdGkiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwYTIiLCJtZXRob2QiOiJQT1NUIiwibmJmIjoxODAwMDAwMDAwLCJvcmdfaWQiOiIzZjlhMWM3Ny0yZTRiLTRkMTAtYjVjOC02YTdlOWQwYjFjMjMiLCJwYXRoIjoiL2F1dGhvcml6ZS9jb25zZW50IiwicGVybWlzc2lvbnMiOlsiY3JlZGVudGlhbDppc3N1ZSJdLCJyZXBvc2l0b3J5X3Njb3BlcyI6WyIqIl0sInN1YiI6IjVlNTUxMGFhLTZhMWUtNGM0ZS05ZDNiLTJiN2YwYzFhOWUwMSJ9.WB25nbo5epkFJF7b-mFYIim_ZzbYTdMKMfL1HXH-uGR-4N5PQjf3NAnz84Ijwz4BPiK0mkqdfRJR2nNjXrLYDg",
+            "approver_reference": "eyJhbGciOiJFZERTQSIsImtpZCI6IndlYi10ZXN0LTEiLCJ0eXAiOiJ3ZWItYXBwcm92ZXIrand0In0.eyJhY3Rpb24iOiJhY3IuY3JlZGVudGlhbC5pc3N1ZSIsImF1ZCI6ImF1dGgtc2VydmljZSIsImV4cCI6MTgwMDAwMDAzMCwiaWF0IjoxODAwMDAwMDAwLCJpbXBlcnNvbmF0aW5nIjpmYWxzZSwiaXNzIjoiaHR0cHM6Ly93d3cuZnVsbGNoYW9zLmRldiIsImp0aSI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBiMSIsIm5iZiI6MTgwMDAwMDAwMCwib3JnX2lkIjoiM2Y5YTFjNzctMmU0Yi00ZDEwLWI1YzgtNmE3ZTlkMGIxYzIzIiwicmVxIjoiU3lmbTc5OF9IMG8tY0Znd0RHaTluN0VIc1FYQ2U4b2dJRmdQb0l3TE80SSIsInNpZCI6InNlc19mUXctVXBHMFQzcUtZdzVibkMxUEVBIiwic3ViIjoiNWU1NTEwYWEtNmExZS00YzRlLTlkM2ItMmI3ZjBjMWE5ZTAxIn0.CFhwCPIW31Vk7N6S1DIcdlCAM_KTNE6zYZkoG7leC_bqnX6JgAyyEy8c0iZOVFO5RE9iKRbgAFTa3EMndB-3Dg",
+            "expect": {
+                "acr_pair": "refuse",
+                "pdp_reference": "accept"
+            }
+        },
+        {
+            "name": "V4 reference that outlives its assertion",
+            "body": "{\"repository_scopes\":[\"*\"],\"schema_version\":\"device_approval_request.v1\",\"user_code\":\"ALU23456\"}",
+            "path": "/api/v1/oauth/device_approval",
+            "web_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6IndlYi10ZXN0LTEiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJhY3ItYXBpIiwiYm9keV9zaGEyNTYiOiJnX25yZFhFNmFER3dERDlDUVJEVjdjNmdOdmloV2lWZk80aXF0SmJrS0kwIiwiZXhwIjoxODAwMDAwMDMwLCJpYXQiOjE4MDAwMDAwMDAsImlzcyI6Imh0dHBzOi8vd3d3LmZ1bGxjaGFvcy5kZXYiLCJqdGkiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwYTEiLCJtZXRob2QiOiJQT1NUIiwibmJmIjoxODAwMDAwMDAwLCJvcmdfaWQiOiIzZjlhMWM3Ny0yZTRiLTRkMTAtYjVjOC02YTdlOWQwYjFjMjMiLCJwYXRoIjoiL2FwaS92MS9vYXV0aC9kZXZpY2VfYXBwcm92YWwiLCJwZXJtaXNzaW9ucyI6WyJjcmVkZW50aWFsOmlzc3VlIl0sInJlcG9zaXRvcnlfc2NvcGVzIjpbIioiXSwic3ViIjoiNWU1NTEwYWEtNmExZS00YzRlLTlkM2ItMmI3ZjBjMWE5ZTAxIn0.OlvxcUm0_Num1yTx9IDe6Wrf6NYmZtCwEiJ6GMnbnRdCXKhMDG43MvwtbvJ6aJLbkt3RD7-zji_cngrHOHMMDw",
+            "approver_reference": "eyJhbGciOiJFZERTQSIsImtpZCI6IndlYi10ZXN0LTEiLCJ0eXAiOiJ3ZWItYXBwcm92ZXIrand0In0.eyJhY3Rpb24iOiJhY3IuY3JlZGVudGlhbC5pc3N1ZSIsImF1ZCI6ImF1dGgtc2VydmljZSIsImV4cCI6MTgwMDAwMDAzNSwiaWF0IjoxODAwMDAwMDA1LCJpbXBlcnNvbmF0aW5nIjpmYWxzZSwiaXNzIjoiaHR0cHM6Ly93d3cuZnVsbGNoYW9zLmRldiIsImp0aSI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBiNCIsIm5iZiI6MTgwMDAwMDAwNSwib3JnX2lkIjoiM2Y5YTFjNzctMmU0Yi00ZDEwLWI1YzgtNmE3ZTlkMGIxYzIzIiwicmVxIjoiU3lmbTc5OF9IMG8tY0Znd0RHaTluN0VIc1FYQ2U4b2dJRmdQb0l3TE80SSIsInNpZCI6InNlc19mUXctVXBHMFQzcUtZdzVibkMxUEVBIiwic3ViIjoiNWU1NTEwYWEtNmExZS00YzRlLTlkM2ItMmI3ZjBjMWE5ZTAxIn0.yJs2oVWSUe4NvbM706mXMe2k6nufVS9w5Z9cB0yxxDjGzj0dGcRF6WN9zmCcxvCCPWkLhdhSNvNhJWwbzpOMBQ",
+            "expect": {
+                "acr_pair": "refuse",
+                "pdp_reference": "accept"
+            }
+        },
+        {
+            "name": "V5 the two tokens in each other's header",
+            "body": "{\"repository_scopes\":[\"*\"],\"schema_version\":\"device_approval_request.v1\",\"user_code\":\"ALU23456\"}",
+            "path": "/api/v1/oauth/device_approval",
+            "web_assertion": "eyJhbGciOiJFZERTQSIsImtpZCI6IndlYi10ZXN0LTEiLCJ0eXAiOiJ3ZWItYXBwcm92ZXIrand0In0.eyJhY3Rpb24iOiJhY3IuY3JlZGVudGlhbC5pc3N1ZSIsImF1ZCI6ImF1dGgtc2VydmljZSIsImV4cCI6MTgwMDAwMDAzMCwiaWF0IjoxODAwMDAwMDAwLCJpbXBlcnNvbmF0aW5nIjpmYWxzZSwiaXNzIjoiaHR0cHM6Ly93d3cuZnVsbGNoYW9zLmRldiIsImp0aSI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBiMSIsIm5iZiI6MTgwMDAwMDAwMCwib3JnX2lkIjoiM2Y5YTFjNzctMmU0Yi00ZDEwLWI1YzgtNmE3ZTlkMGIxYzIzIiwicmVxIjoiU3lmbTc5OF9IMG8tY0Znd0RHaTluN0VIc1FYQ2U4b2dJRmdQb0l3TE80SSIsInNpZCI6InNlc19mUXctVXBHMFQzcUtZdzVibkMxUEVBIiwic3ViIjoiNWU1NTEwYWEtNmExZS00YzRlLTlkM2ItMmI3ZjBjMWE5ZTAxIn0.CFhwCPIW31Vk7N6S1DIcdlCAM_KTNE6zYZkoG7leC_bqnX6JgAyyEy8c0iZOVFO5RE9iKRbgAFTa3EMndB-3Dg",
+            "approver_reference": "eyJhbGciOiJFZERTQSIsImtpZCI6IndlYi10ZXN0LTEiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJhY3ItYXBpIiwiYm9keV9zaGEyNTYiOiJnX25yZFhFNmFER3dERDlDUVJEVjdjNmdOdmloV2lWZk80aXF0SmJrS0kwIiwiZXhwIjoxODAwMDAwMDMwLCJpYXQiOjE4MDAwMDAwMDAsImlzcyI6Imh0dHBzOi8vd3d3LmZ1bGxjaGFvcy5kZXYiLCJqdGkiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwYTEiLCJtZXRob2QiOiJQT1NUIiwibmJmIjoxODAwMDAwMDAwLCJvcmdfaWQiOiIzZjlhMWM3Ny0yZTRiLTRkMTAtYjVjOC02YTdlOWQwYjFjMjMiLCJwYXRoIjoiL2FwaS92MS9vYXV0aC9kZXZpY2VfYXBwcm92YWwiLCJwZXJtaXNzaW9ucyI6WyJjcmVkZW50aWFsOmlzc3VlIl0sInJlcG9zaXRvcnlfc2NvcGVzIjpbIioiXSwic3ViIjoiNWU1NTEwYWEtNmExZS00YzRlLTlkM2ItMmI3ZjBjMWE5ZTAxIn0.OlvxcUm0_Num1yTx9IDe6Wrf6NYmZtCwEiJ6GMnbnRdCXKhMDG43MvwtbvJ6aJLbkt3RD7-zji_cngrHOHMMDw",
+            "expect": {
+                "acr_pair": "refuse",
+                "pdp_reference": "refuse"
+            }
+        }
+    ]
+}

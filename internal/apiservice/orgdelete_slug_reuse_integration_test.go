@@ -140,7 +140,7 @@ VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, super, "slug
 	}
 	s := &slugStack{admin: admin, goAPI: server.Handler(), bearer: issuer.MustMint(t, edtokens.Claims{UserID: super}), users: identities}
 	s.compat = compatLoginPlane(t, ctx, admin)
-	s.issue = authplane.Start(t, ctx, pg.URI, authplane.NewKey(t), "slugreuse-jwt-"+uuid.NewString()).Issuer
+	s.issue = authplane.Start(t, ctx, pg.URI, authplane.NewKey(t)).Issuer
 	schema, err := authschema.NewValidatedIdentifier(authplane.Schema)
 	if err != nil {
 		t.Fatal(err)

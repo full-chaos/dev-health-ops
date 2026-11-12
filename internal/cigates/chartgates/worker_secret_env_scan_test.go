@@ -809,8 +809,10 @@ var realEnvTree struct {
 	units   []envUnit
 	errs    []string
 	elapsed time.Duration
+	readers envReaderCache
 }
 
+// packages.Load is not safe to run twice at once here
 func loadRealEnvTree(root string) {
 	start := time.Now()
 	for _, flags := range [][]string{nil, {"-tags=integration"}} {
@@ -843,12 +845,27 @@ func loadRealEnvTree(root string) {
 	realEnvTree.elapsed = time.Since(start)
 }
 
+// envReaderCache publishes one scan and returns independent maps and nested slices.
+type envReaderCache struct {
+	once    sync.Once
+	readers map[string][]string
+}
+
+func (cache *envReaderCache) scan(units []envUnit) map[string][]string {
+	cache.once.Do(func() { cache.readers = scanEnvUnits(units) })
+	out := make(map[string][]string, len(cache.readers))
+	for name, files := range cache.readers {
+		out[name] = append([]string(nil), files...)
+	}
+	return out
+}
+
 // realEnvReaders scans the non-test Go sources of the tree under g.root.
 func realEnvReaders(g *guard) map[string][]string {
 	realEnvTree.once.Do(func() { loadRealEnvTree(g.root) })
 	g.expect(len(realEnvTree.errs) == 0, "the reader scan could not type-check the tree: %s", strings.Join(firstN(realEnvTree.errs, 5), "; "))
 	g.expect(len(realEnvTree.units) > 0, "no Go package was found under %s, so the reader scan measured nothing", g.root)
-	return scanEnvUnits(realEnvTree.units)
+	return realEnvTree.readers.scan(realEnvTree.units)
 }
 
 func firstN(in []string, n int) []string {

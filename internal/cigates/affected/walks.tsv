@@ -29,6 +29,7 @@ internal/api/syncadmin	dataset_writer_lock_census_test.go	unexpressed	-	-
 internal/api/syncadmin	gate_reader_census_test.go	unexpressed	-	*.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go	cmd	tree	*.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go	internal	tree	*.go
+internal/api/teamsidentity	response_read_census_test.go	internal/api/teamsidentity	dir	*
 internal/api/teamsidentity	team_id_writer_census_test.go	cmd	tree	*.go
 internal/api/teamsidentity	team_id_writer_census_test.go	internal	tree	*.go
 internal/api/teamsidentity	team_id_writer_census_test.go	internal/api/teamsidentity	dir	*

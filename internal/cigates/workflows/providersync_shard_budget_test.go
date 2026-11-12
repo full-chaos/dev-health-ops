@@ -421,6 +421,7 @@ func TestIntegrationGoTestTimeoutsSitThreeMinutesUnderJobCaps(t *testing.T) {
 
 // A direct integration go test call in a workflow run step (not through ci/check_go.sh) must be under its own job's cap too.
 func TestIntegrationTimeoutGuardCoversDirectWorkflowCalls(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	const freeze = ".github/workflows/freeze-provider-worlds.yml"
 	files := []string{
@@ -677,6 +678,7 @@ func TestFreezeProviderWorldsCallFollowsTheJobBudget(t *testing.T) {
 
 // Planted defects of the external-corpus and GitLab guards (a mutation that does not land fails the test).
 func TestAuthCorpusAndGitlabGuardsCatchPlantedDefects(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	const corpus = "ci/auth_corpus_external.sh"
 	const gl = ".gitlab-ci.yml"

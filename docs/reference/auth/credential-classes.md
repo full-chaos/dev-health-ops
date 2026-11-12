@@ -45,7 +45,7 @@ shows where that happens today.
 | --- | --- | --- | --- |
 | `auth_js_browser_session` | active | human | |
 | `ops_access_token_hs256` | retired | human | |
-| `ops_refresh_token` | active | human | |
+| `ops_refresh_token` | retired | human | no endpoint-profile row accepts it; go-api's refresh and logout rows list `refresh_credential` |
 | `social_oauth_exchange` | active | human | |
 | `sso_saml_exchange` | optional_feature | human | |
 | `sso_oidc_exchange` | optional_feature | human | |
@@ -106,7 +106,7 @@ stored as its SHA-256 only, single use with a 30 s grace and family reuse
 revocation. It is class 32. auth-service is its only issuer and its only
 validator (`POST /v1/token/refresh`); its four API routes and three operator
 routes have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`.
-It is not `ops_refresh_token`: go-api mints that class, and
+It is not `ops_refresh_token`: that class is go-api's retired HS256 refresh JWT, and
 `refresh_credential` is auth-service's own.
 
 **`internal_svc_authsess_token`.** The go-api service credential

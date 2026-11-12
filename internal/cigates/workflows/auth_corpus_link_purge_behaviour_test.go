@@ -13,6 +13,7 @@ import (
 // compares the seeded legacy rows as they are. Each hand-off still copies the users before the corpus is handed the
 // forwarded set.
 func TestAuthCorpusOwnedHandOffsRunNoLegacyLinkPurge(t *testing.T) {
+	t.Parallel()
 	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)

@@ -503,6 +503,7 @@ func TestConcurrencyExpressionEvaluator(t *testing.T) {
 }
 
 func TestWorkflowConcurrencyPlantedDefects(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	var files []string
 	for _, n := range workflowNames(t, root) {

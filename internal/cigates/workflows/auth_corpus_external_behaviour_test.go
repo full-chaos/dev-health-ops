@@ -208,6 +208,7 @@ func TestAuthCorpusSetEnvRecreatesGoAPIAndKeepsTheState(t *testing.T) {
 }
 
 func TestAuthCorpusSetEnvGivesUpWhenGoAPIStaysUnhealthy(t *testing.T) {
+	t.Parallel()
 	fake := newFakeDocker(t)
 	_, env := setEnvFixture(t, fake)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -224,6 +225,7 @@ func TestAuthCorpusSetEnvGivesUpWhenGoAPIStaysUnhealthy(t *testing.T) {
 }
 
 func TestAuthCorpusExternalCleanupIsBounded(t *testing.T) {
+	t.Parallel()
 	fake := newFakeDocker(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -245,6 +247,7 @@ func TestAuthCorpusExternalCleanupIsBounded(t *testing.T) {
 // (step 1, then step 1b with the workload subject), and go-api once, in step 1e, after the probe and the sessions grants;
 // the only later up is the auth-service recreate of the seeded users' copy.
 func TestAuthCorpusExternalAcpLegStartsGoAPIOnlyAfterAuthServiceServes(t *testing.T) {
+	t.Parallel()
 	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
@@ -288,6 +291,7 @@ func TestAuthCorpusExternalAcpLegStartsGoAPIOnlyAfterAuthServiceServes(t *testin
 // `compose up --wait-timeout` bounds the wait for health, not a build or a hung compose command: every up carries
 // its own bound.
 func TestAuthCorpusExternalUpIsBounded(t *testing.T) {
+	t.Parallel()
 	fake := newFakeDocker(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -305,6 +309,7 @@ func TestAuthCorpusExternalUpIsBounded(t *testing.T) {
 }
 
 func TestAuthCorpusSetEnvRecreateIsBounded(t *testing.T) {
+	t.Parallel()
 	fake := newFakeDocker(t)
 	_, env := setEnvFixture(t, fake)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -389,6 +394,7 @@ const ownedFlags = "sessions=true local_login=true credentials=true social=true 
 // with go-api's answer. CHAOS-13356: auth-service owns users from bring-up, so credentials and social must be served
 // too, and go-api starts once, with the flags of the forwarded set.
 func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
+	t.Parallel()
 	sessions := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org"
 	forwarded := func(aggregate string) string {
 		return `devhealth_api_auth_proxy_requests_total{aggregate="` + aggregate + `",outcome="forwarded"} 3`
@@ -463,6 +469,7 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 // subject, the sessions-owned grants run before go-api first restarts with the sessions flag, and that restart selects
 // the workload credential with no AUTH_SESSION_ISSUE_TOKEN in its environment.
 func TestAuthCorpusAcpLegSignsInWithTheWorkloadTokenAndGrantsBeforeTheSessionsFlag(t *testing.T) {
+	t.Parallel()
 	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
@@ -534,6 +541,7 @@ func TestAuthCorpusAcpLegSignsInWithTheWorkloadTokenAndGrantsBeforeTheSessionsFl
 // compose's auth-issuer serves (compose.yml's AUTH_TOKEN_ISSUER_URL default), not the workload lib's default, which
 // no host serves: there every venue token answered 503.
 func TestAuthCorpusAcpLegUsesTheIssuerAuthIssuerServes(t *testing.T) {
+	t.Parallel()
 	compose, err := os.ReadFile(filepath.Join(authProofRoot(t), "compose.yml"))
 	if err != nil {
 		t.Fatal(err)
@@ -599,6 +607,7 @@ var ownedMetrics = metric("sessions") + "\n" + metric("local_login") + "\n" + me
 // Leg acp gives auth-service freshly made session keys through the compose environment only: never an argument, never
 // the output (CI masks them first), and none at all when AUTH_CORPUS_OMIT_AUTH_KEYS is set.
 func TestAuthCorpusAcpLegKeysStayOutOfArgumentsAndOutput(t *testing.T) {
+	t.Parallel()
 	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
@@ -621,6 +630,7 @@ func TestAuthCorpusAcpLegKeysStayOutOfArgumentsAndOutput(t *testing.T) {
 }
 
 func TestAuthCorpusAcpLegMasksTheKeysBeforeAnythingElse(t *testing.T) {
+	t.Parallel()
 	fake, out, err := runAcpLeg(t, "GITHUB_ACTIONS=true", "CHECK_GO_JOB_CAP_MIN=30", "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
@@ -690,6 +700,7 @@ func TestAuthCorpusFailureDumpIncludesAuthServiceAndTheStub(t *testing.T) {
 // Leg acp reads auth-service's own log: the corpus test runs in another process than auth-service, so a body written
 // with the wrong writer for its route is visible only as the policy's ERROR line.
 func TestAuthCorpusAcpLegFailsOnAuthServiceWriterViolations(t *testing.T) {
+	t.Parallel()
 	served, metrics := ownedServed, ownedMetrics
 	known := `level=INFO msg="listener bound" component=auth-api-http address=127.0.0.1:8095`
 	violation := `level=ERROR msg="policy: wrong body writer for the route; FastAPI writes this body the other way" route="POST /api/v1/auth/login"`
@@ -724,6 +735,7 @@ const credentialsRoutes = "/api/v1/auth/register,/api/v1/auth/verify,/api/v1/aut
 // auth-users-backfill one-shot (`users-backfill -insert-only`, users owned), then auth-service is recreated. No step
 // flips the flag: nothing runs with AUTH_USERS_OWNED on its command line, no ad-hoc migrate copy, no extra grants pass.
 func TestAuthCorpusAcpLegCopiesTheSeededUsersThroughTheOneShot(t *testing.T) {
+	t.Parallel()
 	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
@@ -748,6 +760,7 @@ func TestAuthCorpusAcpLegCopiesTheSeededUsersThroughTheOneShot(t *testing.T) {
 // writes every forwarded flag to the state before go-api's one start, and the fake docker's go-api refuses a start
 // without them, so a script that started go-api before the probe, or turned the flags on one by one, fails here.
 func TestAuthCorpusAcpLegStartsGoAPIOnceWithTheOwnedSet(t *testing.T) {
+	t.Parallel()
 	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
@@ -763,6 +776,7 @@ func TestAuthCorpusAcpLegStartsGoAPIOnceWithTheOwnedSet(t *testing.T) {
 // auth-service owns users from bring-up: a leg where it does not serve credentials or social fails by name, after the
 // required aggregates, and go-api never starts.
 func TestAuthCorpusAcpLegFailsWhenAnOwnedAggregateIsNotServed(t *testing.T) {
+	t.Parallel()
 	for aggregate, served := range map[string]string{
 		"credentials": requiredServed,
 		"social":      strings.Replace(ownedServed, ",/api/v1/auth/social-login", "", 1),
@@ -782,6 +796,7 @@ func TestAuthCorpusAcpLegFailsWhenAnOwnedAggregateIsNotServed(t *testing.T) {
 // The corpus seeds its users before the copy: leg acp runs the test in the background, which seeds, signals, and waits
 // for the script to finish step 1f (the seeded users' copy) before it drives go-api.
 func TestAuthCorpusAcpLegSeedsBeforeTheBackfillAndHandsTheForwardedSetToTheTest(t *testing.T) {
+	t.Parallel()
 	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
@@ -805,6 +820,7 @@ func TestAuthCorpusAcpLegSeedsBeforeTheBackfillAndHandsTheForwardedSetToTheTest(
 // CHAOS-13356: the run with users not owned is retired. AUTH_CORPUS_USERS_UNOWNED, AUTH_CORPUS_FORCE_SOCIAL and a caller's
 // AUTH_USERS_OWNED other than true are refused by name on both legs, before any docker call and any temporary directory.
 func TestAuthCorpusRetiresTheNotOwnedRun(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		leg, env, want string
 	}{
@@ -838,6 +854,7 @@ func TestAuthCorpusRetiresTheNotOwnedRun(t *testing.T) {
 
 // The test fails the leg when it ends before it seeds.
 func TestAuthCorpusAcpLegFailsWhenTheTestEndsBeforeSeeding(t *testing.T) {
+	t.Parallel()
 	_, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics, "FAKE_GO_TEST_EXITS=1")
 	if err == nil || !strings.Contains(out, "the corpus test ended before it seeded") {
 		t.Fatalf("want a failure naming the early end, got err=%v:\n%s", err, out)
@@ -925,6 +942,7 @@ func TestAuthCorpusSinkReadAPIIsPublishedOnLoopbackOnly(t *testing.T) {
 // The script reads the sink's published port, fails the leg when the read API does not answer, and hands the test its URL
 // on every leg.
 func TestAuthCorpusScriptHandsTheTestTheSinkReadAPI(t *testing.T) {
+	t.Parallel()
 	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics)
 	if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
 		t.Fatalf("want a pass, got err=%v:\n%s", err, out)
@@ -949,6 +967,7 @@ func TestAuthCorpusScriptHandsTheTestTheSinkReadAPI(t *testing.T) {
 // Every leg runs the test as a compiled binary and, when the script fails while the test waits, cleanup kills
 // that pid: no test process outlives the script (it would hold the mail sink's port).
 func TestAuthCorpusAcpLegKillsTheTestItself(t *testing.T) {
+	t.Parallel()
 	fake, out, err := runAcpLeg(t, "FAKE_SERVED="+ownedServed, "FAKE_METRICS="+ownedMetrics, "FAKE_FAIL_BACKFILL=1")
 	if err == nil || !strings.Contains(out, "users-backfill failed") {
 		t.Fatalf("want the backfill failure, got err=%v:\n%s", err, out)
@@ -1105,6 +1124,7 @@ func TestAuthCorpusScriptHasNoNotOwnedStep(t *testing.T) {
 // local_login keeps today's rule: mounted means served, and it is required. Its mount is only real when auth-service
 // has the lockout key, so the corpus env must keep setting it.
 func TestAuthCorpusLocalLoginStaysRequiredAndKeyed(t *testing.T) {
+	t.Parallel()
 	_, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org")
 	if err == nil || !strings.Contains(out, "required aggregate local_login is not served by auth-service") {
 		t.Fatalf("want local_login required, got err=%v:\n%s", err, out)
@@ -1217,6 +1237,7 @@ printf 'PROBED=%s\n' "${PROBED}"`
 // AUTH_CORPUS_FORCE_SOCIAL is a corpus-harness name: it lives in ci/ scripts and test files only, never in a production Go
 // file or a chart (a leaked switch would forward social without the posture where it is read).
 func TestAuthCorpusForceSocialNameStaysOutOfProductionCodeAndCharts(t *testing.T) {
+	t.Parallel()
 	root := authProofRoot(t)
 	var leaks []string
 	for _, base := range []string{"internal", "cmd", "deploy", "compose.yml"} {
@@ -1251,6 +1272,7 @@ func TestAuthCorpusForceSocialNameStaysOutOfProductionCodeAndCharts(t *testing.T
 // CHAOS-13356: go-api must render AUTH_USERS_OWNED true (every leg runs users owned), and with it sessions, local login
 // and credentials forwarded.
 func TestAuthCorpusGoAPILegForwardsSessionsWhenComposeRoutesThem(t *testing.T) {
+	t.Parallel()
 	env := func(pairs string) string {
 		return `{"services":{"go-api":{"environment":{` + pairs + `}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}`
 	}
@@ -1317,6 +1339,7 @@ func TestAuthCorpusGoAPILegForwardsSessionsWhenComposeRoutesThem(t *testing.T) {
 // recreates auth-service, and hands the test the forwarded set; the test is told users are owned. go-api's rule is the
 // script's too: users owned needs sessions, local login and credentials forwarded.
 func TestAuthCorpusGoAPILegRunsTheOwnedHandOffWhenComposeOwnsUsers(t *testing.T) {
+	t.Parallel()
 	const prodSet = `"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_PROXY_SOCIAL":"true"`
 	env := func(pairs string) string {
 		return `{"services":{"go-api":{"environment":{` + pairs + `}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example","AUTH_SIGNING_KEY_ID":"auth-signing-corpus"}}}}`
@@ -1374,6 +1397,7 @@ func TestAuthCorpusGoAPILegRunsTheOwnedHandOffWhenComposeOwnsUsers(t *testing.T)
 // (authrows.SessionAccessTokenErr): the script hands it the issuer as compose renders it, and refuses a leg that names none.
 // CHAOS-13154: a leg without sessions forwarded is refused before the corpus runs (the venue mints under that issuer).
 func TestAuthCorpusHandsTheCorpusAuthServicesIssuerWhenSessionsAreForwarded(t *testing.T) {
+	t.Parallel()
 	const goAPIOwnedEnv = `"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_USERS_OWNED":"true"`
 	const issuer = "https://auth.corpus.example"
 	for _, tc := range []struct {
@@ -1420,6 +1444,7 @@ func TestAuthCorpusHandsTheCorpusAuthServicesIssuerWhenSessionsAreForwarded(t *t
 // auth-service into a mode 0600 file of a mode 0700 directory in the run's private directory, hands the test only its
 // path and auth-service's key id, never shows the key, and removes the file on exit.
 func TestAuthCorpusVenueSigningKeyIsAPrivateFileOfTheRun(t *testing.T) {
+	t.Parallel()
 	acp := []string{"FAKE_SERVED=" + ownedServed, "FAKE_METRICS=" + ownedMetrics}
 	for leg, extra := range map[string][]string{"go-api": nil, "acp": acp} {
 		t.Run(leg, func(t *testing.T) {

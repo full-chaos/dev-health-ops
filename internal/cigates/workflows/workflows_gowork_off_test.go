@@ -92,6 +92,7 @@ func TestGoworkOffPlantedDefects(t *testing.T) {
 // The reviewer's repro: a workspace that replaces yaml.v3 with a module exporting only Unmarshal breaks the compile of the
 // chart test's package. With the step's own environment applied, the workspace must not matter.
 func TestAWorkspaceFileCannotBreakTheChartTestCompile(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	var wf gowFile
 	if err := yaml.Unmarshal([]byte(readFile(t, filepath.Join(root, ".github/workflows/test.yml"))), &wf); err != nil {

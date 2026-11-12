@@ -306,6 +306,7 @@ func TestAuthServiceWorkflow(t *testing.T) {
 }
 
 func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	const wf, quality, cg, tsv, dockerfile = ".github/workflows/go-auth-service.yml", ".github/workflows/go-quality.yml", "ci/check_go.sh", "ci/auth_closure_allow.tsv", "docker/go-worker.Dockerfile"
 	cases := []struct {

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -24,7 +25,7 @@ import (
 const (
 	classHS256   = "ops_access_token_hs256"
 	classUserTok = "user_access_token"
-	classRefresh = "ops_refresh_token"
+	classRefresh = "refresh_credential"
 )
 
 var (
@@ -94,7 +95,7 @@ func TestEveryAccessTokenRowAcceptsOnlyTheUserAccessToken(t *testing.T) {
 }
 
 // The widened rows pass the profile selector gate. The logout row also
-// accepts ops_refresh_token, which the gate judges by its body_field marker.
+// accepts refresh_credential, which the gate judges by its body_field marker.
 func TestWidenedRowsPassTheClassSelectorGate(t *testing.T) {
 	registry, err := contracts.LoadRegistryClasses("../..")
 	if err != nil {
@@ -207,7 +208,7 @@ func TestAWorkloadTokenIsRefusedOnWidenedRows(t *testing.T) {
 }
 
 // Every widened row carries its exact class list: the user access token, plus
-// org_context_header on the four X-Org-Id telemetry rows and ops_refresh_token
+// org_context_header on the four X-Org-Id telemetry rows and refresh_credential
 // on logout.
 func TestWidenedRowsCarryTheirExactClassList(t *testing.T) {
 	extra := map[string]string{
@@ -235,5 +236,52 @@ func TestWidenedRowsCarryTheirExactClassList(t *testing.T) {
 	}
 	if widened != 206 || withExtra != len(extra) {
 		t.Errorf("checked %d widened rows (%d with an extra class), want 206 and %d", widened, withExtra, len(extra))
+	}
+}
+
+// go-api forwards the refresh and logout bodies to auth-service (authproxy.go AuthSessions), so each row lists the
+// body class of the auth-service row it forwards to: refresh_credential, never the retired ops_refresh_token.
+func TestRefreshAndLogoutRowsListTheAuthServiceBodyClass(t *testing.T) {
+	raw, err := os.ReadFile("../../contracts/auth/v1/endpoint-profiles.auth-service.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var authService struct {
+		Rows []struct {
+			Service string   `json:"service"`
+			Method  string   `json:"method"`
+			Route   string   `json:"route"`
+			Classes []string `json:"accepted_credential_classes"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(raw, &authService); err != nil {
+		t.Fatal(err)
+	}
+	upstream := map[string][]string{}
+	for _, row := range authService.Rows {
+		if row.Service == "dev-health-auth-service" {
+			upstream[row.Method+" "+row.Route] = row.Classes
+		}
+	}
+	want := map[string][]string{
+		"POST /api/v1/auth/refresh": {classRefresh},
+		"POST /api/v1/auth/logout":  {classRefresh, classUserTok},
+	}
+	seen := 0
+	for _, row := range apiRows(t) {
+		classes, ok := want[rowProfile(row)]
+		if !ok {
+			continue
+		}
+		seen++
+		if got := rowClasses(row); !slices.Equal(got, classes) {
+			t.Errorf("%s: classes %v, want %v", row["id"], got, classes)
+		}
+		if got := upstream[rowProfile(row)]; !slices.Equal(got, []string{classRefresh}) {
+			t.Errorf("%s: the auth-service row lists %v, want [%s]: the go-api row no longer mirrors it", row["id"], got, classRefresh)
+		}
+	}
+	if seen != len(want) {
+		t.Errorf("found %d of the %d rows", seen, len(want))
 	}
 }

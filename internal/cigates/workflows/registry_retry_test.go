@@ -149,6 +149,7 @@ func runRRLib(t *testing.T, fails int, text string) rrResult {
 }
 
 func TestRegistryRetryRetriesEachTransientClassThenSucceeds(t *testing.T) {
+	t.Parallel()
 	for name, text := range rrTransient {
 		t.Run(name, func(t *testing.T) {
 			r := runRRLib(t, 2, text)
@@ -272,6 +273,7 @@ func TestBuildSharedDoesNotRetryAPermanentFailure(t *testing.T) {
 
 // The exact failing line of run 41254379233 (auth-corpus-queue go-api): the config blob, not a layer.
 func TestAuthCorpusExternalRetriesTheConfigBlobFetchUpToThreeTries(t *testing.T) {
+	t.Parallel()
 	r := runCorpusWithFailingUp(t, "go-api", 2, rrConfig, " go-api")
 	if r.err != nil || len(r.ups) != 3 || r.retryDowns != 2 {
 		t.Fatalf("want 3 up calls and 2 retry downs; got err=%v ups=%q downs=%d\n%s", r.err, r.ups, r.retryDowns, r.out)

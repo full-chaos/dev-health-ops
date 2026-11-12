@@ -74,6 +74,7 @@ func runVenueSkips(t *testing.T, log, ledger string, names ...string) (string, s
 }
 
 func TestKnownDivergenceSkipsAcceptOnlyALedgerRow(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, message, refusal string
 	}{
@@ -114,6 +115,7 @@ func TestKnownDivergenceSkipsAcceptOnlyALedgerRow(t *testing.T) {
 // The skip message venueoracle.KnownDivergenceSkip writes is the form the verb accepts: a real go test -json run of
 // the venueoracle Diff cell passes with a ledger row for it, and is refused without one.
 func TestKnownDivergenceSkipsReadTheVenueoracleSkipForm(t *testing.T) {
+	t.Parallel()
 	cmd := exec.Command("go", "test", "-count=1", "-json", "-run", "^TestDiffSkipsADivergentKnownDivergence$", "./internal/testsupport/venueoracle")
 	cmd.Dir = repoRoot(t)
 	out, err := cmd.Output()

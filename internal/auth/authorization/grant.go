@@ -177,6 +177,52 @@ func (e *Evaluator) HoldsByMembershipDefault(membershipRole, action string, rows
 	return e.membershipDefaultDenial(membershipRole, act) == ""
 }
 
+// repositoryStanding is the standing every repository decision needs before a grant is matched, for one key or
+// for the whole set: an active organization, the principal's service-account row there (the same organization, active)
+// or its active membership, a clock, and every grant row of the pair; rows of another organization are dropped. why is
+// the denial, or "" with the membership role ("" for a service account), isSA, the rows and the clock.
+func repositoryStanding(r Request, gs GrantSnapshot) (memberRole string, isSA bool, rows []Grant, now int64, why Reason) {
+	if gs.OrganizationStatus(r.OrganizationID) != StatusActive {
+		return "", false, nil, 0, ReasonOrganizationInactive
+	}
+	if sa, found := gs.ServiceAccount(r.OrganizationID); found {
+		isSA = true
+		if sa.OrgID != r.OrganizationID {
+			return "", false, nil, 0, ReasonOrgMismatch
+		}
+		if sa.Status != StatusActive {
+			return "", false, nil, 0, ReasonServiceAccountInactive
+		}
+	} else {
+		m, found := gs.Membership(r.OrganizationID)
+		if !found {
+			return "", false, nil, 0, ReasonNoMembership
+		}
+		if m.OrgID != r.OrganizationID {
+			return "", false, nil, 0, ReasonOrgMismatch
+		}
+		if m.Status != StatusActive {
+			return "", false, nil, 0, ReasonNoMembership
+		}
+		memberRole = m.Role
+	}
+	now = gs.NowUnixNano()
+	if now <= 0 {
+		return "", false, nil, 0, ReasonClockUnavailable
+	}
+	all, err := gs.Grants(r.OrganizationID)
+	if err != nil {
+		return "", false, nil, 0, ReasonGrantReadFailed
+	}
+	rows = make([]Grant, 0, len(all))
+	for _, g := range all {
+		if g.OrgID == r.OrganizationID {
+			rows = append(rows, g)
+		}
+	}
+	return memberRole, isSA, rows, now, ""
+}
+
 // evaluateRepository allows a repository action only for a principal with
 // standing in the organization (membership, or the service-account row) and
 // either a live grant of that organization whose role holds the action, or
@@ -188,45 +234,9 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 	if !ok {
 		return deny(ReasonGrantAbsent)
 	}
-	if gs.OrganizationStatus(r.OrganizationID) != StatusActive {
-		return deny(ReasonOrganizationInactive)
-	}
-	var memberRole string
-	isSA := false
-	if sa, found := gs.ServiceAccount(r.OrganizationID); found {
-		isSA = true
-		if sa.OrgID != r.OrganizationID {
-			return deny(ReasonOrgMismatch)
-		}
-		if sa.Status != StatusActive {
-			return deny(ReasonServiceAccountInactive)
-		}
-	} else {
-		m, found := gs.Membership(r.OrganizationID)
-		if !found {
-			return deny(ReasonNoMembership)
-		}
-		if m.OrgID != r.OrganizationID {
-			return deny(ReasonOrgMismatch)
-		}
-		if m.Status != StatusActive {
-			return deny(ReasonNoMembership)
-		}
-		memberRole = m.Role
-	}
-	now := gs.NowUnixNano()
-	if now <= 0 {
-		return deny(ReasonClockUnavailable)
-	}
-	all, err := gs.Grants(r.OrganizationID)
-	if err != nil {
-		return deny(ReasonGrantReadFailed)
-	}
-	rows := make([]Grant, 0, len(all))
-	for _, g := range all {
-		if g.OrgID == r.OrganizationID {
-			rows = append(rows, g)
-		}
+	memberRole, isSA, rows, now, why := repositoryStanding(r, gs)
+	if why != "" {
+		return deny(why)
 	}
 
 	if len(rows) == 0 {

@@ -34,7 +34,7 @@ func WorkerPosture() []WorkerGrant {
 		{Database: "system", Table: "columns", AccessType: "SELECT", Reader: "internal/jobs/metrics/remaining/capacity_native_clickhouse.go:719"},
 		{Database: "system", Table: "parts", AccessType: "SELECT", Reader: "internal/jobs/dimensionfold/fold.go:166"},
 		{Database: "system", Table: "tables", AccessType: "SELECT", Reader: "internal/jobs/metrics/remaining/capacity_native_clickhouse.go:752"},
-		{Database: "system", Table: "view_refreshes", AccessType: "SELECT", Reader: "internal/apiservice/admin/orgdeletion.go:620"},
+		{Database: "system", Table: "view_refreshes", AccessType: "SELECT", Reader: "internal/apiservice/admin/orgdeletion.go:631"},
 	}
 }
 

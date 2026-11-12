@@ -46,6 +46,7 @@ func registryLoginTree(t *testing.T, root string, extraScripts map[string]string
 }
 
 func TestRegistryLoginGateRefusesEachDefectClass(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	const ghcr = "        with:\n          registry: ghcr.io\n"
 	const noScope = "logs in to a registry without packages scope"
@@ -120,6 +121,7 @@ func TestRegistryLoginGateRefusesEachDefectClass(t *testing.T) {
 }
 
 func TestRegistryLoginGateAcceptsTheHarmlessForms(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	for _, c := range []struct{ name, steps string }{
 		{"echo of a login", runStep("echo docker login ghcr.io")},
@@ -218,6 +220,7 @@ var harmlessLines = []string{
 }
 
 func TestRegistryLoginGateRefusesLoginsAtCommandPosition(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	for _, line := range commandPositionLogins {
 		t.Run("workflow "+line, func(t *testing.T) {
@@ -239,6 +242,7 @@ func TestRegistryLoginGateRefusesLoginsAtCommandPosition(t *testing.T) {
 }
 
 func TestRegistryLoginGateAcceptsQuotedAndEchoedForms(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	for _, line := range harmlessLines {
 		t.Run("workflow "+line, func(t *testing.T) {
@@ -253,6 +257,7 @@ func TestRegistryLoginGateAcceptsQuotedAndEchoedForms(t *testing.T) {
 }
 
 func TestRegistryLoginGateRefusesOtherCiScriptsThatCallTheLoginScript(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	for _, line := range []string{
 		"bash ci/lib/ghcr_login.sh",

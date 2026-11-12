@@ -57,6 +57,7 @@ func runGoContainersScript(t *testing.T, env []string, args ...string) (string, 
 }
 
 func TestVerifyImagesFailsClosedOnAnyDifferentOrMissingId(t *testing.T) {
+	t.Parallel()
 	wrong := stubImageID("another image")
 	cases := []struct {
 		name     string

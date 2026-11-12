@@ -19,7 +19,7 @@ Dev Health has three ways to sign in. They differ in who holds the credential an
 | --- | --- | --- |
 | Email and password | Dev Health | Always available for accounts created with a password |
 | Social sign-in | GitHub, GitLab, or Google | The deployment: a provider button appears only when the deployment has configured it |
-| Single sign-on (SSO) | Your organization's identity provider | Not available yet |
+| Single sign-on (SSO) | Your organization's identity provider | The deployment turns it on, and your administrator gives you a provider ID |
 
 ## Social sign-in
 
@@ -34,7 +34,25 @@ Which providers appear is decided by whoever runs your deployment, not per organ
 
 ## Single sign-on
 
-Single sign-on is not available yet through the Dev Health sign-in page, and the sign-in page has no SSO button. To find out whether or when your organization can use it, ask your organization admin.
+Single sign-on uses your organization's identity provider. It supports OpenID Connect and SAML.
+
+The sign-in page shows the single sign-on form only when the deployment has turned SSO on. There is no list of providers. Your administrator gives you a provider ID.
+
+1. On the sign-in page, choose **OpenID Connect** or **SAML** as the protocol.
+2. Enter the provider ID your administrator shared.
+3. Select **Continue with single sign-on**, then sign in at your identity provider.
+
+Expected result: you return to Dev Health signed in. If you came from a link, you return to that page.
+
+If the provider ID is not in the correct form, the page asks for the provider ID your administrator shared. If SSO is off for the deployment, the form is absent.
+
+| Message after you return | What it means |
+| --- | --- |
+| Single sign-on is not available for this account: it is not a member of the organization. | Your account is not a member of the organization that owns the provider. Ask an administrator to add you. |
+| Single sign-on could not link this account to an existing sign-in. Contact your administrator. | The identity matches a sign-in that exists already. |
+| Single sign-on is not included in the plan of this organization. Contact your administrator. | The plan has no SSO. |
+| Single sign-on is temporarily unavailable. Please try again later. | A temporary fault. |
+| Single sign-on failed. Please try again or use another sign-in method. | Any other refusal. |
 
 Administrators diagnosing SSO problems: see [Authentication and role problems](../../admin/troubleshooting/authentication-and-roles.md).
 

@@ -279,7 +279,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgReactivator:     deps.OrgReactivator,
 			OrgProvisioner:     deps.OrgProvisioner,
 			OrgDeletionAuth:    deps.OrgDeletionAuth,
-			OrgDeprovisioner:   deps.OrgDeprovisioner,
+			OrgDeprovisioner:   deps.OrgDeprovisioner, ACROrgRevoker: deps.ACROrgRevoker,
 			OrgSuspender:       deps.OrgSuspender,
 			OrgState:           deps.OrgState,
 			Delegator:          deps.Delegator,
@@ -423,7 +423,7 @@ func configureWith(
 	if err != nil {
 		return nil, err
 	}
-	deps.ACRRevoker = newACRRevoker(envsecrets.ProcessLookup, logger)
+	deps.ACRRevoker, deps.ACROrgRevoker = acrRevokers(envsecrets.ProcessLookup, logger)
 	deps.UsersOwned, err = ParseUsersOwned(envsecrets.ProcessLookup, authProxy)
 	if err != nil {
 		closeComponents(depComponents)

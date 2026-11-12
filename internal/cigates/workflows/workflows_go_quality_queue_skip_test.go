@@ -94,6 +94,7 @@ func runQualityHelper(t *testing.T, sha string, runs string, jobs string, failRu
 // The go-quality form of ci/queue_tested_sha.sh answers only for a green merge_group run of this repository, for exactly
 // this sha, in which all twelve legs ran their gate in the latest attempt. Every other answer keeps the legs running.
 func TestQueueTestedShaForGoQualityAnswersOnlyForAFullyRanQueueRun(t *testing.T) {
+	t.Parallel()
 	good := qualityRunsJSON(qualitySha, "merge_group", qualityRepo, "success")
 	allRan := qualityJobsJSON(qualityLegs(nil))
 	cases := []struct {
@@ -185,6 +186,7 @@ func TestQueueTestedShaForGoQualityAnswersOnlyForAFullyRanQueueRun(t *testing.T)
 
 // A planted failing leg first, then more output than a pipe holds: the go-quality form keeps the SIGPIPE-safe shape.
 func TestQueueTestedShaForGoQualityStaysRedOnAFailedLegInALongAnswer(t *testing.T) {
+	t.Parallel()
 	legs := qualityLegs(func(i int, l *qualityLeg) {
 		if i == 0 {
 			l.step = "failure"

@@ -401,7 +401,7 @@ func TestVenueOracleCredentialRepos(t *testing.T) {
 	var otherOrgID string
 	rows := repoSeedRows()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), OrglessSuperusers: credentialOrglessSuperusers,
+		Golden: golden, Root: venueRoot(), Logger: quietLogger(), OrglessSuperusers: credentialOrglessSuperusers,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey,
 		},

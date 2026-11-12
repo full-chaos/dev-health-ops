@@ -372,7 +372,7 @@ func TestExhaustedUnitStoresTheClassOfItsLastAttempt(t *testing.T) {
 	}{
 		{"unknown error", errors.New("secret-bearing text /org/acme/path"), providersync.CauseClassUnclassified},
 		{"provider 503", &providerfoundation.ProviderError{
-			Class: providerfoundation.ErrorTransient, StatusCode: 503, Path: "/repos/acme/api",
+			Class: providerfoundation.ErrorTransient, StatusCode: 503,
 		}, "provider_transient"},
 		{"provider class outside the vocabulary", &providerfoundation.ProviderError{
 			Class: providerfoundation.ErrorClass("made_up/x"),
@@ -443,7 +443,7 @@ func TestCauseClassVocabularyIsClosedAndWrapSafe(t *testing.T) {
 		timedOut bool
 		want     string
 	}{
-		{"cap", wrap(&providerfoundation.ObjectTooLargeError{Path: "/x", CapBytes: 1, ContentLength: -1}), false, ResponseTooLargeCategory},
+		{"cap", wrap(&providerfoundation.ObjectTooLargeError{CapBytes: 1, ContentLength: -1}), false, ResponseTooLargeCategory},
 		{"bound", wrap(realBoundExceededError(t, 100_001)), false, ResultTooLargeCategory},
 		{"deadline", context.DeadlineExceeded, true, TimeLimitCategory},
 		{"auth", &providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication}, false, AuthCategory},

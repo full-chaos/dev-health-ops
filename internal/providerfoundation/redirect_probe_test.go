@@ -107,3 +107,26 @@ func (r *rewriteTo) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 	return http.DefaultTransport.RoundTrip(request)
 }
+
+// The hop counting copy of DoUnauthenticated decides nothing: a client whose own policy refuses a hop answers the 3xx, the
+// other origin sees no request and no hop is counted.
+func TestTheHopCountingHookOfAnUnauthenticatedRequestNeverOverridesTheClientsOwnPolicy(t *testing.T) {
+	probe := redirectprobe.New(t)
+	supplied := probe.Client()
+	supplied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	client, err := NewHTTPClient("github", probe.Base.URL, supplied, TokenAuth("Authorization", "token ", secrets.NewValue("SECRET")),
+		RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Ledger = NewRequestLedger()
+	response, err := client.DoUnauthenticated(WithRequestAccount(context.Background(), "prs", ""), http.MethodGet, probe.Base.URL+"/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	probe.Assert(t)
+	if got := entriesOf(client.Ledger); got[LedgerKey{"prs", "rest_core"}] != 1 || len(got) != 1 {
+		t.Fatalf("ledger = %v, want the one request that was sent and no hop", got)
+	}
+}

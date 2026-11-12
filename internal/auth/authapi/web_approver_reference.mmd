@@ -1,0 +1,18 @@
+%% The web approver reference at the policy decision point.
+%% Page: web docs/auth-acr-device-approval.md. Code: authorize_web_approver.go (verify),
+%% authorize_reference.go ResolveFor (caller rule), authorize.go decide/evaluate (binding, live session, no cache).
+sequenceDiagram
+    participant A as acr-api (caller)
+    participant P as auth-service POST /v1/authorize
+    participant J as web assertion JWKS file (Secret acr-web-assertion-jwks)
+    participant S as decision state (read-only transaction)
+    A->>P: Bearer acr-api workload token (aud auth-service, typ workload+jwt)
+    P->>P: admit the caller (AUTH_AUTHORIZE_CALLER_SUBJECTS)
+    A->>P: principal_reference = web approver reference (typ web-approver+jwt, aud auth-service, 30 s)
+    P->>P: caller is AUTH_AUTHORIZE_WEB_APPROVER_CALLER, else 401
+    P->>J: read the keys (every reference; unreadable = 503)
+    P->>P: kid, retire_after (24 h ceiling), signature, iss, aud, action, time, sub uuid, sid, impersonating false
+    P->>P: question is acr.credential.issue on organization org_id, key org_id, single route; else 401
+    P->>S: session sid live and owned by sub (never the decision cache)
+    S-->>P: session row, grant snapshot
+    P-->>A: authorization_decision.v1 (+ high-risk audit row)

@@ -31,8 +31,8 @@ const (
 	delegatedRefusal = `{"detail":"Not allowed in an impersonation session"}`
 )
 
-// delegatedClaim is a delegated session's HS256 token: auth-service's
-// hs256_compat mint writes the actor into impersonating_user_id.
+// delegatedClaim is a delegated session's fixture token: the actor is in
+// impersonating_user_id, where auth-service's retired hs256_compat mint wrote it.
 func delegatedClaim(c jwt.MapClaims) { c["impersonating_user_id"] = actorID.String() }
 
 // delegatedWrap is one way a route is guarded, with the store and claims that
@@ -225,7 +225,7 @@ var namedBearerReaders = map[string]bool{
 	// POST /api/v1/auth/logout: the user names the audit line; it ends the refresh token in the body.
 	// It writes, so it applies the Guard's delegated refusal (denyingBearerReaders).
 	"internal/api/session/routes.go:handlers.optionalUser": true,
-	// The validator's HS256 leg, reached only from Authenticate.
+	// The routed access-token validator, reached only from Authenticate.
 	"internal/apiservice/accessverify.go:buildAccessVerify": true,
 }
 

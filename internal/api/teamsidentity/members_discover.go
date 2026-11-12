@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -60,42 +59,43 @@ func optionalStringField(object *pyjson.Object, key string) (*string, error) {
 	return &text, nil
 }
 
-func decodeObject(raw []byte, what string) (*pyjson.Object, error) {
+func decodeObject(response *http.Response, raw []byte) (*pyjson.Object, error) {
 	value, err := pyjson.DecodeString(string(raw))
 	if err != nil {
-		return nil, fmt.Errorf("decode %s: %w", what, err)
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	object, ok := value.(*pyjson.Object)
 	if !ok {
-		return nil, fmt.Errorf("decode %s: not a JSON object", what)
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyShape)
 	}
 	return object, nil
 }
 
-func decodeObjectList(raw []byte, what string) ([]*pyjson.Object, error) {
+func decodeObjectList(response *http.Response, raw []byte) ([]*pyjson.Object, error) {
 	value, err := pyjson.DecodeString(string(raw))
 	if err != nil {
-		return nil, fmt.Errorf("decode %s: %w", what, err)
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	list, ok := value.([]pyjson.Value)
 	if !ok {
-		return nil, fmt.Errorf("decode %s: not a JSON list", what)
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyShape)
 	}
 	out := make([]*pyjson.Object, 0, len(list))
 	for _, item := range list {
 		object, ok := item.(*pyjson.Object)
 		if !ok {
-			return nil, fmt.Errorf("decode %s: element is not a JSON object", what)
+			return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyShape)
 		}
 		out = append(out, object)
 	}
 	return out, nil
 }
 
-func readBody(response *http.Response) ([]byte, error) {
-	defer response.Body.Close()
-	return io.ReadAll(response.Body)
-}
+// discoveryBodyLimit is the cap of one discovery response body, the value of
+// providerfoundation's maxProviderPageBody (pagination.go:16). readDiscoveryBody
+// sits at the end of this file so the line numbers that the endpoint profiles
+// cite in the handlers below stay put.
+const discoveryBodyLimit = 32 << 20
 
 var pyQuoteUnreserved = regexp.MustCompile(`[A-Za-z0-9_.~-]`)
 
@@ -146,11 +146,11 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 	if err != nil {
 		return nil, err
 	}
-	rawDetail, err := readBody(response)
+	rawDetail, err := readDiscoveryBody(response)
 	if err != nil {
 		return nil, err
 	}
-	detail, err := decodeObject(rawDetail, "github team")
+	detail, err := decodeObject(response, rawDetail)
 	if err != nil {
 		return nil, err
 	}
@@ -172,11 +172,11 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 			return nil, walk.pageError(err)
 		}
 		link := linkFieldValue(response.Header)
-		raw, err := readBody(response)
+		raw, err := readDiscoveryBody(response)
 		if err != nil {
 			return nil, walk.pageError(err)
 		}
-		page, err := decodeObjectList(raw, "github team members page")
+		page, err := decodeObjectList(response, raw)
 		if err != nil {
 			return nil, walk.pageError(err)
 		}
@@ -201,11 +201,11 @@ func discoverMembersGitHub(ctx context.Context, token secrets.Value, orgName, te
 				if err != nil {
 					return nil, err
 				}
-				raw, err := readBody(response)
+				raw, err := readDiscoveryBody(response)
 				if err != nil {
 					return nil, err
 				}
-				if source, err = decodeObject(raw, "github user"); err != nil {
+				if source, err = decodeObject(response, raw); err != nil {
 					return nil, err
 				}
 				completed = true
@@ -252,11 +252,11 @@ func discoverMembersGitLab(ctx context.Context, token secrets.Value, baseURL, gr
 			return nil, walk.pageError(err)
 		}
 		link := linkFieldValue(response.Header)
-		raw, err := readBody(response)
+		raw, err := readDiscoveryBody(response)
 		if err != nil {
 			return nil, walk.pageError(err)
 		}
-		items, err := decodeObjectList(raw, "gitlab group members page")
+		items, err := decodeObjectList(response, raw)
 		if err != nil {
 			return nil, walk.pageError(err)
 		}
@@ -321,15 +321,15 @@ func linearGraphQL(ctx context.Context, client *providerfoundation.HTTPClient, q
 	if err != nil {
 		return nil, err
 	}
-	response, err := client.Do(ctx, "POST", "/graphql", bytes.NewReader(body))
+	response, err := client.DoRoute(ctx, "POST", "/graphql", "/graphql", bytes.NewReader(body))
 	if err != nil {
 		return nil, linearTransportFailure(err)
 	}
-	raw, err := readBody(response)
+	raw, err := readDiscoveryBody(response)
 	if err != nil {
 		return nil, err
 	}
-	payload, err := decodeObject(raw, "linear response")
+	payload, err := decodeObject(response, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -510,15 +510,15 @@ func discoverMembersJira(ctx context.Context, credential providerfoundation.Cred
 	if err != nil {
 		return nil, err
 	}
-	response, err := client.Do(ctx, "GET", "/rest/api/3/project/"+projectKey, nil)
+	response, err := client.DoRoute(ctx, "GET", "/rest/api/3/project/{key}", "/rest/api/3/project/"+projectKey, nil)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := readBody(response)
+	raw, err := readDiscoveryBody(response)
 	if err != nil {
 		return nil, err
 	}
-	payload, err := decodeObject(raw, "jira project")
+	payload, err := decodeObject(response, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -790,4 +790,20 @@ func (h handlers) discoverMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, membersDiscoverJSON(teamID, provider, matches), nil)
+}
+
+// readDiscoveryBody reads and closes the body of a 2xx response. A read
+// failure or a body above discoveryBodyLimit is a *ProviderError that names
+// the route template and wraps ErrNormalizationInvalid.
+func readDiscoveryBody(response *http.Response) ([]byte, error) {
+	defer response.Body.Close()
+	body, over, err := providerfoundation.ReadResponseBodyWithin(response, discoveryBodyLimit,
+		func(error) error { return providerfoundation.ErrNormalizationInvalid })
+	if err != nil {
+		return nil, err
+	}
+	if over > 0 {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
+	}
+	return body, nil
 }

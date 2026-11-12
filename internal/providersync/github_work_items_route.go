@@ -325,7 +325,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 				prCommentsTruncated++
 			}
 			if !exists && socialComplete {
-				return CompleteRouteBatch{}, usage.wrap(providerfoundation.ErrGraphQLResponse)
+				return CompleteRouteBatch{}, usage.wrap(providerfoundation.GraphQLShapeFailure(graphQLRoute, providerfoundation.ErrGraphQLResponse))
 			}
 			adapted, adaptErr := adaptGitHubWorkItemPRSocialPayload(payload)
 			if adaptErr != nil {

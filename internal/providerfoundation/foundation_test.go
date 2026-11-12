@@ -187,9 +187,6 @@ func TestHTTPClientSurfacesStatusPathAndBodyOnFailure(t *testing.T) {
 	if providerErr.StatusCode != http.StatusBadRequest {
 		t.Fatalf("StatusCode = %d, want 400", providerErr.StatusCode)
 	}
-	if providerErr.Path != "/rest/api/3/search/jql" {
-		t.Fatalf("Path = %q, want the request path without its query string", providerErr.Path)
-	}
 	message := providerErr.Error()
 	for _, want := range []string{"status=400"} {
 		if !strings.Contains(message, want) {

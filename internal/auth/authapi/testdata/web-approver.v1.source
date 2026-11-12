@@ -1,0 +1,4 @@
+source_repository full-chaos/dev-health-web
+source_commit fa1e5c3bad53248084d4288c740a3c5866ec100e
+source_path src/lib/acr/__tests__/vectors/web-approver.v1.json
+sha256 9f3c81c4ff3fe4e3d2f37b0e2f2a1d4bbfcb8513b09c7addf5b59790cc7586c3

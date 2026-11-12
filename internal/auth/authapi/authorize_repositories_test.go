@@ -304,6 +304,7 @@ func (h *listingFixture) delegateAs(owner bool, permitted ...string) {
 
 // D0: the route stays dark without its endpoint-profile row: the embedded document has none yet.
 func TestRepositoryListingRouteIsDarkWithoutItsRow(t *testing.T) {
+	t.Parallel()
 	f := newAuthorizeFixture(t)
 	routes, err := AuthorizeRoutes(AuthorizeDeps{Callers: f.callers(), References: f.references(), State: &fakeDecisionState{},
 		Evaluator: authorization.NewEvaluator(), Audit: (&fakeAudit{}).write, ProfileRows: authorizeProfileDoc(t, listingRoute)})
@@ -339,11 +340,13 @@ func wantDeny(t *testing.T, a listingAnswer, reason string) {
 // the route equals today's per-key READ decisions, for acr.context.read and acr.evidence.read, on the same fixture and
 // session; each row also pins what that answer is.
 func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		role  string
 		repos int
 	}{{"viewer", 105}, {"member", 105}, {"admin", 105}, {"owner", 105}, {"admin", 300}} {
 		t.Run(fmt.Sprintf("%s, membership default, %d-repository org", tc.role, tc.repos), func(t *testing.T) {
+			t.Parallel()
 			h := newListingFixture(t)
 			trap := newCatalogTrap(t, h.member(h.org, tc.role, nil), tc.repos)
 			h.plant(h.org, trap)
@@ -360,6 +363,7 @@ func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
 	}
 	for _, repos := range []int{105, 300} {
 		t.Run(fmt.Sprintf("wildcard grant in a %d-repository org", repos), func(t *testing.T) {
+			t.Parallel()
 			h := newListingFixture(t)
 			h.plant(h.org, newCatalogTrap(t, h.member(h.org, "member", []authorization.Grant{listedGrant(h.org, "*")}), repos))
 			probes := probeKeys(inventoryOf(repos), nil)
@@ -367,6 +371,7 @@ func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
 		})
 	}
 	t.Run("exact grant on one repository", func(t *testing.T) {
+		t.Parallel()
 		h := newListingFixture(t)
 		h.plant(h.org, newCatalogTrap(t, h.member(h.org, "member", []authorization.Grant{listedGrant(h.org, "acme/catalog-007")}), 105))
 		a := h.differential(t, "exact grant", h.org, probeKeys(inventoryOf(105), nil), false)
@@ -376,6 +381,7 @@ func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
 	})
 	for _, n := range []int{99, 100, 101, 105, 256, 257} {
 		t.Run(fmt.Sprintf("named reader with %d grants", n), func(t *testing.T) {
+			t.Parallel()
 			h := newListingFixture(t)
 			rows, want := ownGrants(h.org, n)
 			h.plant(h.org, newCatalogTrap(t, h.member(h.org, "viewer", rows), 300))
@@ -393,6 +399,7 @@ func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
 		})
 	}
 	t.Run("named reader with no live grant", func(t *testing.T) {
+		t.Parallel()
 		h := newListingFixture(t)
 		revoked := listedGrant(h.org, "acme/api")
 		revoked.Revoked = true
@@ -404,6 +411,7 @@ func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
 	})
 	for _, role := range []string{"platform_admin", "platform_owner"} {
 		t.Run(role+" with no membership", func(t *testing.T) {
+			t.Parallel()
 			h := newListingFixture(t)
 			h.plant(h.org, h.platformAdmin(h.org, role, authorization.StatusActive))
 			wantDeny(t, h.differential(t, role+" no membership", h.org, probeKeys(inventoryOf(105), nil), false), "no_membership")
@@ -415,6 +423,7 @@ func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
 			actor = "platform_owner actor"
 		}
 		t.Run("impersonation of an org-wide reader, "+actor, func(t *testing.T) {
+			t.Parallel()
 			h := newListingFixture(t)
 			h.plant(h.org, h.member(h.org, "admin", nil))
 			h.delegateAs(owner, listingActions...)
@@ -426,6 +435,7 @@ func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
 			}
 		})
 		t.Run("impersonation of a named reader, "+actor, func(t *testing.T) {
+			t.Parallel()
 			h := newListingFixture(t)
 			rows, want := ownGrants(h.org, 105)
 			h.plant(h.org, h.member(h.org, "member", rows))
@@ -437,12 +447,14 @@ func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
 		})
 	}
 	t.Run("impersonation without the read action permitted", func(t *testing.T) {
+		t.Parallel()
 		h := newListingFixture(t)
 		h.plant(h.org, h.member(h.org, "admin", nil))
 		h.delegateAs(false, "acr.credential.issue")
 		wantDeny(t, h.differential(t, "impersonation, read not permitted", h.org, probeKeys(inventoryOf(105), nil), false), "impersonation_denied")
 	})
 	t.Run("principal of another organization", func(t *testing.T) {
+		t.Parallel()
 		h := newListingFixture(t)
 		other := uuidOther()
 		stranger := h.member(other, "admin", nil)
@@ -451,6 +463,7 @@ func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
 		wantDeny(t, h.differential(t, "other org", other, probeKeys(inventoryOf(105), nil), false), "no_membership")
 	})
 	t.Run("service account with grants", func(t *testing.T) {
+		t.Parallel()
 		h := newListingFixture(t)
 		account := h.member(h.org, "", []authorization.Grant{listedGrant(h.org, "acme/api")})
 		account.membership = nil
@@ -469,6 +482,7 @@ func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
 		},
 	} {
 		t.Run("suspended organization, "+name, func(t *testing.T) {
+			t.Parallel()
 			h := newListingFixture(t)
 			h.plant(h.org, s(h))
 			wantDeny(t, h.differential(t, "suspended org, "+name, h.org, probeKeys(inventoryOf(105), nil), false), "organization_inactive")
@@ -479,6 +493,7 @@ func TestRepositoryListingEqualsThePerKeyReadDecisions(t *testing.T) {
 // D2: canonical keys: an id-bearing grant lists the live path of its id (never its stale stored path), an id with no
 // live path lists nothing, and a key reached twice is listed once.
 func TestRepositoryListingListsTheCanonicalKeys(t *testing.T) {
+	t.Parallel()
 	h := newListingFixture(t)
 	renamed := listedGrant(h.org, "acme/old-name")
 	renamed.RepoID = "github:1"
@@ -500,6 +515,7 @@ func TestRepositoryListingListsTheCanonicalKeys(t *testing.T) {
 
 // D3: a store error fails closed: the call is a 503, never a list and never a deny.
 func TestRepositoryListingFailsClosedOnAStoreError(t *testing.T) {
+	t.Parallel()
 	h := newListingFixture(t)
 	s := h.member(h.org, "member", nil)
 	s.grantsErr = errors.New("grant read failed")
@@ -517,6 +533,7 @@ func TestRepositoryListingFailsClosedOnAStoreError(t *testing.T) {
 // D4: the route lists; it never decides one repository, and an action that is not a repository read is
 // resource_mismatch. A caller without a workload token is refused before any read.
 func TestRepositoryListingRequestShape(t *testing.T) {
+	t.Parallel()
 	h := newListingFixture(t)
 	for name, q := range map[string]map[string]any{
 		"one repository":     h.question("acr.context.read", "repository", "acme/api", h.org),
@@ -545,6 +562,7 @@ func TestRepositoryListingRequestShape(t *testing.T) {
 
 // D5: the listing never answers from the decision cache: a cached org-wide allow does not widen a named reader's list.
 func TestRepositoryListingBypassesTheDecisionCache(t *testing.T) {
+	t.Parallel()
 	planted := map[string]authorization.Decision{}
 	h := newListingFixture(t, withPlanted(planted))
 	for _, action := range listingActions {
@@ -555,4 +573,20 @@ func TestRepositoryListingBypassesTheDecisionCache(t *testing.T) {
 	if got := allowlistOf(t, h.list(h.listQuestion("acr.context.read", h.org))); !slices.Equal(got, want) {
 		t.Fatalf("allowlist %v, want the own keys %v", got, want)
 	}
+}
+
+// B0: the embedded endpoint-profile document mounts the route.
+func TestRepositoryListingRouteMountsFromTheEmbeddedDocument(t *testing.T) {
+	f := newAuthorizeFixture(t)
+	routes, err := AuthorizeRoutes(AuthorizeDeps{Callers: f.callers(), References: f.references(), State: &fakeDecisionState{},
+		Evaluator: authorization.NewEvaluator(), Audit: (&fakeAudit{}).write})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range routes {
+		if r.Method == http.MethodPost && r.Pattern == listingRoute {
+			return
+		}
+	}
+	t.Fatalf("POST %s is not mounted from the embedded endpoint-profile document", listingRoute)
 }

@@ -177,7 +177,6 @@ func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest st
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/governance/llmsettings_" + mode + ".go-pin.json", SHA256: pinDigest, Ruling: ruling})
 	root := repoRoot(t)
 	nextID := goldenIDs("llm")
-	const jwtKey = "venue-oracle-test-secret-key-for-llm-settings-32-bytes!"
 	t.Setenv("BYO_LLM_MAX_BUDGET_MICRO_USD", llmVenueOperatorMax)
 
 	adminID, memberID, superID := nextID(), nextID(), nextID()
@@ -219,7 +218,6 @@ func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest st
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden:    golden,
 		Root:      root,
-		JWTKey:    jwtKey,
 		PythonEnv: pythonEnv,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -476,7 +474,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 	}
 
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		if withKey {
 			decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(llmVenueEncryptionKey), "")
 			if err != nil {

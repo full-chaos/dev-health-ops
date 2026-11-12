@@ -2,9 +2,6 @@ package teamsidentity
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -100,14 +97,13 @@ func githubTeamDetailFor(ctx context.Context, client *providerfoundation.HTTPCli
 	if err != nil {
 		return githubTeamDetail{}, err
 	}
-	defer response.Body.Close()
-	raw, err := io.ReadAll(response.Body)
+	raw, err := readDiscoveryBody(response)
 	if err != nil {
 		return githubTeamDetail{}, err
 	}
 	var detail githubTeamDetail
-	if err := json.Unmarshal(raw, &detail); err != nil {
-		return githubTeamDetail{}, fmt.Errorf("decode github team detail response: %w", err)
+	if err := providerfoundation.DecodeResponseJSON(response, raw, &detail, 0); err != nil {
+		return githubTeamDetail{}, err
 	}
 	return detail, nil
 }
@@ -126,14 +122,13 @@ func githubListAllPages[T any](ctx context.Context, client *providerfoundation.H
 		if err != nil {
 			return nil, walk.pageError(err)
 		}
-		raw, readErr := io.ReadAll(response.Body)
-		response.Body.Close()
+		raw, readErr := readDiscoveryBody(response)
 		if readErr != nil {
 			return nil, walk.pageError(readErr)
 		}
 		var page []T
-		if err := json.Unmarshal(raw, &page); err != nil {
-			return nil, walk.pageError(fmt.Errorf("decode github list page: %w", err))
+		if err := providerfoundation.DecodeResponseJSON(response, raw, &page, 0); err != nil {
+			return nil, walk.pageError(err)
 		}
 		out = appendNew(out, seenItems, page, key)
 		link, advertised := githubNextLinkPresent(linkFieldValue(response.Header))

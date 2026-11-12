@@ -66,7 +66,6 @@ func runPagerDutyAuthorizeOracle(t *testing.T, mode, digest string) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("authorize_"+mode, t.Name(), digest))
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-authorize-32-by"
 
 	orgs := map[string]uuid.UUID{}
 	for _, slug := range []string{"a", "b", "off", "cleanup", "othercleanup"} {
@@ -85,7 +84,6 @@ func runPagerDutyAuthorizeOracle(t *testing.T, mode, digest string) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden:    golden,
 		Root:      root,
-		JWTKey:    jwtKey,
 		PythonEnv: pythonEnv,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -173,7 +171,7 @@ VALUES ($1, $2, 'v1:not-decryptable-here', now() - interval '2 hours', now() - i
 	}
 
 	python := golden.Python(t, venue, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: clientID, RedirectURI: pagerDutyAuthorizeVenueRedirectURI}
 	})

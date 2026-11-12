@@ -39,7 +39,6 @@ func TestOrgDeletionMatchesThePythonAPI(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion", t.Name(), "14b005709fee0b58eb76f201020e004e69da4c88b4dda0933776b7caf52bb562"))
 	root := repoRoot(t)
 	nextID := goldenIDs("od")
-	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-flow-32-bytes!!"
 
 	targetOrgID := nextID()
 	controlOrgID := nextID()
@@ -53,7 +52,6 @@ func TestOrgDeletionMatchesThePythonAPI(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -143,7 +141,7 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, nextID(), controlOrgID)
 	bearer := func(name string) string { return "Bearer " + venue.Tokens[name] }
 	authHeaders := func(name string) map[string]string { return map[string]string{"Authorization": bearer(name)} }
 
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		// The admin (unrestricted) ClickHouse connection, matching
 		// production's CLICKHOUSE_URI wiring -- not GoAPIClickHouseURI,
 		// which is locked to chclickhouse.APIPosture's closed teams/

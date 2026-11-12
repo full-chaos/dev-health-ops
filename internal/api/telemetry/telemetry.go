@@ -55,8 +55,8 @@ func Routes(pool *pgxpool.Pool, guard *policy.Guard, auth *policy.Authenticator,
 func (h handlers) routeTable(wrap func(http.Handler) http.Handler) []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: "/api/v1/telemetry/status", Handler: wrap(h.withOrg(h.status))},
-		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-in", Handler: wrap(h.withOrg(h.optIn))},
-		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-out", Handler: wrap(h.withOrg(h.optOut))},
+		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-in", Handler: wrap(h.withOrg(h.requireOrgAdmin(h.optIn)))},
+		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-out", Handler: wrap(h.withOrg(h.requireOrgAdmin(h.optOut)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/report",
 			Handler: wrap(h.requirePlatformRole(h.withOrg(h.report)))},
 	}
@@ -123,6 +123,34 @@ func (h handlers) withOrg(next http.HandlerFunc) http.Handler {
 			}
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), orgKey{}, requested)))
+	})
+}
+
+// requireOrgAdmin runs below withOrg: a write to the org-wide telemetry
+// setting needs the admin or owner role in the resolved org, or the platform
+// action withOrg already uses for its cross-org pass. A live impersonation
+// keeps its answer (known flaw F1).
+func (h handlers) requireOrgAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if policy.ImpersonationFrom(r.Context()) != nil {
+			next(w, r)
+			return
+		}
+		user := policy.UserFrom(r.Context())
+		if user.Holds(policy.ActionAdminTelemetry) {
+			next(w, r)
+			return
+		}
+		role, member, err := h.auth.Membership(r.Context(), user.UserID, r.Context().Value(orgKey{}).(string))
+		if err != nil {
+			h.internal(w, r, "membership role", err)
+			return
+		}
+		if !member || (role != "admin" && role != "owner") {
+			h.refuse(w, r, "not_org_admin", "You must be an org admin or owner to change telemetry settings")
+			return
+		}
+		next(w, r)
 	})
 }
 

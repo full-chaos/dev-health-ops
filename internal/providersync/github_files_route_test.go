@@ -400,6 +400,14 @@ func TestGitHubFilesRouteFallsBackToNonRecursiveWalkWhenTheRecursiveTreeExceedsT
 	if !strings.Contains(logged, "content_length=") {
 		t.Fatalf("logs=%q, want the content_length field", logged)
 	}
+	if !strings.Contains(logged, "route="+githubTreeRoute) {
+		t.Fatalf("logs=%q, want the route template %s", logged, githubTreeRoute)
+	}
+	for _, raw := range []string{"path=", "/repos/acme", "recursive=true"} {
+		if strings.Contains(logged, raw) {
+			t.Fatalf("logs=%q carry raw request path text %q", logged, raw)
+		}
+	}
 }
 
 func TestGitHubFilesRouteFailsClosedWhenATruncatedSubtreeCannotBeEnumerated(t *testing.T) {

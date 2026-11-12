@@ -180,7 +180,7 @@ func TestVenueMainAlertWorkflowPlantedDefects(t *testing.T) {
 	for _, w := range []string{"go", "go-quality", "go-auth-service", "go-workers-compose-proof", "live-e2e", "docker-images", "test", "codeql-analysis"} {
 		files = append(files, ".github/workflows/"+w+".yml")
 	}
-	trigAll := "workflow_run:\n    workflows:\n      - Venue oracles\n      - Go\n      - Go quality\n      - Go auth service\n      - Go workers compose proof\n      - Live Backend E2E\n      - Build Docker images\n      - Tests\n      - CodeQL\n    types: [completed]\n"
+	trigAll := "workflow_run:\n    workflows:\n      - Venue oracles\n      - Go\n      - Go quality\n      - Go auth service\n      - Go workers compose proof\n      - Live Backend E2E\n      - Build Docker images\n      - Tests\n      - CodeQL\n    types: [completed]\n    branches: [main]\n"
 	cases := []struct {
 		name string
 		muts []mutation
@@ -197,8 +197,9 @@ func TestVenueMainAlertWorkflowPlantedDefects(t *testing.T) {
 		{"the table row is dropped", []mutation{{tsv, "Tests\ttest.yml", "#Tests\ttest.yml"}}, []string{"workflow_run.workflows"}},
 		{"the group ignores the workflow", []mutation{{f, "group: main-red-alert-${{ github.event.workflow_run.name }}", "group: main-red-alert"}}, []string{"concurrency group"}},
 		{"the workflow name is not passed", []mutation{{f, "          RUN_WORKFLOW: ${{ github.event.workflow_run.name }}\n", ""}}, []string{"env RUN_WORKFLOW"}},
-		{"workflow_run gains a branch filter", []mutation{{f, "types: [completed]", "types: [completed]\n    branches: [release]"}}, []string{"workflow_run declares [branches types workflows]"}},
-		{"workflow_run gains a branches-ignore filter", []mutation{{f, "types: [completed]", "types: [completed]\n    branches-ignore: [main]"}}, []string{"workflow_run declares [branches-ignore types workflows]"}},
+		{"workflow_run gains a branch filter", []mutation{{f, "    branches: [main]\n", "    branches: [release]\n"}}, []string{"workflow_run.branches is [release]"}},
+		{"workflow_run drops the main branch filter", []mutation{{f, "    branches: [main]\n", ""}}, []string{"workflow_run.branches is []"}},
+		{"workflow_run gains a branches-ignore filter", []mutation{{f, "types: [completed]", "types: [completed]\n    branches-ignore: [main]"}}, []string{"workflow_run declares [branches branches-ignore types workflows]"}},
 		{"the venue workflow is renamed", []mutation{{venueWorkflow, "name: Venue oracles\n", "name: Venue oracle suite\n"}}, []string{"is named"}},
 		{"the push-only filter is dropped", []mutation{{f, " && github.event.workflow_run.event == 'push'", ""}}, []string{"only main push runs may alert"}},
 		{"top-level permissions granted", []mutation{{f, "permissions: {}\n", "permissions:\n  contents: read\n"}}, []string{"top-level permissions"}},

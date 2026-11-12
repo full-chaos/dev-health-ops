@@ -294,8 +294,8 @@ func TestAuthorizeRoutesStayDarkWithoutTheirRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(routes) != 2 {
-		t.Fatalf("the embedded document holds both authorize rows, yet %d route(s) mounted, want 2", len(routes))
+	if len(routes) != 3 {
+		t.Fatalf("the embedded document holds the three authorize rows, yet %d route(s) mounted, want 3", len(routes))
 	}
 	deps.ProfileRows = authorizeProfileDoc(t)
 	if routes, _ = AuthorizeRoutes(deps); len(routes) != 0 {

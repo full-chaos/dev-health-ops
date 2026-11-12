@@ -47,13 +47,13 @@ func withAuthorizeRows(t *testing.T, raw []byte) {
 	t.Cleanup(func() { authorizeProfileRows = saved })
 }
 
-// The embedded document holds both authorize rows: the routes mount from it. A document with no row mounts none.
+// The embedded document holds the three authorize rows: the routes mount from it. A document with no row mounts none.
 func TestTheAuthorizeRoutesMountFromTheEmbeddedRows(t *testing.T) {
 	pool, schema, signer := authorizeTestDeps(t)
 	cfg := authconfig.Config{TokenIssuerURL: "https://auth.example.com", AuthorizeCallerSubjects: []string{session.WirePrincipalID(uuid.New())}}
 	routes, err := authorizeRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, signer, nil)
-	if err != nil || len(routes) != 2 {
-		t.Fatalf("routes %d, %v; want 2 from the embedded rows", len(routes), err)
+	if err != nil || len(routes) != 3 {
+		t.Fatalf("routes %d, %v; want 3 from the embedded rows", len(routes), err)
 	}
 	withAuthorizeRows(t, []byte(`{"rows": []}`))
 	routes, err = authorizeRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, signer, nil)

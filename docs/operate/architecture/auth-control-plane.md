@@ -142,6 +142,7 @@ See [organization and membership authority](../../reference/auth/org-membership-
 
 The policy decision point (PDP) runs in auth-service.
 `POST /v1/authorize` evaluates one request. `POST /v1/authorize:batch` evaluates up to 100.
+`POST /v1/authorize:repositories` lists the repositories a principal may read in one organization.
 The calling service authenticates with its own workload token for auth-service.
 The request separately names the user principal reference, action and resource.
 The PDP resolves current principal, session, organization, membership and grant state.

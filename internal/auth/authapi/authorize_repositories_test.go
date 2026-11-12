@@ -556,3 +556,19 @@ func TestRepositoryListingBypassesTheDecisionCache(t *testing.T) {
 		t.Fatalf("allowlist %v, want the own keys %v", got, want)
 	}
 }
+
+// B0: the embedded endpoint-profile document mounts the route.
+func TestRepositoryListingRouteMountsFromTheEmbeddedDocument(t *testing.T) {
+	f := newAuthorizeFixture(t)
+	routes, err := AuthorizeRoutes(AuthorizeDeps{Callers: f.callers(), References: f.references(), State: &fakeDecisionState{},
+		Evaluator: authorization.NewEvaluator(), Audit: (&fakeAudit{}).write})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range routes {
+		if r.Method == http.MethodPost && r.Pattern == listingRoute {
+			return
+		}
+	}
+	t.Fatalf("POST %s is not mounted from the embedded endpoint-profile document", listingRoute)
+}

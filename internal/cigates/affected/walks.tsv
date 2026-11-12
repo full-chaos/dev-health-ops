@@ -29,6 +29,7 @@ internal/api/syncadmin	dataset_writer_lock_census_test.go	unexpressed	-	-
 internal/api/syncadmin	gate_reader_census_test.go	unexpressed	-	*.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go	cmd	tree	*.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go	internal	tree	*.go
+internal/api/teamsidentity	response_read_census_test.go	internal/api/teamsidentity	dir	*
 internal/api/teamsidentity	team_id_writer_census_test.go	cmd	tree	*.go
 internal/api/teamsidentity	team_id_writer_census_test.go	internal	tree	*.go
 internal/api/teamsidentity	team_id_writer_census_test.go	internal/api/teamsidentity	dir	*
@@ -54,8 +55,10 @@ internal/auth/acrmint	census_test.go	.	tree	*.go
 internal/auth/authapi	acr_events_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
 internal/auth/authapi	acr_events_test.go	internal/auth/outboxprojection	dir	*
 internal/auth/authapi	authorize_loadprofile_test.go	internal/loadharness/testdata/pdp	dir	*
+internal/auth/authapi	authorize_web_approver_vector_test.go	.	tree	*
 internal/auth/authapi	provisioning_read_test.go	contracts/auth/v1/golden/read-api/vectors	dir	*
 internal/auth/authapi	register_test.go	unexpressed	-	-
+internal/auth/authapi	sid_mint_census_test.go	internal/auth/authapi	dir	*
 internal/auth/authorization	evaluate_test.go	internal/auth/authorization	dir	*
 internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
 internal/auth/authruntime	fixed_credential_scan_test.go	internal/auth/authruntime	dir	*
@@ -276,6 +279,9 @@ internal/cigates/workflows	live_e2e_auth_stack_test.go	*.md	dir	*
 internal/cigates/workflows	live_e2e_auth_stack_test.go	.github/docs-legacy	tree	*
 internal/cigates/workflows	live_e2e_auth_stack_test.go	.github/workflows/*.yml	dir	*
 internal/cigates/workflows	live_e2e_auth_stack_test.go	ci/*.sh	dir	*
+internal/cigates/workflows	live_e2e_auth_stack_test.go	ci/bigboy/*.yml	dir	*
+internal/cigates/workflows	live_e2e_auth_stack_test.go	compose.yml	dir	*
+internal/cigates/workflows	live_e2e_auth_stack_test.go	deploy	tree	*.yaml
 internal/cigates/workflows	live_e2e_auth_stack_test.go	docs	tree	*
 internal/cigates/workflows	live_e2e_auth_stack_test.go	unexpressed	-	-
 internal/cigates/workflows	providerstub_not_release_test.go	.github/workflows	dir	*
@@ -425,6 +431,7 @@ internal/providersync	client_ledger_census_test.go	internal/providersync	dir	*
 internal/providersync	github_repo_identity_census_test.go	internal/providersync	dir	*
 internal/providersync	gitlab_repo_identity_census_test.go	internal/providersync	dir	*
 internal/providersync	ingested_at_writer_enumeration_test.go	internal	tree	*
+internal/providersync	item_route_census_test.go	internal/providersync	dir	*
 internal/providersync	jira_search_endpoint_guard_test.go	internal/providersync	dir	*
 internal/providersync	log_sites_redaction_test.go	internal/providersync	dir	*
 internal/providersync	oracle_golden_inventory_test.go	internal/providersync	dir	*

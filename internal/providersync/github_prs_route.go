@@ -253,7 +253,7 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 		}
 		var detail gitHubPullDetailPayload
 		if err := decodeGitHubPullDetail(raw, &detail); err != nil {
-			return CompleteRouteBatch{}, err
+			return CompleteRouteBatch{}, providerfoundation.RouteFailure(githubPullRoute, providerfoundation.ReasonBodyDecode, err)
 		}
 		row, err := normalizeGitHubPullRequest(claim, repoID, detail, normalizedAt)
 		if err != nil {

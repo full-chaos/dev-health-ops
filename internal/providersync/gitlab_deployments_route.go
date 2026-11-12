@@ -249,7 +249,7 @@ func fetchGitLabDeploymentObjects(
 	for _, raw := range page.Items {
 		object, include, decodeErr := decodeGitLabDeploymentObject(raw)
 		if decodeErr != nil {
-			return nil, 0, decodeErr
+			return nil, 0, providerfoundation.RouteFailure(route, providerfoundation.ReasonBodyDecode, decodeErr)
 		}
 		if include {
 			objects = append(objects, object)

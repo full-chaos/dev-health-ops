@@ -89,10 +89,10 @@ type Plane struct {
 const Schema = "auth"
 
 // Start serves the plane over the database at adminURI, whose auth schema (Schema) is already applied, signing access tokens
-// with key. jwtKey is auth-service's JWT_SECRET_KEY. It first projects every public.users row into the auth schema with
+// with key. It first projects every public.users row into the auth schema with
 // auth-service's projector (the users-backfill state of a deployed auth-service), so a principal written later for a
 // seeded session (venueoracle.WriteAuthSessions) is already a whole user.
-func Start(t testing.TB, ctx context.Context, adminURI string, key Key, jwtKey string) Plane {
+func Start(t testing.TB, ctx context.Context, adminURI string, key Key) Plane {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, adminURI)
 	if err != nil {

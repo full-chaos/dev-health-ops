@@ -344,7 +344,7 @@ authService:
   #    the API port.
   operatorPort: 8096
   # -- The internal listener (CHAOS-12661, --internal-http-addr): the service-to-service routes alone
-  #    (POST /internal/v1/token/exchange, /v1/authorize and /v1/authorize:batch), for the policy enforcement
+  #    (POST /internal/v1/token/exchange, /v1/authorize, /v1/authorize:batch and /v1/authorize:repositories), for the policy enforcement
   #    points. It trusts no forwarded address (authService.trustedProxies is the API port's alone): each caller is
   #    identified by its own token. Off by default. On, the chart renders the arg, a named `internal` containerPort,
   #    a ClusterIP Service `<fullname>-auth-service-internal` and a NetworkPolicy of the same name that admits the
@@ -476,7 +476,7 @@ authService:
     loginLockout:
       secretName: ""
       secretKey: AUTH_LOGIN_LOCKOUT_KEY
-  # -- CHAOS-12662: the rate limits of the policy decision point routes (/v1/authorize and /v1/authorize:batch), per pod.
+  # -- CHAOS-12662: the rate limits of the policy decision point routes (/v1/authorize, /v1/authorize:batch and /v1/authorize:repositories), per pod.
   #    callerPerSecond/callerBurst: the token bucket of ONE caller workload on ONE route; the effective per-caller limit
   #    is that times authService.replicas. A batch costs its decision count (at most 100), so callerBurst and routeBurst
   #    must be at least 100: the render refuses less. routePerSecond/routeBurst: the ceiling of all callers together

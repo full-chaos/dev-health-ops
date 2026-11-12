@@ -405,7 +405,7 @@ func fetchGitLabGraphQLBlobs(
 	}
 	trimmedErrors := bytes.TrimSpace(envelope.Errors)
 	if len(trimmedErrors) > 0 && !bytes.Equal(trimmedErrors, []byte("null")) && !bytes.Equal(trimmedErrors, []byte("[]")) {
-		return nil, providerfoundation.ErrGraphQLResponse
+		return nil, providerfoundation.ResponseGraphQL(response, providerfoundation.ErrGraphQLResponse)
 	}
 	if envelope.Data.Project == nil || envelope.Data.Project.Repository == nil ||
 		envelope.Data.Project.Repository.Blobs == nil {

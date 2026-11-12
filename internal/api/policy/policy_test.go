@@ -2,6 +2,8 @@ package policy
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"io"
 	"log/slog"
@@ -21,13 +23,13 @@ import (
 )
 
 var (
-	testKey      = strings.Repeat("policy-fixture-", 3)
-	userID       = uuid.MustParse("11111111-1111-4111-8111-111111111111")
-	ownOrg       = "22222222-2222-4222-8222-222222222222"
-	memberOrg    = "33333333-3333-4333-8333-333333333333"
-	strangerOrg  = "44444444-4444-4444-8444-444444444444"
-	targetUserID = uuid.MustParse("55555555-5555-4555-8555-555555555555")
-	targetOrgID  = uuid.MustParse("66666666-6666-4666-8666-666666666666")
+	fixturePublic, fixturePrivate = fixtureKeys()
+	userID                        = uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	ownOrg                        = "22222222-2222-4222-8222-222222222222"
+	memberOrg                     = "33333333-3333-4333-8333-333333333333"
+	strangerOrg                   = "44444444-4444-4444-8444-444444444444"
+	targetUserID                  = uuid.MustParse("55555555-5555-4555-8555-555555555555")
+	targetOrgID                   = uuid.MustParse("66666666-6666-4666-8666-666666666666")
 )
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -122,9 +124,18 @@ func claims(mutate func(jwt.MapClaims)) jwt.MapClaims {
 	return c
 }
 
+// fixtureKeys is the test-only Ed25519 pair of the sign() fixture, made per run (no key literal in the tree).
+func fixtureKeys() (ed25519.PublicKey, ed25519.PrivateKey) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return public, private
+}
+
 func sign(t *testing.T, c jwt.MapClaims) string {
 	t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString([]byte(testKey))
+	token, err := jwt.NewWithClaims(jwt.SigningMethodEdDSA, c).SignedString(fixturePrivate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +143,7 @@ func sign(t *testing.T, c jwt.MapClaims) string {
 }
 
 // fixtureValidator is the routed validator of these unit tests: it reads a
-// sign() fixture (a test-only HMAC token under testKey, no production class)
+// sign() fixture (a test-only EdDSA token under fixturePrivate, no production class)
 // as the verified access-token claims (sub, org_id, sid, impersonating_user_id
 // as act.sub). An absent sid names the session whose id is the subject's own id
 // (fakeStore.SessionState answers it).
@@ -140,8 +151,8 @@ type fixtureValidator struct{}
 
 func (fixtureValidator) Validate(_ context.Context, _, _, bearer string) (*RoutedResult, error) {
 	var claims jwt.MapClaims
-	if _, err := jwt.ParseWithClaims(bearer, &claims, func(*jwt.Token) (any, error) { return []byte(testKey), nil },
-		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired()); err != nil {
+	if _, err := jwt.ParseWithClaims(bearer, &claims, func(*jwt.Token) (any, error) { return fixturePublic, nil },
+		jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}), jwt.WithExpirationRequired()); err != nil {
 		return nil, errRejected
 	}
 	sub, _ := claims["sub"].(string)
@@ -164,6 +175,33 @@ func (fixtureValidator) Validate(_ context.Context, _, _, bearer string) (*Route
 		out.Actor = &actor
 	}
 	return &RoutedResult{Claims: out}, nil
+}
+
+// The fixture validator admits only sign()'s own tokens: another key, the retired HMAC form (alg HS256 under the
+// old fixture key) and an expired token are each refused.
+func TestFixtureValidatorAdmitsOnlyItsOwnUnexpiredEdDSATokens(t *testing.T) {
+	ctx := context.Background()
+	if result, err := (fixtureValidator{}).Validate(ctx, "", "", sign(t, claims(nil))); err != nil || result == nil {
+		t.Fatalf("sign() token: %+v %v, want admitted", result, err)
+	}
+	_, otherKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSigned, err := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims(nil)).SignedString(otherKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hmacSigned, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims(nil)).SignedString([]byte(strings.Repeat("policy-fixture-", 3)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := sign(t, claims(func(c jwt.MapClaims) { c["exp"] = time.Now().Add(-time.Minute).Unix() }))
+	for name, bearer := range map[string]string{"another key": otherSigned, "alg HS256": hmacSigned, "expired": expired} {
+		if result, err := (fixtureValidator{}).Validate(ctx, "", "", bearer); !errors.Is(err, errRejected) || result != nil {
+			t.Errorf("%s: %+v %v, want refused", name, result, err)
+		}
+	}
 }
 
 // unrouted is an Authenticator with no access check (no RouteAccess).

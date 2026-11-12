@@ -22,7 +22,7 @@ An authorization decision answers one question: may this principal perform this 
 {: .fc-page-lede }
 
 !!! warning "No consumer enforces an obligation yet"
-    `POST /v1/authorize` and `POST /v1/authorize:batch` are served by the auth-service (`contracts/auth/v1/openapi/auth-v1.openapi.json`). Every allow of an organization or repository action carries `tenant_scope` and, for an action that reads repository-bound data, `repository_scope` or `repository_allowlist`. A delegated (impersonation) allow also carries `minimum_assurance`. The redaction rules are empty, so no allow carries `redaction` yet. No service enforces an obligation yet. See [Status](#status).
+    `POST /v1/authorize`, `POST /v1/authorize:batch` and `POST /v1/authorize:repositories` are served by the auth-service (`contracts/auth/v1/openapi/auth-v1.openapi.json`). Every allow of an organization or repository action carries `tenant_scope` and, for an action that reads repository-bound data, `repository_scope` or `repository_allowlist`. A delegated (impersonation) allow also carries `minimum_assurance`. The redaction rules are empty, so no allow carries `redaction` yet. No service enforces an obligation yet. See [Status](#status).
 
 ## Request
 

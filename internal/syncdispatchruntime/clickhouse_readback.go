@@ -57,19 +57,21 @@ SELECT native_team_key FROM (
 		"org_id": orgID, "provider": provider, "keys": sortedUniqueStrings(expectedKeys),
 	})...)
 	if err != nil {
-		return nil, fmt.Errorf("%w: query missing team keys: %v", ErrReferenceDiscoveryUnavailable, err)
+		// The cause stays in the chain so isRetryableDiscoveryError can see a
+		// ClickHouse connectivity error and retry the run (CHAOS-4200).
+		return nil, fmt.Errorf("%w: query missing team keys: %w", ErrReferenceDiscoveryUnavailable, err)
 	}
 	defer func() { _ = rows.Close() }()
 	visible := make(map[string]bool, len(expectedKeys))
 	for rows.Next() {
 		var key string
 		if err := rows.Scan(&key); err != nil {
-			return nil, fmt.Errorf("%w: scan missing team keys: %v", ErrReferenceDiscoveryUnavailable, err)
+			return nil, fmt.Errorf("%w: scan missing team keys: %w", ErrReferenceDiscoveryUnavailable, err)
 		}
 		visible[key] = true
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%w: iterate missing team keys: %v", ErrReferenceDiscoveryUnavailable, err)
+		return nil, fmt.Errorf("%w: iterate missing team keys: %w", ErrReferenceDiscoveryUnavailable, err)
 	}
 	return missingFrom(expectedKeys, visible), nil
 }
@@ -96,19 +98,19 @@ SELECT sprint_id FROM (
 		"org_id": orgID, "provider": provider, "ids": sortedUniqueStrings(expectedIDs),
 	})...)
 	if err != nil {
-		return nil, fmt.Errorf("%w: query missing sprint ids: %v", ErrReferenceDiscoveryUnavailable, err)
+		return nil, fmt.Errorf("%w: query missing sprint ids: %w", ErrReferenceDiscoveryUnavailable, err)
 	}
 	defer func() { _ = rows.Close() }()
 	visible := make(map[string]bool, len(expectedIDs))
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("%w: scan missing sprint ids: %v", ErrReferenceDiscoveryUnavailable, err)
+			return nil, fmt.Errorf("%w: scan missing sprint ids: %w", ErrReferenceDiscoveryUnavailable, err)
 		}
 		visible[id] = true
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%w: iterate missing sprint ids: %v", ErrReferenceDiscoveryUnavailable, err)
+		return nil, fmt.Errorf("%w: iterate missing sprint ids: %w", ErrReferenceDiscoveryUnavailable, err)
 	}
 	return missingFrom(expectedIDs, visible), nil
 }

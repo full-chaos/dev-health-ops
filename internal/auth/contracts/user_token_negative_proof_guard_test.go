@@ -118,6 +118,7 @@ var negativeProofs = map[string]negativeProof{
 	"auth-service|POST /internal/v1/sessions/delegated/end [dev-health-auth-service @api]":                     {file: proofDelegated, test: delegatedTest},
 	"auth-service|POST /v1/authorize [dev-health-auth-service @api]":                                           {file: proofAuthorize, test: authorizeTest},
 	"auth-service|POST /v1/authorize:batch [dev-health-auth-service @api]":                                     {file: proofAuthorize, test: authorizeTest},
+	"auth-service|POST /v1/authorize:repositories [dev-health-auth-service @api]":                              {file: proofAuthorize, test: authorizeTest},
 	"auth-service|POST /internal/v1/acr/credential-events [dev-health-auth-service @internal]":                 {file: proofAcrEvents, test: acrEventsTest},
 	"auth-service|POST /v1/token/refresh [dev-health-auth-service @api]":                                       {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/refresh [dev-health-auth-service @api]":                                    {file: proofRefresh, test: refreshTest},
@@ -239,8 +240,8 @@ func TestNegativeProofCensus(t *testing.T) {
 	// CHAOS-12128 the principal access read row; CHAOS-12189 the session state row; CHAOS-10992 the organization onboard and create rows.
 	// CHAOS-10987 the two delegated session rows; CHAOS-12273 the four service account key rows; CHAOS-12275 the organization rename row; CHAOS-10841 the two authorize rows; CHAOS-12670 the eight read rows.
 	// CHAOS-13265 took query-api GET /buildinfo out: it accepts a platform admin's user access token. CHAOS-13378 the four user-admin rows.
-	// CHAOS-13526 the acr credential events row.
-	if len(derivedRows(t)) != 63 || proven != 62 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 63, 62, 1", len(derivedRows(t)), proven, exempt)
+	// CHAOS-13526 the acr credential events row. CHAOS-13542 the authorize repository listing row.
+	if len(derivedRows(t)) != 64 || proven != 63 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 64, 63, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

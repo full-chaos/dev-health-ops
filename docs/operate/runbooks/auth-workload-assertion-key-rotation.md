@@ -20,7 +20,9 @@ The operator changes the records with `auth-migrate workload-assertion-key-set` 
 
 Two places must agree. The registry row (this runbook) is the record. The ACR verifier reads the public keys from its own JWKS file
 (`ACR_WEB_ASSERTION_JWKS_FILE`), and ACR stops a key at the `retire_after` time that the JWKS entry carries
-(the acr verifier, function `keyInTimeBound`). The verbs never reach the JWKS file. Change the JWKS file in the same
+(the acr verifier, function `keyInTimeBound`). auth-service reads the same file from the same Secret
+(`AUTH_AUTHORIZE_WEB_APPROVER_JWKS_FILE`) to verify the web approver reference and applies the same `retire_after` rule, so
+each step below changes both readers at once. The verbs never reach the JWKS file. Change the JWKS file in the same
 steps, in the order below. The web side of the same rotation (the signer config) is in the web repository,
 the auth endpoint profiles guide, section "Rotating the web assertion key".
 

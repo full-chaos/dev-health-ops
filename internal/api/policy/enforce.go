@@ -179,7 +179,38 @@ func (e *Enforcer) decides(pattern string) (namespace string, ok bool) {
 	return row.Namespace, true
 }
 
+// decide is decideOnce plus one production-level (Info) log line for a request that serves another organization than the
+// token's, after the verdict: the route, the namespace, the organization the decision point was asked about, the organization
+// the request names and the outcome. The named organization is request input and is logged quoted, never used.
 func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerdict {
+	verdict := e.decideOnce(ctx, o)
+	if e == nil || o.orgID == "" || o.served.against(o.orgID) != servedOrgOther {
+		return verdict
+	}
+	outcome := ""
+	switch verdict {
+	case enforceAllow:
+		outcome = enforceOutcomeAllow
+	case enforceDeny, enforceDenyNoOrg:
+		outcome = enforceOutcomeDeny
+	case enforceUnavailable, enforceNoDecisionPoint:
+		outcome = enforceOutcomeErrorDeny
+	default:
+		return verdict
+	}
+	e.logger.InfoContext(ctx, "api enforcement: a request that serves another organization than the token's was decided on the token organization",
+		slog.String("route", o.pattern), slog.String("namespace", e.rows[o.pattern].Namespace),
+		slog.String("decided_org", strings.ToLower(o.orgID)), slog.String("served_org", logSafe(o.served.raw)), slog.String("outcome", outcome))
+	return verdict
+}
+
+// logSafe drops the line breaks of a request-supplied value so it cannot start a second log line.
+func logSafe(value string) string {
+	value = strings.ReplaceAll(value, "\n", "")
+	return strings.ReplaceAll(value, "\r", "")
+}
+
+func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforceVerdict {
 	if e == nil {
 		return enforceNotCovered
 	}
@@ -203,14 +234,18 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 		return enforceImpersonationRefused
 	}
-	// A request that serves another organization than the token's, or a token with none, keeps the legacy answer: the
-	// legacy guard judges the token organization at the route's level and the handler the served one. The decision point
-	// judges one organization, and neither alone is that answer (product rule 1, D6773).
+	// A request that serves another organization than the token's is judged as the legacy guard judges it: the decision
+	// point answers for the TOKEN organization, the route level's check, and the org scope and the handler keep admitting
+	// the served one. Neither verdict widens the other: an allow for the token organization never widens what the scope or the
+	// handler admit (product rule 1, D6773; CHAOS-10872 S2-parity). A token with no organization has none to judge: that
+	// class keeps the legacy answer (S1).
 	if o.served.against(o.orgID) == servedOrgOther {
-		countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedServedOrg)
-		e.logger.DebugContext(ctx, "api enforcement: the request serves another organization than the token's, the legacy answer stands",
-			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
-		return enforceLegacy
+		if o.orgID == "" {
+			countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedServedOrg)
+			e.logger.DebugContext(ctx, "api enforcement: the token has no organization and the request names one, the legacy answer stands",
+				slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+			return enforceLegacy
+		}
 	}
 	org := strings.ToLower(o.orgID)
 	if reason := unjudgedReason(o, row, org); reason != "" {

@@ -70,10 +70,10 @@ func testSetEnv() []string {
 }
 
 // planeEnv is the Python plane's settings the goldens were recorded under, as
-// far as a Go port reads them: the harness's fixed entries, the test's JWT key
-// (Options.JWTKey) and the test's PythonEnv last (a later entry wins).
+// far as a Go port reads them: the harness's fixed entries and the test's
+// PythonEnv last (a later entry wins).
 func planeEnv(options Options) []string {
-	return append([]string{"JWT_SECRET_KEY=" + options.JWTKey, "OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
+	return append([]string{"OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
 		"PGBOUNCER_TRANSACTION_MODE=true", "ENVIRONMENT=test"}, options.PythonEnv...)
 }
 

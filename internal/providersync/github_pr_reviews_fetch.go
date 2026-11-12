@@ -232,7 +232,7 @@ func (fetcher GitHubPullRequestReviewFetcher) fetchPage(
 		return nil, err
 	}
 	if len(envelope.Errors) > 0 {
-		return nil, providerfoundation.ErrGraphQLResponse
+		return nil, providerfoundation.ResponseGraphQL(response, providerfoundation.ErrGraphQLResponse)
 	}
 	if envelope.Data.Repository == nil {
 		return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)

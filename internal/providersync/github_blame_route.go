@@ -908,7 +908,7 @@ func fetchGitHubBlame(
 		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyRead)
 	}
 	if len(envelope.Errors) > 0 {
-		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
+		return nil, providerfoundation.ResponseGraphQL(response, providerfoundation.ErrNormalizationInvalid)
 	}
 	return envelope.Data.Repository.Object.Blame.Ranges, nil
 }

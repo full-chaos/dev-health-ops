@@ -21,14 +21,14 @@ const (
     id UUID, repo String, ref Nullable(String), created_at DateTime64(3, 'UTC'),
     settings Nullable(String), tags Nullable(String), last_synced DateTime64(3, 'UTC'),
     org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (id)`
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`
 	alertsDDL = `CREATE TABLE security_alerts (
     repo_id UUID, alert_id String, source String, severity Nullable(String), state Nullable(String),
     package_name Nullable(String), cve_id Nullable(String), url Nullable(String), title Nullable(String),
     description Nullable(String), created_at DateTime64(3, 'UTC'), fixed_at Nullable(DateTime64(3, 'UTC')),
     dismissed_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
     org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, alert_id)`
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, alert_id)`
 )
 
 const (
@@ -282,5 +282,60 @@ func TestRealClickHouse_AlertOrgMustMatchRepoOrg(t *testing.T) {
 	}
 	if len(ov.Trend) != 1 || ov.Trend[0].Opened != 1 || ov.Trend[0].Fixed != 0 {
 		t.Errorf("trend counted the foreign row: %#v", ov.Trend)
+	}
+}
+
+func TestRealClickHouse_DuplicateRowsDoNotChangeCounts(t *testing.T) {
+	for _, dup := range []string{"alert", "repo", "alert-newer-state"} {
+		t.Run(dup, func(t *testing.T) {
+			ctx, conn, client := startSecurityStore(t)
+			seedRepos(t, ctx, conn)
+			seedAlert(t, ctx, conn, "org-1", repoA, "A1", "dependabot", "critical", "open", "lodash", 3, nil, nil)
+			seedAlert(t, ctx, conn, "org-1", repoA, "A2", "dependabot", "high", "open", "axios", 4, nil, nil)
+			wantOpen := 2
+			switch dup {
+			case "alert":
+				if err := conn.Exec(ctx, `INSERT INTO security_alerts SELECT repo_id, alert_id, source, severity, state, package_name, cve_id, url, title, description, created_at, fixed_at, dismissed_at, last_synced + INTERVAL 1 SECOND, org_id FROM security_alerts WHERE alert_id = 'A1'`); err != nil {
+					t.Fatal(err)
+				}
+			case "repo":
+				if err := conn.Exec(ctx, fmt.Sprintf(`INSERT INTO repos (id, repo, created_at, last_synced, org_id) SELECT '%s', 'acme/web', now64(3), now64(3) + INTERVAL 1 SECOND, 'org-1'`, repoA)); err != nil {
+					t.Fatal(err)
+				}
+			case "alert-newer-state":
+				if err := conn.Exec(ctx, `INSERT INTO security_alerts SELECT repo_id, alert_id, source, severity, 'fixed', package_name, cve_id, url, title, description, created_at, now64(3), dismissed_at, last_synced + INTERVAL 1 SECOND, org_id FROM security_alerts WHERE alert_id = 'A1'`); err != nil {
+					t.Fatal(err)
+				}
+				wantOpen = 1
+			}
+			ov, err := ResolveOverview(ctx, client, "org-1", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ov.Kpis.OpenTotal != wantOpen {
+				t.Errorf("open_total %d want %d", ov.Kpis.OpenTotal, wantOpen)
+			}
+			total := 0
+			for _, b := range ov.SeverityBreakdown {
+				total += b.Count
+			}
+			if total != wantOpen || len(ov.TopRepos) != 1 || ov.TopRepos[0].Count != wantOpen {
+				t.Errorf("breakdown %#v top %#v want %d", ov.SeverityBreakdown, ov.TopRepos, wantOpen)
+			}
+			opened := 0
+			for _, p := range ov.Trend {
+				opened += p.Opened
+			}
+			if opened != 2 {
+				t.Errorf("trend opened %d want 2", opened)
+			}
+			conn1, err := ResolveAlerts(ctx, client, "org-1", nil, &model.SecurityPaginationInput{First: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(conn1.Edges) != 2 {
+				t.Errorf("alert nodes %d want 2", len(conn1.Edges))
+			}
+		})
 	}
 }

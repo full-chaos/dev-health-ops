@@ -127,9 +127,8 @@ func (s *Store) insertOrganization(ctx context.Context, orgID uuid.UUID, src org
 		},
 		Audit:  organizationAudit("auth.organization.projected", "organization_created", org),
 		Events: []audit.OutboxEvent{s.organizationEvent(ctx, org, "organization.created", src, true)},
-		// A slug held by another organization is refused here; the session
-		// route answers it 409 organization_conflict and logs it at ERROR.
-		Refusals: []error{errOrganizationProjectedConcurrently, ErrOrganizationSlugCollision},
+		// Only the lost race: a slug held by another organization stays ERROR.
+		Refusals: []error{errOrganizationProjectedConcurrently},
 	})
 	switch {
 	case err == nil:

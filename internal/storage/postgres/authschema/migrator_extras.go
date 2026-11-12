@@ -228,10 +228,10 @@ func migratorExtraStatements(ctx context.Context, tx pgx.Tx, migrator, runtimeRo
 		keyword, known := privilegeKeyword(row.Privilege)
 		reason := ""
 		switch {
-		case !known:
-			reason = "privilege this move does not know"
 		case row.Owner == migrator:
 			reason = "the migrator owns the table"
+		case !known:
+			reason = "privilege this move does not know"
 		case row.Grantor != row.Owner:
 			reason = "grantor is not the table owner"
 		case hasDependent(dependents, row):

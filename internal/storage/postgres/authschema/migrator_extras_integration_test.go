@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 func migratorPublicRows(t *testing.T, ctx context.Context, env *ownerMoveEnv) []MigratorPublicRow {
@@ -423,5 +425,132 @@ func TestOwnerMoveRestoreStatementsIgnoreTheMigratorsLeftovers(t *testing.T) {
 	}
 	if report.ExtrasRevoked != 0 || report.ExtrasKept != 0 || len(report.ExtraLines) != 0 {
 		t.Errorf("restore counted extras: %+v", report)
+	}
+}
+
+func keepOrRevokeLines(report OwnerMoveReport, table string) (revoke, keep []string) {
+	for _, line := range report.ExtraLines {
+		if !strings.Contains(line, "|"+table+"|") && !strings.HasPrefix(line, "revoke|"+table+"|") && !strings.HasPrefix(line, "keep|"+table+"|") {
+			continue
+		}
+		if strings.HasPrefix(line, "revoke|") {
+			revoke = append(revoke, line)
+		} else {
+			keep = append(keep, line)
+		}
+	}
+	return revoke, keep
+}
+
+// Skip rule: a leftover granted by a role that is not the table owner is kept and counted, never revoked.
+func TestMigratorLeftoverGrantedByANonOwnerIsKeptAndCounted(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	env := newOwnerMoveEnv(t, ctx, false)
+	env.move(t, ctx, env.moveOptions(true))
+	other, err := containers.RoleName("om_grantor", env.instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherQ := Quote(mustValidatedIdentifier(other))
+	migrator := Quote(mustValidatedIdentifier(env.migratorRole))
+	if _, err := env.admin.Exec(ctx, "CREATE ROLE "+otherQ+" NOLOGIN"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(env.admin, other, t.Logf) })
+	if _, err := env.old.Exec(ctx, `GRANT SELECT (user_id) ON public.refresh_tokens TO `+otherQ+` WITH GRANT OPTION`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := env.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{"SET LOCAL ROLE " + otherQ, `GRANT SELECT (user_id) ON public.refresh_tokens TO ` + migrator} {
+		if _, err := tx.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	report := env.move(t, ctx, env.moveOptions(true))
+	if report.ExtrasRevoked != 0 || report.ExtrasKept != 1 {
+		t.Fatalf("revoked %d kept %d, want 0 and 1: %v", report.ExtrasRevoked, report.ExtrasKept, report.ExtraLines)
+	}
+	if line := report.ExtraLines[0]; !strings.HasPrefix(line, "keep|refresh_tokens|SELECT|user_id|false|"+other+"|grantor is not the table owner") {
+		t.Errorf("line = %q", line)
+	}
+	if got := migratorRowsOutsideTheSet(t, ctx, env); len(got) != 1 {
+		t.Errorf("outside the set = %v, want the one kept row", got)
+	}
+}
+
+// Skip rule: a table the migrator owns is skipped (its own implicit privileges are not leftovers).
+func TestMigratorLeftoverOnATableTheMigratorOwnsIsSkippedAndCounted(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	env := newOwnerMoveEnv(t, ctx, false)
+	env.move(t, ctx, env.moveOptions(true))
+	if _, err := env.admin.Exec(ctx, `ALTER TABLE public.refresh_tokens OWNER TO `+Quote(mustValidatedIdentifier(env.migratorRole))); err != nil {
+		t.Fatal(err)
+	}
+	report := env.move(t, ctx, env.moveOptions(true))
+	revoke, keep := keepOrRevokeLines(report, "refresh_tokens")
+	if len(revoke) != 0 || len(keep) == 0 || report.ExtrasRevoked != 0 {
+		t.Fatalf("revoked %d, refresh_tokens lines revoke %v keep %v", report.ExtrasRevoked, revoke, keep)
+	}
+	for _, line := range keep {
+		if !strings.HasSuffix(line, "|the migrator owns the table") {
+			t.Errorf("line %q names the wrong reason", line)
+		}
+	}
+	var owner string
+	if err := env.admin.QueryRow(ctx, `SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'public.refresh_tokens'::regclass`).Scan(&owner); err != nil || owner != env.migratorRole {
+		t.Errorf("owner = %q (%v), want the migrator", owner, err)
+	}
+}
+
+// Skip rule: a table that is absent has no row to list and no statement to send.
+func TestMigratorLeftoverRevokeSkipsAnAbsentTable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	env := newOwnerMoveEnv(t, ctx, false)
+	env.move(t, ctx, env.moveOptions(true))
+	seedMigratorLeftovers(t, ctx, env)
+	if _, err := env.admin.Exec(ctx, `DROP TABLE public.refresh_tokens CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	report := env.move(t, ctx, env.moveOptions(true))
+	if report.ExtrasRevoked != 1 || report.ExtrasKept != 0 {
+		t.Errorf("revoked %d kept %d, want only the users leftover: %v", report.ExtrasRevoked, report.ExtrasKept, report.ExtraLines)
+	}
+}
+
+// First move of a database that holds the leftovers: the runtime role holds INSERT(users.is_superuser) from the owner, the
+// move re-grants it as the migrator in the same transaction, so the migrator's leftover is kept this run (a plain
+// REVOKE would be refused) and the rest goes.
+func TestFirstMoveWithLeftoversAndARuntimeRowRegrantedInTheSameRunKeepsThatLeftover(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	env := newOwnerMoveEnv(t, ctx, false)
+	seedMigratorLeftovers(t, ctx, env)
+	runtime := Quote(mustValidatedIdentifier(env.runtimeRole))
+	if _, err := env.old.Exec(ctx, `GRANT INSERT (is_superuser) ON public.users TO `+runtime); err != nil {
+		t.Fatal(err)
+	}
+	report := env.move(t, ctx, env.moveOptions(true))
+	if report.ExtrasRevoked != 8 || report.ExtrasKept != 1 {
+		t.Fatalf("revoked %d kept %d, want 8 and 1: %v", report.ExtrasRevoked, report.ExtrasKept, report.ExtraLines)
+	}
+	_, keep := keepOrRevokeLines(report, "users")
+	if len(keep) != 1 || !strings.HasPrefix(keep[0], "keep|users|INSERT|is_superuser|true|") || !strings.HasSuffix(keep[0], "|another role holds a privilege the migrator granted") {
+		t.Errorf("keep lines = %v", keep)
+	}
+	var held bool
+	if err := env.admin.QueryRow(ctx, `SELECT has_column_privilege($1, 'public.users', 'is_superuser', 'INSERT')`, env.runtimeRole).Scan(&held); err != nil || !held {
+		t.Errorf("the runtime role lost INSERT(is_superuser) (%v, %v)", held, err)
+	}
+	if got := migratorRowsOutsideTheSet(t, ctx, env); len(got) != 1 || got[0] != "users|INSERT|is_superuser" {
+		t.Errorf("outside the set = %v, want only users|INSERT|is_superuser", got)
 	}
 }

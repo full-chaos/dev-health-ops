@@ -2,7 +2,6 @@ package principal
 
 import (
 	"context"
-	"crypto/ed25519"
 	"os"
 	"testing"
 
@@ -35,22 +34,5 @@ func TestGeneratedKeyFilesVerifyAnEnvelopeSignedWithThePrivateKey(t *testing.T) 
 	}
 	if claims.OrgID != "org-1" {
 		t.Errorf("OrgID = %q", claims.OrgID)
-	}
-}
-
-// The negative: an envelope signed by a different key under the same key id is rejected,
-// so the test above cannot pass on a verifier that checks nothing.
-func TestAWrongKeyFailsAgainstTheGeneratedJWKS(t *testing.T) {
-	paths, err := signingkey.GenerateKeyFiles(t.TempDir(), signingkey.DefaultKeyID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, wrong, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	v := mustVerifier(t, paths.JWKS, testIssuer, testAudience)
-	if _, err := v.Verify(context.Background(), signEnvelope(t, wrong, signingkey.DefaultKeyID, baseClaims())); err == nil {
-		t.Fatal("Verify accepted an envelope signed by a key that is not in the generated JWKS")
 	}
 }

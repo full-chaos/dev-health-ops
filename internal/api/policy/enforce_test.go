@@ -1078,7 +1078,9 @@ func TestRollbackCannotReactivateRevokedAccess(t *testing.T) {
 
 // The decision point judges user principals only. A route whose profile row names an action is enforceable, so its
 // row may accept the two user access-token classes and nothing else: a row that gains a service-account, workload or
-// push class must keep its namespace off until the decision point judges that kind.
+// push class must keep its namespace off until the decision point judges that kind. The one other class a mapped row
+// may carry is org_context_header: it names the X-Org-Id request header the telemetry rows read, travels with the user
+// token, is no credential, and the decision point never reads it (the platform question carries no organization).
 func TestEveryMappedRowAcceptsOnlyUserTokenClasses(t *testing.T) {
 	var document struct {
 		Rows []struct {
@@ -1096,7 +1098,7 @@ func TestEveryMappedRowAcceptsOnlyUserTokenClasses(t *testing.T) {
 		}
 		mapped++
 		for _, class := range row.Classes {
-			if class != "ops_access_token_hs256" && class != "user_access_token" {
+			if class != "ops_access_token_hs256" && class != "user_access_token" && class != "org_context_header" {
 				t.Errorf("%s %s (%s) accepts %s: keep the %s namespace off, or teach the decision point that principal kind", row.Method, row.Route, row.Action, class, strings.SplitN(row.Action, ".", 2)[0])
 			}
 		}

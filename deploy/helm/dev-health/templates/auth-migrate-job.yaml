@@ -66,6 +66,10 @@ spec:
             - name: AUTH_PLATFORM_ROLES_OWNED
               value: "true"
             {{- end }}
+            {{- if eq (include "dev-health.ssoProvidersOwned" .) "true" }}
+            - name: AUTH_SSO_PROVIDERS_OWNED
+              value: "true"
+            {{- end }}
             {{- $readers := concat $m.sessionReaderRoles (compact (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi)))) | uniq }}
             {{- with $readers }}
             - name: AUTH_SESSION_READER_ROLES

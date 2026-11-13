@@ -237,6 +237,11 @@ func execute(
 		return 1
 	}
 
+	ssoProvidersOwned, err := authconfig.SSOProvidersOwnedFromLookup(lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
 	platformRolesOwned, err := rule.OwnedFromLookup(lookup)
 	if err != nil {
 		fmt.Fprintf(stderr, "configuration error: %v\n", err)
@@ -299,6 +304,7 @@ func execute(
 			RepoIdentityCallerRoles:  repoIdentityCallers,
 			UsersOwned:               usersOwned,
 			PlatformRolesOwned:       platformRolesOwned,
+			SSOProvidersOwned:        ssoProvidersOwned,
 			SchemaOwnerRole:          ownerRole,
 			AcknowledgeNarrowing:     strings.TrimSpace(*ackNarrowing),
 			DeferNarrowing:           *deferNarrowing,
@@ -324,6 +330,7 @@ func execute(
 		RepoIdentityCallerRoles:  repoIdentityCallers,
 		UsersOwned:               usersOwned,
 		PlatformRolesOwned:       platformRolesOwned,
+		SSOProvidersOwned:        ssoProvidersOwned,
 		SchemaOwnerRole:          ownerRole,
 
 		AcknowledgeNarrowing: strings.TrimSpace(*ackNarrowing),

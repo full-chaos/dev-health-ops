@@ -15,6 +15,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
 )
 
+// serviceSessionIssuerClass is the endpoint-profile credential class of the retired session issuer credential
+// (svc_authsess_). No route takes it; the cells use it as a wrong class.
+const serviceSessionIssuerClass = "internal_svc_authsess_token"
+
 // The routes are built only from a binary whose embedded endpoint-profile
 // document has a row, accepting the go-api workload token, for each of
 // them.

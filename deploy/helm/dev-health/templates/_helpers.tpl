@@ -136,20 +136,6 @@ Secret name — either the one we create or an external one
 {{- end }}
 
 {{/*
-CHAOS-11217: the Secret that holds AUTH_SESSION_ISSUE_TOKEN, the credential go-api
-presents to auth-service's session issue route. goApi.sessionIssue.secretName names a
-dedicated, operator-created Secret; empty keeps the shared Secret. Only go-api reads it.
-*/}}
-{{- define "dev-health.sessionIssueSecretName" -}}
-{{- $issue := default dict .Values.goApi.sessionIssue }}
-{{- if $issue.secretName }}
-{{- $issue.secretName }}
-{{- else }}
-{{- include "dev-health.secretName" . }}
-{{- end }}
-{{- end }}
-
-{{/*
 CHAOS-10446: the Secret that holds JWT_SECRET_KEY, the HS256 access-token key. It is
 its own Secret so the shared Secret the worker groups envFrom never carries it.
 hs256Secret.externalSecretName names an operator-managed one; otherwise the chart
@@ -819,7 +805,7 @@ Every env name the chart renders for the go-api container, as a JSON list. goApi
 any case, for the same reason as dev-health.authServiceEnvNames. auth_phase_test.go walks the rendered names. The DSN name is appended, not listed, so the worker DSN list keeps the only listed spelling (a chartgates planted defect edits it).
 */}}
 {{- define "dev-health.goApiEnvNames" -}}
-{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "GO_API_AUTHZ_ENFORCE" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
+{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "GO_API_AUTHZ_ENFORCE" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_CREDENTIAL" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
 {{- $names = (append $names "API_DATABASE_URI") }}{{- toJson $names -}}
 {{- end -}}
 
@@ -847,7 +833,7 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 - Class rule: every Secret key the auth values read is a valid Kubernetes Secret key (dev-health.validSecretKey):
   authService.database.secretKey, authService.migrate.secretKey, authService.signingKey.secretKey,
   authService.valkey.secretKey, authService.sessionKeys.successor.secretKey,
-  authService.sessionKeys.loginLockout.secretKey, goApi.sessionIssue.secretKey and each set
+  authService.sessionKeys.loginLockout.secretKey and each set
   authService.keySet.keys[].secretKey.
 - Phase 2 preconditions (both session readers, the successor key): query-api, the migrate Job and the River hooks
   carry AUTH_PROXY_SESSIONS from phase 2 even when go-api is off.
@@ -857,7 +843,7 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{- define "dev-health.authValidate" -}}
 {{- $a := .Values.authService -}}
 {{- $session := default dict $a.sessionKeys -}}
-{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "authService.mail.keys.provider" (default dict (default dict $a.mail).keys).provider) (list "authService.mail.keys.fromAddress" (default dict (default dict $a.mail).keys).fromAddress) (list "authService.mail.keys.apiKey" (default dict (default dict $a.mail).keys).apiKey) (list "authService.mail.keys.resendApiKey" (default dict (default dict $a.mail).keys).resendApiKey) (list "authService.mail.keys.appBaseURL" (default dict (default dict $a.mail).keys).appBaseURL) (list "goApi.sessionIssue.secretKey" (default dict .Values.goApi.sessionIssue).secretKey) -}}
+{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "authService.mail.keys.provider" (default dict (default dict $a.mail).keys).provider) (list "authService.mail.keys.fromAddress" (default dict (default dict $a.mail).keys).fromAddress) (list "authService.mail.keys.apiKey" (default dict (default dict $a.mail).keys).apiKey) (list "authService.mail.keys.resendApiKey" (default dict (default dict $a.mail).keys).resendApiKey) (list "authService.mail.keys.appBaseURL" (default dict (default dict $a.mail).keys).appBaseURL) -}}
 {{- range $keys }}
 {{- if not (include "dev-health.validSecretKey" (index . 1)) }}{{- fail (printf "%s must be a Secret key: letters, digits, '-', '_' and '.', at most 253 characters, not '.', '..' or a name that starts with '..'" (index . 0)) }}{{- end }}
 {{- end }}

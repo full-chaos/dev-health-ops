@@ -926,6 +926,17 @@ true
 {{- end -}}
 
 {{/*
+"true" when authService.ssoProvidersOwned is on, else "". The one read of the switch: the auth-migrate and auth-grants Jobs
+render AUTH_SSO_PROVIDERS_OWNED from it, and the grants pass then gives the auth runtime role the column grants (and the
+DELETE) the internal SSO provider routes write public.sso_providers with. Off (the default) the role holds none of them.
+*/}}
+{{- define "dev-health.ssoProvidersOwned" -}}
+{{- $v := .Values.authService.ssoProvidersOwned -}}
+{{- if not (kindIs "bool" $v) }}{{- fail "authService.ssoProvidersOwned must be true or false" }}{{- end -}}
+{{- if $v -}}true{{- end -}}
+{{- end -}}
+
+{{/*
 The go-api enforcement list as one comma list, "" when empty (authService.enforce.goApi). A non-empty list needs
 AUTH_PROXY_URL on go-api, so it is refused unless go-api reaches auth-service. Rendered as GO_API_AUTHZ_ENFORCE.
 */}}

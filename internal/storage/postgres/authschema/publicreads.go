@@ -720,6 +720,9 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		if schema == publicSchema && (kind == "r" || kind == "p") && isSSOProviderWriteColumn(table, privilege, column) {
 			continue
 		}
+		if options.SSOProvidersOwned && schema == publicSchema && (kind == "r" || kind == "p") && isSSOProviderOwnColumn(table, privilege, column) {
+			continue
+		}
 		if schema == publicSchema && (kind == "r" || kind == "p") && isImpersonationWriteColumn(options.UsersOwned, table, privilege, column) {
 			continue
 		}
@@ -751,6 +754,10 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err != nil {
 		return nil, err
 	}
-	return append(append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), providerWriteMissing...),
-		impersonationMissing...), nil
+	providerOwnMissing, err := ssoProviderOwnMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), providerWriteMissing...),
+		impersonationMissing...), providerOwnMissing...), nil
 }

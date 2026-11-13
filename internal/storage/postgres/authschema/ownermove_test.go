@@ -49,7 +49,7 @@ func emittedPublicGrants(t *testing.T) map[string]bool {
 	t.Helper()
 	ctx := context.Background()
 	logger := slog.New(slog.DiscardHandler)
-	options := Options{Schema: "auth", RuntimeRole: "rt", UsersOwned: true, RequirePublicTables: true}
+	options := Options{Schema: "auth", RuntimeRole: "rt", UsersOwned: true, SSOProvidersOwned: true, RequirePublicTables: true}
 	builders := map[string]func() ([]string, error){
 		"publicRead": func() ([]string, error) { return publicReadStatements(ctx, presentQuerier{}, options, logger) },
 		"usersWrite": func() ([]string, error) { return usersWriteStatements(ctx, presentQuerier{}, options, logger) },
@@ -61,6 +61,7 @@ func emittedPublicGrants(t *testing.T) map[string]bool {
 		"invite":        func() ([]string, error) { return inviteWriteStatements(ctx, presentQuerier{}, options, logger) },
 		"audit":         func() ([]string, error) { return publicAuditWriteStatements(ctx, presentQuerier{}, options, logger) },
 		"ssoProviderUp": func() ([]string, error) { return ssoProviderWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"ssoProviderOwn": func() ([]string, error) { return ssoProviderOwnStatements(ctx, presentQuerier{}, options, logger) },
 		"impersonation": func() ([]string, error) { return impersonationWriteStatements(ctx, presentQuerier{}, options, logger) },
 	}
 	emitted := map[string]bool{}

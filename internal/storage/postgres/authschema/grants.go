@@ -309,6 +309,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		return err
 	}
 	publicStatements = append(publicStatements, providerWrite...)
+	providerOwn, err := ssoProviderOwnStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, providerOwn...)
 	impersonationWrite, err := impersonationWriteStatements(ctx, conn, options, logger)
 	if err != nil {
 		return err

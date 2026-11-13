@@ -30,12 +30,12 @@ type PublicPrivilege struct {
 // the one list the migrator's own authority there is cut from. A unit test holds it equal to what the grant builders
 // emit, both ways.
 func PublicPrivilegeSet() []PublicPrivilege {
-	return publicPrivilegeSetFor(true)
+	return publicPrivilegeSetFor(true, true)
 }
 
 // publicPrivilegeSetFor is the part of PublicPrivilegeSet the grants pass gives under the users-owned switch: with it
 // off, only the grants no switch gates remain.
-func publicPrivilegeSetFor(usersOwned bool) []PublicPrivilege {
+func publicPrivilegeSetFor(usersOwned, ssoProvidersOwned bool) []PublicPrivilege {
 	type key struct{ table, privilege string }
 	columns := map[key][]string{}
 	tableLevel := map[key]bool{}
@@ -72,6 +72,15 @@ func publicPrivilegeSetFor(usersOwned bool) []PublicPrivilege {
 	}
 	add(publicAuditTable, "INSERT", PublicAuditWriteColumns())
 	add(ssoProvidersTable, "UPDATE", SSOProviderWriteColumns())
+	if ssoProvidersOwned {
+		own := SSOProviderOwn()
+		add(ssoProvidersTable, "INSERT", own.Insert)
+		add(ssoProvidersTable, "UPDATE", own.Update)
+		add(ssoProvidersTable, "SELECT", own.Select)
+		if own.Delete {
+			tableLevel[key{ssoProvidersTable, "DELETE"}] = true
+		}
+	}
 	add(impersonationTable, "UPDATE", ImpersonationEndColumns())
 	if usersOwned {
 		add(impersonationTable, "INSERT", ImpersonationStartColumns())

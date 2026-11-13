@@ -68,6 +68,10 @@ spec:
             - name: AUTH_PLATFORM_ROLES_OWNED
               value: "true"
             {{- end }}
+            {{- if eq (include "dev-health.ssoProvidersOwned" .) "true" }}
+            - name: AUTH_SSO_PROVIDERS_OWNED
+              value: "true"
+            {{- end }}
             {{- with $m.sessionReaderRoles }}
             - name: AUTH_SESSION_READER_ROLES
               value: {{ join "," . | quote }}

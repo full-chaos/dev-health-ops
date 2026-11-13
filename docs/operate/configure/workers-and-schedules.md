@@ -413,7 +413,7 @@ there, and the run after it reads the rest. Job History
 therefore shows fewer scheduled runs for a slow configuration, each covering
 the time since the previous one. A skipped tick adds no row to Job History.
 
-The scheduler resumes; it does not backfill (CHAOS-3954). After a scheduler
+The scheduler resumes; it does not backfill. After a scheduler
 stop, the first missed cron instant starts late and the next run stands for the
 newest due instant. The instants between them, and an instant a skipped tick
 held back, get no occurrence and no run: a later run covers their time. Running every

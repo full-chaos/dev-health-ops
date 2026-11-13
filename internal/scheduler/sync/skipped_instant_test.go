@@ -249,7 +249,8 @@ func TestSchedulerDownAcrossInstantsCountsAndNamesTheUnmintedInstants(t *testing
 func TestOpenRunSkipIsOneLinePerSkippedInstantNotPerPoll(t *testing.T) {
 	createdAt := at("2026-08-01T00:00:00Z")
 	previousSync := at("2026-08-19T21:10:00Z")
-	marker := at("2026-08-19T23:00:00Z")
+	start := at("2026-08-19T23:00:00Z")
+	marker := start
 	ledger := newLedgerCoordinator()
 	ledger.minted[at("2026-08-19T22:00:00Z")] = true
 	skips := 0
@@ -263,7 +264,7 @@ func TestOpenRunSkipIsOneLinePerSkippedInstantNotPerPoll(t *testing.T) {
 			openRuns: openScheduledRuns{blocking: 1, blockingOccurrenceID: "sha256:run-2200", blockingOpenSeconds: 3600},
 		}
 		result, err := mutationRepository(transaction).HandoffDueResult(
-			context.Background(), marker.Add(time.Duration(second)*time.Second), 4, ledger,
+			context.Background(), start.Add(time.Duration(second)*time.Second), 4, ledger,
 		)
 		if err != nil {
 			t.Fatal(err)

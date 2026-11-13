@@ -287,7 +287,8 @@ func TestGoQualityLegsNeverSkipOnDocsOnly(t *testing.T) {
 		}
 	}
 	leg := asMap(jobsOf(loadWf(t, root, "go-quality.yml"))["go-quality-leg"])
-	if _, has := leg["if"]; has {
+	// The one allowed condition: an unlabelled draft pull request starts no leg (the fan-in reports it; go_quality_leg_selection_test pins both).
+	if got, has := leg["if"]; has && asString(got) != "needs.go-quality-plan.outputs.draft_skip != 'true'" {
 		t.Errorf("go-quality-leg has a job-level if %q: the legs must always report", asString(leg["if"]))
 	}
 }

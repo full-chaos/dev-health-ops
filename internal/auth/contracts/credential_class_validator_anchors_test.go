@@ -78,7 +78,7 @@ func TestTheValidatorAnchorCheckRefusesEachGap(t *testing.T) {
 		t.Fatalf("a Go-anchored validator must pass: %v", f)
 	}
 	for name, validator := range map[string]string{
-		"a null anchor":           `{"anchor":null,"description":"Decide refuses it"}`,
+		"a null anchor":           `{"anchor":null,"description":"Decide refuses it","earlier_auth_gate":false,"foreign_class_validator":false}`,
 		"an ops anchor not in Go": `{"anchor":{"repo":"ops","path":"docs/a.md","line":1},"description":"x","earlier_auth_gate":false,"foreign_class_validator":false}`,
 		"an acr anchor not in Go": `{"anchor":{"repo":"acr","path":"a.py","line":1},"description":"x","earlier_auth_gate":false,"foreign_class_validator":false}`,
 		"a web anchor not in TS":  `{"anchor":{"repo":"web","path":"src/a.go","line":1},"description":"x","earlier_auth_gate":false,"foreign_class_validator":false}`,

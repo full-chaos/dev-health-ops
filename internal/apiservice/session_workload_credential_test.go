@@ -286,7 +286,7 @@ func TestUnsetAndWorkloadSendTheIssueGolden(t *testing.T) {
 	for name, selector := range map[string]map[string]string{"unset": {}, "workload": {EnvAuthSessionIssueCredential: "workload"}} {
 		s := newCredServer(t)
 		token := s.tokenAnswer(t)
-		env := workloadEnv(t, map[string]string{sessionissue.EnvToken: testIssueToken(t)})
+		env := workloadEnv(t, map[string]string{retiredIssueTokenEnv: testIssueToken(t)})
 		for k, v := range selector {
 			env[k] = v
 		}
@@ -336,7 +336,7 @@ func (s *credServer) tokenAnswer(t *testing.T) string {
 func TestWorkloadSessionSelectorSendsOnlyTheWorkloadToken(t *testing.T) {
 	s := newCredServer(t)
 	token := s.tokenAnswer(t)
-	env := workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: "workload", sessionissue.EnvToken: testIssueToken(t)})
+	env := workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: "workload", retiredIssueTokenEnv: testIssueToken(t)})
 	cfg := sessionsOn(t, s.URL)
 	_, session, err := newCredentials(cfg, issueEnv(env))
 	if err != nil {
@@ -372,7 +372,7 @@ func TestWorkloadSessionSelectorIgnoresThePlaceholderSessionToken(t *testing.T) 
 	const placeholder = "unused-go-api-signs-in-with-its-workload-token"
 	s := newCredServer(t)
 	token := s.tokenAnswer(t)
-	env := workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: "workload", sessionissue.EnvToken: placeholder})
+	env := workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: "workload", retiredIssueTokenEnv: placeholder})
 	cfg := sessionsOn(t, s.URL)
 	_, session, err := newCredentials(cfg, issueEnv(env))
 	if err != nil {
@@ -402,7 +402,7 @@ func TestWorkloadSessionSelectorIgnoresThePlaceholderSessionToken(t *testing.T) 
 func TestWorkloadSessionSelectorExchangeFailureSendsNothing(t *testing.T) {
 	s := newCredServer(t)
 	s.exchange = func() (int, string) { return http.StatusServiceUnavailable, `{}` }
-	env := workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: "workload", sessionissue.EnvToken: testIssueToken(t)})
+	env := workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: "workload", retiredIssueTokenEnv: testIssueToken(t)})
 	cfg := sessionsOn(t, s.URL)
 	_, session, _ := newCredentials(cfg, issueEnv(env))
 	issuer, err := sessionIssuer(cfg, session)

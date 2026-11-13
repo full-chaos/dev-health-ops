@@ -28,8 +28,8 @@ var riverHook = []string{
 	"--set", "migrations.hook.riverMigrate.image=ghcr.io/full-chaos/dho:sha-0123456789ab",
 }
 
-// AUTH_PROXY_SESSIONS on: go-api presents the auth-session-issuer credential
-// from the release Secret, and every step that applies the api role's River
+// AUTH_PROXY_SESSIONS on: go-api presents its workload credential on the
+// session issue route, and every step that applies the api role's River
 // grants (the migrate Job, the River hook) reads the same flag, so the
 // refresh_tokens REVOKE follows it.
 func TestSessionsOnWiresTheIssueCredentialAndTheGrantFlag(t *testing.T) {
@@ -39,13 +39,9 @@ func TestSessionsOnWiresTheIssueCredentialAndTheGrantFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
 	}
-	token := sessionsContainerEnv(t, docs, "Deployment", "a-dev-health-go-api")["AUTH_SESSION_ISSUE_TOKEN"]
-	if token == nil {
-		t.Fatal("go-api has no AUTH_SESSION_ISSUE_TOKEN with sessions on")
-	}
-	if at(token, "value") != nil || at(token, "valueFrom", "secretKeyRef", "key") != "AUTH_SESSION_ISSUE_TOKEN" ||
-		at(token, "valueFrom", "secretKeyRef", "name") != "a-dev-health-secrets" || at(token, "valueFrom", "secretKeyRef", "optional") != nil {
-		t.Fatalf("AUTH_SESSION_ISSUE_TOKEN = %v, want a required secretKeyRef to the release Secret", token)
+	cred := sessionsContainerEnv(t, docs, "Deployment", "a-dev-health-go-api")["AUTH_SESSION_ISSUE_CREDENTIAL"]
+	if at(cred, "value") != "workload" || at(cred, "valueFrom") != nil {
+		t.Fatalf("AUTH_SESSION_ISSUE_CREDENTIAL = %v, want the literal workload", cred)
 	}
 	for _, job := range []string{"a-dev-health-migrate", "a-dev-health-river-migrate"} {
 		flag := sessionsContainerEnv(t, docs, "Job", job)["AUTH_PROXY_SESSIONS"]
@@ -62,8 +58,8 @@ func TestSessionsOffRendersNoIssueCredentialOrGrantFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
 	}
-	if token := sessionsContainerEnv(t, docs, "Deployment", "a-dev-health-go-api")["AUTH_SESSION_ISSUE_TOKEN"]; token != nil {
-		t.Fatalf("go-api reads AUTH_SESSION_ISSUE_TOKEN with sessions off: %v", token)
+	if cred := sessionsContainerEnv(t, docs, "Deployment", "a-dev-health-go-api")["AUTH_SESSION_ISSUE_CREDENTIAL"]; cred != nil {
+		t.Fatalf("go-api has a session issue credential with sessions off: %v", cred)
 	}
 	for _, job := range []string{"a-dev-health-migrate", "a-dev-health-river-migrate"} {
 		if flag := sessionsContainerEnv(t, docs, "Job", job)["AUTH_PROXY_SESSIONS"]; flag != nil {

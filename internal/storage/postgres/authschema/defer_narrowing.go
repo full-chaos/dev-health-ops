@@ -14,15 +14,18 @@ import (
 // owned auth-service pods still serve while its pre-upgrade hooks run, and each
 // of their public writes (the sign-in stamp, a register, a password change)
 // needs the users-owned grants: revoking them there answers 500 (SQLSTATE
-// 42501). With the acknowledgement, a deferred run keeps every lost grant that
-// the users-owned switch gives (usersOwnedPublicGrant) and narrows only the
+// 42501). The same holds for the SSO provider routes and their grants
+// (SSOProviderOwn, AUTH_SSO_PROVIDERS_OWNED). With the acknowledgement, a
+// deferred run keeps every lost grant that the users-owned switch or the SSO
+// providers switch gives (usersOwnedPublicGrant) and narrows only the
 // rest; a later release without the deferral narrows them with its own
 // acknowledgement, after no owned pod is left.
 
 // usersOwnedPublicGrant reports whether g, a direct grant of the runtime role
 // on a public table (g.Object is the bare table name), is one the users-owned
 // switch gives: UsersWriteGrant, RegisterOrganizationGrants or the delegated
-// Start's. A grant held WITH GRANT OPTION never is.
+// Start's; or one the SSO providers switch gives: SSOProviderOwn. A grant held
+// WITH GRANT OPTION never is.
 func usersOwnedPublicGrant(g GrantRecord) bool {
 	if g.Grantable {
 		return false

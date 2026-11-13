@@ -301,6 +301,7 @@ type provFixture struct {
 	reads                                       *fakeReads
 	grantReads                                  *fakeGrantReads
 	usersAdmin                                  *fakeUsersAdmin
+	sso                                         *fakeSSOProviders
 	roles                                       *fakePlatformRoles
 	reader                                      *sdkmetric.ManualReader
 	usersReader                                 *sdkmetric.ManualReader // a reader binds to one provider: the user-admin routes' own
@@ -407,8 +408,16 @@ func buildProvFixture(t *testing.T, profileRows []byte, w *workloadIssueFixture)
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.sso = &fakeSSOProviders{}
+	ssoRoutes, err := SSOProviderRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs, ProfileRows: profileRows,
+		SSOProviderStores: SSOProviderStores{SSOProviders: f.sso, SSOSealer: fakeSealer{}}, Workload: workload,
+		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewManualReader())).Meter("test")})
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.mux = http.NewServeMux()
-	for _, route := range append(append(routes, readRoutes...), usersRoutes...) {
+	for _, route := range append(append(append(routes, readRoutes...), usersRoutes...), ssoRoutes...) {
 		f.mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
 	}
 	return f

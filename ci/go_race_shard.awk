@@ -33,8 +33,23 @@
 # serial=<key> serialx=<factor> (CHAOS-13422): the package check_go.sh runs alone after the shard's other packages. Its whole wall
 # adds to the shard, while the other packages overlap (sum / factor), so its weight counts factor times. A pinned serial package is
 # placed after the other pins.
+# chain=1 (CHAOS-13664, the test legs only): check_go.sh runs a test shard's split-package jobs one after another (a chain) beside one
+# go test of its other packages (the rest, which overlap about 2x), then the serial package alone, so a leg's wall is about
+# max(chain, rest / 2) + serial. The split parts and the serial package are placed first, heaviest first, each on the shard of the
+# least chain + serial load. Then each other package, heaviest first: among the shards it does not lift above the highest
+# modelled wall so far, the one of the least rest (so the rest spreads under the chains); when it lifts every shard, the shard of
+# the least wall after it (ties: the least rest). Ties: the lowest index.
+# A "<key>#<part>" weights row gives that part of a split package its own weight (else
+# ceil(weight / PARTS)); serialx is not used. Pins: pinned packages first (rest rule), then a pinned serial one (chain rule). solo is
+# refused. Without chain, nothing above changes the split. Still a partition.
+# wall2(s, x): twice the modelled wall of shard s with x more rest weight: max(2 * chain, rest + x) + 2 * serial.
+function wall2(s, x,    r) {
+  r = rl[s] + x
+  return (2 * cl[s] > r ? 2 * cl[s] : r) + 2 * sl[s]
+}
 BEGIN {
   FS = "\t"
+  if (chain && solo != "") { print "go_race_shard.awk: chain=1 takes no solo file" > "/dev/stderr"; bad = 1; exit 2 }
   if (weights != "") {
     while ((getline line < weights) > 0) {
       if (line ~ /^[[:space:]]*(#|$)/) continue
@@ -88,7 +103,8 @@ BEGIN {
     nparts[n] = np
     weight[n] = (key in w) ? w[key] : defw + 0
     if (np > 1) weight[n] = int((weight[n] + np - 1) / np)
-    if (serial != "" && key == serial && serialx + 0 > 0) weight[n] = weight[n] * serialx
+    if (chain && np > 1 && ((key "#" pp) in w)) weight[n] = w[key "#" pp]
+    if (!chain && serial != "" && key == serial && serialx + 0 > 0) weight[n] = weight[n] * serialx
     serialPkg[n] = (serial != "" && key == serial) ? 1 : 0
     soloPkg[n] = (key in isSolo) ? 1 : 0
     pinPkg[n] = ((key in isPin) && !(key in isSolo)) ? 1 : 0
@@ -108,7 +124,39 @@ END {
     order[j + 1] = v
   }
   for (s = 1; s <= count; s++) load[s] = 0
-  for (ppass = 0; ppass <= 1; ppass++) {
+  if (chain) {
+    for (s = 1; s <= count; s++) { cl[s] = 0; rl[s] = 0; sl[s] = 0 }
+    for (cpass = 1; cpass <= 4; cpass++) {
+      for (i = 1; i <= n; i++) {
+        k = order[i]
+        onChain = (nparts[k] > 1 || serialPkg[k])
+        if (cpass == 1 && !(pinPkg[k] && !onChain)) continue
+        if (cpass == 2 && !(pinPkg[k] && onChain)) continue
+        if (cpass == 3 && !(!pinPkg[k] && onChain)) continue
+        if (cpass == 4 && !(!pinPkg[k] && !onChain)) continue
+        best = 1
+        if (onChain) {
+          for (s = 2; s <= count; s++) if (cl[s] + sl[s] < cl[best] + sl[best]) best = s
+          if (serialPkg[k]) sl[best] += weight[k]
+          else cl[best] += weight[k]
+        } else {
+          top = 0
+          for (s = 1; s <= count; s++) if (wall2(s, 0) > top) top = wall2(s, 0)
+          best = 0
+          for (s = 1; s <= count; s++) if (wall2(s, weight[k]) <= top && (best == 0 || rl[s] < rl[best])) best = s
+          if (best == 0) {
+            best = 1
+            for (s = 2; s <= count; s++) {
+              if (wall2(s, weight[k]) < wall2(best, weight[k]) || (wall2(s, weight[k]) == wall2(best, weight[k]) && rl[s] < rl[best])) best = s
+            }
+          }
+          rl[best] += weight[k]
+        }
+        if (best == shard) keep[k] = 1
+      }
+    }
+  }
+  for (ppass = 0; ppass <= 1 && !chain; ppass++) {
     for (i = 1; i <= n; i++) {
       k = order[i]
       if (!pinPkg[k] || serialPkg[k] != ppass) continue
@@ -118,7 +166,7 @@ END {
       if (best == shard) keep[k] = 1
     }
   }
-  for (pass = 1; pass <= 2; pass++) {
+  for (pass = 1; pass <= 2 && !chain; pass++) {
     for (i = 1; i <= n; i++) {
       k = order[i]
       if (pinPkg[k]) continue

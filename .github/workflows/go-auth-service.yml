@@ -14,9 +14,11 @@
 # CI: an auth change runs every job below; a change outside the closure runs only
 # `auth-changes` and `auth-gate`.
 #
-# JOB NAMES must not reuse a required context (test, lint, go-quality,
-# metrics-executed-proof; ops main ruleset 5324160): a second producer of a
-# required context is the CHAOS-4834 defect class. tests/tooling/
+# JOB NAMES must not reuse a required context produced elsewhere (test,
+# go-quality, metrics-executed-proof, go-queue-gate, image-queue-gate, live-e2e,
+# pr-title; ops main ruleset 5324160). `auth-gate` is itself a required context
+# and this file is its only producer: a second producer of a required context is
+# the CHAOS-4834 defect class. tests/tooling/
 # test_go_auth_service_workflow.py pins the names, the fuzz matrix against the
 # registry in ci/check_go.sh, and the gate's fan-in.
 name: Go auth service

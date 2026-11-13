@@ -181,11 +181,12 @@ var attributeVocabulary = map[string][]string{
 		"provider_already_linked", "expired", "principal_not_found", "malformed", "compromised",
 		"invite_created", "invite_accepted", "invite_revoked", "restore_fence_bootstrap",
 		"workload_enabled", "service_account_owner_changed", "domain_revoked", "org_deprovisioned", "owner_request",
+		"sso_provider_created", "sso_provider_updated", "sso_provider_deleted", "sso_provider_activated", "sso_provider_deactivated",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",
 		"session", "external_identity", "service_account", "workload", "policy_revision", "entitlement_snapshot",
-		"signing_key", "invite",
+		"signing_key", "invite", "sso_provider",
 	},
 	"resource_kind": {"organization", "repository", "project", "team"},
 	// decision_reason_code is authorization_decision.v1's reason_code set (reason-codes.json decision_reason_code).

@@ -161,6 +161,7 @@ func TestCallbackChecksTheSignerBeforeTheFlowIsConsumed(t *testing.T) {
 			transport := &offlineTransport{}
 			env.svc.cfg.Flows, env.svc.cfg.Sessions = flows, sessions
 			env.svc.cfg.HTTPClient = &http.Client{Transport: transport}
+			env.svc.oidcClient = env.svc.cfg.HTTPClient
 			callback := env.sealedCallback(t, c, row)
 
 			rec := env.serve(c, callback())

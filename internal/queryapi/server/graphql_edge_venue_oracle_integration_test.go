@@ -25,8 +25,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/envelopemint"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/signingkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/issuerstub"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -194,7 +194,7 @@ func startEdgeIssuer(t *testing.T) edgeIssuer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	priv, err := envelopemint.LoadPrivateKeyFromFile(files.PrivateKey)
+	priv, err := signingkey.LoadPrivateKeyFromFile(files.PrivateKey)
 	if err != nil {
 		t.Fatal(err)
 	}

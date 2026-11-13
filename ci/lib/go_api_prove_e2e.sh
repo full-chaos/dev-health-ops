@@ -171,12 +171,12 @@ query_api_e2e_start() {
   GO_API_PROVE_E2E_ENVELOPE_PEM="${dir}/envelope-keys/private/envelope-private-key.pem"
   GO_API_PROVE_E2E_JWKS="${dir}/envelope-keys/public/envelope-jwks.json"
 
-  echo "==> [query-api] building dho (query-api, goapi prove, mint envelope, mint edge-token)"
+  echo "==> [query-api] building dho (query-api, goapi prove, mint envelope-keys, mint edge-token)"
   # query-api refuses to identify an unstamped or modified build, and
   # `dho goapi prove` refuses to measure a candidate built from another
   # commit than its own, so dho is stamped the way the image build stamps
   # it: -buildvcs=false and the commit through -ldflags. The one dho build
-  # serves `dho query-api` and covers mint-envelope (needed immediately
+  # serves `dho query-api` and covers mint envelope-keys (needed immediately
   # below), go-api-prove and mint-edge-token too, so the candidate and the
   # prover are the same build and run_go_api_prove_e2e (below) builds
   # nothing of its own.

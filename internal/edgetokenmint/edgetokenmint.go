@@ -2,9 +2,8 @@
 // dedicated proof service principal: an access-token.v1 EdDSA user token
 // (eddsa.go). No HS256 access token is minted.
 //
-// go-api-prove carries two bearers. The effective-principal envelope is
-// minted in the tools pod by internal/envelopemint. This package is its
-// sibling for the other bearer. The tools pod holds an Ed25519 key file and
+// go-api-prove's edge bearer. The signing key files it reads are loaded by
+// internal/signingkey. The tools pod holds an Ed25519 key file and
 // mints locally. It never execs into a running api pod and never calls one.
 //
 // The principal is a DEDICATED service identity, never a human user:

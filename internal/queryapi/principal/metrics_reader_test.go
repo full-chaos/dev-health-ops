@@ -41,7 +41,7 @@ import (
 // before the next test function starts -- so a later test's own calls
 // can never retroactively pollute an earlier test's already-completed
 // collection. The only pre-existing calls to Verify()/EdgeVerifier.Verify
-// outside these dedicated telemetry tests (envelopemint_compat_test.go,
+// outside these dedicated telemetry tests (the former envelope compat test,
 // live_python_envelope_oracle_test.go, edge_verifier_test.go's own
 // accept/reject cases, verifier_test.go, verifier_toctou_test.go) either
 // run after the telemetry tests that share this reader (this package's

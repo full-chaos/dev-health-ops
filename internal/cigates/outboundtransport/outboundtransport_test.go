@@ -78,7 +78,7 @@ const (
 // pinnedOutOfScope: the production .go files no linux/amd64 or linux/arm64 build contains; none holds an HTTP client
 // (the shard planner's `//go:build ignore` test-file lister, the non-Linux keystore and envelope key file, and the
 // `//go:build tools` import list).
-var pinnedOutOfScope = []string{"ci/tools/gotestfuncs/main.go", "internal/auth/keystore/open_other.go", "internal/envelopemint/custody_other.go", "tools.go"}
+var pinnedOutOfScope = []string{"ci/tools/gotestfuncs/main.go", "internal/auth/keystore/open_other.go", "internal/signingkey/custody_other.go", "tools.go"}
 
 type site struct{ file, symbol, kind string }
 

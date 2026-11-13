@@ -113,7 +113,7 @@ ARG COMMIT="unknown"
 ARG BUILD_TIME="1970-01-01T00:00:00Z"
 
 LABEL org.opencontainers.image.title="Dev Health Go-API tools" \
-      org.opencontainers.image.description="the dho operator binary's goapi and mint verbs (routing, prove, rest-prove, mint envelope, mint edge-token), plus the documents dump and operation catalog they need, for the Go-API rollout's tools pod" \
+      org.opencontainers.image.description="the dho operator binary's goapi and mint verbs (routing, prove, rest-prove, mint edge-token), plus the documents dump and operation catalog they need, for the Go-API rollout's tools pod" \
       org.opencontainers.image.source="https://github.com/full-chaos/dev-health-ops" \
       org.opencontainers.image.version=${VERSION} \
       org.opencontainers.image.revision=${COMMIT} \
@@ -152,7 +152,7 @@ USER 10001:10001
 
 # No long-lived process of its own -- this exists to be `kubectl exec`ed
 # or `kubectl run ... -- <command>`ed into for one-off `dho goapi routing`
-# / `dho goapi prove` / `dho goapi rest-prove` / `dho mint envelope` /
+# / `dho goapi prove` / `dho goapi rest-prove` /
 # `dho mint edge-token` runs, so no ENTRYPOINT is set: a caller-supplied
 # command replaces CMD outright instead of trailing a fixed entrypoint
 # binary. The default CMD only needs to keep the Pod alive when no

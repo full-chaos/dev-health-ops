@@ -1,4 +1,4 @@
-package envelopemint
+package signingkey
 
 import (
 	"errors"

@@ -42,7 +42,6 @@ tree is library code that later waves compose:
 | `net/http` (`ServeMux`) | `internal/auth/httpapi` | Router with explicit method-and-path registration (ACP-ADR-01 item 3). No third-party router. |
 | `github.com/jackc/pgx/v5` | `internal/auth/authstore`, `authschema`, `internal/audit` | PostgreSQL pool, readiness probe, migrations, the audit and outbox transaction. |
 | `go.opentelemetry.io/otel` | `internal/audit`, the health surface | Outbox and request metrics. |
-| `github.com/golang-jwt/jwt/v5` | `internal/envelopemint` | Claim types of the effective-principal envelope token. No auth package verifies or mints an HS256 token. |
 | `github.com/google/jsonschema-go` | `internal/auth/contracts` | Draft 2020-12 validation of `contracts/auth/v1/`. |
 | `golang.org/x/crypto/bcrypt` | `internal/auth/passwordhash` | The existing password hash format, byte for byte. |
 | `github.com/valkey-io/valkey-go` | `internal/auth/ratelimitvalkey` | Shared rate-limit state. |

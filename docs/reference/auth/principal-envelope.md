@@ -5,8 +5,7 @@ content_type: reference
 owner: engineering
 source_of_truth:
   - internal/queryapi/principal
-  - internal/envelopemint
-  - internal/mintcli/envelope
+  - internal/signingkey
 applicability: current
 lifecycle: active
 ---
@@ -66,7 +65,7 @@ The private key is `GO_API_ENVELOPE_PRIVATE_KEY` (PEM, Ed25519), required at iss
 
 ## Signing key custody
 
-One contract applies to signing-key files across the platform (the web `readPrivateKey`, `internal/auth/keystore` and `internal/envelopemint`). The file must:
+One contract applies to signing-key files across the platform (the web `readPrivateKey`, `internal/auth/keystore` and `internal/signingkey`). The file must:
 
 - open with `O_NOFOLLOW`;
 - be a regular file of 1 byte up to a size bound (16 KiB here);

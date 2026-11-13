@@ -38,6 +38,7 @@ internal/auth/contracts	code	contracts
 internal/auth/contracts	test	ci
 internal/auth/contracts	test	docs
 internal/auth/contracts/tokencorpus	code	contracts
+internal/auth/grant	test	contracts
 internal/auth/httpapi	test	deploy
 internal/auth/identity/oidc	test	ci
 internal/auth/identity/saml	test	ci
@@ -77,11 +78,6 @@ internal/cigates/bigboy	test	deploy
 internal/cigates/bigboy	test	docker
 internal/cigates/bigboyrender	test	ci
 internal/cigates/cachepoison	test	.github
-internal/cigates/chpin	test	.github
-internal/cigates/chpin	test	.gitlab-ci.yml
-internal/cigates/chpin	test	ci
-internal/cigates/chpin	test	compose.yml
-internal/cigates/chpin	test	deploy
 internal/cigates/chartgates	test	alerts
 internal/cigates/chartgates	test	compose.yml
 internal/cigates/chartgates	test	contracts
@@ -90,6 +86,11 @@ internal/cigates/chartgates	test	docker
 internal/cigates/chartgates	test	docs
 internal/cigates/checkgo	test	ci
 internal/cigates/checkgoshards	test	ci
+internal/cigates/chpin	test	.github
+internal/cigates/chpin	test	.gitlab-ci.yml
+internal/cigates/chpin	test	ci
+internal/cigates/chpin	test	compose.yml
+internal/cigates/chpin	test	deploy
 internal/cigates/docmaketargets	test	.github
 internal/cigates/docmaketargets	test	Makefile
 internal/cigates/docs	test	.github
@@ -100,10 +101,10 @@ internal/cigates/docs	test	deploy
 internal/cigates/docs	test	docs
 internal/cigates/docs	test	docs-data
 internal/cigates/docs	test	mkdocs.yml
-internal/cigates/docsprepare	test	docs-data
 internal/cigates/docsbuild	code	docs
 internal/cigates/docsbuild	code	docs-data
 internal/cigates/docsbuild	code	mkdocs.yml
+internal/cigates/docsprepare	test	docs-data
 internal/cigates/docstools	code	contracts
 internal/cigates/docstools	code	deploy
 internal/cigates/docstools	code	docs
@@ -123,8 +124,8 @@ internal/cigates/nopython	test	ci
 internal/cigates/outboundtransport	test	ci
 internal/cigates/proofteardown	test	ci
 internal/cigates/queuecreds	code	contracts
-internal/cigates/raceunweighted	test	ci
 internal/cigates/racescope	test	ci
+internal/cigates/raceunweighted	test	ci
 internal/cigates/retiredcredentialnames	test	.github
 internal/cigates/retiredcredentialnames	test	ci
 internal/cigates/retiredcredentialnames	test	contracts
@@ -144,8 +145,8 @@ internal/cigates/scripts	test	README.md
 internal/cigates/scripts	test	ci
 internal/cigates/scripts	test	compose.yml
 internal/cigates/scripts	test	contracts
-internal/cigates/scripts	test	docker
 internal/cigates/scripts	test	deploy
+internal/cigates/scripts	test	docker
 internal/cigates/scripts	test	docs
 internal/cigates/splitshards	test	.github
 internal/cigates/splitshards	test	ci
@@ -185,7 +186,6 @@ internal/contractcheck	code	contracts
 internal/contractcheck	code	deploy
 internal/deploymentcontract	code	contracts
 internal/deploymentcontract	test	deploy
-internal/envelopemint	test	contracts
 internal/faultproxy	test	deploy
 internal/faultproxy	test	docker
 internal/fixturescli	code	contracts
@@ -237,6 +237,7 @@ internal/providersync	test	docs
 internal/queryapi/aggflame	test	README.md
 internal/queryapi/graph	code	contracts
 internal/queryapi/graph/model	test	contracts
+internal/queryapi/pdp	test	docs
 internal/queryapi/reports/writeproofcases	test	contracts
 internal/queryapi/sankey	test	README.md
 internal/queryapi/server	code	contracts
@@ -248,6 +249,7 @@ internal/rivermigrate	test	deploy
 internal/scheduler/fixed	test	contracts
 internal/scheduler/fixed	test	deploy
 internal/schedulerservice	code	contracts
+internal/signingkey	test	contracts
 internal/storage/clickhouse	test	docker
 internal/storage/postgres	test	deploy
 internal/storage/postgres/authschema	test	contracts
@@ -269,5 +271,3 @@ internal/workersctl	code	contracts
 internal/workersctl	code	deploy
 internal/workerservice	code	contracts
 internal/workerservice	test	deploy
-internal/auth/grant	test	contracts
-internal/queryapi/pdp	test	docs

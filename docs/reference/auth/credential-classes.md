@@ -97,8 +97,8 @@ app, was outside the ops/web/acr inventories, and the signed envelope it
 verifies was a credential class the vocabulary did not name. It is now class 31
 and query-api's three surfaces have rows in
 `contracts/auth/v1/endpoint-profiles.query-api.json`. G-61 position: the class
-has exactly one issuer, the edge (`internal/envelopemint`); query-api only
-verifies, so no exception to one active issuer per token class is needed.
+has no issuer in Go (the minter is removed and the class is retired); query-api only
+verifies and refuses it, so no exception to one active issuer per token class is needed.
 
 **`refresh_credential`.** The opaque refresh credential of the
 auth-service session domain (TRD section 11): `dhr1_` plus 32 random bytes,

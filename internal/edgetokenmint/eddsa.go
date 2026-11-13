@@ -15,11 +15,11 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
-	"github.com/full-chaos/dev-health-ops/internal/envelopemint"
 	"github.com/full-chaos/dev-health-ops/internal/platform/pgident"
+	"github.com/full-chaos/dev-health-ops/internal/signingkey"
 )
 
-// The EdDSA mode signs an access-token.v1 user token with an Ed25519 key read from a file, the way envelopemint
+// The EdDSA mode signs an access-token.v1 user token with an Ed25519 key read from a file, the way signingkey
 // reads its key. The token is accepted only for a live session of its principal, so the caller names a session
 // that already exists: this package reads it, never writes one.
 const (
@@ -54,7 +54,7 @@ func EdDSASignerFromEnv(lookup func(string) (string, bool)) (EdDSASigner, error)
 		v, _ := lookup(name)
 		return strings.TrimSpace(v)
 	}
-	key, err := envelopemint.LoadPrivateKeyFromFile(get(SigningKeyFileEnvVar))
+	key, err := signingkey.LoadPrivateKeyFromFile(get(SigningKeyFileEnvVar))
 	if err != nil {
 		return EdDSASigner{}, err
 	}

@@ -1,4 +1,4 @@
-package envelopemint
+package signingkey
 
 import (
 	"bytes"
@@ -35,7 +35,7 @@ const (
 // ErrKeyFilesExist is returned when a key or JWKS file is already present.
 // Nothing is written or changed in that case: replacing a key would make
 // every envelope signed with the old one fail verification.
-var ErrKeyFilesExist = errors.New("envelopemint: envelope key files already exist")
+var ErrKeyFilesExist = errors.New("signingkey: envelope key files already exist")
 
 // KeyPaths names the two files of a key set.
 type KeyPaths struct {
@@ -55,7 +55,7 @@ func PathsIn(dir string) KeyPaths {
 // this program can produce or safely accept (a public key without its private
 // key, a pair that does not match, a symlink, or permissions wider than
 // allowed). Nothing is changed, repaired or loosened in that case.
-var ErrKeyFilesInconsistent = errors.New("envelopemint: envelope key files are in a state that is not accepted")
+var ErrKeyFilesInconsistent = errors.New("signingkey: envelope key files are in a state that is not accepted")
 
 // Crash safety. Every file is written to a temp file in its own directory,
 // fsynced, and then linked to its final name (link fails if the name exists, so
@@ -90,23 +90,23 @@ var crashHook = func(point string) error { return nil }
 func GenerateKeyFiles(dir, keyID string) (KeyPaths, error) {
 	paths := PathsIn(dir)
 	if keyID == "" {
-		return paths, errors.New("envelopemint: key id must not be empty")
+		return paths, errors.New("signingkey: key id must not be empty")
 	}
 	for _, p := range []string{paths.Private, paths.JWKS} {
 		if _, err := os.Lstat(p); err == nil {
 			return paths, fmt.Errorf("%w: %s", ErrKeyFilesExist, p)
 		} else if !errors.Is(err, fs.ErrNotExist) {
-			return paths, fmt.Errorf("envelopemint: check %s: %w", p, err)
+			return paths, fmt.Errorf("signingkey: check %s: %w", p, err)
 		}
 	}
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return paths, fmt.Errorf("envelopemint: generate key: %w", err)
+		return paths, fmt.Errorf("signingkey: generate key: %w", err)
 	}
 	der, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
-		return paths, fmt.Errorf("envelopemint: marshal private key: %w", err)
+		return paths, fmt.Errorf("signingkey: marshal private key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 	jwks, err := jwksDocument(pub, keyID)
@@ -213,7 +213,7 @@ func missing(path string) (bool, error) {
 	case errors.Is(err, fs.ErrNotExist):
 		return true, nil
 	}
-	return false, fmt.Errorf("envelopemint: check %s: %w", path, err)
+	return false, fmt.Errorf("signingkey: check %s: %w", path, err)
 }
 
 func inconsistent(format string, args ...any) error {
@@ -264,7 +264,7 @@ func checkPrivate(paths KeyPaths) (ed25519.PrivateKey, error) {
 	}
 	pemBytes, err := os.ReadFile(paths.Private)
 	if err != nil {
-		return nil, fmt.Errorf("envelopemint: read existing private key: %w", err)
+		return nil, fmt.Errorf("signingkey: read existing private key: %w", err)
 	}
 	priv, err := LoadPrivateKey(pemBytes)
 	if err != nil {
@@ -300,7 +300,7 @@ func checkKeySet(paths KeyPaths, keyID string) error {
 	}
 	raw, err := os.ReadFile(paths.JWKS)
 	if err != nil {
-		return fmt.Errorf("envelopemint: read existing JWKS: %w", err)
+		return fmt.Errorf("signingkey: read existing JWKS: %w", err)
 	}
 	want, err := jwksDocument(priv.Public().(ed25519.PublicKey), keyID)
 	if err != nil {
@@ -347,7 +347,7 @@ func jwksDocument(pub ed25519.PublicKey, keyID string) ([]byte, error) {
 	}
 	out, err := json.Marshal(doc)
 	if err != nil {
-		return nil, fmt.Errorf("envelopemint: marshal JWKS: %w", err)
+		return nil, fmt.Errorf("signingkey: marshal JWKS: %w", err)
 	}
 	return out, nil
 }
@@ -359,13 +359,13 @@ func mkdirMode(path string, mode fs.FileMode) error {
 		return inconsistent("%s is a symlink or not a directory", path)
 	}
 	if err := os.MkdirAll(path, mode); err != nil {
-		return fmt.Errorf("envelopemint: create %s: %w", path, err)
+		return fmt.Errorf("signingkey: create %s: %w", path, err)
 	}
 	if info, err := os.Lstat(path); err != nil || !info.IsDir() {
 		return inconsistent("%s is a symlink or not a directory", path)
 	}
 	if err := os.Chmod(path, mode); err != nil {
-		return fmt.Errorf("envelopemint: chmod %s: %w", path, err)
+		return fmt.Errorf("signingkey: chmod %s: %w", path, err)
 	}
 	return nil
 }
@@ -377,7 +377,7 @@ func writeNew(path string, data []byte, mode fs.FileMode, point string) (err err
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+tempMarker+"*")
 	if err != nil {
-		return fmt.Errorf("envelopemint: create temp file in %s: %w", dir, err)
+		return fmt.Errorf("signingkey: create temp file in %s: %w", dir, err)
 	}
 	tmp := f.Name()
 	crashed := false
@@ -395,18 +395,18 @@ func writeNew(path string, data []byte, mode fs.FileMode, point string) (err err
 	}
 	if _, werr := f.Write(data); werr != nil {
 		_ = f.Close()
-		return fmt.Errorf("envelopemint: write %s: %w", tmp, werr)
+		return fmt.Errorf("signingkey: write %s: %w", tmp, werr)
 	}
 	if cerr := f.Chmod(mode); cerr != nil {
 		_ = f.Close()
-		return fmt.Errorf("envelopemint: chmod %s: %w", tmp, cerr)
+		return fmt.Errorf("signingkey: chmod %s: %w", tmp, cerr)
 	}
 	if serr := f.Sync(); serr != nil {
 		_ = f.Close()
-		return fmt.Errorf("envelopemint: fsync %s: %w", tmp, serr)
+		return fmt.Errorf("signingkey: fsync %s: %w", tmp, serr)
 	}
 	if cerr := f.Close(); cerr != nil {
-		return fmt.Errorf("envelopemint: close %s: %w", tmp, cerr)
+		return fmt.Errorf("signingkey: close %s: %w", tmp, cerr)
 	}
 	if err := step("temp-written"); err != nil {
 		return err
@@ -415,14 +415,14 @@ func writeNew(path string, data []byte, mode fs.FileMode, point string) (err err
 		if errors.Is(lerr, fs.ErrExist) {
 			return fmt.Errorf("%w: %s", ErrKeyFilesExist, path)
 		}
-		return fmt.Errorf("envelopemint: link %s: %w", path, lerr)
+		return fmt.Errorf("signingkey: link %s: %w", path, lerr)
 	}
 	if err := step("committed"); err != nil {
 		return err
 	}
 	_ = os.Remove(tmp)
 	if serr := syncDir(dir); serr != nil {
-		return fmt.Errorf("envelopemint: %s is written but its directory entry is not confirmed durable: %w", path, serr)
+		return fmt.Errorf("signingkey: %s is written but its directory entry is not confirmed durable: %w", path, serr)
 	}
 	return nil
 }

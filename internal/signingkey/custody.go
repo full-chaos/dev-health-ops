@@ -1,4 +1,4 @@
-package envelopemint
+package signingkey
 
 import (
 	"crypto/ed25519"
@@ -19,7 +19,7 @@ const MaxPrivateKeyFileBytes = int64(16 << 10)
 // ErrKeyFileCustody is returned for every key file that fails the custody
 // contract. Its text carries a fixed reason only: never the path (an
 // os.PathError embeds it) and never key bytes.
-var ErrKeyFileCustody = errors.New("envelopemint: private key file refused")
+var ErrKeyFileCustody = errors.New("signingkey: private key file refused")
 
 func custodyFailure(reason string) error {
 	slog.Info("envelope private key file refused", "reason", reason)

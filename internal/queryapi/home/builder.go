@@ -594,6 +594,10 @@ func topDeltaByMagnitude(deltas []MetricDelta) (MetricDelta, bool) {
 // caller that serves the field asks for it, and a request that does not select
 // the field does not depend on those reads.
 func BuildResponseWithFilterEmptyReason(ctx context.Context, chClient QueryClient, pgClient PGQueryClient, orgID string, f Filters, now time.Time) (*Response, error) {
+	f, err := ResolveScope(ctx, chClient, orgID, f)
+	if err != nil {
+		return nil, err
+	}
 	response, err := BuildResponse(ctx, chClient, pgClient, orgID, f, now)
 	if err != nil {
 		return nil, err

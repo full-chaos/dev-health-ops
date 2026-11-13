@@ -88,6 +88,12 @@ func repoFilterRequested(f Filters) bool {
 // teamscope.ClassifyEmptyFilter. nil when the request names no repository, and
 // whenever something matched.
 func filterEmptyReason(ctx context.Context, client QueryClient, f Filters, orgID string, asOf time.Time) (*teamscope.EmptyReason, error) {
+	if f.Scope.unresolved && (f.Scope.Level == "service" || f.Scope.Level == "developer") {
+		// CHAOS-6119: the scope names nothing the organization has. The existing reason is the one the wire carries for a named
+		// scope that resolved to nothing (it says "repository"; no service or developer reason exists).
+		reason := teamscope.ReasonRepositoryNotFound
+		return &reason, nil
+	}
 	refs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
 	if len(refs) == 0 {
 		return nil, nil

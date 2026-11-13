@@ -34,6 +34,8 @@ var homeUnresolvedScopeDifference = struct{ Ticket, Reason string }{
 	Reason: "Python widens an unresolved repo, service or developer scope filter to the whole organization; Go answers empty (R335).",
 }
 
+var _ = homeUnresolvedScopeDifference
+
 // homeNumericLeaves is every numeric leaf this route's response can
 // reach, named float or integer and traced to its producing query, per
 // entry, for every 200-status request below (Options.

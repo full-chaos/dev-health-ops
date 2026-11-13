@@ -206,3 +206,32 @@ func TestHomeAnswersNoMetricRowsForAnUnresolvedScopeAtEveryLevel(t *testing.T) {
 		}
 	}
 }
+
+// The reason of an empty filter is the existing one for an unresolved service or developer scope (CHAOS-6119); a known scope and an
+// org scope carry none, and nothing is read.
+func TestFilterEmptyReasonForAnUnresolvedServiceOrDeveloperScope(t *testing.T) {
+	for _, level := range []string{"service", "developer"} {
+		unknown := resolved(t, newExistenceClient(), "org-a", level, "nope")
+		reason, err := filterEmptyReason(context.Background(), nil, unknown, "org-a", time.Now())
+		if err != nil || reason == nil || string(*reason) != "repository_not_found" {
+			t.Errorf("%s unknown: reason %v err %v, want repository_not_found", level, reason, err)
+		}
+	}
+	known := resolved(t, newExistenceClient(), "org-a", "developer", "dev@example.com")
+	if reason, err := filterEmptyReason(context.Background(), nil, known, "org-a", time.Now()); err != nil || reason != nil {
+		t.Errorf("known developer: reason %v err %v, want null", reason, err)
+	}
+}
+
+// BuildResponseWithFilterEmptyReason resolves the scope once and hands the resolved scope to both halves.
+func TestBuildResponseWithFilterEmptyReasonCarriesTheReasonOfAnUnresolvedScope(t *testing.T) {
+	c := newExistenceClient()
+	f := Filters{Time: TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))}, Scope: ScopeFilter{Level: "service", IDs: []string{"svc-1"}}}
+	resp, err := BuildResponseWithFilterEmptyReason(context.Background(), c, nil, "org-a", f, goldenNow)
+	if err != nil || resp.FilterEmptyReason == nil || *resp.FilterEmptyReason != "repository_not_found" {
+		t.Fatalf("response reason %v err %v, want repository_not_found", resp, err)
+	}
+	if c.resolveQueries() != 0 {
+		t.Errorf("%d resolve queries for a service scope, want 0", c.resolveQueries())
+	}
+}

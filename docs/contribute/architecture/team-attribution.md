@@ -513,6 +513,15 @@ means the ClickHouse `teams` dimension is empty.
 > integration tests seed an in-day multi-claim and require the primary owner on all six TestOps
 > output tables.
 
+> **The AI analytics team scope uses repository ownership, not patterns.** The
+> query-api AI analytics reads (`internal/queryapi/aianalytics`: aiReviewLoad, aiRiskBreakdown,
+> aiAttributedPrs, aiAttributionOverview) resolve a team scope to the repositories the team owns,
+> through the one ownership rule of `internal/queryapi/teamscope` (`HeldRepoIDs`, as of the
+> request). The team of an attributed pull request or evidence row is its repository's owner from
+> `teamscope.OwnerShares`: the scoped team when it is an owner, else the owner with the largest
+> linked share, the lowest team id on a tie; an unowned repository has no team. `teams.repo_patterns`
+> is not read. A team that owns no repository answers empty.
+
 > **`team_cognitive_load_daily` — an
 > append-only, ownership-scoped table.** The `resolveCognitiveLoad` GraphQL resolver's single-team
 > path (`teamId` set, `repoId` NOT set) reads this table directly instead of the org-wide

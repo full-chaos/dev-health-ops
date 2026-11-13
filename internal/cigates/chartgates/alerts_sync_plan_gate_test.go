@@ -8,7 +8,8 @@ import (
 
 // The sync plan executed-proof alert (alerts/rules.yml, group sync_plan_gate). The metric name and the
 // outcome value are read from the Go telemetry file, so a rename there fails here instead of leaving a rule
-// on a series nobody emits.
+// on a series nobody emits. The rule is scoped to the work-items claim, so pairs without proof yet (PagerDuty
+// datasets) do not hold it red.
 
 const (
 	syncPlanGateGroup = "sync_plan_gate"
@@ -30,7 +31,7 @@ func syncPlanGateWantExpr(g *guard) string {
 		g.failf("%s has no counter TYPE line or no planGateOutcomeExecutedProofUnsatisfied constant", syncPlanGateGoRel)
 		return ""
 	}
-	return `sum by (provider, dataset) (increase(` + metric[1] + `{outcome="` + outcome[1] + `"}[2h])) > 0`
+	return `sum by (provider) (increase(` + metric[1] + `{dataset="work-items",outcome="` + outcome[1] + `"}[2h])) > 0`
 }
 
 func syncPlanGateAlertIsTheGroup(g *guard) {
@@ -65,9 +66,10 @@ func TestSyncPlanGateAlertGuardsRealTree(t *testing.T) {
 
 func TestSyncPlanGateAlertGuardsPlantedDefects(t *testing.T) {
 	rules := []string{rulesRel, syncPlanGateGoRel}
-	const expr = `sum by (provider, dataset) (increase(sync_plan_gate_total{outcome="executed_proof_unsatisfied"}[2h])) > 0`
+	const expr = `sum by (provider) (increase(sync_plan_gate_total{dataset="work-items",outcome="executed_proof_unsatisfied"}[2h])) > 0`
 	runPlanted(t, []planted{
 		{"sync-plan-gate-rule-reads-another-outcome", rules, mut(rulesRel, expr, strings.Replace(expr, "executed_proof_unsatisfied", "planned", 1)), syncPlanGateRuleText, "want"},
+		{"sync-plan-gate-rule-loses-work-items-scope", rules, mut(rulesRel, expr, strings.Replace(expr, `dataset="work-items",`, "", 1)), syncPlanGateRuleText, "want"},
 		{"sync-plan-gate-threshold-raised", rules, mut(rulesRel, expr, strings.Replace(expr, "> 0", "> 5", 1)), syncPlanGateRuleText, "want"},
 		{"sync-plan-gate-window-shortened", rules, mut(rulesRel, expr, strings.Replace(expr, "[2h]", "[5m]", 1)), syncPlanGateRuleText, "want"},
 		{"sync-plan-gate-outcome-renamed-in-go", rules, mut(syncPlanGateGoRel, `planGateOutcomeExecutedProofUnsatisfied = "executed_proof_unsatisfied"`, `planGateOutcomeExecutedProofUnsatisfied = "executed_proof_missing"`), syncPlanGateRuleText, "want"},

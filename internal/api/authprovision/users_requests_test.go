@@ -128,7 +128,7 @@ func TestUsersAdminRequestsCarryTheAdmittedMembers(t *testing.T) {
 		t.Fatalf("create = %+v, %v", created, err)
 	}
 	if err := client.UpdateUser(ctx, authprovision.UserUpdateRequest{Actor: actor, Principal: principal, OrgID: &org, Email: &text,
-		Username: &text, FullName: &text, AvatarURL: &text, IsVerified: &yes, IsSuperuser: &yes}); err != nil {
+		Username: &text, FullName: &text, AvatarURL: &text, IsVerified: &yes, IsSuperuser: &yes, IsActive: &yes}); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.SetUserPassword(ctx, authprovision.UserPasswordRequest{Actor: actor, Principal: principal, OrgID: &org,

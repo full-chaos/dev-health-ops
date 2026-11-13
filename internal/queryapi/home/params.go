@@ -29,6 +29,8 @@ type ScopeFilter struct {
 	// BuildResponse (CHAOS-9116). Not part of the request: an id is never
 	// printed in prose, the name is, or a generic word when there is none.
 	names map[string]string
+	// checked and unresolved are set by ResolveScope (CHAOS-6119): the ids were looked up once, and none exists for the organization.
+	checked, unresolved bool
 }
 
 // WhatFilter ports the one field of WhatFilter

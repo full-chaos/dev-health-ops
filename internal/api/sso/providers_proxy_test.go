@@ -460,3 +460,16 @@ func TestProviderAnswerBodyIsByteEqualToTheLegacyRender(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+func TestProviderListItemsCarryTheConfigAsAuthServiceWroteIt(t *testing.T) {
+	f := newProxyFixture(t)
+	config := `{"z":1.50,"a":"é","client_secret":"********"}`
+	item := `{"id":"` + uuid.NewString() + `","org_id":"` + f.org.String() + `","name":"Acme","protocol":"oidc","status":"active","is_default":false,` +
+		`"allow_idp_initiated":false,"auto_provision_users":true,"default_role":"member","config":` + config + `,"allowed_domains":[],` +
+		`"last_metadata_sync_at":null,"last_login_at":null,"last_error":null,"last_error_at":null,"created_at":"2026-11-13T01:02:03Z","updated_at":"2026-11-13T01:02:03Z"}`
+	f.fake.list = `{"items":[` + item + `,` + item + `],"total":2,"limit":1000,"offset":0}`
+	response := f.do(f.h.listProviders, "member", "", "", "", nil)
+	if response.Code != http.StatusOK || strings.Count(response.Body.String(), `"config":`+config+`,"allowed_domains"`) != 2 {
+		t.Fatalf("list: %d %s, want both configs passed through", response.Code, response.Body)
+	}
+}

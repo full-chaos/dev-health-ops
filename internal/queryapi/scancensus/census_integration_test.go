@@ -512,6 +512,10 @@ const nullableIntoPlainSites = `
 `
 
 // unverifiedSites is `file|func|destinations|digest|reason`; see reasonClass.
+//
+// aianalytics/scope.go ownerTeams (digest c0b3734eb92d) is not-describable because the census
+// cannot resolve its coalesce() expression; read by hand: owner_repo_id (the coalesce) and
+// owner_team_id are plain String, not Nullable, so the scan into *string is safe.
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a003456ad69e|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|7ecb45f4962b|not-describable

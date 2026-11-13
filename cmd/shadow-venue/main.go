@@ -746,7 +746,7 @@ func judgeEnforced(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "judge-enforced: slots %s\n", strings.Join(verdicts, ", "))
 	fmt.Fprintf(stdout, "judge-enforced: schedule sha12 %s\n", shadowvenue.ScheduleSHA12(slots))
 	if sums, err := shadowvenue.UnjudgedTotals(files["metrics-before"], files["metrics-after"]); err == nil {
-		fmt.Fprintf(stdout, "judge-enforced: unjudged no_org %d, served_org %d, org_required %d, other %d\n", sums.NoOrg, sums.ServedOrg, sums.OrgRequired, sums.Other)
+		fmt.Fprintf(stdout, "judge-enforced: unjudged org_required %d, other %d\n", sums.OrgRequired, sums.Other)
 	}
 	fmt.Fprintf(stdout, "judge-enforced: void %v, exit %d, table %s\n", report.Void, report.Exit(), *out)
 	return finish(file, report.Exit(), stderr)

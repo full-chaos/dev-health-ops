@@ -3,23 +3,22 @@ package shadowvenue
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 // CHAOS-10872 S1: on a go-api build that decides a token with no organization, the superuser's no-org slots of an
 // organization row are no longer unjudged no_org. An AdminOrg row refuses them with no question, counted unjudged
 // org_required; any other organization row asks the decision point, which counts a decision in the row's namespace and
-// no unjudged reason. The judge accepts either build, per run, and never a mix.
+// no unjudged reason. Since CHAOS-13673 the judge judges only such builds: a no_org series voids the run.
 
 // decidedNoOrg is the verdict of a no-org slot an S1 build decided (VerdictDecidedNoOrg).
 const decidedNoOrg = "DECIDED_NOORG"
 
 // s1Run is newEnfRun on an S1 build: the no-org route (billing) counts no unjudged reason and its namespace counts three
-// more decisions; the seam route counts nothing either (it is decided too).
+// more decisions; the seam route counts nothing either (it is decided too, CHAOS-10872 S2).
 func s1Run(decided string) *enfRun {
 	r := newEnfRun()
-	r.in.MetricsBefore = live(allEnforced, 1000, "f50883b", "0", unjudged(seamKey, "served_org", "2"), decisions("billing", "allow", "10"), decisions("billing", "deny", "1"))
-	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(seamKey, "served_org", "2"), decisions("billing", "allow", decided), decisions("billing", "deny", "1"))
+	r.in.MetricsBefore = live(allEnforced, 1000, "f50883b", "0", decisions("billing", "allow", "10"), decisions("billing", "deny", "1"))
+	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", decisions("billing", "allow", decided), decisions("billing", "deny", "1"))
 	return r
 }
 
@@ -42,7 +41,7 @@ func TestEnforcedS1DecidedNoOrgSlotsFailWithoutTheDecisions(t *testing.T) {
 		})
 	}
 	r := s1Run("13")
-	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(seamKey, "served_org", "2"))
+	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0")
 	if report := r.judge(); report.Pass || report.VerdictCounts()[decidedNoOrg] != 0 {
 		t.Fatalf("no decision series: pass %v counts %v", report.Pass, report.VerdictCounts())
 	}
@@ -59,8 +58,7 @@ func TestEnforcedS1AdminOrgRefusalPassesOnOrgRequired(t *testing.T) {
 	for name, after := range map[string][]byte{
 		"one short":             live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "org_required", "6")),
 		"one over":              live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "org_required", "8")),
-		"another reason grew":   live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "org_required", "7"), unjudged(noOrgKey, "hs256", "1")),
-		"no_org grew with it":   live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "org_required", "7"), unjudged(noOrgKey, "no_org", "1")),
+		"another reason grew":   live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "org_required", "7"), unjudged(noOrgKey, "impersonation", "1")),
 		"delegated_orgless too": live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "org_required", "7"), unjudged(noOrgKey, "delegated_orgless", "1")),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -74,32 +72,24 @@ func TestEnforcedS1AdminOrgRefusalPassesOnOrgRequired(t *testing.T) {
 	}
 }
 
-// A run is one build: a no-org route judged the legacy way (no_org) beside one judged the S1 way fails the run.
-func TestEnforcedLegacyAndS1NoOrgRoutesInOneRunFail(t *testing.T) {
-	const otherKey = "GET /api/v1/admin/settings/{category}"
-	r := newEnfRun()
-	for k := 1; k <= 3; k++ {
-		start := enfT0.Add(time.Duration(len(r.in.Slots)) * 3 * time.Second)
-		r.in.Yard = append(r.in.Yard, YardSlot{Seq: len(r.in.Yard) + 1, Row: "4", Caller: "superuser", K: k, Key: otherKey, Status: 403, Verdict: VerdictSkipped})
-		r.in.Slots = append(r.in.Slots, Slot{Start: start, End: start.Add(100 * time.Millisecond), Seq: len(r.in.Slots) + 1, Row: "4", Caller: "superuser",
-			Principal: "superuser-A", Expect: "match", K: k, Method: "GET", Route: "/api/v1/admin/settings/{category}", Path: "/api/v1/admin/settings/general", Status: 403})
-	}
-	r.in.Namespaces[otherKey] = "settings"
-	r.in.Outbound = Outbound{Rows: tableOf(r.in.Slots, nil)}
-	r.in.MetricsBefore = live(allEnforced, 1000, "f50883b", "0", unjudged(noOrgKey, "no_org", "5"), unjudged(seamKey, "served_org", "2"), unjudged(otherKey, "org_required", "1"))
-	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"), unjudged(otherKey, "org_required", "4"))
+// CHAOS-13673: a no-org route counted the legacy way (no_org) is a build before CHAOS-13596. The judge no longer judges
+// it, so the run is void, whatever the other routes count.
+func TestEnforcedALegacyNoOrgCountVoidsTheRun(t *testing.T) {
+	r := s1Run("13")
+	r.in.MetricsBefore = live(allEnforced, 1000, "f50883b", "0", unjudged(noOrgKey, "no_org", "5"), decisions("billing", "allow", "10"), decisions("billing", "deny", "1"))
+	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), decisions("billing", "allow", "13"), decisions("billing", "deny", "1"))
 	report := r.judge()
-	if report.Pass || !strings.Contains(strings.Join(report.Reasons, "\n"), "one build") {
-		t.Fatalf("a mixed run passed or gave no reason: pass %v %v %v", report.Pass, report.VerdictCounts(), report.Reasons)
+	if !report.Void || report.Exit() != 3 || !strings.Contains(strings.Join(report.Reasons, "\n"), "no_org") {
+		t.Fatalf("a legacy no_org count was judged: void %v exit %d %v", report.Void, report.Exit(), report.Reasons)
 	}
 }
 
-// org_required is a no-org superuser's count like no_org: it does not take the allow proof from the route's other 5xx
+// org_required is a no-org superuser's count: it does not take the allow proof from the route's other 5xx
 // cells.
 func TestEnforcedOrgRequiredOnTheRouteKeepsTheAllowProof(t *testing.T) {
 	run := fiveXXRun(500)
 	run.in.Log = adminLines(t, run, "match", "dec_ALLOW"+strings.Repeat("A", 20))
-	run.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, "no_org", "8"), unjudged(seamKey, "served_org", "5"), unjudged(teamsKey, "org_required", "1"))
+	run.in.MetricsAfter = enfAfter(allEnforced, 1100, "f50883b", "0", unjudged(teamsKey, "org_required", "1"))
 	rep := run.judge()
 	if rep.VerdictCounts()[VerdictEqualPastGuard] != 3 || rep.VerdictCounts()[VerdictVoidParity] != 0 {
 		t.Fatalf("an org_required count voided the parity: %v", rep.VerdictCounts())
@@ -107,10 +97,10 @@ func TestEnforcedOrgRequiredOnTheRouteKeepsTheAllowProof(t *testing.T) {
 }
 func TestUnjudgedTotalsCountOrgRequiredApart(t *testing.T) {
 	before := scrape(unjudged("GET /a", "org_required", "1"))
-	after := scrape(unjudged("GET /a", "org_required", "4"), unjudged("GET /a", "no_org", "2"), unjudged("GET /b", "delegated_orgless", "1"))
+	after := scrape(unjudged("GET /a", "org_required", "4"), unjudged("GET /a", "impersonation", "2"), unjudged("GET /b", "delegated_orgless", "1"))
 	totals, err := UnjudgedTotals(before, after)
-	if err != nil || totals.NoOrg != 2 || totals.ServedOrg != 0 || totals.OrgRequired != 3 || totals.Other != 1 {
-		t.Fatalf("totals %+v err %v, want no_org 2, served_org 0, org_required 3, other 1", totals, err)
+	if err != nil || totals.OrgRequired != 3 || totals.Other != 3 {
+		t.Fatalf("totals %+v err %v, want org_required 3, other 3", totals, err)
 	}
 }
 
@@ -124,8 +114,8 @@ func TestDecidedNoOrgIsTheJudgesVerdict(t *testing.T) {
 // A decided slot may be a refusal (a caller the decision point denies admin.orgs): deny decisions count as evidence too.
 func TestEnforcedS1DecidedNoOrgSlotsCountDenyDecisions(t *testing.T) {
 	r := newEnfRun()
-	r.in.MetricsBefore = live(allEnforced, 1000, "f50883b", "0", unjudged(seamKey, "served_org", "2"), decisions("billing", "allow", "10"), decisions("billing", "deny", "1"))
-	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(seamKey, "served_org", "2"), decisions("billing", "allow", "10"), decisions("billing", "deny", "4"))
+	r.in.MetricsBefore = live(allEnforced, 1000, "f50883b", "0", decisions("billing", "allow", "10"), decisions("billing", "deny", "1"))
+	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", decisions("billing", "allow", "10"), decisions("billing", "deny", "4"))
 	if report := r.judge(); !report.Pass || report.VerdictCounts()[decidedNoOrg] != 3 {
 		t.Fatalf("pass %v counts %v %v", report.Pass, report.VerdictCounts(), report.Reasons)
 	}
@@ -134,10 +124,10 @@ func TestEnforcedS1DecidedNoOrgSlotsCountDenyDecisions(t *testing.T) {
 // A decided route passes on no unjudged growth only: an unjudged count of any reason beside the namespace decisions
 // fails the slots, however many decisions there are.
 func TestEnforcedS1DecidedNoOrgSlotsFailOnAnyUnjudgedGrowth(t *testing.T) {
-	for _, reason := range []string{"hs256", "no_org", "org_required", "delegated_orgless"} {
+	for _, reason := range []string{"impersonation", "org_required", "delegated_orgless"} {
 		t.Run(reason, func(t *testing.T) {
 			r := s1Run("13")
-			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(seamKey, "served_org", "2"), unjudged(noOrgKey, reason, "1"),
+			r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(noOrgKey, reason, "1"),
 				decisions("billing", "allow", "13"), decisions("billing", "deny", "1"))
 			if report := r.judge(); report.Pass || report.VerdictCounts()[decidedNoOrg] != 0 {
 				t.Fatalf("pass %v counts %v", report.Pass, report.VerdictCounts())
@@ -155,7 +145,7 @@ func TestEnforcedS1DecidedNoOrgIsTheSuperusersOnly(t *testing.T) {
 			r.in.Yard[i].Verdict = VerdictSkipped
 		}
 	}
-	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", unjudged(seamKey, "served_org", "2"), decisions("billing", "allow", "13"), decisions("billing", "deny", "1"),
+	r.in.MetricsAfter = live(allEnforced, 1100, "f50883b", "0", decisions("billing", "allow", "13"), decisions("billing", "deny", "1"),
 		decisions("teams", "allow", "3"))
 	if report := r.judge(); report.Pass || report.VerdictCounts()[decidedNoOrg] != 3 || report.VerdictCounts()[VerdictUnevidencedNoOrg] != 3 {
 		t.Fatalf("pass %v counts %v", report.Pass, report.VerdictCounts())

@@ -119,12 +119,12 @@ func TestNoOrgEvidenceDoesNotRelabelASeamSkip(t *testing.T) {
 	}
 }
 
-// The record shows the no_org and served_org counts on their own line: every other reason is summed apart.
-func TestUnjudgedTotalsKeepNoOrgAndServedOrgApart(t *testing.T) {
-	before := scrape(unjudged("GET /a", "no_org", "1"), unjudged("GET /a", "served_org", "2"), unjudged("GET /b", "hs256", "0"))
-	after := scrape(unjudged("GET /a", "no_org", "4"), unjudged("GET /a", "served_org", "7"), unjudged("GET /b", "no_org", "2"), unjudged("GET /b", "hs256", "3"), unjudged("GET /b", "impersonation", "1"))
+// The record shows the org_required count on its own line: every other reason is summed apart.
+func TestUnjudgedTotalsKeepOrgRequiredApart(t *testing.T) {
+	before := scrape(unjudged("GET /a", "org_required", "1"), unjudged("GET /b", "impersonation", "0"))
+	after := scrape(unjudged("GET /a", "org_required", "6"), unjudged("GET /b", "org_required", "2"), unjudged("GET /b", "impersonation", "3"), unjudged("GET /b", "delegated_orgless", "1"))
 	sums, err := UnjudgedTotals(before, after)
-	if err != nil || sums.NoOrg != 5 || sums.ServedOrg != 5 || sums.OrgRequired != 0 || sums.Other != 4 {
-		t.Fatalf("sums %+v err %v, want no_org 5, served_org 5, org_required 0, other 4", sums, err)
+	if err != nil || sums.OrgRequired != 7 || sums.Other != 4 {
+		t.Fatalf("sums %+v err %v, want org_required 7, other 4", sums, err)
 	}
 }

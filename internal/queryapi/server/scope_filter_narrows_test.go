@@ -89,6 +89,16 @@ var emptyMatchStatements = map[string]int{
 	"GET /api/v1/investment/sunburst":                2,
 }
 
+// A repo-level scope that names nothing (CHAOS-6119, R335) is answered before the page's reads: opportunities and experiments read no
+// metric at all, and Home skips the theme allocation read, which carried one empty match before. Every other consumer is unchanged.
+var repoScopeEmptyMatchStatements = map[string]int{
+	"GET/POST /api/v1/opportunities": 0,
+	"GET/POST /api/v1/home":          22,
+}
+
+// readsNoMetricWhenTheScopeIsUnresolved are the consumers that answer an unresolved repo-level scope without any metric read.
+var readsNoMetricWhenTheScopeIsUnresolved = map[string]bool{"GET/POST /api/v1/opportunities": true}
+
 // Named repositories that resolve to nothing leave nothing: no data, never the
 // unfiltered read. Every consumer, through a repo-level scope.
 func TestNamedRepositoryThatResolvesToNothingLeavesNothingOnEverySurface(t *testing.T) {
@@ -99,6 +109,14 @@ func TestNamedRepositoryThatResolvesToNothingLeavesNothingOnEverySurface(t *test
 			want, known := emptyMatchStatements[consumer.route]
 			if !known {
 				t.Fatalf("%s is not in emptyMatchStatements: a new consumer states how many of its reads carry the empty match", consumer.route)
+			}
+			if override, ok := repoScopeEmptyMatchStatements[consumer.route]; ok {
+				want = override
+			}
+			if readsNoMetricWhenTheScopeIsUnresolved[consumer.route] {
+				if reads := client.statementsWith("_metrics_daily"); len(reads) != 0 {
+					t.Fatalf("%s reads a metric for a repo-level scope that resolved to nothing:\n%v", consumer.route, reads)
+				}
 			}
 			if got := len(client.statementsWith("1 = 0")); got < want {
 				t.Fatalf("%s: %d statement(s) carry the empty match for a repository that resolved to nothing, want %d (the others read the whole organization):\n%v", consumer.route, got, want, client.statements)

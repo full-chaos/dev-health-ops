@@ -541,6 +541,7 @@ internal/queryapi/graph	root_class_census_test.go
 internal/queryapi/graph/model	sdl_nullability_gate_test.go
 internal/queryapi/heatmap	identity.go
 internal/queryapi/home	import_boundary_test.go
+internal/queryapi/home	resolve_scope_callers_test.go
 internal/queryapi/investment	golden_test.go
 internal/queryapi/pdp	headers_switch_census_test.go
 internal/queryapi/people	identity.go

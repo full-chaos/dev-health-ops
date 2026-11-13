@@ -98,7 +98,7 @@ matches `issued_credential` and `exposure`, which already work this way.
 Every entry in a row's `reachable_validators` array carries two required
 booleans. They answer two different questions, so they are never summed:
 
-- `foreign_class_validator: true` (the CHAOS-3271 defect shape): a validator
+- `foreign_class_validator: true` (the defect shape): a validator
   that does not own a credential's class can observe or try to parse that
   credential before (or regardless of) the route's intended validator. This is
   the number to watch.
@@ -124,27 +124,27 @@ Worked examples:
   runs before each route's own check.
 - Foreign-class validator: the Python `OrgIdMiddleware` ran every
   `Authorization` bearer (an opaque ACR service credential included) through
-  the user-JWT decoder (CHAOS-3271). That code is gone. Today no row in ops,
+  the user-JWT decoder. That code is gone. Today no row in ops,
   web or acr sets `foreign_class_validator: true`.
 
 `contracts/auth/v1/credential-classes.json` lists the validators of each
-credential class with the same two fields. Four of its entries are retired
-Python validators with a null anchor (the first validator of
-`ops_refresh_token`, `internal_svc_acr_token`, `internal_svc_worker_token` and
-`external_push_ingest_token`). They carry neither field and are not counted;
-CHAOS-13627 removes them. The schema lets only an unanchored entry leave the
-fields out.
+credential class with the same two fields, but only on a validator that has a
+code anchor. A validator with a null anchor (its code was not found or is gone,
+four of them retired Python validators) carries neither field: an unverified
+`false` would read as a measured 0. The schema lets only an unanchored entry
+leave the fields out, and the count names every such entry instead of counting
+it.
 
 The count of foreign-class validators, with the entries it does not count named
 in its output (run at the ops repository root; add the web and acr profile files
 for the platform-wide count):
 
 ```sh
-jq -n '[inputs] as $d | {foreign_class_validator: ([$d[] | .. | objects | select(.foreign_class_validator == true)] | length), not_counted_pending_chaos_13627: [$d[] | .classes[]? | .class_id as $c | (.validators // []) | to_entries[] | select(.value | has("foreign_class_validator") | not) | "\($c) validators[\(.key)]"]}' contracts/auth/v1/endpoint-profiles.*.json contracts/auth/v1/credential-classes.json
+jq -n '[inputs] as $d | {foreign_class_validator: ([$d[] | .. | objects | select(.foreign_class_validator == true)] | length), not_counted_unanchored: [$d[] | .classes[]? | .class_id as $c | (.validators // []) | to_entries[] | select(.value | has("foreign_class_validator") | not) | "\($c) validators[\(.key)]"]}' contracts/auth/v1/endpoint-profiles.*.json contracts/auth/v1/credential-classes.json
 ```
 
 `ci/auth-contracts-ajv/run.test.mjs` runs this command text from this page:
-on this repository it answers 0 and names the four retired entries; on a
+on this repository it answers 0 and names every unanchored validator; on a
 fixture with one planted foreign-class entry it answers 1.
 
 ## Retired worker service credentials

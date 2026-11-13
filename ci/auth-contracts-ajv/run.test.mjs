@@ -265,12 +265,19 @@ test("the credential-class schema holds the two validator kinds and the retired 
   assert.equal(validate(read()), true, JSON.stringify(validate.errors));
   const plant = (anchored, mutate) => {
     const document = read();
-    const validator = document.classes.flatMap((c) => c.validators ?? []).find((v) => (v.anchor !== null) === anchored && "earlier_auth_gate" in v);
-    assert.ok(validator, `no ${anchored ? "anchored" : "unanchored"} validator with the fields`);
+    const validator = document.classes.flatMap((c) => c.validators ?? []).find((v) => (v.anchor !== null) === anchored);
+    assert.ok(validator, `no ${anchored ? "anchored" : "unanchored"} validator`);
     mutate(validator);
     return validate(document);
   };
-  assert.equal(plant(false, (v) => { delete v.earlier_auth_gate; delete v.foreign_class_validator; }), true, "an unanchored entry may leave both out");
+  // An anchored validator states both fields; an unanchored one states neither (an unverified false is no measurement).
+  for (const v of read().classes.flatMap((c) => c.validators ?? [])) {
+    const has = "earlier_auth_gate" in v && "foreign_class_validator" in v;
+    const none = !("earlier_auth_gate" in v) && !("foreign_class_validator" in v);
+    assert.ok(v.anchor !== null ? has : none, `${v.description}: anchor ${JSON.stringify(v.anchor)} with fields ${has}`);
+  }
+  assert.equal(plant(false, () => {}), true, "an unanchored entry leaves both out");
+  assert.equal(plant(false, (v) => { v.earlier_auth_gate = false; v.foreign_class_validator = false; }), true, "the schema still allows the fields on an unanchored entry");
   const refused = {
     "anchored, earlier_auth_gate missing": [true, (v) => delete v.earlier_auth_gate],
     "anchored, foreign_class_validator missing": [true, (v) => delete v.foreign_class_validator],
@@ -284,7 +291,7 @@ test("the credential-class schema holds the two validator kinds and the retired 
 
 // The documented count command, run as written on the docs page: 0 here with the four retired entries named as
 // not counted, and 1 with one planted foreign-class entry.
-test("the foreign-class count command of the docs answers 0 here, names what it does not count, and 1 on a planted fixture", () => {
+test("the foreign-class count command of the docs answers 0 here, names every unanchored validator, and 1 on a planted fixture", () => {
   const page = readFileSync(path.join(repo, "docs", "reference", "auth", "endpoint-profiles.md"), "utf8");
   const commands = page.split("\n").filter((line) => line.startsWith("jq -n '[inputs] as $d | {foreign_class_validator:"));
   assert.equal(commands.length, 1, "the page holds the count command once");
@@ -293,8 +300,13 @@ test("the foreign-class count command of the docs answers 0 here, names what it 
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
-  const retired = ["ops_refresh_token validators[0]", "internal_svc_acr_token validators[0]", "internal_svc_worker_token validators[0]", "external_push_ingest_token validators[0]"];
-  assert.deepEqual(run(repo), { foreign_class_validator: 0, not_counted_pending_chaos_13627: retired });
+  // Not counted: exactly the unanchored validators, read from the registry itself (the 4 retired ones among them).
+  const registry = JSON.parse(readFileSync(path.join(repo, "contracts", "auth", "v1", "credential-classes.json"), "utf8"));
+  const retired = registry.classes.flatMap((c) => (c.validators ?? []).flatMap((v, i) => (v.anchor === null ? [`${c.class_id} validators[${i}]`] : [])));
+  for (const id of ["ops_refresh_token", "internal_svc_acr_token", "internal_svc_worker_token", "external_push_ingest_token"]) {
+    assert.ok(retired.includes(`${id} validators[0]`), `${id} validators[0] is not among the unanchored`);
+  }
+  assert.deepEqual(run(repo), { foreign_class_validator: 0, not_counted_unanchored: retired });
   const root = mkdtempSync(path.join(os.tmpdir(), "foreign-count-"));
   try {
     const v1 = path.join(root, "contracts", "auth", "v1");
@@ -305,7 +317,7 @@ test("the foreign-class count command of the docs answers 0 here, names what it 
     row.reachable_validators[0].earlier_auth_gate = false;
     row.reachable_validators[0].foreign_class_validator = true;
     writeFileSync(path.join(v1, "endpoint-profiles.go-api.json"), JSON.stringify(document));
-    assert.deepEqual(run(root), { foreign_class_validator: 1, not_counted_pending_chaos_13627: retired });
+    assert.deepEqual(run(root), { foreign_class_validator: 1, not_counted_unanchored: retired });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -452,10 +452,12 @@ func (c *drainingComponent) Shutdown(context.Context) error {
 	return c.shutdownErr
 }
 
-// stopProbe records when its shutdown began and whether its context had already ended.
+// stopProbe records when its shutdown began and whether its context had already ended. A non-nil gate holds the Shutdown call
+// until the test closes it: the worst order the runtime allows, a component whose attempt ends before its Shutdown has begun.
 type stopProbe struct {
 	name   string
 	record func(string)
+	gate   <-chan struct{}
 
 	mu        sync.Mutex
 	stoppedAt time.Time
@@ -471,6 +473,9 @@ func (c *stopProbe) stopped() (time.Time, bool) {
 func (c *stopProbe) Name() string                { return c.name }
 func (c *stopProbe) Start(context.Context) error { return nil }
 func (c *stopProbe) Shutdown(ctx context.Context) error {
+	if c.gate != nil {
+		<-c.gate
+	}
 	c.record("stop:" + c.name)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -532,7 +537,13 @@ func TestShutdownBoundsTheDrainWaitByTheGlobalDeadline(t *testing.T) {
 			shutdownErr: errors.New("1 handlers still running"),
 			drained:     make(chan struct{}),
 		}
-		store := &stopProbe{name: "store", record: record}
+		// The store's attempt starts with the global budget spent, so the runtime moves on as soon as it has dispatched the call: it
+		// does not wait for Shutdown to begin. The gate forces that order every run (the call begins only after shutdown has
+		// returned) instead of leaving it to the scheduler; the test then lets the call run and waits for it to settle in the
+		// bubble before it reads the store. Reading right after shutdown returned saw "the store was never stopped" whenever the
+		// scheduler ran the dispatching goroutine late (CHAOS-13695).
+		gate := make(chan struct{})
+		store := &stopProbe{name: "store", record: record, gate: gate}
 		const shutdownTimeout = 100 * time.Millisecond
 		runtime, err := New(Options{ShutdownTimeout: shutdownTimeout})
 		if err != nil {
@@ -541,6 +552,8 @@ func TestShutdownBoundsTheDrainWaitByTheGlobalDeadline(t *testing.T) {
 		started := time.Now()
 		err = runtime.shutdown(context.Background(), []Component{store, server})
 		returnedAt := time.Now()
+		close(gate)
+		synctest.Wait()
 		stoppedAt, _ := store.stopped()
 		if stoppedAt.IsZero() {
 			t.Fatal("the store was never stopped")

@@ -63,6 +63,9 @@ const (
 var ssoProviderPatterns = []string{PatternSSOProviderList, PatternSSOProviderCreate, PatternSSOProviderGet, PatternSSOProviderUpdate,
 	PatternSSOProviderDelete, PatternSSOProviderActivate, PatternSSOProviderDeactivate}
 
+// SSOProviderPatterns returns a copy of the SSO provider routes, for tests that plant their endpoint-profile rows.
+func SSOProviderPatterns() []string { return append([]string(nil), ssoProviderPatterns...) }
+
 // SSOProviderRouteCount is the number of SSO provider routes.
 func SSOProviderRouteCount() int { return len(ssoProviderPatterns) }
 

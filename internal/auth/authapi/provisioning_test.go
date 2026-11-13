@@ -409,7 +409,13 @@ func buildProvFixture(t *testing.T, profileRows []byte, w *workloadIssueFixture)
 		t.Fatal(err)
 	}
 	f.sso = &fakeSSOProviders{}
-	ssoRoutes, err := SSOProviderRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs, ProfileRows: profileRows,
+	// The embedded document holds no SSO provider rows (they ship in a follow-up PR, after the file they cite has a commit
+	// on main), so a fixture without its own document plants them.
+	ssoRows := profileRows
+	if ssoRows == nil {
+		ssoRows = docWithRows(t, ssoProviderPatterns...)
+	}
+	ssoRoutes, err := SSOProviderRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs, ProfileRows: ssoRows,
 		SSOProviderStores: SSOProviderStores{SSOProviders: f.sso, SSOSealer: fakeSealer{}}, Workload: workload,
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewManualReader())).Meter("test")})

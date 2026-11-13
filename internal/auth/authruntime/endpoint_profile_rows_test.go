@@ -296,7 +296,7 @@ func TestTheRowGateRefusesAPlantedMissingRowForEveryServedRoute(t *testing.T) {
 // the twenty-five provisioning routes, the eight read routes, the four user-admin routes, the three authorize routes and the three operator paths on GET and HEAD, GET and
 // HEAD of the JWKS and the discovery document, the five OAuth authorization server routes and, on the internal listener,
 // the acr credential events route.
-const servedAuthRouteCount = 95
+const servedAuthRouteCount = 88
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.

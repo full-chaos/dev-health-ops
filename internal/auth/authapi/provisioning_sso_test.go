@@ -147,7 +147,13 @@ func TestSSOProviderRoutesRefuseUserTokens(t *testing.T) {
 func TestSSOProviderRoutesMountOnlyWithTheirRows(t *testing.T) {
 	t.Parallel()
 	for _, c := range ssoRouteCases() {
-		f := newProvFixtureFor(t, embeddedDocWithoutRoutes(t, c.path), nil)
+		var others []string
+		for _, pattern := range SSOProviderPatterns() {
+			if pattern != c.path {
+				others = append(others, pattern)
+			}
+		}
+		f := newProvFixtureFor(t, docWithRows(t, others...), nil)
 		if response := f.post(c.path, c.body(f, f.owner), nil); response.Code != http.StatusNotFound && response.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("%s without its row: %d, want the route unmounted", c.op, response.Code)
 		}
@@ -346,5 +352,20 @@ func TestSSOProviderRoutesRefuseOtherProdWorkloadSubjects(t *testing.T) {
 				t.Fatalf("%s, %s: a refused workload token reached a store", c.op, name)
 			}
 		}
+	}
+}
+
+// The embedded endpoint-profile document holds no SSO provider rows (they ship after the PR that adds the file they cite),
+// so on the real document none of the seven routes is mounted, whatever else is set up: the routes are dark by their rows.
+func TestSSOProviderRoutesAreNotMountedOnTheEmbeddedDocument(t *testing.T) {
+	t.Parallel()
+	f := newProvFixtureFor(t, nil, nil)
+	routes, err := SSOProviderRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+		SSOProviderStores: SSOProviderStores{SSOProviders: f.sso, SSOSealer: fakeSealer{}}, Workload: nil})
+	if err != nil || len(routes) != 0 {
+		t.Fatalf("embedded document: %d routes, err %v; want none and no error", len(routes), err)
+	}
+	if err := SSOProviderRowsError(nil); err == nil {
+		t.Fatal("the embedded document passes the SSO provider rows check: the rows are meant to ship in the follow-up PR")
 	}
 }

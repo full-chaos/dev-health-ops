@@ -97,8 +97,7 @@ func TestTheRegistryNamesTheProvisioningRoutesAsWorkloadConsumersOnly(t *testing
 				}
 			}
 			// The eight read routes mount with the provisioning routes, on the same two switches.
-			// The seven SSO provider routes mount on the same two switches (AUTH_MEMBERSHIP_ROUTES).
-			if want := len(provisioningRoutes) + len(ReadOperations()) + 7; named != want {
+			if want := len(provisioningRoutes) + len(ReadOperations()); named != want {
 				t.Errorf("%d workload_token provisioning consumers name both variables, want %d", named, want)
 			}
 		case "internal_svc_authsess_token":

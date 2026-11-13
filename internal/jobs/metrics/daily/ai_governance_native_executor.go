@@ -188,3 +188,5 @@ func wrapAIGovernanceCoverageWritePartialWrite(written int, err error) (int, err
 }
 
 var _ NativeFamilyExecutor = (*AIGovernanceExecutor)(nil)
+
+// CI cell C6 (stacked draft PR, never merged): a metrics_proof path.

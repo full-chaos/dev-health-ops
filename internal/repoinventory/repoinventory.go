@@ -55,6 +55,25 @@ LIMIT {limit_n:UInt32}
 `, settings)
 }
 
+// ExistsStatement is the existence probe: one row when the organization has at
+// least one repos row whose lowercased, trimmed repo is a well-formed slug (the
+// rows Statement counts), else none. LIMIT 1: it reads no list and holds no
+// Limit, so an organization of any size answers. It binds {org_id:String};
+// settings is the trailing SETTINGS clause.
+func ExistsStatement(settings string) string {
+	return fmt.Sprintf(`
+SELECT 1 AS present
+FROM repos FINAL
+WHERE org_id = {org_id:String}
+  AND match(
+    lowerUTF8(trimBoth(repo)),
+    '^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$'
+  )
+LIMIT 1
+%s
+`, settings)
+}
+
 // Row is one row of Statement: a slug and its row count.
 type Row struct {
 	Value string

@@ -25,7 +25,7 @@ func TestAdminMemberListAnswersAsLegacyVenueOracle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		GoOnly: true, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		GoOnly: true, Root: venueRoot(), Logger: quietLogger(),
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(query string, args ...any) {

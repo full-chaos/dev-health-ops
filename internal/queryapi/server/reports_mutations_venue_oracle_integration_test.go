@@ -45,9 +45,8 @@ import (
 // then every row the mutations touched, column by column.
 
 const (
-	oracleJWTKey = "venue-oracle-saved-report-mutations-secret-key-32b!"
-	oracleOrgA   = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
-	oracleOrgB   = "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b"
+	oracleOrgA = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+	oracleOrgB = "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b"
 )
 
 // The seeded reports, fixed ids so both planes name the same rows.
@@ -117,7 +116,7 @@ func runSavedReportVenue(t *testing.T, goldenName, pin string, cases []oracleCas
 	golden := venueoracle.OpenGolden(t, venueGolden(goldenName, t.Name(), pin))
 	userA, userB := stableVenueID(goldenName+"/user-a"), stableVenueID(goldenName+"/user-b")
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: root, JWTKey: oracleJWTKey,
+		Golden: golden, Root: root,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
 				t.Helper()

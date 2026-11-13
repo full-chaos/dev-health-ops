@@ -65,11 +65,9 @@ func TestIntegrationBackfillVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("integration-backfill-venue-oracle", t.Name(), "c3f5776e50a3d7364b4c112df01cb3108f7d0c919a8fc64e4b48636036816495"))
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-integration-backfill!"
 	v := newIDs()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden, Root: root,
-		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + venueKey,
 		},
@@ -90,7 +88,7 @@ func TestIntegrationBackfillVenueOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	base := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.Now = func() time.Time { return pinned }
 		deps.IntegrationHandoffWait = 3 * time.Second
 	})
@@ -354,7 +352,7 @@ func normalize(request venueoracle.Request, body string) string {
 	})
 }
 
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, adjust func(*apiservice.Deps)) string {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, adjust func(*apiservice.Deps)) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {

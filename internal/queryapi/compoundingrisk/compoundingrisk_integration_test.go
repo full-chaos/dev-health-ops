@@ -27,9 +27,9 @@ var ddls = []string{
       w_churn Float64, w_complexity Float64, w_ownership Float64, w_review Float64,
       threshold_elevated Float64, threshold_high Float64, computed_at DateTime DEFAULT now(),
       merged_prs_30d Nullable(Float64), reviewed_prs_30d Nullable(Float64), review_share_30d Nullable(Float64))
-      ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, scope, scope_id, day, computed_at)`,
+      ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, scope, scope_id, day)`,
 	`CREATE TABLE repos (id UUID, repo String, provider String DEFAULT 'unknown', org_id String DEFAULT 'default',
-      created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY id`,
+      created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
 	`CREATE TABLE teams (id String, name String, org_id String DEFAULT 'default', repo_patterns Array(String) DEFAULT [],
       is_active UInt8 DEFAULT 1, updated_at DateTime64(6), last_synced DateTime64(6) DEFAULT now64(6)) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 	`CREATE TABLE team_repo_ownership (org_id String, provider String, team_id String, repo_id Nullable(UUID),
@@ -508,5 +508,32 @@ func TestRealClickHouse_CoverageBesideAScoreOnly(t *testing.T) {
 	}
 	if len(teams.Rows) != 2 {
 		t.Errorf("team rows = %v", ids(teams.Rows))
+	}
+}
+
+// A superseded repo name row must neither select a repository by the old
+// name nor label it, for the repo breakout (filter subquery and label read).
+func TestRealClickHouse_RepoBreakoutIgnoresSupersededRepoName(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) SELECT '%s', 'acme/old', 'github', 'org-1', now64(3), now64(3) - INTERVAL 1 HOUR`, rA)
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) SELECT '%s', 'acme/new', 'github', 'org-1', now64(3), now64(3)`, rA)
+	put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, 1), score: "0.2", sev: "low"})
+	in := func(repoIDs []string) *model.CompoundingRiskFilterInput {
+		return &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeRepo, RepoIds: repoIDs, TrendDays: 30}
+	}
+	current, err := Resolve(ctx, client, "org-1", in([]string{"acme/new"}), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current.Rows) != 1 || current.Rows[0].ScopeLabel != "acme/new" {
+		t.Fatalf("current name %#v", current.Rows)
+	}
+	stale, err := Resolve(ctx, client, "org-1", in([]string{"acme/old"}), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale.Rows) != 0 {
+		t.Fatalf("a superseded name selected the repository: %#v", stale.Rows)
 	}
 }

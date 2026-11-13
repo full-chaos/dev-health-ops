@@ -45,13 +45,11 @@ func startRefreshFedVenue(t *testing.T) *refreshFedVenue {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	t.Cleanup(cancel)
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-refresh-fed-32"
 	v := &refreshFedVenue{ctx: ctx, target: uuid.New(), control: uuid.New()}
 	superID := uuid.New()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, adminPool *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			for _, org := range []uuid.UUID{v.target, v.control} {
@@ -76,7 +74,7 @@ VALUES ($1, 'venue-groupsdel-super@example.com', true, true, true, 0, now(), now
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	v.conn = conn
-	v.goBase, _ = startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	v.goBase, _ = startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.ClickHouseDSN = chURI
 	})
 	v.super = venue.Tokens["super"]

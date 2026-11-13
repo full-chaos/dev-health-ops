@@ -1,10 +1,11 @@
 # CHAOS-13520: the unit-test packages too long for one five-minute go-quality test leg run as PARTS parts of their test names.
 #
-# Format: package<TAB>parts (parts >= 2), sorted by package (C locale). ci/go_race_shard.awk places each part like a package at
-# ceil(weight / parts) (ci/go_test_weights.tsv); check_go.sh lists the package's names with `go test -list` (the leg's own build),
-# sorts them and gives name i to part ((i - 1) mod parts) + 1, then runs a part's names alone through -run after the shard's
-# other packages (a package with race-excluded rows runs fresh with -json, so the shard reads its rows' receipts from that run).
-# A new test joins a part with no edit here. A split package is never pinned (ci/go_test_pins.tsv) or solo.
+# Format: package<TAB>parts (parts >= 2), sorted by package (C locale). ci/go_race_shard.awk places each part like a package, at
+# the weight its test rows give it (ci/go_test_split_weights.tsv, CHAOS-13668); check_go.sh lists the package's names with
+# `go test -list` (the leg's own build) and cuts them by those rows (a measured name longest first onto the lightest part, any
+# other name by a hash of its name), then runs a part's names through -run beside the shard's other packages (a package with
+# race-excluded rows runs fresh with -json, so the shard reads its rows' receipts from that run). A new test joins a part with no
+# edit and moves no other test. A split package needs at least `parts` test rows. It is never pinned (ci/go_test_pins.tsv) or solo.
 # parts = ceil(measured seconds / 150), the measured time from the test legs of run 42838102780 (PR #6046, ae06059f).
 # CHAOS-13520 (acp, after PR #6058 run at d4b3b08c): internal/cigates/chartgates 4 -> 6 parts (958 s), internal/cigates/splitshards split in 4 parts (1166 s).
 deploy/helm/dev-health	5

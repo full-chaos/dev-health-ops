@@ -182,7 +182,6 @@ func TestTheTestWeightsTableIsClean(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatal("ci/go_test_weights.tsv has no row: every shard would be balanced by package count alone")
 	}
-	splits := splitRows(t)
 	seen := map[string]bool{}
 	var keys []string
 	for _, r := range rows {
@@ -191,15 +190,9 @@ func TestTheTestWeightsTableIsClean(t *testing.T) {
 		}
 		seen[r.pkg] = true
 		keys = append(keys, r.pkg)
-		// A "<key>#<part>" row weighs one part of a split package for the chain-aware test-leg plan; its package's own row comes first.
-		if pkg, part, isPart := strings.Cut(r.pkg, "#"); isPart {
-			n, err := strconv.Atoi(part)
-			if err != nil || n < 1 || n > splits[pkg] {
-				t.Errorf("part row %s names no part of a package ci/go_test_splits.tsv splits", r.pkg)
-			}
-			if !seen[pkg] {
-				t.Errorf("part row %s has no row of its whole package before it", r.pkg)
-			}
+		// CHAOS-13668: part weights are derived from ci/go_test_split_weights.tsv; a hand "<key>#<part>" row could go stale.
+		if strings.Contains(r.pkg, "#") {
+			t.Errorf("part row %s: part weights are derived from ci/go_test_split_weights.tsv, never kept by hand", r.pkg)
 			continue
 		}
 		if !known[r.pkg] {
@@ -219,6 +212,7 @@ func TestEveryShardIsNonEmptyAndTheShardsPartitionTheModule(t *testing.T) {
 		weights[r.pkg] = r.seconds
 	}
 	splits := splitRows(t)
+	weights = withPartWeights(weights, derivedPartWeights(splitWeightRows(t), splits, weights))
 	serial := serialHeavyKey(t, mod)
 	var all []string
 	var shards []chainLoad

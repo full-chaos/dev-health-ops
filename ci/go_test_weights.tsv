@@ -1,21 +1,15 @@
 # Measured wall seconds of one package under `go test` in the go-quality test leg (CHAOS-10355), the weight ci/go_race_shard.awk balances the test shards by
 # (`check_go.sh ci-leg test K N`). Re-measured at 10 test legs (CHAOS-13622): MEDIAN (rounded to whole seconds) of the uncached `ok <pkg> <n>s` lines of the test legs of the 5 successful
 # full-plan go-quality push runs on main since the 10-leg plan (43366218676, 43369751192, 43376042584, 43377857475, 43379257796; up to 5 values per package). A split package's
-# (ci/go_test_splits.tsv) value of one run is the sum of its parts' lines: the weight of the whole package (ci/go_race_shard.awk gives each part weight/parts).
+# (ci/go_test_splits.tsv) value of one run is the sum of its parts' lines: the weight of the whole package.
 # Rows: every package of median >= 20 s, and every package that already had a row (a row of a package with no uncached line in those runs keeps its earlier value), among them the
 # packages the unweighted-slow guard flagged on a starved shard (internal/auth/identity/saml, internal/cigates/bigboyrender, internal/auth/identity; CHAOS-13422). A package with no row weighs 1.
-# Part rows <key>#<part> (CHAOS-13664, read only by the chain-aware test-leg plan, ci/go_race_shard.awk chain=1): every part of every split package, the MEDIAN over the same 5 runs of
-# the ok seconds of the leg that ran that part (under the plan of those runs; a leg that ran m parts of one package gives each 1/m: deploy/helm/dev-health parts 1+4 and 2+5). Minimum 1.
+# No part rows (CHAOS-13668): the test-leg plan derives a split package's part weights from its test rows in ci/go_test_split_weights.tsv; a <key>#<part> row is refused.
 # The weights only need to be roughly right: a wrong one costs balance, never coverage (the shards always partition `go list ./...`). Key = import path relative to the module root.
 # Sorted (LC_ALL=C), no duplicates; internal/cigates/testshard checks each row names a real package.
 cmd/dho	51
 cmd/gqlgen-guard	33
 deploy/helm/dev-health	424
-deploy/helm/dev-health#1	77
-deploy/helm/dev-health#2	79
-deploy/helm/dev-health#3	116
-deploy/helm/dev-health#4	77
-deploy/helm/dev-health#5	79
 internal/api/credentials	31
 internal/api/policy	47
 internal/api/syncadmin	59
@@ -35,84 +29,36 @@ internal/auth/platformrole	25
 internal/auth/writerinventory	79
 internal/cigates/abstime	40
 internal/cigates/affected	365
-internal/cigates/affected#1	176
-internal/cigates/affected#2	79
-internal/cigates/affected#3	131
 internal/cigates/affectedmatrix	69
 internal/cigates/affectedmodule	60
 internal/cigates/affectedreject	169
 internal/cigates/bigboy	46
-internal/cigates/bigboy#1	20
-internal/cigates/bigboy#2	29
 internal/cigates/bigboyrender	10
 internal/cigates/chartgates	264
-internal/cigates/chartgates#1	28
-internal/cigates/chartgates#2	15
-internal/cigates/chartgates#3	95
-internal/cigates/chartgates#4	106
-internal/cigates/chartgates#5	9
-internal/cigates/chartgates#6	6
 internal/cigates/checkgo	519
-internal/cigates/checkgo#1	67
-internal/cigates/checkgo#2	32
-internal/cigates/checkgo#3	80
-internal/cigates/checkgo#4	263
-internal/cigates/checkgo#5	95
 internal/cigates/checkgoshards	130
-internal/cigates/checkgoshards#1	94
-internal/cigates/checkgoshards#2	37
 internal/cigates/docs	75
 internal/cigates/docstools	66
 internal/cigates/emitscan	20
 internal/cigates/integrationshards	568
-internal/cigates/integrationshards#1	71
-internal/cigates/integrationshards#2	157
-internal/cigates/integrationshards#3	95
-internal/cigates/integrationshards#4	110
-internal/cigates/integrationshards#5	87
-internal/cigates/integrationshards#6	74
 internal/cigates/outboundtransport	28
-internal/cigates/outboundtransport#1	27
-internal/cigates/outboundtransport#2	1
 internal/cigates/proofteardown	35
 internal/cigates/racescope	31
-internal/cigates/racescope#1	21
-internal/cigates/racescope#2	10
 internal/cigates/raceunweighted	77
-internal/cigates/raceunweighted#1	44
-internal/cigates/raceunweighted#2	43
 internal/cigates/releasetag	18
 internal/cigates/scripts	559
-internal/cigates/scripts#1	288
-internal/cigates/scripts#2	89
-internal/cigates/scripts#3	76
-internal/cigates/scripts#4	67
 internal/cigates/sharedserver	31
 internal/cigates/splitshards	163
-internal/cigates/splitshards#1	10
-internal/cigates/splitshards#2	22
-internal/cigates/splitshards#3	69
-internal/cigates/splitshards#4	64
 internal/cigates/suitecatalog	52
 internal/cigates/testshard	443
-internal/cigates/testshard#1	117
-internal/cigates/testshard#2	114
-internal/cigates/testshard#3	105
-internal/cigates/testshard#4	93
 internal/cigates/weightsfiles	86
 internal/cigates/workflowpaths	28
 internal/cigates/workflows	85
-internal/cigates/workflows#1	23
-internal/cigates/workflows#2	20
-internal/cigates/workflows#3	24
-internal/cigates/workflows#4	17
 internal/cli	13
 internal/fixturescli	16
 internal/goapicli/restprove	16
 internal/goapiproof	33
 internal/gqlgenguard	281
-internal/gqlgenguard#1	82
-internal/gqlgenguard#2	199
 internal/httpguard	36
 internal/joboutbox	19
 internal/jobruntime	10
@@ -128,8 +74,6 @@ internal/platform/otlpmetrics	36
 internal/platform/tracing	20
 internal/providerfoundation	13
 internal/providersync	84
-internal/providersync#1	50
-internal/providersync#2	41
 internal/pythonparity	25
 internal/pythonparity/emailvalidator	35
 internal/pythonparity/pyidna	29
@@ -146,6 +90,4 @@ internal/syncdispatchruntime	27
 internal/testsupport/gitmaintcensus	9
 internal/testsupport/goldenscan/treegate	10
 internal/testsupport/venuechanged	44
-internal/testsupport/venuechanged#1	26
-internal/testsupport/venuechanged#2	18
 internal/testsupport/venueoracle/goldenhygiene	15

@@ -25,9 +25,10 @@ concurrency:
   # main pushes and merge_group entries are never cancelled -- see
   # go.yml/typecheck.yml/docker-images.yml/arc-runner-image.yml for the
   # specific incidents this protects). cancel-in-progress cancels a stale
-  # PR re-push and a stale non-main branch push only. The run of a label other than ci:full has its own group: it can
-  # neither cancel nor displace the real run of the PR.
-  group: ${{ github.workflow }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && '-other-label' || '' }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  # PR re-push and a stale non-main branch push only. A label run has its own group, so it never cancels the PR's run:
+  # ci:full in '-ci-full' (a cancelled run's always() fan-ins would post a CANCELLED required check beside the ci:full
+  # verdict), any other label in '-other-label'.
+  group: ${{ github.workflow }}${{ github.event.action == 'labeled' && github.event.label.name == 'ci:full' && '-ci-full' || github.event.action == 'labeled' && '-other-label' || '' }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:

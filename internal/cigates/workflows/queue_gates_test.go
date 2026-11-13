@@ -310,8 +310,10 @@ func TestLiveE2ERunsForEveryNonDocsQueueEntry(t *testing.T) {
 var liveE2EJobs = []string{"changes", "live-e2e-run", "metrics-executed-proof-run", "live-e2e", "metrics-executed-proof"}
 
 // liveE2ELabelViolations: adding ci:full starts the run with no push; the run of any other label posts no check run
-// under a real job name (a skipped job posts a passing check, which would overwrite a red verdict of the same head) and
-// sits in its own concurrency group (so it cannot cancel the real run); unlabeled starts nothing.
+// under a real job name (a skipped job posts a passing check, which would overwrite a red verdict of the same head);
+// unlabeled starts nothing. The three groups are pinned: the PR's own runs in <workflow>-<PR>, a ci:full label run in
+// <workflow>-ci-full-<PR> and any other label's run in <workflow>-other-label-<PR>, so no label run cancels the PR's run
+// (a cancelled run's always() fan-ins post a CANCELLED required check beside the later verdict).
 func liveE2ELabelViolations(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
@@ -422,11 +424,22 @@ func liveE2ELabelViolations(t *testing.T, root string) []string {
 		return g
 	}
 	sync, full, other := render("synchronize", ""), render("labeled", "ci:full"), render("labeled", "documentation")
-	if other == sync {
-		add("another label's run shares the PR concurrency group %q and would cancel the real run", sync)
+	const prSuffix = "-7"
+	base, ok := strings.CutSuffix(sync, prSuffix)
+	if !ok {
+		add("the PR concurrency group %q does not end in the PR number", sync)
 	}
-	if full != sync {
-		add("the ci:full run's group %q differs from the PR group %q: it would not supersede the run it recomputes", full, sync)
+	for _, g := range []struct{ id, got, want string }{
+		{"opened/synchronize/reopened", render("opened", ""), sync},
+		{"ci:full label", full, base + "-ci-full" + prSuffix},
+		{"other label", other, base + "-other-label" + prSuffix},
+	} {
+		if g.got != g.want {
+			add("the %s run's concurrency group is %q, want %q", g.id, g.got, g.want)
+		}
+	}
+	if full == sync || other == sync {
+		add("a label run shares the PR concurrency group %q and would cancel the PR's run", sync)
 	}
 	return out
 }
@@ -445,7 +458,9 @@ func TestLiveE2ELabeledTriggerPlantedDefects(t *testing.T) {
 	}{
 		{"no labeled type", mutation{live, "types: [opened, synchronize, reopened, labeled]", "types: [opened, synchronize, reopened]"}, []string{"lack labeled"}},
 		{"unlabeled type", mutation{live, "types: [opened, synchronize, reopened, labeled]", "types: [opened, synchronize, reopened, labeled, unlabeled]"}, []string{"unlabeled"}},
-		{"other label shares the group", mutation{live, "${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && '-other-label' || '' }}", ""}, []string{"would cancel the real run"}},
+		{"other label shares the group", mutation{live, " || github.event.action == 'labeled' && '-other-label' || '' }}", " || '' }}"}, []string{"other label run's concurrency group", "would cancel the PR's run"}},
+		{"ci:full shares the PR group (the previous form)", mutation{live, "github.event.action == 'labeled' && github.event.label.name == 'ci:full' && '-ci-full' || github.event.action == 'labeled' && '-other-label' || ''", "github.event.action == 'labeled' && github.event.label.name != 'ci:full' && '-other-label' || ''"}, []string{"ci:full label run's concurrency group", "would cancel the PR's run"}},
+		{"ci:full lands in the other-label group", mutation{live, "&& '-ci-full' ||", "&& '-other-label' ||"}, []string{"ci:full label run's concurrency group"}},
 		{"changes runs on another label", mutation{live, "    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'\n", ""}, []string{"changes: runs on the other label added run"}},
 		{"metrics fan-in runs on another label", mutation{live, "github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')\n    needs: [changes, metrics-executed-proof-run]", "github.event_name == 'merge_group')\n    needs: [changes, metrics-executed-proof-run]"}, []string{"metrics-executed-proof: runs on the other label added run"}},
 		{"proof run job keeps its real name", mutation{live, "    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'metrics-executed-proof-run (other label, not run)' || 'metrics-executed-proof-run' }}\n", ""}, []string{"metrics-executed-proof-run", "under the real name"}},

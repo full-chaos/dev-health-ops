@@ -49,16 +49,28 @@ var rejected = func() metric.Int64Counter {
 func Routes(pool *pgxpool.Pool, guard *policy.Guard, auth *policy.Authenticator, endpoint string, logger *slog.Logger) []httpapi.Route {
 	h := handlers{pool: pool, auth: auth, logger: logger, now: time.Now, endpoint: endpoint,
 		client: &http.Client{Timeout: sendTimeout, Transport: httpguard.SharedTransport()}}
-	return h.routeTable(func(next http.Handler) http.Handler { return guard.Wrap(policy.Authenticated, next) })
+	return h.routeTable(func(next http.Handler) http.Handler { return guard.Wrap(policy.Authenticated, next) }, guard)
 }
 
-func (h handlers) routeTable(wrap func(http.Handler) http.Handler) []httpapi.Route {
+// reportDeny is the text the guard's refusals of the report route carry.
+func (h handlers) reportDeny() policy.DenyText {
+	return policy.DenyText{Denied: reportRefused, Impersonated: reportRefused, Refused: h.reportRefusedObserved}
+}
+
+// reportKey is the route the decision point judges as admin.telemetry; reportRefused is the text the handler answered a
+// caller that does not hold the platform action, or that acts in an impersonation session, before the guard did.
+const (
+	reportKey     = "POST /api/v1/telemetry/report"
+	reportRefused = "Instance-wide telemetry statistics require a platform role"
+)
+
+func (h handlers) routeTable(wrap func(http.Handler) http.Handler, guard *policy.Guard) []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: "/api/v1/telemetry/status", Handler: wrap(h.withOrg(h.status))},
 		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-in", Handler: wrap(h.withOrg(h.requireOrgAdmin(h.optIn)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-out", Handler: wrap(h.withOrg(h.requireOrgAdmin(h.optOut)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/report",
-			Handler: wrap(h.requirePlatformRole(h.withOrg(h.report)))},
+			Handler: guard.WrapPlatformDeny(reportKey, policy.ActionAdminTelemetry, h.reportDeny(), h.requirePlatformRole(h.withOrg(h.report)))},
 	}
 }
 

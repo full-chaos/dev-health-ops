@@ -490,7 +490,7 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, level
 }
 
 // writeEnforceRefusal answers a request the decision point refused or could not judge, or that no decision point can.
-func writeEnforceRefusal(w http.ResponseWriter, level Authz, verdict enforceVerdict) {
+func writeEnforceRefusal(w http.ResponseWriter, r *http.Request, level Authz, verdict enforceVerdict, deny DenyText) {
 	switch verdict {
 	case enforceUnavailable:
 		WriteDetail(w, http.StatusServiceUnavailable, enforceUnavailableDetail, http.Header{"Retry-After": []string{enforceRetryAfter}})
@@ -501,7 +501,8 @@ func writeEnforceRefusal(w http.ResponseWriter, level Authz, verdict enforceVerd
 		WriteDetail(w, http.StatusServiceUnavailable, detail, nil)
 		return
 	case enforceImpersonationRefused:
-		WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
+		deny.refused(r)
+		WriteDetail(w, http.StatusForbidden, deny.impersonated(), nil)
 		return
 	case enforceSessionRowUnavailable:
 		WriteAuthFailure(w, "", ErrUnavailable)
@@ -510,7 +511,10 @@ func writeEnforceRefusal(w http.ResponseWriter, level Authz, verdict enforceVerd
 		WriteDetail(w, http.StatusForbidden, msgOrgContextRequired, nil)
 		return
 	}
-	WriteDetail(w, http.StatusForbidden, enforceDenyDetail(level), nil)
+	if verdict == enforceDeny {
+		deny.refused(r)
+	}
+	WriteDetail(w, http.StatusForbidden, deny.denied(enforceDenyDetail(level)), nil)
 }
 
 // enforceDenyDetail is the refusal a denied caller gets: the body the legacy guard gives at the same level, so a

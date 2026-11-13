@@ -168,4 +168,6 @@ C2	GET	/api/v1/admin/integrations	A	no	-	drift-S	mismatch	/api/v1/admin/integrat
 154	POST	/api/v1/admin/retention-policies/{policy_id}/execute	A	no	-	-	match	/api/v1/admin/retention-policies/{missing}/execute	{}
 157	GET	/api/v1/orgs/me	A	no	-	-	match	/api/v1/orgs/me	-
 158	POST	/api/v1/acr/credentials/{credential_id}/revoke	A	no	-	-	match	/api/v1/acr/credentials/crd_{missing}/revoke	-
+159	PATCH	/api/v1/orgs/me	A	no	-	-	match	/api/v1/orgs/me	{}
+160	POST	/api/v1/telemetry/report	A	no	-	-	match	/api/v1/telemetry/report	-
 `)

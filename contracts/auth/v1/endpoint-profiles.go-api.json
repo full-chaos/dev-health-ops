@@ -8654,14 +8654,12 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "org.write",
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26)",
-      "gaps": [
-        "action: no catalog action is proven to equal this handler's own check on the own organization profile (candidate for a ruling; this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/orgs/me [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -15161,7 +15159,7 @@
       "access_token_validation": {
         "legacy_hs256": false
       },
-      "action": null,
+      "action": "admin.telemetry",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -15170,9 +15168,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:182; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go#handlers.withOrg); a caller that does not hold admin.telemetry (a superuser holds it), or a request in an active impersonation session, answers 403 (internal/api/telemetry/report.go:46)",
-      "gaps": [
-        "action: the route admits only a caller holding admin.telemetry (internal/api/telemetry/report.go:32) and acts in one organization; admin.telemetry is a platform action and this route is org-scoped, so the row keeps no action"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/telemetry/report [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -15183,7 +15179,7 @@
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
-        "description": "policy.Authenticated: a valid access token for an active user."
+        "description": "policy.Superuser behind WrapPlatformDeny(admin.telemetry): a valid access token whose caller holds admin.telemetry; the refusal keeps the handler's text."
       },
       "public_rationale": null,
       "reachable_validators": [

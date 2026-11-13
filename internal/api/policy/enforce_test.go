@@ -811,7 +811,7 @@ func answerOf(verdict enforceVerdict) (int, string, http.Header) {
 	switch verdict {
 	case enforceDeny, enforceUnavailable, enforceNoDecisionPoint:
 		w := httptest.NewRecorder()
-		writeEnforceRefusal(w, Admin, verdict)
+		writeEnforceRefusal(w, nil, Admin, verdict, DenyText{})
 		return w.Code, w.Body.String(), w.Header()
 	case enforceAllow:
 		return http.StatusOK, "", http.Header{}

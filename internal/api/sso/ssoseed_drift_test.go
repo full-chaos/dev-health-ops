@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e/ssoseed"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e/ssoseed"
 )
 
 // The test-only seed stand-in (internal/cigates/livee2e/ssoseed, CHAOS-13636) mirrors the production row. These cells turn red when

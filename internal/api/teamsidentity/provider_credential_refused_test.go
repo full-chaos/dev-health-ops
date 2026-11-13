@@ -1,9 +1,12 @@
 package teamsidentity
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -113,5 +116,24 @@ func TestGoodTokenDiscoveryControl(t *testing.T) {
 	teams, err := discoverGitHub(context.Background(), githubTestCredential(), "acme")
 	if err != nil || len(teams) != 0 {
 		t.Fatalf("teams = %d, err = %v; want 0 teams and no error", len(teams), err)
+	}
+}
+
+// TestRefusedCredentialWarnLineHasFixedFieldsOnly pins the log line of the 422: step, provider and
+// provider_status, never the provider's body.
+func TestRefusedCredentialWarnLineHasFixedFieldsOnly(t *testing.T) {
+	var logs bytes.Buffer
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/teams/discover", nil)
+	err := &providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: http.StatusForbidden, Body: upstreamLeakText}
+	handlers{logger: slog.New(slog.NewTextHandler(&logs, nil))}.providerFailure(rec, req, "github", "discover teams", err)
+	line := logs.String()
+	for _, want := range []string{"step=\"discover teams\"", "provider=github", "provider_status=403"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("log line lacks %s: %s", want, line)
+		}
+	}
+	if strings.Contains(line, upstreamLeakText) {
+		t.Errorf("log line carries the provider body: %s", line)
 	}
 }

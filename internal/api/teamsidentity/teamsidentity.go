@@ -120,17 +120,17 @@ const providerCredentialRefusedDetail = "The provider refused the stored credent
 // providerFailure answers a failed provider call: a provider "not found" or a
 // refused credential (422) is a client error naming that, anything else stays a 500.
 // Not a 401/403: those name the caller's own session or role on this API.
-func (h handlers) providerFailure(w http.ResponseWriter, r *http.Request, what string, err error) {
+func (h handlers) providerFailure(w http.ResponseWriter, r *http.Request, provider, what string, err error) {
 	var providerErr *providerfoundation.ProviderError
 	if errors.As(err, &providerErr) {
 		switch providerErr.Class {
 		case providerfoundation.ErrorNotFound:
-			h.logger.WarnContext(r.Context(), "provider reported not found", slog.String("step", what))
+			h.logger.WarnContext(r.Context(), "provider reported not found", slog.String("step", what), slog.String("provider", provider))
 			policy.WriteDetail(w, http.StatusNotFound, providerNotFoundDetail, nil)
 			return
 		case providerfoundation.ErrorAuthentication:
 			h.logger.WarnContext(r.Context(), "provider refused the credential", slog.String("step", what),
-				slog.Int("provider_status", providerErr.StatusCode))
+				slog.String("provider", provider), slog.Int("provider_status", providerErr.StatusCode))
 			policy.WriteDetail(w, http.StatusUnprocessableEntity, providerCredentialRefusedDetail, nil)
 			return
 		}
@@ -515,7 +515,7 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.providerFailure(w, r, "discover teams", err)
+		h.providerFailure(w, r, provider, "discover teams", err)
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, teamDiscoverResponseJSON(provider, teams, truncated, warnings), nil)

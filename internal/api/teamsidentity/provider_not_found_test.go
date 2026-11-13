@@ -27,7 +27,7 @@ func (notFoundDoer) Do(request *http.Request) (*http.Response, error) {
 func answerProviderFailure(err error) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/teams/IMP/discover-members", nil)
-	handlers{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}.providerFailure(rec, req, "discover team members", err)
+	handlers{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}.providerFailure(rec, req, "github", "discover team members", err)
 	return rec
 }
 

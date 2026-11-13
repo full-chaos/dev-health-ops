@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"net/http"
 	"sort"
@@ -102,6 +103,13 @@ func (s pgStore) setupStatus(ctx context.Context, orgID string) (*pyjson.Object,
 		return nil, err
 	}
 	hasIntegration := len(providers) > 0
+	integrationSkipped := false
+	if !hasIntegration {
+		integrationSkipped, err = s.onboardingIntegrationSkipped(ctx, orgID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	configs, err := s.setupConfigs(ctx, orgID)
 	if err != nil {
 		return nil, err
@@ -195,10 +203,55 @@ func (s pgStore) setupStatus(ctx context.Context, orgID string) (*pyjson.Object,
 		canStartSync = primary.IsActive && !inFlight && hasRepoSelection
 	}
 
+	nextAction, blocker := setupNextAction(setupDecision{
+		hasIntegration:     hasIntegration,
+		integrationSkipped: integrationSkipped,
+		hasSyncConfig:      hasSyncConfig,
+		providers:          providers,
+		syncStatus:         syncStatus,
+		lastSyncError:      lastSyncError,
+		hasRepoSelection:   hasRepoSelection,
+	})
+
+	out := pyjson.NewObject()
+	out.Set("has_integration", hasIntegration)
+	providerValues := make([]pyjson.Value, len(providers))
+	for index, provider := range providers {
+		providerValues[index] = provider
+	}
+	out.Set("providers", providerValues)
+	out.Set("has_sync_config", hasSyncConfig)
+	out.Set("sync_config_id", optionalString(syncConfigID))
+	out.Set("first_sync_started", firstSyncStarted)
+	out.Set("first_sync_completed", firstSyncCompleted)
+	out.Set("sync_status", syncStatus)
+	out.Set("selected_repositories_count", pyjson.Int{Int: big.NewInt(selectedRepositories)})
+	out.Set("last_sync_error", optionalString(lastSyncError))
+	out.Set("can_start_sync", canStartSync)
+	out.Set("next_action", nextAction)
+	out.Set("blocker", optionalString(blocker))
+	return out, nil
+}
+
+type setupDecision struct {
+	hasIntegration     bool
+	integrationSkipped bool
+	hasSyncConfig      bool
+	providers          []string
+	syncStatus         string
+	lastSyncError      *string
+	hasRepoSelection   bool
+}
+
+func setupNextAction(in setupDecision) (string, *string) {
 	var nextAction string
 	var blocker *string
 	text := func(value string) *string { return &value }
+	hasIntegration, hasSyncConfig, providers := in.hasIntegration, in.hasSyncConfig, in.providers
+	syncStatus, lastSyncError, hasRepoSelection := in.syncStatus, in.lastSyncError, in.hasRepoSelection
 	switch {
+	case !hasIntegration && in.integrationSkipped:
+		nextAction = "complete"
 	case !hasIntegration:
 		nextAction, blocker = "connect_integration", text("No integration connected")
 	case !hasSyncConfig:
@@ -225,24 +278,17 @@ func (s pgStore) setupStatus(ctx context.Context, orgID string) (*pyjson.Object,
 		nextAction = "start_sync"
 	}
 
-	out := pyjson.NewObject()
-	out.Set("has_integration", hasIntegration)
-	providerValues := make([]pyjson.Value, len(providers))
-	for index, provider := range providers {
-		providerValues[index] = provider
+	return nextAction, blocker
+}
+
+// onboardingIntegrationSkipped reads the stored onboarding skip of the org.
+func (s pgStore) onboardingIntegrationSkipped(ctx context.Context, orgID string) (bool, error) {
+	var skipped bool
+	err := s.Pool.QueryRow(ctx, `SELECT onboarding_integration_skipped_at IS NOT NULL FROM organizations WHERE id = $1::uuid`, orgID).Scan(&skipped)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
 	}
-	out.Set("providers", providerValues)
-	out.Set("has_sync_config", hasSyncConfig)
-	out.Set("sync_config_id", optionalString(syncConfigID))
-	out.Set("first_sync_started", firstSyncStarted)
-	out.Set("first_sync_completed", firstSyncCompleted)
-	out.Set("sync_status", syncStatus)
-	out.Set("selected_repositories_count", pyjson.Int{Int: big.NewInt(selectedRepositories)})
-	out.Set("last_sync_error", optionalString(lastSyncError))
-	out.Set("can_start_sync", canStartSync)
-	out.Set("next_action", nextAction)
-	out.Set("blocker", optionalString(blocker))
-	return out, nil
+	return skipped, err
 }
 
 // activeCredentialProviders is sorted({c.provider for c in active credentials}).

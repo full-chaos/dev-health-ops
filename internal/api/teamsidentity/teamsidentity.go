@@ -125,17 +125,33 @@ func (h handlers) providerFailure(w http.ResponseWriter, r *http.Request, provid
 	if errors.As(err, &providerErr) {
 		switch providerErr.Class {
 		case providerfoundation.ErrorNotFound:
-			h.logger.WarnContext(r.Context(), "provider reported not found", slog.String("step", what), slog.String("provider", provider))
+			h.logger.WarnContext(r.Context(), "provider reported not found", slog.String("step", what), slog.String("provider", loggedProvider(provider)))
 			policy.WriteDetail(w, http.StatusNotFound, providerNotFoundDetail, nil)
 			return
 		case providerfoundation.ErrorAuthentication:
 			h.logger.WarnContext(r.Context(), "provider refused the credential", slog.String("step", what),
-				slog.String("provider", provider), slog.Int("provider_status", providerErr.StatusCode))
+				slog.String("provider", loggedProvider(provider)), slog.Int("provider_status", providerErr.StatusCode))
 			policy.WriteDetail(w, http.StatusUnprocessableEntity, providerCredentialRefusedDetail, nil)
 			return
 		}
 	}
 	h.internal(w, r, what, err)
+}
+
+// loggedProvider maps the route's provider value to a closed log value, so a
+// request cannot write its own text into the log line.
+func loggedProvider(provider string) string {
+	switch provider {
+	case "github":
+		return "github"
+	case "gitlab":
+		return "gitlab"
+	case "jira":
+		return "jira"
+	case "linear":
+		return "linear"
+	}
+	return "other"
 }
 
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, err error) {

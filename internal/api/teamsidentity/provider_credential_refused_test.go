@@ -137,3 +137,20 @@ func TestRefusedCredentialWarnLineHasFixedFieldsOnly(t *testing.T) {
 		t.Errorf("log line carries the provider body: %s", line)
 	}
 }
+
+func TestRefusedCredentialWarnLineLogsAnUnknownProviderAsOther(t *testing.T) {
+	for _, provider := range []string{"evil\nprovider=github", "GitHub", ""} {
+		var logs bytes.Buffer
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/teams/discover", nil)
+		err := &providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication, StatusCode: http.StatusUnauthorized}
+		handlers{logger: slog.New(slog.NewTextHandler(&logs, nil))}.providerFailure(rec, req, provider, "discover teams", err)
+		line := logs.String()
+		if !strings.Contains(line, "provider=other") {
+			t.Errorf("provider %q: log line lacks provider=other: %s", provider, line)
+		}
+		if strings.Count(line, "provider=") != 1 {
+			t.Errorf("provider %q: log line carries the request's provider text: %s", provider, line)
+		}
+	}
+}

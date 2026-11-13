@@ -13,13 +13,15 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/metric/noop"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // plantedRequestIDLog serves one authorize call with no credential through requestid.Middleware and the production
-// JSON logger while the uuid random source answers draws in order and then ends. It returns the answer, the log, the
-// number of draws read and whether the route ran. The source is process-wide, so no cell using it runs in parallel.
+// JSON logger (the route's and the process default, which the middleware writes to) while the uuid random source
+// answers draws in order and then ends. It returns the answer, the log, the number of draws read and whether the route
+// ran. The source and the default logger are process-wide, so no cell using it runs in parallel.
 func plantedRequestIDLog(t *testing.T, draws ...[16]byte) (*httptest.ResponseRecorder, *bytes.Buffer, int, bool) {
 	t.Helper()
 	var source []byte
@@ -30,7 +32,9 @@ func plantedRequestIDLog(t *testing.T, draws ...[16]byte) (*httptest.ResponseRec
 	uuid.SetRand(planted)
 	t.Cleanup(func() { uuid.SetRand(nil) })
 	logs := &bytes.Buffer{}
-	rec, err := newRecorder(logging.NewJSON(logs, slog.LevelInfo), noop.NewMeterProvider().Meter("test"))
+	logger := logging.NewJSON(logs, slog.LevelInfo)
+	t.Cleanup(logging.InstallDefault(logger))
+	rec, err := newRecorder(logger, noop.NewMeterProvider().Meter("test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,15 +118,54 @@ func TestAuthRequestIDLogNamesTheServedIDWhenADrawLooksLikeAKey(t *testing.T) {
 }
 
 // The redraw is bounded: a source that only answers key-shaped ids is a 503 dependency_unavailable after 8 draws,
-// before any route runs, with no X-Auth-Request-ID header and no log line of a redacted id.
+// before any route runs, with no X-Auth-Request-ID header and no log line of a redacted id. The error.v1 body names
+// the fixed nil-uuid wire id, never a draw, and one WARN line without any id records the refusal.
 func TestAuthRequestIDRedrawIsBounded(t *testing.T) {
 	keyShaped := keyShapedRequestDraw(t)
+	drawWire := wireOfDraw(t, keyShaped)
+	placeholder := requestid.WireOf(uuid.Nil)
 	draws := make([][16]byte, 8)
 	for i := range draws {
 		draws[i] = keyShaped
 	}
 	w, logs, read, ran := plantedRequestIDLog(t, draws...)
 	assertError(t, w, http.StatusServiceUnavailable, reasonDependency)
+	var doc struct {
+		SchemaVersion     string `json:"schema_version"`
+		Status            int    `json:"status"`
+		RequestID         string `json:"request_id"`
+		RetryAfterSeconds *int   `json:"retry_after_seconds"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.SchemaVersion != contracts.ErrorSurface || doc.Status != http.StatusServiceUnavailable ||
+		doc.RetryAfterSeconds == nil || *doc.RetryAfterSeconds != 1 || w.Header().Get("Retry-After") != "1" {
+		t.Fatalf("body %s, Retry-After %q: want an error.v1 503 with retry 1", w.Body, w.Header().Get("Retry-After"))
+	}
+	if doc.RequestID != placeholder || doc.RequestID == drawWire {
+		t.Fatalf("request_id %s, want the fixed %s and never the draw %s", doc.RequestID, placeholder, drawWire)
+	}
+	var warns []string
+	for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			t.Fatalf("log line %s: %v", line, err)
+		}
+		if entry["level"] == slog.LevelWarn.String() {
+			warns = append(warns, string(line))
+		}
+	}
+	if len(warns) != 1 {
+		t.Fatalf("%d WARN lines, want 1: %s", len(warns), logs)
+	}
+	if strings.Contains(warns[0], requestid.WirePrefix) || strings.Contains(warns[0], drawWire[len(requestid.WirePrefix):]) ||
+		strings.Contains(warns[0], "request_id") {
+		t.Fatalf("the WARN line names an id: %s", warns[0])
+	}
 	if ran {
 		t.Fatal("the route ran without a loggable request id")
 	}

@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/base32"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -38,15 +39,21 @@ const (
 	logKey = "audit_request_id"
 	// maxDraws bounds the redraw of ids the log redactor would change (about 3.6e-7 of draws).
 	maxDraws = 8
+	// redrawExhaustedMessage is the one WARN line of a request no draw is kept for. It names no id.
+	redrawExhaustedMessage = "request id redraw exhausted, no draw survives log redaction, answered 503 dependency_unavailable"
 )
 
 type key struct{}
 
+// unloggableWire is the request_id of the 503 a request with no loggable id gets: the wire form of the nil uuid,
+// which uuid.New never mints (it sets the version bits), so it names no request and no draw.
+var unloggableWire = WireOf(uuid.Nil)
+
 // Middleware mints a fresh id for every request, whatever the request carries,
 // and sets its wire form in Header before the handler writes. An id whose wire
 // form the log redactor would change is drawn again; when no draw is kept the
-// request is a 503 dependency_unavailable that reaches no handler and carries
-// no Header, so no log line names a redacted id.
+// request is a 503 dependency_unavailable that reaches no handler, carries no
+// Header and names no draw, so no log line names a redacted id.
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var id uuid.UUID
@@ -55,7 +62,8 @@ func Middleware(next http.Handler) http.Handler {
 			return WireOf(id), nil
 		})
 		if err != nil {
-			refuseUnloggable(w, WireOf(id))
+			slog.Default().WarnContext(r.Context(), redrawExhaustedMessage, slog.Int("draws", maxDraws))
+			refuseUnloggable(w)
 			return
 		}
 		w.Header().Set(Header, wire)
@@ -64,18 +72,16 @@ func Middleware(next http.Handler) http.Handler {
 }
 
 // refuseUnloggable writes the error.v1 503 of a request with no loggable id. The schema requires a request_id, so the
-// body carries the last draw; it is in no log line.
-func refuseUnloggable(w http.ResponseWriter, wire string) {
+// body carries unloggableWire.
+func refuseUnloggable(w http.ResponseWriter) {
 	retry := 1
 	raw, _ := json.Marshal(struct {
-		SchemaVersion     string              `json:"schema_version"`
-		Status            int                 `json:"status"`
-		ReasonCode        string              `json:"reason_code"`
-		RequestID         string              `json:"request_id"`
-		OccurredAt        contracts.Timestamp `json:"occurred_at"`
-		RetryAfterSeconds int                 `json:"retry_after_seconds"`
-	}{contracts.ErrorSurface, http.StatusServiceUnavailable, "dependency_unavailable", wire,
-		contracts.Timestamp{Time: time.Now().UTC()}, retry})
+		SchemaVersion string `json:"schema_version"`
+		contracts.ErrorEnvelope
+	}{contracts.ErrorSurface, contracts.ErrorEnvelope{
+		Status: http.StatusServiceUnavailable, ReasonCode: "dependency_unavailable", RequestID: unloggableWire,
+		OccurredAt: contracts.Timestamp{Time: time.Now().UTC()}, RetryAfterSeconds: &retry,
+	}})
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 	w.Header().Set("Cache-Control", "no-store")

@@ -27,6 +27,10 @@ var StubHosts = []string{
 var egressKeys = []string{"when", "network_internal", "networks", "default_route", "public_tcp", "public_dns", "stub_tcp", "hosts_pinned", "image",
 	"stub_mode", "stub_config", "stub_started", "goapi_ip", "run_id", "dynamic_hosts"}
 
+// ingressKey is the one optional key, at most once: none, or the comma list of the venue-ingress IPs a drive may sign
+// in through (CheckVenueBase). A record without it parses as before.
+const ingressKey = "ingress_ips"
+
 // noRun is the run_id of the read after the last drive, which precedes no drive.
 const noRun = "none"
 
@@ -50,7 +54,7 @@ func ParseEgress(name string, raw []byte) EgressRead {
 		switch {
 		case !ok:
 			read.Err = fmt.Errorf("line %d is not key=value", n+1)
-		case !slices.Contains(egressKeys, key):
+		case !slices.Contains(egressKeys, key) && key != ingressKey:
 			read.Err = fmt.Errorf("line %d: unknown key %q", n+1, key)
 		case seen[key]:
 			read.Err = fmt.Errorf("line %d: key %s twice", n+1, key)
@@ -69,7 +73,36 @@ func ParseEgress(name string, raw []byte) EgressRead {
 			return read
 		}
 	}
+	if value, ok := read.Fields[ingressKey]; ok {
+		if _, err := parseIngressIPs(value); err != nil {
+			read.Err = fmt.Errorf("key %s: %w", ingressKey, err)
+		}
+	}
 	return read
+}
+
+// parseIngressIPs reads an ingress_ips value: none, or distinct literal IPs in their plain form, none of them loopback
+// or unspecified; no CIDR, host name or empty entry.
+func parseIngressIPs(value string) ([]net.IP, error) {
+	if value == "none" {
+		return nil, nil
+	}
+	var ips []net.IP
+	seen := map[string]bool{}
+	for _, entry := range strings.Split(value, ",") {
+		ip := net.ParseIP(entry)
+		switch {
+		case ip == nil || ip.String() != entry:
+			return nil, fmt.Errorf("%q is not a literal IP in its plain form", entry)
+		case ip.IsLoopback() || ip.IsUnspecified():
+			return nil, fmt.Errorf("%s is loopback or unspecified", entry)
+		case seen[entry]:
+			return nil, fmt.Errorf("%s twice", entry)
+		}
+		seen[entry] = true
+		ips = append(ips, ip)
+	}
+	return ips, nil
 }
 
 // checkEgress holds the egress reads of a run to the no-egress form: exactly the reads named by want, in that order,
@@ -120,7 +153,7 @@ func checkEgress(reads []EgressRead, want []string) []string {
 			voids = append(voids, fmt.Sprintf("egress record %s: goapi_ip %q is not a private IP", r.Name, r.Fields["goapi_ip"]))
 		}
 		if i > 0 && reads[0].Err == nil {
-			for _, key := range []string{"image", "networks", "stub_config", "stub_started", "goapi_ip"} {
+			for _, key := range []string{"image", "networks", "stub_config", "stub_started", "goapi_ip", ingressKey} {
 				if r.Fields[key] != reads[0].Fields[key] {
 					voids = append(voids, fmt.Sprintf("egress record %s: %s %s differs from %s's %s", r.Name, key, r.Fields[key], reads[0].Name, reads[0].Fields[key]))
 				}

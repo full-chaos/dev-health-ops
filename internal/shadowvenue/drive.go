@@ -26,8 +26,9 @@ const loginPath = "/api/v1/auth/login"
 // CheckVenueBase is the one check of every origin the driver sends to: a plain-http origin with no path, query or
 // credentials whose host is loopback, or go-api's own address on the venue's internal network (a container on an
 // internal-only network has no published port). Such a host must be the private IP the egress record read just before
-// this drive names as goapi_ip; that record must be readable, show an internal network with no default route, and name
-// this drive's run id (run_id), so a record of another drive is refused. Any other host is refused before any request.
+// this drive names as goapi_ip, or exactly one of its ingress_ips (a venue-ingress address in front of go-api); that
+// record must be readable, show an internal network with no default route, and name this drive's run id (run_id), so a
+// record of another drive is refused. Any other host is refused before any request.
 func CheckVenueBase(raw string, record EgressRead, runID string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || u.Opaque != "" {
@@ -43,13 +44,20 @@ func CheckVenueBase(raw string, record EgressRead, runID string) (*url.URL, erro
 		return nil, fmt.Errorf("base %q: a non-loopback base needs the readable egress record of the read before the drive (-egress)", raw)
 	case record.Fields["network_internal"] != "true" || record.Fields["default_route"] != "none":
 		return nil, fmt.Errorf("base %q: egress record %s does not show an internal network with no default route", raw, record.Name)
-	case !net.ParseIP(record.Fields["goapi_ip"]).Equal(ip):
-		return nil, fmt.Errorf("base %q: the host is not go-api's venue address %q in egress record %s", raw, record.Fields["goapi_ip"], record.Name)
+	case !net.ParseIP(record.Fields["goapi_ip"]).Equal(ip) && !listedIngress(record, ip):
+		return nil, fmt.Errorf("base %q: the host is not go-api's venue address %q nor one of its ingress_ips %q in egress record %s", raw,
+			record.Fields["goapi_ip"], record.Fields[ingressKey], record.Name)
 	case runID == noRun || record.Fields["run_id"] != runID:
 		return nil, fmt.Errorf("base %q: egress record %s names run %q, not this drive's run %q (-run-id)", raw, record.Name, record.Fields["run_id"], runID)
 	}
 	u.Path = ""
 	return u, nil
+}
+
+// listedIngress reports whether ip is exactly one of the record's ingress_ips; a missing or malformed list lists none.
+func listedIngress(record EgressRead, ip net.IP) bool {
+	ips, err := parseIngressIPs(record.Fields[ingressKey])
+	return err == nil && slices.ContainsFunc(ips, ip.Equal)
 }
 
 // ReadPassword reads one password from an owner-only regular file. The value never reaches an error.

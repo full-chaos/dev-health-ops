@@ -532,7 +532,8 @@ instant when there are at most 3, otherwise the first and the last. The count
 stops at 1,024 (`unminted_count_capped=true`). A count that fails writes
 `reason=unminted_count_failed` and never stops the occurrence. The window starts
 when the previous occurrence was created, so a pause or a cron edit before that
-moment is not counted; the data holds no stamp for either. One line after a long
+moment is not counted; the data holds no stamp for either. A pause or an edit
+while that run is in flight is counted, so the count can be too high. One line after a long
 run is normal. Steady growth for one report means its runs take longer than its
 cron interval.
 

@@ -373,3 +373,22 @@ func TestReportInstantPassedByAnOnDemandRunIsCountedOnce(t *testing.T) {
 		t.Errorf("the instant must be counted once across three sweeps: %+v", counted)
 	}
 }
+
+// Pins today's over-count. The 22:00 run is in flight until 01:12 and the report
+// is paused from 23:30 to 00:30. No stamp records the pause, so the 02:00 mint
+// counts 23:00, 00:00 and 01:00 although 00:00 fell inside the pause. A stamp fix
+// would make this 2; when it lands this cell turns red and the want moves to 2.
+func TestReportPauseInsideAnInFlightRunIsCountedToday(t *testing.T) {
+	tx := &skipTestTx{}
+	outcome := skipTestProduce(t, tx, skipTestWindow{
+		base:              skipTestAt("2026-08-20T01:12:00Z"),
+		nextDueAt:         skipTestAt("2026-08-19T23:00:00Z"),
+		previousCreatedAt: skipTestPtr("2026-08-19T22:00:30Z"),
+	}, skipTestAt("2026-08-20T02:00:00Z"))
+	if len(outcome.Unminted) != 1 || outcome.Unminted[0].Count != 3 {
+		t.Fatalf("unminted = %+v, want one entry of count 3 (the pause is not subtracted)", outcome.Unminted)
+	}
+	if got := skipTestNamed(outcome.Unminted); got != "2026-08-19T23:00:00Z,2026-08-20T00:00:00Z,2026-08-20T01:00:00Z" {
+		t.Errorf("named = %s", got)
+	}
+}

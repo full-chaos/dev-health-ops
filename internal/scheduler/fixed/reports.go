@@ -508,7 +508,8 @@ const (
 // instant and not at the schedule's creation. A pause, an edit of the cron
 // expression, or a scheduler stop before that moment is therefore never counted.
 // No column records when a job was enabled or its cron edited (updated_at is
-// rewritten by every sweep), so this is the latest start the data supports.
+// rewritten by every sweep), so this is the latest start the data supports. A
+// pause or an edit while that run is in flight is still counted (an over-count).
 type UnmintedInstants struct {
 	ReportID  string
 	MintedFor time.Time
@@ -1156,7 +1157,8 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT latest.created_at
     FROM public.scheduled_report_occurrences AS latest
-    WHERE latest.report_id = report.id
+    WHERE latest.org_id = report.org_id
+      AND latest.report_id = report.id
     ORDER BY latest.scheduled_for DESC
     LIMIT 1
 ) AS previous ON TRUE

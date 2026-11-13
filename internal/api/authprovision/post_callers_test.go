@@ -36,7 +36,9 @@ func TestEveryPostCallerKeepsItsNonSuccessOutcomes(t *testing.T) {
 		_, err := provisioner(t, s).ChangeRole(ctx, org, other, actor, "admin")
 		return err
 	}
-	callers["RemoveMember"] = func(t *testing.T, s *usersServer) error { return provisioner(t, s).RemoveMember(ctx, org, other, actor) }
+	callers["RemoveMember"] = func(t *testing.T, s *usersServer) error {
+		return provisioner(t, s).RemoveMember(ctx, org, other, actor)
+	}
 	callers["TransferOwnership"] = func(t *testing.T, s *usersServer) error {
 		return provisioner(t, s).TransferOwnership(ctx, org, actor, other, actor)
 	}
@@ -95,8 +97,8 @@ func TestEveryPostCallerKeepsItsNonSuccessOutcomes(t *testing.T) {
 		_, err := reactivate(t, s).State(ctx, org)
 		return err
 	}
-	if len(callers) < 20 {
-		t.Fatalf("%d callers in the table, want at least 20 (every Core.Post call site)", len(callers))
+	if len(callers) < 19 {
+		t.Fatalf("%d callers in the table, want at least 19 (every one of the 16 Core.Post call sites, the shared ones through one method each)", len(callers))
 	}
 	unavailable := func(err error) bool {
 		return errors.Is(err, authprovision.ErrUnavailable) || errors.Is(err, orgreactivate.ErrUnavailable)

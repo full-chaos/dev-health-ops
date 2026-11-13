@@ -516,6 +516,11 @@ const nullableIntoPlainSites = `
 // aianalytics/scope.go ownerTeams (digest c0b3734eb92d) is not-describable because the census
 // cannot resolve its coalesce() expression; read by hand: owner_repo_id (the coalesce) and
 // owner_team_id are plain String, not Nullable, so the scan into *string is safe.
+// CHAOS-13705: three explain pins re-pinned by hand, digests copied from the hosted TestScanTypeCensus failure output of job 132076907184
+// (not computed): scope filter now from the unresolved branch, types unchanged (no column or type change):
+//   09e3a4863c03 -> 06f0dd79850a
+//   ed3ed30df2f7 -> 696073003934
+//   42ca92597595 -> cc6f1e4e4f8c
 const unverifiedSites = `
 internal/queryapi/aggflame/clickhouse.go|fetchCycleBreakdown|*string,*float64,*uint64|a003456ad69e|not-describable
 internal/queryapi/aianalytics/ai_opportunities.go|loadClusters|*string,*string,*uint64,*[]string|7ecb45f4962b|not-describable
@@ -547,10 +552,10 @@ internal/queryapi/datahealth/sourcehealth.go|SourceHealth|*string,**string,*bool
 internal/queryapi/drilldown/issues.go|BuildIssuesResponse|*string,*string,*string,**string,**string,**float64,**float64,**time.Time,**time.Time|6e4dfa5717bf|not-describable
 internal/queryapi/drilldown/issues.go|buildBlockedIssuesResponse|*string,*string,**string,**string,*uint64|75f4f440a0f6|not-describable
 internal/queryapi/explain/metrics.go|fetchChangeFailureView|[]any|74d73326912d|variadic-destinations
-internal/queryapi/explain/metrics.go|fetchMetricContributors|*string,**float64|09e3a4863c03|spliced-select-list
-internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*uint8,*uint8,**float64|ed3ed30df2f7|not-describable
+internal/queryapi/explain/metrics.go|fetchMetricContributors|*string,**float64|06f0dd79850a|spliced-select-list
+internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*uint8,*uint8,**float64|696073003934|not-describable
 internal/queryapi/explain/metrics.go|fetchMetricValue|**float64,*uint64|67264c7b19cb|spliced-select-list
-internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|42ca92597595|not-describable
+internal/queryapi/explain/repositories.go|fetchWorkItemProviders|*string|cc6f1e4e4f8c|not-describable
 internal/queryapi/home/queries_metric_drivers_batch.go|fetchMetricDriversBatch|*string,*string|61d29f14b0f2|not-describable
 internal/queryapi/home/queries_metrics.go|fetchBlockedHours|*time.Time,*float64|626f0d2551e1|not-describable
 internal/queryapi/home/queries_metrics.go|fetchChangeFailureView|[]any|cf1d07948519|variadic-destinations

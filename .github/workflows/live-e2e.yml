@@ -6,7 +6,12 @@ on:
   pull_request:
     # No ready_for_review: no job here reads the draft state, so the checks of the last opened/synchronize run stand on the
     # head sha at the flip (a rerun of the whole workflow there would only repeat them).
-    types: [opened, synchronize, reopened]
+    # labeled: only ci:full starts work. Any other label's run skips every job, in its own concurrency group. A skipped
+    # job posts a passing check, so it must never carry a real job name (it would overwrite a red verdict): every job's
+    # `name:` is an expression, and GitHub names a job skipped by `if:` by the raw text of that expression, never by a
+    # required name. Those check rows are unreadable; that is cosmetic. No unlabeled: removing ci:full starts nothing,
+    # and the verdict of the last real run stands.
+    types: [opened, synchronize, reopened, labeled]
     branches: [ "**" ]
   merge_group:
   workflow_dispatch:
@@ -20,8 +25,10 @@ concurrency:
   # main pushes and merge_group entries are never cancelled -- see
   # go.yml/typecheck.yml/docker-images.yml/arc-runner-image.yml for the
   # specific incidents this protects). cancel-in-progress cancels a stale
-  # PR re-push and a stale non-main branch push only.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  # PR re-push and a stale non-main branch push only. A label run has its own group, so it never cancels the PR's run:
+  # ci:full in '-ci-full' (a cancelled run's always() fan-ins would post a CANCELLED required check beside the ci:full
+  # verdict), any other label in '-other-label'.
+  group: ${{ github.workflow }}${{ github.event.action == 'labeled' && github.event.label.name == 'ci:full' && '-ci-full' || github.event.action == 'labeled' && '-other-label' || '' }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
@@ -33,6 +40,8 @@ env:
 
 jobs:
   changes:
+    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'changes (other label, not run)' || 'changes' }}
+    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is
     # stalled (org plan change, 2026-09-04; chris ruling 16:54 PDT). Flip the
     # repo variable SELF_HOSTED_RUNNERS back to 'disabled' to restore the
@@ -44,6 +53,7 @@ jobs:
       contents: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      metrics_proof: ${{ steps.filter.outputs.metrics_proof }}
       docs_only: ${{ steps.docs.outputs.docs_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -137,8 +147,111 @@ jobs:
               - 'contracts/auth/v1/vocabulary/**'
               - 'contracts/auth/v1/**'
               - '.github/workflows/live-e2e.yml'
+            # A pull request that touches one of these runs metrics-executed-proof-run with no ci:full label: the
+            # harness, the metric families it asserts, the team attribution and sync plan (post-sync fanout) they
+            # run through, the fixtures, worker, reconciler and migrations it starts. Every entry is also covered by
+            # `code` (the job also needs code == 'true'; TestLiveE2EMetricsProofPathsAreCode).
+            metrics_proof:
+              - '.github/workflows/live-e2e.yml'
+              - 'ci/run_metrics_executed_proof.sh'
+              - 'ci/lib/go_worker_fixture.sh'
+              - 'ci/lib/e2e_fixture.sh'
+              - 'scripts/worker/**'
+              - 'cmd/dho/**'
+              - 'cmd/cigate/**'
+              - 'internal/cigates/metricsproof/**'
+              - 'internal/jobs/metrics/**'
+              - 'internal/jobruntime/**'
+              - 'internal/jobcontract/**'
+              - 'contracts/jobs/**'
+              - 'internal/teamattribution/**'
+              - 'internal/teamownership/**'
+              - 'internal/teamkeytables/**'
+              - 'internal/teamresolve/**'
+              - 'internal/teamactive/**'
+              - 'internal/syncdispatchruntime/**'
+              - 'internal/syncdispatchcontract/**'
+              - 'contracts/sync-dispatch/v1/**'
+              - 'internal/scheduler/sync/**'
+              - 'internal/syncroute/**'
+              - 'internal/syncrunrollup/**'
+              - 'internal/providersync/**'
+              - 'internal/fixturescli/**'
+              - 'internal/fixturesgen/**'
+              - 'internal/workerservice/**'
+              - 'internal/reconcilerservice/**'
+              - 'internal/jobroute/**'
+              - 'internal/joboutbox/**'
+              - 'internal/rivermigrate/**'
+              - 'internal/chmigrate/**'
+              - 'internal/pgmigrate/**'
+              # The rest of the import closure of dho and cigate on the proof's path: the verb runtime, config and
+              # storage, the code the metric families and post-sync run through. TestLiveE2EMetricsProofPathsCoverTheProofClosure
+              # walks that closure; a package left out is a cut row there, with the reason.
+              - 'internal/cli/**'
+              - 'internal/pyargparse/**'
+              - 'internal/platform/**'
+              - 'internal/pythonparity/**'
+              - 'internal/storage/clickhouse/**'
+              - 'internal/storage/postgres/*'
+              - 'internal/storage/postgres/aclguard/**'
+              - 'internal/storage/postgres/ownermove/**'
+              - 'internal/storage/postgres/pgconfig/**'
+              - 'internal/storage/river/**'
+              - 'internal/storage/roleacl/**'
+              - 'internal/storage/roleprovision/**'
+              - 'internal/storage/valkey/**'
+              - 'internal/admincli/**'
+              - 'internal/auth/platformrole/rule/**'
+              - 'internal/authzenforce/**'
+              - 'contracts/auth/v1/vocabulary/**'
+              - 'contracts/auth/v1/embed.go'
+              - 'contracts/auth/v1/credential-classes.json'
+              - 'contracts/auth/v1/oauth-clients.v1.json'
+              - 'contracts/auth/v1/jsonschema/acr-credential-lifecycle-event.v1.schema.json'
+              - 'internal/httpguard/**'
+              - 'internal/netclass/**'
+              - 'internal/egressguard/**'
+              - 'internal/api/pyjson/**'
+              - 'internal/api/licensing/**'
+              - 'internal/api/apimetrics/**'
+              - 'internal/queryapi/rowview/**'
+              - 'internal/prrootid/**'
+              - 'internal/workitemcontract/**'
+              - 'internal/operationalordering/**'
+              - 'internal/providerfoundation/**'
+              - 'internal/providerfamilycontract/**'
+              - 'internal/aftercommit/**'
+              - 'internal/cacheinvalidation/**'
+              - 'internal/ownershipwindow/**'
+              - 'internal/teamid/**'
+              - 'internal/teamcreated/**'
+              - 'internal/teamprovider/**'
+              - 'internal/projectmembership/**'
+              - 'internal/identityalias/**'
+              - 'internal/storedversion/**'
+              - 'internal/auth/pushevent/**'
+              - 'internal/auth/contracts/externalpush/**'
+              - 'internal/auth/contracts/provisioning/**'
+              - 'internal/auth/repokey/**'
+              - 'internal/auth/repoidentityevent/**'
+              - 'internal/jobs/workgraph/**'
+              - 'internal/jobs/investment/**'
+              - 'internal/jobs/pushexpiry/**'
+              - 'internal/jobs/providerrevocation/**'
+              - 'internal/orgactivity/**'
+              - 'internal/jobrescue/**'
+              - 'internal/externalrecompute/**'
+              - 'internal/syncreconciler/**'
+              - 'internal/syncbudget/**'
+              - 'internal/synccoverage/**'
+              - 'internal/synchandoff/**'
+              - 'internal/synclimits/**'
+              - 'internal/operationalbackfill/**'
+              - 'internal/backfillrun/**'
 
   live-e2e-run:
+    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'live-e2e-run (other label, not run)' || 'live-e2e-run' }}
     needs: [changes]
     if: >-
       (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
@@ -271,15 +384,13 @@ jobs:
   # reconciler process the resulting post-sync fanout, then asserts rows
   # landed in ClickHouse for the seeded org's live repo ids.
   #
-  # RED ON MAIN TODAY, ON PURPOSE: CHAOS-4263 (daily_metrics_partitions built
-  # from the wrong id space) means this job currently fails with
-  # zero_rows_with_source_data for every family. It goes green once
-  # CHAOS-4263 merges. Do not mark it a required check before that -- see the
-  # PR's RISK-NOTES.
+  # On a pull request it runs with ci:full, or with no label when the PR touches a `metrics_proof` path of `changes`:
+  # a metric, team-attribution or sync-plan change merged with this job skipped once and turned main red.
   metrics-executed-proof-run:
+    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'metrics-executed-proof-run (other label, not run)' || 'metrics-executed-proof-run' }}
     needs: [changes]
     if: >-
-      (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && needs.changes.outputs.metrics_proof != 'true')) &&
       needs.changes.outputs.docs_only != 'true' &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'merge_group' ||
@@ -415,10 +526,13 @@ jobs:
   # job reports success, so a failed `changes` (which skips both work jobs) must fail here, never pass: always(), and the
   # aggregate fails unless `changes` succeeded. A work job's skip is legitimate only on a pull request without ci:full,
   # or when there is nothing to run (docs-only, or a pull request whose live-e2e paths did not change) (`queue-heavy`).
-  # Pull requests and merge queue entries only: the ruleset judges those.
+  # For metrics-executed-proof a pull request touching a `metrics_proof` path counts as ci:full (HEAVY_ON_PR).
+  # Pull requests and merge queue entries only: the ruleset judges those. The run of a label other than ci:full posts
+  # neither verdict: both fan-ins skip, and a job skipped by `if:` is posted under the raw text of its `name:`
+  # expression, never under live-e2e or metrics-executed-proof, so the last real verdict stands.
   live-e2e:
-    name: live-e2e
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'live-e2e (other label, not run)' || 'live-e2e' }}
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')
     needs: [changes, live-e2e-run]
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
@@ -439,8 +553,8 @@ jobs:
           ./ci/aggregate_gate_results.sh
 
   metrics-executed-proof:
-    name: metrics-executed-proof
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'metrics-executed-proof (other label, not run)' || 'metrics-executed-proof' }}
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')
     needs: [changes, metrics-executed-proof-run]
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
@@ -454,7 +568,7 @@ jobs:
           GATE_HAS_SELECTOR: "true"
           CHANGES_RESULT: ${{ needs.changes.result }}
           CHANGES_CODE: ${{ (needs.changes.outputs.docs_only == 'true' || (github.event_name == 'pull_request' && needs.changes.outputs.code == 'false')) && 'false' || 'true' }}
-          HEAVY_ON_PR: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+          HEAVY_ON_PR: ${{ (contains(github.event.pull_request.labels.*.name, 'ci:full') || needs.changes.outputs.metrics_proof == 'true') && 'true' || 'false' }}
           GATED_JOB_1: metrics-executed-proof-run|queue-heavy|${{ needs.metrics-executed-proof-run.result }}
         run: |
           chmod +x ci/aggregate_gate_results.sh

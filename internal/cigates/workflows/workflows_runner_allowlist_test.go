@@ -46,6 +46,11 @@ const (
 	heavyGate      = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full')))"
 	imageHeavyGate = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && (github.event.pull_request.draft || !contains(github.event.pull_request.labels.*.name, 'hotfix-image'))))"
 	goDocsSkip     = "needs.go-storage-integration-plan.outputs.docs_only != 'true'"
+	// proofHeavyGate: live-e2e.yml's metrics-executed-proof-run also runs on a pull request that touches a
+	// metrics_proof path of `changes`, with no ci:full label.
+	proofHeavyGate = "(!(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full') && needs.changes.outputs.metrics_proof != 'true'))"
+	// ciFullLabelEvent is live-e2e.yml's `labeled` filter (only ci:full starts work), not a heavy gate.
+	ciFullLabelEvent = "github.event.label.name == 'ci:full'"
 )
 
 var routedWorkflowFiles = []string{"go-quality.yml", "test.yml", "live-e2e.yml", "go.yml", "docker-images.yml"}
@@ -77,7 +82,7 @@ var heavyGatedJobs = map[[2]string]string{
 	{"go.yml", "go-container-security"}:                    heavyGate + " && " + goDocsSkip,
 	{"go.yml", "go-container-smoke"}:                       heavyGate + " && " + goDocsSkip,
 	{"live-e2e.yml", "live-e2e-run"}:                       heavyGate + " && needs.changes.outputs.docs_only != 'true'",
-	{"live-e2e.yml", "metrics-executed-proof-run"}:         heavyGate + " && needs.changes.outputs.docs_only != 'true'",
+	{"live-e2e.yml", "metrics-executed-proof-run"}:         proofHeavyGate + " && needs.changes.outputs.docs_only != 'true'",
 }
 
 var requiredContextJobs = map[string][]string{
@@ -97,7 +102,7 @@ var cachePathSites = map[string]cachePathSite{
 }
 
 func ungated(v string) string {
-	for _, gate := range []string{heavyGate + " && " + goDocsSkip, imageHeavyGate, heavyGate, draftGate} {
+	for _, gate := range []string{heavyGate + " && " + goDocsSkip, imageHeavyGate, proofHeavyGate, heavyGate, draftGate} {
 		prefix := gate + " && ("
 		if strings.HasPrefix(v, prefix) && strings.HasSuffix(v, ")") {
 			return v[len(prefix) : len(v)-1]
@@ -172,7 +177,7 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	for _, name := range workflowNames(t, root) {
 		jobs := jobsOf(doc(name))
 		for _, jn := range sortedKeys(jobs) {
-			if strings.Contains(str(asMap(jobs[jn])["if"]), "'ci:full'") {
+			if strings.Contains(strings.ReplaceAll(str(asMap(jobs[jn])["if"]), ciFullLabelEvent, ""), "'ci:full'") {
 				found[[2]string{name, jn}] = true
 			}
 		}

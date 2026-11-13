@@ -521,12 +521,17 @@ func TestUsersOwnedRolesNotOwnedSuperuserChangeIs409OperationMoved(t *testing.T)
 	}
 }
 
-// A real is_active change stays the moved operation (CHAOS-13209 row 4), also with other fields in the patch.
-func TestUsersOwnedPatchRealIsActiveChangeStillRefused(t *testing.T) {
+// A real is_active change with other fields in the patch is one forward carrying them all (CHAOS-13684).
+func TestUsersOwnedPatchIsActiveWithOtherFieldsIsOneForward(t *testing.T) {
 	db, users := ownedDB(activeStored()), &fakeUsersAdmin{}
-	code, body := ownedCall{route: "update", body: `{"is_active":false,"is_verified":true}`}.run(ownedHandlers(db, users, true))
-	mustOwnedAnswer(t, code, body, http.StatusConflict, movedBody())
-	mustNoForward(t, db, users)
+	code, _ := ownedCall{route: "update", body: `{"is_active":false,"is_verified":true}`}.run(ownedHandlers(db, users, true))
+	if code != http.StatusOK {
+		t.Fatalf("answer %d, want 200", code)
+	}
+	mustForwardOnly(t, db, users, "update")
+	if in := users.updates[0]; in.IsActive == nil || *in.IsActive || in.IsVerified == nil || !*in.IsVerified {
+		t.Fatalf("update request %+v, want is_active false and is_verified true", in)
+	}
 }
 
 // R10: every auth refusal maps to go-api's own answer for the same fact (PLAN-13380-v4 section 2).

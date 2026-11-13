@@ -31,7 +31,9 @@ func TestUsersOwnedPatchIsActiveIsServed(t *testing.T) {
 				t.Fatalf("is_active %v, roles owned %v: %d %s, want 200 with the read-back user and %s", active, rolesOwned, code, answer, want)
 			}
 			mustForwardOnly(t, db, users, "update")
+			if in := users.updates[0]; in.IsActive == nil || *in.IsActive != active || in.Principal != provTarget || in.Actor != provActor {
+				t.Fatalf("is_active %v, roles owned %v: update request %+v", active, rolesOwned, in)
+			}
 		}
 	}
 }
-

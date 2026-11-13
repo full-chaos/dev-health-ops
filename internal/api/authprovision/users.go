@@ -41,6 +41,8 @@ type UserUpdateRequest struct {
 	Email, Username, FullName *string
 	AvatarURL                 *string
 	IsVerified, IsSuperuser   *bool
+	// IsActive false deactivates the user (the soft delete's writes), true reactivates it.
+	IsActive *bool
 }
 
 // UserPasswordRequest is go-api's admin password set: the acting admin's password, checked by auth-service, and the
@@ -154,6 +156,9 @@ func (c *UsersClient) UpdateUser(ctx context.Context, in UserUpdateRequest) erro
 	}
 	if in.IsSuperuser != nil {
 		request["is_superuser"] = *in.IsSuperuser
+	}
+	if in.IsActive != nil {
+		request["is_active"] = *in.IsActive
 	}
 	return c.postChange(ctx, PathUsersUpdate, request, in.Principal)
 }

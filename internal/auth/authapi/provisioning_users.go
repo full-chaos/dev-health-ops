@@ -71,7 +71,7 @@ var (
 	usersCreateMembers = []string{"actor_principal_id", "email", "password_hash", "username", "full_name", "auth_provider",
 		"auth_provider_id", "is_verified", "grant_platform_admin", "organization_id", "role", "request_metadata"}
 	usersUpdateMembers = []string{"actor_principal_id", "principal_id", "organization_id", "email", "is_verified", "is_superuser",
-		"username", "full_name", "avatar_url"}
+		"username", "full_name", "avatar_url", "is_active"}
 	usersPasswordMembers = []string{"actor_principal_id", "principal_id", "organization_id", "admin_password", "password_hash",
 		"request_metadata"}
 	usersDeleteMembers = []string{"actor_principal_id", "principal_id", "organization_id", "mode"}
@@ -220,19 +220,27 @@ func (h provisioningHandlers) usersPrecheck(w http.ResponseWriter, r *http.Reque
 }
 
 // usersAuthorize is the store's Authorize: the platform role write lock (exclusive when the write changes a
-// platform role, shared otherwise) before any row, then usersActorRule on the transaction with grantRequested, the
-// platform_admin grant the request asks for (go-api guards.go:106-109: a non-superuser is refused for a grant or a
-// superuser target, never for an unchanged false).
-func (h provisioningHandlers) usersAuthorize(actor uuid.UUID, orgID *uuid.UUID, roleChange, grantRequested bool, target *uuid.UUID) func(context.Context, audit.TxOps) error {
+// platform role or sends is_active false, shared otherwise) before any row, then usersActorRule on the transaction
+// with grantRequested, the platform_admin grant the request asks for (go-api guards.go:106-109: a non-superuser is
+// refused for a grant or a superuser target, never for an unchanged false). A deactivate is an erase of the login,
+// as the soft delete is, so it runs the last platform_admin guard on the target too (pm D6878).
+func (h provisioningHandlers) usersAuthorize(actor uuid.UUID, orgID *uuid.UUID, roleChange, grantRequested, deactivate bool,
+	target *uuid.UUID) func(context.Context, audit.TxOps) error {
 	return func(ctx context.Context, tx audit.TxOps) error {
 		lock := h.PlatformRoles.LockWritesShared
-		if roleChange {
+		if roleChange || deactivate {
 			lock = h.PlatformRoles.LockWrites
 		}
 		if err := lock(ctx, tx); err != nil {
 			return err
 		}
-		return h.usersActorRule(ctx, tx, actor, orgID, grantRequested, target)
+		if err := h.usersActorRule(ctx, tx, actor, orgID, grantRequested, target); err != nil {
+			return err
+		}
+		if deactivate {
+			return h.PlatformRoles.RefuseLastPlatformAdmin(ctx, tx, *target)
+		}
+		return nil
 	}
 }
 
@@ -329,7 +337,7 @@ func (h provisioningHandlers) usersCreate(w http.ResponseWriter, r *http.Request
 	}
 	req := identity.AdminCreateRequest{Email: email, Username: username, FullName: fullName, PasswordHash: hash, AuthProvider: provider,
 		AuthProviderID: providerID, Verified: verified, OrgID: orgID, RequestMetadata: metadata, Actor: actor,
-		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, grant, grant, nil)}
+		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, grant, grant, false, nil)}
 	if role != nil {
 		req.Role = *role
 	}
@@ -367,7 +375,8 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 	username, err7 := body.optionalAnyText("username", maxShortTextBytes)
 	fullName, err8 := body.optionalAnyText("full_name", maxShortTextBytes)
 	avatarURL, err9 := body.optionalAnyText("avatar_url", maxShortTextBytes)
-	if errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9) != nil {
+	active, err10 := optionalBoolPointer(body, "is_active")
+	if errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10) != nil {
 		h.malformedUsers(w, r, opUsersUpdate)
 		return
 	}
@@ -390,7 +399,8 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 	}
 	roleChange := superuser != nil && *superuser != held
 	decided := identity.DecideAdminUpdate(cur, identity.AdminUpdatePatch{Email: email, Verified: verified, Username: username,
-		FullName: fullName, AvatarURL: avatarURL})
+		FullName: fullName, AvatarURL: avatarURL, Active: active})
+	deactivate := active != nil && !*active
 	var superuserWrite func(context.Context, audit.TxOps) error
 	if roleChange {
 		grantIt := *superuser
@@ -406,8 +416,8 @@ func (h provisioningHandlers) usersUpdate(w http.ResponseWriter, r *http.Request
 	// Every PATCH, a no-op and a platform role change only included, is one AdminUpdateUser: one lock order, and
 	// public.users.updated_at moves as go-api's PATCH moves it (pm D6915).
 	err = h.UsersAdmin.AdminUpdateUser(ctx, identity.AdminUpdateRequest{Principal: target, Email: email, Verified: verified,
-		Username: username, FullName: fullName, AvatarURL: avatarURL, Actor: actor,
-		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, grantRequested, &target),
+		Username: username, FullName: fullName, AvatarURL: avatarURL, Active: active, Actor: actor,
+		RequestID: requestid.Audit(ctx), Caller: caller, Authorize: h.usersAuthorize(actor, orgID, roleChange, grantRequested, deactivate, &target),
 		Superuser: superuserWrite}, cur)
 	if err != nil {
 		h.answerUsersError(w, r, opUsersUpdate, err)
@@ -458,7 +468,7 @@ func (h provisioningHandlers) usersPassword(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	err = h.UsersAdmin.AdminSetPassword(ctx, identity.AdminPasswordRequest{Principal: target, Hash: hash, Actor: actor, AuditOrg: orgID, RequestMetadata: metadata, RequestID: requestid.Audit(ctx),
-		Authorize: h.usersAuthorize(actor, orgID, false, false, &target)})
+		Authorize: h.usersAuthorize(actor, orgID, false, false, false, &target)})
 	if err != nil {
 		h.answerUsersError(w, r, opUsersPassword, err)
 		return

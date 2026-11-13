@@ -98,6 +98,8 @@ type guardDecision struct {
 	// matching slotHeadroom's own convention (the hard-deny branch returns
 	// before any bucket is visited and its caller never reaches claimUnits).
 	authorizedUnitIDs map[string]bool
+	// heldBackRunIDs are the older runs this pass left free slots to (CHAOS-8880), oldest first per bucket.
+	heldBackRunIDs []string
 }
 
 // syncUnitConcurrencyPerBucket mirrors guard.py's
@@ -262,6 +264,10 @@ type guardEnv struct {
 	totalCap    func() int
 	activeCount func(dispatchBucket) (int, error)
 	emit        func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom int)
+	// self is the deciding run's admission position; olderRuns lists the bucket's older open runs with waiting units
+	// (CHAOS-8880).
+	self      runOrder
+	olderRuns func(dispatchBucket) ([]olderRun, error)
 }
 
 // guardUnitSource folds every unit of the run in id order; each call is one full paged read.

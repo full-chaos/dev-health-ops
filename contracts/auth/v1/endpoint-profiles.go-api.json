@@ -6619,7 +6619,7 @@
         "name": "workload+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: per-request read (internal/apiservice/acr/internalauth.go:118): workload token: signature verify only, no store read; the answer (organization, membership, session, impersonation, both entitlements, repository inventory) is read on every call, no cache (internal/apiservice/acr/access_store.go:89); with a sid, the session (owner, organization, effective revoke, effective expiry, token_version pin) is auth-service's answer from POST /internal/v1/sessions/state, read on every call, no cache; go-api reads no auth table on this route",
+      "current_state_cache_behavior": "none: per-request read (internal/apiservice/acr/internalauth.go:118): workload token: signature verify only, no store read; the answer (organization, membership, session, impersonation, both entitlements, the user's repository read listing) is read on every call, no cache (internal/apiservice/acr/access_store.go:105); the read listing is auth-service's answer from POST /internal/v1/principals/readable-repositories and the empty-org check a LIMIT 1 probe of ClickHouse repos, both read on every call, no cache; with a sid, the session (owner, organization, effective revoke, effective expiry, token_version pin) is auth-service's answer from POST /internal/v1/sessions/state, read on every call, no cache; go-api reads no auth table on this route",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",

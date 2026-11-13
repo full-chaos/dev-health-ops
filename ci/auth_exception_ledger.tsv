@@ -6,7 +6,6 @@
 # Linear-only items (no code anchor) stay on CHAOS-11258: the platform admin no-membership rule (D6773), the external
 # venue HS256 mode (CHAOS-12646), the Sentry e-mail decision (CHAOS-10767), superuser impersonation (CHAOS-13106).
 envelope-entitlement-claims	temporary	internal/queryapi/principal/claims.go	json:"licensed_features"	CHAOS-13173	open	the envelope carries tier and licensed_features; ACP-ADR-07 decision 2 removes them at the next envelope version (60 s TTL is the compensating control)
-closure-golang-jwt	temporary	ci/auth_closure_allow.tsv	github.com/golang-jwt/jwt/v5	CHAOS-12646	open	the auth binaries may link golang-jwt for the HS256 edge token until the HS256 path is deleted
 parity-gap-mcp-roles	temporary	internal/queryapi/server/endpoint_profile_action_fields_test.go	"POST /query @mcp": {extra:	CHAOS-10871	open	the catalog grants analytics.read to admin and owner, the MCP caller class refuses them; settled at query-api PDP enforce (6.17)
 liveness-policy-session-state	temporary	internal/auth/session/liveness_census_test.go	"internal/api/policy/session.go#sessionStateQuery"	CHAOS-13174	open	go-api and query-api read revoked_at outside sessionrule; the text names CHAOS-12701 (Done), re-homed
 liveness-edgetokenmint	temporary	internal/auth/session/liveness_census_test.go	"internal/edgetokenmint/eddsa.go#sessionLiveSQL"	CHAOS-13174	open	the CI-only mint pre-check reads revoked_at outside sessionrule; the text names CHAOS-12701 (Done), re-homed

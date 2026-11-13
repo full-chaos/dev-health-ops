@@ -620,6 +620,7 @@ internal/shadowvenue	drive.go
 internal/shadowvenue	mint.go
 internal/shadowvenue	requestsites_test.go
 internal/signingkey	custody_unix.go
+internal/signingkey	jwks_key_test.go
 internal/signingkey	keygen.go
 internal/signingkey	keygen_state_test.go
 internal/signingkey	keygen_test.go

@@ -18,7 +18,10 @@ type githubScopeDoer struct {
 }
 
 func (d githubScopeDoer) Do(request *http.Request) (*http.Response, error) {
-	headers := d.headers.Clone()
+	headers := http.Header{}
+	for key, values := range d.headers {
+		headers[key] = append([]string(nil), values...)
+	}
 	headers.Set("Content-Type", "application/json")
 	return &http.Response{StatusCode: d.status, Header: headers,
 		Body: io.NopCloser(strings.NewReader(d.body)), Request: request}, nil

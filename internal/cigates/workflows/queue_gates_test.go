@@ -72,7 +72,9 @@ type queueGateSpec struct {
 
 // live-e2e.yml has a `labeled` trigger for ci:full. The run of any other label (otherLabelRun) must post no check run
 // under a real job name: a job skipped by `if:` posts a passing check, which would overwrite a red verdict of the same
-// head. So every job renames itself there (otherLabelName) and the jobs that would post skip (labelFilter).
+// head. So the jobs that would run skip there (labelFilter), and every job's name is an expression (otherLabelName):
+// GitHub posts a job skipped by `if:` under the raw text of that expression, never a required name. The guard checks
+// the stronger property: the expression also renders to no real name on that run.
 const (
 	otherLabelRun = "github.event.action == 'labeled' && github.event.label.name != 'ci:full'"
 	labelFilter   = "(github.event.action != 'labeled' || github.event.label.name == 'ci:full')"

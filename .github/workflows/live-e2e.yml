@@ -6,9 +6,11 @@ on:
   pull_request:
     # No ready_for_review: no job here reads the draft state, so the checks of the last opened/synchronize run stand on the
     # head sha at the flip (a rerun of the whole workflow there would only repeat them).
-    # labeled: only ci:full starts work. Any other label's run skips every job under a renamed check name (a skipped job
-    # posts a passing check, so a real name would overwrite a red verdict) in its own concurrency group. No unlabeled:
-    # removing ci:full starts nothing, and the verdict of the last real run stands.
+    # labeled: only ci:full starts work. Any other label's run skips every job, in its own concurrency group. A skipped
+    # job posts a passing check, so it must never carry a real job name (it would overwrite a red verdict): every job's
+    # `name:` is an expression, and GitHub names a job skipped by `if:` by the raw text of that expression, never by a
+    # required name. Those check rows are unreadable; that is cosmetic. No unlabeled: removing ci:full starts nothing,
+    # and the verdict of the last real run stands.
     types: [opened, synchronize, reopened, labeled]
     branches: [ "**" ]
   merge_group:
@@ -461,7 +463,8 @@ jobs:
   # or when there is nothing to run (docs-only, or a pull request whose live-e2e paths did not change) (`queue-heavy`).
   # For metrics-executed-proof a pull request touching a `metrics_proof` path counts as ci:full (HEAVY_ON_PR).
   # Pull requests and merge queue entries only: the ruleset judges those. The run of a label other than ci:full posts
-  # neither verdict: both fan-ins skip under a renamed check name, so the last real verdict stands.
+  # neither verdict: both fan-ins skip, and a job skipped by `if:` is posted under the raw text of its `name:`
+  # expression, never under live-e2e or metrics-executed-proof, so the last real verdict stands.
   live-e2e:
     name: ${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && 'live-e2e (other label, not run)' || 'live-e2e' }}
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')

@@ -489,6 +489,16 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, level
 	return verdict
 }
 
+// decisionPointRefusal is true for a verdict that comes from the decision point's answer or its absence: the refusals a
+// route's late checks run before. An impersonation refusal and a session row fault are the guard's own and come first.
+func decisionPointRefusal(verdict enforceVerdict) bool {
+	switch verdict {
+	case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceDenyNoOrg:
+		return true
+	}
+	return false
+}
+
 // actionSSOWrite is the catalog 20 action of the SSO provider writes.
 const actionSSOWrite = "sso.write"
 

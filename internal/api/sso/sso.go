@@ -161,23 +161,31 @@ func Routes(deps Deps) []httpapi.Route {
 		}
 		return deps.Inner(prefix+path, local)
 	}
-	providerList, providerCreate := h.gated(listQuery), h.gated(body(ssoProviderCreate))
-	providerGet, providerUpdate, providerDelete := h.gated(noInput), h.gated(body(ssoProviderUpdate)), h.gated(noInput)
+	// A provider route is wrapped with its own 422 and 402 as the guard's late checks when auth-service owns the providers: with
+	// the sso namespace enforced, a refused caller gets the 422 or the 402 first, as the legacy route answers it (sso.go gated; the
+	// role check is the handler's own, router.py create :262, patch :333, delete :383).
+	providerWrap := func(validate validator, serve http.HandlerFunc) http.Handler {
+		if h.Providers != nil {
+			return g.WrapLate(policy.Authenticated, h.gate(validate), serve)
+		}
+		return g.Wrap(policy.Authenticated, h.gated(validate))
+	}
+	providerBodyFirst := func(validate validator, serve http.HandlerFunc) http.Handler {
+		if h.Providers != nil {
+			return g.BodyFirstLate(policy.Authenticated, h.gate(validate), serve)
+		}
+		return g.BodyFirst(policy.Authenticated, h.gated(validate))
+	}
 	activate, deactivate := h.setStatus("active"), h.setStatus("inactive")
 	if h.Providers != nil {
-		providerList = h.gatedTo(listQuery, http.HandlerFunc(h.listProviders))
-		providerCreate = h.gatedTo(body(ssoProviderCreate), http.HandlerFunc(h.createProvider))
-		providerGet = h.gatedTo(noInput, http.HandlerFunc(h.getProvider))
-		providerUpdate = h.gatedTo(body(ssoProviderUpdate), http.HandlerFunc(h.updateProvider))
-		providerDelete = h.gatedTo(noInput, http.HandlerFunc(h.deleteProvider))
 		activate, deactivate = h.setStatusViaProviders("active"), h.setStatusViaProviders("inactive")
 	}
 	routes := []httpapi.Route{
-		route(http.MethodGet, "/sso/providers", g.Wrap(policy.Authenticated, providerList)),
-		route(http.MethodPost, "/sso/providers", g.BodyFirst(policy.Authenticated, providerCreate)),
-		route(http.MethodGet, "/sso/providers/{provider_id}", g.Wrap(policy.Authenticated, providerGet)),
-		route(http.MethodPatch, "/sso/providers/{provider_id}", g.BodyFirst(policy.Authenticated, providerUpdate)),
-		route(http.MethodDelete, "/sso/providers/{provider_id}", g.Wrap(policy.Authenticated, providerDelete)),
+		route(http.MethodGet, "/sso/providers", providerWrap(listQuery, h.listProviders)),
+		route(http.MethodPost, "/sso/providers", providerBodyFirst(body(ssoProviderCreate), h.createProvider)),
+		route(http.MethodGet, "/sso/providers/{provider_id}", providerWrap(noInput, h.getProvider)),
+		route(http.MethodPatch, "/sso/providers/{provider_id}", providerBodyFirst(body(ssoProviderUpdate), h.updateProvider)),
+		route(http.MethodDelete, "/sso/providers/{provider_id}", providerWrap(noInput, h.deleteProvider)),
 		route(http.MethodPost, "/sso/providers/{provider_id}/activate", g.Wrap(policy.Authenticated, activate)),
 		route(http.MethodPost, "/sso/providers/{provider_id}/deactivate", g.Wrap(policy.Authenticated, deactivate)),
 		route(http.MethodGet, "/saml/{provider_id}/metadata", g.Wrap(policy.Public, inner("/saml/{provider_id}/metadata", samlMetadataHandler))),
@@ -226,12 +234,22 @@ func (h handlers) gated(validate validator) http.Handler {
 
 // gatedTo is gated with serve in place of the stub: the 422 and the 402 first, then serve.
 func (h handlers) gatedTo(validate validator, serve http.Handler) http.Handler {
+	check := h.gate(validate)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if check(w, r) {
+			serve.ServeHTTP(w, r)
+		}
+	})
+}
+
+// gate is the 422 and the 402 of a gated route: true when the request may go on, false when the answer is written.
+func (h handlers) gate(validate validator) func(http.ResponseWriter, *http.Request) bool {
+	return func(w http.ResponseWriter, r *http.Request) bool {
 		var errs pybody.Errors
 		validate(r, &errs)
 		if len(errs) > 0 {
 			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
-			return
+			return false
 		}
 		if !licensing.ProcessHasFeature(ssoFeature) {
 			// has_feature logs the denial as a license audit event (a log
@@ -239,10 +257,10 @@ func (h handlers) gatedTo(validate validator, serve http.Handler) http.Handler {
 			h.Logger.WarnContext(r.Context(), "License audit: feature_access_denied",
 				"feature", ssoFeature, "current_tier", licensing.ProcessTier(), "path", r.Pattern)
 			policy.WriteDetail(w, http.StatusPaymentRequired, licensing.FeatureNotLicensedDetail(ssoFeature, &ssoRequiredTier), nil)
-			return
+			return false
 		}
-		serve.ServeHTTP(w, r)
-	})
+		return true
+	}
 }
 
 // unportedStub is what a gated route answers once the process tier grants sso_saml: it is not served by the Go api.

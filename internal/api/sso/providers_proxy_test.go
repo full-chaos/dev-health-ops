@@ -473,3 +473,33 @@ func TestProviderListItemsCarryTheConfigAsAuthServiceWroteIt(t *testing.T) {
 		t.Fatalf("list: %d %s, want both configs passed through", response.Code, response.Body)
 	}
 }
+
+// The fault paths carry no client secret either: the body of the named 503 and the WARN of every refusal and fault of a create
+// and an update that sent the sentinel.
+func TestProviderFaultPathsNeverCarryTheClientSecret(t *testing.T) {
+	faults := map[string]error{
+		"unavailable":   authprovision.ErrUnavailable,
+		"refused other": &authprovision.Refused{Status: 400, Reason: "malformed"},
+		"org missing":   &authprovision.Refused{Status: 404, Reason: authprovision.ReasonOrganizationMissing},
+		"plain":         errors.New("dial tcp: connection refused"),
+	}
+	for name, fault := range faults {
+		f := newProxyFixture(t)
+		f.fake.err = fault
+		body := map[string]any{"name": "Acme", "protocol": "oidc", "oidc_config": map[string]any{"client_id": "c", "client_secret": proxySecret, "issuer": "https://i.example"}}
+		for op, response := range map[string]*httptest.ResponseRecorder{
+			"create": f.do(f.h.createProvider, "admin", "", uuid.NewString(), "", body),
+			"update": f.do(f.h.updateProvider, "admin", "", uuid.NewString(), "", map[string]any{"oidc_config": body["oidc_config"]}),
+		} {
+			if response.Code != http.StatusServiceUnavailable {
+				t.Errorf("%s/%s: %d %s, want the named 503", name, op, response.Code, response.Body)
+			}
+			if strings.Contains(response.Body.String(), proxySecret) {
+				t.Errorf("%s/%s: the secret is in the answer: %s", name, op, response.Body)
+			}
+		}
+		if strings.Contains(f.logs.String(), proxySecret) || !strings.Contains(f.logs.String(), "level=WARN") {
+			t.Errorf("%s: logs %q: want a WARN without the secret", name, f.logs.String())
+		}
+	}
+}

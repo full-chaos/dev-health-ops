@@ -429,11 +429,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_users_owned", "api_users_owned_config_invalid", err)
 	}
-	deps.SSOProvidersOwned, err = ParseSSOProvidersOwned(envsecrets.ProcessLookup, authProxy)
-	if err != nil {
-		closeComponents(depComponents)
-		return nil, dependencyFailure(ctx, logger, "api_sso_providers_owned", "api_sso_providers_owned_config_invalid", err)
-	}
+	deps.SSOProvidersOwned = ParseSSOProvidersOwned(envsecrets.ProcessLookup, authProxy, logger)
 	deps.PlatformRolesOwned, err = rule.OwnedFromLookup(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)

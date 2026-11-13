@@ -11,9 +11,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
-	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
 // ssoRowActions are the go-api SSO provider rows the catalog 20 PR gives an action: reads settings.read, writes sso.write. The
@@ -83,20 +83,21 @@ func ssoRoutes(client authprovision.SSOProviders) func(*testing.T, Deps) []httpa
 	}
 }
 
-func withSSOLicence(t *testing.T) {
-	t.Helper()
-	licensing.SetProcessLicense(&licensing.ProcessLicense{Tier: "enterprise", Features: map[string]bool{"sso_saml": true}})
-	t.Cleanup(func() { licensing.SetProcessLicense(nil) })
+func ssoDo(handler http.Handler, key, token string) cellAnswer {
+	return ssoDoWith(handler, key, token, "", "")
 }
 
-func ssoDo(handler http.Handler, key, token string) cellAnswer {
+// ssoDoWith is ssoDo with a query string and a body of its own (empty: the route's valid one).
+func ssoDoWith(handler http.Handler, key, token, query, override string) cellAnswer {
 	method, route, _ := strings.Cut(key, " ")
-	path := strings.ReplaceAll(route, "{provider_id}", ssoCellProvider.String())
+	path := strings.ReplaceAll(route, "{provider_id}", ssoCellProvider.String()) + query
 	var body *strings.Reader
-	switch key {
-	case "POST /api/v1/auth/sso/providers":
+	switch {
+	case override != "":
+		body = strings.NewReader(override)
+	case key == "POST /api/v1/auth/sso/providers":
 		body = strings.NewReader(`{"name":"Acme","protocol":"oidc","oidc_config":{"client_id":"c","client_secret":"s","issuer":"https://i.example"}}`)
-	case "PATCH /api/v1/auth/sso/providers/{provider_id}":
+	case key == "PATCH /api/v1/auth/sso/providers/{provider_id}":
 		body = strings.NewReader(`{"name":"Renamed"}`)
 	default:
 		body = strings.NewReader("")
@@ -131,7 +132,7 @@ func TestSSORowsMatchTheProfile(t *testing.T) {
 // For each SSO row and caller class, the answer with the cells on (the real evaluator decides) equals the cells-off answer,
 // status and body. Each cell prints one CELL line.
 func TestSSORowsAnswerEveryCallerClassAsLegacy(t *testing.T) {
-	withSSOLicence(t)
+	withSSOLicence(t, true)
 	pdp := newCellPDP(t)
 	client := &ssoCellClient{}
 	off, offMinter := adminConfigServerScoped(t, nil, withBoundaryCallers, ssoRoutes(client), nil)
@@ -163,7 +164,7 @@ func TestSSORowsAnswerEveryCallerClassAsLegacy(t *testing.T) {
 }
 
 func TestSSORowsFailClosed(t *testing.T) {
-	withSSOLicence(t)
+	withSSOLicence(t, true)
 	pdp := newCellPDP(t)
 	client := &ssoCellClient{}
 	on, minter := adminConfigServerScoped(t, func(t *testing.T) *policy.Enforcer {
@@ -179,5 +180,89 @@ func TestSSORowsFailClosed(t *testing.T) {
 	}
 	if len(client.calls) != 0 {
 		t.Fatalf("a failed decision reached auth-service: %v", client.calls)
+	}
+}
+
+// With the sso namespace enforced, a refused caller still gets the legacy ORDER of answers: the invalid body or query (422) and
+// the unlicensed process (402) come before the role check, so before the decision point's refusal (the legacy order: the guard's
+// legacy checks, then the route's 422, then the licence's 402, then the handler's role check: internal/api/sso/sso.go gate;
+// router.py create_provider :262, update_provider :333, delete_provider :383, the role check after the decorators). Each cell is
+// the cells-off answer for every caller class, and that answer is the 422 or the 402 even for a member and a viewer.
+func TestSSORowsKeepTheLegacyOrderOfAnswersUnderEnforcement(t *testing.T) {
+	const list, create, patch, get, del = "GET /api/v1/auth/sso/providers", "POST /api/v1/auth/sso/providers",
+		"PATCH /api/v1/auth/sso/providers/{provider_id}", "GET /api/v1/auth/sso/providers/{provider_id}", "DELETE /api/v1/auth/sso/providers/{provider_id}"
+	scenarios := []struct {
+		name            string
+		licensed        bool
+		key, query, bad string
+		want            int
+	}{
+		{"unlicensed list", false, list, "", "", http.StatusPaymentRequired},
+		{"unlicensed create", false, create, "", "", http.StatusPaymentRequired},
+		{"unlicensed get", false, get, "", "", http.StatusPaymentRequired},
+		{"unlicensed patch", false, patch, "", "", http.StatusPaymentRequired},
+		{"unlicensed delete", false, del, "", "", http.StatusPaymentRequired},
+		{"invalid list query", true, list, "?limit=abc", "", http.StatusUnprocessableEntity},
+		{"invalid create body", true, create, "", `{"name":1}`, http.StatusUnprocessableEntity},
+		{"invalid patch body", true, patch, "", `{"name":1}`, http.StatusUnprocessableEntity},
+		{"invalid body and unlicensed: the 422 first", false, create, "", `{"name":1}`, http.StatusUnprocessableEntity},
+	}
+	pdp := newCellPDP(t)
+	client := &ssoCellClient{}
+	for _, c := range scenarios {
+		withSSOLicence(t, c.licensed)
+		off, offMinter := adminConfigServerScoped(t, nil, withBoundaryCallers, ssoRoutes(client), nil)
+		on, onMinter := adminConfigServerScoped(t, func(t *testing.T) *policy.Enforcer {
+			return newCellEnforcer(t, pdp, ssoRowNamespaces, false)
+		}, withBoundaryCallers, ssoRoutes(client), nil)
+		offCallers, onCallers := boundaryCallers(offMinter), boundaryCallers(onMinter)
+		for _, mode := range []string{"deny", "fail", "evaluate"} {
+			for _, class := range boundaryClasses {
+				pdp.register(onCallers)
+				pdp.reset(mode)
+				legacy := ssoDoWith(off, c.key, offCallers[class].token, c.query, c.bad)
+				got := ssoDoWith(on, c.key, onCallers[class].token, c.query, c.bad)
+				result := "EQUAL"
+				if got.status != legacy.status || got.body != legacy.body || legacy.status != c.want {
+					result = "DIFF"
+					t.Errorf("%s / %s / pdp %s: enforced %d %s, legacy %d %s, want %d", c.name, class, mode, got.status, got.body, legacy.status, legacy.body, c.want)
+				}
+				t.Logf("CELL\t%s\t%s\t%s\tlegacy=%d:%s\tnew=%d:%s\t%s", c.name, mode, class, legacy.status, short(legacy.body), got.status, short(got.body), result)
+			}
+		}
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("a refused request reached auth-service: %v", client.calls)
+	}
+}
+
+// An impersonated SSO write is refused with the impersonation text before the route's own 422 and 402 and before any call to
+// auth-service, with the cell off and on, licensed and not (the cell of 5d6679a9 extended to the provider client).
+func TestAnImpersonatedSSOWriteIsRefusedBeforeGatedAndCallsNothing(t *testing.T) {
+	writes := []string{"POST /api/v1/auth/sso/providers", "PATCH /api/v1/auth/sso/providers/{provider_id}", "DELETE /api/v1/auth/sso/providers/{provider_id}",
+		"POST /api/v1/auth/sso/providers/{provider_id}/activate", "POST /api/v1/auth/sso/providers/{provider_id}/deactivate"}
+	pdp := newCellPDP(t)
+	for _, licensed := range []bool{true, false} {
+		withSSOLicence(t, licensed)
+		for name, enforcer := range map[string]func(*testing.T) *policy.Enforcer{
+			"cells off": nil,
+			"cells on":  func(t *testing.T) *policy.Enforcer { return newCellEnforcer(t, pdp, ssoRowNamespaces, false) },
+		} {
+			client := &ssoCellClient{}
+			handler, minter := adminConfigServerScoped(t, enforcer, withLegacyImpersonationCaller, ssoRoutes(client), refuseLegacyCaller(true))
+			token := minter.mint(probeAdminUser, map[string]any{"sid": sessionid.Wire(cellLegacyCallerSID)})
+			for _, key := range writes {
+				got := ssoDo(handler, key, token)
+				if got.status != http.StatusForbidden || !strings.Contains(got.body, impersonationRefusalBody) {
+					t.Errorf("licensed=%v %s %s: %d %s, want the 403 %s", licensed, name, key, got.status, got.body, impersonationRefusalBody)
+				}
+				if got.header.Get("X-Impersonating") != "" {
+					t.Errorf("licensed=%v %s %s: X-Impersonating %q on a refused request", licensed, name, key, got.header.Get("X-Impersonating"))
+				}
+			}
+			if len(client.calls) != 0 {
+				t.Errorf("licensed=%v %s: an impersonated write reached auth-service: %v", licensed, name, client.calls)
+			}
+		}
 	}
 }

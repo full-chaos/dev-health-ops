@@ -1,53 +1,56 @@
 package apiservice
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 )
 
-func parseSSOProvidersOwnedFor(t *testing.T, values map[string]string) (bool, error) {
+func parseSSOProvidersOwnedFor(t *testing.T, values map[string]string) (bool, string) {
 	t.Helper()
 	lookup := usersOwnedLookup(values)
 	proxy, err := ParseAuthProxyConfig(lookup)
 	if err != nil {
 		t.Fatalf("proxy config: %v", err)
 	}
-	return ParseSSOProvidersOwned(lookup, proxy)
+	logs := &bytes.Buffer{}
+	return ParseSSOProvidersOwned(lookup, proxy, slog.New(slog.NewTextHandler(logs, nil))), logs.String()
 }
 
-func TestSSOProvidersOwnedOffNeedsNoProxy(t *testing.T) {
+func TestSSOProvidersOwnedOffNeedsNoProxyAndSaysNothing(t *testing.T) {
 	for _, values := range []map[string]string{nil, {"AUTH_SSO_PROVIDERS_OWNED": "false"}, {"AUTH_SSO_PROVIDERS_OWNED": ""}} {
-		on, err := parseSSOProvidersOwnedFor(t, values)
-		if err != nil || on {
-			t.Fatalf("%v: on=%v err=%v, want off and no error", values, on, err)
+		if on, logs := parseSSOProvidersOwnedFor(t, values); on || logs != "" {
+			t.Fatalf("%v: on=%v logs=%q, want off and silent", values, on, logs)
 		}
 	}
 }
 
-func TestSSOProvidersOwnedGarbageIsABootError(t *testing.T) {
+// A bad switch value is a WARN and off (today's path), never a refused start (product rule 3).
+func TestSSOProvidersOwnedGarbageIsAWarnAndOff(t *testing.T) {
 	for _, value := range []string{"maybe", "yes", "1", "on"} {
-		_, err := parseSSOProvidersOwnedFor(t, map[string]string{"AUTH_SSO_PROVIDERS_OWNED": value})
-		if err == nil || !strings.Contains(err.Error(), "AUTH_SSO_PROVIDERS_OWNED") {
-			t.Fatalf("%q: err = %v, want a boot error naming AUTH_SSO_PROVIDERS_OWNED", value, err)
+		on, logs := parseSSOProvidersOwnedFor(t, map[string]string{"AUTH_SSO_PROVIDERS_OWNED": value})
+		if on || !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "AUTH_SSO_PROVIDERS_OWNED") {
+			t.Fatalf("%q: on=%v logs=%q, want off and a WARN naming AUTH_SSO_PROVIDERS_OWNED", value, on, logs)
 		}
 	}
 }
 
-func TestSSOProvidersOwnedNeedsTheSessionsProxy(t *testing.T) {
-	on, err := parseSSOProvidersOwnedFor(t, map[string]string{"AUTH_SSO_PROVIDERS_OWNED": "true"})
-	if err == nil || on || !strings.Contains(err.Error(), "AUTH_PROXY_SESSIONS") {
-		t.Fatalf("no sessions proxy: on=%v err=%v, want a refusal naming AUTH_PROXY_SESSIONS", on, err)
+func TestSSOProvidersOwnedNeedsTheSessionsProxyElseWarnsAndStaysOff(t *testing.T) {
+	on, logs := parseSSOProvidersOwnedFor(t, map[string]string{"AUTH_SSO_PROVIDERS_OWNED": "true"})
+	if on || !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "AUTH_PROXY_SESSIONS") {
+		t.Fatalf("no sessions proxy: on=%v logs=%q, want off and a WARN naming AUTH_PROXY_SESSIONS", on, logs)
 	}
-	on, err = parseSSOProvidersOwnedFor(t, map[string]string{"AUTH_SSO_PROVIDERS_OWNED": "true", "AUTH_PROXY_URL": "http://auth-service:8095", "AUTH_PROXY_SESSIONS": "true"})
-	if err != nil || !on {
-		t.Fatalf("sessions proxy on: on=%v err=%v, want on", on, err)
+	on, logs = parseSSOProvidersOwnedFor(t, map[string]string{"AUTH_SSO_PROVIDERS_OWNED": "true", "AUTH_PROXY_URL": "http://auth-service:8095", "AUTH_PROXY_SESSIONS": "true"})
+	if !on || logs != "" {
+		t.Fatalf("sessions proxy on: on=%v logs=%q, want on and silent", on, logs)
 	}
 }
 
 // Owned with no workload client: every provider route answers the named 503, never the stub's 500 and never a write.
 func TestSSOProvidersOwnedWithNoWorkloadClientAnswersTheNamed503OnEveryRoute(t *testing.T) {
-	withSSOLicence(t)
+	withSSOLicence(t, true)
 	client, err := ssoProvidersClient(AuthProxyConfig{}, true, nil)
 	if err != nil || client == nil {
 		t.Fatalf("client = %v, %v, want the unavailable client", client, err)
@@ -68,7 +71,7 @@ func TestSSOProvidersOwnedWithNoWorkloadClientAnswersTheNamed503OnEveryRoute(t *
 // The list bounds on the real route: absent, 0, the cap and past it are echoed as asked; a negative value is the legacy bare 500
 // with no call to auth-service.
 func TestSSOListBoundsOnTheRealRoute(t *testing.T) {
-	withSSOLicence(t)
+	withSSOLicence(t, true)
 	client := &ssoCellClient{}
 	handler, minter := adminConfigServerScoped(t, nil, withBoundaryCallers, ssoRoutes(client), nil)
 	member := boundaryCallers(minter)["org member"].token

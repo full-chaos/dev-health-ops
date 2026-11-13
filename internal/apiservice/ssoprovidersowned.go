@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/full-chaos/dev-health-go/workloadtoken"
@@ -17,23 +18,26 @@ import (
 // writing the table.
 const SSOProvidersOwnedEnv = "AUTH_SSO_PROVIDERS_OWNED"
 
-// ParseSSOProvidersOwned reads AUTH_SSO_PROVIDERS_OWNED for go-api: unset, empty or false is off, true is on, anything
-// else is an error. On, go-api calls auth-service with the workload client the sessions aggregate builds, so it refuses to
-// start unless AUTH_PROXY_SESSIONS is on.
-func ParseSSOProvidersOwned(lookup func(string) (string, bool), proxy AuthProxyConfig) (bool, error) {
+// ParseSSOProvidersOwned reads AUTH_SSO_PROVIDERS_OWNED for go-api: unset, empty or false is off, true is on. A value that is
+// neither, or an on switch without AUTH_PROXY_SESSIONS (go-api reaches auth-service with the workload token that aggregate
+// builds), is a WARN and the safe default, off: today's path. No start is refused for a config hygiene fault (product rule 3).
+func ParseSSOProvidersOwned(lookup func(string) (string, bool), proxy AuthProxyConfig, logger *slog.Logger) bool {
 	raw, _ := lookup(SSOProvidersOwnedEnv)
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "false":
-		return false, nil
+		return false
 	case "true":
 	default:
-		return false, fmt.Errorf("%s must be true or false", SSOProvidersOwnedEnv)
+		logger.Warn("api sso providers: the switch is neither true nor false; the provider routes stay on today's path (off)",
+			slog.String("env", SSOProvidersOwnedEnv))
+		return false
 	}
 	if !proxy.Enabled(AuthSessions) {
-		return false, fmt.Errorf("%s is on: %s must be on too, so go-api reaches auth-service with its workload token",
-			SSOProvidersOwnedEnv, AuthProxyFlagEnv(AuthSessions))
+		logger.Warn("api sso providers: the switch is on without the sessions proxy; the provider routes stay on today's path (off)",
+			slog.String("env", SSOProvidersOwnedEnv), slog.String("needs", AuthProxyFlagEnv(AuthSessions)))
+		return false
 	}
-	return true, nil
+	return true
 }
 
 // ssoProvidersClient is the client of auth-service's SSO provider routes while it owns the providers, over the one

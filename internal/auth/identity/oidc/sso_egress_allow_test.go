@@ -7,6 +7,9 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,8 +17,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/externalurl"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/proxycapture"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 )
 
@@ -152,5 +158,84 @@ func TestSSOEgressAllowNeverReachesTheSocialOAuthCalls(t *testing.T) {
 	}
 	if hits.Load() != 0 {
 		t.Fatalf("the social token endpoint on 127.0.0.1 was reached %d time(s)", hits.Load())
+	}
+}
+
+// C-a: the OIDC client New installs keeps today's posture (30 s timeout, no redirect, the GuardedTransport TLS and
+// connection settings, no proxy); only its dial check differs, and it is not the social client.
+func TestTheOIDCClientKeepsTodaysTimeoutTLSAndRedirectPolicy(t *testing.T) {
+	svc := newDefaultClientService(t, time.Unix(1_800_000_000, 0), nil)
+	assertIdPClientPosture(t, svc.oidcClient, svc.cfg.HTTPClient)
+}
+
+func assertIdPClientPosture(t *testing.T, client, social *http.Client) {
+	t.Helper()
+	if client == nil || client == social {
+		t.Fatal("the OIDC calls do not have a client of their own")
+	}
+	if client.Timeout != 30*time.Second || social.Timeout != 30*time.Second {
+		t.Fatalf("timeouts %v / %v, want 30s", client.Timeout, social.Timeout)
+	}
+	for _, c := range []*http.Client{client, social} {
+		if c.CheckRedirect == nil || c.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+			t.Fatal("a default client follows redirects")
+		}
+	}
+	got, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport %T", client.Transport)
+	}
+	want := externalurl.GuardedTransport()
+	if got.Proxy != nil || !reflect.DeepEqual(got.TLSClientConfig, want.TLSClientConfig) ||
+		got.TLSHandshakeTimeout != want.TLSHandshakeTimeout || got.ForceAttemptHTTP2 != want.ForceAttemptHTTP2 ||
+		got.MaxIdleConns != want.MaxIdleConns || got.IdleConnTimeout != want.IdleConnTimeout ||
+		got.ExpectContinueTimeout != want.ExpectContinueTimeout || got.MaxResponseHeaderBytes != want.MaxResponseHeaderBytes ||
+		got.DisableKeepAlives != want.DisableKeepAlives || got.DialContext == nil {
+		t.Fatalf("the OIDC transport differs from GuardedTransport beyond its dial check")
+	}
+}
+
+func TestTheDefaultOIDCCallClientRefusesRedirectsOnItsOwn(t *testing.T) {
+	client := defaultIdPClient()
+	if client.CheckRedirect == nil || client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("the default OIDC call client follows redirects")
+	}
+}
+
+func TestTheDefaultOIDCCallClientNeverDialsTheEnvironmentProxy(t *testing.T) {
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, proxycapture.Target, nil)
+		if err != nil {
+			panic(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+proxycapture.Canary)
+		if response, err := defaultIdPClient().Do(request); err == nil {
+			_ = response.Body.Close()
+		}
+	}).AssertNothingReached(t)
+}
+
+// Every OIDC call of the Service goes through the OIDC client and no social OAuth call does: service.go names no
+// s.cfg.HTTPClient, oauth_flow.go names no oidcClient.
+func TestOIDCAndSocialCallsUseTheirOwnClients(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(name string) string {
+		raw, err := os.ReadFile(filepath.Join(root, "internal", "auth", "identity", "oidc", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	service, oauthFlow := read("service.go"), read("oauth_flow.go")
+	if strings.Contains(service, "s.cfg.HTTPClient") || strings.Count(service, "s.oidcClient") != 4 {
+		t.Errorf("service.go: s.cfg.HTTPClient %d, s.oidcClient %d; want 0 and the 4 OIDC calls",
+			strings.Count(service, "s.cfg.HTTPClient"), strings.Count(service, "s.oidcClient"))
+	}
+	if strings.Contains(oauthFlow, "oidcClient") || strings.Count(oauthFlow, "s.cfg.HTTPClient") != 2 {
+		t.Errorf("oauth_flow.go: oidcClient %d, s.cfg.HTTPClient %d; want 0 and the 2 social calls",
+			strings.Count(oauthFlow, "oidcClient"), strings.Count(oauthFlow, "s.cfg.HTTPClient"))
 	}
 }

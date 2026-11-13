@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"syscall"
 	"time"
@@ -131,4 +132,86 @@ func refuseInternalAddress(_, address string, _ syscall.RawConn) error {
 
 func logRefusedDial(class string) {
 	slog.Warn("externalurl: outbound connection refused", "class", class)
+}
+
+// IdPAllowEnv names the comma-separated CIDR list of non-public addresses an SSO OIDC call (discovery, token
+// exchange, JWKS, userinfo) may still dial: a job-local IdP only; never set in prod. Unset or empty: none, and
+// IdPTransport is GuardedTransport. One invalid or forbidden entry: none (fail closed).
+const IdPAllowEnv = "SSO_EGRESS_ALLOW_CIDRS"
+
+// IdPTransport is the transport of the SSO OIDC clients only. With IdPAllowEnv unset or empty it is GuardedTransport
+// (the same dial check, the same function). With a valid list, a non-public address inside it is dialled when its
+// class is not a never-allowed one and it is not a translation address; every other address is refused exactly as
+// GuardedTransport refuses it. The list is read when the transport is built.
+func IdPTransport() *http.Transport {
+	transport := httpguard.Transport()
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: idpDialControl(os.Getenv(IdPAllowEnv)),
+		Resolver: dialResolver}
+	transport.DialContext = dialer.DialContext
+	return transport
+}
+
+type dialControl = func(network, address string, conn syscall.RawConn) error
+
+// idpDialControl is refuseInternalAddress itself when value lists nothing usable.
+func idpDialControl(value string) dialControl {
+	allow := parseIdPAllow(value)
+	if len(allow) == 0 {
+		return refuseInternalAddress
+	}
+	return refuseUnlessIdPAllowed(allow)
+}
+
+// parseIdPAllow reads the list. A set, valid list writes one WARN with its entry count; an entry that is not a CIDR,
+// or that holds an address no allow list may admit (netclass.AllowEntryForbidden), empties the whole list and writes
+// one ERROR with the entry count. No line carries an entry.
+func parseIdPAllow(value string) []netip.Prefix {
+	var fields []string
+	for _, field := range strings.Split(value, ",") {
+		if field = strings.TrimSpace(field); field != "" {
+			fields = append(fields, field)
+		}
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	prefixes := make([]netip.Prefix, 0, len(fields))
+	for _, field := range fields {
+		prefix, err := netip.ParsePrefix(field)
+		if err != nil || netclass.AllowEntryForbidden(prefix) {
+			slog.Error("externalurl: "+IdPAllowEnv+" has an invalid or forbidden entry; no non-public address is allowed",
+				"entries", len(fields))
+			return nil
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	slog.Warn("externalurl: "+IdPAllowEnv+" in force", "entries", len(prefixes))
+	return prefixes
+}
+
+// refuseUnlessIdPAllowed admits a non-public address inside allow whose class is not never-allowed and that is not a
+// translation address (one INFO with the class only); every other address goes to refuseInternalAddress.
+func refuseUnlessIdPAllowed(allow []netip.Prefix) dialControl {
+	return func(network, address string, conn syscall.RawConn) error {
+		if host, _, err := net.SplitHostPort(address); err == nil {
+			if addr, err := netip.ParseAddr(host); err == nil {
+				addr = addr.Unmap().WithZone("")
+				class := netclass.BlockedAddressClass(addr)
+				if class != "" && !netclass.NeverAllowed(class) && len(netclass.TranslationTargets(addr)) == 0 && inPrefixes(addr, allow) {
+					slog.Info("externalurl: outbound connection allowed by "+IdPAllowEnv, "class", class)
+					return nil
+				}
+			}
+		}
+		return refuseInternalAddress(network, address, conn)
+	}
+}
+
+func inPrefixes(addr netip.Addr, prefixes []netip.Prefix) bool {
+	for _, prefix := range prefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }

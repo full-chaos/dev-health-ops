@@ -156,7 +156,9 @@ type Config struct {
 	StateSecret contracts.SecretString
 	// AppBaseURL builds the default redirect URI: <AppBaseURL>/oidc/<id>/callback.
 	AppBaseURL string
-	// HTTPClient reaches the IdP; nil means an SSRF-guarded client.
+	// HTTPClient reaches the IdP and the OAuth providers; nil means the
+	// SSRF-guarded clients (defaultIdPClient for the OIDC calls,
+	// defaultHTTPClient for the social OAuth calls).
 	HTTPClient *http.Client
 	// OAuthEndpoints are the OAuth providers' public URLs; nil means
 	// DefaultOAuthEndpoints. A self-hosted GitLab row's base_url overrides
@@ -179,8 +181,10 @@ type Config struct {
 
 // Service runs the OIDC flow.
 type Service struct {
-	cfg      Config
-	outcomes metric.Int64Counter
+	cfg Config
+	// oidcClient makes the OIDC calls: cfg.HTTPClient when the caller set one.
+	oidcClient *http.Client
+	outcomes   metric.Int64Counter
 }
 
 // New validates the configuration.
@@ -192,8 +196,10 @@ func New(cfg Config) (*Service, error) {
 	case cfg.StateSecret.Reveal() == "":
 		return nil, errors.New("oidc: no state secret")
 	}
+	oidcClient := cfg.HTTPClient
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = defaultHTTPClient()
+		oidcClient = defaultIdPClient()
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -210,7 +216,7 @@ func New(cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{cfg: cfg, outcomes: counter}, nil
+	return &Service{cfg: cfg, oidcClient: oidcClient, outcomes: counter}, nil
 }
 
 // AuthorizeResult is the authorize response and the browser-binding cookie.
@@ -524,7 +530,7 @@ type validated struct {
 }
 
 func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state flowState, code string) (validated, *Error) {
-	meta, err := resolveMetadata(ctx, s.cfg.HTTPClient, row.Config)
+	meta, err := resolveMetadata(ctx, s.oidcClient, row.Config)
 	if err != nil {
 		return validated{}, s.recordedIfGoAPIRecords(ctx, row, err, authFailed(ReasonDependency, err))
 	}
@@ -537,7 +543,7 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 		RedirectURL: state.RedirectURI,
 		Endpoint:    oauth2.Endpoint{TokenURL: meta.TokenEndpoint, AuthStyle: oauth2.AuthStyleInParams},
 	}
-	token, err := exchangeCode(ctx, s.cfg.HTTPClient, oauthCfg, code, state.CodeVerifier)
+	token, err := exchangeCode(ctx, s.oidcClient, oauthCfg, code, state.CodeVerifier)
 	if err != nil {
 		return validated{}, s.recordedProviderFailure(ctx, row, ProviderKind, stageNone, msgOIDCExchange, authFailed(ReasonDependency, err))
 	}
@@ -546,7 +552,7 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 		return validated{}, s.recordedProviderFailure(ctx, row, ProviderKind, stageNone, text,
 			authFailed(ReasonMalformed, errors.New("token response missing access_token or id_token")))
 	}
-	keys := gooidc.NewRemoteKeySet(gooidc.ClientContext(ctx, s.cfg.HTTPClient), meta.JWKSURI)
+	keys := gooidc.NewRemoteKeySet(gooidc.ClientContext(ctx, s.oidcClient), meta.JWKSURI)
 	claims, err := verifyIDToken(ctx, keys, rawIDToken, claimRules{
 		Issuer: meta.Issuer, ClientID: row.Config.ClientID, Nonce: state.Nonce, Now: s.cfg.Now(),
 	})
@@ -555,7 +561,7 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 	}
 	var userinfo map[string]any
 	if meta.UserinfoEndpoint != "" {
-		if userinfo, err = fetchUserinfo(ctx, s.cfg.HTTPClient, meta.UserinfoEndpoint, token.AccessToken); err != nil {
+		if userinfo, err = fetchUserinfo(ctx, s.oidcClient, meta.UserinfoEndpoint, token.AccessToken); err != nil {
 			return validated{}, s.recordedIfGoAPIRecords(ctx, row, err, authFailed(ReasonDependency, err))
 		}
 		if sub, _ := userinfo["sub"].(string); sub != claims.Subject {

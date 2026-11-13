@@ -21,9 +21,17 @@ import (
 const maxIdPResponseBytes = 1 << 20
 
 // defaultHTTPClient reaches only addresses the SSRF guard allows and follows
-// no redirect: the issuer and its endpoints are admin-configured URLs.
+// no redirect: the social OAuth providers' endpoints are admin-configured URLs.
 func defaultHTTPClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, Transport: externalurl.GuardedTransport(),
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+// defaultIdPClient is defaultHTTPClient for the OIDC calls (discovery, token
+// exchange, JWKS, userinfo): the same timeout and redirect policy, over
+// externalurl.IdPTransport, which also admits SSO_EGRESS_ALLOW_CIDRS.
+func defaultIdPClient() *http.Client {
+	return &http.Client{Timeout: 30 * time.Second, Transport: externalurl.IdPTransport(),
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 

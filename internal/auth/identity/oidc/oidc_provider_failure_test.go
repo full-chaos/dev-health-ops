@@ -163,7 +163,7 @@ func runUnitCase(t *testing.T, c unitCase, failures ssoaudit.ProviderFailure) (P
 	if c.idp != nil {
 		c.idp(idp)
 	}
-	svc := &Service{cfg: Config{HTTPClient: idp.server.Client(), Now: func() time.Time { return now }, ProviderFailure: failures}}
+	svc := &Service{cfg: Config{HTTPClient: idp.server.Client(), Now: func() time.Time { return now }, ProviderFailure: failures}, oidcClient: idp.server.Client()}
 	row := Provider{ID: uuid.New(), OrgID: uuid.New(), Protocol: "oidc", AutoProvision: true, Config: cfg}
 	_, failure := svc.exchangeAndValidate(context.Background(), row, flowState{Nonce: unitNonce, RedirectURI: "https://app.example/cb"}, "code-1")
 	return row, failure

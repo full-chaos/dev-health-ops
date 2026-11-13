@@ -107,8 +107,16 @@ func appBaseURL() string {
 // defaultOIDCClient dials only addresses externalurl's SSRF guard allows
 // and follows no redirects, the same posture credentials.Routes gives an
 // admin-configured probe URL -- an OIDC issuer is exactly that kind of
-// admin-configured external URL.
+// admin-configured external URL. Its transport, externalurl.IdPTransport,
+// also admits SSO_EGRESS_ALLOW_CIDRS.
 func defaultOIDCClient() *http.Client {
+	return &http.Client{Timeout: 30 * time.Second, Transport: externalurl.IdPTransport(),
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+// defaultSocialClient is defaultOIDCClient for the social OAuth calls, over
+// externalurl.GuardedTransport: the SSO list never reaches them.
+func defaultSocialClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, Transport: externalurl.GuardedTransport(),
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
@@ -593,7 +601,7 @@ func (h handlers) exchangeAndValidate(ctx context.Context, w http.ResponseWriter
 	if metadata.Issuer == "" || config.ClientID == "" || metadata.JWKSURI == "" {
 		return oidcClaims{}, ssoErr("OIDC configuration missing issuer/client_id/jwks")
 	}
-	verifyCtx := oidc.ClientContext(ctx, h.HTTPClient)
+	verifyCtx := oidc.ClientContext(ctx, h.oidcClient)
 	keySet := oidc.NewRemoteKeySet(verifyCtx, metadata.JWKSURI)
 	idVerifier := oidc.NewVerifier(metadata.Issuer, keySet, &oidc.Config{
 		ClientID:             config.ClientID,
@@ -667,7 +675,7 @@ func (h handlers) fetchUserinfo(ctx context.Context, endpoint, accessToken strin
 		return nil, ssoErr("OIDC userinfo request failed")
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err := httpguard.NoRedirects(h.HTTPClient).Do(req) // the access token rides this request
+	resp, err := httpguard.NoRedirects(h.oidcClient).Do(req) // the access token rides this request
 	if err != nil {
 		return nil, ssoErr("OIDC userinfo request failed")
 	}
@@ -714,7 +722,7 @@ func (h handlers) resolveOIDCMetadata(ctx context.Context, config oidcConfigValu
 	if err != nil {
 		return oidcMetadataValues{}, ssoErr("Failed to fetch OIDC discovery document")
 	}
-	resp, err := h.HTTPClient.Do(req)
+	resp, err := h.oidcClient.Do(req)
 	if err != nil {
 		return oidcMetadataValues{}, ssoErr("Failed to fetch OIDC discovery document")
 	}
@@ -786,7 +794,7 @@ func uuidPtr(id uuid.UUID) *uuid.UUID { return &id }
 // exchangeOIDCCode is the token-endpoint call: client_secret and the code ride its BODY, which a 307 would send again
 // to any host, so it follows no redirect whatever client was supplied.
 func (h handlers) exchangeOIDCCode(ctx context.Context, oauthCfg oauth2.Config, code, verifier string) (*oauth2.Token, error) {
-	exchangeCtx := context.WithValue(ctx, oauth2.HTTPClient, httpguard.NoRedirects(h.HTTPClient))
+	exchangeCtx := context.WithValue(ctx, oauth2.HTTPClient, httpguard.NoRedirects(h.oidcClient))
 	var opts []oauth2.AuthCodeOption
 	if verifier != "" {
 		opts = append(opts, oauth2.VerifierOption(verifier))

@@ -65,6 +65,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -111,6 +112,12 @@ func nonEmpty(s *string) bool {
 // require_org_id's "authorized org always wins" behavior by construction,
 // same as reviewedges.Resolve).
 func Resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, untilDate graphqldate.Date, teamID, repoID *string) (*model.CognitiveLoadResult, error) {
+	return resolve(ctx, client, orgID, sinceDate, untilDate, teamID, repoID, time.Now().UTC())
+}
+
+// resolve is Resolve with the instant the ownership rows of the team +
+// repository gate are tested at: one instant per request.
+func resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, untilDate graphqldate.Date, teamID, repoID *string, asOf time.Time) (*model.CognitiveLoadResult, error) {
 	if client == nil {
 		return nil, errors.New("cognitiveload: clickhouse client is required")
 	}
@@ -149,7 +156,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceDate, u
 	// be trusted for this case (CHAOS-4396 taint), so this resolves
 	// ownership FIRST and then filters both fetches by repoId alone.
 	if nonEmpty(teamID) && nonEmpty(repoID) {
-		ownedRepoID, found, err := resolveOwnedRepoID(ctx, client, orgID, *teamID, *repoID)
+		ownedRepoID, found, err := resolveOwnedRepoID(ctx, client, orgID, *teamID, *repoID, asOf)
 		if err != nil {
 			return nil, fmt.Errorf("cognitiveload: resolve owned repo: %w", err)
 		}
@@ -781,9 +788,12 @@ type ownershipRow struct {
 // DESC, updated_at DESC, team_id ASC) same as load_team_repo_ownership_map.
 // teams.repo_patterns is not read: a repository with no owner row is owned
 // by no team (the same rule the metric families and the AI analytics scope
-// use). Returns ("", false, nil) when repoID does not exist, has no owner
-// row, or resolves to a different team than teamID.
-func resolveOwnedRepoID(ctx context.Context, client QueryClient, orgID, teamID, repoID string) (string, bool, error) {
+// use). The rows are those every team scope reads (teamscope.OwnershipFromWhere,
+// as of asOf): an inactive team owns nothing, a row with an empty team id is
+// skipped, and before a repository's first record its first recorded owners
+// apply (package ownershipwindow). Returns ("", false, nil) when repoID does
+// not exist, has no owner row, or resolves to a different team than teamID.
+func resolveOwnedRepoID(ctx context.Context, client QueryClient, orgID, teamID, repoID string, asOf time.Time) (string, bool, error) {
 	candidates, err := fetchRepoCandidates(ctx, client, orgID, repoID)
 	if err != nil {
 		return "", false, fmt.Errorf("candidates: %w", err)
@@ -796,7 +806,7 @@ func resolveOwnedRepoID(ctx context.Context, client QueryClient, orgID, teamID, 
 		candidateIDs[i] = c.id
 	}
 
-	ownershipRows, err := fetchOwnershipCandidates(ctx, client, orgID, candidateIDs)
+	ownershipRows, err := fetchOwnershipCandidates(ctx, client, orgID, candidateIDs, asOf)
 	if err != nil {
 		return "", false, fmt.Errorf("ownership: %w", err)
 	}
@@ -881,43 +891,27 @@ func fetchRepoCandidates(ctx context.Context, client QueryClient, orgID, repoID 
 }
 
 // fetchOwnershipCandidates ports the ownership_rows query inside
-// _resolve_owned_repo_id: LEFT JOINs team_repo_ownership against repos on
-// (org_id, provider, lower(repo)) so a native GitHub auto-import row
-// (repo_id NULL, only repo_full_name set) still resolves, via
-// coalesce(o.repo_id, r.id) -- matching load_team_repo_ownership_map's
-// exact join, including its "matched" sentinel (ClickHouse's zero-value
-// LEFT JOIN default, not NULL, would otherwise silently treat an
-// unmatched name as matched to the UUID zero-value). Only
-// resolved_repo_id/team_id are selected -- is_primary/specificity/
-// updated_at drive the ORDER BY by direct column reference instead of a
-// selected alias, so this port never has to scan values it never reads.
-func fetchOwnershipCandidates(ctx context.Context, client QueryClient, orgID string, candidateIDs []string) ([]ownershipRow, error) {
+// _resolve_owned_repo_id over the one ownership statement of the team scopes
+// (teamscope.OwnershipFromWhere: the repos name join with its matched
+// sentinel, FINAL, the validity window at asOf, active teams only, a
+// non-empty team id, the catalog guard), narrowed to the candidate
+// repositories. A co-owner row (is_primary = 2) is never the canonical
+// owner. Only resolved_repo_id/team_id and the two rank columns of the tie
+// rule are selected; is_primary/specificity/updated_at drive the ORDER BY
+// by direct column reference.
+func fetchOwnershipCandidates(ctx context.Context, client QueryClient, orgID string, candidateIDs []string, asOf time.Time) ([]ownershipRow, error) {
+	fromWhere, bindings := teamscope.OwnershipFromWhere(orgID, asOf)
 	query := `
         SELECT
             coalesce(toString(o.repo_id), toString(r.id)) AS resolved_repo_id,
             o.team_id AS team_id,
             toUInt8(o.is_primary = 1) AS main_owner,
             o.specificity AS specificity
-        FROM team_repo_ownership AS o FINAL
-        LEFT JOIN (
-            SELECT org_id, provider, id, repo, 1 AS matched
-            FROM repos FINAL
-            WHERE org_id = {org_id:String}
-        ) AS r
-            ON r.org_id = o.org_id
-               AND r.provider = o.provider
-               AND lower(r.repo) = lower(o.repo_full_name)
-        WHERE o.org_id = {org_id:String}
-          AND (o.repo_id IS NOT NULL OR r.matched = 1)
+` + fromWhere + `
           AND coalesce(toString(o.repo_id), toString(r.id)) IN {candidate_ids:Array(String)}
           AND o.is_primary != 2
-          AND o.valid_from <= now64(3)
-          AND (o.valid_to IS NULL OR o.valid_to > now64(3))
         ORDER BY resolved_repo_id, (o.is_primary = 1) DESC, o.specificity DESC, o.updated_at DESC, team_id ASC`
-	bindings := []clickhouse.Binding{
-		{Name: "org_id", Value: orgID},
-		{Name: "candidate_ids", Value: candidateIDs},
-	}
+	bindings = append(bindings, clickhouse.Binding{Name: "candidate_ids", Value: candidateIDs})
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

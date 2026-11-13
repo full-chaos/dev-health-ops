@@ -428,6 +428,33 @@ func TestAnyTeamRepoConditionIsTheSameStatementWithoutTheTeamFilter(t *testing.T
 	}
 }
 
+// OwnershipFromWhere is the FROM ... WHERE of AnyTeamRepoCondition (one statement), with its rules and bindings.
+func TestOwnershipFromWhereIsTheStatementOfAnyTeamRepoCondition(t *testing.T) {
+	fromWhere, bindings := OwnershipFromWhere("org-1", asOf)
+	anyTeam, anyBindings := AnyTeamRepoCondition("org-1", "repo_id", asOf)
+	want := "repo_id IN (\n    SELECT DISTINCT coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id\n" + fromWhere + "\n)"
+	if anyTeam != want {
+		t.Fatalf("AnyTeamRepoCondition is not built on OwnershipFromWhere:\nany:\n%s\nfromWhere:\n%s", anyTeam, fromWhere)
+	}
+	for _, line := range []string{
+		Marker,
+		"AND o.team_id != ''",
+		"AND trimBoth(o.team_id) NOT IN (SELECT trimBoth(id) FROM teams WHERE org_id = {" + BindingOrgID + ":String}",
+		"o.valid_from <= greatest({" + BindingAsOf + ":DateTime64(3, 'UTC')}, ",
+		"AND (o.valid_to IS NULL OR o.valid_to > greatest({" + BindingAsOf + ":DateTime64(3, 'UTC')}, ",
+	} {
+		if !strings.Contains(fromWhere, line) {
+			t.Errorf("OwnershipFromWhere lacks %q:\n%s", line, fromWhere)
+		}
+	}
+	if strings.Contains(fromWhere, "o.team_id IN") || strings.Contains(fromWhere, "now64") {
+		t.Errorf("OwnershipFromWhere carries a team filter or its own instant:\n%s", fromWhere)
+	}
+	if fmt.Sprint(bindings) != fmt.Sprint(anyBindings) {
+		t.Errorf("bindings = %v, want those of AnyTeamRepoCondition %v", bindings, anyBindings)
+	}
+}
+
 // OwnerShares renders the ownership predicate of RepoCondition (one definition) under its own binding names, and the
 // teams in view narrow the owners only when ids are given.
 func TestOwnerSharesReadsTheOneOwnershipPredicate(t *testing.T) {

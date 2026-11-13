@@ -11,8 +11,8 @@
 // ranking a shared repository down to a single owner deletes one team's real
 // signal). The SQL is the same join providers/teams.py's
 // load_team_repo_ownership_map established and
-// internal/queryapi/cognitiveload's fetchOwnershipCandidates already
-// runs through this binary's own read-only client.
+// internal/queryapi/cognitiveload's fetchOwnershipCandidates renders
+// (OwnershipFromWhere) through this binary's own read-only client.
 //
 // One exported condition, consumed by every route. The rule is identical
 // everywhere, so it lives in one place rather than in a copy per package:
@@ -142,6 +142,15 @@ func RepoCondition(orgID, repoColumn string, teamIDs []string, asOf time.Time) (
 // carried. Every other reader of ownership stays on RepoCondition.
 func AnyTeamRepoCondition(orgID, repoColumn string, asOf time.Time) (condition string, bindings []dhclickhouse.Binding) {
 	return ownedRepoCondition(orgID, repoColumn, nil, asOf)
+}
+
+// OwnershipFromWhere is the FROM ... WHERE of the ownership statement of AnyTeamRepoCondition, under the same binding
+// names: the join, FINAL, the validity window, the active-team rule, the non-empty team id and the catalog guard. A
+// reader that ranks the owners itself (the cognitive-load team + repository gate) reads the same rows as every team
+// scope. The caller selects from the aliases o and r and appends its own AND clauses.
+func OwnershipFromWhere(orgID string, asOf time.Time) (fromWhere string, bindings []dhclickhouse.Binding) {
+	names := bindingNames{org: BindingOrgID, teams: BindingTeamIDs, asOf: BindingAsOf}
+	return ownershipFromWhere(names, false), ownershipBindings(names, orgID, nil, asOf)
 }
 
 // ownedRepoCondition renders the one ownership statement; teamList nil = any team.

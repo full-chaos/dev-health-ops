@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -69,13 +70,14 @@ const legPassPlain = "ok  \texample.com/m/a\t1.234s\nok  \texample.com/m/b\t2.50
 type legRun struct {
 	code                 int
 	stdout, stderr, argv string
-	jsonDir              string
+	jsonDir, pids        string
 }
 
 type legOpts struct {
 	withDir   bool
 	jqFilter  string // replaces INTEGRATION_LEG_JQ when set
 	slowTail  bool   // the renderer's tail starts 2 s late
+	hangTail  bool   // the renderer never ends (its tail sleeps); the tail and jq stand-ins record their pids
 	mutateOld string // planted defect: old -> new in ci/check_go.sh
 	mutateNew string
 }
@@ -125,6 +127,28 @@ func runIntegrationLeg(t *testing.T, stream string, goRC int, o legOpts) legRun 
 			t.Fatal(err)
 		}
 	}
+	pids := filepath.Join(dir, "renderer-pids")
+	if o.hangTail {
+		realJq, err := exec.LookPath("jq")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "tail"), []byte("#!/bin/sh\necho $$ >> "+pids+"\nexec sleep 300\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "jq"), []byte("#!/bin/sh\necho $$ >> "+pids+"\nexec "+realJq+" \"$@\"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// whatever outcome, no stand-in this test started outlives it: stop each recorded pid, never a pattern
+		t.Cleanup(func() {
+			raw, _ := os.ReadFile(pids)
+			for _, f := range strings.Fields(string(raw)) {
+				if pid, err := strconv.Atoi(f); err == nil && pid > 1 {
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+				}
+			}
+		})
+	}
 	override := ""
 	if o.jqFilter != "" {
 		override = "INTEGRATION_LEG_JQ='" + o.jqFilter + "'\n"
@@ -137,13 +161,18 @@ func runIntegrationLeg(t *testing.T, stream string, goRC int, o legOpts) legRun 
 	if o.withDir {
 		extra = append(extra, "GO_INTEGRATION_LEG_JSON_DIR="+jsonDir)
 	}
+	if o.hangTail {
+		extra = append(extra, "DEV_HEALTH_GO_RENDER_WAIT_SECS=1")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	// a renderer left running would hold stdout open: bound the wait for it, the run then fails instead of hanging
+	cmd.WaitDelay = 10 * time.Second
 	cmd.Env = inheritedEnv(append(append([]string{}, deadlineEnvNames...), "GO_INTEGRATION_LEG_JSON_DIR"), extra...)
 	var so, se strings.Builder
 	cmd.Stdout, cmd.Stderr = &so, &se
-	r := legRun{jsonDir: jsonDir}
+	r := legRun{jsonDir: jsonDir, pids: pids}
 	if err := cmd.Run(); err != nil {
 		ee, ok := err.(*exec.ExitError)
 		if !ok {
@@ -273,6 +302,50 @@ func TestIntegrationLegJSONReturnsAfterALateRenderer(t *testing.T) {
 	}
 }
 
+// legRendererAlive lists the recorded renderer pids still alive, polled up to 2 s (a killed child may still be reaped).
+func legRendererAlive(t *testing.T, pidsFile string) (recorded int, alive []int) {
+	t.Helper()
+	raw, _ := os.ReadFile(pidsFile)
+	var pids []int
+	for _, f := range strings.Fields(string(raw)) {
+		if pid, err := strconv.Atoi(f); err == nil && pid > 1 {
+			pids = append(pids, pid)
+		}
+	}
+	for i := 0; i < 20; i++ {
+		alive = alive[:0]
+		for _, pid := range pids {
+			if syscall.Kill(pid, 0) == nil {
+				alive = append(alive, pid)
+			}
+		}
+		if len(alive) == 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return len(pids), alive
+}
+
+func TestIntegrationLegJSONStopsARendererPastItsBound(t *testing.T) {
+	t.Parallel()
+	for _, rc := range []int{0, 1} {
+		t.Run("go test rc "+strconv.Itoa(rc), func(t *testing.T) {
+			t.Parallel()
+			r := runIntegrationLeg(t, legPassStream(t), rc, legOpts{withDir: true, hangTail: true})
+			if r.code != rc || !strings.Contains(r.stdout, "RETURNED rc="+strconv.Itoa(rc)+"\n") {
+				t.Errorf("rc=%d; want go test's %d\nstdout:\n%s\nstderr:\n%s", r.code, rc, r.stdout, r.stderr)
+			}
+			if !strings.Contains(r.stdout, `"Action":"pass","Package":"example.com/m/a"`) {
+				t.Errorf("the raw events are not in the log past the bound\nstdout:\n%s", r.stdout)
+			}
+			if n, alive := legRendererAlive(t, r.pids); n < 2 || len(alive) > 0 {
+				t.Errorf("renderer stand-ins: %d recorded, still alive %v; want both recorded and none left", n, alive)
+			}
+		})
+	}
+}
+
 func TestIntegrationLegJSONPlantedDefectsAreCaught(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -289,11 +362,15 @@ func TestIntegrationLegJSONPlantedDefectsAreCaught(t *testing.T) {
 				lev("output", legPkgC, "", "FAIL\texample.com/m/c [build failed]\n"), lev("fail", legPkgC, "", "")), 1, legOpts{withDir: true, mutateOld: old, mutateNew: new})
 			return !strings.Contains(r.stdout, "undefined: missingThing")
 		}},
-		{"the renderer's status becomes the call's", `wait "${render_pid}" || render_rc=$?`, `wait "${render_pid}" || { render_rc=$?; rc=${render_rc}; }`, func(t *testing.T, old, new string) bool {
+		{"the renderer's status becomes the call's", `render_rc=$((jq_rc != 0 ? jq_rc : tail_rc))`, `render_rc=$((jq_rc != 0 ? jq_rc : tail_rc)); rc=${render_rc}`, func(t *testing.T, old, new string) bool {
 			return runIntegrationLeg(t, legPassStream(t), 0, legOpts{withDir: true, jqFilter: "this is not jq (", mutateOld: old, mutateNew: new}).code != 0
 		}},
 		{"a truncated stream stays green", "      rc=70\n    fi\n  fi\n", "      :\n    fi\n  fi\n", func(t *testing.T, old, new string) bool {
 			return runIntegrationLeg(t, legTruncStream(t), 0, legOpts{withDir: true, mutateOld: old, mutateNew: new}).code == 0
+		}},
+		{"the raw events are not printed past the bound", "      wait \"${render_pid}\" 2>/dev/null || true\n      cat -- \"${json}\" || true\n", "      wait \"${render_pid}\" 2>/dev/null || true\n", func(t *testing.T, old, new string) bool {
+			r := runIntegrationLeg(t, legPassStream(t), 0, legOpts{withDir: true, hangTail: true, mutateOld: old, mutateNew: new})
+			return !strings.Contains(r.stdout, `"Action":"pass","Package":"example.com/m/a"`)
 		}},
 		{"no wait for the renderer", `    for ((render_tick = 0; render_tick < render_wait * 5; render_tick++)); do`, `    render_wait=0; for ((render_tick = 0; render_tick < render_wait * 5; render_tick++)); do`, func(t *testing.T, old, new string) bool {
 			return runIntegrationLeg(t, legPassStream(t), 0, legOpts{withDir: true, slowTail: true, mutateOld: old, mutateNew: new}).stdout != legPassPlain+"RETURNED rc=0\n"

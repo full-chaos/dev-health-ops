@@ -258,6 +258,7 @@ integration_leg_json_file() {
 
 run_integration_go_test() {
   local module_dir="$1" sid pid rc=0 i own_pgid tmo json="" render_pid="" render_rc=0 render_wait render_tick arg skip_next=0 want_pkgs=0 got_pkgs
+  local fifo="" tail_pid="" tail_rc=0 jq_rc=0 p
   local -a private_group=() json_args=()
   shift
   tmo="$(job_go_test_timeout 32)" || return 2
@@ -285,9 +286,14 @@ run_integration_go_test() {
       go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" ${json_args[@]+"${json_args[@]}"} "$@"
   ) &
   pid=$!
+  # The renderer is two background processes joined by a fifo, so each pid is known ($!) and can be stopped by that pid.
   if [ -n "${json}" ]; then
-    ( set -o pipefail; tail -n +1 -f --pid="${pid}" -- "${json}" | jq -nR --unbuffered -rj "${INTEGRATION_LEG_JQ}" ) &
+    fifo="${json%.json}.fifo"
+    rm -f -- "${fifo}" && mkfifo -- "${fifo}" || die "run_integration_go_test: cannot make the renderer fifo ${fifo}"
+    jq -nR --unbuffered -rj "${INTEGRATION_LEG_JQ}" <"${fifo}" &
     render_pid=$!
+    tail -n +1 -f --pid="${pid}" -- "${json}" >"${fifo}" &
+    tail_pid=$!
   fi
   TC_TRAP_PID="${pid}"
   TC_TRAP_SID="${sid}"
@@ -312,18 +318,34 @@ run_integration_go_test() {
     case "${render_wait}" in ""|*[!0-9]*) render_wait=120 ;; esac
     render_wait=$((10#${render_wait}))
     for ((render_tick = 0; render_tick < render_wait * 5; render_tick++)); do
-      kill -0 "${render_pid}" 2>/dev/null || break
+      kill -0 "${render_pid}" 2>/dev/null || kill -0 "${tail_pid}" 2>/dev/null || break
       sleep 0.2
     done
-    if kill -0 "${render_pid}" 2>/dev/null; then
-      echo "run_integration_go_test: the go test -json renderer still runs ${render_wait}s after go test ended; the log may lack its last lines (${json} is complete)" >&2
+    if kill -0 "${render_pid}" 2>/dev/null || kill -0 "${tail_pid}" 2>/dev/null; then
+      # Past the bound: stop the renderer's own two pids (TERM, KILL after 5 s), reap them, then print the raw events, so no
+      # renderer outlives this call or writes into the next call's log.
+      echo "run_integration_go_test: the go test -json renderer still runs ${render_wait}s after go test ended; stopping it (pids ${tail_pid} ${render_pid}); the raw events follow in the log, the status stays go test's" >&2
+      kill -TERM "${tail_pid}" "${render_pid}" 2>/dev/null || true
+      for ((render_tick = 0; render_tick < 25; render_tick++)); do
+        kill -0 "${render_pid}" 2>/dev/null || kill -0 "${tail_pid}" 2>/dev/null || break
+        sleep 0.2
+      done
+      for p in "${tail_pid}" "${render_pid}"; do
+        if kill -0 "${p}" 2>/dev/null; then kill -KILL "${p}" 2>/dev/null || true; fi
+      done
+      wait "${tail_pid}" 2>/dev/null || true
+      wait "${render_pid}" 2>/dev/null || true
+      cat -- "${json}" || true
     else
-      wait "${render_pid}" || render_rc=$?
+      wait "${tail_pid}" || tail_rc=$?
+      wait "${render_pid}" || jq_rc=$?
+      render_rc=$((jq_rc != 0 ? jq_rc : tail_rc))
       if [ "${render_rc}" -ne 0 ]; then
         echo "run_integration_go_test: the go test -json renderer failed (rc ${render_rc}); the raw events follow in the log, the status stays go test's" >&2
         cat -- "${json}" || true
       fi
     fi
+    rm -f -- "${fifo}"
     # End signal: the packages with a final pass/fail/skip event in the file against the packages of the call. A call that
     # go test passed with fewer final results than packages is a truncated stream: it fails (70), never a green partial.
     for arg in "$@"; do

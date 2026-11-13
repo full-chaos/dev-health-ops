@@ -240,6 +240,10 @@ func staleDispatchSeconds() time.Duration {
 // once); decideDispatchGuard folds them.
 func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID, runID string, now time.Time) (guardDecision, error) {
 	staleCutoff := now.Add(-staleDispatchSeconds())
+	self, err := readRunOrder(ctx, tx, runID)
+	if err != nil {
+		return guardDecision{}, err
+	}
 	env := guardEnv{
 		lockBuckets: func(buckets []dispatchBucket) error { return acquireBucketAdvisoryLocks(ctx, tx, buckets) },
 		// The total cap is opt-in (SYNC_RUN_MAX_UNITS; unset or 0 = none) and is the
@@ -248,9 +252,11 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 		activeCount: func(bucket dispatchBucket) (int, error) {
 			return countActiveBucketUnits(ctx, tx, bucket, staleCutoff, now)
 		},
-		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom int) {
-			emitBucketDecision(ctx, logger, bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom)
+		emit: func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int) {
+			emitBucketDecision(ctx, logger, bucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack)
 		},
+		self:      self,
+		olderRuns: func(bucket dispatchBucket) ([]olderRun, error) { return readOlderRuns(ctx, tx, bucket, self, now) },
 	}
 	source := func(fold func(dispatchGuardUnit) error) error {
 		return forEachDispatchGuardUnit(ctx, tx, runID, fold)
@@ -263,7 +269,7 @@ type guardEnv struct {
 	lockBuckets func([]dispatchBucket) error
 	totalCap    func() int
 	activeCount func(dispatchBucket) (int, error)
-	emit        func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom int)
+	emit        func(bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, headroom, heldBack int)
 	// self is the deciding run's admission position; olderRuns lists the bucket's older open runs with waiting units
 	// (CHAOS-8880).
 	self      runOrder
@@ -425,7 +431,10 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 	}
 
 	activeCounts := make(map[dispatchBucket]int, len(allBuckets))
+	heldBack := make(map[dispatchBucket]int, len(allBuckets))
 	folds := make(map[dispatchBucket]*guardBucketFold, len(allBuckets))
+	livenessBound := admissionLivenessBound()
+	var heldBackRunIDs []string
 	for _, bucket := range allBuckets {
 		activeCount, err := env.activeCount(bucket)
 		if err != nil {
@@ -435,6 +444,20 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		slots := concurrencyCapForCostClass(bucket.costClass) - activeCount
 		if slots < 0 {
 			slots = 0
+		}
+		// CHAOS-8880: free slots go to older live runs of the bucket first. Read under the bucket lock, in this
+		// transaction, right after the active count the slots come from.
+		if slots > 0 && env.olderRuns != nil {
+			older, err := env.olderRuns(bucket)
+			if err != nil {
+				return guardDecision{}, err
+			}
+			held, oldest := holdBackFor(env.self, older, slots, now, livenessBound)
+			slots -= held
+			heldBack[bucket] = held
+			if oldest != "" {
+				heldBackRunIDs = append(heldBackRunIDs, oldest)
+			}
 		}
 		folds[bucket] = &guardBucketFold{slots: slots}
 	}
@@ -476,7 +499,7 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 		if reclaimedStale > fold.slots {
 			reclaimedStale = fold.slots
 		}
-		env.emit(bucket, activeCounts[bucket], reclaimedStale, len(capped)-len(fold.cappedReclaims), len(fold.cappedReclaims), headroom)
+		env.emit(bucket, activeCounts[bucket], reclaimedStale, len(capped)-len(fold.cappedReclaims), len(fold.cappedReclaims), headroom, heldBack[bucket])
 	}
 
 	if len(cappedUnitIDs) > 0 {
@@ -487,9 +510,10 @@ func decideDispatchGuard(source guardUnitSource, env guardEnv, orgID string, now
 			concurrencyCapped: true,
 			slotHeadroom:      slotHeadroom,
 			authorizedUnitIDs: authorizedUnitIDs,
+			heldBackRunIDs:    heldBackRunIDs,
 		}, nil
 	}
-	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs}, nil
+	return guardDecision{allowed: true, slotHeadroom: slotHeadroom, authorizedUnitIDs: authorizedUnitIDs, heldBackRunIDs: heldBackRunIDs}, nil
 }
 
 // forEachDispatchGuardUnit folds this run's units in id order (stable ordering for the total-cap suffix,
@@ -642,9 +666,9 @@ func acquireBucketAdvisoryLocks(ctx context.Context, tx pgx.Tx, buckets []dispat
 // failure here is likewise swallowed, not propagated: attribute.String/Int
 // on a Go span cannot fail the way Python's dynamic OTel calls could, so
 // there is nothing to catch, but the log call is likewise best-effort).
-func emitBucketDecision(ctx context.Context, logger *synclog.Logger, bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, slotHeadroom int) {
+func emitBucketDecision(ctx context.Context, logger *synclog.Logger, bucket dispatchBucket, activeCount, reclaimedStale, cappedNew, cappedStale, slotHeadroom, heldBack int) {
 	bucketLabel := bucket.orgID + "/" + bucket.provider + "/" + bucket.costClass
-	logger.Info(ctx, synclog.MsgDispatchGuardBucketDecision, synclog.Text(synclog.KeyBucket, synclog.ParseLabel(bucketLabel)), synclog.Count(synclog.KeyGuardActiveCount, activeCount), synclog.Count(synclog.KeyGuardReclaimedStale, reclaimedStale), synclog.Count(synclog.KeyGuardCappedNew, cappedNew), synclog.Count(synclog.KeyGuardCappedStale, cappedStale), synclog.Count(synclog.KeyGuardSlotHeadroom, slotHeadroom))
+	logger.Info(ctx, synclog.MsgDispatchGuardBucketDecision, synclog.Text(synclog.KeyBucket, synclog.ParseLabel(bucketLabel)), synclog.Count(synclog.KeyGuardActiveCount, activeCount), synclog.Count(synclog.KeyGuardReclaimedStale, reclaimedStale), synclog.Count(synclog.KeyGuardCappedNew, cappedNew), synclog.Count(synclog.KeyGuardCappedStale, cappedStale), synclog.Count(synclog.KeyGuardSlotHeadroom, slotHeadroom), synclog.Count(synclog.KeyGuardHeldBack, heldBack))
 	span := oteltrace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return
@@ -656,6 +680,7 @@ func emitBucketDecision(ctx context.Context, logger *synclog.Logger, bucket disp
 		attribute.Int("guard.capped_new", cappedNew),
 		attribute.Int("guard.capped_stale", cappedStale),
 		attribute.Int("guard.slot_headroom", slotHeadroom),
+		attribute.Int("guard.held_back", heldBack),
 	}
 	span.SetAttributes(attrs...)
 	span.AddEvent("dispatch_guard.bucket_decision", oteltrace.WithAttributes(attrs...))

@@ -194,7 +194,7 @@ func admissionGuardEnv(self runOrder, active map[dispatchBucket]int, older map[d
 			*calls = append(*calls, guardCall{kind: "active", bucket: bucket})
 			return active[bucket], nil
 		},
-		emit: func(dispatchBucket, int, int, int, int, int) {},
+		emit: func(dispatchBucket, int, int, int, int, int, int) {},
 		self: self,
 		olderRuns: func(bucket dispatchBucket) ([]olderRun, error) {
 			*calls = append(*calls, guardCall{kind: "older", bucket: bucket})

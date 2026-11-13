@@ -5,6 +5,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +79,79 @@ func TestHeldBackPassesArmOneWakeRowForTheOlderRun(t *testing.T) {
 		}
 		if rows != 1 {
 			t.Fatalf("dispatch wakeup rows for the older run after two held-back passes = %d, want 1", rows)
+		}
+	})
+}
+
+// TestOlderRunsInBucketReadUsesTheActiveRunIndex (CHAOS-8880): the older-run read runs once per bucket per dispatch
+// pass, under the bucket lock. It must not read the org's finished history: 3,000 finished runs with 10 units each,
+// one open run deciding, and no Seq Scan on sync_runs or sync_run_units.
+func TestOlderRunsInBucketReadUsesTheActiveRunIndex(t *testing.T) {
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		insertGuardUnit(t, ctx, pool, guardUnitID("00000088f0", 0), "github", "medium", syncRunUnitStatusPlanned, now, nil, nil, nil)
+		for _, statement := range []string{
+			`INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units, created_at)
+			 SELECT md5('history-8880-' || n)::uuid, $1, (SELECT integration_id FROM public.sync_runs WHERE id = $2::uuid),
+				'schedule', 'incremental', 'success', 10, 10, 0, now() - make_interval(hours => n + 2)
+			 FROM generate_series(1, 3000) AS n`,
+			`INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status, attempts, created_at, updated_at)
+			 SELECT md5('history-unit-8880-' || run.id::text || '-' || k)::uuid, run.org_id, run.id, run.integration_id,
+				(SELECT source_id FROM public.sync_run_units WHERE sync_run_id = $2::uuid LIMIT 1),
+				'github', 'dataset-' || k, 'medium', 'incremental', 'success', 1, run.created_at, run.created_at
+			 FROM public.sync_runs AS run CROSS JOIN generate_series(1, 10) AS k
+			 WHERE run.org_id = $1 AND run.status = 'success'`,
+		} {
+			if _, err := pool.Exec(ctx, statement, guardTestOrg, guardTestRun); err != nil {
+				t.Fatalf("seed history: %v", err)
+			}
+		}
+		if _, err := pool.Exec(ctx, `ANALYZE`); err != nil {
+			t.Fatal(err)
+		}
+
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		self, err := readRunOrder(ctx, tx, guardTestRun)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		bucket := dispatchBucket{orgID: guardTestOrg, provider: "github", costClass: "medium"}
+		older, err := readOlderRuns(ctx, tx, bucket, self, now)
+		_ = tx.Rollback(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(older) != 0 {
+			t.Fatalf("older runs on a finished history = %+v, want none", older)
+		}
+
+		rows, err := pool.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS) "+olderRunsInBucketSQL,
+			bucket.orgID, bucket.provider, bucket.costClass, self.createdAt, self.id, self.backfill, now,
+			concurrencyCapForCostClass(bucket.costClass), admissionLivenessBound().Seconds(), olderRunsReadLimit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plan strings.Builder
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				t.Fatal(err)
+			}
+			plan.WriteString(line + "\n")
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("older runs in bucket read, 3000 finished runs x 10 units:\n%s", plan.String())
+		for _, table := range []string{"sync_runs", "sync_run_units"} {
+			if strings.Contains(plan.String(), "Seq Scan on "+table) {
+				t.Fatalf("the older-run read scans %s sequentially:\n%s", table, plan.String())
+			}
 		}
 	})
 }

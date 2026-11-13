@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -383,6 +384,9 @@ func TestSSOProviderAnswerTimesAndConfigAreInGoAPIsForm(t *testing.T) {
 	for _, c := range []ssoRouteCase{ssoRouteCases()[2], ssoRouteCases()[5], ssoRouteCases()[6]} {
 		response := f.post(c.path, c.body(f, f.owner), nil)
 		body := response.Body.String()
+		if strings.HasSuffix(body, "\n") || response.Header().Get("Content-Type") != "application/json" || response.Header().Get("Content-Length") != strconv.Itoa(len(body)) {
+			t.Errorf("%s: the answer is not written as go-api writes one (no trailing newline, JSON type, exact length): %q %v", c.op, body, response.Header())
+		}
 		for _, want := range []string{`"config":` + config, `"last_login_at":"2026-11-13T01:02:03.250000Z"`, `"last_error_at":"2026-11-13T01:02:03Z"`,
 			`"last_metadata_sync_at":"2026-11-13T01:02:03.123456Z"`, `"created_at":"2026-11-13T01:02:03Z"`, `"updated_at":"2026-11-13T01:02:03.250000Z"`} {
 			if !strings.Contains(body, want) {

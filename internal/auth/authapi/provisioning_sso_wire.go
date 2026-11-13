@@ -3,6 +3,7 @@ package authapi
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -100,5 +101,5 @@ func writeProviderJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(status)
-	_, _ = w.Write(raw)
+	_, _ = io.Copy(w, bytes.NewReader(raw))
 }

@@ -107,4 +107,7 @@ func TestSSOProvidersClientBuiltFromBadConfigurationWarnsAndStaysOff(t *testing.
 	if got != nil || !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "AUTH_SSO_PROVIDERS_OWNED") {
 		t.Fatalf("client = %v, logs %q, want nil and a WARN naming AUTH_SSO_PROVIDERS_OWNED", got, logs.String())
 	}
+	if !strings.Contains(logs.String(), `reason="no auth-service URL"`) || strings.Contains(logs.String(), "error=") || strings.Contains(logs.String(), "authprovision:") {
+		t.Fatalf("logs %q: want a fixed reason and no error text (a URL or transport error may carry credentials)", logs.String())
+	}
 }

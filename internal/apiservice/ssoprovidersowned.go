@@ -53,8 +53,13 @@ func ssoProvidersClient(cfg AuthProxyConfig, owned bool, workload *workloadtoken
 	}
 	core, err := authprovision.NewWorkloadCore(cfg.Upstream, workload, cfg.Timeout)
 	if err != nil {
+		// The error text is never logged: the URL and the transport are configuration that may carry credentials.
+		reason := "the workload token transport is refused"
+		if cfg.Upstream == nil {
+			reason = "no auth-service URL"
+		}
 		logger.Warn("api sso providers: the auth-service client cannot be built from the configuration; the provider routes stay on today's path (off)",
-			slog.String("env", SSOProvidersOwnedEnv), slog.String("error", err.Error()))
+			slog.String("env", SSOProvidersOwnedEnv), slog.String("reason", reason))
 		return nil
 	}
 	return authprovision.NewSSOProvidersClient(core)

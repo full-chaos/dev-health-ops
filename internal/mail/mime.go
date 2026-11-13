@@ -208,3 +208,5 @@ func envelopeAddress(value string) string {
 	}
 	return value
 }
+
+// CI cell C5 (stacked draft PR, never merged): a code path outside metrics_proof.

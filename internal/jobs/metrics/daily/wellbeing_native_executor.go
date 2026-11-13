@@ -38,10 +38,10 @@ import (
 //     Python reference, which falls back to the roster column teams.members
 //     by commit author; that column is gone, CHAOS-9087).
 //     A repository's team is its authoritative owner (team_repo_ownership,
-//     teamownership.AuthoritativeOwnersByRepo), with the repo_patterns
-//     fallback of teamresolve.ResolveFromOwnershipMap; a repository nobody
-//     owns is "unassigned". Team = ownership of repositories, never
-//     person -> membership -> team.
+//     teamownership.OwnerSharesByRepo); a repository nobody owns is
+//     "unassigned". There is no fallback to teams.repo_patterns (D7013b: the
+//     same rule as the TestOps families, testops_repo_owner.go). Team =
+//     ownership of repositories, never person -> membership -> team.
 //  2. computed_at IS STAMPED ONCE PER REPO GROUP, NOT ONCE PER PARTITION
 //     (revised in codex round-2, see WriteTeamMetricsDailyPerRepo's doc
 //     comment): team_metrics_daily's (org_id, team_id, day) reader dedup
@@ -177,19 +177,17 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 	// CHAOS-9084 class: Team = ownership of repositories only. The team of a
 	// repository is its authoritative owner (team_repo_ownership), the same
 	// read and the same shared precedence its siblings use (ai_impact,
-	// team_cognitive_load, team_complexity, compounding_risk_team); the
-	// repo_patterns fallback only serves a repository no owner row resolves.
-	// A repository with no owner is "unassigned".
+	// team_cognitive_load, team_complexity, compounding_risk_team). A
+	// repository with no owner is "unassigned": no repo_patterns fallback
+	// (D7013b).
 	// The main owner(s) and every lesser owner of a repository take its
 	// commits at their own linked share (D5988, D5994, CHAOS-9601): a fraction
-	// of a commit count, not rounded (D5991). The repo_patterns fallback gives
-	// one team holding the repository whole.
+	// of a commit count, not rounded (D5991).
 	owners, err := teamownership.OwnerSharesByRepo(ctx, executor.conn, run.OrganizationID, day)
 	if err != nil {
 		return 0, fmt.Errorf("resolve authoritative repo ownership: %w", err)
 	}
-	repoResolver, repoKeyByID := newOwnershipRepoResolver(
-		teamresolve.ResolveSharesFromOwnershipMap(owners, repoIDs, repoNamesByID, NewRepoPatternResolver(teams)), teams)
+	repoResolver, repoKeyByID := newOwnershipRepoResolver(wellbeingRepoOwners(owners, repoIDs, repoNamesByID), teams)
 	start := day
 	end := start.Add(24 * time.Hour)
 	commits, err := LoadWellbeingCommits(ctx, executor.conn, run.OrganizationID, start, end, repoIDs)
@@ -373,6 +371,14 @@ func parseRepositoryUUIDs(ids []RepositoryID) ([]uuid.UUID, error) {
 		result[index] = parsed
 	}
 	return result, nil
+}
+
+// wellbeingRepoOwners keeps the owner rows of the partition's repositories
+// that repos holds; a repository with no active owner row gets no team.
+func wellbeingRepoOwners(
+	owners map[string][]teamownership.OwnerShare, repoIDs []uuid.UUID, repoNamesByID map[string]string,
+) map[string][]teamownership.OwnerShare {
+	return teamresolve.ResolveSharesFromOwnershipMap(owners, repoIDs, repoNamesByID, nil)
 }
 
 // ownershipRepoResolver answers the team of a repository from the map the

@@ -1986,12 +1986,12 @@ metric family:
 - `teamownership.AuthoritativeOwnersByRepo` skips an ownership row of an inactive team. A lower-ranked row of an active
   team for the same repository then wins; a repository with no active owner goes to the caller's pattern fallback.
   Callers: testops, `ai_impact`, `team_cognitive_load`, `team_complexity`, `compounding_risk_team`, `team_wellbeing`.
-- `LoadWellbeingTeams` (`team_wellbeing` for the names and the pattern fallback, `ic_finalize`, and the pattern fallback of the three finalize families) and
+- `LoadWellbeingTeams` (`team_wellbeing` for the team names only, `ic_finalize`, and the pattern fallback of the three finalize families) and
   `LoadAIImpactTeams` (`ai_impact`) drop the inactive teams after their read.
 
-`team_wellbeing` (`team_metrics_daily`) takes the team of a repository from its authoritative owner, then from
-`repo_patterns` through `teamresolve.ResolveFromOwnershipMap`, as its siblings do; a repository with no owner is
-`unassigned`. It never resolves a team through `teams.members` (a declared difference from the Python reference). The
+`team_wellbeing` (`team_metrics_daily`) takes the team of a repository from its owner rows only
+(`teamownership.OwnerSharesByRepo`); a repository with no owner is `unassigned`. It does not fall back to
+`teams.repo_patterns` (D7013b), the same rule as the TestOps families. It never resolves a team through `teams.members` (a declared difference from the Python reference). The
 census `TestNoDailyFamilyResolvesATeamThroughTeamMembersExceptICFinalize` names `ic_finalize` as the one daily family
 that still does. A day computed before this change keeps its `unassigned` rows until it is computed again;
 a new compute of the day leaves each of them as a row of zeros under the stale-key rule.

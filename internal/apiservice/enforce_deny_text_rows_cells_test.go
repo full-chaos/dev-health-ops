@@ -81,16 +81,43 @@ func (c *capturedLog) reset() {
 	c.buf.Reset()
 }
 
-func denyTextServers(t *testing.T, pdp *cellPDP, log *capturedLog) (off, on http.Handler, offClasses, onClasses []deniedClass) {
+// denyClasses are the deny-side classes plus the org roles, over a minter.
+func denyClasses(t *testing.T, minter *eddsaMinter) []deniedClass {
+	t.Helper()
+	classes := deniedClasses(t, minter)
+	byName := map[string]usersCaller{}
+	for _, c := range usersCallers(t, minter) {
+		byName[c.name] = c
+	}
+	for _, name := range []string{"org owner", "org admin", "org member", "org viewer", "platform admin + org member"} {
+		c, ok := byName[name]
+		if !ok {
+			t.Fatalf("no caller class %q", name)
+		}
+		have := false
+		for _, existing := range classes {
+			have = have || existing.name == name
+		}
+		if !have {
+			classes = append(classes, deniedClass{usersCaller: c})
+		}
+	}
+	return classes
+}
+
+// denyTextServers serve the real routes with the cells off and on. refuseLegacy is the production posture of the
+// impersonation aggregate (the org scope refuses a live impersonation row with 403 before the guard).
+func denyTextServers(t *testing.T, pdp *cellPDP, log *capturedLog, refuseLegacy bool) (off, on http.Handler, offClasses, onClasses []deniedClass) {
 	t.Helper()
 	routes := func(_ *testing.T, deps Deps) []httpapi.Route {
 		return Routes(deps, slog.New(slog.NewTextHandler(log, nil)))
 	}
-	off, offMinter := adminConfigServerScoped(t, nil, withDeniedCellCallers, routes, nil)
+	scoped := func(scope *policy.Scope) { scope.RefuseLegacyImpersonation(refuseLegacy) }
+	off, offMinter := adminConfigServerScoped(t, nil, withDeniedCellCallers, routes, scoped)
 	on, onMinter := adminConfigServerScoped(t, func(t *testing.T) *policy.Enforcer {
 		return newCellEnforcer(t, pdp, denyTextNamespaces, false)
-	}, withDeniedCellCallers, routes, nil)
-	return off, on, deniedClasses(t, offMinter), deniedClasses(t, onMinter)
+	}, withDeniedCellCallers, routes, scoped)
+	return off, on, denyClasses(t, offMinter), denyClasses(t, onMinter)
 }
 
 func judgedOf(classes []deniedClass) []usersCaller {
@@ -101,12 +128,30 @@ func judgedOf(classes []deniedClass) []usersCaller {
 	return out
 }
 
+// dbBoundRows are the rows whose legacy handler reads the caller's membership row in Postgres before it refuses: with the
+// closed pool of these cells the legacy answer is its database 500, so the legacy side of those cells runs on a real
+// Postgres in TestLegacyNoRowAndPlatformAdminAnswersOrgsMePatchVenueOracle. Here the cells-on answer is held to the
+// legacy body.
+var dbBoundRows = map[string]bool{"PATCH /api/v1/orgs/me": true}
+
+func classByName(t *testing.T, classes []deniedClass, name string) deniedClass {
+	t.Helper()
+	for _, c := range classes {
+		if c.name == name {
+			return c
+		}
+	}
+	t.Fatalf("no caller class %q", name)
+	return deniedClass{}
+}
+
 // C1 census and the legacy-body cell: every row that mounts a DenyText has an executed cell that asserts the legacy
-// body, the same with the cells off and on, for a refused caller. A DenyText row with no cell fails.
+// body for a refused caller (cells off and on for the row whose legacy handler needs no database, cells on for the
+// database-bound row, whose legacy side is the venue oracle). A DenyText row with no cell fails.
 func TestEveryDenyTextRowHasAnExecutedLegacyBodyCell(t *testing.T) {
 	pdp := newCellPDP(t)
 	log := &capturedLog{}
-	off, on, offClasses, onClasses := denyTextServers(t, pdp, log)
+	off, on, offClasses, onClasses := denyTextServers(t, pdp, log, true)
 	got := policy.DenyTextRows()
 	want := make([]string, 0, len(legacyDenyBodies))
 	for key := range legacyDenyBodies {
@@ -122,20 +167,13 @@ func TestEveryDenyTextRowHasAnExecutedLegacyBodyCell(t *testing.T) {
 	}
 	for key, body := range legacyDenyBodies {
 		class := refused[key]
-		var offToken, onToken string
-		for i := range onClasses {
-			if onClasses[i].name == class {
-				offToken, onToken = offClasses[i].token, onClasses[i].token
-			}
-		}
-		if class == "" || offToken == "" {
-			t.Fatalf("%s: no caller class %q among the denied classes", key, class)
-		}
+		offToken := classByName(t, offClasses, class).token
+		onToken := classByName(t, onClasses, class).token
 		pdp.registerUsers(judgedOf(onClasses))
 		pdp.reset("evaluate")
 		legacy := denyDo(off, key, offToken, nil)
 		got := denyDo(on, key, onToken, nil)
-		if legacy.status != http.StatusForbidden || strings.TrimSpace(legacy.body) != body {
+		if !dbBoundRows[key] && (legacy.status != http.StatusForbidden || strings.TrimSpace(legacy.body) != body) {
 			t.Errorf("%s / %s, cells off: %d %s, want 403 %s", key, class, legacy.status, strings.TrimSpace(legacy.body), body)
 		}
 		if got.status != http.StatusForbidden || strings.TrimSpace(got.body) != body {
@@ -146,73 +184,82 @@ func TestEveryDenyTextRowHasAnExecutedLegacyBodyCell(t *testing.T) {
 }
 
 // Every caller class, both rows: the answer with the cells on equals the answer with the cells off, status and body, on
-// the real handlers. The org.write row is asked once on the token organization; the admin.telemetry row is asked as a
-// platform question and an org-admin caller is refused by the legacy platform wrap before any ask.
+// the real handlers. The database-bound row's refused classes answer the legacy body with the cells on while the
+// closed pool gives the legacy side its database 500; their legacy side is the venue oracle. Row 15 also runs without the
+// impersonation aggregate (the handler's own refusal, the legacy text) as well as with it (the scope refuses first).
 func TestDenyTextRowsAnswerEveryCallerClassAsLegacy(t *testing.T) {
-	pdp := newCellPDP(t)
-	log := &capturedLog{}
-	off, on, offClasses, onClasses := denyTextServers(t, pdp, log)
-	for key, action := range denyTextActions {
-		for i := range onClasses {
-			name := onClasses[i].name
-			pdp.registerUsers(judgedOf(onClasses))
-			pdp.reset("evaluate")
-			legacy := denyDo(off, key, offClasses[i].token, offClasses[i].headers)
-			if calls := pdp.calls(); len(calls) != 0 {
-				t.Fatalf("%s / %s: %d decision point calls with the cells off", key, name, len(calls))
+	for _, posture := range []struct {
+		name   string
+		refuse bool
+	}{{"impersonation aggregate on", true}, {"impersonation aggregate off", false}} {
+		pdp := newCellPDP(t)
+		log := &capturedLog{}
+		off, on, offClasses, onClasses := denyTextServers(t, pdp, log, posture.refuse)
+		for key, action := range denyTextActions {
+			if key == "PATCH /api/v1/orgs/me" && !posture.refuse {
+				continue // the ruling for the impersonated write is the production posture: the aggregate on
 			}
-			got := denyDo(on, key, onClasses[i].token, onClasses[i].headers)
-			calls := pdp.calls()
-			result := "EQUAL"
-			if name == noRowClass && key == "PATCH /api/v1/orgs/me" {
-				// the no-row class is the named answer change of the M-1 ruling (b) on the org rows; this row keeps its text
-				if got.status != legacy.status || got.body != legacy.body {
-					result = "DIFF"
-					t.Errorf("%s / %s: new %d %s, legacy %d %s", key, name, got.status, strings.TrimSpace(got.body), legacy.status, strings.TrimSpace(legacy.body))
+			for i := range onClasses {
+				name := onClasses[i].name
+				pdp.registerUsers(judgedOf(onClasses))
+				pdp.reset("evaluate")
+				legacy := denyDo(off, key, offClasses[i].token, offClasses[i].headers)
+				if calls := pdp.calls(); len(calls) != 0 {
+					t.Fatalf("%s / %s: %d decision point calls with the cells off", key, name, len(calls))
 				}
-			} else if got.status != legacy.status || got.body != legacy.body {
-				result = "DIFF"
-				t.Errorf("%s / %s: new %d %s, legacy %d %s", key, name, got.status, strings.TrimSpace(got.body), legacy.status, strings.TrimSpace(legacy.body))
+				got := denyDo(on, key, onClasses[i].token, onClasses[i].headers)
+				calls := pdp.calls()
+				result := "EQUAL"
+				dbBound := dbBoundRows[key] && legacy.status == http.StatusInternalServerError &&
+					got.status == http.StatusForbidden && strings.TrimSpace(got.body) == legacyDenyBodies[key]
+				switch {
+				case dbBound:
+					result = "DB-BOUND (legacy side: venue oracle)"
+				case got.status != legacy.status || got.body != legacy.body:
+					result = "DIFF"
+					t.Errorf("%s / %s / %s: new %d %s, legacy %d %s", posture.name, key, name, got.status, strings.TrimSpace(got.body), legacy.status, strings.TrimSpace(legacy.body))
+				}
+				t.Logf("CELL\t%s\t%s\t%s\tlegacy=%d:%s\tnew=%d:%s\tpdp_calls=%d(%s)\t%s", posture.name, key, name, legacy.status, short(legacy.body), got.status, short(got.body), len(calls), action, result)
+				if name == "impersonating platform admin" {
+					if got.status != http.StatusForbidden {
+						t.Errorf("%s / %s / live impersonation row: %d %s, want 403", posture.name, key, got.status, strings.TrimSpace(got.body))
+					}
+					switch {
+					case key == "POST /api/v1/telemetry/report" && !posture.refuse && strings.TrimSpace(got.body) != legacyDenyBodies[key]:
+						t.Errorf("%s / %s / live impersonation row: body %s, want the legacy text", posture.name, key, strings.TrimSpace(got.body))
+					case posture.refuse && strings.TrimSpace(got.body) != `{"detail":"Not allowed in an impersonation session"}`:
+						t.Errorf("%s / %s / live impersonation row: body %s, want the impersonation text", posture.name, key, strings.TrimSpace(got.body))
+					}
+				}
 			}
-			t.Logf("CELL\t%s\t%s\tlegacy=%d:%s\tnew=%d:%s\tpdp_calls=%d(%s)\t%s", key, name, legacy.status, short(legacy.body), got.status, short(got.body), len(calls), action, result)
 		}
 	}
 }
 
-// C4, the rule-1 cells: a platform admin with no membership. Row 11: 403 with the legacy text (org.write has no
-// platform-admin flag), the same off and on. Row 15: a holder keeps every answer with an X-Org-Id of an organization he is
-// no member of: the cells on answer what the cells off answer.
+// C4, the rule-1 cells: a platform admin with no membership. Row 11: with the cells on, 403 with the legacy text
+// (org.write has no platform-admin flag); the legacy side runs on a real Postgres in the venue oracle. Row 15: a holder keeps
+// every answer with an X-Org-Id of an organization he is no member of: the cells on answer what the cells off answer.
 func TestPlatformAdminWithNoMembershipKeepsTheLegacyAnswers(t *testing.T) {
 	pdp := newCellPDP(t)
 	log := &capturedLog{}
-	off, on, offClasses, onClasses := denyTextServers(t, pdp, log)
-	find := func(classes []deniedClass, name string) deniedClass {
-		for _, c := range classes {
-			if c.name == name {
-				return c
-			}
-		}
-		t.Fatalf("no class %q", name)
-		return deniedClass{}
-	}
+	off, on, offClasses, onClasses := denyTextServers(t, pdp, log, true)
 	const class = "platform admin, no membership"
-	offC, onC := find(offClasses, class), find(onClasses, class)
+	offC, onC := classByName(t, offClasses, class), classByName(t, onClasses, class)
 	pdp.registerUsers(judgedOf(onClasses))
 
 	pdp.reset("evaluate")
-	legacy := denyDo(off, "PATCH /api/v1/orgs/me", offC.token, nil)
 	got := denyDo(on, "PATCH /api/v1/orgs/me", onC.token, nil)
 	want := legacyDenyBodies["PATCH /api/v1/orgs/me"]
-	if legacy.status != http.StatusForbidden || strings.TrimSpace(legacy.body) != want {
-		t.Errorf("row 11, cells off: %d %s, want 403 %s", legacy.status, strings.TrimSpace(legacy.body), want)
+	if got.status != http.StatusForbidden || strings.TrimSpace(got.body) != want {
+		t.Errorf("row 11, cells on: %d %s, want 403 %s", got.status, strings.TrimSpace(got.body), want)
 	}
-	if got.status != legacy.status || got.body != legacy.body {
-		t.Errorf("row 11, cells on: %d %s, legacy %d %s", got.status, strings.TrimSpace(got.body), legacy.status, strings.TrimSpace(legacy.body))
+	if calls := pdp.calls(); len(calls) != 1 || calls[0].Action != "org.write" || calls[0].OrganizationID != probeOrg.String() {
+		t.Errorf("row 11: decision point calls %+v, want one org.write on the token organization", calls)
 	}
 
 	other := map[string]string{"X-Org-Id": probeOtherOrg.String()}
 	pdp.reset("evaluate")
-	legacy = denyDo(off, "POST /api/v1/telemetry/report", offC.token, other)
+	legacy := denyDo(off, "POST /api/v1/telemetry/report", offC.token, other)
 	got = denyDo(on, "POST /api/v1/telemetry/report", onC.token, other)
 	if got.status != legacy.status || got.body != legacy.body {
 		t.Errorf("row 15, X-Org-Id of another org: cells on %d %s, cells off %d %s", got.status, strings.TrimSpace(got.body), legacy.status, strings.TrimSpace(legacy.body))
@@ -225,28 +272,19 @@ func TestPlatformAdminWithNoMembershipKeepsTheLegacyAnswers(t *testing.T) {
 func TestReportRefusalIsCountedOnceAndAHolderNever(t *testing.T) {
 	pdp := newCellPDP(t)
 	log := &capturedLog{}
-	off, on, offClasses, onClasses := denyTextServers(t, pdp, log)
-	byName := func(classes []deniedClass, name string) string {
-		for _, c := range classes {
-			if c.name == name {
-				return c.token
-			}
-		}
-		t.Fatalf("no class %q", name)
-		return ""
-	}
+	off, on, offClasses, onClasses := denyTextServers(t, pdp, log, true)
 	const key = "POST /api/v1/telemetry/report"
 	for _, cell := range []struct {
 		class string
 		want  int
-	}{{"org admin, X-Org-Id of another org", 1}, {"platform admin, no membership", 0}} {
+	}{{"org admin, X-Org-Id of another org", 1}, {"org member", 1}, {"platform admin, no membership", 0}, {"platform admin + org member", 0}} {
 		pdp.registerUsers(judgedOf(onClasses))
 		for mode, h := range map[string]struct {
 			handler http.Handler
 			token   string
 		}{
-			"cells off": {off, byName(offClasses, cell.class)},
-			"cells on":  {on, byName(onClasses, cell.class)},
+			"cells off": {off, classByName(t, offClasses, cell.class).token},
+			"cells on":  {on, classByName(t, onClasses, cell.class).token},
 		} {
 			pdp.reset("evaluate")
 			log.reset()

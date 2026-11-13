@@ -69,8 +69,9 @@ func DenyTextRows() []string {
 	return rows
 }
 
-// WrapPlatformDeny is WrapPlatform for the route key ("METHOD /route"), whose 403 refusals carry deny's text.
-func (g *Guard) WrapPlatformDeny(key, action string, deny DenyText, next http.Handler) http.Handler {
+// WrapPlatformDeny is WrapPlatform for the route key ("METHOD /route"), whose 403 refusals carry deny's text. The action
+// is the first argument, where the platform action census reads it.
+func (g *Guard) WrapPlatformDeny(action, key string, deny DenyText, next http.Handler) http.Handler {
 	recordDenyRow(key, deny)
 	return g.wrap(Superuser, gate{action: action, kind: gatePlatform, deny: deny}, next)
 }

@@ -70,7 +70,7 @@ func (h handlers) routeTable(wrap func(http.Handler) http.Handler, guard *policy
 		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-in", Handler: wrap(h.withOrg(h.requireOrgAdmin(h.optIn)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/opt-out", Handler: wrap(h.withOrg(h.requireOrgAdmin(h.optOut)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/telemetry/report",
-			Handler: guard.WrapPlatformDeny(reportKey, policy.ActionAdminTelemetry, h.reportDeny(), h.requirePlatformRole(h.withOrg(h.report)))},
+			Handler: guard.WrapPlatformDeny(policy.ActionAdminTelemetry, reportKey, h.reportDeny(), h.requirePlatformRole(h.withOrg(h.report)))},
 	}
 }
 

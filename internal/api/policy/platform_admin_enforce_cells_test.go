@@ -70,12 +70,17 @@ var platformAdminGapRoutes = map[string]Authz{
 }
 
 // productionGoAPIRows is the guard's action map as go-api builds it (apiservice/enforcer.go).
+//
+// The telemetry report row is left out. Its profile row names admin.telemetry since it is mounted WrapPlatformDeny, and its
+// cells run on the real handler (internal/apiservice, enforce_deny_text_rows_cells_test.go). The tests that use this map
+// mount "POST /api/v1/telemetry/report" as the stand-in for a route with no row whose handler asks a platform question.
 func productionGoAPIRows(t *testing.T) map[string]ShadowRow {
 	t.Helper()
 	rows, err := ParseShadowRows(authv1.GoAPIEndpointProfiles, "dev-health-ops-api")
 	if err != nil {
 		t.Fatal(err)
 	}
+	delete(rows, "POST /api/v1/telemetry/report")
 	return rows
 }
 

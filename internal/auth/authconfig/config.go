@@ -278,6 +278,9 @@ type Config struct {
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns user creation and the
 	// local credential links.
 	UsersOwned bool
+	// SSOProvidersOwned is AUTH_SSO_PROVIDERS_OWNED: the internal SSO provider routes mount only with it on (its grants
+	// are the grants pass's, with the same switch).
+	SSOProvidersOwned bool
 
 	// RevisionFeed is AUTH_REVISION_FEED=on: the outbox publisher has a Valkey sink and this replica subscribes.
 	RevisionFeed bool
@@ -611,6 +614,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Social, err = socialClients(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.SSOProvidersOwned, err = SSOProvidersOwnedFromLookup(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.UsersOwned, err = usersOwned(lookup); err != nil {

@@ -182,6 +182,7 @@ func TestTheTestWeightsTableIsClean(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatal("ci/go_test_weights.tsv has no row: every shard would be balanced by package count alone")
 	}
+	splits := splitRows(t)
 	seen := map[string]bool{}
 	var keys []string
 	for _, r := range rows {
@@ -190,6 +191,17 @@ func TestTheTestWeightsTableIsClean(t *testing.T) {
 		}
 		seen[r.pkg] = true
 		keys = append(keys, r.pkg)
+		// A "<key>#<part>" row weighs one part of a split package for the chain-aware test-leg plan; its package's own row comes first.
+		if pkg, part, isPart := strings.Cut(r.pkg, "#"); isPart {
+			n, err := strconv.Atoi(part)
+			if err != nil || n < 1 || n > splits[pkg] {
+				t.Errorf("part row %s names no part of a package ci/go_test_splits.tsv splits", r.pkg)
+			}
+			if !seen[pkg] {
+				t.Errorf("part row %s has no row of its whole package before it", r.pkg)
+			}
+			continue
+		}
 		if !known[r.pkg] {
 			t.Errorf("stale row: %s is not a package of the module", r.pkg)
 		}
@@ -207,34 +219,29 @@ func TestEveryShardIsNonEmptyAndTheShardsPartitionTheModule(t *testing.T) {
 		weights[r.pkg] = r.seconds
 	}
 	splits := splitRows(t)
+	serial := serialHeavyKey(t, mod)
 	var all []string
-	var loads []int
-	heaviest := 1
+	var shards []chainLoad
 	for k := 1; k <= shardCount; k++ {
 		plan, parts := shardPlanParts(t, k, shardCount)
 		if len(plan)+len(parts) == 0 {
 			t.Fatalf("test shard %d/%d is empty", k, shardCount)
 		}
-		load := 0
-		for _, p := range append(append([]string{}, plan...), parts...) {
-			pkg, part, isPart := strings.Cut(p, "#")
-			w := 1
-			if v, ok := weights[keyOf(mod, pkg)]; ok {
-				w = v
-			}
-			if isPart {
-				n := splits[keyOf(mod, pkg)]
-				if n < 2 || !strings.HasSuffix(part, "/"+strconv.Itoa(n)) {
-					t.Fatalf("test shard %d/%d holds part %s of a package ci/go_test_splits.tsv splits %d ways", k, shardCount, p, n)
-				}
-				w = (w + n - 1) / n
-			}
-			if w > heaviest {
-				heaviest = w
-			}
-			load += w
+		var items []planItem
+		for _, p := range plan {
+			items = append(items, planItem{key: keyOf(mod, p)})
 		}
-		loads = append(loads, load)
+		for _, p := range parts {
+			pkg, part, _ := strings.Cut(p, "#")
+			idx, n, _ := strings.Cut(part, "/")
+			i, _ := strconv.Atoi(idx)
+			np, _ := strconv.Atoi(n)
+			if np < 2 || splits[keyOf(mod, pkg)] != np {
+				t.Fatalf("test shard %d/%d holds part %s of a package ci/go_test_splits.tsv splits %d ways", k, shardCount, p, splits[keyOf(mod, pkg)])
+			}
+			items = append(items, planItem{key: keyOf(mod, pkg), part: i, parts: np})
+		}
+		shards = append(shards, chainLoadOf(items, weights, serial))
 		all = append(all, plan...)
 		all = append(all, parts...)
 	}
@@ -254,14 +261,8 @@ func TestEveryShardIsNonEmptyAndTheShardsPartitionTheModule(t *testing.T) {
 	if strings.Join(all, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("the %d test shards are not a partition of go list ./... (a split package as its parts): %d planned, %d listed", shardCount, len(all), len(want))
 	}
-	total := 0
-	for _, l := range loads {
-		total += l
-	}
-	for k, l := range loads {
-		if l > total/shardCount+heaviest {
-			t.Errorf("test shard %d weighs %d, over the longest-processing-time bound %d (loads %v)", k+1, l, total/shardCount+heaviest, loads)
-		}
+	for _, d := range chainPlanDefects(shards, plannedWallCap) {
+		t.Error(d)
 	}
 }
 

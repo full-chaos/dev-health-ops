@@ -1081,9 +1081,10 @@ GO_TEST_WEIGHTS="${GO_TEST_WEIGHTS:-${ROOT}/ci/go_test_weights.tsv}"
 GO_TEST_PINS="${GO_TEST_PINS:-${ROOT}/ci/go_test_pins.tsv}"
 # ci/go_test_splits.tsv (CHAOS-13520): package<TAB>parts; such a package runs as PARTS parts of its test names, placed like packages.
 GO_TEST_SPLITS="${GO_TEST_SPLITS:-${ROOT}/ci/go_test_splits.tsv}"
-# GO_TEST_SERIAL_FACTOR (CHAOS-13422): the other packages of a test shard overlap, so a shard's wall is about their summed time / 1.9
-# (1.80-2.01 over the 5 shards of PR #5995's run at 9244407eb); the serial package adds its whole wall, so it weighs 2x in the split.
-GO_TEST_SERIAL_FACTOR=2
+# CHAOS-13664: the test-leg split is chain-aware (ci/go_race_shard.awk chain=1). check_test_shard runs the split-package jobs one
+# after another beside one go test of the shard's other packages, then the serial package alone, so a leg's wall is about
+# max(chain, rest / 2) + serial (+6..+34 s over the 50 legs of 5 main runs); the split places the chain and the serial package
+# first, then the rest by that wall. A split part may have its own "<key>#<part>" row in ci/go_test_weights.tsv.
 # CHAOS-13622: legs of about ten minutes (CHAOS-13520 had five). A test shard warns past GO_TEST_SHARD_WALL_WARN_SECONDS of go test
 # wall and fails past GO_TEST_SHARD_WALL_FAIL_SECONDS, so a slow runner warns and a shard plan that no longer fits fails.
 GO_TEST_SHARD_WALL_WARN_SECONDS="${GO_TEST_SHARD_WALL_WARN_SECONDS:-600}"
@@ -1113,7 +1114,7 @@ check_test_shard_plan() {
       | quality_filter "${module_dir}" "${modpath}" \
       | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v pin="${GO_TEST_PINS}" \
           -v splits="${GO_TEST_SPLITS}" \
-          -v serial="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}" -v serialx="${GO_TEST_SERIAL_FACTOR}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" \
+          -v serial="${SERIAL_HEAVY_TEST_PACKAGE#"${modpath}/"}" -v chain=1 -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")" \
       || die "test shard ${shard}/${count}: the package list or its split (ci/go_race_shard.awk) failed in ${module_dir}"
     while IFS=$'\t' read -r pkg spart sparts; do
       [ -n "${pkg}" ] || continue
@@ -1152,7 +1153,7 @@ check_test_shard_wall_guard() {
     top="$(check_test_shard_plan "${shard}" "${count}" \
       | awk -F'\t' -v weights="${GO_TEST_WEIGHTS}" '
           BEGIN { while ((getline line < weights) > 0) { if (line ~ /^[[:space:]]*(#|$)/) continue; split(line, f, "\t"); w[f[1]] = f[2] + 0 } }
-          { printf "%d\t%s\n", ($3 in w) ? w[$3] : 1, $2 }' \
+          !seen[$2]++ { printf "%d\t%s\n", ($3 in w) ? w[$3] : 1, $2 }' \
       | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2 \
       | awk -F'\t' 'NR <= 3 { printf "%s%s (weight %s)", (NR > 1 ? ", " : ""), $2, $1 }')"
   fi

@@ -43,9 +43,9 @@ name: Go quality
 
 on:
   pull_request:
-    # No ready_for_review: no job here reads the draft state, so the checks of the last opened/synchronize run stand on the
-    # head sha at the flip (a rerun of the whole workflow there would only repeat them).
-    types: [opened, synchronize, reopened]
+    # ready_for_review: a draft without the ci:integration or ci:full label runs no leg (go-quality-plan, ci/go_quality_legs.sh),
+    # so the flip to ready runs them. The ready run has its own concurrency group (below) and is never cancelled by a push.
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: ['**']
   push:
     branches: [main]
@@ -65,8 +65,8 @@ concurrency:
   # branch, by commit sha on a push to main or on merge_group (never
   # cancelled -- see go.yml/typecheck.yml/docker-images.yml/
   # arc-runner-image.yml for the specific incidents this protects).
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}${{ github.event.action == 'ready_for_review' && '-ready-' || '' }}${{ github.event.action == 'ready_for_review' && github.event.pull_request.head.sha || '' }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' && github.event.action != 'ready_for_review') || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 # CHAOS-12858: "|" falls back to direct on ANY proxy error; the default "," only on 404/410.
 env:
@@ -88,6 +88,7 @@ jobs:
       queue_run: ${{ steps.queue.outputs.queue_run }}
       legs: ${{ steps.legs.outputs.legs }}
       race_policy: ${{ steps.legs.outputs.race_policy }}
+      draft_skip: ${{ steps.legs.outputs.draft_skip }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -100,11 +101,13 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           CI_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+          # A draft pull request without ci:integration or ci:full runs no leg; the ready flip runs them all.
+          DRAFT_SKIP: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full') && !contains(github.event.pull_request.labels.*.name, 'ci:integration') && 'true' || 'false' }}
         run: |
           set -euo pipefail
           out="${RUNNER_TEMP}/go-quality-legs.txt"
-          bash ci/go_quality_legs.sh "${EVENT_NAME}" "${CI_FULL}" > "${out}"
-          { printf 'legs=%s\n' "$(sed -n 1p "${out}")"; printf 'race_policy=%s\n' "$(sed -n 2p "${out}")"; } >> "${GITHUB_OUTPUT}"
+          bash ci/go_quality_legs.sh "${EVENT_NAME}" "${CI_FULL}" "" "${DRAFT_SKIP}" > "${out}"
+          { printf 'legs=%s\n' "$(sed -n 1p "${out}")"; printf 'race_policy=%s\n' "$(sed -n 2p "${out}")"; printf 'draft_skip=%s\n' "${DRAFT_SKIP}"; } >> "${GITHUB_OUTPUT}"
           cat "${out}"
 
       # CHAOS-11408: a main push whose sha the merge queue already ran green through this workflow (the helper checks the
@@ -195,6 +198,8 @@ jobs:
   go-quality-leg:
     name: go-quality-leg (${{ matrix.name }})
     needs: [go-quality-plan]
+    # An unlabelled draft starts no leg (CHAOS-13520); the fan-in reports that, and the ready flip runs the legs.
+    if: needs.go-quality-plan.outputs.draft_skip != 'true'
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
@@ -710,6 +715,13 @@ jobs:
           echo "${RACE_POLICY}"
           echo "${RACE_POLICY}" >> "${GITHUB_STEP_SUMMARY}"
 
+      - name: Report the draft skip
+        if: always() && needs.go-quality-plan.outputs.draft_skip == 'true'
+        run: |
+          msg="DRAFT: legs not run (an unlabelled draft pull request runs no go-quality leg; the ready flip, or the ci:integration or ci:full label at the next push, runs them)"
+          echo "${msg}"
+          echo "${msg}" >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Aggregate go-quality result
         env:
           GATE_NAME: go-quality
@@ -719,7 +731,8 @@ jobs:
           # `unconditional` policy, as typecheck's own fan-in. needs.<job>.result
           # of a matrix job is `success` only when EVERY leg succeeded.
           GATE_HAS_SELECTOR: "false"
-          GATED_JOB_1: go-quality-leg|unconditional|${{ needs.go-quality-leg.result }}
+          # Only an unlabelled draft starts no leg (a draft cannot merge; the ready run posts its own go-quality check-run).
+          GATED_JOB_1: go-quality-leg|unconditional|${{ needs.go-quality-plan.outputs.draft_skip == 'true' && 'success' || needs.go-quality-leg.result }}
           # The plan job must have run: a skipped or failed plan skips every leg.
           GATED_JOB_2: go-quality-plan|unconditional|${{ needs.go-quality-plan.result }}
         run: |

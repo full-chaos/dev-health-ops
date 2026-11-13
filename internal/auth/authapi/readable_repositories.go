@@ -42,7 +42,8 @@ const maxReadableRepositoriesBody = 1 << 10
 
 // readableRepositoriesAnswer is the readable_repositories.v1 document: scope organization (every repository of the
 // organization), repositories with the principal's own canonical keys (sorted, unique, at most 256, [] for none), or
-// denied with the read decision's reason_code (repository_allowlist_too_large over 256 keys, never a truncated list).
+// denied with the read decision's reason_code (repository_allowlist_too_large over 256 keys that are the live path of a
+// repository identity row, never a truncated list).
 type readableRepositoriesAnswer struct {
 	SchemaVersion string    `json:"schema_version"`
 	Scope         string    `json:"scope"`
@@ -158,9 +159,10 @@ func (h readableRepositoriesHandlers) caller(w http.ResponseWriter, r *http.Requ
 
 var errReadableStateFailure = errors.New("authapi: the readable repositories listing could not read its state")
 
-// listing is Evaluator.ReadableRepositories for ReadableRepositoriesAction over the principal's own snapshot (no
-// session, so no delegation). A state failure (a store or clock failure, or a decision reason that is a state failure)
-// is an error, never a deny and never a list.
+// listing is Evaluator.ReadableRepositoriesInInventory for ReadableRepositoriesAction over the principal's own
+// snapshot (no session, so no delegation): a set over 256 keys counts only the keys with a live repository identity
+// row (CHAOS-13618). A state failure (a store or clock failure, or a decision reason that is a state failure) is an
+// error, never a deny and never a list.
 func (h readableRepositoriesHandlers) listing(ctx context.Context, principal, org uuid.UUID) (readableRepositoriesAnswer, error) {
 	orgID := org.String()
 	var d authorization.Decision
@@ -172,7 +174,7 @@ func (h readableRepositoriesHandlers) listing(ctx context.Context, principal, or
 		if snap == nil || snap.NowUnixNano() <= 0 {
 			return errReadableStateFailure
 		}
-		d = h.Evaluator.ReadableRepositories(authorization.Request{
+		d = h.Evaluator.ReadableRepositoriesInInventory(authorization.Request{
 			Action: ReadableRepositoriesAction, ResourceKind: "repository", ResourceKey: "*", OrganizationID: orgID,
 		}, snap)
 		return nil

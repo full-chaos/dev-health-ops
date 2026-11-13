@@ -137,8 +137,8 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	if b, ok := asMap(leg["strategy"])["fail-fast"].(bool); !ok || b {
 		add("go-quality-leg strategy.fail-fast must be false")
 	}
-	if _, has := leg["if"]; has {
-		add("a job-level `if` on the go-quality legs would let GitHub report them skipped; relevance is decided by a STEP inside each leg")
+	if got, has := leg["if"]; has && str(got) != "needs.go-quality-plan.outputs.draft_skip != 'true'" {
+		add("a job-level `if` on the go-quality legs would let GitHub report them skipped; relevance is decided by a STEP inside each leg (the one exception, an unlabelled draft, is pinned in go_quality_leg_selection_test.go)")
 	}
 	ran := false
 	for _, s := range stepsOf(leg) {
@@ -180,8 +180,8 @@ func qualityLegViolations(t *testing.T, root string) []string {
 		if str(env["GATE_HAS_SELECTOR"]) != "false" {
 			add("fan-in GATE_HAS_SELECTOR must be false, got %q", str(env["GATE_HAS_SELECTOR"]))
 		}
-		if got := str(env["GATED_JOB_1"]); got != "go-quality-leg|unconditional|${{ needs.go-quality-leg.result }}" {
-			add("the fan-in must judge the legs `unconditional` so a skipped, cancelled or missing leg fails the gate; got %q", got)
+		if got := str(env["GATED_JOB_1"]); got != "go-quality-leg|unconditional|${{ needs.go-quality-plan.outputs.draft_skip == 'true' && 'success' || needs.go-quality-leg.result }}" {
+			add("the fan-in must judge the legs `unconditional` (only an unlabelled draft counts them passed) so a skipped, cancelled or missing leg fails the gate on a ready run; got %q", got)
 		}
 		if got := str(env["GATED_JOB_2"]); got != "go-quality-plan|unconditional|${{ needs.go-quality-plan.result }}" {
 			add("the fan-in must judge the plan job `unconditional`: a skipped or failed plan skips every leg; got %q", got)

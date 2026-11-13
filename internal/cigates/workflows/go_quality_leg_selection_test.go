@@ -19,6 +19,7 @@ const (
 	legsScript   = "ci/go_quality_legs.sh"
 	legsFile     = "ci/go_quality_legs.json"
 	racePolicy   = "race: not run on PR by policy (runs in merge_group, on the main push and with the ci:full label)"
+	draftPolicy  = "test: not run on an unlabelled draft"
 )
 
 func runLegsScript(t *testing.T, root string, args ...string) (stdout, stderr string, code int) {
@@ -91,6 +92,50 @@ func TestLegScriptSelectsRaceLegsByEvent(t *testing.T) {
 				t.Fatalf("policy line = %q, want %q", lines[1], c.policy)
 			}
 		})
+	}
+}
+
+// A draft pull request without ci:integration or ci:full runs no leg; the workflow passes the draft flag as the fourth argument
+// (the third, the leg file, stays empty for the default). Every other event ignores the flag.
+func TestLegScriptRunsNoLegOnAnUnlabelledDraft(t *testing.T) {
+	root := repoRoot(t)
+	for _, c := range []struct {
+		event, full, draft string
+		wantEmpty          bool
+		policy             string
+	}{
+		{"pull_request", "false", "true", true, draftPolicy},
+		{"pull_request", "false", "false", false, racePolicy},
+		{"pull_request", "true", "false", false, ""},
+		{"merge_group", "false", "true", false, ""},
+		{"push", "false", "true", false, ""},
+	} {
+		t.Run(c.event+"/ci_full="+c.full+"/draft="+c.draft, func(t *testing.T) {
+			out, errs, code := runLegsScript(t, root, c.event, c.full, "", c.draft)
+			if code != 0 {
+				t.Fatalf("exit %d: %s", code, errs)
+			}
+			lines := strings.Split(out, "\n")
+			if len(lines) < 2 {
+				t.Fatalf("want a matrix line and a policy line, got %q", out)
+			}
+			if got := legNames(t, root, lines[0]); (len(got) == 0) != c.wantEmpty {
+				t.Fatalf("legs = %v, want empty = %v", got, c.wantEmpty)
+			}
+			if lines[1] != c.policy {
+				t.Fatalf("policy line = %q, want %q", lines[1], c.policy)
+			}
+		})
+	}
+	if _, _, code := runLegsScript(t, root, "pull_request", "false", "", "maybe"); code != 2 {
+		t.Fatalf("a bad draft flag must exit 2, got %d", code)
+	}
+	f := filepath.Join(t.TempDir(), "legs.json")
+	if err := os.WriteFile(f, []byte(`[]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, code := runLegsScript(t, root, "pull_request", "false", f, "true"); code == 0 {
+		t.Fatal("a draft must not hide an empty or broken leg file")
 	}
 }
 
@@ -169,14 +214,32 @@ func legSelectionViolations(t *testing.T, root string) []string {
 	if asString(outs["legs"]) != "${{ steps.legs.outputs.legs }}" || asString(outs["race_policy"]) != "${{ steps.legs.outputs.race_policy }}" {
 		add("go-quality-plan must publish outputs legs and race_policy from step `legs`, got %v", outs)
 	}
+	if got := asString(outs["draft_skip"]); got != "${{ steps.legs.outputs.draft_skip }}" {
+		add("go-quality-plan must publish output draft_skip from step `legs`, got %q", got)
+	}
+	if got := asString(leg["if"]); got != "needs.go-quality-plan.outputs.draft_skip != 'true'" {
+		add("go-quality-leg must run only when draft_skip != 'true', got if: %q: an unlabelled draft starts no leg", got)
+	}
+	if types := asList(asMap(triggerEvents(doc)["pull_request"])["types"]); !reflect.DeepEqual(types, []any{"opened", "synchronize", "reopened", "ready_for_review"}) {
+		add("go-quality pull_request types are %v, want [opened synchronize reopened ready_for_review]: the ready flip runs the legs a draft skipped", types)
+	}
+	gated := ""
+	for _, st := range stepsOf(fan) {
+		if asString(st["name"]) == "Aggregate go-quality result" {
+			gated = asString(asMap(st["env"])["GATED_JOB_1"])
+		}
+	}
+	if got := gated; got != "go-quality-leg|unconditional|${{ needs.go-quality-plan.outputs.draft_skip == 'true' && 'success' || needs.go-quality-leg.result }}" {
+		add("the fan-in GATED_JOB_1 is %q: only an unlabelled draft may count the skipped legs as passed, every other run keeps `unconditional` on the leg result", got)
+	}
 	legsAt, planAt := -1, -1
 	for i, s := range stepsOf(plan) {
 		switch asString(s["id"]) {
 		case "legs":
 			legsAt = i
 			run := shellCode(asString(s["run"]))
-			if !strings.Contains(run, "\n"+`bash ci/go_quality_legs.sh "${EVENT_NAME}" "${CI_FULL}" > "${out}"`+"\n") {
-				add("step legs must run exactly `bash ci/go_quality_legs.sh \"${EVENT_NAME}\" \"${CI_FULL}\" > \"${out}\"`: a third argument would read another leg file")
+			if !strings.Contains(run, "\n"+`bash ci/go_quality_legs.sh "${EVENT_NAME}" "${CI_FULL}" "" "${DRAFT_SKIP}" > "${out}"`+"\n") {
+				add("step legs must run exactly `bash ci/go_quality_legs.sh \"${EVENT_NAME}\" \"${CI_FULL}\" \"\" \"${DRAFT_SKIP}\" > \"${out}\"`: a third argument would read another leg file")
 			}
 			if n := strings.Count(run, "go_quality_legs"); n != 1 {
 				add("step legs names go_quality_legs %d times, want once (the script call): nothing else may produce or rewrite the output", n)
@@ -185,6 +248,12 @@ func legSelectionViolations(t *testing.T, root string) []string {
 				add("step legs must write legs= once, from line 1 of the script output")
 			}
 			env := asMap(s["env"])
+			if asString(env["DRAFT_SKIP"]) != draftSkipExpr {
+				add("step legs must take DRAFT_SKIP from %s, got %q: only an unlabelled draft pull request runs no leg", draftSkipExpr, asString(env["DRAFT_SKIP"]))
+			}
+			if !strings.Contains(run, `printf 'draft_skip=%s\n' "${DRAFT_SKIP}"`) {
+				add("step legs must publish draft_skip from DRAFT_SKIP")
+			}
 			if asString(env["CI_FULL"]) != "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}" || asString(env["EVENT_NAME"]) != "${{ github.event_name }}" {
 				add("step legs must take the event name and the ci:full label from the event, got %v", env)
 			}
@@ -279,11 +348,24 @@ func legSelectionViolations(t *testing.T, root string) []string {
 			add("the race policy step must run with always() when a policy was set, got if: %q", asString(report["if"]))
 		}
 	}
+	var draftReport map[string]any
+	for _, st := range stepsOf(fan) {
+		if asString(st["name"]) == "Report the draft skip" {
+			draftReport = st
+		}
+	}
+	if draftReport == nil {
+		add("the go-quality fan-in has no step `Report the draft skip`")
+	} else if asString(draftReport["if"]) != "always() && needs.go-quality-plan.outputs.draft_skip == 'true'" || !strings.Contains(asString(draftReport["run"]), "DRAFT: legs not run") {
+		add("the draft skip step must run with always() on a draft skip and print `DRAFT: legs not run`")
+	}
 	if asString(fan["if"]) != "always()" {
 		add("the go-quality fan-in must stay if: always()")
 	}
 	return out
 }
+
+const draftSkipExpr = "${{ github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full') && !contains(github.event.pull_request.labels.*.name, 'ci:integration') && 'true' || 'false' }}"
 
 func sprintf(f string, a ...any) string { return fmt.Sprintf(f, a...) }
 
@@ -301,7 +383,7 @@ func TestGoQualityLegSelectionPlantedDefects(t *testing.T) {
 	}{
 		{"a static matrix comes back", []mutation{{legsWorkflow, "include: ${{ fromJSON(needs.go-quality-plan.outputs.legs) }}", "include:\n          - name: static\n            args: static"}}, []string{"matrix.include must be"}},
 		{"the matrix points at another output", []mutation{{legsWorkflow, "include: ${{ fromJSON(needs.go-quality-plan.outputs.legs) }}", "include: ${{ fromJSON(needs.go-quality-plan.outputs.race_policy) }}"}}, []string{"matrix.include must be"}},
-		{"the producer is handed another file", []mutation{{legsWorkflow, `"${CI_FULL}" > "${out}"`, `"${CI_FULL}" ci/other_legs.json > "${out}"`}}, []string{"third argument"}},
+		{"the producer is handed another file", []mutation{{legsWorkflow, `"${CI_FULL}" "" "${DRAFT_SKIP}" > "${out}"`, `"${CI_FULL}" ci/other_legs.json "${DRAFT_SKIP}" > "${out}"`}}, []string{"third argument"}},
 		{"the script reads another file", []mutation{{legsScript, `${here}/go_quality_legs.json`, `${here}/other_legs.json`}}, []string{"literal ${here}/go_quality_legs.json"}},
 		{"a second file is concatenated into the list", []mutation{{legsScript, `matrix="$(jq -ce '.' "${legs}")"`, `matrix="$(jq -ce -s 'add' "${legs}" "${here}/extra.json")"`}}, []string{"runs jq as"}},
 		{"another step rewrites the legs output", []mutation{{legsWorkflow, "      - name: Configure self-hosted Go cache paths\n        if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')\n        run: |\n          echo \"GOMODCACHE=/mnt/go-cache/mod\" >> \"${GITHUB_ENV}\"\n          echo \"GOCACHE=/mnt/go-cache/build\" >> \"${GITHUB_ENV}\"\n\n      - name: Set up Go\n        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache-dependency-path", "      - name: Rewrite the legs\n        run: echo 'legs=[]' >> \"${GITHUB_OUTPUT}\"\n\n      - name: Set up Go\n        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache-dependency-path"}}, []string{"only producer"}},
@@ -313,6 +395,10 @@ func TestGoQualityLegSelectionPlantedDefects(t *testing.T) {
             exit 0`}}, []string{"must FAIL"}},
 		{"the race policy step is dropped", []mutation{{legsWorkflow, "name: Report the race policy", "name: Report something"}}, []string{"no step `Report the race policy`"}},
 		{"the race policy never reaches the summary", []mutation{{legsWorkflow, `echo "${RACE_POLICY}" >> "${GITHUB_STEP_SUMMARY}"`, `echo "${RACE_POLICY}"`}}, []string{"step summary"}},
+		{"a draft pull request starts the legs", []mutation{{legsWorkflow, "    if: needs.go-quality-plan.outputs.draft_skip != 'true'\n", "    if: needs.go-quality-plan.outputs.draft_skip != 'never'\n"}}, []string{"go-quality-leg must run only when draft_skip"}},
+		{"a labelled draft counts as unlabelled", []mutation{{legsWorkflow, " && !contains(github.event.pull_request.labels.*.name, 'ci:integration')", ""}}, []string{"must take DRAFT_SKIP"}},
+		{"the fan-in forgives skipped legs on a ready run", []mutation{{legsWorkflow, "needs.go-quality-plan.outputs.draft_skip == 'true' && 'success' || needs.go-quality-leg.result", "'success'"}}, []string{"GATED_JOB_1"}},
+		{"the ready flip stops starting a run", []mutation{{legsWorkflow, "types: [opened, synchronize, reopened, ready_for_review]", "types: [opened, synchronize, reopened]"}}, []string{"pull_request types"}},
 		{"the fan-in can skip", []mutation{{legsWorkflow, "\n    if: always()\n    needs: [go-quality-plan, go-quality-leg]", "\n    if: success()\n    needs: [go-quality-plan, go-quality-leg]"}}, []string{"must stay if: always()"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

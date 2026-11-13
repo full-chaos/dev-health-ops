@@ -22,7 +22,7 @@ import (
 const orglessOCRBody = `{"detail":"Organization context required"}`
 
 // orglessOrgNamespaces turns on the cell of every organization row of the go-api profile.
-const orglessOrgNamespaces = "billing,integrations,license,members,settings,teams"
+const orglessOrgNamespaces = "acr,billing,integrations,license,members,org,settings,teams"
 
 // orglessRealRows is every organization row of the go-api profile, keyed "METHOD /route", with the guard level its
 // profile row names (primary_validator).
@@ -58,8 +58,8 @@ func orglessRealRows(t *testing.T) map[string]string {
 			out[key] = levels[key]
 		}
 	}
-	if len(out) != 127 {
-		t.Fatalf("%d organization rows, want 127", len(out))
+	if len(out) != 129 {
+		t.Fatalf("%d organization rows, want 129", len(out))
 	}
 	return out
 }
@@ -67,7 +67,10 @@ func orglessRealRows(t *testing.T) map[string]string {
 // orglessPaths are the rows whose handler serves one fixed value of a path parameter (cellPath fills the others).
 var orglessPaths = map[string]string{"POST /api/v1/admin/ip-allowlist/{entry_id}": "/api/v1/admin/ip-allowlist/check"}
 
-// orglessDo is cellDo with the fixed paths of orglessPaths.
+// orglessNoBody are the rows that take no body (EmptyBody: any body is a 413 before the guard).
+var orglessNoBody = map[string]bool{"POST /api/v1/acr/credentials/{credential_id}/revoke": true}
+
+// orglessDo is cellDo with the fixed paths of orglessPaths and no body on the rows of orglessNoBody.
 func orglessDo(handler http.Handler, key, token string) cellAnswer {
 	method, _, _ := strings.Cut(key, " ")
 	path, fixed := orglessPaths[key]
@@ -75,7 +78,7 @@ func orglessDo(handler http.Handler, key, token string) cellAnswer {
 		path = cellPath(key)
 	}
 	var body io.Reader
-	if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch {
+	if (method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch) && !orglessNoBody[key] {
 		body = strings.NewReader("{}")
 	}
 	request := httptest.NewRequest(method, path, body)
@@ -151,8 +154,8 @@ func TestOrglessOrgRowsRealHandlersKeepTheLegacyAnswer(t *testing.T) {
 			}
 		}
 	}
-	if handlerAnswers[true]+handlerAnswers[false] != 77 {
-		t.Errorf("%d Admin and Authenticated rows reached the handler, want 77", handlerAnswers[true]+handlerAnswers[false])
+	if handlerAnswers[true]+handlerAnswers[false] != 79 {
+		t.Errorf("%d Admin and Authenticated rows reached the handler, want 79", handlerAnswers[true]+handlerAnswers[false])
 	}
 	t.Logf("platform admin with no organization, legacy handler answers: %d rows refuse 403 Organization context required, %d rows answer otherwise", handlerAnswers[true], handlerAnswers[false])
 }
@@ -209,7 +212,7 @@ func orglessCallsText(calls []pep.Request) string {
 	return "[" + strings.Join(parts, " ") + "]"
 }
 
-// The census (acp F-4): over the production mounts of the 127 organization rows, the org-less caller is asked exactly
+// The census (acp F-4): over the production mounts of the 129 organization rows, the org-less caller is asked exactly
 // the platform action the legacy guard admits it by. Every row is a plain level mount today, so that action is
 // admin.orgs (Guard.wrap orglessAction); a row mounted with its own gate action would be asked that action instead.
 func TestOrglessOrgRowsAskTheLegacyOrglessActionOnEveryRow(t *testing.T) {
@@ -222,8 +225,8 @@ func TestOrglessOrgRowsAskTheLegacyOrglessActionOnEveryRow(t *testing.T) {
 	for _, problem := range problems {
 		t.Error(problem)
 	}
-	if checked != 127 {
-		t.Fatalf("%d rows checked, want 127", checked)
+	if checked != 129 {
+		t.Fatalf("%d rows checked, want 129", checked)
 	}
 }
 

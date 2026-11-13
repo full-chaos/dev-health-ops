@@ -177,8 +177,8 @@ func TestAuthWebProxyProofJobIsWired(t *testing.T) {
 }
 
 // The proof signs go-api in to auth-service's session issue route with go-api's workload token: the bootstrap
-// credential and the api principal come before go-api and auth-service start, and no svc_authsess_ credential is made,
-// stored or handed to go-api.
+// credential and the api principal come before go-api and auth-service start, and no service credential is made, stored
+// or handed to go-api (the retiredcredentialnames census keeps the retired session issuer credential's names out of both files).
 func TestAuthWebProxyProofSignsInWithTheWorkloadToken(t *testing.T) {
 	root := authProofRoot(t)
 	script, err := os.ReadFile(filepath.Join(root, "ci", "check_auth_web_proxy_compose.sh"))
@@ -190,7 +190,7 @@ func TestAuthWebProxyProofSignsInWithTheWorkloadToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, text := range map[string]string{"the proof script": string(script), "the proof override": string(over)} {
-		for _, banned := range []string{"svc_authsess_", "AUTH_SESSION_ISSUE_TOKEN", "internal_service_credentials"} {
+		for _, banned := range []string{"internal_service_credentials"} {
 			if strings.Contains(text, banned) {
 				t.Errorf("%s still carries %q", name, banned)
 			}

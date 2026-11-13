@@ -347,8 +347,6 @@ func fakeSecret(t *testing.T, ref string) string {
 		return key32
 	case key == "MIGRATION_URI", key == "AUTH_MIGRATION_DATABASE_URI":
 		return "postgres://migrate:pw@db:5432/devhealth"
-	case key == "AUTH_SESSION_ISSUE_TOKEN":
-		return "svc_fake_session_issuer_token"
 	case key == "AUTH_VALKEY_URI":
 		return "redis://auth:pw@valkey:6379/1"
 	case key == "AUTH_SSO_STATE_KEY":
@@ -700,14 +698,13 @@ func TestGoAPIExtraEnvRefusesSecretLikeLiterals(t *testing.T) {
 	t.Parallel()
 
 	refused := map[string]string{
-		"collision JWT_SECRET_KEY":           `[{"name":"JWT_SECRET_KEY","value":"literal"}]`,
-		"collision API_DATABASE_URI":         `[{"name":"API_DATABASE_URI","value":"literal"}]`,
-		"collision AUTH_SESSION_ISSUE_TOKEN": `[{"name":"AUTH_SESSION_ISSUE_TOKEN","value":"literal"}]`,
-		"unknown social client secret":       `[{"name":"SOCIAL_X_CLIENT_SECRET","value":"literal"}]`,
-		"mixed case":                         `[{"name":"Partner_Api_Token","value":"literal"}]`,
-		"password":                           `[{"name":"SMTP_PASSWORD","value":"literal"}]`,
-		"dsn":                                `[{"name":"REPORTING_DSN","value":"literal"}]`,
-		"credentials":                        `[{"name":"partner_credentials","value":"literal"}]`,
+		"collision JWT_SECRET_KEY":     `[{"name":"JWT_SECRET_KEY","value":"literal"}]`,
+		"collision API_DATABASE_URI":   `[{"name":"API_DATABASE_URI","value":"literal"}]`,
+		"unknown social client secret": `[{"name":"SOCIAL_X_CLIENT_SECRET","value":"literal"}]`,
+		"mixed case":                   `[{"name":"Partner_Api_Token","value":"literal"}]`,
+		"password":                     `[{"name":"SMTP_PASSWORD","value":"literal"}]`,
+		"dsn":                          `[{"name":"REPORTING_DSN","value":"literal"}]`,
+		"credentials":                  `[{"name":"partner_credentials","value":"literal"}]`,
 	}
 	for name, env := range refused {
 		t.Run(name, func(t *testing.T) {
@@ -874,7 +871,7 @@ func TestAuthSecretKeysAreValidSecretKeys(t *testing.T) {
 	t.Parallel()
 	keys := []string{"authService.database.secretKey", "authService.migrate.secretKey", "authService.signingKey.secretKey",
 		"authService.valkey.secretKey", "authService.sessionKeys.successor.secretKey",
-		"authService.sessionKeys.loginLockout.secretKey", "goApi.sessionIssue.secretKey"}
+		"authService.sessionKeys.loginLockout.secretKey"}
 	for _, key := range keys {
 		for _, bad := range []string{"", "a b", "a/b"} {
 			t.Run(fmt.Sprintf("%s=%q", key, bad), func(t *testing.T) {

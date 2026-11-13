@@ -23,7 +23,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
-	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 )
 
@@ -381,7 +380,7 @@ func TestWorkloadSelectorSendsOnlyTheWorkloadToken(t *testing.T) {
 		return http.StatusOK, string(body)
 	}
 	env := map[string]string{EnvAuthProvisioningCredential: "workload", EnvAuthWorkloadIssuer: testWorkloadIssuer,
-		EnvAuthWorkloadBootstrapFile: bootstrapFile(t), sessionissue.EnvToken: testIssueToken(t)}
+		EnvAuthWorkloadBootstrapFile: bootstrapFile(t), retiredIssueTokenEnv: testIssueToken(t)}
 	cfg := provisioningOn(t, w.URL)
 	w.runAll(t, cfg, env)
 	w.runAll(t, cfg, env)
@@ -409,7 +408,7 @@ func TestWorkloadSelectorExchangeFailureSendsNothing(t *testing.T) {
 	w := newWiringServer(t)
 	w.exchange = func() (int, string) { return http.StatusServiceUnavailable, `{}` }
 	env := map[string]string{EnvAuthProvisioningCredential: "workload", EnvAuthWorkloadIssuer: testWorkloadIssuer,
-		EnvAuthWorkloadBootstrapFile: bootstrapFile(t), sessionissue.EnvToken: testIssueToken(t)}
+		EnvAuthWorkloadBootstrapFile: bootstrapFile(t), retiredIssueTokenEnv: testIssueToken(t)}
 	cfg := provisioningOn(t, w.URL)
 	lookup := issueEnv(env)
 	cred, err := newProvisioningCredential(cfg, lookup)

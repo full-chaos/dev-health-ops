@@ -5,8 +5,6 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 )
 
 func issueEnv(values map[string]string) func(string) (string, bool) {
@@ -15,6 +13,10 @@ func issueEnv(values map[string]string) func(string) (string, bool) {
 		return value, ok
 	}
 }
+
+// retiredIssueTokenEnv is the retired session issuer credential's env name: go-api never reads it, and the cells set it to
+// show that.
+const retiredIssueTokenEnv = "AUTH_SESSION_ISSUE_TOKEN"
 
 // testIssueToken is an auth-session-issuer credential built at run time.
 func testIssueToken(t *testing.T) string {
@@ -43,7 +45,7 @@ func TestSessionIssuerFollowsTheSessionsFlag(t *testing.T) {
 	if issuer, err := sessionIssuer(on, sessionCredential{}); err == nil || issuer != nil || !strings.Contains(err.Error(), "AUTH_PROXY_SESSIONS") {
 		t.Fatalf("flag on without a workload credential: %v %v, want a start-up error naming the flag", issuer, err)
 	}
-	_, session, err := newCredentials(on, issueEnv(workloadEnv(t, map[string]string{sessionissue.EnvToken: testIssueToken(t)})))
+	_, session, err := newCredentials(on, issueEnv(workloadEnv(t, map[string]string{retiredIssueTokenEnv: testIssueToken(t)})))
 	if err != nil {
 		t.Fatal(err)
 	}

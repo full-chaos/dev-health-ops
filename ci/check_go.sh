@@ -1153,7 +1153,7 @@ check_test_shard_wall_guard() {
     top="$(check_test_shard_plan "${shard}" "${count}" \
       | awk -F'\t' -v weights="${GO_TEST_WEIGHTS}" '
           BEGIN { while ((getline line < weights) > 0) { if (line ~ /^[[:space:]]*(#|$)/) continue; split(line, f, "\t"); w[f[1]] = f[2] + 0 } }
-          { printf "%d\t%s\n", ($3 in w) ? w[$3] : 1, $2 }' \
+          !seen[$2]++ { printf "%d\t%s\n", ($3 in w) ? w[$3] : 1, $2 }' \
       | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2 \
       | awk -F'\t' 'NR <= 3 { printf "%s%s (weight %s)", (NR > 1 ? ", " : ""), $2, $1 }')"
   fi

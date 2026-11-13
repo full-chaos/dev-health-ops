@@ -402,6 +402,13 @@ func (h *handlers) manualOutcome(w http.ResponseWriter, r *http.Request, configI
 	if err != nil {
 		return outcome, false, err
 	}
+	return outcome, h.answerManualOutcome(w, r, configID, trigger, outcome), nil
+}
+
+// answerManualOutcome answers a waited outcome that is not a plan made and writes one log line for it: the web shows the user
+// plain words, and this line is the server's record of why a sync was refused or stalled. The line carries the status, the
+// reason code (failed only), the config, the organization and the occurrence, never a credential or an error text.
+func (h *handlers) answerManualOutcome(w http.ResponseWriter, r *http.Request, configID string, trigger synchandoff.Trigger, outcome synchandoff.Outcome) bool {
 	body := pyjson.NewObject()
 	switch outcome.State {
 	case synchandoff.StateQuarantined:
@@ -409,20 +416,26 @@ func (h *handlers) manualOutcome(w http.ResponseWriter, r *http.Request, configI
 		body.Set("config_id", configID)
 		body.Set("occurrence_id", trigger.OccurrenceID)
 		body.Set("reason", "scheduled sync occurrence quarantined: "+outcome.ErrorCode)
+		h.logger.WarnContext(r.Context(), "sync_now_failed", "status", "failed", "reason_code", outcome.ErrorCode,
+			"config_id", configID, "org_id", orgID(r), "occurrence_id", trigger.OccurrenceID)
 	case synchandoff.StatePending:
 		body.Set("status", "pending")
 		body.Set("config_id", configID)
 		body.Set("occurrence_id", trigger.OccurrenceID)
+		h.logger.InfoContext(r.Context(), "sync_now_pending", "status", "pending",
+			"config_id", configID, "org_id", orgID(r), "occurrence_id", trigger.OccurrenceID)
 	case synchandoff.StateTerminal:
 		body.Set("status", "disabled")
 		body.Set("config_id", configID)
 		body.Set("run_id", outcome.JobRunID)
 		body.Set("total_units", int64(outcome.TotalUnits))
+		h.logger.InfoContext(r.Context(), "sync_now_disabled", "status", "disabled",
+			"config_id", configID, "org_id", orgID(r), "occurrence_id", trigger.OccurrenceID)
 	default:
-		return outcome, false, nil
+		return false
 	}
 	policy.WriteModel(w, http.StatusAccepted, body, nil)
-	return outcome, true, nil
+	return true
 }
 
 // triggerSyncConfig is sync.py's trigger_sync_config.

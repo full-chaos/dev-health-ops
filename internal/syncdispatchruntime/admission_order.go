@@ -115,9 +115,12 @@ WHERE id = $1::uuid`, runID).Scan(&order.createdAt, &order.backfill)
 // Live: one bounded probe per progress sign inside the window ($9 seconds before now), each an EXISTS that stops at
 // its first row:
 //   - created: the run itself was created inside the window;
-//   - terminal: a unit reached a terminal state. Every terminal unit write arms the run's finalize_sync_run outbox
-//     row in its own transaction (syncrunrollup.ArmFinalize), so the row's updated_at is the newest terminal write;
-//     one probe on uq_sync_dispatch_outbox_run_kind instead of a walk over the run's terminal units;
+//   - terminal: the run's first terminal write is inside the window. Every terminal unit write arms the run's
+//     finalize_sync_run outbox row in its own transaction (syncrunrollup.ArmFinalize; the dispatch pass's own
+//     terminal paths through armFinalizeSyncRunWakeup), and only that INSERT sets created_at. updated_at is NOT
+//     read: the relay rewrites it on claim, dispatch and publish-failure backoff, so a row stuck in backoff would
+//     read as live for ever. One probe on uq_sync_dispatch_outbox_run_kind; later terminal writes count only
+//     through the other signs;
 //   - heartbeat: a running unit sent a heartbeat;
 //   - lease: a running unit holds a live lease;
 //   - dispatching: a unit was claimed (dispatching) inside the window.
@@ -157,7 +160,7 @@ WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
         OR EXISTS (
             SELECT 1 FROM public.sync_dispatch_outbox AS outbox
             WHERE outbox.sync_run_id = run.id AND outbox.kind = 'finalize_sync_run'
-                AND outbox.updated_at > $7::timestamptz - make_interval(secs => $9::double precision)
+                AND outbox.created_at > $7::timestamptz - make_interval(secs => $9::double precision)
             LIMIT 1
         )
         OR EXISTS (

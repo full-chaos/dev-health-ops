@@ -28,6 +28,9 @@ const (
 	signLease       livenessSign = "lease"
 	signDispatching livenessSign = "dispatching"
 	signNone        livenessSign = "none"
+	// signBackoff: the finalize row was created long ago and the relay keeps rewriting its updated_at (publish-failure
+	// backoff); no sign is inside the bound.
+	signBackoff livenessSign = "backoff"
 )
 
 func seedLivenessCase(t *testing.T, ctx context.Context, pool *pgxpool.Pool, now time.Time, sign livenessSign) {
@@ -80,6 +83,11 @@ func seedLivenessCase(t *testing.T, ctx context.Context, pool *pgxpool.Pool, now
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if sign == signBackoff {
+		exec(`UPDATE public.sync_dispatch_outbox
+SET status = 'pending', attempts = 7, last_error = 'publish_failed', available_at = $2, updated_at = $3
+WHERE sync_run_id = $1::uuid AND kind = 'finalize_sync_run'`, admissionOlderRun, now.Add(5*time.Minute), recent)
 	}
 	// heartbeat: a running unit whose lease has expired; only its heartbeat can be recent.
 	expired := now.Add(-time.Minute)
@@ -138,6 +146,67 @@ func TestOlderRunLiveByTerminalUnitHoldsBack(t *testing.T) { assertLivenessHolds
 func TestOlderRunLiveByHeartbeatHoldsBack(t *testing.T)    { assertLivenessHolds(t, signHeartbeat) }
 func TestOlderRunLiveByLeaseHoldsBack(t *testing.T)        { assertLivenessHolds(t, signLease) }
 func TestOlderRunLiveByDispatchingHoldsBack(t *testing.T)  { assertLivenessHolds(t, signDispatching) }
+
+// TestOlderRunWhoseFinalizeRowOnlyBacksOffHoldsNothing (CHAOS-8880 Q1): the relay rewrites the finalize row's
+// updated_at on every publish-failure backoff. That is not progress: with every real sign past the bound, the older
+// run holds nothing back.
+func TestOlderRunWhoseFinalizeRowOnlyBacksOffHoldsNothing(t *testing.T) {
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		seedLivenessCase(t, ctx, pool, now, signBackoff)
+		decision := authorizeLivenessCase(t, ctx, pool, now)
+		if len(decision.cappedUnitIDs) != 1 || len(decision.heldBackRunIDs) != 0 {
+			t.Fatalf("older run whose finalize row only backs off: capped=%d heldBack=%v, want 1 and none (cap 2, 3 planned)",
+				len(decision.cappedUnitIDs), decision.heldBackRunIDs)
+		}
+	})
+}
+
+// TestOlderRunWaitingPastTheScanLimitHoldsNothing (CHAOS-8880 Q2, accepted fail-open): the waiting count reads at most
+// olderRunWaitingScanLimit planned or retrying units of an older run, with no bucket filter in the index. A live older
+// run whose first 300 planned units are in another bucket and whose 2 medium units lie past them holds nothing back
+// in medium -- the behavior before CHAOS-8880, never more hold-back. This pins the limit until an index lands.
+func TestOlderRunWaitingPastTheScanLimitHoldsNothing(t *testing.T) {
+	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		now := pgNow()
+		for i := 0; i < 3; i++ {
+			insertGuardUnit(t, ctx, pool, guardUnitID("00000088e3", i), "github", "medium", syncRunUnitStatusPlanned, now, nil, nil, nil)
+		}
+		pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: admissionOlderRun, OrgID: guardTestOrg})
+		for _, statement := range []struct {
+			sql  string
+			args []any
+		}{
+			{`UPDATE public.sync_runs SET triggered_by = 'schedule', mode = 'incremental', status = 'dispatching', created_at = now() - interval '3 hours' WHERE id = $1::uuid`,
+				[]any{admissionOlderRun}},
+			{`UPDATE public.sync_runs SET triggered_by = 'schedule', mode = 'incremental', status = 'dispatching', created_at = now() - interval '10 seconds' WHERE id = $1::uuid`,
+				[]any{guardTestRun}},
+			{`INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode, status, attempts, created_at, updated_at)
+			 SELECT md5('past-scan-8880-' || k)::uuid, run.org_id, run.id, run.integration_id,
+				(SELECT source_id FROM public.sync_run_units WHERE sync_run_id = $2::uuid LIMIT 1),
+				'github', 'dataset-' || k, CASE WHEN k <= 300 THEN 'light' ELSE 'medium' END, 'incremental', 'planned', 0,
+				now() - interval '3 hours', now() - interval '3 hours'
+			 FROM public.sync_runs AS run CROSS JOIN generate_series(1, 302) AS k
+			 WHERE run.id = $1::uuid
+			 ORDER BY k`,
+				[]any{admissionOlderRun, guardTestRun}},
+		} {
+			if _, err := pool.Exec(ctx, statement.sql, statement.args...); err != nil {
+				t.Fatalf("seed past-scan run: %v", err)
+			}
+		}
+		liveLease := now.Add(time.Hour)
+		pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+			ID: guardUnitID("00000088e4", 0), RunID: admissionOlderRun, OrgID: guardTestOrg, Provider: "github", CostClass: "light",
+			Status: syncRunUnitStatusRunning, UpdatedAt: &now, LeaseExpiresAt: &liveLease, LeaseOwner: ptrString("past-scan-owner"),
+		})
+		decision := authorizeLivenessCase(t, ctx, pool, now)
+		if len(decision.cappedUnitIDs) != 1 || len(decision.heldBackRunIDs) != 0 {
+			t.Fatalf("older live run whose medium units lie past the scan limit: capped=%d heldBack=%v, want 1 and none",
+				len(decision.cappedUnitIDs), decision.heldBackRunIDs)
+		}
+	})
+}
 
 func TestOlderRunWithEverySignPastTheBoundHoldsNothing(t *testing.T) {
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {

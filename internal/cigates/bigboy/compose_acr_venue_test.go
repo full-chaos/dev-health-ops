@@ -88,6 +88,8 @@ func composeACRNetworks(g *guard) {
 	for _, n := range composeACRAll {
 		want := []string{"acr"}
 		switch n {
+		case "acr-mcp":
+			want = []string{"acr", "acr-edge"}
 		case "acr-api":
 			want = []string{"acr", "acr-edge", "acr_auth_workload", "dho-clickhouse-readers", "dho-query-internal"}
 		case "acr-projector":
@@ -119,7 +121,7 @@ func composeOnNetwork(s doc, net string) bool {
 }
 
 // The edge traefik is not in this file: it joins acr-edge from the host compose file of traefik (README "Staging acr host").
-// In this file acr-api is the only member, so the edge reaches acr-api and nothing else of acr, and acr-api publishes no port.
+// In this file acr-api and acr-mcp are the only members, so the edge reaches them and nothing else of acr; acr-api publishes no port.
 func composeACREdgeNetwork(g *guard) {
 	r := composeACR(g)
 	net := mp(at(r.top, "networks", "acr-edge"))
@@ -131,34 +133,47 @@ func composeACREdgeNetwork(g *guard) {
 		}
 	}
 	on = composeSortedStrs(on)
-	g.expect(equal(on, []string{"acr-api"}), "the network acr-edge holds %v, want only acr-api", on)
+	g.expect(equal(on, []string{"acr-api", "acr-mcp"}), "the network acr-edge holds %v, want only acr-api and acr-mcp", on)
 }
 
-var composeACREdgeLabels = func() doc {
+func composeLabels(pairs ...[2]string) doc {
 	out := doc{}
-	for _, kv := range [][2]string{
-		{"traefik.docker.network", "dev-health-acr-edge"},
-		{"traefik.enable", "true"},
-		{"traefik.http.routers.acr-staging.entrypoints", "web"},
-		{"traefik.http.routers.acr-staging.rule", "Host(`acr.commanderkeen.dev`)"},
-		{"traefik.http.services.acr-staging.loadbalancer.server.port", "8080"},
-		{"traefik.scope", "dev-health"},
-	} {
+	for _, kv := range pairs {
 		out[kv[0]] = kv[1]
 	}
 	return out
-}()
+}
+
+// The mcp router admits exactly the five rules of the k3s ingress dev-health-acr-mcp it replaces.
+var composeACREdgeLabels = map[string]doc{
+	"acr-api": composeLabels(
+		[2]string{"traefik.docker.network", "dev-health-acr-edge"},
+		[2]string{"traefik.enable", "true"},
+		[2]string{"traefik.http.routers.acr-staging.entrypoints", "web"},
+		[2]string{"traefik.http.routers.acr-staging.rule", "Host(`acr.commanderkeen.dev`)"},
+		[2]string{"traefik.http.services.acr-staging.loadbalancer.server.port", "8080"},
+		[2]string{"traefik.scope", "dev-health"},
+	),
+	"acr-mcp": composeLabels(
+		[2]string{"traefik.docker.network", "dev-health-acr-edge"},
+		[2]string{"traefik.enable", "true"},
+		[2]string{"traefik.http.routers.mcp-staging.entrypoints", "web"},
+		[2]string{"traefik.http.routers.mcp-staging.rule", "Host(`mcp.commanderkeen.dev`) && (PathPrefix(`/mcp`) || Path(`/healthz`) || Path(`/readyz`) || Path(`/`) || PathPrefix(`/.well-known/oauth-protected-resource`))"},
+		[2]string{"traefik.http.services.mcp-staging.loadbalancer.server.port", "8081"},
+		[2]string{"traefik.scope", "dev-health"},
+	),
+}
 
 func composeACREdgeRoute(g *guard) {
 	r := composeACR(g)
-	got := mp(r.services["acr-api"]["labels"])
-	g.expect(equal(got, composeACREdgeLabels), "acr-api traefik labels are %v, want exactly %v", got, composeACREdgeLabels)
 	for _, n := range composeACRAll {
-		if n == "acr-api" {
+		got := mp(r.services[n]["labels"])
+		if want, routed := composeACREdgeLabels[n]; routed {
+			g.expect(equal(got, want), "%s traefik labels are %v, want exactly %v", n, got, want)
 			continue
 		}
-		for k := range mp(r.services[n]["labels"]) {
-			g.expect(!strings.HasPrefix(k, "traefik."), "%s carries the traefik label %s: only acr-api is routed by the edge traefik", n, k)
+		for k := range got {
+			g.expect(!strings.HasPrefix(k, "traefik."), "%s carries the traefik label %s: only acr-api and acr-mcp are routed by the edge traefik", n, k)
 		}
 	}
 }
@@ -461,8 +476,8 @@ var composeACRChecks = []check{
 	{"container_names_and_aliases_keep_every_acr_hostname", composeACRContainerNames},
 	{"the_acr_services_reach_the_networks_they_always_did", composeACRNetworks},
 	{"only_the_mcp_server_and_the_graph_publish_a_port_and_only_on_loopback", composeACRPorts},
-	{"the_edge_network_acr_edge_holds_only_acr_api", composeACREdgeNetwork},
-	{"only_acr_api_is_routed_by_the_edge_traefik_on_the_staging_host", composeACREdgeRoute},
+	{"the_edge_network_acr_edge_holds_only_acr_api_and_acr_mcp", composeACREdgeNetwork},
+	{"only_acr_api_and_acr_mcp_are_routed_by_the_edge_traefik_on_the_staging_hosts", composeACREdgeRoute},
 	{"falkordb_requires_a_password_and_every_client_reads_it_from_a_secret_file", composeACRFalkorAuth},
 	{"no_secret_value_is_in_the_file_only_paths_of_secret_files", composeACRSecretsAreFiles},
 	{"the_acr_images_are_pinned_by_registry_digest_and_a_missing_pin_fails_the_render", composeACRImagesPinned},
@@ -501,8 +516,18 @@ func TestComposeACRVenuePlanted(t *testing.T) {
 			check: composeACREdgeNetwork, want: "the network acr-edge holds"},
 		{name: "acr-edge renamed", mutate: mut(composeFile, "  acr-edge:\n    driver: bridge\n    name: dev-health-acr-edge\n", "  acr-edge:\n    driver: bridge\n    name: dev-health-acr-edge-2\n"),
 			check: composeACREdgeNetwork, want: "the network acr-edge is"},
-		{name: "acr-mcp routed by the edge", mutate: mut(composeFile, "    image: ${BIGBOY_ACR_MCP_IMAGE:?", "    labels:\n      traefik.enable: 'true'\n    image: ${BIGBOY_ACR_MCP_IMAGE:?"),
-			check: composeACREdgeRoute, want: "acr-mcp carries the traefik label traefik.enable"},
+		{name: "acr-projector routed by the edge", mutate: mut(composeFile, "    networks:\n      acr: null\n      dho-clickhouse-readers: null\n    profiles: [acr]", "    labels:\n      traefik.enable: 'true'\n    networks:\n      acr: null\n      dho-clickhouse-readers: null\n    profiles: [acr]"),
+			check: composeACREdgeRoute, want: "acr-projector carries the traefik label traefik.enable"},
+		{name: "acr-mcp leaves acr-edge", mutate: mut(composeFile, "      acr: null\n      acr-edge: null\n    ports:", "      acr: null\n    ports:"),
+			check: composeACREdgeNetwork, want: "the network acr-edge holds"},
+		{name: "mcp route admits every path", mutate: mut(composeFile, "(PathPrefix(`/mcp`) || ", "(PathPrefix(`/mcp`) || PathPrefix(`/`) || "),
+			check: composeACREdgeRoute, want: "acr-mcp traefik labels"},
+		{name: "mcp route loses readyz", mutate: mut(composeFile, " || Path(`/readyz`)", ""),
+			check: composeACREdgeRoute, want: "acr-mcp traefik labels"},
+		{name: "mcp route healthz by prefix", mutate: mut(composeFile, "Path(`/healthz`)", "PathPrefix(`/healthz`)"),
+			check: composeACREdgeRoute, want: "acr-mcp traefik labels"},
+		{name: "mcp route without the host", mutate: mut(composeFile, "rule: Host(`mcp.commanderkeen.dev`) && (", "rule: ("),
+			check: composeACREdgeRoute, want: "acr-mcp traefik labels"},
 		{name: "acr-api route on another host", mutate: mut(composeFile, "traefik.http.routers.acr-staging.rule: Host(`acr.commanderkeen.dev`)", "traefik.http.routers.acr-staging.rule: Host(`acr.commanderkeen.dev`) || Host(`mcp.commanderkeen.dev`)"),
 			check: composeACREdgeRoute, want: "acr-api traefik labels"},
 		{name: "acr-api route over the ops network", mutate: mut(composeFile, "traefik.docker.network: dev-health-acr-edge", "traefik.docker.network: dev-health_dev-health"),

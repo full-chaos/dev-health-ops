@@ -2276,8 +2276,16 @@ services:
       ACR_MCP_RESOURCE_URL: http://127.0.0.1:8081/mcp
       ACR_MCP_TRANSPORT: http
     image: ${BIGBOY_ACR_MCP_IMAGE:?BIGBOY_ACR_MCP_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    labels:
+      traefik.docker.network: dev-health-acr-edge
+      traefik.enable: 'true'
+      traefik.http.routers.mcp-staging.entrypoints: web
+      traefik.http.routers.mcp-staging.rule: Host(`mcp.commanderkeen.dev`) && (PathPrefix(`/mcp`) || Path(`/healthz`) || Path(`/readyz`) || Path(`/`) || PathPrefix(`/.well-known/oauth-protected-resource`))
+      traefik.http.services.mcp-staging.loadbalancer.server.port: '8081'
+      traefik.scope: dev-health
     networks:
       acr: null
+      acr-edge: null
     ports:
     - mode: ingress
       host_ip: 127.0.0.1

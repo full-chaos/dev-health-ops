@@ -1,6 +1,6 @@
 {
   "schema_version": "roles.v1",
-  "catalog_version": 18,
+  "catalog_version": 19,
   "description": "The closed role catalog. Each role lists its actions explicitly; there is no inheritance, wildcard or all-actions role. A platform role holds only platform actions; an organization role holds only organization actions.",
   "roles": [
     {
@@ -9,6 +9,7 @@
       "actions": [
         "acr.context.read",
         "acr.credential.issue",
+        "acr.credential.revoke",
         "acr.evidence.read",
         "analytics.read",
         "billing.read",
@@ -29,6 +30,7 @@
       "actions": [
         "acr.context.read",
         "acr.credential.issue",
+        "acr.credential.revoke",
         "acr.evidence.read",
         "analytics.export",
         "analytics.read",
@@ -50,6 +52,7 @@
       "actions": [
         "acr.context.read",
         "acr.credential.issue",
+        "acr.credential.revoke",
         "acr.evidence.read",
         "analytics.export",
         "analytics.read",
@@ -82,6 +85,7 @@
       "actions": [
         "acr.context.read",
         "acr.credential.issue",
+        "acr.credential.revoke",
         "acr.evidence.read",
         "analytics.export",
         "analytics.read",

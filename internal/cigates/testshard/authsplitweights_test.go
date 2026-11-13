@@ -410,13 +410,10 @@ func TestEveryAuthSplitAndWeightTableSelectsTheAuthLegs(t *testing.T) {
 	if d := cellAuthTablesSelectTheAuthLegs(t, authTree{repoRoot(t)}); d != "" {
 		t.Error(d)
 	}
-	entries, err := os.ReadDir(filepath.Join(repoRoot(t), "ci"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "auth_race") && !strings.Contains(strings.Join(authLegTables, " "), "ci/"+e.Name()) {
-			t.Errorf("ci/%s is an auth race table the auth path filter cell does not name: add it to authLegTables and auth_path_relevant", e.Name())
+	// Every auth race table check_go.sh names is one of the five (a new one must select the auth legs too).
+	for _, p := range regexp.MustCompile(`ci/auth_race[a-z_]*\.tsv`).FindAllString(readRepoFile(t, "ci/check_go.sh"), -1) {
+		if !strings.Contains(" "+strings.Join(authLegTables, " ")+" ", " "+p+" ") {
+			t.Errorf("ci/check_go.sh names %s, an auth race table the auth path filter cell does not name: add it to authLegTables and auth_path_relevant", p)
 		}
 	}
 	for _, p := range authLegTables {
@@ -455,36 +452,61 @@ func TestTheRaceAndTestLegPlansDoNotReadTheAuthSplitWeights(t *testing.T) {
 	}
 }
 
-// mutantTree: a tree whose ci/check_go.sh is SRC with FROM replaced by TO; every other entry links to the real tree (the auth
-// listing reads only the module and ci/).
+// trackedEntries: the first path segment of every tracked file of the real tree, at the top and below ci/ (git ls-files: the tree
+// copy holds what the repository tracks).
+func trackedEntries(t *testing.T) (top, ci []string) {
+	t.Helper()
+	out, errs, err := run(t, nil, "git", "ls-files", "-z", "--cached")
+	if err != nil {
+		t.Fatalf("git ls-files: %v: %s", err, errs)
+	}
+	seenTop, seenCI := map[string]bool{}, map[string]bool{}
+	for _, rel := range strings.Split(out, "\x00") {
+		first, rest, nested := strings.Cut(rel, "/")
+		if rel == "" {
+			continue
+		}
+		if !seenTop[first] {
+			seenTop[first] = true
+			top = append(top, first)
+		}
+		if first == "ci" && nested {
+			second, _, _ := strings.Cut(rest, "/")
+			if !seenCI[second] {
+				seenCI[second] = true
+				ci = append(ci, second)
+			}
+		}
+	}
+	if !seenTop["ci"] || !seenCI["check_go.sh"] {
+		t.Fatal("git ls-files lists no ci/check_go.sh")
+	}
+	return top, ci
+}
+
+// mutantTree: a tree whose ci/check_go.sh is SRC with FROM replaced by TO; every other tracked entry links to the real tree (the
+// auth listing reads only the module and ci/).
 func mutantTree(t *testing.T, src, from, to string) authTree {
 	t.Helper()
 	root := repoRoot(t)
 	dir := t.TempDir()
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		if e.Name() == "ci" {
+	top, ci := trackedEntries(t)
+	for _, name := range top {
+		if name == "ci" {
 			continue
 		}
-		if err := os.Symlink(filepath.Join(root, e.Name()), filepath.Join(dir, e.Name())); err != nil {
+		if err := os.Symlink(filepath.Join(root, name), filepath.Join(dir, name)); err != nil {
 			t.Fatal(err)
 		}
-	}
-	ci, err := os.ReadDir(filepath.Join(root, "ci"))
-	if err != nil {
-		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(dir, "ci"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range ci {
-		if e.Name() == "check_go.sh" {
+	for _, name := range ci {
+		if name == "check_go.sh" {
 			continue
 		}
-		if err := os.Symlink(filepath.Join(root, "ci", e.Name()), filepath.Join(dir, "ci", e.Name())); err != nil {
+		if err := os.Symlink(filepath.Join(root, "ci", name), filepath.Join(dir, "ci", name)); err != nil {
 			t.Fatal(err)
 		}
 	}

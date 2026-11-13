@@ -459,74 +459,81 @@ func TestBuildScheduledPlanExecutedProofWaiverBypassesMissingEvidence(t *testing
 	}
 }
 
-func TestBuildScheduledPlanRequiresExecutedProofForWorkItemFamilyCanonicalClaim(t *testing.T) {
-	// Same CHAOS-4060 requirement as TestBuildScheduledPlanRequiresExecutedProofOrWaiver,
-	// applied to the family-collapse gate: the canonical work-items claim
-	// must not plan against non-nil evidence recording it as attempted but
-	// never proven.
-	//
-	// CHAOS-4731: this used github/work-items until that pair got an
-	// ExecutedProofWaiver (execution_registry.go) -- switched to gitlab/
-	// work-items, which carries RouteReady/Plannable=true and no waiver, so
-	// the negative control still exercises a genuinely unwaived pair.
-	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
-	units, err := BuildScheduledPlan(PlannerInput{
-		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
-		Sources:  []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "gitlab", FullName: "owner/repo"}},
-		Datasets: []PlanDataset{{Key: "work-items"}},
-		ExecutedProof: &providersync.ExecutedProofEvidence{
-			Proven:    map[string]bool{"gitlab/commits": true},
-			Attempted: map[string]bool{"gitlab/commits": true, "gitlab/work-items": true},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(units) != 0 {
-		t.Fatalf("units=%+v, want zero: gitlab/work-items was attempted and never proven, and has no waiver", units)
+func TestBuildScheduledPlanFoldFamilyStillRequiresExecutedProof(t *testing.T) {
+	// Ruling D7011 (CHAOS-8774) waives the executed-proof gate for the
+	// work-item family only. A fold family (github/prs) and a plain pair
+	// (gitlab/commits) without a waiver must still be vetoed when the
+	// evidence records them attempted and never proven, and the veto must
+	// still count on sync_plan_gate_total{outcome="executed_proof_unsatisfied"}.
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	for _, cell := range []struct {
+		provider, dataset, source string
+	}{
+		{provider: "github", dataset: "prs", source: "owner/repo"},
+		{provider: "gitlab", dataset: "commits", source: "owner/repo"},
+	} {
+		before := globalPlanGateTelemetry.snapshotForTest(cell.provider, cell.dataset, planGateOutcomeExecutedProofUnsatisfied)
+		units, err := BuildScheduledPlan(PlannerInput{
+			OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+			Sources:  []PlanSource{{ID: "source", ExternalID: cell.source, Provider: cell.provider, FullName: cell.source}},
+			Datasets: []PlanDataset{{Key: cell.dataset}},
+			ExecutedProof: &providersync.ExecutedProofEvidence{
+				Proven:    map[string]bool{},
+				Attempted: map[string]bool{cell.provider + "/" + cell.dataset: true},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(units) != 0 {
+			t.Fatalf("%s/%s units=%+v, want zero: attempted, never proven, no waiver", cell.provider, cell.dataset, units)
+		}
+		after := globalPlanGateTelemetry.snapshotForTest(cell.provider, cell.dataset, planGateOutcomeExecutedProofUnsatisfied)
+		if after != before+1 {
+			t.Fatalf("%s/%s executed_proof_unsatisfied count %d -> %d, want +1", cell.provider, cell.dataset, before, after)
+		}
 	}
 }
 
-func TestBuildScheduledPlanWorkItemFamilyExecutedProofWaiverBypassesUnprovenEvidence(t *testing.T) {
-	// CHAOS-4731: github/work-items has been Attempted-but-never-Proven since
-	// 2026-06-21 per the live sync_executed_proof_ledger row (attempted_at
-	// set, proven_at NULL) -- every pre-2026-08-19 sync_run_units success row
-	// for this pair carries neither result.go_provider_route.records nor
-	// result.persisted, so none of the 290 historical "successes" ever
-	// satisfied executedProofProvenPredicateSQL. CHAOS-4060 (merged
-	// 2026-08-22) then started enforcing ExecutedProofSatisfied at plan time,
-	// and with no ExecutedProofWaiver on github/work-items this pair has been
-	// silently, permanently vetoed ever since -- even though the composite
-	// GitHubWorkItemsRouteHandler producer (internal/providersync/
-	// github_work_items_route.go) was rewritten correctly on 2026-08-19..25
-	// and has never been given a single chance to run.
-	//
-	// This is the CHAOS-4731 fix: an ExecutedProofWaiver on github/work-items
-	// mirroring github/repo-metadata's CHAOS-4054 precedent, self-retiring
-	// once a live unit reports a nonzero persisted-row count. Mirrors
-	// TestBuildScheduledPlanExecutedProofWaiverBypassesMissingEvidence, but
-	// against evidence that actually records the pair as attempted-and-
-	// unproven (repo-metadata's test only ever exercises the "never
-	// attempted" empty-evidence case) -- the waiver must bypass a REAL
-	// negative, not just an absent one.
-	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	units, err := BuildScheduledPlan(PlannerInput{
-		OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
-		Sources:  []PlanSource{{ID: "source", ExternalID: "owner/repo", Provider: "github", FullName: "owner/repo"}},
-		Datasets: []PlanDataset{{Key: "work-items"}},
-		ExecutedProof: &providersync.ExecutedProofEvidence{
-			Proven:    map[string]bool{"github/commits": true},
-			Attempted: map[string]bool{"github/commits": true, "github/work-items": true},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(units) != 1 {
-		t.Fatalf(
-			"units=%+v, want exactly one: github/work-items' ExecutedProofWaiver must bypass attempted-but-unproven evidence",
-			units,
-		)
+func TestBuildScheduledPlanWorkItemFamilyExecutedProofWaiverCoversEveryProvider(t *testing.T) {
+	// CHAOS-4731 waived github/work-items after the CHAOS-4060 gate vetoed
+	// it for every org (ledger row attempted, never proven). Ruling D7011
+	// (CHAOS-8774) extends the same waiver, through one mechanism, to gitlab,
+	// jira and linear. Each canonical work-items claim must now plan against
+	// evidence that records it attempted and never proven, and the gate must
+	// count it as planned, not as executed_proof_unsatisfied.
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	for _, cell := range []struct {
+		provider, source string
+	}{
+		{provider: "github", source: "owner/repo"},
+		{provider: "gitlab", source: "owner/repo"},
+		{provider: "jira", source: "PROJ"},
+		{provider: "linear", source: "team-a"},
+	} {
+		plannedBefore := globalPlanGateTelemetry.snapshotForTest(cell.provider, canonicalWorkItemsDataset, planGateOutcomePlanned)
+		unsatisfiedBefore := globalPlanGateTelemetry.snapshotForTest(cell.provider, canonicalWorkItemsDataset, planGateOutcomeExecutedProofUnsatisfied)
+		units, err := BuildScheduledPlan(PlannerInput{
+			OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: now,
+			Sources:  []PlanSource{{ID: "source", ExternalID: cell.source, Provider: cell.provider, FullName: cell.source}},
+			Datasets: []PlanDataset{{Key: "work-items"}},
+			ExecutedProof: &providersync.ExecutedProofEvidence{
+				Proven:    map[string]bool{},
+				Attempted: map[string]bool{cell.provider + "/work-items": true},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(units) != 1 || units[0].Dataset != canonicalWorkItemsDataset {
+			t.Fatalf("%s units=%+v, want exactly one work-items unit: the family waiver must bypass attempted-but-unproven evidence", cell.provider, units)
+		}
+		if got := globalPlanGateTelemetry.snapshotForTest(cell.provider, canonicalWorkItemsDataset, planGateOutcomePlanned); got != plannedBefore+1 {
+			t.Fatalf("%s planned count %d -> %d, want +1", cell.provider, plannedBefore, got)
+		}
+		if got := globalPlanGateTelemetry.snapshotForTest(cell.provider, canonicalWorkItemsDataset, planGateOutcomeExecutedProofUnsatisfied); got != unsatisfiedBefore {
+			t.Fatalf("%s executed_proof_unsatisfied count %d -> %d, want unchanged", cell.provider, unsatisfiedBefore, got)
+		}
 	}
 }
 

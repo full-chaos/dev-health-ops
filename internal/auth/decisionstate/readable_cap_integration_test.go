@@ -129,6 +129,19 @@ func TestTheReadListingRecountsAnOverCapListingOnTheIdentityRows(t *testing.T) {
 			t.Fatalf("%d %s, want 200 %s", code, body, capDenyBody)
 		}
 	})
+	t.Run("(e) 257 grants, no identity row in the organization: the same deny, as main", func(t *testing.T) {
+		user, org, _ := e.capReader(t, ctx, 257, 0)
+		if code, body := list(user, org); code != http.StatusOK || body != capDenyBody {
+			t.Fatalf("%d %s, want 200 %s", code, body, capDenyBody)
+		}
+	})
+	t.Run("(e) 257 grants, identity rows on other repositories only: the recount is 0 keys", func(t *testing.T) {
+		user, org, _ := e.capReader(t, ctx, 257, 0)
+		e.armed(t, ctx, `INSERT INTO auth.repository_identities (organization_id, provider, provider_repo_id, current_path) VALUES ($1, 'github', '5000', 'zeta/another-repo')`, org)
+		if code, body := list(user, org); code != http.StatusOK || body != repositoriesBody([]string{}) {
+			t.Fatalf("%d %s, want 200 with no repository", code, body)
+		}
+	})
 	t.Run("(c) 256 grants, 3 with an identity row: every key, as main", func(t *testing.T) {
 		user, org, keys := e.capReader(t, ctx, 256, 3)
 		if code, body := list(user, org); code != http.StatusOK || body != repositoriesBody(keys) {

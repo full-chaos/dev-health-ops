@@ -13,6 +13,16 @@ import (
 // keys with a live repository identity row (the live path of their id) count. 256 or fewer of them is the 200 with
 // exactly those keys; still more is the same deny. A listing of 256 or fewer keys is not recounted.
 
+// HasLiveRepositoryIdentity makes catalogTrap an identity copy: a row is live when its path maps back to its own id.
+func (c *catalogTrap) HasLiveRepositoryIdentity(string) bool {
+	for id, path := range c.paths {
+		if c.ids[path] == id {
+			return true
+		}
+	}
+	return false
+}
+
 // capTrap is a member snapshot of the fixture's principal with grants and a live identity row for every key in keys
 // except those in missing.
 func capTrap(f *readableFixture, role string, grants []authorization.Grant, keys []string, missing ...string) *catalogTrap {
@@ -64,6 +74,11 @@ func TestReadableRepositoriesRecountsAnOverCapListingOnLiveIdentities(t *testing
 	withLiveID.identity("github:900", "acme/renamed")
 	overWithLiveID := capTrap(f, "member", append(slices.Clone(rows256), listedGrant(f.org, "zeta/not-synced-1"), liveID), keys256)
 	overWithLiveID.identity("github:900", "acme/renamed")
+	otherRows := capTrap(f, "member", rows257, nil)
+	otherRows.identity("github:5000", "zeta/another-repo")
+	sharedOnly := capTrap(f, "member", rows257, nil)
+	sharedOnly.ids["acme/repo-000"] = ""
+	sharedOnly.paths["github:1"], sharedOnly.paths["github:2"] = "acme/repo-000", "acme/repo-000"
 
 	for name, tc := range map[string]struct {
 		snap   authorization.GrantSnapshot
@@ -85,6 +100,12 @@ func TestReadableRepositoriesRecountsAnOverCapListingOnLiveIdentities(t *testing
 			capTrap(f, "member", rows257, keys257), ReadableScopeDenied, nil, "repository_allowlist_too_large"},
 		"(b) 256 identity keys and an id-bearing live path": {
 			overWithLiveID, ReadableScopeDenied, nil, "repository_allowlist_too_large"},
+		"(e) 257 grants, the organization has no identity row: the deny stays": {
+			capTrap(f, "member", rows257, nil), ReadableScopeDenied, nil, "repository_allowlist_too_large"},
+		"(e) 257 grants, every identity row shares its path: no live row, the deny stays": {
+			sharedOnly, ReadableScopeDenied, nil, "repository_allowlist_too_large"},
+		"(e) 257 grants, identity rows on other repositories only: the recount is 0 keys": {
+			otherRows, ReadableScopeRepositories, []string{}, ""},
 		"(c) 3 grants, one with no identity row": {
 			capTrap(f, "member", rows3, keys3, keys3[1]), ReadableScopeRepositories, keys3, ""},
 		"(c) 256 grants, none with an identity row": {

@@ -71,3 +71,25 @@ func TestNeedsIdentities(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-13618: the read listing recounts only in an organization with a live identity row: a row whose path maps back
+// to its own id. No row, or rows whose paths are all shared, is none.
+func TestSnapshotHasLiveRepositoryIdentity(t *testing.T) {
+	live := &snapshot{org: "org-a", repoIDs: map[string]string{"acme/api": "github:42"}, repoPaths: map[string]string{"github:42": "acme/api"}}
+	shared := &snapshot{org: "org-a", repoIDs: map[string]string{"acme/dup": ""}, repoPaths: map[string]string{"github:1": "acme/dup", "github:2": "acme/dup"}}
+	for name, tc := range map[string]struct {
+		s    *snapshot
+		org  string
+		want bool
+	}{
+		"a live row":           {live, "org-a", true},
+		"another organization": {live, "org-b", false},
+		"no organization":      {live, "", false},
+		"only shared paths":    {shared, "org-a", false},
+		"no identity read":     {&snapshot{org: "org-a"}, "org-a", false},
+	} {
+		if got := tc.s.HasLiveRepositoryIdentity(tc.org); got != tc.want {
+			t.Errorf("%s: %v, want %v", name, got, tc.want)
+		}
+	}
+}

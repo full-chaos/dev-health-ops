@@ -641,6 +641,21 @@ func (s *snapshot) PathForID(orgID, id string) (string, bool) {
 	return path, true
 }
 
+var _ authorization.RepositoryIdentityCopy = (*snapshot)(nil)
+
+// HasLiveRepositoryIdentity is true when the snapshot read an identity row of org whose path maps back to its own id.
+func (s *snapshot) HasLiveRepositoryIdentity(orgID string) bool {
+	if orgID == "" || orgID != s.org {
+		return false
+	}
+	for id, path := range s.repoPaths {
+		if s.repoIDs[path] == id {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *snapshot) Workload() (authorization.WorkloadLimits, bool) {
 	return authorization.WorkloadLimits{}, false
 }

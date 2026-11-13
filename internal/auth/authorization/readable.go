@@ -24,9 +24,10 @@ func (e *Evaluator) ReadableRepositories(r Request, s Snapshot) Decision {
 }
 
 // ReadableRepositoriesInInventory is ReadableRepositories for go-api's read listing (CHAOS-13618, acp ruling option
-// 3): when the set would pass MaxRepositoryAllowlist, only the keys that are the live path of a repository identity
-// row count (liveRepositoryScope), so grants on repositories no longer in the inventory do not reach the cap. Every
-// other answer, the standing, delegation and obligations, is ReadableRepositories'.
+// 3): when the set would pass MaxRepositoryAllowlist and the organization has at least one live identity row, only the
+// keys that are the live path of a repository identity row count (liveRepositoryScope), so grants on repositories no
+// longer in the inventory do not reach the cap. With no live identity row the deny stays. Every other answer, the
+// standing, delegation and obligations, is ReadableRepositories'.
 func (e *Evaluator) ReadableRepositoriesInInventory(r Request, s Snapshot) Decision {
 	return e.readable(r, s, true)
 }

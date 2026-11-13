@@ -75,20 +75,19 @@ func Middleware(next http.Handler) http.Handler {
 // body carries unloggableWire.
 func refuseUnloggable(w http.ResponseWriter) {
 	retry := 1
-	raw, _ := json.Marshal(struct {
+	body := struct {
 		SchemaVersion string `json:"schema_version"`
 		contracts.ErrorEnvelope
 	}{contracts.ErrorSurface, contracts.ErrorEnvelope{
 		Status: http.StatusServiceUnavailable, ReasonCode: "dependency_unavailable", RequestID: unloggableWire,
 		OccurredAt: contracts.Timestamp{Time: time.Now().UTC()}, RetryAfterSeconds: &retry,
-	}})
+	}}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Retry-After", strconv.Itoa(retry))
 	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = w.Write(raw)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 // With binds id to ctx.

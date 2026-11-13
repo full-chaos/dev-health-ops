@@ -159,10 +159,11 @@ const WorkloadAudience = "auth-service"
 // route (State). It presents the go-api workload token (see NewWorkload): the
 // routes no longer take the session issuer credential.
 type Client struct {
-	endpoint      string
-	stateEndpoint string
-	workload      *workloadtoken.Client
-	http          *http.Client
+	endpoint         string
+	stateEndpoint    string
+	readableEndpoint string
+	workload         *workloadtoken.Client
+	http             *http.Client
 	// proof signs the client address sent in X-Forwarded-For (internal/auth/clientaddr); nil sends none.
 	proof *clientaddr.ProofKey
 }
@@ -196,8 +197,10 @@ func NewWorkload(base *url.URL, workload *workloadtoken.Client, timeout time.Dur
 	}
 	endpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: Path}
 	stateEndpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: PathState}
+	readableEndpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: PathReadableRepositories}
 	client := httpguard.NoRedirects(&http.Client{Transport: httpguard.SharedTransport(), Timeout: timeout})
-	return &Client{endpoint: endpoint.String(), stateEndpoint: stateEndpoint.String(), workload: workload, http: client}, nil
+	return &Client{endpoint: endpoint.String(), stateEndpoint: stateEndpoint.String(), readableEndpoint: readableEndpoint.String(),
+		workload: workload, http: client}, nil
 }
 
 // bearer is the credential of one call: the workload token asked of the workload client (cached there; one exchange

@@ -315,30 +315,30 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 						calls, legacy.status, ownOrg)
 				}
 			})
-			t.Run("a caller with no organization and a slug keeps the legacy answer, unjudged no_org", func(t *testing.T) {
+			t.Run("a caller with no organization and a slug keeps the legacy answer, asked admin.orgs", func(t *testing.T) {
 				noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
 				legacy := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg}, "acme")
 				rec := recordEnforce(t)
 				pdp := newTestPDP(t, allowAll)
 				got := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: servedOrgEnforcer(t, pdp, namespace)}, "acme")
-				if got.status != legacy.status || got.body != legacy.body || !slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/no_org"}) {
-					t.Errorf("no token org, a slug: %d %q unjudged %v, want the legacy %d %q and [%s/no_org]", got.status, got.body, rec.unjudgedSnapshot(),
-						legacy.status, legacy.body, row.pattern)
+				if got.status != legacy.status || got.body != legacy.body || len(rec.unjudgedSnapshot()) != 0 {
+					t.Errorf("no token org, a slug: %d %q unjudged %v, want the legacy %d %q and none", got.status, got.body, rec.unjudgedSnapshot(),
+						legacy.status, legacy.body)
 				}
-				if n := len(pdp.calls()); n != 0 {
-					t.Errorf("no token org: %d PDP calls, want 0", n)
+				if calls := pdp.calls(); len(calls) != 1 || calls[0].Action != ActionAdminOrgs || calls[0].HasOrg {
+					t.Errorf("no token org: PDP saw %+v, want one platform question admin.orgs with no organization", calls)
 				}
 			})
-			t.Run("a token with no organization keeps the legacy answer on any named org", func(t *testing.T) {
+			t.Run("a token with no organization keeps the legacy answer on any named org, asked admin.orgs", func(t *testing.T) {
 				noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
 				legacy := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg}, ownOrg)
 				rec := recordEnforce(t)
 				pdp := newTestPDP(t, allowAll)
 				got := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: servedOrgEnforcer(t, pdp, namespace)}, ownOrg)
-				if got.status != legacy.status || got.body != legacy.body || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 ||
-					!slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/served_org"}) {
-					t.Errorf("no token org, named A: %d %q, %d PDP calls, outcomes %v unjudged %v, want the legacy %d %q, none, none and [%s/served_org]",
-						got.status, got.body, len(pdp.calls()), rec.snapshot(), rec.unjudgedSnapshot(), legacy.status, legacy.body, row.pattern)
+				if got.status != legacy.status || got.body != legacy.body || len(pdp.calls()) != 1 || len(rec.snapshot()) != 1 ||
+					len(rec.unjudgedSnapshot()) != 0 {
+					t.Errorf("no token org, named A: %d %q, %d PDP calls, outcomes %v unjudged %v, want the legacy %d %q, one, one and none",
+						got.status, got.body, len(pdp.calls()), rec.snapshot(), rec.unjudgedSnapshot(), legacy.status, legacy.body)
 				}
 			})
 		})

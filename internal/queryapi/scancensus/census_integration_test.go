@@ -531,6 +531,7 @@ internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*f
 internal/queryapi/analytics/sankeygrouped.go|executeSankeyGrouped|[]any|02426fb74c03|variadic-destinations
 internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|*time.Time,**float64,**float64|30a7cdd2fa01|statement-not-static
 internal/queryapi/analytics/timeseries.go|ExecuteTimeseries|*time.Time,*string,**float64|f2eec06b6811|statement-not-static
+internal/queryapi/cognitiveload/cognitiveload.go|fetchOwnershipCandidates|*string,*string,*uint8,*uint16|e598129679a3|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchFileTimeseries|*time.Time,*string,*string,**uint32,**float64,**uint32,**uint32|69bcb13af3df|spliced-select-list
 internal/queryapi/complexitytimeseries/complexitytimeseries.go|fetchRepoTimeseries|*time.Time,*string,**uint64,**uint64,**float64,**uint64,**uint64|2d500256c88b|spliced-select-list
 internal/queryapi/compoundingrisk/read.go|latestDay|**time.Time|818fa20627a4|not-describable

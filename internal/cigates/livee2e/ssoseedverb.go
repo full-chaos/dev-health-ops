@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/ssoseed"
+	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e/ssoseed"
 )
 
 // ssoDB is what the seed verb needs of a database.

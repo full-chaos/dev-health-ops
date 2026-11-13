@@ -622,7 +622,7 @@ grant_platform_admin() {
 }
 
 # seed_sso_provider STATE EMAIL PROTOCOL [FLAG...]: test setup only, a stand-in for the provider create route go-api does not
-# have (CHAOS-13636, deleted when it lands). The row is written by cigate live-e2e seed-sso-provider (internal/testsupport/ssoseed:
+# have (CHAOS-13636, deleted when it lands). The row is written by cigate live-e2e seed-sso-provider (internal/cigates/livee2e/ssoseed:
 # the production row shape and the production seal of the client secret), not by SQL here. The secret is read from the
 # environment (SSO_CLIENT_SECRET), the encryption key is the stack's own, and neither is printed.
 seed_sso_provider() {

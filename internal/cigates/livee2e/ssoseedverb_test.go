@@ -146,14 +146,14 @@ func TestSeedSSOProviderNeedsTheKeyAndTheOIDCSecret(t *testing.T) {
 	}
 }
 
-// CHAOS-13636 stand-in census: no production command links internal/testsupport/ssoseed; the cigate binary does. Every
+// CHAOS-13636 stand-in census: no production command links internal/cigates/livee2e/ssoseed; the cigate binary does. Every
 // command of ./cmd/... is named in the cell (dho, auth-service, auth-migrate, the workers' commands and the rest).
 func TestSSOSeedOnlyLinkedByCigate(t *testing.T) {
 	root, err := filepath.Abs("../../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	const pkg = "github.com/full-chaos/dev-health-ops/internal/testsupport/ssoseed"
+	const pkg = "github.com/full-chaos/dev-health-ops/internal/cigates/livee2e/ssoseed"
 	env := append(os.Environ(), "GOFLAGS=-mod=readonly", "GOPROXY=off", "GOSUMDB=off")
 	list := exec.Command("go", "list", "-f", "{{.ImportPath}}", "./cmd/...")
 	list.Dir, list.Env = root, env

@@ -63,7 +63,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "90fa8ecb637e04601a3a0b7c98cd331077a11f89398a2f95581e47e2e087eb04", Ruling: protectedRoutesPinRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "c0d8eb48718e8f5591df0c10853e8710111b0a67e588c768afa66a6520457ec4", Ruling: protectedRoutesPinRuling})
 	publicPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-public.go-pin.json", SHA256: protectedPublicPinSHA256, Ruling: publicRowRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
@@ -502,8 +502,15 @@ const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8
 // internal/api/producttelemetry own that contract.
 const productTelemetryRuling = "CHAOS-10945 intake value rules, stricter than Python (D6129)"
 
-// protectedRoutesPinRuling is the one line the pin file states: both rulings.
-const protectedRoutesPinRuling = teamsRuling + "; " + productTelemetryRuling
+// telemetryOptInRuling retired the Python reference of two telemetry opt-in requests: a plain member may no longer write
+// the org-wide setting (CHAOS-13591).
+const telemetryOptInRuling = "CHAOS-13591 (acp ruling: telemetry opt-in/opt-out need org admin or owner; venue golden gets 2 expected DIFFs)"
+
+// protectedRoutesPinRuling is the one line the pin file states: all rulings.
+const protectedRoutesPinRuling = teamsRuling + "; " + productTelemetryRuling + "; " + telemetryOptInRuling
+
+// retiredTelemetryOptInRequests are the requests whose answer moved from 200 to 403 under telemetryOptInRuling.
+var retiredTelemetryOptInRequests = map[string]bool{"tel: opt-in member": true, "tel: opt-in again": true}
 
 // retiredProductTelemetryRequests are the requests the intake's value rules
 // answer differently from the frozen Python plane.
@@ -524,7 +531,7 @@ var retiredProductTelemetryRequests = map[string]bool{
 // retired: the teams and identities admin groups and the product-telemetry
 // intake requests above.
 func retiredProtectedRequest(request venueoracle.Request) bool {
-	return retiredTeamsRequest(request) || retiredProductTelemetryRequests[request.Name]
+	return retiredTeamsRequest(request) || retiredProductTelemetryRequests[request.Name] || retiredTelemetryOptInRequests[request.Name]
 }
 
 // retiredTeamsRequest reports a request of the teams and identities admin

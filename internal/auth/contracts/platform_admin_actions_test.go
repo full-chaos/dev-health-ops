@@ -26,13 +26,17 @@ var platformAdminLegacyQueryAPIActions = map[string]string{
 	"git.read":        "queryapi/server TestPlatformAdminNoMembershipQueryAPIAnswersEqualLegacy GET /api/v1/drilldown/prs",
 	"work_items.read": "queryapi/server TestPlatformAdminNoMembershipQueryAPIAnswersEqualLegacy GET /api/v1/drilldown/issues",
 	"reports.write":   "acp parity TestParityPDPAlone: OperationOrgGuard and requireMutationOrg read no membership row",
+	"org.read":        "queryapi/server TestBuildInfoNeverAsksThePDP GET /buildinfo: the route verifies the internal envelope, admits a platform admin only and never asks the decision point, so the flag changes no answer",
 }
 
 // platformAdminLegacyGoAPIActions maps each go-api action whose legacy handlers admit an admin.billing holder (or a
 // users.is_superuser user) with no membership row, on every row that asks it, to its executed legacy cell.
 var platformAdminLegacyGoAPIActions = map[string]string{
-	"billing.read": "apiservice TestPlatformAdminNoMembershipBillingAndLicenseReadsEqualLegacyWired, the 5 billing.read rows",
-	"license.read": "apiservice TestPlatformAdminNoMembershipBillingAndLicenseReadsEqualLegacyWired, the 2 license.read rows",
+	"billing.read":          "apiservice TestPlatformAdminNoMembershipBillingAndLicenseReadsEqualLegacyWired, the 5 billing.read rows",
+	"license.read":          "apiservice TestPlatformAdminNoMembershipBillingAndLicenseReadsEqualLegacyWired, the 2 license.read rows",
+	"org.read":              "apiservice TestHandlerDecidedRowsAnswerEveryCallerClassAsLegacy GET /api/v1/orgs/me, platform admin + no membership",
+	"settings.read":         "apiservice TestHandlerDecidedRowsAnswerEveryCallerClassAsLegacy GET /api/v1/telemetry/status, platform admin + no membership",
+	"acr.credential.revoke": "apiservice TestHandlerDecidedRowsAnswerEveryCallerClassAsLegacy POST /api/v1/acr/credentials/{credential_id}/revoke, platform admin + no membership",
 }
 
 // platformAdminLegacyWebActions maps each web action whose legacy route admits a platform admin with no membership

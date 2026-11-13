@@ -1164,6 +1164,7 @@ jobs:
         if: matrix.platform == 'linux/arm64'
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
+          cache-image: false
           # CHAOS-9064: the mirrored binfmt image (ci/builder_images.tsv)
           image: ghcr.io/full-chaos/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
@@ -1214,6 +1215,7 @@ jobs:
         if: matrix.platform == 'linux/arm64'
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
+          cache-image: false
           # CHAOS-9064: the mirrored binfmt image (ci/builder_images.tsv)
           image: ghcr.io/full-chaos/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
@@ -1262,6 +1264,27 @@ jobs:
         run: |
           docker load --input "${RUNNER_TEMP}/go-images/images.tar"
           bash ci/check_go_containers.sh verify-images
+
+      # The scans below run with cache: false and skip-setup-trivy, so neither trivy-action nor its setup-trivy writes an
+      # Actions cache on a pull request: trivy is installed once here, and the Trivy DB is restored on every event and saved
+      # only by a push to main or a merge_group run (the key family is the one trivy-action used).
+      - name: Install Trivy once for the scans below
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.70.0
+          cache: false
+
+      - name: Pick the Trivy DB cache key
+        id: trivy-date
+        run: echo "date=$(date +'%Y-%m-%d')" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore the Trivy DB (every event; saved only by main pushes and the merge queue)
+        id: trivy-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: cache-trivy-${{ steps.trivy-date.outputs.date }}
+          restore-keys: cache-trivy-
 
       # CHAOS-5012: the syft installer that anchore/sbom-action runs
       # internally (curl + checksum verify against a GitHub release) flakes
@@ -1312,6 +1335,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-operator:ci
           scan-type: image
           scanners: vuln
@@ -1338,6 +1363,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-contractcheck:ci
           scan-type: image
           scanners: vuln
@@ -1364,6 +1391,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-migrate:ci
           scan-type: image
           scanners: vuln
@@ -1390,6 +1419,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-dho:ci
           scan-type: image
           scanners: vuln
@@ -1416,6 +1447,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-auth-service:ci
           scan-type: image
           scanners: vuln
@@ -1442,6 +1475,8 @@ jobs:
         if: ${{ !cancelled() && steps.load.outcome == 'success' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          cache: false
+          skip-setup-trivy: true
           image-ref: dev-health-go-auth-migrate:ci
           scan-type: image
           scanners: vuln
@@ -1450,6 +1485,13 @@ jobs:
           ignore-unfixed: false
           exit-code: '1'
           version: v0.70.0
+
+      - name: Save the Trivy DB (main pushes and the merge queue only)
+        if: ${{ !cancelled() && (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.trivy-cache.outcome == 'success' && steps.trivy-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: cache-trivy-${{ steps.trivy-date.outputs.date }}
 
   # Runner contract v1.6: exactly one of this job and its self-hosted twin
   # below runs per workflow run -- no aggregator wrapper needed here (a
@@ -1683,6 +1725,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
+          package-manager-cache: false
           node-version: 22
       - name: Locate the pnpm store
         id: pnpm-store
@@ -1841,6 +1884,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
+          package-manager-cache: false
           node-version: 22
       - name: Locate the pnpm store
         id: pnpm-store

@@ -19,9 +19,11 @@ import (
 // action, a setup action's cache, a run step with --cache-to) must be switched off on a pull_request or pull_request_target
 // event, by the job's if, the step's if, or the value of the switch itself. The expressions are evaluated with the event name
 // known and everything else unknown, so a switch passes only when it is off on that event whatever the rest holds.
-// A setup action (setup-go, setup-node, setup-uv, ...) saves in its post step on a key miss and has no restore-only switch, so
-// on a job a pull request can run its cache must be LITERALLY off (no expression); such a job reads the cache through an
-// actions/cache/restore step and saves it with an actions/cache/save step only a push to main or the merge queue runs.
+// An action that caches by itself (setup-go, setup-node, setup-uv, trivy-action, setup-qemu, setup-buildx, ...) saves on a key
+// miss and has no restore-only switch, so on a job a pull request can run its cache input must be LITERALLY off (no
+// expression); such a job reads the cache through an actions/cache/restore step and saves it with an actions/cache/save step
+// only a push to main or the merge queue runs. The guard fails closed: every action of a pull_request workflow must be in
+// prCacheActions at its pinned ref, a local action or a reusable workflow fails, and so does a bake file it cannot read.
 
 var prCacheEvents = []string{"pull_request", "pull_request_target"}
 
@@ -43,36 +45,48 @@ func prCacheWriteViolations(t *testing.T, root string) []string {
 			jobs := jobsOf(doc)
 			for _, jn := range sortedKeys(jobs) {
 				job := asMap(jobs[jn])
-				if !mayRunOn(job["if"], event) {
-					continue
-				}
-				if uses := asString(job["uses"]); uses != "" {
+				jobRuns := mayRunOn(job["if"], event)
+				if uses := asString(job["uses"]); uses != "" && jobRuns {
 					out = append(out, fmt.Sprintf("%s: job %s calls the reusable workflow %s on %s, which this guard does not follow", name, jn, uses, event))
 				}
 				for i, s := range stepsOf(job) {
 					label := fmt.Sprintf("#%d %s", i+1, firstNonEmpty(asString(s["name"]), asString(s["id"]), asString(s["uses"])))
-					if strings.HasPrefix(asString(s["uses"]), "./") {
-						out = append(out, fmt.Sprintf("%s: job %s step %s runs the local action %s on %s, which this guard does not follow", name, jn, label, asString(s["uses"]), event))
+					at := fmt.Sprintf("%s: job %s step %s", name, jn, label)
+					uses := asString(s["uses"])
+					// Fail closed on every step of a pull_request workflow, reachable or not: an action not read at its pinned ref
+					// may write an Actions cache through an input default or a post step.
+					if uses != "" {
+						if strings.HasPrefix(uses, "./") {
+							out = append(out, fmt.Sprintf("%s runs the local action %s, which this guard does not follow", at, uses))
+							continue
+						}
+						if _, known := prCacheActions[uses]; !known {
+							out = append(out, fmt.Sprintf("%s uses %s, an action this guard has not read at that ref: read its cache inputs, defaults and post step there and add it to prCacheActions", at, uses))
+							continue
+						}
+					}
+					why, switches, broken := cacheWrite(root, doc, job, s)
+					if broken != "" {
+						out = append(out, at+": "+broken)
 						continue
 					}
-					why, switches := cacheWrite(root, doc, job, s)
 					if why == "" {
 						continue
 					}
 					checked++
-					if !mayRunOn(s["if"], event) {
+					if !jobRuns || !mayRunOn(s["if"], event) {
 						continue
 					}
 					on := len(switches) == 0
 					for _, sw := range switches {
 						if lit, ok := sw.(literalSwitch); ok {
-							on = on || !literalOff(lit.v)
+							on = on || !lit.off()
 						} else if switchMayBeOn(sw, event) {
 							on = true
 						}
 					}
 					if on {
-						out = append(out, fmt.Sprintf("%s: job %s step %s can write an Actions cache on a %s event: %s", name, jn, label, event, why))
+						out = append(out, fmt.Sprintf("%s can write an Actions cache on a %s event: %s", at, event, why))
 					}
 				}
 			}
@@ -94,66 +108,150 @@ func firstNonEmpty(s ...string) string {
 	return ""
 }
 
-// literalSwitch is a setup action's cache input: only a literal off value switches it off.
-type literalSwitch struct{ v any }
+type actionKind int
 
-func literalOff(v any) bool {
-	switch c := v.(type) {
+const (
+	nonWriter     actionKind = iota // no Actions cache read or write at this ref (artifacts and the runner's local tool cache are not one)
+	alwaysWriter                    // writes whenever it runs: only an if keeps it off a pull request
+	inputWriter                     // writes unless each listed input is literally off
+	cacheToWriter                   // a buildx build: the cache-to value is the switch
+	bakeWriter                      // a bake: set lines and the bake files' cache-to are the switch
+)
+
+// cacheInput is an input that turns an action's own Actions cache on. A defaultOn input must be set literally off; one
+// that defaults off may be absent.
+type cacheInput struct {
+	name      string
+	defaultOn bool
+	off       []string
+}
+
+type actionPolicy struct {
+	kind   actionKind
+	inputs []cacheInput
+}
+
+// prCacheActions is every action a pull_request workflow may use, each read at its pinned ref (action.yml inputs, defaults
+// and post step; the source where the caching is conditional). Any other action@ref fails the guard.
+var prCacheActions = map[string]actionPolicy{
+	"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1":                {kind: nonWriter},
+	"actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333":       {kind: nonWriter},
+	"actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9":         {kind: nonWriter},
+	"actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8": {kind: nonWriter},
+	"actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9":           {kind: nonWriter},
+	"actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9":                   {kind: alwaysWriter},
+	"actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9":              {kind: alwaysWriter},
+	"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e":                {kind: inputWriter, inputs: []cacheInput{{name: "cache", defaultOn: true}}},
+	"actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1": {kind: inputWriter, inputs: []cacheInput{
+		{name: "cache"}, {name: "package-manager-cache", defaultOn: true}}},
+	"actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0":              {kind: inputWriter, inputs: []cacheInput{{name: "cache"}}},
+	"astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2":                {kind: inputWriter, inputs: []cacheInput{{name: "enable-cache", defaultOn: true}}},
+	"pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115":                 {kind: inputWriter, inputs: []cacheInput{{name: "cache"}}},
+	"aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25":         {kind: inputWriter, inputs: []cacheInput{{name: "cache", defaultOn: true}}},
+	"aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514":          {kind: inputWriter, inputs: []cacheInput{{name: "cache"}}},
+	"docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1":          {kind: inputWriter, inputs: []cacheInput{{name: "cache-image", defaultOn: true}}},
+	"docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003":        {kind: inputWriter, inputs: []cacheInput{{name: "cache-binary", defaultOn: true}}},
+	"docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc":          {kind: cacheToWriter},
+	"docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e":                {kind: bakeWriter},
+	"docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550":               {kind: nonWriter},
+	"docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302":            {kind: nonWriter},
+	"dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d":                {kind: nonWriter},
+	"softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3":       {kind: nonWriter},
+	"azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310":                  {kind: nonWriter},
+	"anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c":               {kind: nonWriter},
+	"anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c": {kind: nonWriter},
+	// codeql-action 4.39.3: TRAP caches are uploaded only when the default branch is analysed (src/trap-caching.ts
+	// uploadTrapCaches), the overlay-base database only in overlay-base mode, which only the default branch gets
+	// (src/config-utils.ts), and dependency caches only when dependency-caching is on (default none, src/caching-utils.ts).
+	"github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066": {kind: inputWriter, inputs: []cacheInput{
+		{name: "dependency-caching", off: []string{"none", "off", "restore"}}}},
+	"github/codeql-action/autobuild@33d7b85da1a04171e211befe2c739303b9a4c066":    {kind: nonWriter},
+	"github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066":      {kind: nonWriter},
+	"github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066": {kind: nonWriter},
+}
+
+// literalSwitch is a cache input of an action: only a literal off value (no expression) switches it off.
+type literalSwitch struct {
+	v   any
+	set bool
+	in  cacheInput
+}
+
+func (l literalSwitch) off() bool {
+	if !l.set {
+		return !l.in.defaultOn
+	}
+	switch c := l.v.(type) {
 	case nil:
-		return true
+		return !l.in.defaultOn
 	case bool:
 		return !c
 	}
-	s := strings.TrimSpace(str(v))
-	return s == "" || strings.EqualFold(s, "false")
+	s := strings.TrimSpace(str(l.v))
+	if s == "" || strings.EqualFold(s, "false") {
+		return true
+	}
+	for _, o := range l.in.off {
+		if strings.EqualFold(s, o) {
+			return true
+		}
+	}
+	return false
 }
 
-var bakeCacheToRe = regexp.MustCompile(`(?m)^\s*cache-to\s*=\s*(.+?)\s*$`)
+var bakeCacheToRe = regexp.MustCompile(`(?m)^\s*cache[-_]to\s*[=:]\s*(.+?)\s*$`)
 var bakeGatedToRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*) == "1" \? \[.*\] : \[\]$`)
 
-// cacheWrite says whether a step can write an Actions cache, and which input values switch the write (all must be off to
-// switch it off). No switch means only an if can keep it from writing.
-func cacheWrite(root string, doc, job, s yamlMap) (string, []any) {
+// cacheWrite says whether a step can write an Actions cache, and which values switch the write (all must be off to switch
+// it off; no switch means only an if keeps it from writing). broken names a step the guard cannot judge.
+func cacheWrite(root string, doc, job, s yamlMap) (why string, switches []any, broken string) {
 	uses := asString(s["uses"])
-	action, _, _ := strings.Cut(strings.ToLower(uses), "@")
 	with := asMap(s["with"])
-	input := func(k string) (any, bool) {
-		v, ok := with[k]
-		return v, ok
+	if uses == "" {
+		if strings.Contains(shellCode(asString(s["run"])), "--cache-to") {
+			return "run text holds --cache-to", nil, ""
+		}
+		return "", nil, ""
 	}
-	switch {
-	case action == "actions/cache" || action == "actions/cache/save":
-		return action, nil
-	case action == "actions/setup-go":
-		if v, ok := input("cache"); ok {
-			return "setup-go cache: " + str(v), []any{literalSwitch{v}}
-		}
-		return "setup-go (cache defaults on)", []any{literalSwitch{true}}
-	case action == "astral-sh/setup-uv":
-		if v, ok := input("enable-cache"); ok {
-			return "setup-uv enable-cache: " + str(v), []any{literalSwitch{v}}
-		}
-		return "setup-uv (enable-cache defaults to auto)", []any{literalSwitch{true}}
-	case strings.HasPrefix(action, "actions/setup-") || action == "ruby/setup-ruby":
-		for _, k := range []string{"cache", "bundler-cache"} {
-			if v, ok := input(k); ok {
-				return action + " " + k + ": " + str(v), []any{literalSwitch{v}}
+	action, _, _ := strings.Cut(uses, "@")
+	p := prCacheActions[uses]
+	switch p.kind {
+	case alwaysWriter:
+		return action, nil, ""
+	case inputWriter:
+		var parts []string
+		for _, in := range p.inputs {
+			v, set := with[in.name]
+			sw := literalSwitch{v: v, set: set, in: in}
+			switches = append(switches, sw)
+			if set {
+				parts = append(parts, in.name+": "+str(v))
+			} else if in.defaultOn {
+				parts = append(parts, in.name+" defaults on")
 			}
 		}
-	}
-	if v, ok := input("cache-to"); ok {
-		return "cache-to: " + str(v), []any{v}
-	}
-	for _, line := range strings.Split(str(with["set"]), "\n") {
-		if _, val, ok := strings.Cut(strings.TrimSpace(line), ".cache-to="); ok {
-			return "bake set " + strings.TrimSpace(line), []any{val}
+		if len(parts) == 0 {
+			parts = append(parts, "no cache input set")
 		}
-	}
-	if action == "docker/bake-action" {
-		for _, f := range strings.Fields(str(with["files"])) {
+		return action + " (" + strings.Join(parts, ", ") + ")", switches, ""
+	case cacheToWriter:
+		if v, ok := with["cache-to"]; ok {
+			return "cache-to: " + str(v), []any{v}, ""
+		}
+	case bakeWriter:
+		for _, line := range strings.Split(str(with["set"]), "\n") {
+			if _, val, ok := strings.Cut(strings.TrimSpace(line), ".cache-to="); ok {
+				return "bake set " + strings.TrimSpace(line), []any{val}, ""
+			}
+		}
+		files := strings.Fields(str(with["files"]))
+		if len(files) == 0 {
+			return "", nil, "a bake step without files: the guard cannot read its bake definition"
+		}
+		for _, f := range files {
 			raw, err := os.ReadFile(filepath.Join(root, f))
 			if err != nil {
-				continue
+				return "", nil, fmt.Sprintf("the bake file %s cannot be read (%v)", f, err)
 			}
 			for _, m := range bakeCacheToRe.FindAllStringSubmatch(string(raw), -1) {
 				rhs := m[1]
@@ -165,16 +263,13 @@ func cacheWrite(root string, doc, job, s yamlMap) (string, []any) {
 					if !set {
 						continue
 					}
-					return fmt.Sprintf("bake file %s writes cache-to when %s is \"1\"", f, g[1]), []any{v}
+					return fmt.Sprintf("bake file %s writes cache-to when %s is \"1\"", f, g[1]), []any{v}, ""
 				}
-				return fmt.Sprintf("bake file %s: cache-to = %s", f, rhs), nil
+				return fmt.Sprintf("bake file %s: cache-to = %s", f, rhs), nil, ""
 			}
 		}
 	}
-	if strings.Contains(shellCode(asString(s["run"])), "--cache-to") {
-		return "run text holds --cache-to", nil
-	}
-	return "", nil
+	return "", nil, ""
 }
 
 func envValue(key string, scopes ...yamlMap) (any, bool) {
@@ -658,7 +753,7 @@ func TestPRCacheWriteGuardPlantedDefectsAreCaught(t *testing.T) {
 	for _, n := range workflowNames(t, root) {
 		files = append(files, ".github/workflows/"+n)
 	}
-	files = append(files, "ci/auth_corpus.bake.hcl")
+	files = append(files, "ci/auth_corpus.bake.hcl", "compose.yml", "ci/auth_corpus_external.override.yml")
 	const (
 		dock = ".github/workflows/docker-images.yml"
 		gq   = ".github/workflows/go-quality.yml"
@@ -675,14 +770,22 @@ func TestPRCacheWriteGuardPlantedDefectsAreCaught(t *testing.T) {
 		{"an actions/cache/save without the event condition", []mutation{{gq, "          && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'", "          && steps.go-cache.outputs.cache-hit != 'true'"}}, []string{"go-quality.yml: job go-quality-leg", "actions/cache/save"}},
 		{"a combined actions/cache", []mutation{{gq, "        id: go-cache\n        if: (steps.relevance.outputs.relevant == 'true' || steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'\n        uses: actions/cache/restore@", "        id: go-cache\n        if: (steps.relevance.outputs.relevant == 'true' || steps.relevance.outputs.warm == 'true') && runner.environment == 'github-hosted'\n        uses: actions/cache@"}}, []string{"go-quality.yml: job go-quality-leg", ": actions/cache"}},
 		{"setup-go back on its default cache", []mutation{{".github/workflows/docs-drift.yml", "          cache: false\n", ""}}, []string{"docs-drift.yml: job docs-drift", "cache defaults on"}},
-		{"setup-go cache as an expression that is off on a pull request", []mutation{{".github/workflows/test.yml", "          cache: false\n", "          cache: ${{ github.event_name != 'pull_request' }}\n"}}, []string{"test.yml: job chart-started", "setup-go cache: ${{"}},
-		{"setup-node writes the pnpm cache", []mutation{{goY, "          node-version: 22\n      - name: Locate the pnpm store", "          node-version: 22\n          cache: pnpm\n      - name: Locate the pnpm store"}}, []string{"go.yml: job go-auth-web-proxy-proof", "actions/setup-node cache: pnpm"}},
-		{"setup-node pnpm cache as an expression", []mutation{{goY, "          node-version: 22\n      - name: Locate the pnpm store", "          node-version: 22\n          cache: ${{ github.event_name != 'pull_request' && 'pnpm' || '' }}\n      - name: Locate the pnpm store"}}, []string{"go.yml: job go-auth-web-proxy-proof", "actions/setup-node cache: ${{"}},
+		{"setup-go cache as an expression that is off on a pull request", []mutation{{".github/workflows/test.yml", "          cache: false\n", "          cache: ${{ github.event_name != 'pull_request' }}\n"}}, []string{"test.yml: job chart-started", "actions/setup-go (cache: ${{"}},
+		{"setup-node writes the pnpm cache", []mutation{{goY, "          package-manager-cache: false\n          node-version: 22\n      - name: Locate the pnpm store", "          package-manager-cache: false\n          node-version: 22\n          cache: pnpm\n      - name: Locate the pnpm store"}}, []string{"go.yml: job go-auth-web-proxy-proof", "actions/setup-node (cache: pnpm"}},
+		{"setup-node pnpm cache as an expression", []mutation{{goY, "          package-manager-cache: false\n          node-version: 22\n      - name: Locate the pnpm store", "          package-manager-cache: false\n          node-version: 22\n          cache: ${{ github.event_name != 'pull_request' && 'pnpm' || '' }}\n      - name: Locate the pnpm store"}}, []string{"go.yml: job go-auth-web-proxy-proof", "actions/setup-node (cache: ${{"}},
 		{"the Go cache save loses its event condition", []mutation{{".github/workflows/docs-inventory-review.yml", "        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.go-cache.outcome", "        if: steps.go-cache.outcome"}}, []string{"docs-inventory-review.yml: job inventory-archive", "actions/cache/save"}},
 		{"the pnpm save keeps only the merge-queue half of its condition", []mutation{{goY, "        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.pnpm-cache.outcome", "        if: (github.event_name == 'merge_group' || github.ref == 'refs/heads/main') && steps.pnpm-cache.outcome"}}, []string{"go.yml: job go-auth-web-proxy-proof", "actions/cache/save"}},
 		{"the bake write switch on a pull request job", []mutation{{gas, "          AUTH_CORPUS_STUB_DIR: ${{ runner.temp }}/corpus-stub", "          AUTH_CORPUS_CACHE_WRITE: \"1\"\n          AUTH_CORPUS_STUB_DIR: ${{ runner.temp }}/corpus-stub"}}, []string{"go-auth-service.yml: job auth-corpus-queue", "AUTH_CORPUS_CACHE_WRITE"}},
 		{"the seeding job loses its main-push if", []mutation{{gas, "  auth-corpus-image-cache:\n    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && ", "  auth-corpus-image-cache:\n    if: "}}, []string{"go-auth-service.yml: job auth-corpus-image-cache"}},
 		{"a run step exports a buildx cache", []mutation{{goY, "      - name: Install web dependencies\n        working-directory: dev-health-web\n", "      - name: Planted\n        run: docker buildx build --cache-to type=gha,mode=max .\n      - name: Install web dependencies\n        working-directory: dev-health-web\n"}}, []string{"go.yml: job go-auth-web-proxy-proof", "--cache-to"}},
+		{"an action this guard has not read", []mutation{{".github/workflows/docs-drift.yml", "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "uses: actions/checkout@0000000000000000000000000000000000000000"}}, []string{"docs-drift.yml: job docs-drift", "actions/checkout@0000000000000000000000000000000000000000, an action this guard has not read"}},
+		{"a bake file the guard cannot read", []mutation{{gas, "            ci/auth_corpus_external.override.yml\n            ci/auth_corpus.bake.hcl\n          targets: authcorpus\n          load: true\n      - name: Run the auth-flow corpus", "            ci/auth_corpus_external.override.yml\n            ci/missing.bake.hcl\n          targets: authcorpus\n          load: true\n      - name: Run the auth-flow corpus"}}, []string{"go-auth-service.yml: job auth-corpus-queue", "the bake file ci/missing.bake.hcl cannot be read"}},
+		{"a bake step without files", []mutation{{gas, "          files: |\n            compose.yml\n            ci/auth_corpus_external.override.yml\n            ci/auth_corpus.bake.hcl\n          targets: authcorpus\n          load: true\n      - name: Run the auth-flow corpus", "          targets: authcorpus\n          load: true\n      - name: Run the auth-flow corpus"}}, []string{"go-auth-service.yml: job auth-corpus-queue", "a bake step without files"}},
+		{"trivy-action back on its own cache", []mutation{{goY, "          cache: false\n          skip-setup-trivy: true\n", "          skip-setup-trivy: true\n"}}, []string{"go.yml: job go-container-security", "aquasecurity/trivy-action (cache defaults on)"}},
+		{"setup-qemu back on its image cache", []mutation{{dock, "          cache-image: false\n", ""}}, []string{"docker-images.yml: job go-build", "docker/setup-qemu-action (cache-image defaults on)"}},
+		{"setup-buildx back on its binary cache", []mutation{{".github/workflows/arc-runner-image.yml", "          cache-binary: false\n", ""}}, []string{"arc-runner-image.yml: job build", "docker/setup-buildx-action (cache-binary defaults on)"}},
+		{"setup-node back on its package-manager cache", []mutation{{".github/workflows/auth-contracts-ajv.yml", "          package-manager-cache: false\n", ""}}, []string{"auth-contracts-ajv.yml", "package-manager-cache defaults on"}},
+		{"codeql dependency caching on", []mutation{{".github/workflows/codeql-analysis.yml", "          languages: ${{ matrix.language }}\n", "          languages: ${{ matrix.language }}\n          dependency-caching: true\n"}}, []string{"codeql-analysis.yml", "github/codeql-action/init (dependency-caching: true)"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -696,11 +799,13 @@ func TestPRCacheWriteGuardFailsClosed(t *testing.T) {
 	cases := []struct {
 		name, yml, want string
 	}{
-		{"a local action", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@x\n        if: github.event_name == 'push'\n      - uses: ./.github/actions/build\n", "local action"},
-		{"a reusable workflow", "on: pull_request\njobs:\n  a:\n    uses: ./.github/workflows/other.yml\n  b:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@x\n        if: github.event_name == 'push'\n", "reusable workflow"},
-		{"an expression it cannot read", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@x\n        if: github.event_name == 'push' ]]\n", "actions/cache/save"},
-		{"pull_request_target", "on: pull_request_target\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/setup-go@x\n", "pull_request_target"},
+		{"a local action", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9\n        if: github.event_name == 'push'\n      - uses: ./.github/actions/build\n", "local action"},
+		{"a reusable workflow", "on: pull_request\njobs:\n  a:\n    uses: ./.github/workflows/other.yml\n  b:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9\n        if: github.event_name == 'push'\n", "reusable workflow"},
+		{"an expression it cannot read", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9\n        if: github.event_name == 'push' ]]\n", "actions/cache/save"},
+		{"pull_request_target", "on: pull_request_target\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e\n", "pull_request_target"},
 		{"nothing to check", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - run: true\n", "vacuously"},
+		{"an unknown action on a step a pull request never runs", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    if: github.event_name == 'push'\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9\n      - uses: someone/cache-everything@v1\n", "someone/cache-everything@v1, an action this guard has not read"},
+		{"a docker step", "on: pull_request\njobs:\n  a:\n    runs-on: x\n    steps:\n      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9\n        if: github.event_name == 'push'\n      - uses: docker://alpine:3\n", "docker://alpine:3, an action this guard has not read"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

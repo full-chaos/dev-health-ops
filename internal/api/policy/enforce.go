@@ -69,9 +69,11 @@ var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceO
 // any call, except on the stop route. A delegated session's own bearer is decided
 // like any other. A token with no organization on an organization row is asked the one platform action the legacy
 // guard admits it by, admin.orgs; on an AdminOrg row it is refused as the legacy guard refuses it, with no question
-// (decideOrgless). The one exception is a caller the decision point cannot judge (a legacy HS256 token, a served
-// organization that is no UUID, a delegated session's bearer with no organization, an impersonation read): that request
-// keeps the legacy answer, which is the same answer the route gives with its cell off.
+// (decideOrgless). A request whose served organization is no UUID is judged on the token organization like any other;
+// its handler still refuses the value. Two callers keep the legacy answer, the named residual (CHAOS-10872 D6989): an
+// impersonation read and a delegated session's bearer with no organization; the answer is the one the route gives with its
+// cell off. A request with no user access token cannot reach an enforced row (authentication refuses it first); if one
+// does, it is refused, logged as an error and counted error_deny.
 // Operator runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md
 type Enforcer struct {
 	decider pep.Decider
@@ -250,13 +252,13 @@ func (e *Enforcer) decideOnce(ctx context.Context, o enforceObservation) enforce
 	if row.ResourceType == policycatalog.ScopeOrganization && o.orgID == "" && o.bearer != "" && o.userAccessToken {
 		return e.decideOrgless(ctx, o, row)
 	}
-	org := strings.ToLower(o.orgID)
-	if reason := unjudgedReason(o, org); reason != "" {
-		countEnforceUnjudged(ctx, o.pattern, reason)
-		e.logger.DebugContext(ctx, "api enforcement: caller not judged, the legacy answer stands",
-			slog.String("route", o.pattern), slog.String("namespace", row.Namespace), slog.String("reason", reason))
-		return enforceLegacy
+	if o.bearer == "" || !o.userAccessToken {
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		e.logger.ErrorContext(ctx, "api enforcement: a request with no user access token reached an enforced row, refused",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+		return enforceDeny
 	}
+	org := strings.ToLower(o.orgID)
 	if o.adminOr && row.ResourceType == policycatalog.ScopePlatform {
 		return e.decideAdminOr(ctx, o, row, org)
 	}
@@ -411,19 +413,6 @@ func (e *Enforcer) askBatch(ctx context.Context, requests []pep.Request) (decisi
 	ctx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
 	return e.decider.DecideBatch(ctx, requests), false
-}
-
-// unjudgedReason says why the decision point cannot judge a request, or "" when it can. A token that is not a user
-// access token comes first: nothing else can be said of it. A served organization that parses as no UUID is no_org:
-// its handler refuses it.
-func unjudgedReason(o enforceObservation, org string) string {
-	switch {
-	case o.bearer == "" || !o.userAccessToken:
-		return enforceUnjudgedHS256
-	case o.served.against(org) == servedOrgUnparsed:
-		return enforceUnjudgedNoOrg
-	}
-	return ""
 }
 
 // obligationsCarriedOut reports whether go-api carries out every obligation of an allow for request. A tenant scope

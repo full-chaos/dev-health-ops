@@ -439,8 +439,8 @@ func TestEveryAPIListenerRowNamesTheScopeMiddlewaresAsReachableValidators(t *tes
 			anchor, _ := entry["anchor"].(map[string]any)
 			note, _ := anchor["note"].(string)
 			notes[note] = true
-			if entry["reachable_but_not_owner"] != true || entry["is_intended_validator"] != false {
-				t.Errorf("%s: reachable validator %q must be marked reachable_but_not_owner and not intended: %v", key, note, entry)
+			if entry["earlier_auth_gate"] != true || entry["foreign_class_validator"] != false || entry["is_intended_validator"] != false {
+				t.Errorf("%s: reachable validator %q must be an earlier auth gate, not a foreign-class validator, and not intended: %v", key, note, entry)
 			}
 		}
 		for _, want := range scopeValidators {

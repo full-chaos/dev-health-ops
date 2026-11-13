@@ -345,7 +345,7 @@ func composeAuthEddsaWiring(g *guard) {
 		_, hasWorkload := env(n)["AUTH_WORKLOAD_READER_ROLES"]
 		g.expect(!hasWorkload, "%s sets AUTH_WORKLOAD_READER_ROLES: only auth-migrate and auth-grants grant the registry read", n)
 	}
-	for _, c := range []struct{ svc, key string }{{"auth-service", "AUTH_SESSION_SUCCESSOR_KEY"}, {"go-api", "AUTH_SESSION_ISSUE_TOKEN"}, {"web", "SSL_CERT_FILE"}, {"query-api", "SSL_CERT_FILE"}} {
+	for _, c := range []struct{ svc, key string }{{"auth-service", "AUTH_SESSION_SUCCESSOR_KEY"}, {"web", "SSL_CERT_FILE"}, {"query-api", "SSL_CERT_FILE"}} {
 		_, has := env(c.svc)[c.key]
 		g.expect(!has, "%s carries %s: a secret is a _FILE and the CA is a dir or NODE_EXTRA_CA_CERTS", c.svc, c.key)
 	}

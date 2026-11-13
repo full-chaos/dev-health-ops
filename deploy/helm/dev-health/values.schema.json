@@ -100,14 +100,13 @@
         "extraVolumes": { "type": "array" },
         "extraVolumeMounts": { "type": "array" },
         "sessionIssue": {
-          "description": "CHAOS-11217: the Secret and key go-api reads AUTH_SESSION_ISSUE_TOKEN from. Empty secretName keeps the shared Secret.",
+          "description": "go-api's credential on the session issue route: the workload token is the only mode. secretName and secretKey are the retired token mode's keys, accepted and ignored so that values files that still set them render unchanged.",
           "type": "object",
           "additionalProperties": false,
-          "required": ["secretName", "secretKey"],
           "properties": {
             "secretName": { "type": "string", "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*)?$" },
             "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" },
-            "credential": { "description": "go-api presents its workload token on the session issue route and renders no AUTH_SESSION_ISSUE_TOKEN. Absent keeps the token reference. \"\" is the same as absent (CHAOS-13467: a venue that layers values.prod.yaml unsets the key this way).", "type": "string", "enum": ["workload", ""] },
+            "credential": { "description": "\"workload\" or \"\": both render the workload mode (the only mode). Kept so that values files that still set it render unchanged.", "type": "string", "enum": ["workload", ""] },
             "workloadBootstrap": {
               "description": "CHAOS-13039: go-api's workload token on the session issue route, from a bootstrap credential file that a Secret mounts. Off renders nothing.",
               "type": "object",
@@ -191,6 +190,23 @@
                 "appBaseURL": { "type": "string" },
                 "encryptionKey": { "type": "string" },
                 "encryptionSalt": { "type": "string" }
+              }
+            }
+          }
+        },
+        "webApprover": {
+          "description": "The web approver reference kind of POST /v1/authorize (CHAOS-11207): issuer, caller and jwks.secretName together or none; set, the chart mounts the JWKS Secret and renders AUTH_AUTHORIZE_WEB_APPROVER_*.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "issuer": { "type": "string" },
+            "caller": { "type": "string" },
+            "jwks": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "secretName": { "type": "string" },
+                "secretKey": { "type": "string" }
               }
             }
           }

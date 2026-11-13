@@ -20,7 +20,7 @@
   "Deployment/a-dev-health-go-api/go-api/AUTH_PROXY_SESSIONS": "value:true",
   "Deployment/a-dev-health-go-api/go-api/AUTH_PROXY_SOCIAL": "value:false",
   "Deployment/a-dev-health-go-api/go-api/AUTH_PROXY_URL": "value:http://a-dev-health-auth-service:8095",
-  "Deployment/a-dev-health-go-api/go-api/AUTH_SESSION_ISSUE_TOKEN": "secret:a-dev-health-secrets/AUTH_SESSION_ISSUE_TOKEN",
+  "Deployment/a-dev-health-go-api/go-api/AUTH_SESSION_ISSUE_CREDENTIAL": "value:workload",
   "Deployment/a-dev-health-query-api/query-api/AUTH_DATABASE_SCHEMA": "value:auth",
   "Deployment/a-dev-health-query-api/query-api/AUTH_PROXY_SESSIONS": "value:true",
   "Job/a-dev-health-auth-grants/auth-grants/AUTH_DATABASE_SCHEMA": "value:auth",

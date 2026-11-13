@@ -88,8 +88,8 @@ func TestOrgProvisioningOnRendersTheSwitchTrueAndNothingElse(t *testing.T) {
 		if extra != 2 {
 			t.Errorf("phase %s: %d added lines, want 2", phase, extra)
 		}
-		if token := sessionsContainerEnv(t, docs, "Deployment", "a-dev-health-go-api")["AUTH_SESSION_ISSUE_TOKEN"]; token == nil {
-			t.Errorf("phase %s: the switch is on and go-api has no AUTH_SESSION_ISSUE_TOKEN", phase)
+		if cred := sessionsContainerEnv(t, docs, "Deployment", "a-dev-health-go-api")["AUTH_SESSION_ISSUE_CREDENTIAL"]; at(cred, "value") != "workload" {
+			t.Errorf("phase %s: the switch is on and go-api's AUTH_SESSION_ISSUE_CREDENTIAL = %v, want workload", phase, cred)
 		}
 	}
 }

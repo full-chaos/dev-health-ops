@@ -690,6 +690,67 @@
       "type": "object"
     },
     "reachableValidator": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "description": "A validator is never both kinds at once.",
+          "not": {
+            "properties": {
+              "earlier_auth_gate": {
+                "const": true
+              },
+              "foreign_class_validator": {
+                "const": true
+              }
+            },
+            "required": [
+              "earlier_auth_gate",
+              "foreign_class_validator"
+            ],
+            "type": "object"
+          }
+        },
+        {
+          "description": "A validator that is not the route's intended one must say which kind it is: both false is allowed only on the intended validator.",
+          "if": {
+            "properties": {
+              "is_intended_validator": {
+                "const": false
+              }
+            },
+            "required": [
+              "is_intended_validator"
+            ],
+            "type": "object"
+          },
+          "then": {
+            "anyOf": [
+              {
+                "properties": {
+                  "earlier_auth_gate": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "earlier_auth_gate"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "foreign_class_validator": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "foreign_class_validator"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        }
+      ],
       "properties": {
         "anchor": {
           "$ref": "#/$defs/anchor"
@@ -697,18 +758,24 @@
         "description": {
           "type": "string"
         },
-        "is_intended_validator": {
+        "earlier_auth_gate": {
+          "description": "true marks an earlier gate of the same credential class: it reads the caller the route's own validator decided (or authenticates that same class) and runs before the route's own check, by design. Not a defect: it records defence in depth.",
           "type": "boolean"
         },
-        "reachable_but_not_owner": {
-          "description": "true marks a CHAOS-3271-class finding: this validator can observe/attempt to parse the credential before (or regardless of) the route's own intended validator, without owning that credential's class.",
+        "foreign_class_validator": {
+          "description": "true marks a CHAOS-3271-class finding: this validator can observe or try to parse a credential whose class it does not own, before (or regardless of) the route's intended validator. This count is the defect number to watch.",
+          "type": "boolean"
+        },
+        "is_intended_validator": {
           "type": "boolean"
         }
       },
       "required": [
         "description",
         "anchor",
-        "is_intended_validator"
+        "is_intended_validator",
+        "earlier_auth_gate",
+        "foreign_class_validator"
       ],
       "type": "object"
     }

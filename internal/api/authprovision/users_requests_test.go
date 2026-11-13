@@ -43,6 +43,12 @@ type usersServer struct {
 
 func newUsersClient(t *testing.T, s *usersServer) *authprovision.UsersClient {
 	t.Helper()
+	return authprovision.NewUsersClient(newCoreFor(t, s))
+}
+
+// newCoreFor serves s over a test auth-service and returns the workload Core that calls it.
+func newCoreFor(t *testing.T, s *usersServer) *authprovision.Core {
+	t.Helper()
 	s.bodies = map[string]map[string]any{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -83,7 +89,7 @@ func newUsersClient(t *testing.T, s *usersServer) *authprovision.UsersClient {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return authprovision.NewUsersClient(core)
+	return core
 }
 
 func keysOf(body map[string]any) []string {

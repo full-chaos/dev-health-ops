@@ -393,8 +393,8 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 		s.record(ctx, o.Pattern, row, caller, result, ShadowReasonNone, "")
 		return
 	}
-	// A served organization that is no UUID, or that is not the token's, keeps the legacy answer under enforcement too:
-	// nothing to compare.
+	// A served organization that is no UUID, or that is not the token's: the enforcer judges the request on the token
+	// organization (CHAOS-13596), but the shadow does not ask yet and counts it skipped (CHAOS-13675 aligns the two).
 	if o.served.against(o.OrgID) != servedOrgJudged {
 		s.record(ctx, o.Pattern, row, caller, resultSkipped, ShadowReasonNone, "")
 		return

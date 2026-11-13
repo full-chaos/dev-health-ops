@@ -2,8 +2,7 @@
 // for go-api-prove: it mints a fresh edge ACCESS TOKEN for the dedicated
 // proof service principal, locally, with the Ed25519 key file named by
 // EDGE_TOKEN_SIGNING_KEY_FILE (an access-token.v1 token for a live session).
-// It is the sibling of cmd/mint-envelope; internal/edgetokenmint has the
-// design.
+// internal/edgetokenmint has the design.
 //
 // It reads the principal row and its org membership from POSTGRES_URI
 // before signing, so the token carries the row's current token_version and
@@ -97,7 +96,7 @@ func openPostgres(ctx context.Context) (edgetokenmint.RowQuerier, func(), error)
 // CALLER (the returned error), but its flag-parse diagnostic text must
 // never reach the process's own stderr -- see the package doc comment's
 // "No error or diagnostic this program writes ever carries the key, the
-// database URI, or the token" and envelope.Mint's own doc comment for why
+// database URI, or the token" for why
 // this discards the flag set's own usage/error output rather than
 // defaulting to os.Stderr, now that minting runs in process.
 func Mint(ctx context.Context, args []string) (string, error) {

@@ -1,9 +1,9 @@
 # CHAOS-5666 published go-api-routing and go-api-prove as one image,
 # ghcr.io/full-chaos/dev-health-go-api-tools. Spec S1 (CHAOS-6280) folds
-# both of them, go-api-rest-prove, mint-envelope and mint-edge-token into
+# both of them, go-api-rest-prove and mint-edge-token into
 # the ONE dho operator binary (cmd/dho): this image now builds and ships
 # that one binary instead of five, as `goapi routing`, `goapi prove`,
-# `goapi rest-prove`, `mint envelope` and `mint edge-token`. Routing rows
+# `goapi rest-prove` and `mint edge-token`. Routing rows
 # can only be re-enabled by a tools image built from the SAME commit as
 # the running query-api (its posture manifest sha is derived from the
 # same schemav1.SDL embed the binary links -- see internal/goapicli/routing's

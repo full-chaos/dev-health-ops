@@ -10,8 +10,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"os"
 )
 
 const (
@@ -61,15 +59,4 @@ func LoadPrivateKey(pemBytes []byte) (ed25519.PrivateKey, error) {
 		return nil, fmt.Errorf("%w: key is not Ed25519", ErrInvalidPrivateKeyPEM)
 	}
 	return key, nil
-}
-
-// LoadPrivateKeyFromEnv loads the key from PrivateKeyFileEnvVar (a path,
-// read under LoadPrivateKeyFromFile's custody contract) or, deprecated, from
-// the raw PrivateKeyEnvVar. The file wins when both are set. Only variable
-// names are ever read into a log line, never a value.
-func LoadPrivateKeyFromEnv() (ed25519.PrivateKey, error) {
-	path, hasFile := os.LookupEnv(PrivateKeyFileEnvVar)
-	hasFile = hasFile && path != ""
-	raw := envsecrets.GetenvSecret(PrivateKeyEnvVar)
-	return loadPrivateKeyFromLookup(path, hasFile, raw)
 }

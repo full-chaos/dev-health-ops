@@ -70,6 +70,13 @@ var orglessPaths = map[string]string{"POST /api/v1/admin/ip-allowlist/{entry_id}
 // orglessNoBody are the rows that take no body (EmptyBody: any body is a 413 before the guard).
 var orglessNoBody = map[string]bool{"POST /api/v1/acr/credentials/{credential_id}/revoke": true}
 
+// On orglessOrgsMe the org-less caller gets the handler's 400, cell off and on. 13604 row 10 there (legacy 200, decision
+// point 403) is a caller WITH a token organization and no membership row, pinned by
+// TestNoRowTokenOrgCallerOnOrgsMeIsDeniedByTheDecisionPoint.
+const orglessOrgsMe = "GET /api/v1/orgs/me"
+
+const orglessNoOrgContextBody = `{"detail":"No organization context"}`
+
 // orglessDo is cellDo with the fixed paths of orglessPaths and no body on the rows of orglessNoBody.
 func orglessDo(handler http.Handler, key, token string) cellAnswer {
 	method, _, _ := strings.Cut(key, " ")
@@ -122,10 +129,17 @@ func TestOrglessOrgRowsRealHandlersKeepTheLegacyAnswer(t *testing.T) {
 	member := orglessRealCaller{"org member", orgless(offMinter, probeMember, probeOtherSID), orgless(onMinter, probeMember, probeOtherSID), cellSnapshot{orgRole: "member"}}
 	pdp.register(map[string]cellCaller{admin.name: {token: admin.onToken, snap: admin.snap}, member.name: {token: member.onToken, snap: member.snap}})
 	handlerAnswers := map[bool]int{}
+	orgsMeChecked := 0
 	for _, key := range sortedKeys(rows) {
 		level := rows[key]
 		for _, c := range []orglessRealCaller{admin, member} {
 			want := orglessDo(off, key, c.offToken)
+			if key == orglessOrgsMe && c.name == admin.name {
+				orgsMeChecked++
+				if want.status != http.StatusBadRequest || want.body != orglessNoOrgContextBody {
+					t.Fatalf("%s / %s off: %d %s, want 400 %s", key, c.name, want.status, want.body, orglessNoOrgContextBody)
+				}
+			}
 			if level == "policy.AdminOrg" || c.name == member.name {
 				if want.status != http.StatusForbidden || want.body != orglessOCRBody {
 					t.Fatalf("%s / %s off: %d %s, want 403 %s", key, c.name, want.status, want.body, orglessOCRBody)
@@ -153,6 +167,9 @@ func TestOrglessOrgRowsRealHandlersKeepTheLegacyAnswer(t *testing.T) {
 				t.Errorf("%s / %s: calls %+v, want one platform question admin.orgs with no organization", key, c.name, calls)
 			}
 		}
+	}
+	if orgsMeChecked != 1 {
+		t.Errorf("%s checked %d times for the org-less platform admin, want 1", orglessOrgsMe, orgsMeChecked)
 	}
 	if handlerAnswers[true]+handlerAnswers[false] != 79 {
 		t.Errorf("%d Admin and Authenticated rows reached the handler, want 79", handlerAnswers[true]+handlerAnswers[false])

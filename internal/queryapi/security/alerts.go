@@ -127,8 +127,8 @@ func ResolveAlerts(ctx context.Context, client QueryClient, orgID string, filter
     sa.created_at,
     sa.fixed_at,
     sa.dismissed_at
-FROM security_alerts sa
-INNER JOIN repos r ON sa.repo_id = r.id
+FROM security_alerts sa FINAL
+INNER JOIN repos r FINAL ON sa.repo_id = r.id
 ` + f.sql + `
 ORDER BY ` + severityRank + ` DESC, sa.created_at DESC
 LIMIT {limit_n:Int64} OFFSET {offset_n:Int64}`

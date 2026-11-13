@@ -30,13 +30,20 @@ type inventoryOverLimit struct {
 	limit                    int
 }
 
-// inventoryOverLimitOf reports whether err is an inventory over its limit
-// (repoinventory or projectinventory ErrOverLimit anywhere in its chain). Any
-// other error, nil included, is false and stays the code-less 503.
+// ErrAllowlistTooLarge is a principal that may read more repositories than one
+// listing carries (sessionissue.MaxReadableRepositories): auth-service denies
+// the listing repository_allowlist_too_large, and the read refuses it, never a
+// truncated list.
+var ErrAllowlistTooLarge = errors.New("acr: the principal may read more repositories than one answer carries")
+
+// inventoryOverLimitOf reports whether err is a scope over its limit (the
+// principal's read listing over its cap, or projectinventory ErrOverLimit,
+// anywhere in its chain). Any other error, nil included, is false and stays the
+// code-less 503.
 func inventoryOverLimitOf(err error) (inventoryOverLimit, bool) {
 	switch {
-	case errors.Is(err, repoinventory.ErrOverLimit):
-		return inventoryOverLimit{RepositoryScopeOverLimitCode, outcomeReposOverLimit, "repository", repoinventory.Limit}, true
+	case errors.Is(err, ErrAllowlistTooLarge):
+		return inventoryOverLimit{RepositoryAllowlistTooLargeCode, outcomeAllowlistTooLarge, "repository_allowlist", sessionissue.MaxReadableRepositories}, true
 	case errors.Is(err, projectinventory.ErrOverLimit):
 		return inventoryOverLimit{ProjectScopeOverLimitCode, outcomeProjectsOverLimit, "project", projectinventory.Limit}, true
 	}
@@ -79,21 +86,36 @@ type ProjectInventory interface {
 	Projects(ctx context.Context, orgID uuid.UUID) ([]projectinventory.Item, error)
 }
 
-// RepositoryInventory reads an org's repository inventory (repoinventory).
-// An error is a failed read, never an empty inventory.
-type RepositoryInventory interface {
-	Repositories(ctx context.Context, orgID uuid.UUID) ([]string, error)
+// ReadableListing reads the repositories one user may read in one org through
+// acr.context.read: auth-service's read listing (sessionissue.Client, on
+// go-api's workload token; acp rulings Q1 and Q2 on CHAOS-13561). An error is a
+// failed read, never an empty listing.
+type ReadableListing interface {
+	ReadableRepositories(ctx context.Context, principalID, organizationID uuid.UUID) (sessionissue.Readable, error)
+}
+
+// RepositoryExistence reports whether an org has at least one repository: the
+// bounded existence probe (repoinventory.ExistsStatement, LIMIT 1, no list and
+// no 100 limit). It only chooses the empty-org path (acp ruling Q3 on
+// CHAOS-13561). An error is a failed read, never "no repositories".
+type RepositoryExistence interface {
+	HasRepositories(ctx context.Context, orgID uuid.UUID) (bool, error)
 }
 
 // AccessStore is the production PrincipalAccessStore. Every read runs on every
-// call: there is no cache (check 18). The ClickHouse inventory read runs
-// beside the Postgres reads; any failed read fails the whole answer
+// call: there is no cache (check 18). The read listing and the existence probe
+// run beside the Postgres reads; any failed read fails the whole answer
 // (ErrUnavailable), so no field is ever served from a partial read.
 type AccessStore struct {
 	Organizations OrganizationLookup
 	Reads         AccessReads
 	Features      FeatureDecider
-	Inventory     RepositoryInventory
+	// Listing is the user's own read listing: repository_scope is built from
+	// it, never from the org's repository inventory.
+	Listing ReadableListing
+	// Existence is the empty-org probe. An org with no repository answers
+	// kind "none" for every reader, as before the listing existed.
+	Existence RepositoryExistence
 	// Sessions answers the session a sid names. Nil: a read with a sid is
 	// unavailable (503); a read without one never needs it.
 	Sessions SessionStates
@@ -108,21 +130,23 @@ type AccessStore struct {
 var _ PrincipalAccessStore = AccessStore{}
 
 // NewPostgresAccessStore is AccessStore over go-api's pool and policy store,
-// with inventory as the repository read (nil answers 503 on every call) and
-// sessions as auth-service's session state read (nil answers 503 on every read
-// with a sid).
-func NewPostgresAccessStore(pool *pgxpool.Pool, reads policy.PGStore, inventory RepositoryInventory, sessions SessionStates) AccessStore {
+// with listing as auth-service's read listing and existence as the empty-org
+// probe (either nil answers 503 on every call), and sessions as auth-service's
+// session state read (nil answers 503 on every read with a sid).
+func NewPostgresAccessStore(pool *pgxpool.Pool, reads policy.PGStore, listing ReadableListing, existence RepositoryExistence,
+	sessions SessionStates) AccessStore {
 	return AccessStore{
 		Organizations: postgresOrganizations{pool: pool},
 		Reads:         reads,
 		Features:      licensing.PostgresStore{Pool: pool},
-		Inventory:     inventory,
+		Listing:       listing,
+		Existence:     existence,
 		Sessions:      sessions,
 	}
 }
 
 func (s AccessStore) Access(ctx context.Context, query AccessQuery) (PrincipalAccess, error) {
-	if s.Organizations == nil || s.Reads == nil || s.Features == nil || s.Inventory == nil {
+	if s.Organizations == nil || s.Reads == nil || s.Features == nil || s.Listing == nil || s.Existence == nil {
 		return PrincipalAccess{}, fmt.Errorf("%w: principal access store not fully configured", ErrUnavailable)
 	}
 	found, err := s.Organizations.OrganizationExists(ctx, query.OrgID)
@@ -133,13 +157,22 @@ func (s AccessStore) Access(ctx context.Context, query AccessQuery) (PrincipalAc
 		return PrincipalAccess{}, ErrOrgUnknown
 	}
 	group, groupCtx := errgroup.WithContext(ctx)
-	var repositories []string
+	var hasRepositories bool
 	group.Go(func() error {
-		repos, err := s.Inventory.Repositories(groupCtx, query.OrgID)
+		has, err := s.Existence.HasRepositories(groupCtx, query.OrgID)
 		if err != nil {
-			return fmt.Errorf("repository inventory read: %w", err)
+			return fmt.Errorf("repository existence probe: %w", err)
 		}
-		repositories = repos
+		hasRepositories = has
+		return nil
+	})
+	var listing sessionissue.Readable
+	group.Go(func() error {
+		read, err := s.Listing.ReadableRepositories(groupCtx, query.UserID, query.OrgID)
+		if err != nil {
+			return fmt.Errorf("read listing: %w", err)
+		}
+		listing = read
 		return nil
 	})
 	var state sessionissue.State
@@ -180,8 +213,12 @@ func (s AccessStore) Access(ctx context.Context, query AccessQuery) (PrincipalAc
 		live, reason := sessionLive(query, state, stateFound, user, userFound)
 		access.Session = &SessionAccess{Live: live, Reason: reason, Impersonating: access.Impersonating}
 	}
-	access.Repositories = repositories
-	if s.Projects != nil && len(repositories) == 0 {
+	if hasRepositories {
+		if err := applyListing(&access, listing); err != nil {
+			return PrincipalAccess{}, err
+		}
+	}
+	if s.Projects != nil && !hasRepositories {
 		// Only an org with no repository inventory gets a project scope
 		// (CHAOS-12224; acr turns it into project_only for a "*" consent grant
 		// only, design CHAOS-12107 D2). One more live read, after the others.
@@ -195,6 +232,30 @@ func (s AccessStore) Access(ctx context.Context, query AccessQuery) (PrincipalAc
 		access.ProjectScope = &ProjectScope{Projects: projects}
 	}
 	return access, nil
+}
+
+// applyListing sets repository_scope from the user's read listing, in an org
+// that has repositories: org-wide is kind "organization", a named reader its
+// own keys (kind "none" for no key), a listing over its cap is
+// ErrAllowlistTooLarge, and any other deny (no membership, an inactive user or
+// organization) is kind "none": member is false there, and acr refuses on it
+// before the scope.
+func applyListing(access *PrincipalAccess, listing sessionissue.Readable) error {
+	access.ListingReason = string(listing.Scope)
+	switch listing.Scope {
+	case sessionissue.ReadableOrganization:
+		access.OrganizationWide = true
+	case sessionissue.ReadableRepositories:
+		access.Repositories = listing.Repositories
+	case sessionissue.ReadableDenied:
+		if listing.Reason == sessionissue.ReasonAllowlistTooLarge {
+			return ErrAllowlistTooLarge
+		}
+		access.ListingReason = listing.Reason
+	default:
+		return fmt.Errorf("%w: read listing scope %q", ErrUnavailable, listing.Scope)
+	}
+	return nil
 }
 
 // postgresFacts reads membership, impersonation and both entitlements, and
@@ -283,43 +344,34 @@ func (o postgresOrganizations) OrganizationExists(ctx context.Context, orgID uui
 // inventoryTimeout is the max_execution_time of the inventory read.
 const inventoryTimeout = 5 * time.Second
 
-// ClickHouseRepositoryInventory runs repoinventory's read on go-api's
-// ClickHouse login (chclickhouse.APIPosture grants SELECT on repos for it).
-type ClickHouseRepositoryInventory struct {
+// ClickHouseRepositoryExistence runs repoinventory's existence probe on
+// go-api's ClickHouse login (chclickhouse.APIPosture grants SELECT on repos for
+// it): one row at most, never a list.
+type ClickHouseRepositoryExistence struct {
 	Conn driver.Conn
 }
 
-func (c ClickHouseRepositoryInventory) Repositories(ctx context.Context, orgID uuid.UUID) ([]string, error) {
+func (c ClickHouseRepositoryExistence) HasRepositories(ctx context.Context, orgID uuid.UUID) (bool, error) {
 	if c.Conn == nil {
-		return nil, errors.New("no ClickHouse connection configured")
+		return false, errors.New("no ClickHouse connection configured")
 	}
-	statement := repoinventory.Statement(fmt.Sprintf("SETTINGS max_execution_time = %d", int(inventoryTimeout.Seconds())))
-	rows, err := c.Conn.Query(ctx, statement,
-		clickhouse.Named("org_id", orgID.String()), clickhouse.Named("limit_n", uint32(repoinventory.QueryLimit)))
+	statement := repoinventory.ExistsStatement(fmt.Sprintf("SETTINGS max_execution_time = %d", int(inventoryTimeout.Seconds())))
+	rows, err := c.Conn.Query(ctx, statement, clickhouse.Named("org_id", orgID.String()))
 	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
+		return false, fmt.Errorf("query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	var read []repoinventory.Row
+	found := 0
 	for rows.Next() {
-		var row repoinventory.Row
-		if err := rows.Scan(&row.Value, &row.Count); err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
-		}
-		read = append(read, row)
+		found++
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows: %w", err)
+		return false, fmt.Errorf("rows: %w", err)
 	}
-	items, err := repoinventory.Canonical(read)
-	if err != nil {
-		return nil, err
+	if found > 1 {
+		return false, fmt.Errorf("the existence probe returned %d rows, want at most 1", found)
 	}
-	slugs := make([]string, 0, len(items))
-	for _, item := range items {
-		slugs = append(slugs, item.Slug)
-	}
-	return slugs, nil
+	return found == 1, nil
 }
 
 // ClickHouseProjectInventory runs projectinventory's read on go-api's

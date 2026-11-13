@@ -293,7 +293,7 @@ func TestStartRefusesAVenueWithNeitherAGoldenNorGoOnly(t *testing.T) {
 		t.Setenv("DEV_HEALTH_VENUE_ORACLES", "1")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		Start(t, ctx, Options{Root: t.TempDir(), JWTKey: "k"})
+		Start(t, ctx, Options{Root: t.TempDir()})
 		t.Log("VENUE STARTED")
 		return
 	}

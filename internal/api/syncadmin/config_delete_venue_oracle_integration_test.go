@@ -31,7 +31,6 @@ func TestSyncConfigDeleteVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name()))
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-sync-admin-reads-32b!"
 	ids := newVenueIDs()
 	grandchild, foreignParent, sameNameGitHub := newID(), newID(), newID()
 	t.Setenv("HIDE_MIGRATED_CHILD_CONFIGS", " On ")
@@ -39,7 +38,6 @@ func TestSyncConfigDeleteVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden:    golden,
 		Root:      root,
-		JWTKey:    jwtKey,
 		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On "},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -52,7 +50,7 @@ func TestSyncConfigDeleteVenueOracle(t *testing.T) {
 			}
 		},
 	})
-	base := startGoServer(t, ctx, venue, jwtKey)
+	base := startGoServer(t, ctx, venue)
 
 	bearer := func(name string) map[string]string {
 		return map[string]string{"Authorization": "Bearer " + venue.Tokens[name]}

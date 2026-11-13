@@ -29,11 +29,9 @@ func TestLocalMemberRoleChangeLastOwnerGuard(t *testing.T) {
 	ownerA, ownerB, memberA, superID := id("owner-a"), id("owner-b"), id("member-a"), id("super")
 	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	const jwtKey = "venue-oracle-member-role-guard-32-bytes-key!!"
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   repoRoot(t),
 		GoOnly: true,
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(query string, args ...any) {
@@ -80,7 +78,7 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, u, fmt.Sprintf("guard-race
 			}
 		},
 	})
-	base, pool := startGoServer(t, ctx, venue, jwtKey)
+	base, pool := startGoServer(t, ctx, venue)
 
 	do := func(method string, org, user uuid.UUID, body *string) venueoracle.Response {
 		t.Helper()

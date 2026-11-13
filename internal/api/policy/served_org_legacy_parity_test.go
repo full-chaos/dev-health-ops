@@ -13,8 +13,8 @@ import (
 // Product rule 1 (D6773) and CHAOS-10872 S2-parity: with a census row's namespace switched on, a request that serves
 // another organization than the token's gets the answer the same guard gives with no enforcer (status and body), and the
 // decision point is asked ONE question about the TOKEN organization, never the served one: the verdict is the token
-// organization's, the handler's own served-org check follows. A token with no organization has none to judge: that class
-// keeps the legacy answer with no call (S1).
+// organization's, the handler's own served-org check follows. A token with no organization has none to judge: it is asked
+// the platform action admin.orgs with no organization instead (S1, decideOrgless), with the legacy answer.
 func TestServedOrgOtherOrganizationIsJudgedOnTheTokenOrganization(t *testing.T) {
 	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
 	for _, row := range servedOrgCensus {
@@ -38,12 +38,15 @@ func TestServedOrgOtherOrganizationIsJudgedOnTheTokenOrganization(t *testing.T) 
 				if got.status != legacy.status || got.body != legacy.body {
 					t.Errorf("%s: enforced %d %q, want the legacy %d %q", tc.name, got.status, got.body, legacy.status, legacy.body)
 				}
-				wantCalls := 1
+				calls := pdp.calls()
 				if tc.setup.claims != nil {
-					wantCalls = 0
+					if len(calls) != 1 || calls[0].Action != ActionAdminOrgs || calls[0].Type != "platform" || calls[0].HasOrg {
+						t.Errorf("%s: PDP saw %+v, want one platform question admin.orgs with no organization", tc.name, calls)
+					}
+					continue
 				}
-				if calls := pdp.calls(); len(calls) != wantCalls || (wantCalls == 1 && calls[0].Org != ownOrg) {
-					t.Errorf("%s: PDP saw %+v, want %d question(s), on the token organization %s", tc.name, calls, wantCalls, ownOrg)
+				if len(calls) != 1 || calls[0].Org != ownOrg {
+					t.Errorf("%s: PDP saw %+v, want one question, on the token organization %s", tc.name, calls, ownOrg)
 				}
 			}
 		})
@@ -99,17 +102,17 @@ func TestServedOrgSeamRunsAfterTheImpersonationRefusal(t *testing.T) {
 	}
 }
 
-// A token with no organization that names the nil UUID is still another organization (servedOrg.against): the legacy
-// answer, counted served_org, not no_org.
-func TestServedOrgNilUUIDWithNoTokenOrgIsServedOrg(t *testing.T) {
+// A token with no organization that names the nil UUID is a token with no organization like any other (S1): it is asked
+// admin.orgs with no organization and counted as a decision, not unjudged.
+func TestServedOrgNilUUIDWithNoTokenOrgIsAskedThePlatformAction(t *testing.T) {
 	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
 	row := servedOrgCensus[0]
 	rec := recordEnforce(t)
 	pdp := newTestPDP(t, allowAll)
 	servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: servedOrgEnforcer(t, pdp, servedOrgNamespace(t, row.pattern))},
 		"00000000-0000-0000-0000-000000000000")
-	if got := rec.unjudgedSnapshot(); !slices.Equal(got, []string{row.pattern + "/served_org"}) || len(pdp.calls()) != 0 {
-		t.Errorf("unjudged %v, %d PDP calls, want [%s/served_org] and none", got, len(pdp.calls()), row.pattern)
+	if got, calls := rec.unjudgedSnapshot(), pdp.calls(); len(got) != 0 || len(calls) != 1 || calls[0].Action != ActionAdminOrgs || calls[0].HasOrg {
+		t.Errorf("unjudged %v, PDP saw %+v, want none and one platform question admin.orgs with no organization", got, calls)
 	}
 }
 
@@ -134,10 +137,10 @@ func TestServedOrgAnAllowForTheTokenOrganizationNeverWidensTheScope(t *testing.T
 	}
 }
 
-// The outage row of S2 (F-9): a request that serves another organization than the token's is now asked about the token
-// organization, so with the decision point dead it is the 503 of every enforced request, where before S2 it kept the
-// legacy answer. A token with no organization still keeps the legacy answer in an outage (S1's class).
-func TestServedOrgAnOutageIsTheEnforced503ForAnotherOrgAndTheLegacyAnswerForNoTokenOrg(t *testing.T) {
+// The outage rows of S2 and S1 (F-9): a request that serves another organization than the token's is asked about the
+// token organization, and a token with no organization is asked admin.orgs (S1), so with the decision point dead both are
+// the 503 of every enforced request, where before they kept the legacy answer.
+func TestServedOrgAnOutageIsTheEnforced503ForAnotherOrgAndForNoTokenOrg(t *testing.T) {
 	row := servedOrgCensusRow{"GET /api/v1/admin/orgs/{org_id}/members", Admin, false}
 	namespace := servedOrgNamespace(t, row.pattern)
 	pdp := newTestPDP(t, allowAll)
@@ -148,10 +151,9 @@ func TestServedOrgAnOutageIsTheEnforced503ForAnotherOrgAndTheLegacyAnswerForNoTo
 		t.Errorf("another org, PDP dead: %d %q, want the enforced 503", got.status, got.body)
 	}
 	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
-	legacy := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg}, ownOrg)
 	got = servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: enforcer}, ownOrg)
-	if got.status != legacy.status || got.body != legacy.body {
-		t.Errorf("no token org, PDP dead: %d %q, want the legacy %d %q", got.status, got.body, legacy.status, legacy.body)
+	if got.status != http.StatusServiceUnavailable {
+		t.Errorf("no token org, PDP dead: %d %q, want the enforced 503", got.status, got.body)
 	}
 }
 

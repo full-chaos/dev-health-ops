@@ -164,7 +164,11 @@ func driveSpan(slots []Slot) (first, last time.Time) {
 // control the enforcement did not deny. Per slot, every caller: the enforced status must equal the yardstick's legacy
 // status; a difference is MISMATCH_STRICTER or MISMATCH_WIDER by direction (403 = deny), else MISMATCH_STATUS. The
 // superuser's skips of the yardstick pass only on the counter: per route, unjudged{reason="no_org"} grew by exactly the
-// number of those slots and no other reason grew; a seam row (SKIPPED_SEAM in the yardstick) allows served_org only.
+// number of those slots and no other reason grew; a seam row (SKIPPED_SEAM in the yardstick) allows served_org only. A
+// build that decides a token with no organization (CHAOS-10872 S1) counts no no_org: there a route passes when
+// unjudged{reason="org_required"} grew by exactly the number of slots (an AdminOrg row) and no other reason grew, or when
+// no reason grew and the route's namespace counted at least as many allow or deny decisions as the run has such slots
+// (DECIDED_NOORG). One run is one build: a legacy route beside an S1 route fails the run.
 func JudgeEnforced(in EnforcedInput) Report {
 	var report Report
 	fail := func(format string, args ...any) {
@@ -240,7 +244,7 @@ func JudgeEnforced(in EnforcedInput) Report {
 	unjudgedRoutes := map[string]bool{}
 	for route, byReason := range reasons {
 		for reason, n := range byReason {
-			if n > 0 && reason != "no_org" && reason != "served_org" {
+			if n > 0 && reason != "no_org" && reason != "served_org" && reason != "org_required" {
 				unjudgedRoutes[route] = true
 			}
 		}
@@ -306,29 +310,62 @@ func JudgeEnforced(in EnforcedInput) Report {
 				perKey[sv.Key()] = append(perKey[sv.Key()], i)
 			}
 		}
+		decided, decidedErr := ParseDecisionDeltas(in.MetricsBefore, in.MetricsAfter)
+		legacyRoutes, s1Routes := 0, 0
+		decidedByNS := map[string][]int{}
 		for key, indexes := range perKey {
 			seam := report.Slots[indexes[0]].Verdict == VerdictUnevidencedSeam
 			got := reasons[key]
-			ok := true
-			for reason, n := range got {
-				switch {
-				case reason == "no_org" && !seam: // counted exactly below
-				case reason == "served_org" && seam:
-				case n != 0:
-					ok = false
+			if seam {
+				ok := true
+				for reason, n := range got {
+					if reason != "served_org" && n != 0 {
+						ok = false
+					}
 				}
-			}
-			if !seam && got["no_org"] != len(indexes) {
-				ok = false
-			}
-			if ok {
-				for _, i := range indexes {
-					report.Slots[i].Verdict = VerdictSkippedNoOrg
-					if seam {
+				if ok {
+					for _, i := range indexes {
 						report.Slots[i].Verdict = VerdictSkippedSeam
 					}
 				}
+				continue
 			}
+			residual := orglessResidual(got, len(indexes))
+			if residual == residualOrgRequired || residual == residualDecided {
+				// Only the org-less caller of the venue, the superuser, is decided this way; any other caller's skip fails.
+				for _, i := range indexes {
+					if report.Slots[i].Caller != "superuser" {
+						residual = residualNone
+					}
+				}
+			}
+			switch residual {
+			case residualLegacy:
+				legacyRoutes++
+				for _, i := range indexes {
+					report.Slots[i].Verdict = VerdictSkippedNoOrg
+				}
+			case residualOrgRequired:
+				s1Routes++
+				for _, i := range indexes {
+					report.Slots[i].Verdict = VerdictDecidedNoOrg
+				}
+			case residualDecided:
+				s1Routes++
+				ns := in.Namespaces[key]
+				decidedByNS[ns] = append(decidedByNS[ns], indexes...)
+			}
+		}
+		for ns, indexes := range decidedByNS {
+			if decidedErr != nil || ns == "" || decided[ns]["allow"]+decided[ns]["deny"] < len(indexes) {
+				continue
+			}
+			for _, i := range indexes {
+				report.Slots[i].Verdict = VerdictDecidedNoOrg
+			}
+		}
+		if legacyRoutes > 0 && s1Routes > 0 {
+			fail("FAIL: %d no-org routes counted no_org and %d were decided: one run is one build, legacy or S1", legacyRoutes, s1Routes)
 		}
 	}
 	// EVIDENCED_NOORG: a no-org superuser slot the counter left UNEVIDENCED (the handler served it) passes on the log proof

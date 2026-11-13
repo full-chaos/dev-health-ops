@@ -20,7 +20,7 @@ import (
 // PrincipalAccessPattern is the principal access read (CHAOS-12084): acr-api
 // calls it on every protected call by a user-class credential to re-check, live,
 // the user's membership, the bound session, the ask_dev and
-// agent_context_runtime entitlements and the org's repository inventory
+// agent_context_runtime entitlements and the repositories the user may read
 // (North Star check 18). Contract:
 // .github/docs-legacy/architecture/acr-entitlement-route.md, "Principal access
 // read".
@@ -45,11 +45,16 @@ const (
 	InvalidSessionCode = "acr_access_invalid_sid"
 	InvalidQueryCode   = "acr_access_invalid_query"
 
-	// RepositoryScopeRepos and RepositoryScopeNone are repository_scope.kind.
-	// "none" is an empty inventory and carries no repos array: an empty list
-	// never stands for any scope.
-	RepositoryScopeRepos = "repos"
-	RepositoryScopeNone  = "none"
+	// RepositoryScopeRepos, RepositoryScopeNone and RepositoryScopeOrganization
+	// are repository_scope.kind. "repos" is the user's own readable keys;
+	// "organization" is every repository of an org that has repositories (no
+	// repos key); "none" is no readable repository or an org with none, and
+	// carries no repos array: an empty list never stands for any scope. The
+	// literal "organization" is the contract of acp ruling 416c190b on
+	// CHAOS-13566.
+	RepositoryScopeRepos        = "repos"
+	RepositoryScopeNone         = "none"
+	RepositoryScopeOrganization = "organization"
 
 	// ProjectScopeProjects and ProjectScopeNone are project_scope.kind. "none"
 	// is an empty project inventory and carries no projects array.
@@ -96,9 +101,16 @@ type PrincipalAccess struct {
 	// ACRBasis names the grant behind AgentContextRuntime (licensing.ACRBasis*);
 	// logged, never served (CHAOS-3695).
 	ACRBasis string
-	// Repositories is the org's repository inventory (repoinventory), sorted.
-	// Empty means none.
+	// Repositories is the user's own readable repository keys (auth-service's
+	// read listing for acr.context.read), sorted. Empty, with OrganizationWide
+	// false, means none.
 	Repositories []string
+	// OrganizationWide is true when the user may read every repository of an
+	// org that has repositories: kind "organization", no list.
+	OrganizationWide bool
+	// ListingReason is the read listing's scope or deny reason; logged, never
+	// served.
+	ListingReason string
 	// ProjectScope is the org's project inventory, served as project_scope. It
 	// is nil, and the answer carries no project_scope, unless the project scope
 	// flag is on and the org has no repository inventory.
@@ -244,7 +256,8 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 			slog.String("org_id", orgRaw), slog.String("user_id", userRaw),
 			slog.Bool("member", access.Member), slog.Bool("impersonating", access.Impersonating), slog.Bool("ask_dev", access.AskDev),
 			slog.Bool("agent_context_runtime", access.AgentContextRuntime), slog.String("acr_entitlement_basis", access.ACRBasis),
-			slog.Int("repositories", len(access.Repositories)), slog.Duration("elapsed", elapsed),
+			slog.Int("repositories", len(access.Repositories)), slog.Bool("organization_wide", access.OrganizationWide),
+			slog.String("listing", access.ListingReason), slog.Duration("elapsed", elapsed),
 		}
 		if access.Session != nil {
 			attrs = append(attrs, slog.Bool("session_live", access.Session.Live),
@@ -278,9 +291,12 @@ func principalAccessBody(orgID, userID string, access PrincipalAccess) *pyjson.O
 	entitlements.Set("agent_context_runtime", access.AgentContextRuntime)
 	body.Set("entitlements", entitlements)
 	scope := pyjson.NewObject()
-	if len(access.Repositories) == 0 {
+	switch {
+	case access.OrganizationWide:
+		scope.Set("kind", RepositoryScopeOrganization)
+	case len(access.Repositories) == 0:
 		scope.Set("kind", RepositoryScopeNone)
-	} else {
+	default:
 		scope.Set("kind", RepositoryScopeRepos)
 		scope.Set("repos", append([]string(nil), access.Repositories...))
 	}
@@ -309,22 +325,24 @@ func principalAccessBody(orgID, userID string, access PrincipalAccess) *pyjson.O
 // Go-only route (no FastAPI ancestor, so no response-model entry): it writes
 // with the JSONResponse writer, as the llm-config route does, never WriteModel,
 // which records a writer violation on a route the table does not name.
-// ProjectScopeOverLimitCode and RepositoryScopeOverLimitCode are the machine
-// codes of the 503 for an inventory above its limit: the project inventory
-// above projectinventory.Limit (CHAOS-12224) and the repository inventory
-// above repoinventory.Limit (CHAOS-12267). acr types them as an access
-// limitation, not a retryable outage (CHAOS-12228). The status stays 503
-// (fail closed), so an acr that reads no 503 body (acr main 968bdcb0) handles
-// it exactly as before. Every other failed read is the code-less 503.
+// ProjectScopeOverLimitCode and RepositoryAllowlistTooLargeCode are the
+// machine codes of the 503 for a scope above its limit: the project inventory
+// above projectinventory.Limit (CHAOS-12224), and a user who may read more
+// repositories than one listing carries (sessionissue.MaxReadableRepositories;
+// the literal is the contract of acp ruling 416c190b on CHAOS-13566). acr types
+// them as an access limitation, not a retryable outage. The status stays 503
+// (fail closed). Every other failed read is the code-less 503. The repository
+// inventory's own code (acr_access_repository_scope_over_limit) is no longer
+// sent: the read reads no repository inventory.
 const (
-	ProjectScopeOverLimitCode    = "acr_access_project_scope_over_limit"
-	RepositoryScopeOverLimitCode = "acr_access_repository_scope_over_limit"
+	ProjectScopeOverLimitCode       = "acr_access_project_scope_over_limit"
+	RepositoryAllowlistTooLargeCode = "acr_access_repository_allowlist_too_large"
 )
 
 // The internal-request counter's outcomes for them.
 const (
 	outcomeProjectsOverLimit = "project_scope_over_limit"
-	outcomeReposOverLimit    = "repository_scope_over_limit"
+	outcomeAllowlistTooLarge = "repository_allowlist_too_large"
 )
 
 func writeAccess(w http.ResponseWriter, status int, body *pyjson.Object) {

@@ -50,7 +50,7 @@ func TestSavedReportWriteProofBaselinesVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("saved-report-write-proof", t.Name(), "527a21c98dc994c6d1821cc0b50f8bbc358908918651dbe5c725535974e9306d"))
 	user := stableVenueID("saved-report-write-proof/user")
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: root, JWTKey: oracleJWTKey,
+		Golden: golden, Root: root,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			for _, statement := range []struct {
 				sql  string

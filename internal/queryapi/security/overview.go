@@ -65,8 +65,8 @@ func readKpis(ctx context.Context, client QueryClient, f filterClause, b []click
         AND (sa.fixed_at IS NULL OR sa.fixed_at >= now() - INTERVAL 30 DAY)
         AND (sa.dismissed_at IS NULL OR sa.dismissed_at >= now() - INTERVAL 30 DAY)
     ) AS open_delta_30d
-FROM security_alerts sa
-INNER JOIN repos r ON sa.repo_id = r.id
+FROM security_alerts sa FINAL
+INNER JOIN repos r FINAL ON sa.repo_id = r.id
 ` + f.sql
 	rows, err := client.Query(ctx, query, b)
 	if err != nil {
@@ -98,8 +98,8 @@ func readBreakdown(ctx context.Context, client QueryClient, f filterClause, b []
 	query := `SELECT
     coalesce(sa.severity, 'unknown') AS severity,
     count() AS count
-FROM security_alerts sa
-INNER JOIN repos r ON sa.repo_id = r.id
+FROM security_alerts sa FINAL
+INNER JOIN repos r FINAL ON sa.repo_id = r.id
 ` + f.sql + `
 AND sa.state IN {open_states_agg:Array(String)}
 GROUP BY severity
@@ -129,8 +129,8 @@ func readTopRepos(ctx context.Context, client QueryClient, f filterClause, b []c
     toString(sa.repo_id) AS repo_id,
     r.repo AS repo_name,
     count() AS count
-FROM security_alerts sa
-INNER JOIN repos r ON sa.repo_id = r.id
+FROM security_alerts sa FINAL
+INNER JOIN repos r FINAL ON sa.repo_id = r.id
 %s
 AND sa.state IN {open_states_agg:Array(String)}
 GROUP BY sa.repo_id, r.repo
@@ -163,14 +163,14 @@ func readTrend(ctx context.Context, client QueryClient, f filterClause) ([]model
     countIf(event_type = 'fixed') AS fixed
 FROM (
     SELECT sa.created_at AS day, 'opened' AS event_type
-    FROM security_alerts sa
-    INNER JOIN repos r ON sa.repo_id = r.id
+    FROM security_alerts sa FINAL
+    INNER JOIN repos r FINAL ON sa.repo_id = r.id
     ` + f.sql + `
     AND sa.created_at >= now() - INTERVAL 30 DAY
     UNION ALL
     SELECT sa.fixed_at AS day, 'fixed' AS event_type
-    FROM security_alerts sa
-    INNER JOIN repos r ON sa.repo_id = r.id
+    FROM security_alerts sa FINAL
+    INNER JOIN repos r FINAL ON sa.repo_id = r.id
     ` + f.sql + `
     AND sa.fixed_at IS NOT NULL
     AND sa.fixed_at >= now() - INTERVAL 30 DAY

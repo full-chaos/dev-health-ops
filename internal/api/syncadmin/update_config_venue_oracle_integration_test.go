@@ -76,7 +76,6 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name()))
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-sync-config-update!"
 	ids := newUpdateVenueIDs()
 	jira, certFile := fakeJira(t)
 	t.Setenv("NO_PROXY", "127.0.0.1,localhost")
@@ -85,7 +84,6 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + updateVenueKey,
 			"NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost",
@@ -115,7 +113,7 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
 	}
 	jiraClient := jira.Client()
 	jiraClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	base := startGoServerWith(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	base := startGoServerWith(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.Now = func() time.Time { return pinned }
 		deps.Decryptor = decryptor
 		deps.SyncJiraHTTP = jiraClient

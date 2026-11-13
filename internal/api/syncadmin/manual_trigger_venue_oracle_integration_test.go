@@ -431,13 +431,11 @@ func runManualTriggerOracle(t *testing.T, golden *venueoracle.Golden) {
 	servePython := func(venue *venueoracle.Venue, requests []venueoracle.Request) []venueoracle.Response {
 		return golden.Python(t, venue, requests)
 	}
-	const jwtKey = "venue-oracle-test-secret-key-for-manual-trigger!"
 	v := newManualIDs(manualRequestNames())
 	t.Setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "6")
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + manualVenueKey,
 			"SYNC_MANUAL_TRIGGER_AWAIT_SECONDS=6",
@@ -460,7 +458,7 @@ func runManualTriggerOracle(t *testing.T, golden *venueoracle.Golden) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := startGoServerWith(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) { deps.Now = func() time.Time { return pinned } })
+	base := startGoServerWith(t, ctx, venue, func(deps *apiservice.Deps) { deps.Now = func() time.Time { return pinned } })
 
 	// One scheduler per plane's database, as its superuser.
 	var paused atomic.Bool

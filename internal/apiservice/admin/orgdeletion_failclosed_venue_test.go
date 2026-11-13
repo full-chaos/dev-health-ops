@@ -40,7 +40,6 @@ const (
 func TestOrgDeletionFailsClosedWithoutAUsableClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	t.Cleanup(cancel)
-	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-fail-closed-32b"
 
 	decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(failClosedEncryptionKey), "")
 	if err != nil {
@@ -60,7 +59,6 @@ func TestOrgDeletionFailsClosedWithoutAUsableClickHouse(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   repoRoot(t),
-		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, adminPool *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -145,8 +143,8 @@ VALUES ($1, 'venue-fc-super@example.com', true, true, true, 0, now(), now())`, s
 	}
 	controlBefore := state(t, orgs["control"])
 
-	noDSN, _ := startGoServer(t, ctx, venue, jwtKey)
-	closed, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) { deps.ClickHouseDSN = closedURI })
+	noDSN, _ := startGoServer(t, ctx, venue)
+	closed, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) { deps.ClickHouseDSN = closedURI })
 
 	t.Run("no dsn, real delete", func(t *testing.T) {
 		before := state(t, orgs["nodsn"])
@@ -173,7 +171,7 @@ VALUES ($1, 'venue-fc-super@example.com', true, true, true, 0, now(), now())`, s
 		fake := &fakePagerDutyRevokeServer{}
 		fakeServer := httptest.NewServer(http.HandlerFunc(fake.handler))
 		t.Cleanup(fakeServer.Close)
-		selectOnly, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+		selectOnly, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 			deps.ClickHouseDSN = selectOnlyURI
 			deps.Decryptor = decryptor
 			deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: "venue-fc-pagerduty", RevokeURL: fakeServer.URL}
@@ -192,7 +190,7 @@ VALUES ($1, 'venue-fc-super@example.com', true, true, true, 0, now(), now())`, s
 	})
 	t.Run("clickhouse fails after the postgres commit, then a re-run purges", func(t *testing.T) {
 		org := orgs["aftercommit"]
-		admin, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) { deps.ClickHouseDSN = adminCH })
+		admin, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) { deps.ClickHouseDSN = adminCH })
 		// A discovered org_id table whose count cannot bind a uuid string: the
 		// purge of this one table fails after Postgres has committed.
 		chExec("CREATE TABLE orgdel_fc_broken (org_id UInt64, n UInt8) ENGINE = MergeTree ORDER BY tuple()")

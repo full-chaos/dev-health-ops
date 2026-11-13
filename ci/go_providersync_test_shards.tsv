@@ -12,6 +12,6 @@
 # Older text: these are intentionally relative source classes, not invented wall-clock
 # seconds: integration-tagged tests dominate container-backed runtime, while
 # ordinary tests are retained in the exact-once partition at the base weight.
-shards	11
+shards	8
 integration-test-weight	200
 ordinary-test-weight	1

@@ -61,17 +61,17 @@ env:
 jobs:
   venue-oracles-changed:
     if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
-    name: venue-oracles (changed packages, shard ${{ matrix.shard }}/16)
+    name: venue-oracles (changed packages, shard ${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        shard: [1, 2, 3, 4, 5, 6]
     env:
       CHECK_GO_JOB_CAP_MIN: 60
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
-      VENUE_LEGS: 16
+      VENUE_LEGS: 6
       VENUE_LEG: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

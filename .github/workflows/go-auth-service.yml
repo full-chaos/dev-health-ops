@@ -159,10 +159,10 @@ jobs:
         run: bash ci/check_go.sh auth vuln
 
   # CHAOS-13520: auth-test, auth-race and auth-race-integration run as legs (check_go.sh auth test-leg|race-leg|race-integration-leg
-  # LEG COUNT), so each job stays under five minutes; the job id, and so auth-gate's needs, stays. COUNT in the run line is the
+  # LEG COUNT) of about ten minutes each (CHAOS-13622); the job id, and so auth-gate's needs, stays. COUNT in the run line is the
   # length of the leg list (internal/cigates/workflows checks it).
   auth-test:
-    name: auth-test (${{ matrix.leg }}/3)
+    name: auth-test (${{ matrix.leg }}/1)
     needs: [auth-changes]
     if: needs.auth-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
@@ -170,7 +170,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [1, 2, 3]
+        leg: [1]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -179,8 +179,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-      - name: go test (auth packages, leg ${{ matrix.leg }} of 3)
-        run: bash ci/check_go.sh auth test-leg "${{ matrix.leg }}" 3
+      - name: go test (auth packages, leg ${{ matrix.leg }} of 1)
+        run: bash ci/check_go.sh auth test-leg "${{ matrix.leg }}" 1
       - name: Dependency closure of the auth binaries (CHAOS-10131)
         if: matrix.leg == 1
         run: bash ci/check_go.sh auth closure
@@ -199,7 +199,7 @@ jobs:
   # CHAOS-12420: the same again. The two legs grew to the whole 30 minutes on a slow runner, and the last package got a
   # 2 s timeout, so each leg has a job of its own. auth-gate fans in both.
   auth-race:
-    name: auth-race (${{ matrix.leg }}/7)
+    name: auth-race (${{ matrix.leg }}/3)
     needs: [auth-changes]
     if: needs.auth-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
@@ -207,7 +207,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [1, 2, 3, 4, 5, 6, 7]
+        leg: [1, 2, 3]
     env:
       CHECK_GO_JOB_CAP_MIN: 30
     steps:
@@ -218,11 +218,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-      - name: go test -race (auth packages, leg ${{ matrix.leg }} of 7)
-        run: bash ci/check_go.sh auth race-leg "${{ matrix.leg }}" 7
+      - name: go test -race (auth packages, leg ${{ matrix.leg }} of 3)
+        run: bash ci/check_go.sh auth race-leg "${{ matrix.leg }}" 3
 
   auth-race-integration:
-    name: auth-race-integration (${{ matrix.leg }}/12)
+    name: auth-race-integration (${{ matrix.leg }}/4)
     needs: [auth-changes]
     if: needs.auth-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
@@ -230,7 +230,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        leg: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        leg: [1, 2, 3, 4]
     env:
       CHECK_GO_JOB_CAP_MIN: 30
     steps:
@@ -241,8 +241,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-      - name: go test -race on live PostgreSQL (session domain concurrency, CHAOS-10207; leg ${{ matrix.leg }} of 12)
-        run: bash ci/check_go.sh auth race-integration-leg "${{ matrix.leg }}" 12
+      - name: go test -race on live PostgreSQL (session domain concurrency, CHAOS-10207; leg ${{ matrix.leg }} of 4)
+        run: bash ci/check_go.sh auth race-integration-leg "${{ matrix.leg }}" 4
 
   # One job per package (CHAOS-11417): checkout, setup-go and the compile are paid once per package, not once per target.
   # Each target keeps its own `auth fuzz TARGET` call, so its corpus, its proof marker and the one default fuzz budget

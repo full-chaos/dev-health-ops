@@ -1,5 +1,5 @@
-# CHAOS-13520: the auth race packages too long for one five-minute auth-race leg run as PARTS parts of their test names
+# CHAOS-13520: the auth race packages too long for one auth-race leg run as PARTS parts of their test names
 # (check_go.sh auth race-leg, ci/go_race_shard.awk; a part's names come from `go test -race -list`). Format: package<TAB>parts,
 # sorted. Measured on run 42838103055 (auth-race job 129906426401): internal/auth/authapi 797 s, internal/auth/contracts 474 s.
-internal/auth/authapi	6
-internal/auth/contracts	4
+# CHAOS-13622 (legs of about ten minutes): PARTS = ceil(seconds / 540); a package of 540 s or less runs whole.
+internal/auth/authapi	2

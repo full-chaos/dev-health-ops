@@ -517,6 +517,7 @@ internal/providersync	ownership_snapshot_test.go
 internal/providersync	pagerduty_ordering_contract_test.go
 internal/providersync	project_id_census_test.go
 internal/providersync	response_read_census_test.go
+internal/providersync	route_template_census_test.go
 internal/providersync	snapshot_close_site_census_test.go
 internal/providersync	snapshot_walk_end_rule_test.go
 internal/providersync	status_mapping.go

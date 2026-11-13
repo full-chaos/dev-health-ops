@@ -84,15 +84,46 @@ func TestEveryPageWalkAndObjectFetchNamesARouteTemplate(t *testing.T) {
 }
 
 // The census proves only what it loads: every package of the module that
-// calls DoRoute or DoUnauthenticatedRoute must be in routeCensusPackages
-// (providerfoundation is the library). A new caller package outside the list
-// fails here, not silently. Every non-test Go file of the module is read.
+// names DoRoute or DoUnauthenticatedRoute (a call or a method value) must be
+// in routeCensusPackages (providerfoundation is the library). A new caller
+// package outside the list fails here, not silently. Every non-test Go file
+// of the module is read.
 func TestRouteCensusLoadListHoldsEveryDoRouteCaller(t *testing.T) {
-	const root = "../.."
+	callers, scanned := routeCallerDirs(t, "../..")
+	if scanned < 1000 {
+		t.Fatalf("read %d non-test Go files of the module; the scan must see the module", scanned)
+	}
+	for _, pattern := range routeCensusPackages {
+		if !callers[strings.TrimPrefix(pattern, "./")] {
+			t.Errorf("%s is in the census list but the scan found no DoRoute caller in it: the scan or the list is wrong", pattern)
+		}
+	}
 	allowed := map[string]bool{"internal/providerfoundation": true}
 	for _, pattern := range routeCensusPackages {
 		allowed[strings.TrimPrefix(pattern, "./")] = true
 	}
+	if outside := routeCallersOutside(callers, allowed); len(outside) > 0 {
+		t.Errorf("packages name DoRoute / DoUnauthenticatedRoute outside the census list %v: add them to routeCensusPackages and routeCensusFloor: %v", routeCensusPackages, outside)
+	}
+}
+
+// The scan finds a package that only keeps DoRoute or DoUnauthenticatedRoute
+// as a method value, not only one that calls it.
+func TestRouteCallerScanFindsAMethodValueInAnUnlistedPackage(t *testing.T) {
+	callers, scanned := routeCallerDirs(t, "testdata/routecensus/callers")
+	if scanned != 3 {
+		t.Fatalf("read %d files in testdata/routecensus/callers, want 3", scanned)
+	}
+	got := routeCallersOutside(callers, map[string]bool{"listed": true})
+	if want := []string{"unlisted", "unlistedredirect"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("packages outside the list: %v, want %v", got, want)
+	}
+}
+
+// routeCallerDirs is every directory under root (relative, slash form) with a
+// non-test Go file that names DoRoute or DoUnauthenticatedRoute as a selector.
+func routeCallerDirs(t *testing.T, root string) (map[string]bool, int) {
+	t.Helper()
 	callers := map[string]bool{}
 	scanned := 0
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -114,7 +145,7 @@ func TestRouteCensusLoadListHoldsEveryDoRouteCaller(t *testing.T) {
 			return err
 		}
 		scanned++
-		if !bytes.Contains(source, []byte("Route(")) {
+		if !bytes.Contains(source, []byte("DoRoute")) && !bytes.Contains(source, []byte("DoUnauthenticatedRoute")) {
 			return nil
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
@@ -122,13 +153,9 @@ func TestRouteCensusLoadListHoldsEveryDoRouteCaller(t *testing.T) {
 			return err
 		}
 		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok && (sel.Sel.Name == "DoRoute" || sel.Sel.Name == "DoUnauthenticatedRoute") {
-				dir, err := filepath.Rel(root, filepath.Dir(path))
-				if err == nil {
+			sel, ok := node.(*ast.SelectorExpr)
+			if ok && (sel.Sel.Name == "DoRoute" || sel.Sel.Name == "DoUnauthenticatedRoute") {
+				if dir, err := filepath.Rel(root, filepath.Dir(path)); err == nil {
 					callers[filepath.ToSlash(dir)] = true
 				}
 			}
@@ -139,14 +166,10 @@ func TestRouteCensusLoadListHoldsEveryDoRouteCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scanned < 1000 {
-		t.Fatalf("read %d non-test Go files of the module; the scan must see the module", scanned)
-	}
-	for _, pattern := range routeCensusPackages {
-		if !callers[strings.TrimPrefix(pattern, "./")] {
-			t.Errorf("%s is in the census list but the scan found no DoRoute caller in it: the scan or the list is wrong", pattern)
-		}
-	}
+	return callers, scanned
+}
+
+func routeCallersOutside(callers, allowed map[string]bool) []string {
 	var outside []string
 	for dir := range callers {
 		if !allowed[dir] {
@@ -154,9 +177,7 @@ func TestRouteCensusLoadListHoldsEveryDoRouteCaller(t *testing.T) {
 		}
 	}
 	sort.Strings(outside)
-	if len(outside) > 0 {
-		t.Errorf("packages call DoRoute / DoUnauthenticatedRoute outside the census list %v: add them to routeCensusPackages and routeCensusFloor: %v", routeCensusPackages, outside)
-	}
+	return outside
 }
 
 // requireRouteCensusLoad fails on a load that the census cannot read: a

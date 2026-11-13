@@ -446,7 +446,7 @@ internal/providersync	pagerduty_webhook_reconcile_golden_test.go	internal/provid
 internal/providersync	prepared_discard_decision_test.go	internal/providersync	dir	*
 internal/providersync	project_id_census_test.go	unexpressed	-	*.go
 internal/providersync	response_read_census_test.go	unexpressed	-	-
-internal/providersync	route_template_census_test.go	.	tree	*.go
+internal/providersync	route_template_census_test.go	unexpressed	-	*.go
 internal/providersync	route_wiring_comment_drift_test.go	internal/providersync	dir	*
 internal/providersync	snapshot_close_site_census_test.go	unexpressed	-	-
 internal/providersync	team_absence_test.go	internal/providersync	dir	*

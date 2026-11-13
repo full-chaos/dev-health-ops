@@ -471,6 +471,20 @@ authService:
     loginLockout:
       secretName: ""
       secretKey: AUTH_LOGIN_LOCKOUT_KEY
+  # -- CHAOS-11207: the web approver reference kind of POST /v1/authorize. acr-api presents it for a device or consent
+  #    approval, and auth-service verifies it with the SAME public JWKS acr verifies web assertions with. Set issuer
+  #    (the web assertion issuer), caller (acr-api's workload principal, prn_...; it must also be in
+  #    AUTH_AUTHORIZE_CALLER_SUBJECTS) and jwks.secretName together, or none of them: the render refuses a partial key.
+  #    Set, the chart mounts the Secret as a whole directory at /run/auth/web-approver (no subPath, so a rotation of the
+  #    Secret reaches the pod without a restart; auth-service reads the file on every reference) and renders
+  #    AUTH_AUTHORIZE_WEB_APPROVER_ISSUER, _JWKS_FILE (/run/auth/web-approver/jwks.json) and _CALLER. Empty renders nothing.
+  #    Rotation: the web key rotation updates this Secret (shared with acr); see the auth key rotation runbook.
+  webApprover:
+    issuer: ""
+    caller: ""
+    jwks:
+      secretName: ""
+      secretKey: web-jwks.json
   # -- CHAOS-12662: the rate limits of the policy decision point routes (/v1/authorize, /v1/authorize:batch and /v1/authorize:repositories), per pod.
   #    callerPerSecond/callerBurst: the token bucket of ONE caller workload on ONE route; the effective per-caller limit
   #    is that times authService.replicas. A batch costs its decision count (at most 100), so callerBurst and routeBurst

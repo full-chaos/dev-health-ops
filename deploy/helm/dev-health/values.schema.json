@@ -194,6 +194,23 @@
             }
           }
         },
+        "webApprover": {
+          "description": "The web approver reference kind of POST /v1/authorize (CHAOS-11207): issuer, caller and jwks.secretName together or none; set, the chart mounts the JWKS Secret and renders AUTH_AUTHORIZE_WEB_APPROVER_*.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "issuer": { "type": "string" },
+            "caller": { "type": "string" },
+            "jwks": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "secretName": { "type": "string" },
+                "secretKey": { "type": "string" }
+              }
+            }
+          }
+        },
         "ssoJit": {
           "description": "Render AUTH_SSO_JIT=true on auth-service. true needs authService.phase 4 with usersOwnedStage=owned.",
           "type": "boolean"

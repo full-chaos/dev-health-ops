@@ -39,6 +39,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -97,6 +98,9 @@ type Deps struct {
 	Issuer sessionissue.Issuer
 	// PlatformRoles is how the sign-in reads take is_superuser (AUTH_PLATFORM_ROLES_OWNED).
 	PlatformRoles policy.PlatformRoleRead
+	// Providers is the client of auth-service's SSO provider routes while it owns the providers: the five provider CRUD
+	// routes and activate/deactivate call it. nil keeps the stub and the direct UPDATE.
+	Providers authprovision.SSOProviders
 }
 
 type handlers struct{ Deps }
@@ -153,14 +157,25 @@ func Routes(deps Deps) []httpapi.Route {
 		}
 		return deps.Inner(prefix+path, local)
 	}
+	providerList, providerCreate := h.gated(listQuery), h.gated(body(ssoProviderCreate))
+	providerGet, providerUpdate, providerDelete := h.gated(noInput), h.gated(body(ssoProviderUpdate)), h.gated(noInput)
+	activate, deactivate := h.setStatus("active"), h.setStatus("inactive")
+	if h.Providers != nil {
+		providerList = h.gatedTo(listQuery, http.HandlerFunc(h.listProviders))
+		providerCreate = h.gatedTo(body(ssoProviderCreate), http.HandlerFunc(h.createProvider))
+		providerGet = h.gatedTo(noInput, http.HandlerFunc(h.getProvider))
+		providerUpdate = h.gatedTo(body(ssoProviderUpdate), http.HandlerFunc(h.updateProvider))
+		providerDelete = h.gatedTo(noInput, http.HandlerFunc(h.deleteProvider))
+		activate, deactivate = h.setStatusViaProviders("active"), h.setStatusViaProviders("inactive")
+	}
 	routes := []httpapi.Route{
-		route(http.MethodGet, "/sso/providers", g.Wrap(policy.Authenticated, h.gated(listQuery))),
-		route(http.MethodPost, "/sso/providers", g.BodyFirst(policy.Authenticated, h.gated(body(ssoProviderCreate)))),
-		route(http.MethodGet, "/sso/providers/{provider_id}", g.Wrap(policy.Authenticated, h.gated(noInput))),
-		route(http.MethodPatch, "/sso/providers/{provider_id}", g.BodyFirst(policy.Authenticated, h.gated(body(ssoProviderUpdate)))),
-		route(http.MethodDelete, "/sso/providers/{provider_id}", g.Wrap(policy.Authenticated, h.gated(noInput))),
-		route(http.MethodPost, "/sso/providers/{provider_id}/activate", g.Wrap(policy.Authenticated, h.setStatus("active"))),
-		route(http.MethodPost, "/sso/providers/{provider_id}/deactivate", g.Wrap(policy.Authenticated, h.setStatus("inactive"))),
+		route(http.MethodGet, "/sso/providers", g.Wrap(policy.Authenticated, providerList)),
+		route(http.MethodPost, "/sso/providers", g.BodyFirst(policy.Authenticated, providerCreate)),
+		route(http.MethodGet, "/sso/providers/{provider_id}", g.Wrap(policy.Authenticated, providerGet)),
+		route(http.MethodPatch, "/sso/providers/{provider_id}", g.BodyFirst(policy.Authenticated, providerUpdate)),
+		route(http.MethodDelete, "/sso/providers/{provider_id}", g.Wrap(policy.Authenticated, providerDelete)),
+		route(http.MethodPost, "/sso/providers/{provider_id}/activate", g.Wrap(policy.Authenticated, activate)),
+		route(http.MethodPost, "/sso/providers/{provider_id}/deactivate", g.Wrap(policy.Authenticated, deactivate)),
 		route(http.MethodGet, "/saml/{provider_id}/metadata", g.Wrap(policy.Public, inner("/saml/{provider_id}/metadata", samlMetadataHandler))),
 		route(http.MethodPost, "/saml/{provider_id}/initiate", g.BodyFirst(policy.Public, inner("/saml/{provider_id}/initiate", samlInitiate))),
 		route(http.MethodPost, "/saml/{provider_id}/acs", g.BodyFirst(policy.Public, inner("/saml/{provider_id}/acs", samlACS))),
@@ -202,6 +217,11 @@ func (h handlers) orStateMissing(next http.Handler) http.Handler {
 // names -- so it fails loudly instead of silently letting an unported
 // route through on a license upgrade alone.
 func (h handlers) gated(validate validator) http.Handler {
+	return h.gatedTo(validate, http.HandlerFunc(h.unportedStub))
+}
+
+// gatedTo is gated with serve in place of the stub: the 422 and the 402 first, then serve.
+func (h handlers) gatedTo(validate validator, serve http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var errs pybody.Errors
 		validate(r, &errs)
@@ -217,10 +237,15 @@ func (h handlers) gated(validate validator) http.Handler {
 			policy.WriteDetail(w, http.StatusPaymentRequired, licensing.FeatureNotLicensedDetail(ssoFeature, &ssoRequiredTier), nil)
 			return
 		}
-		h.Logger.ErrorContext(r.Context(), "api sso: the process tier grants sso_saml, but the licensed SSO flows are not served by the Go api",
-			"path", r.Pattern)
-		policy.WriteInternal(w)
+		serve.ServeHTTP(w, r)
 	})
+}
+
+// unportedStub is what a gated route answers once the process tier grants sso_saml: it is not served by the Go api.
+func (h handlers) unportedStub(w http.ResponseWriter, r *http.Request) {
+	h.Logger.ErrorContext(r.Context(), "api sso: the process tier grants sso_saml, but the licensed SSO flows are not served by the Go api",
+		"path", r.Pattern)
+	policy.WriteInternal(w)
 }
 
 // pairRoute is one Python route under /oauth/{first}/{second}, in the order

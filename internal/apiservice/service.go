@@ -243,7 +243,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// SSO_STATE_SECRET only (statePurposeSecrets);
 			// HKDF derives one key per protocol from it (state.go).
 			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, Inner: proxy.inner,
-			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
+			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(), Providers: deps.SSOProviders,
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
 		routes = append(routes, billing.Routes(billing.Deps{
@@ -429,6 +429,11 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_users_owned", "api_users_owned_config_invalid", err)
 	}
+	deps.SSOProvidersOwned, err = ParseSSOProvidersOwned(envsecrets.ProcessLookup, authProxy)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_sso_providers_owned", "api_sso_providers_owned_config_invalid", err)
+	}
 	deps.PlatformRolesOwned, err = rule.OwnedFromLookup(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
@@ -499,6 +504,11 @@ func configureWith(
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
+	}
+	deps.SSOProviders, err = ssoProvidersClient(authProxy, deps.SSOProvidersOwned, sharedWorkloadClient(provisioningCred, sessionCred))
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_sso_providers", "api_sso_providers_config_invalid", err)
 	}
 	deps.UsersAdmin, err = usersAdminClient(authProxy, deps.UsersOwned, sharedWorkloadClient(provisioningCred, sessionCred))
 	if err != nil {

@@ -264,6 +264,8 @@ internal/cigates/splitshards	support_test.go	unexpressed	-	-
 internal/cigates/suitecatalog	runblock_test.go	unexpressed	-	-
 internal/cigates/suitecatalog	suitecatalog_test.go	.github/workflows	dir	*
 internal/cigates/suitecatalog	suitecatalog_test.go	unexpressed	-	-
+internal/cigates/testshard	authsplitweights_test.go	.	dir	*
+internal/cigates/testshard	authsplitweights_test.go	ci	dir	*
 internal/cigates/testshard	raceweightsdir_test.go	ci/go_race_weights.d	dir	*
 internal/cigates/testshard	trimpath_test.go	.github/workflows	dir	*
 internal/cigates/testshard	trimpath_test.go	unexpressed	-	-

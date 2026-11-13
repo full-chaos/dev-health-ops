@@ -88,6 +88,16 @@ type HandoffResult struct {
 	// Unminted lists, per occurrence this window minted, the cron instants it
 	// passed over: no window minted them and no window will (CHAOS-3954).
 	Unminted []UnmintedInstants
+	// UnmintedCountFailed lists the minted occurrences whose unminted-instant
+	// count failed. The mint stands; only the count is lost.
+	UnmintedCountFailed []UnmintedCountFailure
+}
+
+// UnmintedCountFailure names one minted occurrence whose count failed.
+type UnmintedCountFailure struct {
+	ConfigID  string
+	MintedFor time.Time
+	Error     string
 }
 
 const (
@@ -470,11 +480,20 @@ func (repository *Repository) HandoffDueResult(
 		}
 		result.HandedOff = append(result.HandedOff, occurrence)
 		if newest := locked.candidate.LastOccurrenceAt; outcome == OccurrenceMinted && newest != nil {
-			unminted, err := unmintedInstants(ctx, locked.candidate.Job, occurrence, *newest)
-			if err != nil {
-				return HandoffResult{}, fmt.Errorf("count unminted instants for config %s: %w", occurrence.ConfigID, err)
+			count := repository.countUnminted
+			if count == nil {
+				count = unmintedInstants
 			}
-			if unminted.Count > 0 {
+			unminted, err := count(ctx, locked.candidate.Job, occurrence, *newest)
+			if err != nil {
+				// The count only reports; a failure must not roll back a mint
+				// that would commit without it.
+				result.UnmintedCountFailed = append(result.UnmintedCountFailed, UnmintedCountFailure{
+					ConfigID:  occurrence.ConfigID,
+					MintedFor: occurrence.ScheduledFor.UTC(),
+					Error:     err.Error(),
+				})
+			} else if unminted.Count > 0 {
 				result.Unminted = append(result.Unminted, unminted)
 			}
 		}

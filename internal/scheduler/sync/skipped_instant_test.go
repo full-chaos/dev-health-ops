@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -342,5 +343,71 @@ func TestUnmintedInstantLineIsBounded(t *testing.T) {
 				t.Fatalf("metrics omit %q", want)
 			}
 		})
+	}
+}
+
+// CHAOS-3954 cell: the unminted-instant count only reports. When it fails, the
+// window still mints, advances the marker and commits, exactly as before the
+// count existed, and names the config whose count it lost.
+func TestUnmintedCountFailureStillMints(t *testing.T) {
+	createdAt := at("2026-08-01T00:00:00Z")
+	lateEnd := at("2026-08-20T02:45:00Z")
+	marker := at("2026-08-20T03:00:00Z")
+	ledger := newLedgerCoordinator()
+	ledger.minted[at("2026-08-19T23:00:00Z")] = true
+	transaction := &fakeSchedulerTransaction{
+		rows: &fakeLockedRows{rows: [][]any{lockedLedgerRow(
+			"config-count", "org-a", "job-a", "0 * * * *",
+			createdAt, lateEnd, &marker, ledger.latest(),
+		)}},
+		execTag:  pgconn.NewCommandTag("UPDATE 1"),
+		openRuns: openScheduledRuns{lastScheduledRunEndedAt: &lateEnd},
+	}
+	repository := mutationRepository(transaction)
+	repository.countUnminted = func(context.Context, *Job, Occurrence, time.Time) (UnmintedInstants, error) {
+		return UnmintedInstants{}, errors.New("forced count failure")
+	}
+	var logs bytes.Buffer
+	var result HandoffResult
+	var stepErr error
+	loop, err := newLoop(
+		loopStepFunc(func(ctx context.Context, now time.Time, limit int, coordinator Coordinator) (HandoffResult, error) {
+			result, stepErr = repository.HandoffDueResult(ctx, now, limit, coordinator)
+			return result, stepErr
+		}),
+		ledger,
+		LoopConfig{
+			PollInterval: minLoopPollInterval,
+			StepTimeout:  time.Second,
+			MaxBackoff:   80 * time.Millisecond,
+			Limit:        4,
+			Registry:     health.NewRegistry(time.Second),
+			Occurrences:  &stubOccurrences{},
+			Logger:       slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})),
+		},
+		&testLoopClock{now: at("2026-08-20T03:00:05Z")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startErr := loop.Start(context.Background())
+	_ = loop.Shutdown(context.Background())
+	if stepErr != nil || startErr != nil {
+		t.Fatalf("a count failure failed the window: step err = %v, start err = %v", stepErr, startErr)
+	}
+	if result.Minted() != 1 || !result.HandedOff[0].ScheduledFor.Equal(marker) || !transaction.committed {
+		t.Fatalf("minted=%d committed=%v handed off=%v, want 03:00 minted and committed",
+			result.Minted(), transaction.committed, result.HandedOff)
+	}
+	if len(transaction.execArgs) != 1 {
+		t.Fatalf("marker writes = %d, want 1", len(transaction.execArgs))
+	}
+	if len(result.Unminted) != 0 || len(result.UnmintedCountFailed) != 1 ||
+		result.UnmintedCountFailed[0].ConfigID != "config-count" {
+		t.Fatalf("unminted = %v, count failures = %v", result.Unminted, result.UnmintedCountFailed)
+	}
+	if !strings.Contains(logs.String(), `"reason":"unminted_count_failed"`) ||
+		!strings.Contains(logs.String(), `"config_id":"config-count"`) {
+		t.Fatalf("no count-failure line; logs = %s", logs.String())
 	}
 }

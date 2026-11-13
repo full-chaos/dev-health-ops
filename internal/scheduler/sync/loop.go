@@ -486,6 +486,16 @@ func (loop *Loop) reportUnmintedInstants(ctx context.Context, result HandoffResu
 			"unminted_instants", strings.Join(named, ","),
 		)
 	}
+	for _, failed := range result.UnmintedCountFailed {
+		loop.logger().WarnContext(
+			ctx,
+			"sync scheduler minted an occurrence but could not count the cron instants it passed over",
+			"reason", "unminted_count_failed",
+			"config_id", failed.ConfigID,
+			"scheduled_for", failed.MintedFor.UTC().Format(time.RFC3339),
+			"error", failed.Error,
+		)
+	}
 }
 
 // reportOpenRuns counts and names the ticks that started no run because an
@@ -676,7 +686,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	writeLoopCounter(&text, "sync_scheduler_skipped_feature_disabled_total", "Due candidates refused before minting because their sync targets require the canonical-incident feature and the organization is not entitled to it.", featureDisabled)
 	writeLoopCounter(&text, "sync_scheduler_skipped_not_planner_managed_total", "Due candidates refused before minting because planner_managed is false, marking them a fixture or legacy fan-out config that must never be scheduled (CHAOS-4174).", notPlannerManaged)
 	writeLoopCounter(&text, "sync_scheduler_skipped_open_run_total", "Due schedule ticks that started no run because an earlier scheduled run of the same configuration is still open and inside its bound. The next run covers the skipped time from the unit watermarks.", skippedOpenRun)
-	writeLoopCounter(&text, "sync_scheduler_unminted_instants_total", "Cron instants no window minted: a late window or a skip for an open run passed over them, and the next minted occurrence rebased past them. Runs are incremental, so the next run covers their time; the count is the schedule-fidelity loss (CHAOS-3954).", unmintedInstants)
+	writeLoopCounter(&text, "sync_scheduler_unminted_instants_total", "Cron instants no window minted: a late window or a skip for an open run passed over them, and the next minted occurrence rebased past them. Runs are incremental, so the next run covers their time; the count is the schedule-fidelity loss (CHAOS-3954). A scan that stops at its cap (unminted_count_capped=true) adds the cap, a lower bound.", unmintedInstants)
 	writeLoopCounter(&text, "sync_scheduler_open_run_past_bound_no_progress_total", "Scheduled runs started beside an open run of the same configuration in which no unit ended and no unit held a lease or sent a heartbeat inside the progress interval. Any growth is a run that did not end.", pastNoProgress)
 	writeLoopCounter(&text, "sync_scheduler_open_run_past_bound_age_cap_total", "Scheduled runs started beside an open run of the same configuration that is open for more than the hard age cap of 48 hours, counted from the creation of its occurrence. Any growth is a run that did not end.", pastAgeCap)
 	fmt.Fprintf(&text, "# HELP sync_scheduler_configs_without_schedule Active planner-managed sync configs the scheduler never plans because sync_options.schedule_cron is empty, as of the last hourly pass; the true total, not the capped list (CHAOS-8768).\n# TYPE sync_scheduler_configs_without_schedule gauge\nsync_scheduler_configs_without_schedule %d\n", unscheduled)

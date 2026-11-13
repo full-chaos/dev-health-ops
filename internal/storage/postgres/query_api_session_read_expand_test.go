@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -22,6 +23,21 @@ func widenedSessionTables(owned bool) []QueryAPIAuthTable {
 	return tables
 }
 
+// pr1SessionRead is the session read of the query-api that is live before this read widens
+// (PR-1's QueryAPISessionReadFor, frozen here): its readiness accepts this read or its
+// Widened form. The cells below that use it are that query-api's readiness, so they prove
+// the live query-api stays ready when both granters move to the widened read.
+func pr1SessionRead(schema string, owned bool) QueryAPISessionRead {
+	read := QueryAPISessionRead{Schema: schema, Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+	if owned {
+		read.Also = []QueryAPIAuthTable{
+			{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
+			{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}},
+		}
+	}
+	return read
+}
+
 func grantsOfTables(schema string, tables []QueryAPIAuthTable) []roleacl.Grant {
 	grants := []roleacl.Grant{{Class: "schema", Object: schema, Privilege: "USAGE"}}
 	for _, table := range tables {
@@ -41,7 +57,7 @@ func withBase(t *testing.T, extra []roleacl.Grant) []roleacl.Grant {
 func TestQueryAPIReadinessAcceptsTheOldSessionReadExactly(t *testing.T) {
 	t.Parallel()
 	for _, owned := range []bool{false, true} {
-		read := QueryAPISessionReadFor("auth", owned)
+		read := pr1SessionRead("auth", owned)
 		if got := diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &read, withBase(t, sessionGrantsFor(read))); got != "" {
 			t.Errorf("owned=%v: the old set is refused: %q", owned, got)
 		}
@@ -51,7 +67,7 @@ func TestQueryAPIReadinessAcceptsTheOldSessionReadExactly(t *testing.T) {
 func TestQueryAPIReadinessAcceptsTheWidenedSessionReadExactly(t *testing.T) {
 	t.Parallel()
 	for _, owned := range []bool{false, true} {
-		read := QueryAPISessionReadFor("auth", owned)
+		read := pr1SessionRead("auth", owned)
 		if got := diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &read, withBase(t, grantsOfTables("auth", widenedSessionTables(owned)))); got != "" {
 			t.Errorf("owned=%v: the widened set is refused: %q", owned, got)
 		}
@@ -78,7 +94,7 @@ func TestQueryAPIReadinessRefusesAThirdSessionRead(t *testing.T) {
 		return out
 	}
 	for _, owned := range []bool{false, true} {
-		read := QueryAPISessionReadFor("auth", owned)
+		read := pr1SessionRead("auth", owned)
 		widened := widenedSessionTables(owned)
 		thirds := map[string][]roleacl.Grant{
 			"old plus created_at only":         append(sessionGrantsFor(read), roleacl.Grant{Class: "column", Object: "auth.sessions.created_at", Privilege: "SELECT"}),
@@ -106,11 +122,11 @@ func TestQueryAPIReadinessRefusesAThirdSessionRead(t *testing.T) {
 func TestQueryAPIReadinessAcceptsTheWidenedSessionReadInItsSchema(t *testing.T) {
 	t.Parallel()
 	for _, owned := range []bool{false, true} {
-		read := QueryAPISessionReadFor("tenant_auth", owned)
+		read := pr1SessionRead("tenant_auth", owned)
 		if got := diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &read, withBase(t, grantsOfTables("tenant_auth", widenedSessionTables(owned)))); got != "" {
 			t.Errorf("owned=%v: the widened set in tenant_auth is refused: %q", owned, got)
 		}
-		other := QueryAPISessionReadFor("auth", owned)
+		other := pr1SessionRead("auth", owned)
 		if got := diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &other, withBase(t, grantsOfTables("tenant_auth", widenedSessionTables(owned)))); got == "" {
 			t.Errorf("owned=%v: the widened set in tenant_auth is accepted for schema auth", owned)
 		}
@@ -121,7 +137,7 @@ func TestQueryAPIReadinessAcceptsTheWidenedSessionReadInItsSchema(t *testing.T) 
 // a difference outside the session read is named once.
 func TestQueryAPIReadinessNamesTheDifferenceAgainstBothSessionReads(t *testing.T) {
 	t.Parallel()
-	read := QueryAPISessionReadFor("auth", false)
+	read := pr1SessionRead("auth", false)
 	partial := append(sessionGrantsFor(read), roleacl.Grant{Class: "column", Object: "auth.sessions.created_at", Privilege: "SELECT"})
 	got := diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &read, withBase(t, partial))
 	want := "holds SELECT on column auth.sessions.created_at, which is outside the manifest" +
@@ -134,5 +150,39 @@ func TestQueryAPIReadinessNamesTheDifferenceAgainstBothSessionReads(t *testing.T
 	got = diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &read, withBase(t, outside))
 	if want := "holds SELECT on relation public.audit_log, which is outside the manifest"; got != want {
 		t.Errorf("a grant outside the session read: %q, want %q", got, want)
+	}
+}
+
+// Both granters now grant the widened read (QueryAPISessionReadFor), and the live query-api,
+// which holds the old read, accepts exactly that set: the grant hooks do not take it out of Ready.
+func TestTheLiveQueryAPIAcceptsWhatBothGrantersNowGrant(t *testing.T) {
+	t.Parallel()
+	for _, owned := range []bool{false, true} {
+		read := QueryAPISessionReadFor("auth", owned)
+		if got, want := read.Tables(), widenedSessionTables(owned); !reflect.DeepEqual(got, want) {
+			t.Fatalf("owned=%v: the granted read is %+v, want the widened read %+v", owned, got, want)
+		}
+		live := pr1SessionRead("auth", owned)
+		if got := diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &live, withBase(t, sessionGrantsFor(read))); got != "" {
+			t.Errorf("owned=%v: the live query-api refuses the granted read: %q", owned, got)
+		}
+	}
+}
+
+// This query-api's session read needs the widened grant (sessionrule.Revoked reads
+// created_at, web_session_id and the password stamp), so its readiness holds the
+// role to the widened read alone: on the old grant it is not ready and names the
+// first missing column; on the widened grant it is ready.
+func TestQueryAPIReadinessNeedsTheWidenedGrant(t *testing.T) {
+	t.Parallel()
+	for _, owned := range []bool{false, true} {
+		read := QueryAPISessionReadFor("auth", owned)
+		old := withBase(t, grantsOfTables("auth", pr1SessionRead("auth", owned).Tables()))
+		if got, want := diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &read, old), "lacks SELECT on column auth.sessions.created_at"; got != want {
+			t.Errorf("owned=%v: on the old grant %q, want %q", owned, got, want)
+		}
+		if got := diffQueryAPIGrantsWithSessions("db", QueryAPIPosture(), &read, withBase(t, grantsOfTables("auth", widenedSessionTables(owned)))); got != "" {
+			t.Errorf("owned=%v: on the widened grant %q, want ready", owned, got)
+		}
 	}
 }

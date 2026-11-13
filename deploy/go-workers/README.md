@@ -1196,8 +1196,9 @@ sides:
 **Auth session read.** While auth-service owns sessions (`authService.phase` 2 or
 more, `AUTH_PROXY_SESSIONS`), the manifest also holds USAGE on the auth schema
 (`AUTH_DATABASE_SCHEMA`, default `auth`) and column SELECT on
-`sessions(id, principal_id, revoked_at, legacy_token_version)`: the same list auth-migrate grants a
-session reader (`authschema.SessionReaderColumns`), declared once in
+`sessions(id, principal_id, revoked_at, legacy_token_version, created_at, web_session_id)` and
+`users(principal_id, password_updated_at)` (what the session rule's revoke reads): the same list
+auth-migrate grants a session reader (`authschema.SessionReaderReads`), declared once in
 `postgres.QueryAPISessionReadFor`. `dho migrate river` emits it after the role's
 REVOKE, so the role ends with exactly the manifest plus that read; auth-migrate's
 identical grant converges on the same state. The river-migrate hook runs after
@@ -1209,11 +1210,14 @@ requires `authService.migrate.sessionReaders.queryApi` to equal the
 below phase 2: the reader and the phase are set (and
 removed) in one values change, so auth-migrate and river-migrate never undo each
 other's grant.
-Readiness also accepts, exactly, the widened read the session rule needs
-(`QueryAPISessionRead.Widened`: the same sessions columns plus `created_at` and
-`web_session_id`, and `users(principal_id, password_updated_at)`), so the grant can
-widen after query-api rolls. Any other set is refused, and the refusal names the
-difference against both.
+Readiness accepts exactly that read. The old read (the four sessions columns
+alone) is refused: this query-api's session read needs the widened one, so a pod on
+the old grant stays not ready, naming the first missing column. Both granters emit
+the widened read, so the grant hooks run before query-api and go-api roll; the
+query-api they replace accepted the widened read already (`QueryAPISessionRead.Widened`).
+Never run an older auth-migrate or river migrate once these apps are live: it narrows
+the read back, and go-api, which checks no auth grant at readiness, then fails every
+session read.
 
 Leaving `QUERY_API_DATABASE_ROLE` unset changes nothing. The completeness proof
 for the manifest is `TestQueryAPIRoleServesEveryPostgresPathItReaches`

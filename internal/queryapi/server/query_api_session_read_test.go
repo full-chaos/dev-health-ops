@@ -13,7 +13,8 @@ func TestQueryAPISessionReadFollowsTheSessionsFlag(t *testing.T) {
 		}
 	}
 	read, err := queryAPISessionRead(env(map[string]string{"AUTH_PROXY_SESSIONS": "true", "AUTH_DATABASE_SCHEMA": "acp"}))
-	if err != nil || read == nil || read.Schema != "acp" || read.Table != "sessions" || len(read.Columns) != 4 {
+	if err != nil || read == nil || read.Schema != "acp" || read.Table != "sessions" || len(read.Columns) != 6 ||
+		len(read.Also) != 1 || read.Also[0].Table != "users" {
 		t.Fatalf("flag on: %+v %v", read, err)
 	}
 	if _, err := queryAPISessionRead(env(map[string]string{"AUTH_PROXY_SESSIONS": "maybe"})); err == nil {
@@ -44,11 +45,11 @@ func TestQueryAPIPlatformReadFollowsTheSwitch(t *testing.T) {
 	t.Parallel()
 	env := func(values map[string]string) getenvFunc { return func(k string) string { return values[k] } }
 	read, err := queryAPISessionRead(env(map[string]string{"AUTH_PROXY_SESSIONS": "true", "AUTH_PLATFORM_ROLES_OWNED": " TRUE "}))
-	if err != nil || read == nil || len(read.Tables()) != 3 || read.Tables()[1].Table != "platform_role_assignments" {
+	if err != nil || read == nil || len(read.Tables()) != 4 || read.Tables()[1].Table != "users" || read.Tables()[2].Table != "platform_role_assignments" {
 		t.Fatalf("owned: %+v %v", read, err)
 	}
 	read, err = queryAPISessionRead(env(map[string]string{"AUTH_PROXY_SESSIONS": "true", "AUTH_PLATFORM_ROLES_OWNED": "false"}))
-	if err != nil || read == nil || len(read.Tables()) != 1 {
+	if err != nil || read == nil || len(read.Tables()) != 2 {
 		t.Fatalf("not owned: %+v %v", read, err)
 	}
 	if _, err := queryAPISessionRead(env(map[string]string{"AUTH_PROXY_SESSIONS": "true", "AUTH_PLATFORM_ROLES_OWNED": "yes"})); err == nil {

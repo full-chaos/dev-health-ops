@@ -251,10 +251,12 @@ install() { # DB: database and ClickHouse database, hook Secrets on the superuse
   if [ "$1" = "${AUTH_DB}" ]; then
     pg -d "$1" -c "CREATE SCHEMA auth AUTHORIZATION ${AUTH_MIGRATOR}" -c "SET ROLE ${AUTH_MIGRATOR}" \
       -c "CREATE TABLE auth.schema_migrations (version integer PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())" \
-      -c "CREATE TABLE auth.sessions (id uuid PRIMARY KEY, principal_id uuid NOT NULL, revoked_at timestamptz, legacy_token_version integer, secret_hash text)" \
+      -c "CREATE TABLE auth.sessions (id uuid PRIMARY KEY, principal_id uuid NOT NULL, revoked_at timestamptz, legacy_token_version integer, secret_hash text, created_at timestamptz, web_session_id uuid)" \
+      -c "CREATE TABLE auth.users (principal_id uuid PRIMARY KEY, password_updated_at timestamptz, password_hash text)" \
       -c "INSERT INTO auth.sessions (id, principal_id) VALUES (gen_random_uuid(), gen_random_uuid())" \
       -c "GRANT USAGE ON SCHEMA auth TO ${QUERY_API}" \
-      -c "GRANT SELECT (id, principal_id, revoked_at, legacy_token_version) ON auth.sessions TO ${QUERY_API}" >/dev/null
+      -c "GRANT SELECT (id, principal_id, revoked_at, legacy_token_version, created_at, web_session_id) ON auth.sessions TO ${QUERY_API}" \
+      -c "GRANT SELECT (principal_id, password_updated_at) ON auth.users TO ${QUERY_API}" >/dev/null
     pass "$1: schema auth owned by ${AUTH_MIGRATOR}; query-api's session read granted by the auth migrator (auth-grants form)"
   fi
   helm_args "$1" "$1" "" 0

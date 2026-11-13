@@ -57,10 +57,18 @@ func PublicReadColumns() []ColumnGrant {
 	}
 }
 
-// SessionReaderColumns is what a session reader role may SELECT in the auth
-// schema: column-level, on the sessions table only.
+// SessionReaderColumns is what a session reader role may SELECT on the sessions
+// table of the auth schema, column-level: the columns its session read selects
+// and the ones sessionrule.Revoked reads on the row and on its web session
+// (created_at, web_session_id).
 func SessionReaderColumns() ColumnGrant {
-	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version", "created_at", "web_session_id"}}
+}
+
+// SessionReaderStampColumns is the principal's password stamp sessionrule.Revoked
+// reads: column-level on users, no other users column (no password_hash).
+func SessionReaderStampColumns() ColumnGrant {
+	return ColumnGrant{Table: "users", Columns: []string{"principal_id", "password_updated_at"}}
 }
 
 // ProjectionReaderReads is everything a projection reader role reads in the auth schema. scopes and source_id are
@@ -80,10 +88,10 @@ func PlatformRoleReaderColumns() []ColumnGrant {
 }
 
 // SessionReaderReads is everything a session reader role reads in the auth
-// schema: SessionReaderColumns, then PlatformRoleReaderColumns while
-// platformRolesOwned.
+// schema: SessionReaderColumns and SessionReaderStampColumns, then
+// PlatformRoleReaderColumns while platformRolesOwned.
 func SessionReaderReads(platformRolesOwned bool) []ColumnGrant {
-	reads := []ColumnGrant{SessionReaderColumns()}
+	reads := []ColumnGrant{SessionReaderColumns(), SessionReaderStampColumns()}
 	if platformRolesOwned {
 		reads = append(reads, PlatformRoleReaderColumns()...)
 	}

@@ -60,7 +60,7 @@ func TestWorkloadReaderRoleReadsTheRegistryAndTheQueryAPIRoleDoesNot(t *testing.
 	if err := readerStatement(ctx, apiPool, registry); err != nil {
 		t.Fatalf("the go-api role cannot read the registry row: %v", err)
 	}
-	if err := readerStatement(ctx, apiPool, `SELECT id, principal_id, revoked_at, legacy_token_version FROM auth.sessions`); err != nil {
+	if err := readerStatement(ctx, apiPool, `SELECT id, principal_id, revoked_at, legacy_token_version, created_at, web_session_id FROM auth.sessions`); err != nil {
 		t.Fatalf("the go-api role lost its session read: %v", err)
 	}
 	for _, refused := range []string{`SELECT * FROM auth.workloads`, `SELECT id, kind FROM auth.principals`, `SELECT 1 FROM auth.workload_bindings`,
@@ -74,10 +74,10 @@ func TestWorkloadReaderRoleReadsTheRegistryAndTheQueryAPIRoleDoesNot(t *testing.
 			t.Errorf("%s as the query-api role: err = %v, want permission denied", refused, err)
 		}
 	}
-	if got, want := columnGrantsOf(t, ctx, env, query), "sessions.id:SELECT,sessions.legacy_token_version:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT"; got != want {
+	if got, want := columnGrantsOf(t, ctx, env, query), "sessions.created_at:SELECT,sessions.id:SELECT,sessions.legacy_token_version:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT,sessions.web_session_id:SELECT,users.password_updated_at:SELECT,users.principal_id:SELECT"; got != want {
 		t.Errorf("the query-api role's column grants = %s, want %s", got, want)
 	}
-	wantAPI := "principals.disabled_at:SELECT,principals.id:SELECT,sessions.id:SELECT,sessions.legacy_token_version:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT," +
+	wantAPI := "principals.disabled_at:SELECT,principals.id:SELECT,sessions.created_at:SELECT,sessions.id:SELECT,sessions.legacy_token_version:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT,sessions.web_session_id:SELECT,users.password_updated_at:SELECT,users.principal_id:SELECT," +
 		"workloads.audiences:SELECT,workloads.disabled_at:SELECT,workloads.name:SELECT,workloads.organization_id:SELECT,workloads.principal_id:SELECT"
 	if got := columnGrantsOf(t, ctx, env, api); got != wantAPI {
 		t.Errorf("the go-api role's column grants = %s, want %s", got, wantAPI)

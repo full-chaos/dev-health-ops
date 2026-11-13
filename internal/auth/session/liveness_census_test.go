@@ -39,13 +39,11 @@ var (
 type allowed struct{ predicates, reason string }
 
 var livenessAllowlist = map[string]allowed{
-	"internal/api/policy/session.go#sessionStateQuery":          {`revoked_at IS NOT NULL`, "CHAOS-12701: go-api and query-api reader on column grants; moves to sessionrule with its grant ruling"},
 	"internal/auth/session/delegation.go#lockBaseAndPriors":     {`s.revoked_at IS NULL`, "the prior-delegation lock set (own revoked_at); the base decision itself uses the rule"},
 	"internal/auth/session/delegation.go#insertDelegation":      {`e.expires_at >`, "creation expiry of a delegated row (min of the base's rule Expiry and grants), not a liveness decision"},
 	"internal/auth/session/end_all.go#revokeAllLive":            {`s.revoked_at IS NULL`, "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry"},
 	"internal/auth/session/end_org.go#EndOrgInTx":               {`s.revoked_at IS NULL`, "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry"},
 	"internal/auth/session/end_org.go#EndOrganizationInTx":      {`s.revoked_at IS NULL`, "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry"},
-	"internal/edgetokenmint/eddsa.go#sessionLiveSQL":            {`expires_at <= | revoked_at IS NOT NULL`, "CI-only mint pre-check that mirrors go-api policy.PGStore.SessionState plus expiry (CHAOS-12701 site); moves to sessionrule with it"},
 	"internal/auth/session/store.go#liveClientSessions":         {`revoked_at IS NULL`, "selects the live client sessions under a revoked web session to name them in session.revoked events (own revoked_at); the server read of each is the rule"},
 	"internal/auth/session/store.go#CurrentWithClientClass":     {`g.revoked_at IS NULL`, "the grant's own revoke (oauth_grants), naming the live grant's client class; the session's liveness in the same statement is the rule's"},
 	"internal/auth/session/store.go#endSessions":                {`revoked_at IS NULL | revoked_at IS NULL`, "UPDATE writer: revokes the rows it was given"},
@@ -124,6 +122,27 @@ func predicatesOf(text string) string {
 	return strings.Join(out, " | ")
 }
 
+// handWrittenIn returns, per statement of one Go file (rel, from the repo root) that names the
+// sessions table and tests revoked_at or expires_at by hand, its predicates.
+func handWrittenIn(t *testing.T, rel string, raw []byte) map[string]string {
+	t.Helper()
+	found := map[string]string{}
+	if !strings.Contains(string(raw), "sessions") {
+		return found
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, rel, raw, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for scope, text := range statementLiterals(fset, file) {
+		if sessionsWord.MatchString(text) && livenessWords.MatchString(text) {
+			found[rel+"#"+scope] = predicatesOf(text)
+		}
+	}
+	return found
+}
+
 func TestNoHandWrittenSessionLivenessPredicate(t *testing.T) {
 	root := repoRoot(t)
 	found := map[string]string{}
@@ -144,18 +163,8 @@ func TestNoHandWrittenSessionLivenessPredicate(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if !strings.Contains(string(raw), "sessions") {
-				return nil
-			}
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, path, raw, parser.SkipObjectResolution)
-			if err != nil {
-				return err
-			}
-			for scope, text := range statementLiterals(fset, file) {
-				if sessionsWord.MatchString(text) && livenessWords.MatchString(text) {
-					found[rel+"#"+scope] = predicatesOf(text)
-				}
+			for key, predicates := range handWrittenIn(t, rel, raw) {
+				found[key] = predicates
 			}
 			return nil
 		})
@@ -223,6 +232,25 @@ func TestCensusSeesASecondPredicateInsideAnAllowlistedStatement(t *testing.T) {
 	for _, extra := range []string{" AND s.expires_at > now()", " AND s.revoked_at IS NULL", " AND x.revoked_at IS NOT NULL"} {
 		if got := predicatesOf("SELECT 1 FROM sessions s WHERE s.principal_id = $1 AND s.revoked_at IS NULL" + extra); got == entry.predicates {
 			t.Errorf("a second predicate %q is not seen", extra)
+		}
+	}
+}
+
+// The two reads that left the allowlist are seen again if their hand-written form comes
+// back: the old texts, read as the files at their paths, are reported and are not allowlisted.
+func TestCensusSeesAPlantedRevokedAtReadAtEitherSite(t *testing.T) {
+	for rel, c := range map[string]struct{ body, key, want string }{
+		"internal/api/policy/session.go": {"package policy\n\nconst sessionStateQuery = `SELECT principal_id, revoked_at IS NOT NULL, legacy_token_version FROM {auth_schema}.sessions WHERE id = $1`\n",
+			"internal/api/policy/session.go#sessionStateQuery", "revoked_at IS NOT NULL"},
+		"internal/edgetokenmint/eddsa.go": {"package edgetokenmint\n\nconst sessionLiveSQL = `SELECT principal_id, revoked_at IS NOT NULL, expires_at <= now(), legacy_token_version FROM %s.sessions WHERE id = $1`\n",
+			"internal/edgetokenmint/eddsa.go#sessionLiveSQL", "expires_at <= | revoked_at IS NOT NULL"},
+	} {
+		found := handWrittenIn(t, rel, []byte(c.body))
+		if found[c.key] != c.want {
+			t.Errorf("%s: the census reports [%s], want [%s]", c.key, found[c.key], c.want)
+		}
+		if _, ok := livenessAllowlist[c.key]; ok {
+			t.Errorf("%s is allowlisted: a planted revoked_at read there passes the census", c.key)
 		}
 	}
 }

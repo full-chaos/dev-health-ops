@@ -72,9 +72,10 @@ func readerViolations(t *testing.T, ctx context.Context, env *authFixture, reade
 }
 
 // A session reader (go-api, query-api) may SELECT exactly id, principal_id,
-// revoked_at and legacy_token_version of the auth sessions, column-level, and nothing else in the
-// auth schema; a re-apply restores exactly that, and the posture names any
-// widening.
+// revoked_at, legacy_token_version, created_at and web_session_id of the auth sessions
+// and principal_id and password_updated_at of the auth users (the session rule's revoke),
+// column-level, and nothing else in the auth schema; a re-apply restores exactly that,
+// and the posture names any widening.
 func TestSessionReaderRolesReadExactlyTheSessionColumns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -84,10 +85,15 @@ func TestSessionReaderRolesReadExactlyTheSessionColumns(t *testing.T) {
 		t.Fatalf("Apply with a session reader: %v", err)
 	}
 
-	if err := readerStatement(ctx, pool, `SELECT id, principal_id, revoked_at, legacy_token_version FROM auth.sessions`); err != nil {
+	if err := readerStatement(ctx, pool, `SELECT id, principal_id, revoked_at, legacy_token_version, created_at, web_session_id FROM auth.sessions`); err != nil {
 		t.Fatalf("the reader cannot read its columns: %v", err)
 	}
+	if err := readerStatement(ctx, pool, `SELECT principal_id, password_updated_at FROM auth.users`); err != nil {
+		t.Fatalf("the reader cannot read the password stamp: %v", err)
+	}
 	for _, refused := range []string{
+		`SELECT password_hash FROM auth.users`,
+		`SELECT * FROM auth.users`,
 		`SELECT expires_at FROM auth.sessions`,
 		`SELECT * FROM auth.sessions`,
 		`SELECT id FROM auth.principals`,
@@ -123,7 +129,7 @@ func TestSessionReaderRolesReadExactlyTheSessionColumns(t *testing.T) {
 		columns = append(columns, entry)
 	}
 	rows.Close()
-	if want := "sessions.id:SELECT,sessions.legacy_token_version:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT"; strings.Join(columns, ",") != want {
+	if want := "sessions.created_at:SELECT,sessions.id:SELECT,sessions.legacy_token_version:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT,sessions.web_session_id:SELECT,users.password_updated_at:SELECT,users.principal_id:SELECT"; strings.Join(columns, ",") != want {
 		t.Errorf("the reader's column grants = %v, want %s", columns, want)
 	}
 	if found := readerViolations(t, ctx, env, reader); len(found) != 0 {

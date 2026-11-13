@@ -54,7 +54,7 @@ func readerColumnGrants(t *testing.T, ctx context.Context, env *authFixture, rea
 }
 
 const (
-	sessionColumnGrants  = "sessions.id:SELECT,sessions.legacy_token_version:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT"
+	sessionColumnGrants  = "sessions.created_at:SELECT,sessions.id:SELECT,sessions.legacy_token_version:SELECT,sessions.principal_id:SELECT,sessions.revoked_at:SELECT,sessions.web_session_id:SELECT,users.password_updated_at:SELECT,users.principal_id:SELECT"
 	platformColumnGrants = "platform_role_assignments.expires_at:SELECT,platform_role_assignments.principal_id:SELECT,platform_role_assignments.role_key:SELECT," +
 		"principals.disabled_at:SELECT,principals.id:SELECT,principals.kind:SELECT,"
 )

@@ -62,10 +62,9 @@ func (noImpersonation) ImpersonatingActor(context.Context, uuid.UUID, uuid.UUID)
 // same key set is served after reads; the minted token is a valid
 // access-token.v1 document.
 //
-// The sid of a minted ACR token is an OAuth client session's, and this cell is what
-// lets internal/api/policy's sessionStateQuery read a row's own revoked_at: a client
-// session's sid is refused here with zero reads, and no platform minter writes one.
-// If a platform minter ever writes a client session's sid, that query changes first.
+// The sid of a minted ACR token is an OAuth client session's: it is refused here with
+// zero reads, and no platform minter writes one. (internal/api/policy's session read
+// takes the session rule's revoke, so a client session's web session counts there too.)
 func TestAnACRMintedTokenIsRefusedAtQueryAPIBeforeAnyRead(t *testing.T) {
 	quietStdLog(t)
 	ctx := context.Background()

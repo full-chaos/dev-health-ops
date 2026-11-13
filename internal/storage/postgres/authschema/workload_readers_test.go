@@ -37,8 +37,8 @@ func TestSessionReaderReadsNeverNameTheWorkloadRegistry(t *testing.T) {
 
 func TestSessionReaderReadsWithTheWorkloadReadMergeATableBothNameOnce(t *testing.T) {
 	off := SessionReaderReadsWith(false, true)
-	if len(off) != 3 || off[0].Table != "sessions" || off[1].Table != "workloads" || off[2].Table != "principals" ||
-		!reflect.DeepEqual(off[2].Columns, []string{"id", "disabled_at"}) {
+	if len(off) != 4 || off[0].Table != "sessions" || off[1].Table != "users" || off[2].Table != "workloads" || off[3].Table != "principals" ||
+		!reflect.DeepEqual(off[3].Columns, []string{"id", "disabled_at"}) {
 		t.Fatalf("platform roles off: %+v", off)
 	}
 	on := SessionReaderReadsWith(true, true)
@@ -58,7 +58,7 @@ func TestSessionReaderReadsWithTheWorkloadReadMergeATableBothNameOnce(t *testing
 	if len(principals) != 1 || !reflect.DeepEqual(principals[0].Columns, []string{"id", "kind", "disabled_at"}) {
 		t.Fatalf("platform roles on: principals = %+v, want the platform columns once", principals)
 	}
-	if tables["workloads"] != 1 || tables["sessions"] != 1 || tables["platform_role_assignments"] != 1 {
+	if tables["workloads"] != 1 || tables["sessions"] != 1 || tables["users"] != 1 || tables["platform_role_assignments"] != 1 {
 		t.Fatalf("platform roles on: %v", tables)
 	}
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionrule"
 	"github.com/full-chaos/dev-health-ops/internal/envelopemint"
 	"github.com/full-chaos/dev-health-ops/internal/platform/pgident"
 )
@@ -73,8 +74,16 @@ func EdDSASignerFromEnv(lookup func(string) (string, bool)) (EdDSASigner, error)
 	return signer, nil
 }
 
-// sessionLiveSQL reads the session the way go-api's policy.PGStore.SessionState does, plus expiry.
-const sessionLiveSQL = `SELECT principal_id, revoked_at IS NOT NULL, expires_at <= now(), legacy_token_version FROM %s.sessions WHERE id = $1`
+// sessionLiveSQL reads the session the way go-api's policy.PGStore.SessionState does (the session
+// rule's revoke), plus the rule's absolute cap: the row's expires_at, or a client session's web
+// session's own expiry when first. The cap, not Expiry: go-api applies no refresh idle end.
+func sessionLiveSQL(quotedSchema string) (string, error) {
+	rule, err := sessionrule.New(quotedSchema, sessionrule.DefaultRefreshTTL)
+	if err != nil {
+		return "", err
+	}
+	return `SELECT s.principal_id, ` + rule.Revoked("s") + ` IS NOT NULL, ` + rule.Cap("s") + ` <= now(), s.legacy_token_version FROM ` + quotedSchema + `.sessions s WHERE s.id = $1`, nil
+}
 
 // CheckSession refuses a session the verifier would refuse for principal: no row, revoked or expired, another
 // principal's, or pinned to another token_version than the principal's current one.
@@ -93,7 +102,11 @@ func CheckSession(ctx context.Context, db RowQuerier, sessionID uuid.UUID, princ
 		revoked, expired bool
 		pin              *int64
 	)
-	err := db.QueryRow(ctx, fmt.Sprintf(sessionLiveSQL, pgx.Identifier{authSchema}.Sanitize()), sessionID).Scan(&owner, &revoked, &expired, &pin)
+	query, err := sessionLiveSQL(pgx.Identifier{authSchema}.Sanitize())
+	if err != nil {
+		return fmt.Errorf("edgetokenmint: %w", err)
+	}
+	err = db.QueryRow(ctx, query, sessionID).Scan(&owner, &revoked, &expired, &pin)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return ErrSessionNotFound

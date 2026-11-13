@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionrule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/pgident"
 )
 
@@ -91,16 +92,17 @@ func (a *Authenticator) checkSession(ctx context.Context, sid string, subject uu
 	return &id, nil
 }
 
-// sessionStateQuery reads one auth-service session in PostgreSQL by its
-// primary key; {auth_schema} is the validated, quoted AUTH_DATABASE_SCHEMA.
-//
-// It reads the row's own revoked_at, not the effective revoke, which also reads a
-// browser client session's web session (session.Store.effectiveRevokedAt). That
-// holds because a client session's sid only ever appears in an ACR-audience token,
-// which go-api and query-api refuse before any read (acp, CHAOS-12251), and no
-// platform minter writes one. If a platform minter ever writes a client session's
-// sid, this query changes first.
-const sessionStateQuery = `SELECT principal_id, revoked_at IS NOT NULL, legacy_token_version FROM {auth_schema}.sessions WHERE id = $1`
+// sessionStateSQL reads one auth-service session in PostgreSQL by its primary key,
+// in the quoted auth schema. Its revoke is the session rule's (sessionrule.Revocation):
+// the row's own revoke, its principal's password stamp after the row was created, and
+// the same two of a browser client session's web session. It decides no expiry, so it
+// takes no refresh lifetime. The session reader grant covers exactly what it reads.
+func sessionStateSQL(quotedSchema string) string {
+	revocation, _ := sessionrule.NewRevocation(quotedSchema) // a sanitized identifier is never empty
+	return strings.NewReplacer("{auth_schema}", quotedSchema, "{revoked}", revocation.Revoked("s")).Replace(sessionStateQuery)
+}
+
+const sessionStateQuery = `SELECT s.principal_id, {revoked} IS NOT NULL, s.legacy_token_version FROM {auth_schema}.sessions s WHERE s.id = $1`
 
 // SessionState reads the session id names, in the auth schema AuthSchema
 // names: its principal, whether it is revoked and its token_version pin.
@@ -116,13 +118,12 @@ func (s PGStore) SessionState(ctx context.Context, id uuid.UUID) (SessionRow, bo
 	var principal uuid.UUID
 	var revoked bool
 	var pin *int64
-	query := strings.ReplaceAll(sessionStateQuery, "{auth_schema}", pgx.Identifier{name}.Sanitize())
-	err := s.Pool.QueryRow(ctx, query, id).Scan(&principal, &revoked, &pin)
+	err := s.Pool.QueryRow(ctx, sessionStateSQL(pgx.Identifier{name}.Sanitize()), id).Scan(&principal, &revoked, &pin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SessionRow{}, false, nil
 	}
 	if err != nil {
-		return SessionRow{}, false, storeError(err, "SELECT on <auth schema>.sessions (id, principal_id, revoked_at, legacy_token_version)")
+		return SessionRow{}, false, storeError(err, "SELECT on <auth schema>.sessions (id, principal_id, revoked_at, legacy_token_version, created_at, web_session_id) and <auth schema>.users (principal_id, password_updated_at)")
 	}
 	return SessionRow{PrincipalID: principal, Revoked: revoked, LegacyTokenVersion: pin}, true, nil
 }

@@ -23,7 +23,11 @@ func TestQueryAPISessionReadFollowsTheSessionsFlagAndTheAuthSchema(t *testing.T)
 	if err != nil || read == nil {
 		t.Fatalf("flag on: %v %v", read, err)
 	}
-	if !reflect.DeepEqual(*read, riverstore.SessionReadGrant{Schema: want.Schema, Table: want.Table, Columns: want.Columns}) {
+	wantGrant := riverstore.SessionReadGrant{Schema: want.Schema, Table: want.Table, Columns: want.Columns}
+	for _, table := range want.Also {
+		wantGrant.Also = append(wantGrant.Also, riverstore.SessionReadTable{Table: table.Table, Columns: table.Columns})
+	}
+	if !reflect.DeepEqual(*read, wantGrant) {
 		t.Fatalf("read %+v, want the declared session read %+v", *read, want)
 	}
 	read, err = queryAPISessionReadFor(env(map[string]string{"AUTH_DATABASE_SCHEMA": "acp"}), true)
@@ -66,8 +70,17 @@ func TestQueryAPIAuthReadsEqualTheReaderColumnsInBothStates(t *testing.T) {
 		if !reflect.DeepEqual(reader, manifest) || !reflect.DeepEqual(manifest, granted) {
 			t.Errorf("owned %v: reader grant %v, query-api manifest %v, query-api grant %v", owned, reader, manifest, granted)
 		}
-		if want := 1 + map[bool]int{false: 0, true: 2}[owned]; len(granted) != want {
+		if want := 2 + map[bool]int{false: 0, true: 2}[owned]; len(granted) != want {
 			t.Errorf("owned %v: %d auth tables, want %d", owned, len(granted), want)
+		}
+		// The read sessionrule.Revoked needs, written out: the row's and its web
+		// session's revoke inputs, then the principal's password stamp.
+		want := [][2]any{
+			{"sessions", []string{"id", "principal_id", "revoked_at", "legacy_token_version", "created_at", "web_session_id"}},
+			{"users", []string{"principal_id", "password_updated_at"}},
+		}
+		if !reflect.DeepEqual(granted[:min(2, len(granted))], want) {
+			t.Errorf("owned %v: the query-api grant starts %v, want %v", owned, granted, want)
 		}
 	}
 }

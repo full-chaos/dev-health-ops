@@ -6,8 +6,9 @@ import (
 )
 
 // CHAOS-10985 (acp OPTION P, D6358): query-api reads public.memberships through three columns (user_id, org_id, role) and holds
-// nothing of the auth schema's memberships or organizations. Its one auth-schema read is the sessions columns of
-// QueryAPISessionReadFor; auth-service dual-writes the public row in the same transaction, so there is no second read authority.
+// nothing of the auth schema's memberships or organizations. Its auth-schema read is QueryAPISessionReadFor: the sessions
+// columns and the users password stamp sessionrule.Revoked reads; auth-service dual-writes the public row in the same
+// transaction, so there is no second read authority.
 
 func TestQueryAPIPostureHoldsMembershipsAsThreeColumnsAndNothingInTheAuthMembershipTables(t *testing.T) {
 	t.Parallel()
@@ -50,6 +51,15 @@ func TestTheMembershipSurfaceCheckRefusesEachPlantedWidening(t *testing.T) {
 		{"an extra auth session column", func(_ *RolePosture, s *QueryAPISessionRead) {
 			s.Columns = append(append([]string{}, s.Columns...), "status")
 		}, []string{"session", "status"}},
+		{"the users password hash in the session read", func(_ *RolePosture, s *QueryAPISessionRead) {
+			s.Also = []QueryAPIAuthTable{{Table: "users", Columns: []string{"principal_id", "password_updated_at", "password_hash"}}}
+		}, []string{"users", "password_hash"}},
+		{"the auth memberships in the session read", func(_ *RolePosture, s *QueryAPISessionRead) {
+			s.Also = append(append([]QueryAPIAuthTable{}, s.Also...), QueryAPIAuthTable{Table: "memberships", Columns: []string{"role"}})
+		}, []string{"memberships"}},
+		{"no users password stamp", func(_ *RolePosture, s *QueryAPISessionRead) {
+			s.Also = nil
+		}, []string{"users", "stamp"}},
 	} {
 		p := QueryAPIPosture()
 		p.RequiredTables = append([]TablePrivilege{}, p.RequiredTables...)

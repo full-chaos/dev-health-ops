@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -18,27 +17,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
-
-// closedPortAddr returns an address whose dials get ECONNREFUSED, and keeps it that way for the test: a socket is bound to the port and
-// never listens, so the kernel refuses every connection and no other listener, in this process or another parallel test, can be handed
-// that port. (Binding :0, closing it and dialling the freed port left a window in which another test's listener answered the dial.)
-func closedPortAddr(t *testing.T) string {
-	t.Helper()
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = syscall.Close(fd) })
-	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
-		t.Fatal(err)
-	}
-	bound, err := syscall.Getsockname(fd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(bound.(*syscall.SockaddrInet4).Port))
-}
 
 // dialCheck is a required check that dials addr and reads one byte, the way a
 // pooler answers once it is up. A refused dial or a peer that accepts and
@@ -146,7 +126,7 @@ func TestPreclaimReadinessRetriesAcceptThenCloseUntilEndpointAnswers(t *testing.
 
 func TestPreclaimReadinessRefusedDialExitsAfterBudget(t *testing.T) {
 	t.Parallel()
-	addr := closedPortAddr(t)
+	addr := refusedaddr.Addr(t)
 	registry := health.NewRegistry(2 * time.Second)
 	var attempts atomic.Int32
 	check := dialCheck(addr)

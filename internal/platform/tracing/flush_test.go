@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,19 +13,9 @@ import (
 
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-)
 
-// closedPort returns a host:port nothing listens on.
-func closedPort(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	_ = listener.Close()
-	return address
-}
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
+)
 
 // hungExporter is a collector that never answers: every export and its shutdown wait for their context to end, or for the test to
 // release them (the SDK abandons the export it started when the flush bound ends). It is in memory, no socket is opened.
@@ -130,7 +119,7 @@ func TestAZeroComponentStopsAsANoOp(t *testing.T) {
 func TestACallerContextThatExpiredIsNotSwallowed(t *testing.T) {
 	t.Setenv("OTEL_ENABLED", "true")
 	t.Setenv("OTEL_SAMPLE_RATE", "1")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", closedPort(t))
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", refusedaddr.Addr(t))
 	var logs bytes.Buffer
 	component := InitWithServiceName(slog.New(slog.NewTextHandler(&logs, nil)), "flush-test")
 	t.Cleanup(func() { otel.SetTracerProvider(sdktrace.NewTracerProvider()) })
@@ -178,7 +167,7 @@ func TestAnExporterDeadlineErrorBeforeTheBoundIsAFailureNotACollectorOutage(t *t
 func TestACancelledCallerOnAFreshComponentIsNotReportedAsAnOutage(t *testing.T) {
 	t.Setenv("OTEL_ENABLED", "true")
 	t.Setenv("OTEL_SAMPLE_RATE", "1")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", closedPort(t))
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", refusedaddr.Addr(t))
 	var logs bytes.Buffer
 	component := InitWithServiceName(slog.New(slog.NewTextHandler(&logs, nil)), "flush-test")
 	t.Cleanup(func() { otel.SetTracerProvider(sdktrace.NewTracerProvider()) })

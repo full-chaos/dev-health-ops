@@ -56,6 +56,7 @@ var readerRoles = map[string]struct{ role, why string }{
 	"internal/queryapi/heatmap/identity.go":                                {"reader-nosum", "reads rows with no sum across scopes (a listing or one key)"},
 	"internal/queryapi/home/metricspec.go":                                 {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
 	"internal/queryapi/home/queries_metrics.go":                            {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
+	"internal/queryapi/home/scoperesolve.go":                               {"reader-nosum", "reads rows with no sum across scopes (a listing or one key)"},
 	"internal/queryapi/operatingreview/operatingreview.go":                 {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
 	"internal/queryapi/people/metricconfig.go":                             {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
 	"internal/queryapi/people/resolve.go":                                  {"reader-nosum", "reads rows with no sum across scopes (a listing or one key)"},

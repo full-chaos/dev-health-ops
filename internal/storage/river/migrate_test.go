@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/refusedaddr"
 )
 
 func TestPinnedMigrationBundleIsExactPrefix(t *testing.T) {
@@ -55,27 +57,6 @@ func TestPinnedMigratorRequiresTwoConnectionsForLockAndCommitSeparatedMigrations
 	}
 }
 
-// closedPortAddr opens a listener on 127.0.0.1:0, records its address, then
-// closes it -- dialing that address afterward is refused deterministically
-// everywhere, unlike a permanently-unbound port such as 127.0.0.1:1 (which
-// some hosted CI runners answer with a hanging "i/o timeout" instead of a
-// refusal -- CHAOS-5478). CheckSchema's own query genuinely needs a real,
-// live-but-failing connection here, not a mock: rivermigrate's driver is
-// constructed straight from *pgxpool.Pool, with no interface seam to fake a
-// "failing querier" through.
-func closedPortAddr(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	if err := ln.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return addr
-}
-
 // TestCheckSchemaDistinguishesConnectionFailureFromVersionMismatch proves
 // CheckSchema reports a pool/connection error (ExistingVersions failing to
 // even run its query) as its own distinct sentinel, never collapsed into
@@ -88,7 +69,7 @@ func closedPortAddr(t *testing.T) string {
 func TestCheckSchemaDistinguishesConnectionFailureFromVersionMismatch(t *testing.T) {
 	t.Parallel()
 
-	poolConfig, err := pgxpool.ParseConfig("postgres://queue@" + closedPortAddr(t) + "/app?sslmode=disable")
+	poolConfig, err := pgxpool.ParseConfig("postgres://queue@" + refusedaddr.Addr(t) + "/app?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
 	}

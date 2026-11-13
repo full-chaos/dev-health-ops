@@ -476,6 +476,8 @@ internal/queryapi/graph	operation_enforce_test.go	internal/queryapi/graph	dir	*
 internal/queryapi/graph	root_class_census_test.go	unexpressed	-	-
 internal/queryapi/graph/model	sdl_nullability_gate_test.go	unexpressed	-	-
 internal/queryapi/home	import_boundary_test.go	unexpressed	-	-
+internal/queryapi/home	resolve_scope_callers_test.go	cmd	tree	*.go
+internal/queryapi/home	resolve_scope_callers_test.go	internal	tree	*.go
 internal/queryapi/investmentexplain	cache_key_golden_test.go	internal/queryapi/investmentexplain/testdata	dir	*
 internal/queryapi/investmentexplain	explain_canonical_keys_test.go	internal/queryapi/investmentexplain/testdata	dir	*
 internal/queryapi/investmentexplain	llm_token_usage_golden_test.go	internal/queryapi/investmentexplain/testdata	dir	*

@@ -38,7 +38,7 @@ var (
 	shadowNamespaces = catalogNamespaces()
 	shadowCallers    = []string{"member", "admin", "superuser"}
 	shadowClasses    = []string{"legacy_bug", "new_bug", "unresolved", "intentional"}
-	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"}
+	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused", "decided_no_question"}
 	shadowReasons    = []string{ShadowReasonNone, ShadowReasonHS256, ShadowReasonEnvelope, ShadowReasonNoUserBearer, ShadowReasonCap,
 		ShadowReasonUnmapped, ShadowReasonOpRefused, ShadowReasonNeverDecided, ShadowReasonHighRiskOff}
 )
@@ -84,6 +84,9 @@ const (
 	resultSkipped  = "skipped"
 	// resultImpersonationRefused: a caller with a live go-api impersonation row, which enforcement refuses unasked.
 	resultImpersonationRefused = "impersonation_refused"
+	// resultDecidedNoQuestion: a token with no organization on an AdminOrg row, which enforcement refuses unasked
+	// (orglessRefusedUnasked); its answer is EnforcedOrglessRefusal.
+	resultDecidedNoQuestion = "decided_no_question"
 
 	shadowDefaultInFlight = 32
 	shadowDefaultTimeout  = 2 * time.Second
@@ -412,6 +415,9 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	switch orgless := row.ResourceType == policycatalog.ScopeOrganization && org == ""; {
 	case o.Bearer == "" || !o.UserAccessToken:
 		s.record(ctx, o.Pattern, row, caller, resultSkipped, shadowReasonOf(o.SkipReason), "")
+		return
+	case orgless && o.orgless.action != "" && o.orgless.question() == orglessRefusedUnasked:
+		s.record(ctx, o.Pattern, row, caller, resultDecidedNoQuestion, ShadowReasonNone, "")
 		return
 	case orgless && (o.orgless.action == "" || o.orgless.question() != orglessAsksPlatform):
 		s.record(ctx, o.Pattern, row, caller, resultSkipped, shadowReasonOf(o.SkipReason), "")

@@ -136,8 +136,22 @@ func TestServedOrgShadowAsksWhatTheEnforcerAsks(t *testing.T) {
 								t.Errorf("%s: shadow allow %v (results %v, legacy %d), enforcer allow %v (%d %q)", name, sha.allowed, results,
 									legacy.status, enf.allowed, got.status, strings.TrimSpace(got.body))
 							}
-							if !enf.asked && len(results) == 1 && results[0] != "skipped" {
-								t.Errorf("%s: the enforcer asked nothing, the shadow recorded %v", name, results)
+							// Asked nothing: a delegated session's bearer keeps the legacy answer (skipped); an AdminOrg row refuses
+							// a token with no organization unasked (decided_no_question), and that refusal is the legacy one, byte
+							// for byte, on both sides.
+							if !enf.asked {
+								want := "skipped"
+								if orgless && level == AdminOrg && caller.name != "delegated session with no organization" {
+									want = "decided_no_question"
+									status, body := EnforcedOrglessRefusal()
+									if got.status != status || got.body != string(body) || legacy.status != status || legacy.body != string(body) {
+										t.Errorf("%s: enforced %d %q, legacy %d %q, want both %d %q", name, got.status, got.body, legacy.status, legacy.body, status, body)
+									}
+								}
+								// A delegated bearer the row does not take is refused by authentication first: no shadow line.
+								if !slices.Equal(results, []string{want}) && !(want == "skipped" && len(results) == 0) {
+									t.Errorf("%s: the enforcer asked nothing, the shadow recorded %v, want [%s]", name, results, want)
+								}
 							}
 						}
 					}

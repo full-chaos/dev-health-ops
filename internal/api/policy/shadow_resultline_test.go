@@ -102,6 +102,13 @@ func TestShadowResultLineAtEveryResultSite(t *testing.T) {
 				return o
 			}(),
 			map[string]string{"route": "GET /api/v1/billing/invoices", "namespace": "billing", "caller": "member", "result": "skipped"}},
+		{"org-less token on an AdminOrg row: decided with no question", nil, nil,
+			func() ShadowObservation {
+				o := observation("GET /api/v1/admin/teams", ShadowCallerSuperuser, false)
+				o.OrgID, o.orgless = "", orglessInputs{orgRequired: true, action: ActionAdminOrgs}
+				return o
+			}(),
+			map[string]string{"route": "GET /api/v1/admin/teams", "namespace": "teams", "caller": "superuser", "result": "decided_no_question"}},
 		{"org-less token asks the platform action", nil, nil,
 			func() ShadowObservation {
 				o := observation("GET /api/v1/admin/teams", ShadowCallerSuperuser, true)

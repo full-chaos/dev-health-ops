@@ -265,7 +265,9 @@ func JudgeEnforced(in EnforcedInput) Report {
 			}
 		case slot.Status == y.Status:
 			sv.Verdict = VerdictMatchEnforced
-			if y.Verdict == VerdictSkipped {
+			// A no-organization superuser slot the yardstick did not compare (SKIPPED), or saw decided with no question on an
+			// AdminOrg row (DECIDED_NO_QUESTION), is decided here on the counter (org_required or the namespace decisions).
+			if y.Verdict == VerdictSkipped || y.Verdict == VerdictDecidedNoQuestion {
 				sv.Verdict = VerdictUnevidencedNoOrg
 			}
 			if in.Strict {

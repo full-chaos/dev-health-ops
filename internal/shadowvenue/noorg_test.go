@@ -1,9 +1,13 @@
 package shadowvenue
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
 const unjudgedHelp = "# HELP dev_health_authz_enforcement_unjudged_total x\n# TYPE dev_health_authz_enforcement_unjudged_total counter\n"
@@ -86,5 +90,47 @@ func TestUnjudgedTotalsKeepOrgRequiredApart(t *testing.T) {
 	sums, err := UnjudgedTotals(before, after)
 	if err != nil || sums.OrgRequired != 7 || sums.Other != 4 {
 		t.Fatalf("sums %+v err %v, want org_required 7, other 4", sums, err)
+	}
+}
+
+// CHAOS-13675 (acp Q-A): decided_no_question passes only on a slot whose legacy answer is the enforcer's unasked
+// refusal of a token with no organization on an AdminOrg row, status and body bytes; it is counted on its own line,
+// never as a match. Any other legacy answer fails.
+func TestJudgeHoldsDecidedNoQuestionToTheRefusalBytes(t *testing.T) {
+	status, body := policy.EnforcedOrglessRefusal()
+	sum := sha256.Sum256(body)
+	refusal := hex.EncodeToString(sum[:])
+	other := sha256.Sum256([]byte(`{"detail":"Admin access required"}`))
+	judge := func(status int, bodySHA string) SlotVerdict {
+		slot := slotAt(1, "2", "superuser", 1)
+		slot.Status, slot.BodySHA = status, bodySHA
+		ev, err := ParseLog(strings.NewReader(result(slot, 300*time.Millisecond, "decided_no_question", "") + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := Judge([]Slot{slot}, ev, nil, JudgeOptions{K: 1, Grace: 2200 * time.Millisecond})
+		if r.VerdictCounts()[VerdictMatch] != 0 {
+			t.Fatalf("decided_no_question folded into MATCH: %v", r.VerdictCounts())
+		}
+		return r.Slots[0]
+	}
+	if sv := judge(status, refusal); sv.Verdict != VerdictDecidedNoQuestion || !sv.Pass() {
+		t.Errorf("the legacy refusal: %s (pass %v), want DECIDED_NO_QUESTION passing", sv.Verdict, sv.Pass())
+	}
+	for name, c := range map[string]struct {
+		status int
+		sha    string
+	}{
+		"another refusal body": {status, hex.EncodeToString(other[:])},
+		"served":               {200, refusal},
+		"another status":       {401, refusal},
+		"no body digest":       {status, ""},
+	} {
+		if sv := judge(c.status, c.sha); sv.Verdict != VerdictDecidedNoQuestionDiffers || sv.Pass() {
+			t.Errorf("%s: %s (pass %v), want DECIDED_NO_QUESTION_DIFFERS failing", name, sv.Verdict, sv.Pass())
+		}
+	}
+	if status != 403 || !strings.Contains(string(body), "Organization context required") {
+		t.Errorf("the enforcer's org-less AdminOrg refusal is %d %q, want the legacy 403 Organization context required", status, body)
 	}
 }

@@ -2,6 +2,8 @@ package shadowvenue
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
 // The go-api shadow log lines the judge reads (internal/api/policy/shadow.go).
@@ -44,10 +48,18 @@ const (
 	VerdictDecidedNoOrg = "DECIDED_NOORG"
 	VerdictStricter     = "MISMATCH_STRICTER"
 	VerdictWider        = "MISMATCH_WIDER"
+	// VerdictDecidedNoQuestion: the shadow's decided_no_question (a token with no organization on an AdminOrg row,
+	// refused by enforcement with no question) on a slot whose legacy answer is that very refusal, status and body bytes
+	// (policy.EnforcedOrglessRefusal). It passes, on its own line, never as a match.
+	VerdictDecidedNoQuestion = "DECIDED_NO_QUESTION"
+	// VerdictDecidedNoQuestionDiffers: decided_no_question on a slot whose legacy answer is any other: it fails.
+	VerdictDecidedNoQuestionDiffers = "DECIDED_NO_QUESTION_DIFFERS"
 )
 
 var resultVerdicts = map[string]string{
 	"error": VerdictError, "dropped": VerdictDropped, "skipped": VerdictSkipped, "impersonation_refused": VerdictImpersonationRefused,
+	// decided_no_question fails unless decidedNoQuestion finds the slot's legacy answer is the refusal.
+	"decided_no_question": VerdictDecidedNoQuestionDiffers,
 }
 
 // windowSkew allows for the driver stamping its start a little after go-api's own clock reads the request.
@@ -237,7 +249,7 @@ type SlotVerdict struct {
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictDecidedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictDecidedNoOrg, VerdictMatchEnforced, VerdictEqualPastGuard, VerdictDecidedNoQuestion:
 		return true
 	}
 	return false
@@ -462,7 +474,20 @@ func judgeSlot(sv *SlotVerdict, results []resultLine, ev Evidence, rulings []Rul
 		}
 	default:
 		sv.Verdict = resultVerdicts[line.result]
+		if line.result == "decided_no_question" {
+			sv.Verdict = decidedNoQuestion(sv.Slot)
+		}
 	}
+}
+
+// decidedNoQuestion holds a decided_no_question slot to its legacy answer: the enforcer's refusal, byte for byte.
+func decidedNoQuestion(slot Slot) string {
+	status, body := policy.EnforcedOrglessRefusal()
+	sum := sha256.Sum256(body)
+	if slot.Status == status && slot.BodySHA == hex.EncodeToString(sum[:]) {
+		return VerdictDecidedNoQuestion
+	}
+	return VerdictDecidedNoQuestionDiffers
 }
 
 // mismatchTuple finds the WARN line of a mismatch: by decision id when the decision point answered, else the
@@ -567,7 +592,7 @@ func rowVerdicts(slots []SlotVerdict, k int) []RowVerdict {
 func cellPasses(counts map[string]int, row string) bool {
 	for verdict := range counts {
 		switch verdict {
-		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictMatchEnforced:
+		case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled, VerdictMatchEnforced, VerdictDecidedNoQuestion:
 		default:
 			if !(strings.HasPrefix(row, "C") && controlMismatch(verdict)) {
 				return false

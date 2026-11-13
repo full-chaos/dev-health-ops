@@ -32,6 +32,8 @@ A call is **skipped** (counted, never asked) when the caller cannot be judged: t
 
 A call is counted **impersonation_refused** (never asked) when a live go-api impersonation row is in force for the caller's own bearer and enforcement refuses it (a write, or a platform wrap); its read that the legacy check admits is counted **skipped**, as enforcement keeps the legacy answer; the stop route is asked. A delegated session's own bearer is asked like any other caller.
 
+A call is counted **decided_no_question** (never asked) when a token with no organization reaches an `AdminOrg` row: enforcement refuses it with no question, with the legacy `403` `Organization context required`, so there is nothing to ask. The shadow venue judge passes such a slot only when its legacy answer is that refusal, byte for byte.
+
 ## Switches
 
 | Variable | Meaning | Default |

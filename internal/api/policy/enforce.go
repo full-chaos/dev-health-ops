@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -520,6 +521,33 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, level
 		g.observeShadowAs(r, user, bearer, false, true, gt, level)
 	}
 	return verdict
+}
+
+// EnforcedOrglessRefusal is the answer the Enforcer gives, unasked, a token with no organization on an AdminOrg row:
+// its status and body bytes. The shadow venue judge holds a slot the shadow logged decided_no_question to it.
+func EnforcedOrglessRefusal() (int, []byte) {
+	w := &bufferedAnswer{header: http.Header{}}
+	writeEnforceRefusal(w, AdminOrg, enforceDenyNoOrg)
+	return w.status, w.body.Bytes()
+}
+
+type bufferedAnswer struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (b *bufferedAnswer) Header() http.Header { return b.header }
+func (b *bufferedAnswer) WriteHeader(status int) {
+	if b.status == 0 {
+		b.status = status
+	}
+}
+func (b *bufferedAnswer) Write(p []byte) (int, error) {
+	if b.status == 0 {
+		b.status = http.StatusOK
+	}
+	return b.body.Write(p)
 }
 
 // writeEnforceRefusal answers a request the decision point refused or could not judge, or that no decision point can.

@@ -501,7 +501,7 @@ func TestShadowADelegatedBearerIsAsked(t *testing.T) {
 
 // The result set is closed and the counter's description names exactly it.
 func TestShadowResultSetIsClosed(t *testing.T) {
-	want := []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"}
+	want := []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused", "decided_no_question"}
 	if !slices.Equal(shadowResults, want) {
 		t.Errorf("shadow results %v, want %v", shadowResults, want)
 	}

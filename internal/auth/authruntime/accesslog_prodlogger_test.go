@@ -29,8 +29,15 @@ func newProdLoggerStack(t *testing.T, internal bool) *accessStack {
 		t.Fatal(err)
 	}
 	cfg := authconfig.Config{TrustedProxies: trust}
-	routes := []httpapi.Route{{Method: http.MethodGet, Pattern: "/v1/access-ok", Unthrottled: true,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })}}
+	routes := []httpapi.Route{
+		{Method: http.MethodGet, Pattern: "/v1/access-ok", Unthrottled: true,
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })},
+		{Method: http.MethodGet, Pattern: "/v1/access-reshaped", Unthrottled: true,
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set(requestid.Header, reshapedWireID)
+				w.WriteHeader(http.StatusNoContent)
+			})},
+	}
 	logs := &bytes.Buffer{}
 	logger := logging.NewJSON(logs, slog.LevelInfo)
 	options := apiServerOptions(cfg, logger, routes)
@@ -78,6 +85,25 @@ func TestTheProdLoggerAccessLineCarriesTheUnredactedWireID(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// reshapedWireID is an answer X-Auth-Request-ID outside the wire form.
+const reshapedWireID = "req_not-the-wire-form"
+
+// The access line logs the answer header only through requestid.LoggableWire: a value outside the wire form is
+// "invalid", never the raw text.
+func TestTheProdLoggerAccessLineLogsAReshapedWireIDAsInvalid(t *testing.T) {
+	stack := newProdLoggerStack(t, false)
+	response := stack.serve(httptest.NewRequest(http.MethodGet, "/v1/access-reshaped", nil))
+	if got := response.Header().Get(requestid.Header); got != reshapedWireID {
+		t.Fatalf("answer %s = %q, want the handler's %q", requestid.Header, got, reshapedWireID)
+	}
+	if got := stack.onlyLine(t)[wireIDLogKey]; got != "invalid" {
+		t.Errorf("%s = %v, want \"invalid\"", wireIDLogKey, got)
+	}
+	if strings.Contains(stack.logs.String(), reshapedWireID) {
+		t.Errorf("the raw answer header reached the log: %s", stack.logs.String())
 	}
 }
 

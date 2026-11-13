@@ -59,8 +59,15 @@ func TestUsersOwnedPatchIsActiveNoOpIsServedWithoutAChange(t *testing.T) {
 			t.Fatalf("no-op is_active %v: %d %s, want 200 with the user", active, code, answer)
 		}
 		mustForwardOnly(t, db, users, "update")
-		if in := users.updates[0]; in.IsActive != nil {
+		in := users.updates[0]
+		if in.IsActive != nil {
 			t.Fatalf("no-op is_active %v: request sent is_active", active)
+		}
+		// The forward carries no field change, so auth-service writes exactly the one D6915 no-change touch row and no
+		// principal audit row or outbox event (pinned on that side by TestAdminUpdateActiveWritesExactlyOneAuditRowAndItsEvents,
+		// the no-op cases: exactly [EventUserTouched], no events).
+		if in.Email != nil || in.Username != nil || in.FullName != nil || in.AvatarURL != nil || in.IsVerified != nil || in.IsSuperuser != nil {
+			t.Fatalf("no-op is_active %v: request %+v carries a field change, want none", active, in)
 		}
 	}
 }
@@ -80,8 +87,19 @@ func TestUsersOwnedImpersonatedPatchIsActiveAnswersAsIsVerified(t *testing.T) {
 			after := stored
 			after.active, after.verified = field != "is_active", field != "is_verified"
 			users := &fakeUsersAdmin{onUpdate: func() { db.rows[ownedByIDSQL] = after.row() }}
-			code, _ := ownedCall{route: "update", body: body, caller: caller, session: session}.run(ownedHandlers(db, users, true))
+			code, answer := ownedCall{route: "update", body: body, caller: caller, session: session}.run(ownedHandlers(db, users, true))
 			answers[field] = [2]any{code, strings.Join(users.verbs, ",")}
+			// The 13211 answer for the /admin/users rows is main's answer (13211 lists the only accepted narrowing and
+			// these rows are not in it; platform_admin_pep_seam_test.go:407): the impersonating platform admin is served
+			// as for its own bearer, 200 with the read-back user, and the change is forwarded once.
+			if name == "superuser" && field == "is_active" {
+				if code != http.StatusOK || !strings.Contains(answer, `"id":"`+provTarget.String()+`"`) || !strings.Contains(answer, `"is_active":false`) {
+					t.Errorf("superuser in an impersonation session: PATCH is_active %d %s, want 200 with the user, is_active false", code, answer)
+				}
+				if len(users.updates) != 1 || users.updates[0].IsActive == nil || *users.updates[0].IsActive {
+					t.Errorf("superuser in an impersonation session: update requests %+v, want one with is_active false", users.updates)
+				}
+			}
 		}
 		if answers["is_active"] != answers["is_verified"] {
 			t.Errorf("%s in an impersonation session: is_active %v, is_verified %v; want the same answer and forward",

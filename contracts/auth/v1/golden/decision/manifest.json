@@ -9,8 +9,18 @@
       "layer": "pdp"
     },
     {
+      "file": "allow-member-revokes-acr-credential.json",
+      "id": "allow-member-revokes-acr-credential",
+      "layer": "pdp"
+    },
+    {
       "file": "allow-owner-deletes-org.json",
       "id": "allow-owner-deletes-org",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-owner-revokes-acr-credential.json",
+      "id": "allow-owner-revokes-acr-credential",
       "layer": "pdp"
     },
     {
@@ -44,6 +54,21 @@
       "layer": "pdp"
     },
     {
+      "file": "allow-platform-admin-no-membership-reads-org-profile.json",
+      "id": "allow-platform-admin-no-membership-reads-org-profile",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-no-membership-reads-org-settings.json",
+      "id": "allow-platform-admin-no-membership-reads-org-settings",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-no-membership-revokes-acr-credential.json",
+      "id": "allow-platform-admin-no-membership-revokes-acr-credential",
+      "layer": "pdp"
+    },
+    {
       "file": "allow-platform-admin-suspended-org-reads-org-integrations.json",
       "id": "allow-platform-admin-suspended-org-reads-org-integrations",
       "layer": "pdp"
@@ -51,6 +76,11 @@
     {
       "file": "allow-platform-admin-unknown-org-reads-org-integrations.json",
       "id": "allow-platform-admin-unknown-org-reads-org-integrations",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-viewer-revokes-acr-credential.json",
+      "id": "allow-viewer-revokes-acr-credential",
       "layer": "pdp"
     },
     {
@@ -96,6 +126,11 @@
     {
       "file": "delegated-request-for-another-organization-is-delegation-invalid.json",
       "id": "delegated-request-for-another-organization-is-delegation-invalid",
+      "layer": "pdp"
+    },
+    {
+      "file": "deny-non-member-revokes-acr-credential.json",
+      "id": "deny-non-member-revokes-acr-credential",
       "layer": "pdp"
     },
     {

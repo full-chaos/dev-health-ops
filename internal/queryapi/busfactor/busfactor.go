@@ -254,12 +254,12 @@ func loadEvidence(ctx context.Context, client QueryClient, orgID, repoID string,
     gc.author_name AS author_name,
     gcs.additions AS additions,
     gcs.deletions AS deletions
-FROM git_commit_stats AS gcs
-INNER JOIN git_commits AS gc
+FROM git_commit_stats AS gcs FINAL
+INNER JOIN git_commits AS gc FINAL
     ON gc.repo_id = gcs.repo_id
    AND gc.hash = gcs.commit_hash
    AND gc.org_id = gcs.org_id
-LEFT JOIN repos AS r
+LEFT JOIN repos AS r FINAL
     ON r.id = gc.repo_id
    AND r.org_id = gc.org_id
 WHERE 1 = 1

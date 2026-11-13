@@ -639,19 +639,24 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		auth = acr.PostgresCredentialStore{Pool: deps.Pool, Now: deps.Now}
 		// The users, membership and impersonation reads run on go-api's pool
 		// (policy.PGStore with the auth schema, as the authenticator reads it).
-		// Without a ClickHouse connection the inventory read fails, so the
-		// access read answers 503, never a partial answer.
-		// The session a sid names is auth-service's to answer, read on the
-		// client and credential of go-api's session issue route. Without that
-		// client (go-api owns sessions, or no auth-service URL or credential) a
-		// read with a sid answers 503; start-up does not fail (D6465).
+		// The session a sid names and the user's read listing are
+		// auth-service's to answer, read on the client and workload token of
+		// go-api's session issue route. Without that client (go-api owns
+		// sessions, or no auth-service URL or credential) every read answers
+		// 503; start-up does not fail (D6465). Without a ClickHouse connection
+		// the empty-org probe fails, so the read answers 503, never a partial
+		// answer.
 		var sessions acr.SessionStates
 		if states, ok := deps.SessionIssuer.(sessionissue.StateReader); ok {
 			sessions = states
 		}
+		var listing acr.ReadableListing
+		if reader, ok := deps.SessionIssuer.(sessionissue.ReadableReader); ok {
+			listing = reader
+		}
 		store := acr.NewPostgresAccessStore(deps.Pool,
 			policy.PGStore{Pool: deps.Pool, AuthSchema: deps.AuthSchema, PlatformRolesOwned: deps.PlatformRolesOwned},
-			acr.ClickHouseRepositoryInventory{Conn: deps.ClickHouse}, sessions)
+			listing, acr.ClickHouseRepositoryExistence{Conn: deps.ClickHouse}, sessions)
 		// project_scope (CHAOS-12224) only with ACR_ACCESS_PROJECT_SCOPE on: an
 		// acr that does not know the field refuses every answer that carries it.
 		if deps.ACRAccessProjectScope {

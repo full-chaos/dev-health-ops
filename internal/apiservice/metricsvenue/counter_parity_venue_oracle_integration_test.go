@@ -72,11 +72,9 @@ func TestCounterParityVenueOracle(t *testing.T) {
 	// disabled Jira source: enabling it is refused at the repo limit.
 	cappedOrg, cappedOwner, jiraIntegration, jiraSource := nextID(), nextID(), nextID(), nextID()
 	garbled, notJSON, emptyList, oddProvider := nextID(), nextID(), nextID(), nextID()
-	jwtKey := nextID().String() + nextID().String()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden:    golden,
 		Root:      venueRoot(),
-		JWTKey:    jwtKey,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + encryptionKey, "INGEST_API_KEYS=" + ingestAPIKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -198,7 +196,7 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 		t.Fatalf("python /metrics answered %d", pythonMetrics.Status)
 	}
 
-	goBase, operator := startGoAPI(t, ctx, venue, jwtKey)
+	goBase, operator := startGoAPI(t, ctx, venue)
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/counter_parity.go-pin.json", SHA256: counterParityPinSHA256, Ruling: retiredLegacyIngestRuling})
 	receipt := venueoracle.Diff(t, goBase, requests, python[:len(requests)], venueoracle.DiffOptions{Golden: golden,
 		Retire: func(request venueoracle.Request) bool { return request.Name == "legacy ingest with a wrong key" }, Pin: pin})
@@ -397,7 +395,7 @@ func parsePythonMetricsTable(t *testing.T) []tableRow {
 // startGoAPI serves the dho api route set on the venue's Go database, and
 // returns its base URL and a reader of its operator /metrics, the Go api's
 // scrape surface.
-func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, key string) (string, func() string) {
+func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue) (string, func() string) {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {

@@ -123,8 +123,8 @@ func TestNoOrgEvidenceDoesNotRelabelASeamSkip(t *testing.T) {
 func TestUnjudgedTotalsKeepNoOrgAndServedOrgApart(t *testing.T) {
 	before := scrape(unjudged("GET /a", "no_org", "1"), unjudged("GET /a", "served_org", "2"), unjudged("GET /b", "hs256", "0"))
 	after := scrape(unjudged("GET /a", "no_org", "4"), unjudged("GET /a", "served_org", "7"), unjudged("GET /b", "no_org", "2"), unjudged("GET /b", "hs256", "3"), unjudged("GET /b", "impersonation", "1"))
-	noOrg, served, other, err := UnjudgedTotals(before, after)
-	if err != nil || noOrg != 5 || served != 5 || other != 4 {
-		t.Fatalf("no_org %d served_org %d other %d err %v, want 5 5 4", noOrg, served, other, err)
+	sums, err := UnjudgedTotals(before, after)
+	if err != nil || sums.NoOrg != 5 || sums.ServedOrg != 5 || sums.OrgRequired != 0 || sums.Other != 4 {
+		t.Fatalf("sums %+v err %v, want no_org 5, served_org 5, org_required 0, other 4", sums, err)
 	}
 }

@@ -1,0 +1,37 @@
+{
+  "expect": {
+    "allowed": true,
+    "cache_class": "",
+    "expires_in_seconds": null,
+    "obligations": {
+      "tenant_scope": "org-a"
+    },
+    "policy_revision": 19,
+    "reason": "allowed_by_platform_admin",
+    "wire_reason_code": "allowed_by_role"
+  },
+  "id": "allow-platform-admin-no-membership-reads-org-settings",
+  "layer": "pdp",
+  "request": {
+    "action": "settings.read",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [],
+    "grants_error": false,
+    "memberships": {},
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "platform_admin",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "platform_admin holds admin.orgs and settings.read is flagged: a superuser with no membership row reads the telemetry status of an organization, as GET /api/v1/telemetry/status answers today."
+}

@@ -91,7 +91,7 @@ var measuredRowHaving = "\n                HAVING " + liverow.NewestPredicate("c
 // names a repository of the org by id or by full name.
 const repoIDFilter = `
                   AND scope_id IN (
-                      SELECT toString(id) FROM repos
+                      SELECT toString(id) FROM repos FINAL
                       WHERE org_id = {org_id:String}
                         AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
                   )
@@ -297,7 +297,7 @@ func repoTrend(ctx context.Context, client QueryClient, orgID string, end time.T
 	if len(ids) > 0 {
 		query += `
               AND scope_id IN (
-                  SELECT toString(id) FROM repos
+                  SELECT toString(id) FROM repos FINAL
                   WHERE org_id = {org_id:String}
                     AND (repo IN {repo_ids:Array(String)} OR toString(id) IN {repo_ids:Array(String)})
               )`
@@ -335,7 +335,7 @@ func repoLabels(ctx context.Context, client QueryClient, orgID string, ids []str
 	}
 	rs, err := client.Query(ctx, `
         SELECT toString(id) AS repo_id, repo AS full_name
-        FROM repos
+        FROM repos FINAL
         WHERE org_id = {org_id:String}
           AND toString(id) IN {repo_ids:Array(String)}
         `, []clickhouse.Binding{{Name: "org_id", Value: orgID}, {Name: "repo_ids", Value: ids}})

@@ -32,7 +32,6 @@ import (
 func TestLLMSettingsUndecryptableAfterKeyRotation(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-llm-rotation-32-bytes!"
 	const (
 		oldDefault = "placeholder-old-default-value"
 		oldExplain = "placeholder-old-explain-value"
@@ -44,7 +43,6 @@ func TestLLMSettingsUndecryptableAfterKeyRotation(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		GoOnly: true,
 		Root:   root,
-		JWTKey: jwtKey,
 		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
@@ -75,9 +73,9 @@ VALUES ($1, 'llmrotation-admin@example.com', true, true, false, 0, now(), now())
 			deps.Decryptor = decryptor
 		}
 	}
-	before, pool := startGoServer(t, ctx, venue, jwtKey, withKey(llmVenueEncryptionKey))
-	after, _ := startGoServer(t, ctx, venue, jwtKey, withKey(rotatedKey))
-	keyless, _ := startGoServer(t, ctx, venue, jwtKey)
+	before, pool := startGoServer(t, ctx, venue, withKey(llmVenueEncryptionKey))
+	after, _ := startGoServer(t, ctx, venue, withKey(rotatedKey))
+	keyless, _ := startGoServer(t, ctx, venue)
 
 	type reply struct {
 		status int

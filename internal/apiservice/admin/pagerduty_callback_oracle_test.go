@@ -293,7 +293,6 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("callback", "TestPagerDutyCallbackAndManualVenueOracle", "4abac9d40a4a717bc3dbef25ec0c2548b83dd6b5338fb1b91d6efeb07e034c45"))
 	root := repoRoot(t)
-	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-callback-32-b"
 
 	fake := &fakePagerDuty{failRevoke: map[string]bool{"old-fail-rt": true, "rt-missing-refused": true, "rt-noaccount-refused": true, "rt-corrupt-refused": true},
 		slowStarted: make(chan struct{}), slowRelease: make(chan struct{})}
@@ -352,7 +351,6 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
 		Root:   root,
-		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"PAGER_DUTY_CLIENT_ID=" + pagerDutyCallbackVenueClientID,
 			"PAGER_DUTY_SECRET=" + pagerDutyCallbackVenueSecret,
@@ -596,7 +594,7 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 	// answered: frozen with the golden, compared with the Go plane's calls.
 	pythonCallsText := golden.InspectRows(t, "upstream calls of the Python plane")
 	fake.take()
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+	goBase, _ := startGoServer(t, ctx, venue, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{
 			ClientID: pagerDutyCallbackVenueClientID, ClientSecret: pagerDutyCallbackVenueSecret, RedirectURI: pagerDutyCallbackVenueRedirectURI,

@@ -150,7 +150,7 @@ type integrationTimeoutRow struct {
 func integrationTimeoutRows() []integrationTimeoutRow {
 	shard := []integrationTimeoutJob{{"go.yml", "go-storage-integration-shard", "check_go.sh integration-shard"}}
 	return []integrationTimeoutRow{
-		{"packages", "check_go.sh", regexp.MustCompile(`-timeout="\$\{tmo\}" "\$@"`), shard},
+		{"packages", "check_go.sh", regexp.MustCompile(`-timeout="\$\{tmo\}" \$\{json_args\[@\]\+"\$\{json_args\[@\]\}"\} "\$@"`), shard},
 		{"daily", "check_go.sh", regexp.MustCompile(`DAILY_INTEGRATION_PACKAGE_KEY`), shard},
 		{"workerservice", "check_go.sh", regexp.MustCompile(`WORKERSERVICE_INTEGRATION_PACKAGE_KEY`), shard},
 		{"queryapiserver", "check_go.sh", regexp.MustCompile(`QAPISERVER_INTEGRATION_PACKAGE_KEY`), shard},

@@ -1109,6 +1109,7 @@ func TestAMappedRowWithOrgContextHeaderAndNoUserTokenClassFails(t *testing.T) {
 		t.Errorf("a non-user class: problems %v, want one", got)
 	}
 }
+
 // Every row that names an action carries only the classes mappedRowClassProblems accepts.
 func TestEveryMappedRowAcceptsOnlyUserTokenClasses(t *testing.T) {
 	var document struct {

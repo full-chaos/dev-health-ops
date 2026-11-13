@@ -197,7 +197,7 @@ jobs:
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
-      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, test-N-of-5, race-N-of-6; the tooling tests pin the
+      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, plan-reads, test-N-of-10, race-N-of-6; the tooling tests pin the
       # race and test counts there). go-quality-plan filters them with ci/go_quality_legs.sh: a pull request without the ci:full
       # label starts no race leg (a job cannot read its own matrix in an `if`, so the leg is left out, not started to report a
       # skip). The legs are not required status contexts (the ruleset requires the `go-quality` aggregate), so the count can
@@ -693,7 +693,7 @@ jobs:
           QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
         run: |
           if [ -n "${QUEUE_RUN}" ]; then
-            summary="go-quality on this push: static ran, plan-reads ran; test-1-of-28, test-2-of-28, test-3-of-28, test-4-of-28, test-5-of-28, test-6-of-28, test-7-of-28, test-8-of-28, test-9-of-28, test-10-of-28, test-11-of-28, test-12-of-28, test-13-of-28, test-14-of-28, test-15-of-28, test-16-of-28, test-17-of-28, test-18-of-28, test-19-of-28, test-20-of-28, test-21-of-28, test-22-of-28, test-23-of-28, test-24-of-28, test-25-of-28, test-26-of-28, test-27-of-28, test-28-of-28, race-1-of-6, race-2-of-6, race-3-of-6, race-4-of-6, race-5-of-6, race-6-of-6 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
+            summary="go-quality on this push: static ran, plan-reads ran; test-1-of-10, test-2-of-10, test-3-of-10, test-4-of-10, test-5-of-10, test-6-of-10, test-7-of-10, test-8-of-10, test-9-of-10, test-10-of-10, race-1-of-6, race-2-of-6, race-3-of-6, race-4-of-6, race-5-of-6, race-6-of-6 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
           else
             summary="go-quality on this push: every leg ran (no queue-tested sha)"
           fi

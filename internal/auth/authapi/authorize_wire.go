@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/contracts/auth/v1/vocabulary"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 const (
@@ -18,6 +19,9 @@ const (
 	decisionIDLength                 = 26
 	decisionIDAlphabet               = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 	expiresAtLayout                  = "2006-01-02T15:04:05.000000Z07:00"
+	decisionIDLogKey                 = "decision_id"
+	// maxDecisionIDDraws bounds the redraw of ids the log redactor would change (about 1e-5 of draws).
+	maxDecisionIDDraws = 8
 )
 
 // authorizeStateFailures are the Reasons that mean the decision point could
@@ -198,6 +202,21 @@ func newDecisionID() (string, error) {
 		out = append(out, decisionIDAlphabet[b&63])
 	}
 	return string(out), nil
+}
+
+// loggableDecisionID mints until the log redactor keeps the id whole: a random body can look like a credential (a
+// vendor key prefix), and a redacted id in the decision line names no decision.
+func loggableDecisionID(mint func() (string, error)) (string, error) {
+	for range maxDecisionIDDraws {
+		id, err := mint()
+		if err != nil {
+			return "", err
+		}
+		if logging.RedactKeyedText(decisionIDLogKey, id) == id {
+			return id, nil
+		}
+	}
+	return "", errors.New("authapi: no minted decision id survives log redaction")
 }
 
 // decisionExpiry is when a decision stops being usable. A deny, and an allow

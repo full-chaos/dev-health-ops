@@ -6,10 +6,14 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/metric/noop"
+
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
+	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
@@ -223,5 +227,73 @@ func TestAuthorizeDecisionLogNamesNoRepositoryOrTenant(t *testing.T) {
 				t.Errorf("decision log line %s holds %q", raw, value)
 			}
 		}
+	}
+}
+
+// plantedDecisionLog serves one question through the authorize handler with the production JSON logger and a
+// decision id mint that answers ids in order (the last one again once they run out); it returns the answer, the
+// log and the number of mints.
+func plantedDecisionLog(t *testing.T, ids ...string) (*httptest.ResponseRecorder, *bytes.Buffer, int) {
+	t.Helper()
+	h := newAuthorizeHandlerFixture(t)
+	logs := &bytes.Buffer{}
+	logger := logging.NewJSON(logs, slog.LevelInfo)
+	rec, err := newRecorder(logger, noop.NewMeterProvider().Meter("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mints := 0
+	mint := func() (string, error) {
+		id := ids[min(mints, len(ids)-1)]
+		mints++
+		return id, nil
+	}
+	handlers := authorizeHandlers{AuthorizeDeps: AuthorizeDeps{Callers: h.callers(), References: h.references(), State: h.state,
+		Evaluator: authorization.NewEvaluator(), Logger: logger}, rec: rec, decisionID: mint}
+	req := httptest.NewRequest(http.MethodPost, PatternAuthorize, bytes.NewReader(mustJSON(t, h.question("analytics.read", "organization", "acme", h.org))))
+	req.Header.Set("Authorization", "Bearer "+h.workloadToken(nil))
+	w := httptest.NewRecorder()
+	admit := handlers.admit(opAuthorize)
+	requestid.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if admitted, ok := admit(w, r); ok {
+			handlers.authorize(w, admitted)
+		}
+	})).ServeHTTP(w, req)
+	return w, logs, mints
+}
+
+// keyShapedDecisionID is a contract-shape decision id whose body the log redactor reads as a vendor key (sk- and 23
+// letters or digits), the shape minted on CI; it is built at run time so no source literal looks like a key.
+var keyShapedDecisionID = "dec_" + "sk" + "-" + strings.Repeat("Ab3", 7) + "xY"
+
+// A minted id the log redactor would change is never served: the decision line names the decision the wire serves.
+func TestAuthorizeDecisionLogNamesTheServedIDWhenAMintLooksLikeAKey(t *testing.T) {
+	if got := logging.RedactKeyedText("decision_id", keyShapedDecisionID); got == keyShapedDecisionID {
+		t.Fatalf("the redactor keeps %s; the cell needs an id it changes", got)
+	}
+	clean := "dec_AAAAAAAAAAAAAAAAAAAAAAAAAA"
+	w, logs, mints := plantedDecisionLog(t, keyShapedDecisionID, clean)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body)
+	}
+	d := decodeWire[wireDecision](t, w)
+	raw, entries := decisionLogLines(t, logs)
+	if len(entries) != 1 {
+		t.Fatalf("%d decision log lines, want 1: %v", len(entries), raw)
+	}
+	if entries[0]["decision_id"] != d.DecisionID || d.DecisionID != clean {
+		t.Fatalf("wire decision %s, log line %v; want both %s", d.DecisionID, entries[0], clean)
+	}
+	if mints != 2 {
+		t.Fatalf("%d mints, want 2", mints)
+	}
+}
+
+// The redraw is bounded: a mint that only answers key-shaped ids is a 503 after 8 draws.
+func TestAuthorizeDecisionIDRedrawIsBounded(t *testing.T) {
+	w, _, mints := plantedDecisionLog(t, keyShapedDecisionID)
+	assertError(t, w, http.StatusServiceUnavailable, reasonDependency)
+	if mints != 8 {
+		t.Fatalf("%d mints, want 8", mints)
 	}
 }

@@ -526,7 +526,7 @@ func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format strin
 	perListener := map[string]*listenerCensus{}
 	var carriers []wrongclass.Carrier
 	for _, class := range classes {
-		carrier, ok, err := wrongclass.CarrierFor(class, wrongclass.Options{Mint: rig.mint(t)})
+		found, ok, err := wrongclass.CarriersFor(class, wrongclass.Options{Mint: rig.mint(t)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -534,7 +534,10 @@ func runAuthServiceGate(t *testing.T, rig *authGateRig, errorf func(format strin
 			census.NotDriven = append(census.NotDriven, class.ID)
 			continue
 		}
-		carriers = append(carriers, carrier)
+		carriers = append(carriers, found...)
+	}
+	if !wrongclass.HasHeaderCarrier(carriers, "X-ACR-Approver-Reference") {
+		t.Fatal("no carrier presents X-ACR-Approver-Reference: the web approver reference header of acr_web_assertion is not driven")
 	}
 	census.Driven = len(carriers)
 	if census.Driven == 0 {

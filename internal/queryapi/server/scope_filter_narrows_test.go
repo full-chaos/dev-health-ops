@@ -127,15 +127,32 @@ func TestNamedRepositoryThatResolvesToNothingLeavesNothingOnEverySurface(t *test
 				if got := len(client.statementsWith("1 = 0")); got != want {
 					t.Fatalf("%s: %d statements carry the empty match, want exactly %d (every metric read, the skipped theme allocation read excepted)", consumer.route, got, want)
 				}
+				// Two exemptions, each keyed on its own text and each required exactly once: the coverage read (covered repositories) and the
+				// freshness read (last ingested at). Both are organization-level metadata with no scope filter; any other read must carry it.
+				exemptions := map[string]int{
+					"toFloat64(countDistinct(repo_id)) AS covered":      0,
+					"SELECT maxOrNull(computed_at) AS last_ingested_at": 0,
+				}
 				for _, table := range []string{"repo_metrics_daily", "work_item_metrics_daily", "deploy_metrics_daily", "work_item_state_durations_daily"} {
 					for _, statement := range client.statementsWith(table) {
-						// The coverage read (covered repositories) is an organization-level freshness read with no scope filter.
-						if !strings.Contains(statement, "GROUP BY day") {
+						exempted := false
+						for text := range exemptions {
+							if strings.Contains(statement, text) {
+								exemptions[text]++
+								exempted = true
+							}
+						}
+						if exempted {
 							continue
 						}
 						if !strings.Contains(statement, "1 = 0") {
 							t.Fatalf("%s: a read of %s does not carry the empty match:\n%s", consumer.route, table, statement)
 						}
+					}
+				}
+				for text, n := range exemptions {
+					if n != 1 {
+						t.Fatalf("%s: %d statements are exempt as %q, want exactly 1", consumer.route, n, text)
 					}
 				}
 				if skipped := client.statementsWith("FROM work_unit_investments"); len(skipped) != 0 {

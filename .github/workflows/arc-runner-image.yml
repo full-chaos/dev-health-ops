@@ -173,7 +173,8 @@ jobs:
           push: ${{ steps.publish.outputs.should_publish == 'true' }}
           load: true
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # A pull request only reads the gha cache (workflows/pr_cache_writes_test.go).
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
 
       # In-image CGO check (team-lead, after CF's second pickup failed with
       # `-race requires cgo; CGO_ENABLED=1`). Go itself is not part of this

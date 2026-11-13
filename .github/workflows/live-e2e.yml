@@ -324,6 +324,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
+        id: setup-go
         # CHAOS-5362: this job now also builds/runs dho worker/
         # dev-health-worker-migrate/dho reconciler (ci/lib/go_worker_
         # fixture.sh), same as the metrics-executed-proof job below.
@@ -331,6 +332,24 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          cache: false
+      - name: Locate the Go module and build caches
+        id: go-cache-paths
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Restore the Go module and build caches (every event; saved only by main pushes and the merge queue)
+        id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
 
       - name: Run live-e2e tier
         env:
@@ -374,6 +393,14 @@ jobs:
             live-e2e-worker.log
             live-e2e-reconciler.log
           if-no-files-found: ignore
+      - name: Save the Go module and build caches (main pushes and the merge queue only)
+        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # CHAOS-4266: executed-proof gate for the metrics family. Deliberately a
   # SEPARATE job from `live-e2e` above, not another stage of it: that job's
@@ -470,23 +497,41 @@ jobs:
         # CHAOS-4906: the oci-arc-runners pool exports GOMODCACHE/GOCACHE to a
         # SHARED hostPath (unlike a GitHub-hosted runner's ephemeral per-job
         # filesystem), same as go.yml's self-hosted legs. Only set on the
-        # self-hosted leg; the hosted leg keeps setup-go's normal cache.
+        # self-hosted leg; the hosted leg restores the shared Go cache below.
         if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
         run: |
           echo "GOMODCACHE=/mnt/go-cache/mod" >> "${GITHUB_ENV}"
           echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
 
       - name: Set up Go
+        id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-          # `false` on the self-hosted leg: setup-go's own cache defaults to
-          # `true`, which would restore/save a GitHub Actions cache tarball
-          # into the pool's persistent, concurrently-shared hostPath above --
-          # a corruption risk against other jobs reading/writing it at the
-          # same time (same reasoning as go.yml's self-hosted legs).
-          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
+          # `false`: on the self-hosted leg a cache tarball would land in the pool's concurrently-shared hostPath above (same
+          # reasoning as go.yml's self-hosted legs); the hosted leg restores the shared Go cache in the steps below, and only a
+          # push to main or the merge queue saves it.
+          cache: false
+      - name: Locate the Go module and build caches
+        id: go-cache-paths
+        if: runner.environment == 'github-hosted'
+        run: |
+          {
+            echo "mod=$(go env GOMODCACHE)"
+            echo "build=$(go env GOCACHE)"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Restore the Go module and build caches (every event; saved only by main pushes and the merge queue)
+        id: go-cache
+        if: runner.environment == 'github-hosted'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-shared-v1-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
 
       - name: Run metrics executed-proof
         id: metrics-proof
@@ -521,6 +566,14 @@ jobs:
             metrics-executed-proof-reconciler.log
             metrics-executed-proof-family-summary.json
           if-no-files-found: ignore
+      - name: Save the Go module and build caches (main pushes and the merge queue only)
+        if: (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && runner.environment == 'github-hosted' && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.mod }}
+            ${{ steps.go-cache-paths.outputs.build }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # REQUIRED status checks (ruleset): live-e2e and metrics-executed-proof are fan-ins of the work jobs above. A skipped
   # job reports success, so a failed `changes` (which skips both work jobs) must fail here, never pass: always(), and the

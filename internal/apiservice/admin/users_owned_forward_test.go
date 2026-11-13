@@ -335,8 +335,8 @@ func TestUsersOwnedPatchWebFormNormalizedEqualFieldsForwardOnlyTheChange(t *test
 			t.Fatalf("an unchanged email or username was checked for a duplicate: %q", step)
 		}
 	}
-	if in := users.updates[0]; in.IsVerified == nil || !*in.IsVerified {
-		t.Fatalf("update request %+v", in)
+	if in := users.updates[0]; in.IsVerified == nil || !*in.IsVerified || in.IsActive != nil {
+		t.Fatalf("update request %+v, want is_verified true and no is_active (unchanged)", in)
 	}
 }
 

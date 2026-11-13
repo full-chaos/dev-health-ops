@@ -230,7 +230,13 @@ func (h *handlers) updateUserInAuth(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 	request := authprovision.UserUpdateRequest{Actor: user.ID, Principal: existing.ID, OrgID: optionalOrg(orgID), Email: patch.Email,
-		Username: patch.Username, FullName: patch.FullName, AvatarURL: patch.AvatarURL, IsVerified: patch.IsVerified, IsActive: patch.IsActive}
+		Username: patch.Username, FullName: patch.FullName, AvatarURL: patch.AvatarURL, IsVerified: patch.IsVerified}
+	// Only a real is_active change is sent: the web edit forms send is_active on every save, and an auth-service that
+	// does not take the member yet refuses it as malformed (the 503, nothing written), so an unchanged one must not
+	// reach it.
+	if patch.IsActive != nil && *patch.IsActive != existing.IsActive {
+		request.IsActive = patch.IsActive
+	}
 	if h.store.PlatformRolesOwned {
 		request.IsSuperuser = patch.IsSuperuser
 	}

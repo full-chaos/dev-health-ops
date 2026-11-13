@@ -32,6 +32,7 @@ const (
 type ownerClient struct {
 	repos      map[string]string   // repo id -> full name
 	owners     map[string][]string // repo id -> owning teams, in the server's order
+	patterns   map[string][]string // team id -> teams.repo_patterns, served to any read that asks for them
 	statements []string
 }
 
@@ -66,6 +67,17 @@ func (c *ownerClient) Query(_ context.Context, st string, b []clickhouse.Binding
 			for _, team := range c.owners[id] {
 				rows = append(rows, []any{id, team})
 			}
+		}
+	case strings.Contains(st, "repo_patterns"):
+		// Served so that a read of teams.repo_patterns would see real patterns:
+		// the owner rule must not depend on them.
+		teams := make([]string, 0, len(c.patterns))
+		for id := range c.patterns {
+			teams = append(teams, id)
+		}
+		sort.Strings(teams)
+		for _, id := range teams {
+			rows = append(rows, []any{id, id, c.patterns[id]})
 		}
 	case strings.Contains(st, "AS full_name"):
 		ids := make([]string, 0, len(c.repos))
@@ -173,5 +185,70 @@ func TestAttributedPrs_ATeamThatOwnsNothingAnswersEmptyWithoutReadingRows(t *tes
 	}
 	if len(got.Rows) != 0 {
 		t.Fatalf("rows = %d, want none", len(got.Rows))
+	}
+}
+
+// Pattern and ownership DISAGREE in this catalogue: the scoped team's pattern
+// selects a repository no team owns, and the team owns a repository no pattern
+// of it selects. The patterns are served to any read that asks for them.
+const (
+	patternOnlyRepo = "bbbbbbbb-0000-0000-0000-000000000001"
+	ownerOnlyRepo   = "bbbbbbbb-0000-0000-0000-000000000002"
+)
+
+func newDisagreeingClient() *ownerClient {
+	return &ownerClient{
+		repos: map[string]string{
+			patternOnlyRepo: "acme/pattern-only",
+			ownerOnlyRepo:   "acme/owner-only",
+		},
+		owners: map[string][]string{
+			ownerOnlyRepo: {scopedTeamID},
+		},
+		patterns: map[string][]string{
+			scopedTeamID: {"acme/pattern-only"},
+		},
+	}
+}
+
+// (a) A repository a team pattern selects but no owner row claims has no team
+// and is outside that team's scope.
+func TestOwnerRule_PatternWithoutOwnerIsOutOfScopeAndHasNoTeam(t *testing.T) {
+	client := newDisagreeingClient()
+	ids, ok := teamRepoIDs(context.Background(), client, "org-1", scopedTeamID, "test")
+	if !ok {
+		t.Fatal("the team scope must resolve")
+	}
+	for _, id := range ids {
+		if id == patternOnlyRepo {
+			t.Fatalf("team scope %v holds the pattern-only repository %s", ids, patternOnlyRepo)
+		}
+	}
+	got, err := ownerTeams(context.Background(), client, "org-1", []string{patternOnlyRepo}, scopedTeamID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[patternOnlyRepo] != nil {
+		t.Fatalf("the pattern-only repository has team %s, want none", *got[patternOnlyRepo])
+	}
+}
+
+// (b) A repository an owner row claims and no pattern selects is in the
+// owner's scope and carries the owner team.
+func TestOwnerRule_OwnerWithoutPatternIsInScopeWithTheOwnerTeam(t *testing.T) {
+	client := newDisagreeingClient()
+	ids, ok := teamRepoIDs(context.Background(), client, "org-1", scopedTeamID, "test")
+	if !ok {
+		t.Fatal("the team scope must resolve")
+	}
+	if !reflect.DeepEqual(ids, []string{ownerOnlyRepo}) {
+		t.Fatalf("team scope = %v, want [%s]", ids, ownerOnlyRepo)
+	}
+	got, err := ownerTeams(context.Background(), client, "org-1", []string{ownerOnlyRepo}, "", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nameOrNil(got[ownerOnlyRepo]) != scopedTeamID {
+		t.Fatalf("the owner-only repository has team %s, want %s", nameOrNil(got[ownerOnlyRepo]), scopedTeamID)
 	}
 }

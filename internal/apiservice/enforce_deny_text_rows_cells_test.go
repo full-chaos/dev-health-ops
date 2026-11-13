@@ -220,12 +220,16 @@ func TestDenyTextRowsAnswerEveryCallerClassAsLegacy(t *testing.T) {
 					t.Errorf("%s / %s / %s: new %d %s, legacy %d %s", posture.name, key, name, got.status, strings.TrimSpace(got.body), legacy.status, strings.TrimSpace(legacy.body))
 				}
 				t.Logf("CELL\t%s\t%s\t%s\tlegacy=%d:%s\tnew=%d:%s\tpdp_calls=%d(%s)\t%s", posture.name, key, name, legacy.status, short(legacy.body), got.status, short(got.body), len(calls), action, result)
-				wantCalls := 1
-				if name == "impersonating platform admin" {
+				wantCalls, wantAction := 1, action
+				switch {
+				case name == "impersonating platform admin":
 					wantCalls = 0
+				case key == "PATCH /api/v1/orgs/me" && (name == "no platform role, no org claim" || name == "platform admin, no org claim"):
+					// an org-less caller on an organization row is asked the legacy org-less action
+					wantAction = policy.ActionAdminOrgs
 				}
-				if len(calls) != wantCalls || (len(calls) == 1 && calls[0].Action != action) {
-					t.Errorf("%s / %s / %s: decision point calls %+v, want %d asking %s", posture.name, key, name, calls, wantCalls, action)
+				if len(calls) != wantCalls || (len(calls) == 1 && calls[0].Action != wantAction) {
+					t.Errorf("%s / %s / %s: decision point calls %+v, want %d asking %s", posture.name, key, name, calls, wantCalls, wantAction)
 				}
 				if name == "impersonating platform admin" {
 					if got.status != http.StatusForbidden {

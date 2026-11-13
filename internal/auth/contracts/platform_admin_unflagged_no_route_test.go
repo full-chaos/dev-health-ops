@@ -10,8 +10,12 @@ import (
 )
 
 // unflaggedOrganizationActionRows is the closed list of profile rows that may ask an organization action without the
-// platform_admin flag. It is empty since catalog 19 flagged org.read.
-var unflaggedOrganizationActionRows = map[string]string{}
+// platform_admin flag. PATCH /api/v1/orgs/me asks org.write: a platform admin with no membership row keeps the legacy 403
+// (product rule 1), executed on the real handler and on a real Postgres by
+// TestLegacyNoRowAndPlatformAdminAnswersOrgsMePatchVenueOracle (internal/apiservice).
+var unflaggedOrganizationActionRows = map[string]string{
+	"PATCH /api/v1/orgs/me [dev-health-ops-api @api]": "org.write",
+}
 
 // C4. An organization action without the platform_admin flag has no legacy cell for a superuser with no membership
 // row: no served route asks it, so there is no legacy path to execute. A profile row or GraphQL field that starts to

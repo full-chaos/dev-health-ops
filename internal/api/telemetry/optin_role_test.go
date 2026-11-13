@@ -53,7 +53,7 @@ func (s roleStore) ReadsPlatformRoles() bool { return false }
 func reachedWrite(t *testing.T, h handlers, method, path string, r *http.Request) (status int, reached bool) {
 	t.Helper()
 	var handler http.Handler
-	for _, route := range h.routeTable(func(next http.Handler) http.Handler { return next }) {
+	for _, route := range h.routeTable(func(next http.Handler) http.Handler { return next }, nil) {
 		if route.Method == method && route.Pattern == path {
 			handler = route.Handler
 		}

@@ -51,7 +51,7 @@ Each profile row (`contracts/auth/v1/endpoint-profile.schema.json`) has an `acti
 
 ## go-api
 
-252 rows: 156 map to one of 17 catalog actions, 61 have no action with a stated gap, and 33 (the public rows) have no action field. 2 public rows carry `action: null`.
+252 rows: 158 map to one of 19 catalog actions, 59 have no action with a stated gap, and 33 (the public rows) have no action field. 2 public rows carry `action: null`.
 
 ### Routes with an action
 
@@ -185,6 +185,7 @@ Each profile row (`contracts/auth/v1/endpoint-profile.schema.json`) has an `acti
 | `license.read` | `GET /api/v1/billing/entitlements/{org_id}` | Authenticated | `org_scoped` |
 | `license.read` | `GET /api/v1/licensing/entitlements/{org_id}` | Authenticated | `org_scoped` |
 | `org.read` | `GET /api/v1/orgs/me` | Authenticated | `org_scoped` |
+| `org.write` | `PATCH /api/v1/orgs/me` | Authenticated | `org_scoped` |
 | `acr.credential.revoke` | `POST /api/v1/acr/credentials/{credential_id}/revoke` | Authenticated | `org_scoped` |
 | `admin.users` | `POST /api/v1/admin/service-accounts/keys/{credential_id}/revoke` | Superuser | `cross_org_superuser_only` |
 | `admin.users` | `GET /api/v1/admin/service-accounts/{service_account_id}/keys` | Superuser | `cross_org_superuser_only` |
@@ -213,20 +214,21 @@ Each profile row (`contracts/auth/v1/endpoint-profile.schema.json`) has an `acti
 | `admin.flags` | `PATCH /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}` | Superuser | `cross_org_superuser_only` |
 | `admin.audit` | `GET /api/v1/admin/platform/audit-logs` | Superuser | `cross_org_superuser_only` |
 | `admin.stats` | `GET /api/v1/admin/platform/stats` | Superuser | `cross_org_superuser_only` |
+| `admin.telemetry` | `POST /api/v1/telemetry/report` | Superuser | `org_scoped` |
 
 Source: `contracts/auth/v1/endpoint-profiles.go-api.json`. "Route level today" is the `policy.*` validator named in the row.
 
-These 21 catalog actions have no go-api route that maps to them: `analytics.read`, `analytics.export`, `metrics.read`, `metrics.compute`, `work_items.read`, `work_items.sync`, `git.read`, `git.sync`, `teams.read`, `settings.read`, `reports.write`, `members.read`, `members.update`, `org.write`, `org.delete`, `acr.context.read`, `acr.evidence.read`, `acr.credential.issue`, `authz.decide`, `admin.telemetry`, `credentials.project`. Of these, query-api rows map to `analytics.read`, `metrics.read`, `work_items.read`, `git.read` (see below).
+These 19 catalog actions have no go-api route that maps to them: `analytics.read`, `analytics.export`, `metrics.read`, `metrics.compute`, `work_items.read`, `work_items.sync`, `git.read`, `git.sync`, `teams.read`, `settings.read`, `reports.write`, `members.read`, `members.update`, `org.delete`, `acr.context.read`, `acr.evidence.read`, `acr.credential.issue`, `authz.decide`, `credentials.project`. Of these, query-api rows map to `analytics.read`, `metrics.read`, `work_items.read`, `git.read` (see below).
 
 ### Routes with no action
 
-61 protected rows carry `action: null` and a gap (56 on the api listener, 4 on the internal listener, 1 on the billing-edge listener). The gap text falls into these groups:
+59 protected rows carry `action: null` and a gap (54 on the api listener, 4 on the internal listener, 1 on the billing-edge listener). The gap text falls into these groups:
 
 | Reason | Rows |
 | --- | --- |
 | no catalog action covers the route's resource | 37 |
-| a check exists but is not proven equal to one catalog action | 9 |
-| other (see the row) | 15 |
+| a check exists but is not proven equal to one catalog action | 8 |
+| other (see the row) | 14 |
 
 The first group names a resource that the catalog has no action for. The resources, taken from the gap text, with the number of rows for each:
 

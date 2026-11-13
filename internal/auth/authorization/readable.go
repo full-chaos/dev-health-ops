@@ -20,6 +20,19 @@ import "github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 // organization when the subject reads org-wide (every per-key read allows), each with the session's assurance level.
 // Reads are allowed under impersonation, so the listing adds no impersonation refusal of its own.
 func (e *Evaluator) ReadableRepositories(r Request, s Snapshot) Decision {
+	return e.readable(r, s, false)
+}
+
+// ReadableRepositoriesInInventory is ReadableRepositories for go-api's read listing (CHAOS-13618, acp ruling option
+// 3): when the set would pass MaxRepositoryAllowlist and the organization has at least one live identity row, only the
+// keys that are the live path of a repository identity row count (liveRepositoryScope), so grants on repositories no
+// longer in the inventory do not reach the cap. With no live identity row the deny stays. Every other answer, the
+// standing, delegation and obligations, is ReadableRepositories'.
+func (e *Evaluator) ReadableRepositoriesInInventory(r Request, s Snapshot) Decision {
+	return e.readable(r, s, true)
+}
+
+func (e *Evaluator) readable(r Request, s Snapshot, recount bool) Decision {
 	if e == nil || e.cat == nil || isNilCatalog(e.cat) {
 		return Decision{Reason: ReasonInvalidRequest, CacheClass: CacheNone}
 	}
@@ -44,18 +57,18 @@ func (e *Evaluator) ReadableRepositories(r Request, s Snapshot) Decision {
 			if why := delegationDenial(r, del); why != "" {
 				return deny(why)
 			}
-			d := e.readableBase(r, act, s, rev)
+			d := e.readableBase(r, act, s, rev, recount)
 			if !d.Allowed {
 				return d
 			}
 			return e.delegatedAllow(r, del, d, rev)
 		}
 	}
-	return e.readableBase(r, act, s, rev)
+	return e.readableBase(r, act, s, rev, recount)
 }
 
 // readableBase is the listing of the effective subject, with the per-key decision's standing and repositoryScope's set.
-func (e *Evaluator) readableBase(r Request, act policycatalog.Action, s Snapshot, rev int) Decision {
+func (e *Evaluator) readableBase(r Request, act policycatalog.Action, s Snapshot, rev int, recount bool) Decision {
 	deny := func(why Reason) Decision { return Decision{Reason: why, PolicyRevision: rev, CacheClass: CacheNone} }
 	if s.PrincipalStatus() != StatusActive {
 		return deny(ReasonPrincipalInactive)
@@ -81,7 +94,11 @@ func (e *Evaluator) readableBase(r Request, act policycatalog.Action, s Snapshot
 		}
 		reason = ReasonAllowedByMembershipDefault
 	}
-	keys, unrestricted, why := e.repositoryScope(s, r.OrganizationID, memberRole, act, rows, now)
+	scope := e.repositoryScope
+	if recount {
+		scope = e.liveRepositoryScope
+	}
+	keys, unrestricted, why := scope(s, r.OrganizationID, memberRole, act, rows, now)
 	if why != "" {
 		return deny(why)
 	}

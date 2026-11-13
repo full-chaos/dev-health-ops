@@ -49,10 +49,20 @@ type readableFixture struct {
 
 func newReadableFixture(t *testing.T) *readableFixture {
 	t.Helper()
+	return newReadableFixtureOn(t, nil)
+}
+
+// newReadableFixtureOn is newReadableFixture whose route reads through ls (its planted snapshots first), when ls is set.
+func newReadableFixtureOn(t *testing.T, ls *listingState) *readableFixture {
+	t.Helper()
 	f := &readableFixture{t: t, state: &fakeDecisionState{snapshots: map[snapKey]*fakeSnapshot{}}, logs: &bytes.Buffer{},
 		principal: uuid.New(), org: uuid.NewString()}
+	var state DecisionState = f.state
+	if ls != nil {
+		ls.inner, state = f.state, ls
+	}
 	routes, err := ReadableRepositoriesRoutes(ReadableRepositoriesDeps{
-		State: f.state, Evaluator: authorization.NewEvaluator(), Workload: testIssueWorkload(),
+		State: state, Evaluator: authorization.NewEvaluator(), Workload: testIssueWorkload(),
 		ProfileRows: readableRowsDoc(workloadTokenClass), Logger: slog.New(slog.NewJSONHandler(f.logs, nil)),
 	})
 	if err != nil {
